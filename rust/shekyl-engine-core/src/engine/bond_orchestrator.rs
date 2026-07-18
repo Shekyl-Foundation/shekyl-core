@@ -64,6 +64,20 @@ pub struct FirstStakeOutcome {
 /// `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.1/§5.7). Refusals are
 /// caller-recoverable states with user-meaning; `Engine`/`Persist` arms are
 /// mid-flow failures whose recovery is a `stake` re-invoke (W2).
+/// Render a funding-side refusal for the `stake` error surface **without
+/// amounts** (the error-text discipline: `error.data`/messages are the
+/// most-logged surface and must never carry persona funding figures — the
+/// exact off-chain correlate the firewall keeps dark). Variant identity and
+/// non-numeric detail survive; numeric arms are reduced to their names.
+fn funding_refusal_detail(e: &BondAssemblyError) -> String {
+    match e {
+        BondAssemblyError::InsufficientFunding { .. } => {
+            "insufficient persona funding for the bond floor + fee".to_owned()
+        }
+        other => other.to_string(),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum FirstStakeError {
     /// No StakeEngine is resident — first-stake must enter through the
@@ -512,7 +526,7 @@ where
                 required,
                 BlockHeight::from_raw(reference.height.0),
             )
-            .map_err(|e| FirstStakeError::Funding(e.to_string()))?;
+            .map_err(|e| FirstStakeError::Funding(funding_refusal_detail(&e)))?;
         }
 
         // The durable point (W1 above it, W2 below it). Re-entrant for the
@@ -543,6 +557,19 @@ where
 /// KAT helpers for the two height couplings (F-2 / F-6).
 #[cfg(test)]
 mod tests {
+    /// The stake error surface never carries persona funding amounts (the
+    /// most-logged-surface discipline): the amount-bearing refusal arm is
+    /// reduced to its name.
+    #[test]
+    fn funding_refusal_detail_is_amount_free() {
+        let d = super::funding_refusal_detail(&super::BondAssemblyError::InsufficientFunding {
+            available: 123_456,
+            required: 999_999,
+        });
+        assert!(!d.contains("123") && !d.contains("999"), "no amounts: {d}");
+        assert!(d.contains("insufficient"));
+    }
+
     use super::*;
     use shekyl_curve_tree::{should_reanchor, REF_ANCHOR_AGE};
 

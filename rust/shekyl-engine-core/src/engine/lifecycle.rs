@@ -265,6 +265,35 @@ pub enum CapabilityInput<'a> {
     },
 }
 
+/// The **transient first-stake intent** (SA-R1-a,
+/// `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.6/§5.7): "spawn the StakeEngine for
+/// this slot even though `staking_enabled` is still false, because a
+/// credentialed first-stake is about to run."
+///
+/// A newtype rather than a bare `PSlot` because the **pin lives on the
+/// type**: the intent is a *call parameter and nothing more* — it is never
+/// persisted, never stored on the engine, and is set only by the
+/// credentialed `stake` entry's open-with-intent (a sticky intent would
+/// derive personas for a non-staker, the firewall hazard the pin names). Its
+/// only consumer is the spawn gate; an aborted first-stake leaves only
+/// transient derivation, dropped when the actor dies at close.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FirstStakeIntent {
+    slot: PSlot,
+}
+
+impl FirstStakeIntent {
+    /// The intent for `slot` — constructed only on the `stake` entry path.
+    pub(crate) fn for_slot(slot: PSlot) -> Self {
+        Self { slot }
+    }
+
+    /// The slot the first stake targets.
+    pub(crate) fn slot(&self) -> PSlot {
+        self.slot
+    }
+}
+
 /// Parameters for [`Engine::create`].
 ///
 /// Borrowed-where-possible to avoid stack copies of the master seed.
@@ -577,7 +606,7 @@ impl Engine<SoloSigner> {
             network,
             daemon,
             overrides,
-            Some(PSlot::from_raw(intent_slot)),
+            Some(FirstStakeIntent::for_slot(PSlot::from_raw(intent_slot))),
         )
     }
 
@@ -587,7 +616,7 @@ impl Engine<SoloSigner> {
         network: Network,
         daemon: DaemonClient,
         overrides: SafetyOverrides,
-        first_stake_intent: Option<PSlot>,
+        first_stake_intent: Option<FirstStakeIntent>,
     ) -> Result<OpenedEngine<SoloSigner>, OpenError> {
         let (file, outcome) =
             WalletFile::open(base_path, credentials.password(), network, overrides)
@@ -739,7 +768,7 @@ impl Engine<SoloSigner> {
         daemon: DaemonClient,
         network: Network,
         capability: Capability,
-        first_stake_intent: Option<PSlot>,
+        first_stake_intent: Option<FirstStakeIntent>,
     ) -> Result<Self, OpenError> {
         let state_wrap_key = super::sealing_keys::state_wrap_key_from_wallet_file(&file);
 
@@ -1014,7 +1043,7 @@ impl Engine<SoloSigner> {
         derivation_network: DerivationNetwork,
         seed_format: SeedFormat,
         staking: &StakingBlock,
-        first_stake_intent: Option<PSlot>,
+        first_stake_intent: Option<FirstStakeIntent>,
     ) -> Result<Option<StakeEngineHandle>, OpenError> {
         // SA-R1-a (ARCHIVAL_STAKE_ACTIVATION_PLAN.md §5.6/§5.7, RATIFIED):
         // first-stake needs a spawned StakeEngine to assemble against BEFORE
@@ -1067,7 +1096,7 @@ impl Engine<SoloSigner> {
         // (the monotone cursor IS the next slot), but unioned explicitly so
         // the bootstrap spawn is the real spawn even for a non-default slot.
         if let Some(intent) = first_stake_intent {
-            slots.insert(intent.to_raw());
+            slots.insert(intent.slot().to_raw());
         }
 
         let mut bundles = std::collections::BTreeMap::new();
@@ -1096,7 +1125,7 @@ impl Engine<SoloSigner> {
         // the tag dies with the actor (transient); durable bondedness remains
         // solely `persist_bond_record`'s write.
         if let Some(intent) = first_stake_intent {
-            bonded.insert(intent);
+            bonded.insert(intent.slot());
         }
 
         // Idle at open: the request path (2c-2b) mints a handle and activates.
@@ -1677,6 +1706,94 @@ mod tests {
         );
         assert!(!after.ledger().staking.staking_enabled);
         assert!(after.ledger().staking.bonded_slots.is_empty());
+    }
+
+    /// Integrated refusal paths of `Engine::first_stake` (rule 82 taxonomy),
+    /// and the W1 invariant: a refusal writes **nothing durable** — the
+    /// wallet remains a clean non-staker after any pre-persist failure.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn first_stake_refuses_cleanly_before_the_durable_point() {
+        use crate::engine::FirstStakeError;
+        use tokio::sync::RwLock;
+
+        let fix = make_create_fixture();
+        let creds = Credentials::password_only(b"correct horse");
+        let seed = fixed_seed();
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let network = params.network;
+        Engine::<SoloSigner>::create(params, dummy_daemon())
+            .expect("create FULL wallet")
+            .close(&creds)
+            .expect("close after create");
+
+        // No StakeEngine resident (plain open, no intent): the continuation
+        // refuses with the internal-sequencing arm — never a partial write.
+        let plain = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("plain open")
+        .into_wallet();
+        let arc = std::sync::Arc::new(RwLock::new(plain));
+        let err = Engine::first_stake(arc.clone(), 0)
+            .await
+            .expect_err("no stake engine must refuse");
+        assert!(matches!(err, FirstStakeError::NoStakeEngine), "got {err:?}");
+        {
+            let g = arc.read().await;
+            assert!(!g.ledger().staking.staking_enabled);
+            assert!(g.ledger().staking.bonded_slots.is_empty());
+        }
+        let plain = std::sync::Arc::try_unwrap(arc)
+            .unwrap_or_else(|_| panic!("sole owner"))
+            .into_inner();
+        plain.close(&creds).expect("close");
+
+        // Intent open (actor resident), unreachable daemon: the first
+        // pre-persist step to touch the daemon fails → a `Funding` refusal,
+        // and — the W1 pin — nothing durable was written: the wallet
+        // reopens as a plain non-staker.
+        let intent = Engine::<SoloSigner>::open_full_with_first_stake_intent(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+            0,
+        )
+        .expect("intent open")
+        .into_wallet();
+        let arc = std::sync::Arc::new(RwLock::new(intent));
+        let err = Engine::first_stake(arc.clone(), 0)
+            .await
+            .expect_err("unreachable daemon must refuse pre-persist");
+        assert!(matches!(err, FirstStakeError::Funding(_)), "got {err:?}");
+        {
+            let g = arc.read().await;
+            assert!(
+                !g.ledger().staking.staking_enabled,
+                "W1: a pre-persist refusal writes nothing durable"
+            );
+            assert!(g.ledger().staking.bonded_slots.is_empty());
+        }
+        let intent = std::sync::Arc::try_unwrap(arc)
+            .unwrap_or_else(|_| panic!("sole owner"))
+            .into_inner();
+        intent.close(&creds).expect("close");
+
+        let after = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("reopen")
+        .into_wallet();
+        assert!(!after.has_stake_engine(), "still a clean non-staker");
     }
 
     /// Phase 1 query surface: `Engine::primary_address` assembles the

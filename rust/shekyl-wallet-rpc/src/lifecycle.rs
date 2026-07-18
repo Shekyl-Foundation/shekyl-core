@@ -250,20 +250,17 @@ async fn open_wallet_engine(
     })
 }
 
-pub(crate) async fn close_wallet(
+/// Take the open tenant and fully close its engine — the shared close
+/// choreography (`close_wallet` and the first-stake intent reopen both use
+/// it, so the restore-on-failure semantics cannot diverge): scan shutdown →
+/// sole-ownership reclaim (restore + fail loud if another task holds a
+/// clone) → persist-for-close (restore + fail loud on I/O). On success the
+/// tenant slot is left in the **closing** reservation; the caller either
+/// `clear_closing`s (a plain close) or transitions to `begin_opening` (a
+/// reopen).
+async fn take_and_close_tenant(
     tenants: &tokio::sync::Mutex<TenantState>,
-    params: &Value,
-) -> Result<Value, WalletRpcError> {
-    require_empty_object(params, "close_wallet")?;
-
-    // Take the slot under a short mutex hold, then drop the guard before
-    // try_unwrap / outstanding check / Engine::close (fsync / Argon2-free
-    // but still file IO). `take_open` marks the tenant *closing* so a
-    // concurrent create/open cannot claim the emptied slot while the mutex is
-    // released — the failure paths below re-install via restore_open /
-    // set_open (whose empty-slot asserts would panic if a new wallet had
-    // slipped in). Restore under a fresh lock if close cannot proceed; clear
-    // the reservation on success.
+) -> Result<String, WalletRpcError> {
     let (name, shared, pscan) = {
         let mut state = tenants.lock().await;
         state
@@ -271,26 +268,12 @@ pub(crate) async fn close_wallet(
             .take_open()
             .ok_or(WalletRpcError::WalletNotOpen)?
     };
-
-    // Stop the P-scan task (if any) and await its exit BEFORE reclaiming sole
-    // ownership. The task holds its own clone of the engine arc, so a live
-    // handle would make the `Arc::try_unwrap` below fail spuriously;
-    // `PScanHandle::shutdown` deterministically observes the task's exit and the
-    // release of that clone (start.rs "the step that makes a subsequent
-    // Arc::try_unwrap → Engine::close possible").
     if let Some(handle) = pscan {
         handle.shutdown().await;
     }
-
-    // Reclaim sole ownership before closing. If another task still holds a
-    // clone (e.g. an in-flight refresh), restore the slot and fail loud rather
-    // than evicting a still-live wallet we cannot actually close.
     let lock = match Arc::try_unwrap(shared) {
         Ok(lock) => lock,
         Err(shared) => {
-            // The wallet stays open, so re-arm the scan we just shut down —
-            // leaving a still-open staker unscanned is a silent privacy
-            // regression (see `restart_pscan`) — then restore and fail loud.
             let pscan = restart_pscan(&shared).await;
             tenants
                 .lock()
@@ -303,20 +286,22 @@ pub(crate) async fn close_wallet(
         }
     };
     let engine = lock.into_inner();
-
-    // Persist without consuming. `Engine::close(self)` drops `self` on any
-    // `Err` (by-value signature), which would orphan the RPC session on a
-    // transient I/O failure with no password available to reopen. Flush
-    // first; restore the tenant slot on failure; only drop on success.
     if let Err(e) = tokio::task::block_in_place(|| engine.persist_for_close()) {
-        // Keep the wallet open: re-wrap and re-arm the scan (same must-not-fail
-        // posture as the try_unwrap restore above).
         let shared: SharedEngine = Arc::new(RwLock::new(engine));
         let pscan = restart_pscan(&shared).await;
         tenants.lock().await.tenant.set_open(name, shared, pscan);
         return Err(WalletRpcError::from(e));
     }
     drop(engine);
+    Ok(name)
+}
+
+pub(crate) async fn close_wallet(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    require_empty_object(params, "close_wallet")?;
+    take_and_close_tenant(tenants).await?;
     tenants.lock().await.tenant.clear_closing();
     Ok(json!({}))
 }
@@ -511,6 +496,13 @@ pub(crate) async fn stake(
     // recorded bonded slot for a W2 resume — the user never names a slot,
     // rule 81). The arc clone drops before any reopen (its liveness would
     // fail the close's sole-ownership reclaim).
+    // Auth note: on the continue/resume path (a StakeEngine already
+    // resident) the password is NOT re-verified — the open session is the
+    // authorization boundary, exactly as for every other method on an open
+    // wallet; the password is consumed only when a credentialed reopen is
+    // actually needed. Slot note: the resume pick is the FIRST bonded slot —
+    // the single-slot genesis case; a multi-slot W2 resume re-invokes after
+    // the arm-#3 open-time GC has collected the true phantoms.
     let (needs_intent_open, slot) = {
         let shared = require_open_engine(tenants).await?;
         let g = shared.read().await;
@@ -577,53 +569,17 @@ async fn reopen_with_first_stake_intent(
 ) -> Result<(), WalletRpcError> {
     let password = Zeroizing::new(password.into_bytes());
 
-    // Close (mirrors `close_wallet`, minus params plumbing).
-    let (name, shared, pscan, base, network, daemon_address) = {
+    // Close via the shared choreography (identical restore-on-failure
+    // semantics as `close_wallet`), then transition the reservation
+    // closing → opening.
+    let name = take_and_close_tenant(tenants).await?;
+    let (base, network, daemon_address) = {
         let mut state = tenants.lock().await;
-        let (name, shared, pscan) = state
-            .tenant
-            .take_open()
-            .ok_or(WalletRpcError::WalletNotOpen)?;
         let base = wallet_base(&state.wallet_dir, &name);
-        (
-            name,
-            shared,
-            pscan,
-            base,
-            state.network,
-            state.daemon_address.clone(),
-        )
-    };
-    if let Some(handle) = pscan {
-        handle.shutdown().await;
-    }
-    let lock = match Arc::try_unwrap(shared) {
-        Ok(lock) => lock,
-        Err(shared) => {
-            let pscan = restart_pscan(&shared).await;
-            tenants
-                .lock()
-                .await
-                .tenant
-                .restore_open(name, shared, pscan);
-            return Err(WalletRpcError::InternalError(
-                "cannot stake: wallet engine still in use by another task".into(),
-            ));
-        }
-    };
-    let engine = lock.into_inner();
-    if let Err(e) = tokio::task::block_in_place(|| engine.persist_for_close()) {
-        let shared: SharedEngine = Arc::new(RwLock::new(engine));
-        let pscan = restart_pscan(&shared).await;
-        tenants.lock().await.tenant.set_open(name, shared, pscan);
-        return Err(WalletRpcError::from(e));
-    }
-    drop(engine);
-    {
-        let mut state = tenants.lock().await;
         state.tenant.clear_closing();
         state.tenant.begin_opening();
-    }
+        (base, state.network, state.daemon_address.clone())
+    };
 
     // Reopen with the intent (the transient SA-R1-a parameter — it exists
     // only on this call path and is `None` in every other open).
@@ -698,7 +654,7 @@ async fn restart_pscan(shared: &SharedEngine) -> Option<PScanHandle> {
 
 #[cfg(test)]
 mod tests {
-    use super::{close_wallet, create_wallet, open_wallet};
+    use super::{close_wallet, create_wallet, open_wallet, stake};
     use crate::tenant::TenantState;
 
     use serde_json::json;
@@ -828,5 +784,72 @@ mod tests {
             .await
             .expect("close shuts the P-scan task down and succeeds (shutdown wiring)");
         assert_pscan(&tenants, false, "close clears the parked handle").await;
+    }
+
+    /// The `stake` handler end-to-end against the never-connecting daemon:
+    /// the full SA-R1-a intent dance runs (close → reopen-with-intent →
+    /// actor + on-demand P-scan parked), the continuation refuses at the
+    /// first daemon-touching pre-persist step (`-29500`, W1-clean), the
+    /// wallet REMAINS OPEN as an intent-spawned tenant, and a retry takes
+    /// the continue path (no second reopen) to the same clean refusal.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stake_runs_the_intent_dance_and_refuses_w1_clean() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = tenants_in(dir.path());
+
+        // Not open yet: WalletNotOpen.
+        let err = stake(&tenants, &json!({ "password": "pw" }))
+            .await
+            .expect_err("no wallet open");
+        assert!(matches!(err, crate::error::WalletRpcError::WalletNotOpen));
+
+        create_wallet(
+            &tenants,
+            &json!({ "name": "stakeme", "password": "pw" }),
+            fast_kdf(),
+        )
+        .await
+        .expect("create");
+
+        // Param shape: password required.
+        let err = stake(&tenants, &json!({})).await.expect_err("params");
+        assert!(matches!(
+            err,
+            crate::error::WalletRpcError::InvalidParams(_)
+        ));
+
+        // The real call: intent dance + W1-clean refusal at the daemon seam.
+        let err = stake(&tenants, &json!({ "password": "pw" }))
+            .await
+            .expect_err("unreachable daemon refuses pre-persist");
+        assert!(
+            matches!(err, crate::error::WalletRpcError::StakeNotReady { .. }),
+            "got {err:?}"
+        );
+        // The wallet stayed open, now intent-spawned with the scan parked.
+        {
+            let shared = crate::tenant::require_open_engine(&tenants)
+                .await
+                .expect("wallet still open after refusal");
+            let g = shared.read().await;
+            assert!(g.has_stake_engine(), "intent open spawned the actor");
+            assert!(
+                !g.ledger().staking.staking_enabled,
+                "W1: refusal wrote nothing durable"
+            );
+        }
+        assert_pscan(&tenants, true, "on-demand P-scan parked under intent").await;
+
+        // Retry: the continue path (actor resident, no reopen) — same clean
+        // refusal, still nothing durable.
+        let err = stake(&tenants, &json!({ "password": "pw" }))
+            .await
+            .expect_err("retry refuses identically");
+        assert!(matches!(
+            err,
+            crate::error::WalletRpcError::StakeNotReady { .. }
+        ));
+
+        close_wallet(&tenants, &json!({})).await.expect("close");
     }
 }

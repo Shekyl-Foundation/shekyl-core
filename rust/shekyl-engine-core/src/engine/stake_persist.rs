@@ -44,7 +44,7 @@
 //! consumer, so the producer carries `#[allow(dead_code)]`.
 
 use shekyl_engine_state::StakingBlock;
-use shekyl_types::{BlockHeight, PCanonicalId};
+use shekyl_types::PCanonicalId;
 
 use super::pscan::reconcile::PReconcileSet;
 
@@ -209,25 +209,17 @@ pub(crate) fn reconcile_phantom_bonded_slots<E>(
     pending_slots: &std::collections::BTreeSet<u32>,
     mut id_of_slot: impl FnMut(u32) -> Result<PCanonicalId, E>,
 ) -> Result<PhantomSlotSweep, E> {
-    let covered_high = evidence.covered().high().to_raw();
-    if covered_high == 0 {
-        // Nothing exhaustively scanned: every verdict would be
-        // `OutsideCovered`; skip the walk entirely.
-        return Ok(PhantomSlotSweep {
-            dropped: Vec::new(),
-            staking_disabled: false,
-        });
-    }
-    let evidence_height = BlockHeight::from_raw(covered_high - 1);
-
     let mut dropped = Vec::new();
     for &slot in &staking.bonded_slots {
         if pending_slots.contains(&slot) {
             continue; // W3 / scan-lag bridge: a pending post is never phantom.
         }
         let id = id_of_slot(slot)?;
+        // The whole-covered absence form; `OutsideCovered` (including the
+        // nothing-scanned case) keeps the slot — the type's
+        // absence-≠-unscanned gate does the work.
         if matches!(
-            evidence.reconcile(id, evidence_height),
+            evidence.reconcile_full_scan(id),
             crate::engine::pscan::reconcile::ReconcileVerdict::AbsentWithinCovered
         ) {
             dropped.push(slot);
@@ -249,6 +241,118 @@ pub(crate) fn reconcile_phantom_bonded_slots<E>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::engine::pscan::exhaustiveness::VerifiedBatch;
+    use crate::engine::pscan::scan_step::BondPostMatch;
+    use shekyl_types::BlockHeight;
+
+    fn staking(bonded: &[u32]) -> StakingBlock {
+        StakingBlock {
+            staking_enabled: !bonded.is_empty(),
+            bonded_slots: bonded.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    fn id(b: u8) -> PCanonicalId {
+        PCanonicalId::from_bytes([b; 32])
+    }
+
+    /// Evidence covering `[0, high)` carrying `matches`.
+    fn evidence(high: u64, matches: Vec<BondPostMatch>) -> PReconcileSet {
+        PReconcileSet::from_verified_scan(
+            VerifiedBatch::for_test(0, high, [1; 32]).range(),
+            matches,
+        )
+    }
+
+    fn match_for(persona: PCanonicalId, height: u64) -> BondPostMatch {
+        BondPostMatch {
+            height: BlockHeight::from_raw(height),
+            p_canonical_id: persona,
+            post_kind: 0,
+        }
+    }
+
+    /// Arm #3 unit matrix: pending-guarded, present, absent, unscanned —
+    /// only confirmed-absent-and-unpended drops; emptying flips the flag.
+    #[test]
+    fn phantom_sweep_drops_only_confirmed_absent_unpended_slots() {
+        // Slot 0: pending post (W3 bridge) — kept even though absent.
+        // Slot 1: present in evidence — kept.
+        // Slot 2: absent within covered, no pending — DROPPED.
+        let mut st = staking(&[0, 1, 2]);
+        let ev = evidence(100, vec![match_for(id(1), 10)]);
+        let pending: std::collections::BTreeSet<u32> = [0u32].into_iter().collect();
+        let sweep = reconcile_phantom_bonded_slots(&mut st, &ev, &pending, |slot| {
+            Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
+        })
+        .expect("sweep");
+        assert_eq!(sweep.dropped, vec![2]);
+        assert!(!sweep.staking_disabled, "slots remain");
+        assert_eq!(st.bonded_slots, vec![0, 1]);
+        assert!(st.staking_enabled);
+    }
+
+    /// Nothing exhaustively scanned ⇒ `OutsideCovered` ⇒ nothing drops —
+    /// the absence-≠-unscanned gate, exercised through the sweep.
+    #[test]
+    fn phantom_sweep_keeps_everything_when_nothing_is_covered() {
+        let mut st = staking(&[7]);
+        let ev = evidence(0, Vec::new());
+        let sweep = reconcile_phantom_bonded_slots(
+            &mut st,
+            &ev,
+            &std::collections::BTreeSet::new(),
+            |_| Ok::<_, ()>(id(9)),
+        )
+        .expect("sweep");
+        assert!(sweep.dropped.is_empty());
+        assert_eq!(st.bonded_slots, vec![7], "unscanned absence never GCs");
+        assert!(st.staking_enabled);
+    }
+
+    /// Emptying `bonded_slots` reverts the wallet to a non-staker, and the
+    /// cursor is untouched (the dropped slot stays burned).
+    #[test]
+    fn phantom_sweep_emptying_disables_staking_and_keeps_the_cursor() {
+        let mut st = staking(&[3]);
+        let cursor_before = st.p_slot;
+        let ev = evidence(50, Vec::new());
+        let sweep = reconcile_phantom_bonded_slots(
+            &mut st,
+            &ev,
+            &std::collections::BTreeSet::new(),
+            |_| Ok::<_, ()>(id(3)),
+        )
+        .expect("sweep");
+        assert_eq!(sweep.dropped, vec![3]);
+        assert!(sweep.staking_disabled);
+        assert!(!st.staking_enabled);
+        assert!(st.bonded_slots.is_empty());
+        assert_eq!(
+            st.p_slot, cursor_before,
+            "no-reuse: the cursor never lowers"
+        );
+    }
+
+    /// A derivation error aborts the sweep with NO mutation — fail closed,
+    /// never a partial drop.
+    #[test]
+    fn phantom_sweep_derivation_failure_leaves_state_untouched() {
+        let mut st = staking(&[1, 2]);
+        let ev = evidence(50, Vec::new());
+        let err = reconcile_phantom_bonded_slots(
+            &mut st,
+            &ev,
+            &std::collections::BTreeSet::new(),
+            |slot| if slot == 2 { Err("boom") } else { Ok(id(1)) },
+        )
+        .expect_err("derivation failure propagates");
+        assert_eq!(err, "boom");
+        assert_eq!(st.bonded_slots, vec![1, 2], "no partial mutation on error");
+        assert!(st.staking_enabled);
+    }
 
     use shekyl_address::Network;
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
