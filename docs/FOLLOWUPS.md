@@ -6151,6 +6151,29 @@ sustainability is unaffected by the recalibration.
     unshipped) but live on `dev`. Wallet **construction** (Rust-tx-builder
     territory), not consensus. *Blocker:* MS-5 tx construction. *Target:*
     V3.1.
+  - **`MultisigKeyContainer` is one type over two populations — S2-blocking.**
+    In the Rust production receive path (`multisig_receiving.rs`) the
+    container's leaf keys are derived **per-output** from KEM shared secrets;
+    in `fcmp.cpp:633` / the (now-deleted) wallet2 surface it was treated as a
+    **long-term group** object. One type, two lifetimes, **no compile error
+    possible** — this is exactly what let `multisig_group_id` hash per-output
+    material under a per-group name (deleted, MS-5 PR-B; group identity is now
+    the address fingerprint). Before S2 writes E′'s two-component output
+    constructor (`O = ho·G + B_group + y_out·T`), the container must be split
+    into distinct per-output vs group-long-term types (or a typestate marker),
+    so the ambiguity cannot re-enter through the new constructor. **Chosen
+    consequence recorded (MS-5 PR-B):** with the Option-D receive constructor
+    deleted, there is **no multisig output constructor at all** until S2/S4 —
+    the right state, not a gap to paper over. *Blocker:* container-type split.
+    *Target:* **MS-5 S2 (blocks the E′ output constructor).**
+  - **`tx_extra` tag `0x05` — reserve-vs-free decision, own consensus-wire
+    slice.** MS-5 PR-B deleted the Option-D reader/writer that was the only
+    (dead) code touching tag `0x05`. Whether `0x05` is reserved for E′'s per-output
+    KEM fan-out or freed is a **genesis-frozen consensus wire discriminant**
+    with no reserve precedent in the codebase — it is **not** bundled into the
+    wallet/FFI deletion (rule 19 validation-surface, rule 07 consensus-atomic
+    cutover). *Blocker:* E′ receive-wire design (which fields land in `tx_extra`
+    under E′). *Target:* **its own consensus-wire slice, before genesis freeze.**
   - **Structural pqc-auth verify → Rust port slice.** The C++
     `tx_pqc_verify.cpp` per-input structural checks are largely redundant
     with `shekyl_pqc_verify` (which already validates scheme + deserializes

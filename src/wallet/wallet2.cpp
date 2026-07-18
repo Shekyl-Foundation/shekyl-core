@@ -1353,10 +1353,7 @@ wallet2::wallet2(network_type nettype, uint64_t kdf_rounds, bool unattended, std
   m_export_format(ExportFormat::Binary),
   m_pool_info_query_time(0),
   m_has_ever_refreshed_from_node(false),
-  m_allow_mismatched_daemon_version(false),
-  m_pqc_multisig_group_id(crypto::null_hash),
-  m_pqc_multisig_n(0),
-  m_pqc_multisig_m(0)
+  m_allow_mismatched_daemon_version(false)
 {
 }
 
@@ -9823,35 +9820,6 @@ skip_tx:
 
   // if we made it this far, we're OK to actually send the transactions
   return ptx_vector;
-}
-//----------------------------------------------------------------------------------------------------
-bool wallet2::create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys)
-{
-  THROW_WALLET_EXCEPTION_IF(is_pqc_multisig(), error::wallet_internal_error, "PQC multisig group already configured");
-  THROW_WALLET_EXCEPTION_IF(n_total < 1 || n_total > config::MAX_MULTISIG_PARTICIPANTS, error::wallet_internal_error,
-      "n_total out of range [1," + std::to_string(config::MAX_MULTISIG_PARTICIPANTS) + "]");
-  THROW_WALLET_EXCEPTION_IF(m_required < 1 || m_required > n_total, error::wallet_internal_error,
-      "m_required out of range [1," + std::to_string(n_total) + "]");
-  THROW_WALLET_EXCEPTION_IF(participant_public_keys.size() != n_total, error::wallet_internal_error,
-      "Expected " + std::to_string(n_total) + " public keys, got " + std::to_string(participant_public_keys.size()));
-
-  std::vector<uint8_t> keys_blob;
-  keys_blob.push_back(n_total);
-  keys_blob.push_back(m_required);
-  for (const auto& pk : participant_public_keys)
-    keys_blob.insert(keys_blob.end(), pk.begin(), pk.end());
-
-  crypto::hash group_id;
-  bool ok = shekyl_pqc_multisig_group_id(keys_blob.data(), keys_blob.size(),
-      reinterpret_cast<uint8_t*>(group_id.data));
-  THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to compute multisig group ID");
-
-  m_pqc_multisig_keys = std::move(keys_blob);
-  m_pqc_multisig_group_id = group_id;
-  m_pqc_multisig_n = n_total;
-  m_pqc_multisig_m = m_required;
-
-  return true;
 }
 //----------------------------------------------------------------------------------------------------
 bool wallet2::sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs) const

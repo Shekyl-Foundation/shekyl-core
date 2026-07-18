@@ -368,15 +368,15 @@ fn verify_pqc_auths(parsed: &ParsedSubmission, pqc_auths: &[PqcAuth]) -> Result<
                 {
                     return Err(VerifyFailure::Malformed);
                 }
-                // Group-id binding is not on this path (the C++ battery
-                // calls `shekyl_pqc_verify`, the no-group-id entry point).
+                // Group-id binding no longer exists (Option E′ deleted
+                // `group_id`; identity is the address fingerprint). This is
+                // the single `verify_multisig` entry point.
                 if !matches!(
                     verify_multisig(
                         auth.scheme_id,
                         &auth.hybrid_public_key,
                         &auth.hybrid_signature,
                         payload_hash,
-                        None,
                     ),
                     Ok(true)
                 ) {

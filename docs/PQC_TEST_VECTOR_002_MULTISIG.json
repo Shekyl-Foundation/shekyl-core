@@ -7,8 +7,7 @@
     "single_key_canonical_len": 1996,
     "single_sig_canonical_len": 3385,
     "spend_auth_pubkey_len": 32,
-    "container_version": 1,
-    "domain_separator": "shekyl-multisig-group-v31"
+    "container_version": 1
   },
   "key_container_wire_format": {
     "description": "version(1) || n_total(1) || m_required(1) || key[0](1996) || ... || key[N-1](1996) || spend_auth_pk[0](32) || ... || spend_auth_pk[N-1](32)",
@@ -36,14 +35,8 @@
       {"config": "5-of-5", "m": 5, "expected_blob_len": 16931}
     ]
   },
-  "group_id_format": {
-    "algorithm": "cn_fast_hash",
-    "preimage": "domain_separator || group_version(1) || scheme_id(1) || spend_auth_version(1) || n_total(1) || m_required(1) || key[0](1996) || ... || key[N-1](1996) || spend_auth_pk[0](32) || ... || spend_auth_pk[N-1](32)",
-    "note": "group_version and spend_auth_version are carried by the group's MultisigAddressPayload (MSW-4); changing either yields a distinct group_id, preventing silent cross-stack reinterpretation (§5.3).",
-    "output_len": 32
-  },
   "verification_pipeline": {
-    "description": "10-check adversarial validation",
+    "description": "9-check adversarial validation",
     "checks": [
       {"number": 1, "name": "scheme_match", "error": "SchemeMismatch", "description": "scheme_id must equal 2"},
       {"number": 2, "name": "parameter_bounds", "error": "ParameterBounds", "description": "container version == 1 and 0 < m <= n <= 5"},
@@ -53,8 +46,7 @@
       {"number": 6, "name": "index_validity", "error": "IndexOutOfRange", "description": "all signer indices < n_total"},
       {"number": 7, "name": "index_ordering", "error": "IndicesNotAscending", "description": "signer indices strictly ascending"},
       {"number": 8, "name": "key_uniqueness", "error": "DuplicateKeys", "description": "no two keys share canonical encoding"},
-      {"number": 9, "name": "group_id_match", "error": "GroupIdMismatch", "description": "cn_fast_hash(preimage) must match committed group_id"},
-      {"number": 10, "name": "crypto_verify", "error": "CryptoVerifyFailed", "description": "each sig[i] must verify under key[idx[i]] for the transaction message"}
+      {"number": 9, "name": "crypto_verify", "error": "CryptoVerifyFailed", "description": "each sig[i] must verify under key[idx[i]] for the transaction message"}
     ]
   },
   "size_regression": {

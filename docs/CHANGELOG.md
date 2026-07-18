@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **multisig: `group_id` deleted — group identity is the address
+  fingerprint (MS-5 PR-B).** `multisig_group_id` was a per-output
+  `cn_fast_hash` over the leaf `MultisigKeyContainer` (whose keys are
+  derived per-output from KEM shared secrets), so it produced a *different*
+  value for every output while being named for the group; it had **no
+  consumer** under Option E′; and its one long-term caller
+  (`wallet2::create_pqc_multisig_group`) threw on every input. Deleted, both
+  languages: the Rust `multisig_group_id{,_with_versions,_from_address}`,
+  `DOMAIN_SEP_V31`, `rotating_prover_index`, `verify_fcmp_multisig_partials`,
+  and the Option-D receive-construction unit
+  (`construct_multisig_output_for_sender` / `validate_multisig_output_at_receive`
+  / `MultisigOutputConstruction` / `PersistedMultisigOutput` / `GriefingTracker`);
+  `verify_multisig`'s `expected_group_id` parameter and **check 9**
+  (`GroupIdMismatch`, FFI error code 9 — now a **9-check** pipeline, codes
+  10/11 unchanged, discriminant 9 retired not renumbered); the FFI
+  `shekyl_pqc_multisig_group_id` / `shekyl_pqc_verify_with_group_id` and their
+  C headers; the C++ `wallet2` PQC-multisig surface
+  (`create_pqc_multisig_group`, `get_pqc_multisig_info`, the four
+  `m_pqc_multisig_*` fields + accessors + boost-serialize lines — the on-disk
+  epee cache never emitted them, so this is a clean drop with no version gate);
+  and the `fuzz_group_id` harness (+ its inventory smoke-gate row).
+  Group identity is now the **address fingerprint**
+  (`cSHAKE256(canonical(MultisigAddressPayload), "shekyl/multisig-address-v1")`,
+  PR #323): per-group, independently derivable, version-binding via the
+  canonical payload. **Chosen consequence:** with the Option-D receive
+  constructor deleted, there is **no multisig output constructor at all** until
+  S2/S4 writes E′'s two-component `O = ho·G + B_group + y_out·T`. The
+  `MultisigKeyContainer` per-output-vs-long-term lifetime ambiguity is filed as
+  its own S2-blocking slice.
+
 ### Changed
 
 - **docs: F-D5 disposition round RAN — the structural-derivation attempt

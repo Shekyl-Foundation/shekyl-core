@@ -1368,7 +1368,6 @@ Eleven `cargo-fuzz` targets exercise the critical parsing, crypto, multisig, and
 | `fuzz_multisig_verify` | `shekyl-crypto-pq` | Multisig verify path with malformed group IDs, signatures, and payloads |
 | `fuzz_multisig_key_blob` | `shekyl-crypto-pq` | Randomized multisig key-blob decode and bounds checks |
 | `fuzz_multisig_sig_blob` | `shekyl-crypto-pq` | Randomized multisig signature-blob decode and validation |
-| `fuzz_group_id` | `shekyl-crypto-pq` | Group-id parser and canonicalization edge cases |
 | `fuzz_claim_reward` | `shekyl-staking` | Random accrual records; reward overflow, monotonicity, and bound invariants |
 | `fuzz_tx_deserialize_fcmp_type7` | `shekyl-fcmp` | Transaction-structured FCMP++ deserialization: pseudoOuts, proof blobs, PQC hashes, corrupted types |
 
@@ -1386,7 +1385,6 @@ cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_kem_decapsulate --
 cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_multisig_verify -- -runs=10000000
 cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_multisig_key_blob -- -runs=10000000
 cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_multisig_sig_blob -- -runs=10000000
-cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_group_id -- -runs=10000000
 cd rust/shekyl-staking/fuzz && cargo +nightly fuzz run fuzz_claim_reward -- -runs=10000000
 ```
 

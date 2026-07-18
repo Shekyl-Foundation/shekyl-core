@@ -14,6 +14,17 @@ implementation can target this document without reading the full V3.1
 multisig spec. All multi-byte integers are **little-endian** unless
 stated otherwise.
 
+> **Option-D residue (2026-07-18, MS-5 PR-B / E′).** Two facts have moved
+> out from under this spec and it has **not** yet been rewritten to match:
+> (1) the `group_id` field named throughout (envelope offset 1, §2, §3, §4)
+> is the **retired** per-container `cn_fast_hash` — group identity is now the
+> **address fingerprint** (`PQC_MULTISIG.md` §5.3), and (2) under Option E′
+> the wallet **owns no transport** — the engine emits/consumes a
+> self-authenticating blob and this envelope/relay framing is not a wallet
+> responsibility ([[eprime-transport-blob-not-pipe]]). The offset tables
+> below are retained as the Option-D transport record; a conforming E′ wire
+> spec lands with the transport slice, not here.
+
 ---
 
 ## 1. MultisigEnvelope
