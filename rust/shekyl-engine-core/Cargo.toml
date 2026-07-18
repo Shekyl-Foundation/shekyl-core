@@ -198,6 +198,11 @@ zeroize = { workspace = true }
 kameo = { workspace = true }
 
 [dev-dependencies]
+# Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`
+# for this crate's integration tests, so `tests/sp_r0_arm1_fire.rs` compiles
+# the DQ-F fire harness into the lib-under-test on a plain `cargo test`
+# (no silently-skipped `required-features` lane).
+shekyl-engine-core = { path = ".", features = ["test-helpers"] }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 # PR 7 C4 `EconomicsEngine` differential
 # (`engine::economics_differential`): deserialize the sim-recorded
@@ -499,7 +504,10 @@ bench-internals = []
 #
 # See `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C6α /
 # F-Mock-1 / F-Mock-7.
-test-helpers = []
+# `shekyl-scanner/test-utils` rides along for the SP-R0 arm-#1 DQ-F fire
+# harness (`engine/pscan/arm1_fire.rs`), which builds its funding/spend
+# fixture blocks from the scanner's bench fixtures.
+test-helpers = ["shekyl-scanner/test-utils"]
 
 [lints]
 workspace = true

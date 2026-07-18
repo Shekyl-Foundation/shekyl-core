@@ -97,12 +97,15 @@ where
     /// Engine-side WI-2 assemble orchestrator (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`
     /// §3.3 steps 1–6).
     ///
-    /// Go-live remains compile-blocked on a production
-    /// [`SpentRecordsDurablyPruned`] mint (2d-1 / SP-R0); tests pass
-    /// [`SpentRecordsDurablyPruned::for_test`]. Dead_code allow retires only
-    /// when **both** SP-R0 pruning **and** the RPC stake entry land
-    /// (`docs/FOLLOWUPS.md`).
-    #[allow(dead_code)] // rule-21: SP-R0/2d-1 AND RPC entry — neither alone
+    /// The SP-R0 witness precondition is **discharged** (arm #1, 2026-07-18):
+    /// [`SpentRecordsDurablyPruned::arm1_watch_pruning_live`] is the sole
+    /// production mint, so there is **no compile block left on this path** —
+    /// go-live is gated only by the #332 staker-activation entry that wires
+    /// this orchestrator (nothing else guards it; activation sequencing must
+    /// be handled there, not assumed from a witness gap). Tests pass
+    /// [`SpentRecordsDurablyPruned::for_test`]. Dead_code allow retires with
+    /// the RPC stake entry (`docs/FOLLOWUPS.md`).
+    #[allow(dead_code)] // rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332)
     pub(crate) async fn assemble_bond_post(
         self_arc: Arc<RwLock<Self>>,
         handle: PersonaHandle,

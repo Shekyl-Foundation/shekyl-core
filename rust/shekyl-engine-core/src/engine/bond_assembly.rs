@@ -255,33 +255,65 @@ impl BondAssemblyError {
 /// Witness that durable removal of confirmed-spent funding records has
 /// landed (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.2, GF4b-5 structural gate).
 ///
-/// [`sweep_funding_outputs`] cannot be called without one, and this type has
-/// **zero production constructors**: the sole intended production mint site
-/// is the SP-R0 durable-pruning code (FOLLOWUPS "2d-1 WI-2 — durable removal
-/// of SPENT funding outputs"), which does not exist yet. "Assemble goes live
-/// without pruning" therefore fails to compile rather than fails review —
-/// load-bearing under sweep semantics, where **any single** stale spent
-/// record is in *every* subsequent sweep, so one confirmed post would poison
-/// every later bond post for that persona (daemon-rejected duplicate key
-/// image) until pruning lands.
+/// [`sweep_funding_outputs`] cannot be called without one. Load-bearing under
+/// sweep semantics: **any single** stale spent record is in *every* subsequent
+/// sweep, so one confirmed post would poison every later bond post for that
+/// persona (daemon-rejected duplicate key image) unless pruning is live.
 ///
-/// The `#[cfg(test)]` constructor below is the **only** non-SP-R0 mint; KATs
-/// exercise the sweep through it. The C-1 §5-item-4 review obligation is a
-/// confirmation that this type still has zero production constructors, plus
-/// a grep that `sweep_funding_outputs` remains the sole funding-selection
-/// entry into the assemble path (the gate is exactly as complete as sweep's
-/// monopoly).
+/// **The precondition holds — SP-R0 arm #1 landed the pruning** (disposition
+/// D-1(a), `ARCHIVAL_BOND_SP_R0_PLAN.md` §2/§4): the arm-(c) spent-key-image
+/// watch in `run_dual_extractor` and the prune-at-ingest in
+/// `PScanAccrual::ingest` are **unconditional** in every production scan
+/// step, and pre-genesis every wallet fresh-syncs from block 0 with the watch
+/// on (D-2's airtight no-bump form) — so "the funding store durably prunes
+/// spent records" holds for every wallet state that can exist.
+/// [`arm1_watch_pruning_live`](Self::arm1_watch_pruning_live) is the **sole
+/// production constructor**, and the witness **stays** (per the executed
+/// rule-21 clause): any future build that removes or conditions the
+/// watch/prune must first confront this type and its tripwire.
 ///
-/// Reversion clause (rule 21): the SP-R0 PR either adds the sole production
-/// constructor (disposition (a), durable pruning) or deletes this token
-/// (disposition (b), durable reservation retention, which makes the
-/// precondition unconditional).
+/// **Two named bounds on the attestation** (neither opens the poison):
+///
+/// - **Retired-persona window — deferred to arm #2.** A record whose owning
+///   slot is not resident-**bonded** is unwatchable by construction (the keys
+///   are wiped), so a spend scanned during a retired window is not observed
+///   and sealed ranges never re-scan. Arm #2's retire-time atomic prune
+///   (`docs/FOLLOWUPS.md`, SP-R0 arm #2) closes this by removing the
+///   records *with* the persona. Until it lands, the sweep never reaches
+///   such a record while retired (the sweep is scoped to the assembling —
+///   resident-bonded — persona), and a re-bond of the same persona before
+///   arm #2 is the tracked residual, not a silent one.
+/// - **Quarantined records.** A record whose watch key-image derivation
+///   fails deterministically is skipped from the watch (loudly), never
+///   step-fatal. Sound because assemble re-derives the same bundle
+///   (`derive_spend_parts`) and fails identically — a record the watch
+///   cannot derive can never be swept into a bond post.
+///
+/// Reversion clause (rule 21, executed 2026-07-18 as disposition (a)): if the
+/// watch or the prune is ever made conditional (feature-gated, posture-gated,
+/// or skippable), the attestation below is void — the constructor must grow a
+/// real precondition and this doc must be rewritten, not deleted.
 pub(crate) struct SpentRecordsDurablyPruned {
     _sealed: (),
 }
 
 impl SpentRecordsDurablyPruned {
-    /// Test-only mint — the only non-SP-R0 constructor (see the type docs).
+    /// The **sole production constructor** — minted by SP-R0 arm #1 (see the
+    /// type docs for the soundness argument: unconditional watch + prune +
+    /// pre-genesis fresh-sync). Callers are the production assemble/dispatch
+    /// paths (bond orchestrator, claim orchestrator, claim-dispatch seam) via
+    /// the activation round's entry.
+    // rule-21: the in-crate production caller is the #332 activation entry
+    // (retires with dead-code half (b)); until then the non-test consumer is
+    // the DQ-F fire harness (`test-helpers` + not(test)), which the cfg(test)
+    // lint unit cannot see.
+    #[allow(dead_code)]
+    pub(crate) fn arm1_watch_pruning_live() -> Self {
+        Self { _sealed: () }
+    }
+
+    /// Test-only mint — the only other constructor (KATs exercise the sweep
+    /// through it without touring the scan path).
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
         Self { _sealed: () }
@@ -762,14 +794,19 @@ mod tests {
             !backing.contains(retired),
             "BackingSet must not revive the subset selector"
         );
-        // Zero production constructors: only `for_test` under cfg(test).
-        // Inspect the impl region only — narrative mentions of constructors
-        // elsewhere in production docs must not false-positive.
+        // Exactly ONE production constructor: SP-R0 arm #1's attestation
+        // (`arm1_watch_pruning_live`), plus `for_test` under cfg(test) — and
+        // nothing else. Inspect the impl region only — narrative mentions of
+        // constructors elsewhere in production docs must not false-positive.
         let impl_region = src
             .split("impl SpentRecordsDurablyPruned")
             .nth(1)
             .and_then(|rest| rest.split("/// The outcome of the D-A2 sweep").next())
             .expect("SpentRecordsDurablyPruned impl region");
+        assert!(
+            impl_region.contains("fn arm1_watch_pruning_live()"),
+            "the sole production SpentRecordsDurablyPruned constructor (SP-R0 arm #1) must remain"
+        );
         assert!(
             impl_region.contains("fn for_test()"),
             "test-only witness constructor must remain"
@@ -778,7 +815,7 @@ mod tests {
             !impl_region.contains("pub(crate) fn new(")
                 && !impl_region.contains("pub fn new(")
                 && !impl_region.contains("pub(crate) fn mint("),
-            "no production SpentRecordsDurablyPruned constructor"
+            "no second production SpentRecordsDurablyPruned constructor"
         );
         // Orchestrator's sole-funding-path claim is asserted in
         // `bond_orchestrator::tests` (keeps this KAT independent of that module).

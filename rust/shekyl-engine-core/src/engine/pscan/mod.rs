@@ -35,6 +35,11 @@
 //! discovery), each annotated with its named consumer.
 
 pub(crate) mod accrual;
+// SP-R0 arm #1 DQ-F fire harness. `not(test)` is load-bearing: it guarantees
+// every compilation containing the harness has no `#[cfg(test)]` constructors
+// (Guard 1 — no `for_test()` on the path under test — as a compile-time fact).
+#[cfg(all(feature = "test-helpers", not(test)))]
+pub(crate) mod arm1_fire;
 pub(crate) mod block_source;
 pub(crate) mod cadence;
 pub(crate) mod cover_discovery;
