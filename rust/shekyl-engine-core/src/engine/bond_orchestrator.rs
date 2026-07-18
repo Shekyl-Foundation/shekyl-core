@@ -102,7 +102,7 @@ where
     /// [`SpentRecordsDurablyPruned::for_test`]. Dead_code allow retires only
     /// when **both** SP-R0 pruning **and** the RPC stake entry land
     /// (`docs/FOLLOWUPS.md`).
-    #[allow(dead_code)] // rule-21: SP-R0/2d-1 AND RPC entry — neither alone
+    #[allow(dead_code)] // rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332)
     pub(crate) async fn assemble_bond_post(
         self_arc: Arc<RwLock<Self>>,
         handle: PersonaHandle,

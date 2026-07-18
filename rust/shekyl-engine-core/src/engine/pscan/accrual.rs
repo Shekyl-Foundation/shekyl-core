@@ -157,8 +157,16 @@ pub(crate) struct PScanAccrual {
     /// scan — the funding-selection substrate for production bond assembly,
     /// durable via [`PScanState::funding_outputs`]. Public output identity only
     /// (no derived secrets), but a row of `P`'s funding history — redacted
-    /// `Debug` like the matches.
+    /// `Debug` like the matches. SP-R0 arm #1 prunes confirmed-spent records
+    /// out of it at ingest; their durable removal is their absence from the
+    /// next seal.
     funding_outputs: Vec<FundingOutputMatch>,
+    /// SP-R0 arm #1 fire counter: total spent funding records pruned by
+    /// [`ingest`](Self::ingest) this run. **Not persisted** (the durable record
+    /// is the pruned records' absence from the seal); this is the DQ-F
+    /// logic-discharge observer — the CI fire lane asserts it non-zero after
+    /// driving a real spend through the production scan path.
+    spent_pruned_total: u64,
 }
 
 impl std::fmt::Debug for PScanAccrual {
@@ -174,6 +182,7 @@ impl std::fmt::Debug for PScanAccrual {
             .field("pending_unbonds", &self.pending_unbonds)
             .field("bond_post_matches", &"<redacted persona-history>")
             .field("funding_outputs", &"<redacted funding-history>")
+            .field("spent_pruned_total", &self.spent_pruned_total)
             .finish()
     }
 }
@@ -190,6 +199,7 @@ impl PScanAccrual {
             pending_unbonds: BTreeMap::new(),
             bond_post_matches: Vec::new(),
             funding_outputs: Vec::new(),
+            spent_pruned_total: 0,
         }
     }
 
@@ -224,6 +234,7 @@ impl PScanAccrual {
                 .iter()
                 .map(FundingOutputMatch::from)
                 .collect(),
+            spent_pruned_total: 0,
         }
     }
 
@@ -309,6 +320,21 @@ impl PScanAccrual {
             .extend(result.bond_post_matches.iter().cloned());
         self.funding_outputs
             .extend(result.funding_outputs.iter().cloned());
+        // SP-R0 arm #1 prune-at-ingest (DQ-B): drop held records whose spend
+        // arm (c) observed in this (finality-deep) step. After the extend, so
+        // a discover-then-spend within one step nets to no record. The
+        // removal's durable form is absence from the next seal — the same
+        // one-atomic-write coupling that makes accumulation idempotent makes
+        // the prune crash-self-healing: a prune lost to a pre-seal crash is
+        // re-detected when the unsealed range re-scans. Infallible, so it
+        // rides the all-or-nothing commit section.
+        if !result.spent_funding.is_empty() {
+            let spent: std::collections::BTreeSet<shekyl_types::GlobalOutputIndex> =
+                result.spent_funding.iter().map(|s| s.gindex).collect();
+            let before = self.funding_outputs.len();
+            self.funding_outputs.retain(|m| !spent.contains(&m.gindex));
+            self.spent_pruned_total += (before - self.funding_outputs.len()) as u64;
+        }
         self.synced_height = result.range.end();
         self.frontier_hash = verified.frontier_hash();
         self.covered = new_covered;
@@ -413,6 +439,13 @@ impl PScanAccrual {
         &self.funding_outputs
     }
 
+    /// SP-R0 arm #1 fire counter — total spent funding records pruned by
+    /// [`ingest`](Self::ingest) this run (see the field docs; the DQ-F
+    /// logic-discharge lane asserts this non-zero).
+    pub(crate) fn spent_pruned_total(&self) -> u64 {
+        self.spent_pruned_total
+    }
+
     /// Personas with a reorg-deep **JoinMarket** bond-post match — the WI-3
     /// dispatch driver's confirmation set (`ARCHIVAL_BOND_WI3_DISPATCH.md`
     /// §3.5). Every match here came out of our own verified, exhaustive scan
@@ -458,6 +491,7 @@ mod tests {
     /// A funding-only scan-step result over `[start, end)` carrying `deltas`.
     fn step(start: u64, end: u64, deltas: &[(u64, u64)]) -> ScanStepResult {
         ScanStepResult {
+            spent_funding: Vec::new(),
             range: BlockRange::new(BlockHeight::from_raw(start), BlockHeight::from_raw(end))
                 .expect("range"),
             funding: deltas
@@ -470,6 +504,70 @@ mod tests {
             bond_post_matches: Vec::new(),
             funding_outputs: Vec::new(),
         }
+    }
+
+    /// A minimal held-funding record for the arm-#1 prune tests (identity
+    /// fields only; the prune keys on `gindex`).
+    fn funding_match(gindex: u64, height: u64) -> FundingOutputMatch {
+        FundingOutputMatch {
+            p_slot: shekyl_types::PSlot::from_raw(0),
+            tx_hash: shekyl_types::TxHash::from_bytes([0u8; 32]),
+            index_in_transaction: 0,
+            gindex: shekyl_types::GlobalOutputIndex::from_raw(gindex),
+            output_key: [0u8; 32],
+            commitment: [0u8; 32],
+            ciphertext_x25519: [0u8; 32],
+            ciphertext_ml_kem: Vec::new(),
+            amount: AtomicUnits::from_raw(1),
+            height: BlockHeight::from_raw(height),
+            epoch: SettlementEpoch::from_raw(settlement_epoch_at_height(height)),
+            lineage: shekyl_engine_state::pscan_state::MintLineageOutput::ExternalTransfer,
+            spendable_height: BlockHeight::from_raw(height),
+        }
+    }
+
+    /// SP-R0 arm #1: prune-at-ingest removes spent records after the extend —
+    /// a discover-then-spend within one step nets to no record — and the
+    /// DQ-F fire counter advances by exactly the number of removed records.
+    #[test]
+    fn ingest_prunes_spent_funding_and_counts_the_fire() {
+        use crate::engine::pscan::scan_step::SpentFundingMatch;
+        let mut acc = PScanAccrual::genesis();
+
+        // Step 1: discover gindex 7.
+        let mut r1 = step(0, 10, &[]);
+        r1.funding_outputs.push(funding_match(7, 5));
+        acc.ingest(&r1, &VerifiedBatch::for_test(0, 10, [0x01; 32]))
+            .expect("ingest 1");
+        assert_eq!(acc.funding_outputs().len(), 1);
+        assert_eq!(acc.spent_pruned_total(), 0, "nothing spent yet");
+
+        // Step 2: its spend is observed — record pruned, counter fires.
+        let mut r2 = step(10, 20, &[]);
+        r2.spent_funding.push(SpentFundingMatch {
+            gindex: shekyl_types::GlobalOutputIndex::from_raw(7),
+            height: BlockHeight::from_raw(15),
+        });
+        acc.ingest(&r2, &VerifiedBatch::for_test(10, 20, [0x02; 32]))
+            .expect("ingest 2");
+        assert!(acc.funding_outputs().is_empty(), "spent record pruned");
+        assert_eq!(acc.spent_pruned_total(), 1, "the fire counter advanced");
+
+        // Step 3: discover-then-spend within one step — extend-then-retain
+        // nets to no record; the counter still counts the real prune.
+        let mut r3 = step(20, 30, &[]);
+        r3.funding_outputs.push(funding_match(9, 22));
+        r3.spent_funding.push(SpentFundingMatch {
+            gindex: shekyl_types::GlobalOutputIndex::from_raw(9),
+            height: BlockHeight::from_raw(25),
+        });
+        acc.ingest(&r3, &VerifiedBatch::for_test(20, 30, [0x03; 32]))
+            .expect("ingest 3");
+        assert!(
+            acc.funding_outputs().is_empty(),
+            "in-step spend nets to nothing"
+        );
+        assert_eq!(acc.spent_pruned_total(), 2);
     }
 
     fn epoch(e: u64) -> SettlementEpoch {
@@ -489,6 +587,7 @@ mod tests {
     /// A scan step over `[start, end)` carrying `matches` (no funding).
     fn match_step(start: u64, end: u64, matches: Vec<BondPostMatch>) -> ScanStepResult {
         ScanStepResult {
+            spent_funding: Vec::new(),
             range: BlockRange::new(BlockHeight::from_raw(start), BlockHeight::from_raw(end))
                 .expect("range"),
             funding: Vec::new(),

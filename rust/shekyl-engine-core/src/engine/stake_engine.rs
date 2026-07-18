@@ -178,7 +178,8 @@ use super::emission_claim::{
 use super::error::KeyEngineError;
 use super::pscan::persona_scanner::{guaranteed_scanner_for_persona, PersonaScanError};
 use super::pscan::scan_step::{
-    run_dual_extractor, BlockRange, DualExtractError, ScanStep, ScanStepResult,
+    run_dual_extractor, BlockRange, DualExtractError, DualExtractOutput, FundingOutputMatch,
+    KeyImageWatchSet, ScanStep, ScanStepResult, SpentFundingMatch,
 };
 use super::stake_timing::{OsRngGapAdapter, DEFAULT_ENTRY_GAP};
 use super::traits::key::SourceSecretsBundle;
@@ -602,6 +603,20 @@ pub(crate) enum StakeEngineError {
     #[error("scan-step task failed to join: {0}")]
     ScanJoin(#[from] tokio::task::JoinError),
 
+    /// SP-R0 arm #1: deriving a held funding output's watch key image from the
+    /// vault failed (non-canonical scalar or a corrupted resident record).
+    /// Fails closed and loud: a silently-missing watch entry would break the
+    /// prune's absence-as-evidence discipline — the spent record would survive
+    /// as exactly the double-spend poison the witness guards (DQ7-class).
+    #[error("watch key-image derivation failed for gindex {gindex}: {reason}")]
+    WatchDerivation {
+        /// The record's global output index (public identity; names the record
+        /// without reproducing `P`'s funding history in the error path).
+        gindex: u64,
+        /// What failed (bundle derivation or scalar canonicity).
+        reason: String,
+    },
+
     /// An [`AssembleEmissionClaim`] claim-side step refused or failed —
     /// derivation boundaries, size bounding, or the step-7 self-check. The
     /// wrapped [`EmissionClaimError`] keeps the CB-5 taxonomy (including the
@@ -718,6 +733,13 @@ pub(crate) struct StakeEngine {
     /// invalidating every [`PersonaHandle`] minted before it — the mechanism
     /// behind operation-scoped handles (typed contract #2).
     generation: u64,
+    /// SP-R0 arm #1 (DQ-A): the key-image watch cache — key images of `P`'s
+    /// held, unspent funding outputs, derived in-actor from the vault.
+    /// Refreshed per scan-step from the task's authoritative held list
+    /// (derive-on-add / drop-on-prune); **never persisted** — re-derived at
+    /// open from the sealed records. Containment is the type's
+    /// (redacting `Debug`, no `Serialize`).
+    watch_cache: KeyImageWatchSet,
     /// GF-7 measurement-hook observer (injected via [`StakeEngineArgs`];
     /// see the field docs there). Feature-gated out of default builds.
     #[cfg(feature = "gf7-hooks")]
@@ -889,6 +911,73 @@ impl StakeEngine {
     /// bonded personas are few) at the cost of a stale-cache invalidation surface
     /// on a firewall-critical set — a missed invalidation would silently drop a
     /// newly-bonded persona's bond-post matches. Recompute is the safe trade.
+    /// SP-R0 arm #1 (DQ-A): refresh the in-actor key-image watch cache against
+    /// the task's authoritative held-funding list. Derive-on-add — an uncached
+    /// gindex gets its key image derived from the vault; drop-on-prune —
+    /// cached entries whose gindex is no longer held are dropped (the
+    /// records-driven framing pin: the task's held list is authoritative).
+    ///
+    /// A record whose owning slot is not resident-**bonded** is skipped, not an
+    /// error: a retired persona's funding records are arm #2's retire-time
+    /// atomic prune (the records leave with the persona; until then their
+    /// spends are unwatchable by construction — the keys are wiped), and a
+    /// bonded persona's records always have resident keys. Derivation failure
+    /// for a resident bonded slot fails closed
+    /// ([`StakeEngineError::WatchDerivation`]).
+    fn refresh_watch_cache(&mut self, held: &[FundingOutputMatch]) -> Result<(), StakeEngineError> {
+        let held_gindexes: BTreeSet<shekyl_types::GlobalOutputIndex> =
+            held.iter().map(|m| m.gindex).collect();
+        self.watch_cache.retain_gindexes(&held_gindexes);
+        for m in held {
+            if self.watch_cache.contains_gindex(m.gindex) {
+                continue;
+            }
+            if let Some(key_image) = self.derive_watch_key_image(m)? {
+                self.watch_cache.insert(key_image, m.gindex);
+            }
+        }
+        Ok(())
+    }
+
+    /// Derive the key image of one held funding record from the vault — the
+    /// watch half of [`prepare_funding_inputs`]' derivation (same bundle, same
+    /// `KI = x·Hp(O)`), without the membership/PQC legs. `Ok(None)` when the
+    /// owning slot is not resident-bonded (see
+    /// [`refresh_watch_cache`](Self::refresh_watch_cache)). The derived
+    /// intermediates are `Zeroizing`; only the (per-DQ-A contained) key image
+    /// leaves this function.
+    fn derive_watch_key_image(
+        &self,
+        m: &FundingOutputMatch,
+    ) -> Result<Option<[u8; 32]>, StakeEngineError> {
+        let keys = match self.held.get(&m.p_slot) {
+            Some(held @ HeldPersona::Bonded(_)) => held.keys(),
+            _ => return Ok(None),
+        };
+        let ciphertext = HybridCiphertext {
+            x25519: m.ciphertext_x25519,
+            ml_kem: m.ciphertext_ml_kem.clone(),
+        };
+        let bundle = derive_p_source_secrets_bundle(keys, &ciphertext, m.index_in_transaction)
+            .map_err(|e| StakeEngineError::WatchDerivation {
+                gindex: m.gindex.to_raw(),
+                reason: format!("spend-bundle derivation: {e}"),
+            })?;
+        let x_scalar: Zeroizing<Scalar> = Zeroizing::new(
+            Option::from(Scalar::from_canonical_bytes(*bundle.spend_key_x)).ok_or_else(|| {
+                StakeEngineError::WatchDerivation {
+                    gindex: m.gindex.to_raw(),
+                    reason: "non-canonical x".to_owned(),
+                }
+            })?,
+        );
+        Ok(Some(
+            (biased_hash_to_point(m.output_key) * *x_scalar)
+                .compress()
+                .to_bytes(),
+        ))
+    }
+
     fn bonded_scan_inputs(&self) -> Result<BondedScanInputs, ScanSetupError> {
         let mut scanners = Vec::new();
         let mut known_personas = BTreeMap::new();
@@ -1058,6 +1147,7 @@ impl Actor for StakeEngine {
             held,
             active,
             generation: 0,
+            watch_cache: KeyImageWatchSet::new(),
             #[cfg(feature = "gf7-hooks")]
             observer: args.observer,
         })
@@ -1363,8 +1453,10 @@ impl Message<SignBond> for StakeEngine {
 /// where to place them.
 ///
 /// Dead_code allow: the Engine orchestrator is wired; go-live still needs
-/// SP-R0/2d-1 pruning **and** the RPC stake entry (rule-21 — neither alone).
-#[allow(dead_code)] // rule-21: SP-R0/2d-1 AND RPC entry — neither alone
+/// SP-R0/2d-1 pruning **and** the RPC stake entry (rule-21 — neither alone;
+/// half (a) landed 2026-07-18 with SP-R0 arm #1, logic-discharged — half (b)
+/// is the remaining retirement, the staker-activation round).
+#[allow(dead_code)] // rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332)
 pub(crate) struct AssembleBond {
     /// Operation-scoped capability proving the slot is currently held (typed
     /// contract #2). Must match `ticket.p_slot()`.
@@ -1390,7 +1482,8 @@ pub(crate) struct AssembleBond {
 ///
 /// Dead_code allow: reply type of the wired orchestrator; same dual gate as
 /// [`AssembleBond`].
-#[allow(dead_code)] // rule-21: SP-R0/2d-1 AND RPC entry — neither alone
+#[allow(dead_code)]
+// rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332)
 #[derive(Debug)]
 pub(crate) struct AssembledBondPost {
     /// The fully-signed, wire-encoded bond transaction, persona-bound.
@@ -2456,16 +2549,50 @@ impl Message<ScanStep> for StakeEngine {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let (scanners, known_personas) = self.bonded_scan_inputs()?;
-        let ScanStep { range, blocks } = msg;
+        let ScanStep {
+            range,
+            blocks,
+            held_funding,
+        } = msg;
+        // SP-R0 arm #1 (DQ-A): refresh the watch cache from the task's held
+        // list, then hand the closure a transient snapshot. Derivation happens
+        // here, in-actor — spend material never enters the closure.
+        self.refresh_watch_cache(&held_funding)?;
+        let watch = self.watch_cache.clone();
         // The secret `scanners` are MOVED into the closure; they never reach the
         // actor task again and are dropped at the closure's end. The two `?`
         // surface the join failure (`ScanJoin`) and the extraction failure
         // (`ScanStep`) via their `#[from]` conversions — structured, not
         // stringified.
-        let result = tokio::task::spawn_blocking(move || {
-            run_dual_extractor(scanners, &known_personas, range, &blocks)
+        let DualExtractOutput {
+            mut result,
+            trailing_key_images,
+        } = tokio::task::spawn_blocking(move || {
+            run_dual_extractor(scanners, &known_personas, range, &blocks, watch)
         })
         .await??;
+        // Close arm (c)'s in-step blind spot: derive this step's discoveries
+        // (derive-on-add) and match them against the trailing spend key images
+        // the closure collected — an output discovered at height `h` can be
+        // spent at `h' > h` within the same step, and only the actor can
+        // derive its key image. Merged hits prune exactly like watch hits.
+        for m in &result.funding_outputs {
+            if let Some(key_image) = self.derive_watch_key_image(m)? {
+                for (observed, height) in &trailing_key_images {
+                    if observed == &key_image {
+                        result.spent_funding.push(SpentFundingMatch {
+                            gindex: m.gindex,
+                            height: *height,
+                        });
+                    }
+                }
+                self.watch_cache.insert(key_image, m.gindex);
+            }
+        }
+        // Drop-on-prune: spent outputs leave the watch with their records.
+        for spent in &result.spent_funding {
+            self.watch_cache.remove_gindex(spent.gindex);
+        }
         Ok(result)
     }
 }
@@ -2752,8 +2879,9 @@ impl StakeEngineHandle {
     /// Ask the actor to assemble the full, broadcast-ready JoinMarket bond
     /// (`AssembleBond`). Engine-side caller is [`Engine::assemble_bond_post`]
     /// (WI-2 §3.3). Dead_code allow retires only when **both** SP-R0 / 2d-1
-    /// pruning **and** the RPC stake entry land — neither alone.
-    #[allow(dead_code)] // rule-21: SP-R0/2d-1 AND RPC entry — neither alone
+    /// pruning **and** the RPC stake entry land — neither alone (half (a)
+    /// landed 2026-07-18 with SP-R0 arm #1; half (b) remains).
+    #[allow(dead_code)] // rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332)
     pub(crate) async fn assemble_bond(
         &self,
         handle: PersonaHandle,
@@ -2800,9 +2928,14 @@ impl StakeEngineHandle {
         &self,
         range: BlockRange,
         blocks: Vec<ScannableBlock>,
+        held_funding: Vec<FundingOutputMatch>,
     ) -> Result<ScanStepResult, StakeEngineError> {
         self.actor
-            .ask(ScanStep { range, blocks })
+            .ask(ScanStep {
+                range,
+                blocks,
+                held_funding,
+            })
             .await
             .map_err(collapse_send_error)
     }
@@ -3679,7 +3812,7 @@ mod tests {
         let block = with_bond_post(block_funding(0), 0);
 
         let res = handle
-            .scan_step(one_block_range(20_001), vec![block])
+            .scan_step(one_block_range(20_001), vec![block], Vec::new())
             .await
             .expect("scan-step succeeds");
 
@@ -3704,7 +3837,7 @@ mod tests {
         let block = with_bond_post(block_funding(1), 1);
 
         let res = handle
-            .scan_step(one_block_range(20_001), vec![block])
+            .scan_step(one_block_range(20_001), vec![block], Vec::new())
             .await
             .expect("scan-step succeeds");
 
@@ -3724,7 +3857,7 @@ mod tests {
     async fn actor_is_responsive_after_a_scan_step() {
         let handle = spawn_over(&[0], &[0], None);
         let _ = handle
-            .scan_step(one_block_range(1), vec![block_funding(0)])
+            .scan_step(one_block_range(1), vec![block_funding(0)], Vec::new())
             .await
             .expect("scan-step succeeds");
         let active = handle.active_persona().await.expect("still responsive");

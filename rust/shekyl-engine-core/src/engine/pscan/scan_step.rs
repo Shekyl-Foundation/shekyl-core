@@ -145,6 +145,13 @@ pub(crate) struct ScanStep {
     /// Blocks aligned to `range`: `blocks[i]` is the block at `range.start + i`.
     /// `blocks.len()` must equal `range.block_count()`.
     pub(crate) blocks: Vec<ScannableBlock>,
+    /// `P`'s currently-held funding records (public identity, from the task's
+    /// accrual as of the frontier) — the authoritative list the actor refreshes
+    /// its key-image watch cache from before running the step (SP-R0 arm #1,
+    /// DQ-A: derive-on-add / drop-on-prune; the derived key images never leave
+    /// the actor except inside the transient [`KeyImageWatchSet`] handed to the
+    /// offload closure).
+    pub(crate) held_funding: Vec<FundingOutputMatch>,
 }
 
 /// One settlement epoch's confirmed funding **delta** from a single step
@@ -306,6 +313,120 @@ impl From<&PFundingOutputRecord> for FundingOutputMatch {
     }
 }
 
+/// A confirmed on-chain spend of one of `P`'s held funding outputs — arm (c)
+/// of the extractor (SP-R0 arm #1). The public pairing of *our* output's
+/// `gindex` with the height its spend was observed at; the task prunes the
+/// matching record on ingest (prune-at-ingest, DQ-B).
+///
+/// `Debug` is redacted: the pairing marks which on-chain spend consumed `P`'s
+/// output — a row of `P`'s funding history, the same discipline as
+/// [`FundingOutputMatch`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SpentFundingMatch {
+    /// The spent output's global index — the prune key into `funding_outputs`.
+    pub(crate) gindex: shekyl_types::GlobalOutputIndex,
+    /// Height of the block carrying the spend.
+    pub(crate) height: BlockHeight,
+}
+
+impl std::fmt::Debug for SpentFundingMatch {
+    /// Redacted — see the type docs.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SpentFundingMatch(<redacted funding-history>)")
+    }
+}
+
+/// The key-image watch-set (SP-R0 arm #1, DQ-A): key images of `P`'s **held,
+/// unspent** funding outputs, derived **in-actor** from the vault and handed to
+/// the scan closure so arm (c) can match on-chain spends. Spend material never
+/// enters the closure — only the derived tags, mapped to their prune keys.
+///
+/// ## Containment is structural (DQ-A, ratified 2026-07-18)
+///
+/// A key image is public only once its output is *spent*; this set is key
+/// images of **unspent** outputs — pre-publication values, and as a set a
+/// correlated fingerprint of `P`'s live UTXO. It is safe only because it is
+/// `≤ view_sk`, transient, and same-process. That contingency is frozen here,
+/// not left as a review note:
+///
+/// - **redacting `Debug`** — no clear log/`{:?}` path, not even a length;
+/// - **no `Serialize`/`Deserialize`, ever** — the type cannot be persisted or
+///   cross a wire; a refactor that tries to send it over a boundary is a
+///   compile error, not a leak. The `watch_set_has_no_serialize_impl`
+///   tripwire test enforces this stays true at the source level.
+#[derive(Clone)]
+pub(crate) struct KeyImageWatchSet {
+    /// Key image → the watched output's global index (the prune key).
+    map: BTreeMap<[u8; 32], shekyl_types::GlobalOutputIndex>,
+}
+
+impl KeyImageWatchSet {
+    /// An empty watch-set.
+    pub(crate) fn new() -> Self {
+        Self {
+            map: BTreeMap::new(),
+        }
+    }
+
+    /// Watch `gindex` under `key_image` (derive-on-add).
+    pub(crate) fn insert(&mut self, key_image: [u8; 32], gindex: shekyl_types::GlobalOutputIndex) {
+        self.map.insert(key_image, gindex);
+    }
+
+    /// The watched gindex `key_image` spends, if any — arm (c)'s match.
+    pub(crate) fn lookup(&self, key_image: &[u8; 32]) -> Option<shekyl_types::GlobalOutputIndex> {
+        self.map.get(key_image).copied()
+    }
+
+    /// Whether `gindex` is already watched (the derive-on-add cache check).
+    pub(crate) fn contains_gindex(&self, gindex: shekyl_types::GlobalOutputIndex) -> bool {
+        self.map.values().any(|g| *g == gindex)
+    }
+
+    /// Drop-on-prune: stop watching `gindex`. Linear over the set — the held
+    /// funding set is small (a persona's live outputs), and a second
+    /// gindex-keyed index would be a premature optimization (SP-R0 §5 DQ-A
+    /// carried pin: note it, don't pre-build it).
+    pub(crate) fn remove_gindex(&mut self, gindex: shekyl_types::GlobalOutputIndex) {
+        self.map.retain(|_, g| *g != gindex);
+    }
+
+    /// Drop every entry whose gindex is not in `held` — the task's held list
+    /// is authoritative (records-driven, the SP-R0 framing pin).
+    pub(crate) fn retain_gindexes(&mut self, held: &BTreeSet<shekyl_types::GlobalOutputIndex>) {
+        self.map.retain(|_, g| held.contains(g));
+    }
+}
+
+impl std::fmt::Debug for KeyImageWatchSet {
+    /// Redacted — see the type docs (not even the length renders).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("KeyImageWatchSet(<redacted live-utxo-fingerprint>)")
+    }
+}
+
+/// The extractor's full output: the public [`ScanStepResult`] the task
+/// consumes, plus the **trailing key images** — every `ToKey` key image
+/// observed at a height after the step's first in-step funding discovery.
+///
+/// The trailing set exists to close arm (c)'s in-step blind spot: an output
+/// discovered at height `h` can be spent at `h' > h` **within the same step**,
+/// and its key image is derivable only in-actor *after* the closure returns
+/// (spend material never enters the closure, DQ-A). The handler derives the
+/// step's discoveries, matches them against this set, and merges any hits into
+/// `result.spent_funding` — so the watch has no same-step gap and D-2's
+/// absence-as-evidence argument holds without a batch-size caveat. Empty
+/// whenever the step discovered nothing (the common case — zero cost). Never
+/// crosses the actor→task boundary.
+#[derive(Debug)]
+pub(crate) struct DualExtractOutput {
+    /// The public scan-step result (after the handler's merge).
+    pub(crate) result: ScanStepResult,
+    /// `(key_image, height)` of every spend input observed after the first
+    /// in-step discovery. Public on-chain data.
+    pub(crate) trailing_key_images: Vec<([u8; 32], BlockHeight)>,
+}
+
 /// Public result of one scan-step — only public extraction outputs cross the
 /// actor boundary (the secret scanners stay in the offload closure).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -319,6 +440,10 @@ pub(crate) struct ScanStepResult {
     /// Per-output funding-discovery records (WI-2 D-A1) — public identity only;
     /// per-epoch sums of these equal `funding`'s deltas by construction.
     pub(crate) funding_outputs: Vec<FundingOutputMatch>,
+    /// Arm (c): observed spends of held funding outputs — the prune set
+    /// (SP-R0 arm #1; includes the handler's in-step trailing merges). The
+    /// task removes the matching records on ingest, before the seal.
+    pub(crate) spent_funding: Vec<SpentFundingMatch>,
 }
 
 /// Why a dual-extraction failed. All arms fail **closed** — a corrupted scan
@@ -509,7 +634,8 @@ pub(crate) fn run_dual_extractor(
     known_personas: &BTreeMap<PCanonicalId, u32>,
     range: BlockRange,
     blocks: &[ScannableBlock],
-) -> Result<ScanStepResult, DualExtractError> {
+    watch: KeyImageWatchSet,
+) -> Result<DualExtractOutput, DualExtractError> {
     // Enforce DQ6's bound first, rather than trust the caller (the actor mailbox
     // is blocked for the step's duration); then check the range↔block alignment.
     if range.block_count() > MAX_SCAN_STEP_BLOCKS {
@@ -534,6 +660,16 @@ pub(crate) fn run_dual_extractor(
     let mut by_epoch: BTreeMap<SettlementEpoch, AtomicUnits> = BTreeMap::new();
     let mut bond_post_matches = Vec::new();
     let mut funding_outputs = Vec::new();
+    // Arm (c) — SP-R0 arm #1. `spent_funding` collects watch hits; the
+    // trailing set collects every spend key image seen after the step's first
+    // in-step discovery (whose own key image only the actor can derive, after
+    // this closure returns — see `DualExtractOutput`). A block's inputs are
+    // processed before its outputs are scanned, and a same-block
+    // create-and-spend is impossible (membership requires a prior tree root),
+    // so "after the first discovery" is exactly the possible blind-spot window.
+    let mut spent_funding = Vec::new();
+    let mut trailing_key_images: Vec<([u8; 32], BlockHeight)> = Vec::new();
+    let mut discovered_in_step = false;
 
     for (i, block) in blocks.iter().enumerate() {
         let height = range.height_at(i);
@@ -572,8 +708,19 @@ pub(crate) fn run_dual_extractor(
         );
 
         // (b) public bond-post match — reads inputs, no secret, no clone.
+        // (c) rides the same pass: spent-key-image match against the
+        // actor-derived watch-set (SP-R0 arm #1) — a hit is a confirmed spend
+        // of a held funding output, pruned by the task on ingest.
         for (j, tx) in block.transactions.iter().enumerate() {
             for input in &tx.prefix.inputs {
+                if let Input::ToKey { key_image, .. } = input {
+                    if let Some(gindex) = watch.lookup(key_image) {
+                        spent_funding.push(SpentFundingMatch { gindex, height });
+                    }
+                    if discovered_in_step {
+                        trailing_key_images.push((*key_image, height));
+                    }
+                }
                 if let Input::BondPost(bp) = input {
                     // Lift the wire `[u8; 32]` into the domain id once, at the
                     // wire→domain boundary, then match + carry the typed value.
@@ -656,6 +803,10 @@ pub(crate) fn run_dual_extractor(
                     lineage,
                     spendable_height,
                 });
+                // Arm (c): later blocks in this step may spend this discovery;
+                // its key image is derivable only in-actor, so from here on the
+                // trailing set collects candidates for the handler's pass.
+                discovered_in_step = true;
             }
         }
     }
@@ -665,11 +816,15 @@ pub(crate) fn run_dual_extractor(
         .map(|(epoch, amount)| EpochInflowDelta { epoch, amount })
         .collect();
 
-    Ok(ScanStepResult {
-        range,
-        funding,
-        bond_post_matches,
-        funding_outputs,
+    Ok(DualExtractOutput {
+        result: ScanStepResult {
+            range,
+            funding,
+            bond_post_matches,
+            funding_outputs,
+            spent_funding,
+        },
+        trailing_key_images,
     })
 }
 
@@ -809,8 +964,10 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_002),
             &[funding_block(&p)],
+            KeyImageWatchSet::new(),
         )
-        .expect("extract");
+        .expect("extract")
+        .result;
 
         assert_eq!(res.funding.len(), 1, "one epoch touched");
         assert_eq!(res.funding[0].epoch, SettlementEpoch::from_raw(2));
@@ -834,8 +991,10 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_002),
             &[funding_block(&p)],
+            KeyImageWatchSet::new(),
         )
-        .expect("extract");
+        .expect("extract")
+        .result;
 
         assert!(
             !res.funding_outputs.is_empty(),
@@ -878,8 +1037,10 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_002),
             &[funding_block(&p)],
+            KeyImageWatchSet::new(),
         )
-        .expect("extract");
+        .expect("extract")
+        .result;
         let rec = res.funding_outputs.first().expect("one record");
         assert_eq!(
             format!("{rec:?}"),
@@ -905,8 +1066,15 @@ mod tests {
 
         let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
         let known = BTreeMap::from([(canonical_id(&mine), 0)]);
-        let res =
-            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(5, 6),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
 
         assert_eq!(
             res.bond_post_matches.len(),
@@ -944,8 +1112,15 @@ mod tests {
 
         let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
         let known = BTreeMap::from([(canonical_id(&mine), 0)]);
-        let res =
-            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(5, 6),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
 
         assert_eq!(res.bond_post_matches.len(), 1);
         assert_eq!(
@@ -965,8 +1140,15 @@ mod tests {
 
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
         let known = BTreeMap::from([(canonical_id(&p), 0)]);
-        let res =
-            run_dual_extractor(vec![(0, scanner)], &known, range(7, 8), &[block]).expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(7, 8),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
 
         assert_eq!(res.funding.len(), 1, "funding recovered");
         assert_eq!(res.bond_post_matches.len(), 1, "bond-post matched");
@@ -982,6 +1164,7 @@ mod tests {
             &BTreeMap::new(),
             range(0, 3),
             &[funding_block(&p)],
+            KeyImageWatchSet::new(),
         )
         .expect_err("mismatch must fail closed");
         assert!(matches!(
@@ -1002,6 +1185,7 @@ mod tests {
             &BTreeMap::new(),
             range(0, MAX_SCAN_STEP_BLOCKS + 1),
             &[],
+            KeyImageWatchSet::new(),
         )
         .expect_err("an oversized step must fail closed");
         assert!(matches!(
@@ -1026,8 +1210,15 @@ mod tests {
 
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
         let known = BTreeMap::from([(canonical_id(&p), 0)]);
-        let res =
-            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(5, 6),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
 
         let rec = res.funding_outputs.first().expect("one record");
         assert_eq!(rec.lineage, MintLineageOutput::BondPostChange);
@@ -1044,8 +1235,10 @@ mod tests {
             &BTreeMap::new(),
             range(5, 6),
             &[funding_block(&p)],
+            KeyImageWatchSet::new(),
         )
-        .expect("extract");
+        .expect("extract")
+        .result;
 
         let rec = res.funding_outputs.first().expect("one record");
         assert_eq!(rec.lineage, MintLineageOutput::ExternalTransfer);
@@ -1067,8 +1260,15 @@ mod tests {
 
         let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
         let known = BTreeMap::from([(canonical_id(&mine), 0), (canonical_id(&other), 1)]);
-        let res =
-            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(5, 6),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
 
         let rec = res.funding_outputs.first().expect("one record");
         assert_eq!(
@@ -1102,8 +1302,15 @@ mod tests {
 
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
         let known = BTreeMap::from([(canonical_id(&p), 0)]);
-        let res =
-            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(5, 6),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
 
         let rec = res.funding_outputs.first().expect("one record");
         assert_eq!(rec.lineage, MintLineageOutput::EmissionReward);
@@ -1124,8 +1331,15 @@ mod tests {
 
         let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
         let known = BTreeMap::from([(canonical_id(&mine), 0)]);
-        let res =
-            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(5, 6),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
 
         let rec = res.funding_outputs.first().expect("one record");
         assert_eq!(
@@ -1151,8 +1365,15 @@ mod tests {
 
         let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
         let known = BTreeMap::from([(canonical_id(&mine), 0), (canonical_id(&other), 1)]);
-        let res =
-            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(5, 6),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
 
         let rec = res.funding_outputs.first().expect("one record");
         assert_eq!(
@@ -1182,8 +1403,15 @@ mod tests {
                 canonical_bytes: intact.clone(),
             });
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
-        let res =
-            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(5, 6),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
         assert_eq!(
             res.funding_outputs.first().expect("one record").lineage,
             MintLineageOutput::EmissionReward,
@@ -1202,8 +1430,15 @@ mod tests {
                 canonical_bytes: truncated,
             });
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
-        let res =
-            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(5, 6),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
         assert_eq!(
             res.funding_outputs.first().expect("one record").lineage,
             MintLineageOutput::ExternalTransfer,
@@ -1230,8 +1465,15 @@ mod tests {
 
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
         let known = BTreeMap::from([(canonical_id(&p), 0)]);
-        let res =
-            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(5, 6),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
 
         let rec = res.funding_outputs.first().expect("one record");
         assert_eq!(
@@ -1262,8 +1504,15 @@ mod tests {
 
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
         let known = BTreeMap::from([(canonical_id(&p), 0)]);
-        let res =
-            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(5, 6),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
 
         let rec = res.funding_outputs.first().expect("one record");
         assert_eq!(
@@ -1325,8 +1574,10 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_002),
             &[funding_block(&p)],
+            KeyImageWatchSet::new(),
         )
-        .expect("extract");
+        .expect("extract")
+        .result;
 
         let rec = res.funding_outputs.first().expect("one record");
         assert_eq!(
@@ -1356,8 +1607,10 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_002),
             &[block],
+            KeyImageWatchSet::new(),
         )
-        .expect("extract");
+        .expect("extract")
+        .result;
 
         let rec = res.funding_outputs.first().expect("one record");
         assert_eq!(
@@ -1382,8 +1635,15 @@ mod tests {
 
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
         let known = BTreeMap::from([(canonical_id(&p), 0)]);
-        let res = run_dual_extractor(vec![(0, scanner)], &known, range(20_001, 20_002), &[block])
-            .expect("extract");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &known,
+            range(20_001, 20_002),
+            &[block],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
 
         let m = res.funding_outputs.first().expect("one record");
         let persisted = PFundingOutputRecord::from(m);
@@ -1391,5 +1651,143 @@ mod tests {
         assert_eq!(persisted.spendable_height, BlockHeight::from_raw(20_061));
         let back = FundingOutputMatch::from(&persisted);
         assert_eq!(&back, m, "state→transform restores the exact match");
+    }
+
+    /// Arm (c): a `ToKey` input whose key image is in the watch-set yields a
+    /// spent match carrying the watched gindex and the spend height; an
+    /// unwatched key image yields nothing.
+    #[test]
+    fn arm_c_matches_watched_key_images_only() {
+        let p = persona(0);
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let ki = [0xABu8; 32];
+        let mut block = funding_block(&p);
+        block.transactions[0]
+            .prefix
+            .inputs
+            .push(shekyl_wire::transaction::Input::ToKey {
+                amount: 0,
+                key_offsets: Vec::new(),
+                key_image: ki,
+            });
+        let gindex = shekyl_types::GlobalOutputIndex::from_raw(42);
+        let mut watch = KeyImageWatchSet::new();
+        watch.insert(ki, gindex);
+        let out = run_dual_extractor(
+            vec![(0, scanner)],
+            &BTreeMap::new(),
+            range(20_001, 20_002),
+            std::slice::from_ref(&block),
+            watch,
+        )
+        .expect("extract");
+        assert_eq!(out.result.spent_funding.len(), 1, "watched spend matches");
+        assert_eq!(out.result.spent_funding[0].gindex, gindex);
+        assert_eq!(
+            out.result.spent_funding[0].height,
+            BlockHeight::from_raw(20_001)
+        );
+
+        // Same block, empty watch: no match, and — because the block also
+        // discovers a funding output at the same height — no trailing entry
+        // either (same-height create-and-spend is impossible; inputs are
+        // processed before the block's outputs are discovered).
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let out = run_dual_extractor(
+            vec![(0, scanner)],
+            &BTreeMap::new(),
+            range(20_001, 20_002),
+            std::slice::from_ref(&block),
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract");
+        assert!(
+            out.result.spent_funding.is_empty(),
+            "unwatched spend ignored"
+        );
+        assert!(
+            out.trailing_key_images.is_empty(),
+            "no trailing entries at or before the first discovery height"
+        );
+    }
+
+    /// Arm (c): spends observed at heights after an in-step discovery are
+    /// collected as trailing key images (regardless of watch membership) —
+    /// the handler's material for closing the in-step blind spot.
+    #[test]
+    fn trailing_key_images_collect_after_an_in_step_discovery() {
+        let p = persona(0);
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let ki = [0xCDu8; 32];
+        let discovery = funding_block(&p);
+        let mut later = funding_block(&persona(9)); // not ours — filler carrier
+        later.transactions[0]
+            .prefix
+            .inputs
+            .push(shekyl_wire::transaction::Input::ToKey {
+                amount: 0,
+                key_offsets: Vec::new(),
+                key_image: ki,
+            });
+        let out = run_dual_extractor(
+            vec![(0, scanner)],
+            &BTreeMap::new(),
+            range(20_001, 20_003),
+            &[discovery, later],
+            KeyImageWatchSet::new(),
+        )
+        .expect("extract");
+        assert_eq!(out.result.funding_outputs.len(), 1, "one discovery");
+        // The fixture's own txs carry `ToKey` inputs too; the guarantee is
+        // containment (the injected spend is collected) plus the window bound
+        // (nothing at or before the discovery height).
+        assert!(
+            out.trailing_key_images
+                .contains(&(ki, BlockHeight::from_raw(20_002))),
+            "the post-discovery spend is collected for the handler's pass"
+        );
+        assert!(
+            out.trailing_key_images
+                .iter()
+                .all(|(_, h)| *h > BlockHeight::from_raw(20_001)),
+            "trailing collection starts strictly after the discovery height"
+        );
+    }
+
+    /// DQ-A structural-containment tripwire (self-parsing, the
+    /// `SpentRecordsDurablyPruned` idiom): the watch-set must never gain a
+    /// `Serialize`/`Deserialize` impl or derive — it is a correlated
+    /// fingerprint of `P`'s live UTXO and must be unable to persist or cross
+    /// a wire. The redacting `Debug` must stay hand-written.
+    #[test]
+    fn watch_set_has_no_serialize_impl() {
+        let src = include_str!("scan_step.rs");
+        let region = src
+            .split("pub(crate) struct KeyImageWatchSet")
+            .next()
+            .expect("prefix region");
+        // The derive line immediately above the struct is in `region`'s tail;
+        // check the whole file for any serde coupling to the type name. The
+        // needles are assembled at runtime so this test's own source cannot
+        // false-positive the grep.
+        let ty = "KeyImageWatchSet";
+        assert!(
+            !src.contains(&format!("impl Serialize for {ty}"))
+                && !src.contains(&format!("impl serde::Serialize for {ty}"))
+                && !src.contains(&format!("impl<'de> Deserialize<'de> for {ty}")),
+            "KeyImageWatchSet must never implement Serialize/Deserialize (DQ-A)"
+        );
+        let derive_line = region
+            .rsplit('\n')
+            .find(|l| l.contains("#[derive"))
+            .unwrap_or("");
+        assert!(
+            !derive_line.contains("Serialize") && !derive_line.contains("Deserialize"),
+            "KeyImageWatchSet's derive list must never include serde (DQ-A)"
+        );
+        assert!(
+            src.contains("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        f.write_str(\"KeyImageWatchSet(<redacted live-utxo-fingerprint>)\")"),
+            "KeyImageWatchSet's redacting Debug must stay hand-written"
+        );
     }
 }

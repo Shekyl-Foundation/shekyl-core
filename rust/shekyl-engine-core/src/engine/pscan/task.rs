@@ -324,8 +324,13 @@ where
             &blocks,
         )?;
 
-        // Offloaded dual extraction behind the actor; only public results return.
-        let result = stake.scan_step(range, blocks).await?;
+        // Offloaded dual extraction behind the actor; only public results
+        // return. The held-funding list (as of the frontier) rides along so
+        // the actor can refresh its key-image watch cache (SP-R0 arm #1,
+        // DQ-A) before the step runs.
+        let result = stake
+            .scan_step(range, blocks, accrual.funding_outputs().to_vec())
+            .await?;
         // Ingest against the *verified batch* (not a bare hash): it is what advances the
         // accrual's verified-`covered` range, so the frontier can only move behind a
         // `VerifiedBatch` (the structural reconcile-evidence guard).
