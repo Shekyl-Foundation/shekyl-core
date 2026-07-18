@@ -126,6 +126,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError, SendError};
@@ -603,20 +604,6 @@ pub(crate) enum StakeEngineError {
     #[error("scan-step task failed to join: {0}")]
     ScanJoin(#[from] tokio::task::JoinError),
 
-    /// SP-R0 arm #1: deriving a held funding output's watch key image from the
-    /// vault failed (non-canonical scalar or a corrupted resident record).
-    /// Fails closed and loud: a silently-missing watch entry would break the
-    /// prune's absence-as-evidence discipline — the spent record would survive
-    /// as exactly the double-spend poison the witness guards (DQ7-class).
-    #[error("watch key-image derivation failed for gindex {gindex}: {reason}")]
-    WatchDerivation {
-        /// The record's global output index (public identity; names the record
-        /// without reproducing `P`'s funding history in the error path).
-        gindex: u64,
-        /// What failed (bundle derivation or scalar canonicity).
-        reason: String,
-    },
-
     /// An [`AssembleEmissionClaim`] claim-side step refused or failed —
     /// derivation boundaries, size bounding, or the step-7 self-check. The
     /// wrapped [`EmissionClaimError`] keeps the CB-5 taxonomy (including the
@@ -740,6 +727,16 @@ pub(crate) struct StakeEngine {
     /// open from the sealed records. Containment is the type's
     /// (redacting `Debug`, no `Serialize`).
     watch_cache: KeyImageWatchSet,
+    /// Held records whose watch key-image derivation failed (public prune
+    /// keys only). Derivation is deterministic, so re-trying every step would
+    /// re-fail identically — and failing the step would wedge the whole scan
+    /// pipeline on one bad record. Instead the record is skipped (loudly, see
+    /// `absorb_watch_derivation`) until it leaves the held set; sound for the
+    /// pruning attestation because the sweep's own derivation of the same
+    /// bundle fails the same way, so a quarantined record can never be swept
+    /// into a bond post. **Never persisted**; cleared per-record when the
+    /// task's held list drops the record.
+    watch_quarantine: BTreeSet<shekyl_types::GlobalOutputIndex>,
     /// GF-7 measurement-hook observer (injected via [`StakeEngineArgs`];
     /// see the field docs there). Feature-gated out of default builds.
     #[cfg(feature = "gf7-hooks")]
@@ -889,6 +886,147 @@ impl StakeEngine {
         }
     }
 
+    /// SP-R0 arm #1 (DQ-A) watch upkeep — the cheap, in-actor half of the
+    /// refresh against the task's authoritative held-funding list (the
+    /// records-driven framing pin). Drop-on-prune: cached (and quarantined)
+    /// entries whose gindex is no longer held are dropped. Returns the
+    /// derive-on-add candidates — the uncached records whose CPU-heavy
+    /// derivation the caller offloads
+    /// ([`derive_watch_key_images_offloaded`](Self::derive_watch_key_images_offloaded));
+    /// the derivation never runs in the actor's async context (DQ5/DQ6).
+    fn watch_upkeep(&mut self, held: &[FundingOutputMatch]) -> Vec<FundingOutputMatch> {
+        let held_gindexes: BTreeSet<shekyl_types::GlobalOutputIndex> =
+            held.iter().map(|m| m.gindex).collect();
+        self.watch_cache.retain_gindexes(&held_gindexes);
+        self.watch_quarantine.retain(|g| held_gindexes.contains(g));
+        self.watch_derivation_candidates(held)
+    }
+
+    /// The subset of `records` whose watch key image still needs deriving:
+    /// not yet watched, not quarantined, and owned by a resident-**bonded**
+    /// slot. The watched-gindex set is built once, so the pass is
+    /// `O(n log n)` in the held count, not the quadratic
+    /// scan-per-record it replaces.
+    ///
+    /// A record whose owning slot is not resident-bonded is skipped, not an
+    /// error: a retired persona's funding records are arm #2's retire-time
+    /// atomic prune (the records leave with the persona; until then their
+    /// spends are unwatchable by construction — the keys are wiped), and a
+    /// bonded persona's records always have resident keys.
+    fn watch_derivation_candidates(
+        &self,
+        records: &[FundingOutputMatch],
+    ) -> Vec<FundingOutputMatch> {
+        let watched = self.watch_cache.watched_gindexes();
+        records
+            .iter()
+            .filter(|m| {
+                !watched.contains(&m.gindex)
+                    && !self.watch_quarantine.contains(&m.gindex)
+                    && matches!(self.held.get(&m.p_slot), Some(HeldPersona::Bonded(_)))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Derive the watch key images of `records` on a blocking thread: the
+    /// per-record hybrid-KEM decapsulation + scalar multiplication must not
+    /// run on the async executor — the same DQ5/DQ6 offload discipline as the
+    /// extractor, which a catch-up step over a large held set would otherwise
+    /// violate for the whole derivation run. The vault is **moved** into the
+    /// closure and moved back with the outcomes — never cloned (the secrets
+    /// exist once, rule 35/36), and never into the *extractor* closure (the
+    /// DQ-A pin: spend material and the scan closure stay separated). The
+    /// handler holds `&mut self` across this `await`, so no other message can
+    /// observe the actor without its vault.
+    ///
+    /// Per-record outcomes are values, not early returns: one record's
+    /// deterministic derivation failure must not abort the others or the step
+    /// (see [`absorb_watch_derivation`](Self::absorb_watch_derivation)).
+    async fn derive_watch_key_images_offloaded(
+        &mut self,
+        records: Vec<FundingOutputMatch>,
+    ) -> Vec<(shekyl_types::GlobalOutputIndex, Result<[u8; 32], String>)> {
+        let held = std::mem::take(&mut self.held);
+        let joined = tokio::task::spawn_blocking(move || {
+            let outcomes = records
+                .iter()
+                .map(|m| {
+                    let outcome = match held.get(&m.p_slot) {
+                        Some(persona @ HeldPersona::Bonded(_)) => derive_funding_key_image(
+                            persona.keys(),
+                            m.ciphertext_x25519,
+                            &m.ciphertext_ml_kem,
+                            m.index_in_transaction,
+                            m.output_key,
+                        ),
+                        // `watch_derivation_candidates` filtered to
+                        // resident-bonded slots; a vanished slot here is a
+                        // logic error — a per-record failure, never a panic
+                        // (the vault must ride back out of this closure).
+                        _ => Err("owning slot no longer resident-bonded".to_owned()),
+                    };
+                    (m.gindex, outcome)
+                })
+                .collect();
+            (held, outcomes)
+        })
+        .await;
+        match joined {
+            Ok((held, outcomes)) => {
+                self.held = held;
+                outcomes
+            }
+            // The vault moved into the closure and the closure died: the keys
+            // unwound (wiped) with it and are unrecoverable. Returning an
+            // error would leave a resident actor that scans keyless — a
+            // silent DQ7 weakening; fail-stop instead, the actor's documented
+            // no-restart panic posture (`on_panic`).
+            Err(join_err) => panic!("watch-derivation offload lost the vault: {join_err}"),
+        }
+    }
+
+    /// Fold one offloaded derivation outcome into the watch (derive-on-add)
+    /// or the quarantine, returning the key image on success.
+    ///
+    /// Quarantine, **not** a step error: the derivation is deterministic
+    /// (same record, same vault ⇒ same failure), so failing the step would
+    /// permanently wedge the scan pipeline on one bad record — frontier
+    /// frozen, balances, bond-post matches, and unbond processing all
+    /// stalled. Skipping only this record keeps the wallet syncing, and is
+    /// sound for the [`SpentRecordsDurablyPruned`] attestation: assemble
+    /// re-derives the same bundle (`derive_spend_parts`) and fails the same
+    /// way, so a record the watch cannot derive can never be swept into a
+    /// bond post — the duplicate-key-image poison the witness precludes
+    /// cannot arise from a quarantined record. Loud (error level, once per
+    /// record per residency): a failed derivation is still corrupted-state
+    /// evidence.
+    fn absorb_watch_derivation(
+        &mut self,
+        gindex: shekyl_types::GlobalOutputIndex,
+        outcome: Result<[u8; 32], String>,
+    ) -> Option<[u8; 32]> {
+        match outcome {
+            Ok(key_image) => {
+                self.watch_cache.insert(key_image, gindex);
+                Some(key_image)
+            }
+            Err(reason) => {
+                if self.watch_quarantine.insert(gindex) {
+                    tracing::error!(
+                        gindex = gindex.to_raw(),
+                        %reason,
+                        "watch key-image derivation failed; record quarantined from the \
+                         spent-watch until it leaves the held set (its on-chain spend \
+                         will not be observed; assemble of this record fails identically, \
+                         so it cannot be swept into a bond post either)"
+                    );
+                }
+                None
+            }
+        }
+    }
+
     /// Build the bonded union's transient scan inputs for a [`ScanStep`]: a
     /// [`GuaranteedScanner`] per bonded persona (SP-1, burning-bug-immune) plus
     /// their cleartext `p_canonical_id` set (the public half of the SP-3 dual
@@ -911,73 +1049,6 @@ impl StakeEngine {
     /// bonded personas are few) at the cost of a stale-cache invalidation surface
     /// on a firewall-critical set — a missed invalidation would silently drop a
     /// newly-bonded persona's bond-post matches. Recompute is the safe trade.
-    /// SP-R0 arm #1 (DQ-A): refresh the in-actor key-image watch cache against
-    /// the task's authoritative held-funding list. Derive-on-add — an uncached
-    /// gindex gets its key image derived from the vault; drop-on-prune —
-    /// cached entries whose gindex is no longer held are dropped (the
-    /// records-driven framing pin: the task's held list is authoritative).
-    ///
-    /// A record whose owning slot is not resident-**bonded** is skipped, not an
-    /// error: a retired persona's funding records are arm #2's retire-time
-    /// atomic prune (the records leave with the persona; until then their
-    /// spends are unwatchable by construction — the keys are wiped), and a
-    /// bonded persona's records always have resident keys. Derivation failure
-    /// for a resident bonded slot fails closed
-    /// ([`StakeEngineError::WatchDerivation`]).
-    fn refresh_watch_cache(&mut self, held: &[FundingOutputMatch]) -> Result<(), StakeEngineError> {
-        let held_gindexes: BTreeSet<shekyl_types::GlobalOutputIndex> =
-            held.iter().map(|m| m.gindex).collect();
-        self.watch_cache.retain_gindexes(&held_gindexes);
-        for m in held {
-            if self.watch_cache.contains_gindex(m.gindex) {
-                continue;
-            }
-            if let Some(key_image) = self.derive_watch_key_image(m)? {
-                self.watch_cache.insert(key_image, m.gindex);
-            }
-        }
-        Ok(())
-    }
-
-    /// Derive the key image of one held funding record from the vault — the
-    /// watch half of [`prepare_funding_inputs`]' derivation (same bundle, same
-    /// `KI = x·Hp(O)`), without the membership/PQC legs. `Ok(None)` when the
-    /// owning slot is not resident-bonded (see
-    /// [`refresh_watch_cache`](Self::refresh_watch_cache)). The derived
-    /// intermediates are `Zeroizing`; only the (per-DQ-A contained) key image
-    /// leaves this function.
-    fn derive_watch_key_image(
-        &self,
-        m: &FundingOutputMatch,
-    ) -> Result<Option<[u8; 32]>, StakeEngineError> {
-        let keys = match self.held.get(&m.p_slot) {
-            Some(held @ HeldPersona::Bonded(_)) => held.keys(),
-            _ => return Ok(None),
-        };
-        let ciphertext = HybridCiphertext {
-            x25519: m.ciphertext_x25519,
-            ml_kem: m.ciphertext_ml_kem.clone(),
-        };
-        let bundle = derive_p_source_secrets_bundle(keys, &ciphertext, m.index_in_transaction)
-            .map_err(|e| StakeEngineError::WatchDerivation {
-                gindex: m.gindex.to_raw(),
-                reason: format!("spend-bundle derivation: {e}"),
-            })?;
-        let x_scalar: Zeroizing<Scalar> = Zeroizing::new(
-            Option::from(Scalar::from_canonical_bytes(*bundle.spend_key_x)).ok_or_else(|| {
-                StakeEngineError::WatchDerivation {
-                    gindex: m.gindex.to_raw(),
-                    reason: "non-canonical x".to_owned(),
-                }
-            })?,
-        );
-        Ok(Some(
-            (biased_hash_to_point(m.output_key) * *x_scalar)
-                .compress()
-                .to_bytes(),
-        ))
-    }
-
     fn bonded_scan_inputs(&self) -> Result<BondedScanInputs, ScanSetupError> {
         let mut scanners = Vec::new();
         let mut known_personas = BTreeMap::new();
@@ -1148,6 +1219,7 @@ impl Actor for StakeEngine {
             active,
             generation: 0,
             watch_cache: KeyImageWatchSet::new(),
+            watch_quarantine: BTreeSet::new(),
             #[cfg(feature = "gf7-hooks")]
             observer: args.observer,
         })
@@ -1959,16 +2031,12 @@ fn prepare_funding_inputs(
         let rec = &ctx.record;
         let mut parts = derive_spend_parts(keys, rec, &ctx.leaf_chunk)?;
 
-        // KI = x·Hp(O) — same construction the FCMP++ verifier checks. The
-        // full-path-only leg (the backing's membership-only leg has none).
-        let x_scalar: Zeroizing<Scalar> = Zeroizing::new(
-            Option::from(Scalar::from_canonical_bytes(*parts.bundle.spend_key_x)).ok_or_else(
-                || BondAssemblyError::build("key-image derivation", "non-canonical x"),
-            )?,
-        );
-        let key_image = (biased_hash_to_point(rec.output_key) * *x_scalar)
-            .compress()
-            .to_bytes();
+        // KI = x·Hp(O) — the single shared definition (see
+        // `key_image_from_spend_key_x`; the watch path derives through the
+        // same leg, so watch and sweep cannot diverge). The full-path-only
+        // leg (the backing's membership-only leg has none).
+        let key_image = key_image_from_spend_key_x(&parts.bundle.spend_key_x, rec.output_key)
+            .map_err(|e| BondAssemblyError::build("key-image derivation", e))?;
 
         let pqc_pubkey = std::mem::take(&mut parts.pqc_pubkey);
         let gindex = rec.gindex;
@@ -2531,6 +2599,53 @@ pub(crate) fn derive_p_source_secrets_bundle(
     })
 }
 
+/// `KI = x·Hp(O)` for one funding record, from its public
+/// `(ciphertext, index, output_key)` identity and the owning persona's
+/// vaulted keys — **the** single definition of the funding key image
+/// (SP-R0 arm #1). Every consumer — the actor's watch derive-on-add, the
+/// assemble path ([`prepare_funding_inputs`] via
+/// [`key_image_from_spend_key_x`], sharing the leg after its own bundle
+/// derivation), and the DQ-F fire harness — derives through here, so the
+/// construction cannot diverge between the watch and the sweep. A divergence
+/// would mean derived watch key images stop matching on-chain spends, prunes
+/// never fire, and the stale-record poison [`SpentRecordsDurablyPruned`]
+/// precludes returns — which is why this is one function, not three copies.
+///
+/// The derived intermediates are `Zeroizing`; only the key image leaves.
+/// Errors are public reason text, never key material.
+pub(crate) fn derive_funding_key_image(
+    keys: &ArchivalPKeys,
+    ciphertext_x25519: [u8; 32],
+    ciphertext_ml_kem: &[u8],
+    index_in_transaction: u64,
+    output_key: [u8; 32],
+) -> Result<[u8; 32], String> {
+    let ciphertext = HybridCiphertext {
+        x25519: ciphertext_x25519,
+        ml_kem: ciphertext_ml_kem.to_vec(),
+    };
+    let bundle = derive_p_source_secrets_bundle(keys, &ciphertext, index_in_transaction)
+        .map_err(|e| format!("spend-bundle derivation: {e}"))?;
+    key_image_from_spend_key_x(&bundle.spend_key_x, output_key)
+}
+
+/// The key-image leg of [`derive_funding_key_image`] alone — for the
+/// assemble path, which already holds the derived bundle (it needs the
+/// bundle's other secrets too) and must compute the same `KI = x·Hp(O)` the
+/// FCMP++ verifier checks.
+pub(crate) fn key_image_from_spend_key_x(
+    spend_key_x: &[u8; 32],
+    output_key: [u8; 32],
+) -> Result<[u8; 32], String> {
+    let x_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(*spend_key_x))
+            .ok_or_else(|| "non-canonical x".to_owned())?,
+    );
+    Ok((biased_hash_to_point(output_key) * *x_scalar)
+        .compress()
+        .to_bytes())
+}
+
 // SP-5 — the actor performs the per-batch scan-step; `view_sk` never crosses the
 // boundary. The handler builds the bonded union's transient scanners from the
 // resident bundles and **offloads** the CPU+secret dual extraction to
@@ -2548,16 +2663,26 @@ impl Message<ScanStep> for StakeEngine {
         msg: ScanStep,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let (scanners, known_personas) = self.bonded_scan_inputs()?;
         let ScanStep {
             range,
             blocks,
             held_funding,
         } = msg;
-        // SP-R0 arm #1 (DQ-A): refresh the watch cache from the task's held
-        // list, then hand the closure a transient snapshot. Derivation happens
-        // here, in-actor — spend material never enters the closure.
-        self.refresh_watch_cache(&held_funding)?;
+        // SP-R0 arm #1 (DQ-A): watch upkeep against the task's held list —
+        // cheap set work in-actor; any uncached record's derivation offloads
+        // to its own blocking closure (DQ5/DQ6 — the vault moves in and back;
+        // spend material never enters the *extractor* closure below). The
+        // common warm-cache step derives nothing and skips the offload.
+        let to_derive = self.watch_upkeep(&held_funding);
+        if !to_derive.is_empty() {
+            let outcomes = self.derive_watch_key_images_offloaded(to_derive).await;
+            for (gindex, outcome) in outcomes {
+                self.absorb_watch_derivation(gindex, outcome);
+            }
+        }
+        let (scanners, known_personas) = self.bonded_scan_inputs()?;
+        // Hand the extractor closure a transient watch snapshot (documented
+        // rule-35 `Clone` exception on the type; both copies wipe on drop).
         let watch = self.watch_cache.clone();
         // The secret `scanners` are MOVED into the closure; they never reach the
         // actor task again and are dropped at the closure's end. The two `?`
@@ -2572,34 +2697,22 @@ impl Message<ScanStep> for StakeEngine {
         })
         .await??;
         // Close arm (c)'s in-step blind spot: derive this step's discoveries
-        // (derive-on-add) and match them against the trailing spend key images
-        // the closure collected — an output discovered at height `h` can be
-        // spent at `h' > h` within the same step, and only the actor can
-        // derive its key image. Merged hits prune exactly like watch hits.
-        // The trailing set is indexed once (key image → spend height) so a
-        // catch-up step with an early discovery and many subsequent spends
-        // costs O((spends + discoveries)·log spends) on the actor path, not
-        // a discoveries × spends nested scan. First insert wins: a key image
-        // appears at most once on a consensus-valid chain (double-spends are
-        // rejected), and if a malformed source repeats one, the earliest
-        // spend height is the conservative record — the prune is by gindex
-        // and idempotent either way.
-        let trailing_by_key_image: BTreeMap<[u8; 32], shekyl_types::BlockHeight> = {
-            let mut index = BTreeMap::new();
-            for (key_image, height) in trailing_key_images {
-                index.entry(key_image).or_insert(height);
-            }
-            index
-        };
-        for m in &result.funding_outputs {
-            if let Some(key_image) = self.derive_watch_key_image(m)? {
-                if let Some(height) = trailing_by_key_image.get(&key_image) {
-                    result.spent_funding.push(SpentFundingMatch {
-                        gindex: m.gindex,
-                        height: *height,
-                    });
+        // (derive-on-add, offloaded exactly like the refresh) and match them
+        // against the trailing spend key images the closure collected — an
+        // output discovered at height `h` can be spent at `h' > h` within
+        // the same step, and only the actor can derive its key image. Merged
+        // hits prune exactly like watch hits; the derived entries also warm
+        // the cache for the next step. Discoveries are rare (the common case
+        // is an empty candidate list — zero cost, no offload).
+        let to_derive = self.watch_derivation_candidates(&result.funding_outputs);
+        if !to_derive.is_empty() {
+            let outcomes = self.derive_watch_key_images_offloaded(to_derive).await;
+            for (gindex, outcome) in outcomes {
+                if let Some(key_image) = self.absorb_watch_derivation(gindex, outcome) {
+                    if trailing_key_images.contains(&key_image) {
+                        result.spent_funding.push(SpentFundingMatch { gindex });
+                    }
                 }
-                self.watch_cache.insert(key_image, m.gindex);
             }
         }
         // Drop-on-prune: spent outputs leave the watch with their records.
@@ -2941,7 +3054,7 @@ impl StakeEngineHandle {
         &self,
         range: BlockRange,
         blocks: Vec<ScannableBlock>,
-        held_funding: Vec<FundingOutputMatch>,
+        held_funding: Arc<[FundingOutputMatch]>,
     ) -> Result<ScanStepResult, StakeEngineError> {
         self.actor
             .ask(ScanStep {
@@ -3825,7 +3938,7 @@ mod tests {
         let block = with_bond_post(block_funding(0), 0);
 
         let res = handle
-            .scan_step(one_block_range(20_001), vec![block], Vec::new())
+            .scan_step(one_block_range(20_001), vec![block], Vec::new().into())
             .await
             .expect("scan-step succeeds");
 
@@ -3850,7 +3963,7 @@ mod tests {
         let block = with_bond_post(block_funding(1), 1);
 
         let res = handle
-            .scan_step(one_block_range(20_001), vec![block], Vec::new())
+            .scan_step(one_block_range(20_001), vec![block], Vec::new().into())
             .await
             .expect("scan-step succeeds");
 
@@ -3870,7 +3983,11 @@ mod tests {
     async fn actor_is_responsive_after_a_scan_step() {
         let handle = spawn_over(&[0], &[0], None);
         let _ = handle
-            .scan_step(one_block_range(1), vec![block_funding(0)], Vec::new())
+            .scan_step(
+                one_block_range(1),
+                vec![block_funding(0)],
+                Vec::new().into(),
+            )
             .await
             .expect("scan-step succeeds");
         let active = handle.active_persona().await.expect("still responsive");

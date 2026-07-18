@@ -546,7 +546,6 @@ mod tests {
         let mut r2 = step(10, 20, &[]);
         r2.spent_funding.push(SpentFundingMatch {
             gindex: shekyl_types::GlobalOutputIndex::from_raw(7),
-            height: BlockHeight::from_raw(15),
         });
         acc.ingest(&r2, &VerifiedBatch::for_test(10, 20, [0x02; 32]))
             .expect("ingest 2");
@@ -559,7 +558,6 @@ mod tests {
         r3.funding_outputs.push(funding_match(9, 22));
         r3.spent_funding.push(SpentFundingMatch {
             gindex: shekyl_types::GlobalOutputIndex::from_raw(9),
-            height: BlockHeight::from_raw(25),
         });
         acc.ingest(&r3, &VerifiedBatch::for_test(20, 30, [0x03; 32]))
             .expect("ingest 3");

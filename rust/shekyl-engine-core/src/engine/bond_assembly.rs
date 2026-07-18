@@ -272,6 +272,23 @@ impl BondAssemblyError {
 /// rule-21 clause): any future build that removes or conditions the
 /// watch/prune must first confront this type and its tripwire.
 ///
+/// **Two named bounds on the attestation** (neither opens the poison):
+///
+/// - **Retired-persona window — deferred to arm #2.** A record whose owning
+///   slot is not resident-**bonded** is unwatchable by construction (the keys
+///   are wiped), so a spend scanned during a retired window is not observed
+///   and sealed ranges never re-scan. Arm #2's retire-time atomic prune
+///   (`docs/FOLLOWUPS.md`, SP-R0 arm #2) closes this by removing the
+///   records *with* the persona. Until it lands, the sweep never reaches
+///   such a record while retired (the sweep is scoped to the assembling —
+///   resident-bonded — persona), and a re-bond of the same persona before
+///   arm #2 is the tracked residual, not a silent one.
+/// - **Quarantined records.** A record whose watch key-image derivation
+///   fails deterministically is skipped from the watch (loudly), never
+///   step-fatal. Sound because assemble re-derives the same bundle
+///   (`derive_spend_parts`) and fails identically — a record the watch
+///   cannot derive can never be swept into a bond post.
+///
 /// Reversion clause (rule 21, executed 2026-07-18 as disposition (a)): if the
 /// watch or the prune is ever made conditional (feature-gated, posture-gated,
 /// or skippable), the attestation below is void — the constructor must grow a

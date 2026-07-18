@@ -8,8 +8,13 @@
   (logic-discharged).** The `P`-scan dual extractor gains arm (c): each
   scanned tx's FCMP++ `ToKey` key images are matched against an in-actor
   watch-set of the key images of `P`'s held funding outputs (derived from the
-  vault via the same spend-bundle leg assemble uses; DQ-A structural
-  containment — redacting `Debug`, no `Serialize`, tripwire-enforced). A hit
+  vault via the single shared `KI = x·Hp(O)` definition assemble also uses;
+  DQ-A structural containment — redacting `Debug`, no `Serialize`,
+  zeroize-on-drop, tripwire-enforced). Derivation is offloaded off the actor's
+  async executor (DQ5/DQ6) with per-record quarantine: a deterministically
+  underivable record is skipped loudly, never a scan halt (assemble re-derives
+  the same bundle and fails identically, so a quarantined record can never be
+  swept into a bond post). A hit
   prunes the matching `PScanState::funding_outputs` record at ingest
   (extend-then-retain — a discover-then-spend within one scan step nets to no
   record; the in-step blind spot is closed by the handler's trailing pass), no

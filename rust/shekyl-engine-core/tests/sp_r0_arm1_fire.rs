@@ -31,8 +31,12 @@ async fn arm1_gc_fires_on_the_production_path() {
         "in-step discover-then-spend must prune via the trailing pass"
     );
     assert_eq!(
-        report.records_after, 0,
-        "no spent record survives the seal substrate"
+        report.records_after_cross_step, 0,
+        "no spent record survives the seal substrate (cross-step scenario)"
+    );
+    assert_eq!(
+        report.records_after_in_step, 0,
+        "no spent record survives the seal substrate (in-step scenario)"
     );
     assert!(
         report.sweep_refuses_after_prune,

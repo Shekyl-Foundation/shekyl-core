@@ -48,6 +48,9 @@
 //! task (PR-B) accumulates them and finalizes the per-epoch inflow at epoch-close.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use shekyl_archival_retention::consensus_state::settlement_epoch_at_height;
 use shekyl_archival_retention::{p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin};
@@ -150,8 +153,11 @@ pub(crate) struct ScanStep {
     /// its key-image watch cache from before running the step (SP-R0 arm #1,
     /// DQ-A: derive-on-add / drop-on-prune; the derived key images never leave
     /// the actor except inside the transient [`KeyImageWatchSet`] handed to the
-    /// offload closure).
-    pub(crate) held_funding: Vec<FundingOutputMatch>,
+    /// offload closure). A shared snapshot, not a per-step deep copy: the task
+    /// re-snapshots only when an ingest changed the list, so the steady-state
+    /// step sends an `Arc` bump instead of re-cloning every record's ~1 KB
+    /// ML-KEM ciphertext.
+    pub(crate) held_funding: Arc<[FundingOutputMatch]>,
 }
 
 /// One settlement epoch's confirmed funding **delta** from a single step
@@ -314,19 +320,19 @@ impl From<&PFundingOutputRecord> for FundingOutputMatch {
 }
 
 /// A confirmed on-chain spend of one of `P`'s held funding outputs — arm (c)
-/// of the extractor (SP-R0 arm #1). The public pairing of *our* output's
-/// `gindex` with the height its spend was observed at; the task prunes the
-/// matching record on ingest (prune-at-ingest, DQ-B).
+/// of the extractor (SP-R0 arm #1). Carries exactly the prune key: every
+/// consumer (the prune-at-ingest in `PScanAccrual::ingest`, the actor's
+/// drop-on-prune) keys on `gindex` alone, so the match carries nothing else —
+/// derivable detail (the spend's height) stays out rather than accreting
+/// bookkeeping no reader consumes.
 ///
-/// `Debug` is redacted: the pairing marks which on-chain spend consumed `P`'s
+/// `Debug` is redacted: the match marks that an on-chain spend consumed `P`'s
 /// output — a row of `P`'s funding history, the same discipline as
 /// [`FundingOutputMatch`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SpentFundingMatch {
     /// The spent output's global index — the prune key into `funding_outputs`.
     pub(crate) gindex: shekyl_types::GlobalOutputIndex,
-    /// Height of the block carrying the spend.
-    pub(crate) height: BlockHeight,
 }
 
 impl std::fmt::Debug for SpentFundingMatch {
@@ -353,34 +359,61 @@ impl std::fmt::Debug for SpentFundingMatch {
 /// - **no `Serialize`/`Deserialize`, ever** — the type cannot be persisted or
 ///   cross a wire; a refactor that tries to send it over a boundary is a
 ///   compile error, not a leak. The `watch_set_has_no_serialize_impl`
-///   tripwire test enforces this stays true at the source level.
-#[derive(Clone)]
+///   tripwire test enforces this stays true at the source level;
+/// - **wipe on drop** (rule 35) — the entries zeroize structurally, so the
+///   pre-publication key images do not linger in freed heap, swap, or a core
+///   dump after the set (or a transient snapshot of it) drops.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub(crate) struct KeyImageWatchSet {
-    /// Key image → the watched output's global index (the prune key).
-    map: BTreeMap<[u8; 32], shekyl_types::GlobalOutputIndex>,
+    /// Entries sorted by key image (binary-search lookup). A sorted `Vec`,
+    /// not a `BTreeMap`: the wipe-on-drop leg above needs elements that can
+    /// be zeroized in place, which map nodes cannot. Residual bound shared
+    /// with every growable zeroizing container: growth/removal may leave
+    /// moved copies in spare capacity; every live entry wipes.
+    entries: Vec<WatchEntry>,
+}
+
+/// One watch entry: the (pre-publication) key image and its public prune key.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+struct WatchEntry {
+    key_image: [u8; 32],
+    /// Public identity (the curve-tree leaf position) — nothing to wipe.
+    #[zeroize(skip)]
+    gindex: shekyl_types::GlobalOutputIndex,
 }
 
 impl KeyImageWatchSet {
     /// An empty watch-set.
     pub(crate) fn new() -> Self {
         Self {
-            map: BTreeMap::new(),
+            entries: Vec::new(),
         }
     }
 
     /// Watch `gindex` under `key_image` (derive-on-add).
     pub(crate) fn insert(&mut self, key_image: [u8; 32], gindex: shekyl_types::GlobalOutputIndex) {
-        self.map.insert(key_image, gindex);
+        match self
+            .entries
+            .binary_search_by(|e| e.key_image.cmp(&key_image))
+        {
+            Ok(i) => self.entries[i].gindex = gindex,
+            Err(i) => self.entries.insert(i, WatchEntry { key_image, gindex }),
+        }
     }
 
     /// The watched gindex `key_image` spends, if any — arm (c)'s match.
     pub(crate) fn lookup(&self, key_image: &[u8; 32]) -> Option<shekyl_types::GlobalOutputIndex> {
-        self.map.get(key_image).copied()
+        self.entries
+            .binary_search_by(|e| e.key_image.cmp(key_image))
+            .ok()
+            .map(|i| self.entries[i].gindex)
     }
 
-    /// Whether `gindex` is already watched (the derive-on-add cache check).
-    pub(crate) fn contains_gindex(&self, gindex: shekyl_types::GlobalOutputIndex) -> bool {
-        self.map.values().any(|g| *g == gindex)
+    /// The set of currently-watched gindexes — built once per refresh so the
+    /// per-record cache check is a set lookup, not a scan of the whole watch
+    /// per held record (which made the refresh quadratic in the held count).
+    pub(crate) fn watched_gindexes(&self) -> BTreeSet<shekyl_types::GlobalOutputIndex> {
+        self.entries.iter().map(|e| e.gindex).collect()
     }
 
     /// Drop-on-prune: stop watching `gindex`. Linear over the set — the held
@@ -388,13 +421,26 @@ impl KeyImageWatchSet {
     /// gindex-keyed index would be a premature optimization (SP-R0 §5 DQ-A
     /// carried pin: note it, don't pre-build it).
     pub(crate) fn remove_gindex(&mut self, gindex: shekyl_types::GlobalOutputIndex) {
-        self.map.retain(|_, g| *g != gindex);
+        self.entries.retain(|e| e.gindex != gindex);
     }
 
     /// Drop every entry whose gindex is not in `held` — the task's held list
     /// is authoritative (records-driven, the SP-R0 framing pin).
     pub(crate) fn retain_gindexes(&mut self, held: &BTreeSet<shekyl_types::GlobalOutputIndex>) {
-        self.map.retain(|_, g| held.contains(g));
+        self.entries.retain(|e| held.contains(&e.gindex));
+    }
+}
+
+impl Clone for KeyImageWatchSet {
+    /// Documented rule-35 `Clone` exception: the only cloner is the `ScanStep`
+    /// handler, which hands a transient snapshot into the extractor's
+    /// `spawn_blocking` closure (the live cache cannot be borrowed across the
+    /// `'static` offload boundary). Both copies wipe on drop; the snapshot
+    /// dies with the closure.
+    fn clone(&self) -> Self {
+        Self {
+            entries: self.entries.clone(),
+        }
     }
 }
 
@@ -422,9 +468,11 @@ impl std::fmt::Debug for KeyImageWatchSet {
 pub(crate) struct DualExtractOutput {
     /// The public scan-step result (after the handler's merge).
     pub(crate) result: ScanStepResult,
-    /// `(key_image, height)` of every spend input observed after the first
-    /// in-step discovery. Public on-chain data.
-    pub(crate) trailing_key_images: Vec<([u8; 32], BlockHeight)>,
+    /// Key image of every spend input observed after the first in-step
+    /// discovery. Public on-chain data (each is already published by its
+    /// spend); a plain set — the handler's merge is a membership check, and
+    /// the prune key is the gindex, so no per-spend detail rides along.
+    pub(crate) trailing_key_images: BTreeSet<[u8; 32]>,
 }
 
 /// Public result of one scan-step — only public extraction outputs cross the
@@ -668,7 +716,7 @@ pub(crate) fn run_dual_extractor(
     // create-and-spend is impossible (membership requires a prior tree root),
     // so "after the first discovery" is exactly the possible blind-spot window.
     let mut spent_funding = Vec::new();
-    let mut trailing_key_images: Vec<([u8; 32], BlockHeight)> = Vec::new();
+    let mut trailing_key_images: BTreeSet<[u8; 32]> = BTreeSet::new();
     let mut discovered_in_step = false;
 
     for (i, block) in blocks.iter().enumerate() {
@@ -715,10 +763,10 @@ pub(crate) fn run_dual_extractor(
             for input in &tx.prefix.inputs {
                 if let Input::ToKey { key_image, .. } = input {
                     if let Some(gindex) = watch.lookup(key_image) {
-                        spent_funding.push(SpentFundingMatch { gindex, height });
+                        spent_funding.push(SpentFundingMatch { gindex });
                     }
                     if discovered_in_step {
-                        trailing_key_images.push((*key_image, height));
+                        trailing_key_images.insert(*key_image);
                     }
                 }
                 if let Input::BondPost(bp) = input {
@@ -1683,10 +1731,6 @@ mod tests {
         .expect("extract");
         assert_eq!(out.result.spent_funding.len(), 1, "watched spend matches");
         assert_eq!(out.result.spent_funding[0].gindex, gindex);
-        assert_eq!(
-            out.result.spent_funding[0].height,
-            BlockHeight::from_raw(20_001)
-        );
 
         // Same block, empty watch: no match, and — because the block also
         // discovers a funding output at the same height — no trailing entry
@@ -1719,7 +1763,19 @@ mod tests {
         let p = persona(0);
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
         let ki = [0xCDu8; 32];
-        let discovery = funding_block(&p);
+        // A distinctive spend AT the discovery height — the window-bound
+        // probe: it must not be collected (collection starts strictly after
+        // the first discovery's height).
+        let ki_at_discovery = [0xABu8; 32];
+        let mut discovery = funding_block(&p);
+        discovery.transactions[0]
+            .prefix
+            .inputs
+            .push(shekyl_wire::transaction::Input::ToKey {
+                amount: 0,
+                key_offsets: Vec::new(),
+                key_image: ki_at_discovery,
+            });
         let mut later = funding_block(&persona(9)); // not ours — filler carrier
         later.transactions[0]
             .prefix
@@ -1738,18 +1794,15 @@ mod tests {
         )
         .expect("extract");
         assert_eq!(out.result.funding_outputs.len(), 1, "one discovery");
-        // The fixture's own txs carry `ToKey` inputs too; the guarantee is
-        // containment (the injected spend is collected) plus the window bound
-        // (nothing at or before the discovery height).
+        // The guarantee is containment (the injected post-discovery spend is
+        // collected) plus the window bound (the injected at-discovery-height
+        // spend is not).
         assert!(
-            out.trailing_key_images
-                .contains(&(ki, BlockHeight::from_raw(20_002))),
+            out.trailing_key_images.contains(&ki),
             "the post-discovery spend is collected for the handler's pass"
         );
         assert!(
-            out.trailing_key_images
-                .iter()
-                .all(|(_, h)| *h > BlockHeight::from_raw(20_001)),
+            !out.trailing_key_images.contains(&ki_at_discovery),
             "trailing collection starts strictly after the discovery height"
         );
     }
@@ -1759,36 +1812,76 @@ mod tests {
     /// `Serialize`/`Deserialize` impl or derive — it is a correlated
     /// fingerprint of `P`'s live UTXO and must be unable to persist or cross
     /// a wire. The redacting `Debug` must stay hand-written.
+    ///
+    /// Fail-closed grep, not a needle list: rather than enumerating serde
+    /// impl spellings (which a path-qualified `impl ::serde::Serialize`, an
+    /// aliased `use ... as S; impl S`, or a `Deserialize` form would slip
+    /// past), every trait-impl coupling to the type name must be on the
+    /// allowlist below, and every attribute in the contiguous block above the
+    /// struct (not just the last `#[derive]` line — a stacked second derive
+    /// attribute is still an attribute here) is checked. Scope: this file —
+    /// which is where the field lives, so any impl needing the map is here or
+    /// doesn't compile.
     #[test]
     fn watch_set_has_no_serialize_impl() {
         let src = include_str!("scan_step.rs");
-        let region = src
-            .split("pub(crate) struct KeyImageWatchSet")
-            .next()
-            .expect("prefix region");
-        // The derive line immediately above the struct is in `region`'s tail;
-        // check the whole file for any serde coupling to the type name. The
-        // needles are assembled at runtime so this test's own source cannot
+        // Needles are assembled at runtime so this test's own source cannot
         // false-positive the grep.
         let ty = "KeyImageWatchSet";
+        let coupling = format!("for {ty}");
+        let allowed = [
+            format!("impl std::fmt::Debug for {ty}"),
+            format!("impl Clone for {ty}"), // documented rule-35 snapshot exception
+        ];
+        for (idx, _) in src.match_indices(&coupling) {
+            let line_start = src[..idx].rfind('\n').map_or(0, |p| p + 1);
+            let line = src[line_start..].lines().next().unwrap_or("");
+            assert!(
+                allowed.iter().any(|a| line.contains(a)),
+                "unlisted trait impl coupled to {ty} (DQ-A allowlist): {line}"
+            );
+        }
+        // Every attribute of the contiguous doc/attribute block directly
+        // above the struct declaration — a second stacked `#[derive]` (or a
+        // `#[serde(...)]`) evades a last-derive-line check but not this one.
+        let decl = format!("pub(crate) struct {ty}");
+        let prefix = &src[..src.find(&decl).expect("struct decl present")];
+        let attr_block: Vec<&str> = prefix
+            .lines()
+            .rev()
+            .take_while(|l| {
+                let t = l.trim_start();
+                t.starts_with("#[") || t.starts_with("///") || t.starts_with("//")
+            })
+            .filter(|l| l.trim_start().starts_with("#["))
+            .collect();
+        for attr in &attr_block {
+            assert!(
+                !attr.contains("Serialize")
+                    && !attr.contains("Deserialize")
+                    && !attr.contains("serde"),
+                "KeyImageWatchSet's attributes must never include serde (DQ-A): {attr}"
+            );
+            assert!(
+                !attr.contains("Debug"),
+                "KeyImageWatchSet must never derive Debug (the redaction would be lost): {attr}"
+            );
+            assert!(
+                !attr.contains("Clone"),
+                "KeyImageWatchSet must never derive Clone — the rule-35 exception is the \
+                 documented hand-written impl: {attr}"
+            );
+        }
+        // The wipe-on-drop leg of the containment (rule 35) stays structural
+        // too: removing the zeroizing derive must trip, not slip by review.
         assert!(
-            !src.contains(&format!("impl Serialize for {ty}"))
-                && !src.contains(&format!("impl serde::Serialize for {ty}"))
-                && !src.contains(&format!("impl<'de> Deserialize<'de> for {ty}")),
-            "KeyImageWatchSet must never implement Serialize/Deserialize (DQ-A)"
-        );
-        let derive_line = region
-            .rsplit('\n')
-            .find(|l| l.contains("#[derive"))
-            .unwrap_or("");
-        assert!(
-            !derive_line.contains("Serialize") && !derive_line.contains("Deserialize"),
-            "KeyImageWatchSet's derive list must never include serde (DQ-A)"
+            attr_block.iter().any(|a| a.contains("ZeroizeOnDrop")),
+            "KeyImageWatchSet must keep its structural wipe-on-drop (rule 35 / DQ-A)"
         );
         // The Debug impl must stay hand-written-and-redacting. Assert the
-        // invariants (a manual impl exists; it emits the redaction constant;
-        // the derive list gains no Debug), not the exact formatting — rustfmt
-        // churn must not fail a live tripwire.
+        // invariants (a manual impl exists; it emits the redaction constant),
+        // not the exact formatting — rustfmt churn must not fail a live
+        // tripwire.
         assert!(
             src.contains(&format!("impl std::fmt::Debug for {ty}")),
             "KeyImageWatchSet's Debug must stay a hand-written impl"
@@ -1796,10 +1889,6 @@ mod tests {
         assert!(
             src.contains("KeyImageWatchSet(<redacted live-utxo-fingerprint>)"),
             "KeyImageWatchSet's Debug must emit the redaction constant"
-        );
-        assert!(
-            !derive_line.contains("Debug"),
-            "KeyImageWatchSet must never derive Debug (the redaction would be lost)"
         );
     }
 }

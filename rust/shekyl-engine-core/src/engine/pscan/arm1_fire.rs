@@ -36,11 +36,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use curve25519_dalek::Scalar;
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
-use shekyl_crypto_pq::kem::{HybridCiphertext, HybridKemPublicKey};
-use shekyl_curve_generators::biased_hash_to_point;
+use shekyl_crypto_pq::kem::HybridKemPublicKey;
 use shekyl_scanner::bench_fixtures::{
     build_typical_case_scannable_block, scannable_block_for_recipient,
 };
@@ -48,24 +46,30 @@ use shekyl_scanner::ScannableBlock;
 use shekyl_types::{BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::Input;
-use zeroize::Zeroizing;
 
 use crate::engine::bond_assembly::{sweep_funding_outputs, SpentRecordsDurablyPruned};
 use crate::engine::pscan::accrual::PScanAccrual;
 use crate::engine::pscan::exhaustiveness::verify_exhaustive;
 use crate::engine::pscan::scan_step::{BlockRange, FundingOutputMatch};
-use crate::engine::stake_engine::{derive_p_source_secrets_bundle, StakeEngineHandle};
+use crate::engine::stake_engine::{derive_funding_key_image, StakeEngineHandle};
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 
 /// What the fire lane asserts (all counts produced by production code).
+/// Per-scenario fields throughout — the prune counters and the surviving
+/// record counts are reported per path, so a scenario that fails to go
+/// clean cannot hide behind the other's result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Arm1FireReport {
     /// Records pruned via the cross-step watch-cache path (expected: 1).
     pub cross_step_pruned: u64,
     /// Records pruned via the in-step trailing path (expected: 1).
     pub in_step_pruned: u64,
-    /// Held funding records remaining after each scenario (expected: 0).
-    pub records_after: usize,
+    /// Held funding records remaining after the cross-step scenario
+    /// (expected: 0).
+    pub records_after_cross_step: usize,
+    /// Held funding records remaining after the in-step scenario
+    /// (expected: 0).
+    pub records_after_in_step: usize,
     /// The production-witness sweep refused to select anything after the
     /// prune (expected: true — the spent record is durably gone).
     pub sweep_refuses_after_prune: bool,
@@ -115,23 +119,20 @@ fn spend_block(key_image: [u8; 32]) -> ScannableBlock {
 
 /// Derive the expected on-chain key image of a discovered funding record —
 /// the harness playing the *chain's* role (the spender knows its own key
-/// image). Uses the same production primitive the actor's watch refresh uses;
-/// if the production derivation ever diverges from this, the watch match
-/// fails and the fire counter stays zero — which is exactly the failure the
-/// lane exists to catch.
+/// image). Calls the production derivation itself
+/// ([`derive_funding_key_image`] — the single shared definition the actor's
+/// watch refresh and the assemble path also use); if that derivation ever
+/// stops matching what the chain would compute, the watch match fails and
+/// the fire counter stays zero — which is exactly the failure the lane
+/// exists to catch.
 fn expected_key_image(keys: &ArchivalPKeys, m: &FundingOutputMatch) -> Result<[u8; 32], String> {
-    let ciphertext = HybridCiphertext {
-        x25519: m.ciphertext_x25519,
-        ml_kem: m.ciphertext_ml_kem.clone(),
-    };
-    let bundle = derive_p_source_secrets_bundle(keys, &ciphertext, m.index_in_transaction)
-        .map_err(|e| format!("bundle derivation: {e}"))?;
-    let x: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(*bundle.spend_key_x)).ok_or("non-canonical x")?,
-    );
-    Ok((biased_hash_to_point(m.output_key) * *x)
-        .compress()
-        .to_bytes())
+    derive_funding_key_image(
+        keys,
+        m.ciphertext_x25519,
+        &m.ciphertext_ml_kem,
+        m.index_in_transaction,
+        m.output_key,
+    )
 }
 
 fn spawn_actor() -> Result<StakeEngineHandle, String> {
@@ -162,7 +163,7 @@ async fn step(
     let range = BlockRange::new(BlockHeight::from_raw(start), BlockHeight::from_raw(end))
         .ok_or("empty range")?;
     let result = handle
-        .scan_step(range, blocks, accrual.funding_outputs().to_vec())
+        .scan_step(range, blocks, accrual.funding_outputs().into())
         .await
         .map_err(|e| format!("scan step: {e}"))?;
     accrual
@@ -225,7 +226,8 @@ pub async fn run_arm1_fire() -> Result<Arm1FireReport, String> {
     Ok(Arm1FireReport {
         cross_step_pruned,
         in_step_pruned,
-        records_after: records_after_a.max(records_after_b),
+        records_after_cross_step: records_after_a,
+        records_after_in_step: records_after_b,
         sweep_refuses_after_prune,
     })
 }
