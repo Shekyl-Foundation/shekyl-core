@@ -1265,7 +1265,7 @@ const PSCAN_TEST_REORG_DEPTH: u64 = 4;
 /// pscan auto-start lifecycle test). Returns the arc'd engine, its tempdir
 /// (caller keeps it alive — it owns the wallet files), and the principal's
 /// encoded primary address.
-async fn staker_wallet(
+pub(super) async fn staker_wallet(
     rpc_port: u16,
     seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
     slot: super::stake_engine::PSlot,
@@ -1307,7 +1307,10 @@ async fn staker_wallet(
 /// bundle at open (`spawn_stake_engine_if_staker` → `derive_archival_p_keys`);
 /// the harness re-derives only the PUBLIC halves so the principal can fund the
 /// persona over an ordinary wallet-built transfer.
-fn persona_address(seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES], slot: u32) -> String {
+pub(super) fn persona_address(
+    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    slot: u32,
+) -> String {
     use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     let keys = derive_archival_p_keys(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
