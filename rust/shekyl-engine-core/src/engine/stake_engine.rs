@@ -182,6 +182,7 @@ use super::pscan::scan_step::{
 };
 use super::stake_timing::{OsRngGapAdapter, DEFAULT_ENTRY_GAP};
 use super::traits::key::SourceSecretsBundle;
+use super::{Network, ShekylAddress};
 
 // S6 / DQ3 — the session RNG self-cert grader (`shekyl-standoff` `conformance`)
 // is gated to **`x86_64` exactly** (the guard below is `target_arch = "x86_64"`,
@@ -854,6 +855,29 @@ impl StakeEngine {
         )
     }
 
+    /// Project the held persona at `slot` into its public
+    /// [`ShekylAddress`](shekyl_address::ShekylAddress) — built **in-actor**,
+    /// from the already-live bundle (never re-derived), from only the public
+    /// spend/view pubs + ML-KEM-768 encap key. The reply type is structurally
+    /// public-only (an address cannot carry a secret), so **no `P` secret leaves
+    /// the actor** (rule 36). The orchestrator uses this only to address a
+    /// funding transfer *to* `P` (`Engine::stake_in`), where `P` is a public
+    /// recipient. `network` is the principal wallet's network (the actor is
+    /// network-agnostic; the address's network is the sender's).
+    fn receive_address_of(&self, slot: PSlot, network: Network) -> ShekylAddress {
+        let keys = self
+            .held
+            .get(&slot)
+            .expect("receive_address_of called for a held slot")
+            .keys();
+        ShekylAddress::new(
+            network,
+            *keys.spend_pk.as_canonical_bytes(),
+            *keys.view_pk.as_canonical_bytes(),
+            keys.ml_kem_ek.to_vec(),
+        )
+    }
+
     /// Wipe the retired slot iff it is ephemeral; a bonded persona is left
     /// resident (typed contract #4 — the wipe path accepts only the ephemeral
     /// type, so this match is the single place a slot can be removed).
@@ -1220,6 +1244,31 @@ impl Message<ActivePersona> for StakeEngine {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         Ok(self.active.map(|slot| self.identity_of(slot)))
+    }
+}
+
+/// Project the currently-active persona's public
+/// [`ShekylAddress`](shekyl_address::ShekylAddress), or `None` when idle — the
+/// funding side of `Engine::stake_in`. The reply is structurally public-only (an
+/// address cannot carry a secret; rule 36) and built **in-actor** from the live
+/// bundle. Distinct from [`ActivePersona`], which reports the *identity*
+/// (`bond_id`, a signing key), not an address. `network` is the principal
+/// wallet's network, supplied by the caller (the actor is network-agnostic).
+pub(crate) struct ActivePersonaReceiveAddress {
+    pub network: Network,
+}
+
+impl Message<ActivePersonaReceiveAddress> for StakeEngine {
+    type Reply = Result<Option<ShekylAddress>, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: ActivePersonaReceiveAddress,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .active
+            .map(|slot| self.receive_address_of(slot, msg.network)))
     }
 }
 
@@ -2694,6 +2743,19 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
+    /// The currently-active persona's public [`ShekylAddress`], or `None` when
+    /// idle — the funding side of `Engine::stake_in`. The reply is structurally
+    /// public-only (rule 36); `network` is the principal's network.
+    pub(crate) async fn active_persona_receive_address(
+        &self,
+        network: Network,
+    ) -> Result<Option<ShekylAddress>, StakeEngineError> {
+        self.actor
+            .ask(ActivePersonaReceiveAddress { network })
+            .await
+            .map_err(collapse_send_error)
+    }
+
     /// The public identity of the held persona at `p_slot` — a pure
     /// projection: no activation, no rotation, no generation advance (see
     /// [`PersonaIdentityOf`]).
@@ -2989,6 +3051,87 @@ mod tests {
     ) -> Result<PersonaIdentity, StakeEngineError> {
         let h = handle.mint_handle(PSlot::from_raw(slot)).await?;
         handle.activate_persona(h).await
+    }
+
+    /// GF-2 boundary (the firewall-critical half of `Engine::stake_in`): the
+    /// address the actor projects for the active persona — public-only, built
+    /// in-actor, no re-derivation — is one `P`'s own dual-scan recovers.
+    /// Construct an output to the *projected* address, then recover it with `P`'s
+    /// secret bundle (the `derive_bundle` oracle — test-side only; production
+    /// never re-derives). A wrong projection (wrong keys / wrong persona) fails
+    /// recovery.
+    #[tokio::test]
+    async fn active_persona_receive_address_is_recovered_by_p_dual_scan() {
+        use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
+        use shekyl_crypto_pq::output::{construct_output, scan_output_recover};
+
+        let slot = 3u32;
+        // Address network is the sender's; it does not affect the derived keys
+        // (which the `DerivationNetwork` fixes), only the address encoding.
+        let network = Network::Mainnet;
+
+        let stake = spawn_over(&[slot], &[], Some(slot));
+        let address = stake
+            .active_persona_receive_address(network)
+            .await
+            .expect("accessor")
+            .expect("an active persona projects an address")
+            .encode()
+            .expect("encode P's projected address");
+
+        // The address `stake_in` would target, decoded back to key material.
+        let decoded = ShekylAddress::decode_for_network(&address, network).expect("decode");
+        let x25519_pk = ed25519_pk_to_x25519_pk(&decoded.view_key).expect("montgomery");
+
+        let amount = 50_000u64;
+        let output_index = 7u64;
+        let constructed = construct_output(
+            &[0x5Au8; 32],
+            &x25519_pk,
+            &decoded.ml_kem_encap_key,
+            &decoded.spend_key,
+            amount,
+            output_index,
+        )
+        .expect("construct an output to P's projected address");
+
+        // P's dual-scan (secret bundle via the test oracle) recovers it.
+        let keys = derive_bundle(slot);
+        let recovered = scan_output_recover(
+            keys.view_sk.as_canonical_bytes(),
+            keys.ml_kem_dk.as_canonical_bytes(),
+            &constructed.kem_ciphertext_x25519,
+            &constructed.kem_ciphertext_ml_kem,
+            &constructed.output_key,
+            &constructed.commitment,
+            &constructed.enc_amount,
+            constructed.amount_tag,
+            &constructed.enc_label,
+            constructed.label_tag,
+            constructed.view_tag_prefilter,
+            output_index,
+        )
+        .expect("P recovers the output addressed via the actor's projection");
+
+        assert_eq!(
+            recovered.amount, amount,
+            "recovered amount matches the funded amount"
+        );
+        assert_eq!(
+            &recovered.recovered_spend_key,
+            keys.spend_pk.as_canonical_bytes(),
+            "the output is owned by P (projected address == P's receive key)"
+        );
+
+        // Idle actor projects no address (the `NoActivePersona` path).
+        let idle = spawn_over(&[slot], &[], None);
+        assert!(
+            idle.active_persona_receive_address(network)
+                .await
+                .expect("accessor")
+                .is_none(),
+            "an idle actor projects no receive address"
+        );
     }
 
     /// WI-2 D-A1/D-A3 — the P-side spend-bundle re-derivation is
