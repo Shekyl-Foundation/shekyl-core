@@ -75,8 +75,8 @@ const fn bech32m_char_len(payload_bytes: usize, hrp_len: usize) -> usize {
 
 /// Longest HRP across the PQC segments and networks (`sskpq2` / `tskpq2`).
 const MAX_PQC_HRP_LEN: usize = 6;
-/// Longest classical HRP across networks (`shekyltest`).
-const MAX_CLASSICAL_HRP_LEN: usize = 10;
+/// Longest classical HRP across networks (`tshekyl` / `sshekyl`, 7 chars).
+const MAX_CLASSICAL_HRP_LEN: usize = 7;
 
 // Bech32m's BCH checksum is proven to detect errors only up to 1023 characters.
 // Each segment must stay strictly under that bound, or its checksum can validate

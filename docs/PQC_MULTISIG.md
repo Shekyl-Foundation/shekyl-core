@@ -330,7 +330,7 @@ Multisig addresses use a new Bech32m human-readable prefix:
 
 ```
 single-sig:     shekyl1<classical+tag>/<pqc_a>/<pqc_b>   (full string; POST_QUANTUM_CRYPTOGRAPHY.md §Address Format)
-single-sig tn:  shekyltest1<...>/<...>/<...>
+single-sig tn:  tshekyl1<...>/<...>/<...>                (classical HRP `tshekyl`; PQC `tskpq`/`tskpq2`)
 multisig:       shekyl1m1<fingerprint 32B>               (names the fingerprint, not the payload; §6.2)
 multisig tn:    shekyltest1m1<fingerprint 32B>
 ```
