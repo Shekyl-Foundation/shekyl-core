@@ -1,4 +1,4 @@
-# Archival stake activation — the production first-stake path (Round 0 scoping)
+# Archival stake activation — the production first-stake path (Rounds 0–1)
 
 **Arc / numbering authority:** [`ARCHIVAL_BOND_PR2_CHAIN.md`](ARCHIVAL_BOND_PR2_CHAIN.md)
 §3.6. This is the **`(b) RPC stake entry`** co-gate named in the GF4b witness rule-21 note —
@@ -110,7 +110,7 @@ mechanism.
   persona's first bond debuts on-chain), so its RPC→broadcast timing is exactly a `T_obs` the
   GF-7 model measures — plausibly the strongest linkage in the system. **The fork:** the GF-7
   decorrelation lives in the 2c-2b scheduler, which exists only **after** the engine spawns (i.e.
-  after reopen; `2C_GF7_HOOKS.md:35`). So **broadcast-before-reopen** (no scheduler →
+  after reopen; `ARCHIVAL_BOND_2C_GF7_HOOKS.md:35`). So **broadcast-before-reopen** (no scheduler →
   GF-7-exposed debut) vs **broadcast-after-reopen** (routes through the scheduler → GF-7-preserved,
   but the signed bond must be **held across the reopen**). The answer is almost certainly *hold
   across reopen, broadcast through the scheduler*; ratify it as a Round-0 pin, since getting it
@@ -169,15 +169,19 @@ with the seed live**, in this order:
    `S` via the **one** primitive `derive_archival_p_keys` (`archival_p.rs:369`) — SA-DQ-2.
 3. **Spawn the StakeEngine for `{S} ∪ lookahead`** *even though `staking_enabled` is still false*
    (SA-R1-a, the one gate change), so a `PersonaHandle` exists to assemble against.
-4. **Assemble** the first bond (`AssembleBond`) — it **sweeps the one `stake_in` funding output
-   → one input** (SA-DQ-4) — and **persists it to the durable `.wallet.pending` store**
-   (`bond_orchestrator.rs:283-289`); it does **not** broadcast (SA-DQ-5).
-5. `persist_bond_record(S)` (`stake_persist.rs:138`) → flips `staking_enabled` + writes
-   `bonded_slots[S]` atomically, crash-safe. The slot is **durable-but-phantom** until confirmed
-   (SA-DQ-3).
-6. `start_pscan` (already in the open path once staking) → the `DispatchDriver` loads the pending
-   post and **broadcasts it at its GF-7 offset** (`pscan/dispatch.rs:259-263,556`). No reopen #2
-   needed: the whole bootstrap completes inside the credentialed open.
+4. **Sweep** the one `stake_in` funding output → **one input** (SA-DQ-4), **in-memory** — funding is
+   validated *before* any durable staker state, so an insufficient-funding first-stake **fails closed**
+   leaving nothing to reconcile (§5.7 W1).
+5. **`persist_bond_record(S)`** (`stake_persist.rs:138`) → mint the `PersistedBondTicket` + flip
+   `staking_enabled` + write `bonded_slots[S]` atomically, crash-safe. **This precedes sign** — the
+   persist-before-use typestate (this section's intro): sign has no ticket to consume otherwise. The
+   slot is now **durable-but-phantom** until confirmed (SA-DQ-3).
+6. **Sign + assemble** the first bond (`AssembleBond`, consuming the ticket) → **persist the post to
+   the durable `.wallet.pending` store** (`bond_orchestrator.rs:283-289`, written **post-sign**); it
+   does **not** broadcast (SA-DQ-5).
+7. `start_pscan` (already in the open path once staking) → the **bond** dispatch driver loads the
+   pending post and **broadcasts it at its GF-7 offset** (`pscan/dispatch.rs:259-263,556`). No reopen
+   #2 needed: the whole bootstrap completes inside the credentialed open.
 
 ### 5.1 SA-DQ-1 — RPC surface, seed re-materialization, idempotency
 
@@ -264,10 +268,13 @@ uses `AssembleBond`→pending-store (never a bespoke send).
   bootstrap spawn **is** the real spawn (no throwaway bootstrap actor). The intent is a transient
   parameter to `assemble()`, never persisted (persistence is `persist_bond_record`'s job). Confirm
   this over the alternative (a distinct short-lived bootstrap StakeEngine for `{S}`).
-- **SA-R1-b — assemble-before-persist ordering.** The bootstrap **assembles into `.wallet.pending`
-  then persists** (steps 4→5), so a crash after persist/before dispatch yields exactly the SA-DQ-3
-  phantom (safe, GC-collected). Confirm this over persist-first (which would widen the phantom window
-  with no assembled post to show for it).
+- **SA-R1-b — the typestate-forced order + sweep-before-persist.** The order is **not a free choice**:
+  the persist-before-use typestate forces `persist_bond_record` (mint ticket) **before** sign/assemble
+  (§5.0; sign has no ticket otherwise). The one degree of freedom is **sweeping before persist** —
+  validate funding first, so an insufficient-funding first-stake fails closed with **no** durable
+  staker state (§5.7 W1), rather than flipping `staking_enabled` and *then* finding the funding short.
+  The unavoidable window this leaves (persist done, sign/assemble not) is §5.7's W2, handled by
+  seed-gated resume.
 - **SA-R1-c — the SA-DQ-4 ownership split** (§5.4): invariant + enforcement here; funding-shape in
   `stake_in`. Confirm both are pre-genesis and cross-referenced, and that a debug-assert-on-count at
   assemble is the right enforcement locus (vs. only shaping `stake_in`).
@@ -313,9 +320,9 @@ three, against the typestate order, with recovery each:
 
 The **load-bearing recovery decision** is W2: **re-entrant `persist_bond_record` + resume-first-stake on
 reopen**, *not* "arm #3 GCs and the user re-stakes" — because arm #3 is not live at first-stake's genesis
-window, and a resume keeps a crashed first-stake progressing without a live GC. (SA-R1-b's assemble-before-
-persist ordering from §5.6 is what makes W3 the common outcome and W2 recoverable; the typestate is what makes
-W2 exist at all.)
+window, and a resume keeps a crashed first-stake progressing without a live GC. (SA-R1-b's sweep-before-persist
+ordering from §5.6 keeps W1 clean; the persist-before-use typestate — persist mints the ticket sign consumes —
+is what makes W2 exist at all, with W3 the success outcome.)
 
 **W2 resume is seed-gated (the genesis-window behavior, stated not inferred).** Re-signing needs the spend
 key → the **seed**, so resume is a **credentialed path**: it fires on a `stake` **re-invoke** (seed present,
