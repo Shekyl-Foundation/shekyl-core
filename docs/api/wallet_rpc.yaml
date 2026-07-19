@@ -899,11 +899,15 @@ components:
       type: object
       description: >
         Freeform URI composition. The address is not format-validated here
-        (mirrors `shekyl_address::format_payment_uri`); `rid`, when given,
-        must be non-zero and u48-fitting (-32602 otherwise).
+        (mirrors `shekyl_address::format_payment_uri`), but a provided
+        address must be non-empty and contain no whitespace — anything else
+        would embed into the composed URI as an ambiguous `shekyl:` string
+        (-32602). `rid`, when given, must be non-zero and u48-fitting
+        (-32602 otherwise).
       properties:
         address:
           type: string
+          pattern: "^\\S+$"
           description: Defaults to the open wallet's primary address.
         amount:
           $ref: "#/components/schemas/AtomicUnits"

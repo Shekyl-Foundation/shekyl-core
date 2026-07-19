@@ -220,6 +220,13 @@ async fn make_uri_parse_uri_round_trip_and_rid_bounds() {
     let garbage = rpc(state.clone(), "parse_uri", json!({ "uri": "http://x" })).await;
     assert_eq!(garbage["error"]["code"], -32602, "{garbage}");
 
+    // Whitespace in a provided address → invalid params, never embedded
+    // into the composed URI (padding and internal whitespace alike).
+    for bad_address in [" shekylstubaddress1", "shekyl stub", "\taddr\n", "  "] {
+        let ws = rpc(state.clone(), "make_uri", json!({ "address": bad_address })).await;
+        assert_eq!(ws["error"]["code"], -32602, "{bad_address:?}: {ws}");
+    }
+
     // Receiving methods that need the engine refuse without an open wallet.
     let no_wallet = rpc(
         state,

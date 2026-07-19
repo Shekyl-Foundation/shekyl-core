@@ -138,10 +138,14 @@ pub(crate) async fn make_uri(
     let expiry = p.expiry.map(parse_height_param).transpose()?;
 
     let address = match p.address {
-        Some(a) if !a.trim().is_empty() => a,
+        // Reject — never trim-and-repair — per the boundary discipline the
+        // rest of the surface follows (rid=0 rejected, counts rejected).
+        // Whitespace anywhere (padding or internal) would embed into the
+        // composed URI and produce an ambiguous `shekyl:` string.
+        Some(a) if !a.is_empty() && !a.chars().any(char::is_whitespace) => a,
         Some(_) => {
             return Err(WalletRpcError::InvalidParams(
-                "address must be non-empty when provided".into(),
+                "address must be non-empty and contain no whitespace".into(),
             ));
         }
         None => {
@@ -215,9 +219,11 @@ fn parse_filter(
         None | Some("ALL") => Ok(PaymentRequestFilter::All),
         Some("PENDING") => Ok(PaymentRequestFilter::Pending),
         Some("MATCHED") => Ok(PaymentRequestFilter::Matched),
-        Some(other) => Err(WalletRpcError::InvalidParams(format!(
-            "unknown payment-request filter: {other}"
-        ))),
+        // Stable message; never reflect the client-supplied string (same
+        // no-echo discipline as `parse_atomic_units`).
+        Some(_) => Err(WalletRpcError::InvalidParams(
+            "unknown payment-request filter (expected ALL, PENDING, or MATCHED)".into(),
+        )),
     }
 }
 
