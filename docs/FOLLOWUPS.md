@@ -8457,7 +8457,29 @@ one place to confirm each item's relationship to the wallet stack.
   only (the surviving channel) and cannot silently re-introduce shape machinery.
   **Target: V3.0** (with the drain-send subsystem; the audit is cheap, the carve
   decisions freeze with the wallet's exit UX).
-- **Principal-side default-on Tor — flip `--proxy` from opt-in to default, opt-out loud.**
+- **`P`-lane fee uniformity — implementation rider (ratified 2026-07-19,
+  `V3_WALLET_DECISION_LOG.md` "P-lane fees"; rides the `Unbond` wallet
+  constructor, the SP-R0 arm-#2 production-discharge family).** The decision:
+  every `P`-lane tx pays the standard weight-priced floor fee from persona
+  working capital (cover + earnings); no fee-less class. The wire already
+  admits it (balance `fee` term is universal; gate-4 §3.3 envelope allows
+  `txin_to_key` on every `post_kind`). What the implementation lands:
+  (a) the **typed `P`-space pool** selector (cover + claim outputs; principal
+  outputs unrepresentable by type) shared by every `P`-lane constructor;
+  (b) **`EXIT_FEE_RESERVE_ATOMIC`** + the spend-floor invariant in every
+  mid-life constructor, with a pinned dominance assert against
+  `COVER_RUNWAY_FLOOR_ATOMIC`; (c) the **`ClaimFeeInputsRequired`
+  conditional** (`backing_set.rs`) — destitute branch admits the Q11
+  zero-fee-input claim, with a test walking the two-step destitute exit
+  (mint-funded claim → `Unbond` funded from the claimed output);
+  (d) **debit-path fee-input battery rows** — the `Unbond`/`HoldingsUpdate`-drop
+  submit battery (the non-JM PR-4b sibling) exercises fee inputs over the K12
+  shared funding-subset leg, plus a `fee == 0` reject row per kind so
+  fee-presence is enforced by an executed test, not convention (no-theater
+  rule); (e) the **canonical-floor fee derivation** (no estimator multiplier,
+  no user knob) shared with the first-stake fee path. **Target: with the
+  `Unbond` constructor build** — the fee rule is a construction input, so it
+  cannot land later than the constructor without rework.
   Source-verified at the WI-4 arc closure (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §18.13):
   the persona side is Tor-mandatory **by construction** (`shekyl-p-transport` fails the
   build without its SOCKS connector), but the principal side is opt-in — `shekyl-cli`'s
