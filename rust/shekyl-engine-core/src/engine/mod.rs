@@ -331,6 +331,9 @@ pub(crate) mod stake_persist;
 /// (distinct inner types → compile error on cross-apply). Design-now; real checks
 /// wire in cold-start / 2d wiring.
 pub(crate) mod stake_timing;
+// WI-RPC-1: read-only staked-balance/staked-output aggregation over the
+// authoritative sealed pscan/pending records, for the wallet-RPC surface.
+pub mod staking_read;
 /// `docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3: the submit lifecycle
 /// driver — the wallet-side actor that lifts the [`submit_watchdog`]
 /// kernel (projection → escape ladder → resubmit-same-bytes probe →
@@ -411,6 +414,7 @@ pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
 };
 pub use sealing_keys::StateWrapKey;
+pub use staking_read::{StakedBalance, StakedOutput, StakingReadError, StakingReadView};
 /// The MS-5 multisig signer marker — only present under `--features multisig`.
 #[cfg(feature = "multisig")]
 pub use signer::MultisigSignerV2;
