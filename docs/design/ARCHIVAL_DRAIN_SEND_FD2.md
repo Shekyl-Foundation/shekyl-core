@@ -41,8 +41,11 @@ hold** (Gate-6 §12.4 build notes, verified at source 2026-07-19):
    wired nowhere.
 3. **The wallet-flow default on top** — never seed a reward-derived
    amount; offer round-number / random-split; aggregate-only balance
-   surface. Plus the **F-D4 §16.4 funding default** (ACCEPTED as
-   F-D2-class at Gate-6 §12.9 decision 3).
+   surface. **Incl. the F-D4 §16.4 funding default** (ACCEPTED as
+   F-D2-class at Gate-6 §12.9 decision 3): the §12.9 R4 close wording —
+   "F-D1 + F-D2 **(incl. funding default)** + deletion PR + F-D5 §14.4
+   disposition", carried verbatim through the 07-17 UPDATEs — writes it
+   into the close as a **gating** item (see DS-6).
 
 Riders that land **before/with** this subsystem (`docs/FOLLOWUPS.md`
 "P-drain mechanism re-walk", V3.0): (a) fee/change mechanics decision,
@@ -98,10 +101,24 @@ seal input (seat removed 2026-07-19; see the charter note above).
   `PayloadKind::PScanStatePostcard = 0x02` in the engine wallet file
   (`shekyl-engine-file/src/payload.rs:126`, `handle.rs:594–:650`).
 - Lifecycle precedent: `Engine::start_pscan_if_staker`
-  (`engine/pscan/start.rs:500`) — quiet `None` for a non-staker
-  (staker ⇔ `stake_handle()` present, set at open); `shekyl-wallet-rpc`'s
-  tenant calls it unconditionally at open and parks the handle
-  (`lifecycle.rs:441–:463`). This is the adoption shape WI-1 landed.
+  (`engine/pscan/start.rs:520`) — quiet `None` for a non-staker; a live
+  handle only when **the open path found `staking_enabled`** (the fn's
+  own docstring, `start.rs:504`). `shekyl-wallet-rpc`'s tenant calls it
+  unconditionally at open and parks the handle (`lifecycle.rs:441–:463`).
+  This is the adoption shape WI-1 landed.
+- **`staking_enabled` production setter — landed on `dev`** (verified
+  2026-07-19; supersedes the SP-R0 §0 F-1 "zero production callers"
+  state): the stake-activation entry (2026-07-18,
+  `feat/stake-activation-entry`) wired wallet-rpc `"stake"`
+  (`handlers.rs:48`) → `Engine::first_stake` (`bond_orchestrator.rs:537`)
+  / `open_full_with_first_stake_intent` → `persist_bond_record`, which
+  flips `staking_enabled = true` (`stake_persist.rs:150`). The
+  production caller is **wallet-rpc, not the GUI** — a GUI-held engine
+  wallet becomes a staker only via a GUI-side activation surface
+  (calling `Engine::first_stake` in-process) or a documented cross-tool
+  flow (stake via wallet-rpc, then open the same engine wallet in the
+  GUI). Neither exists today; DS-PR-3 inherits this as a named
+  dependency (see DS-2 and §4).
 
 ### 2.4 GUI substrate (`shekyl-gui-wallet`, verified 2026-07-19)
 
@@ -177,6 +194,34 @@ whether the GUI's principal surfaces work against an engine wallet
 today — needs the pre-flight substrate check before this round can
 close. **Not decided here.**
 
+**Pre-flight results recorded (review round, 2026-07-19 — source
+checks, not the ratification):**
+
+- *The GUI's principal path is wallet2-only today.* `Send.tsx` →
+  `commands::transfer` (`commands.rs:802`) → `Wallet2::transfer_native`
+  (`wallet_bridge.rs:770–:788`); the `wallet_bridge.rs` module doc
+  itself marks Engine adoption as future work (`:24–:28`). No principal
+  surface in the GUI executes against an engine `.wallet`.
+- *The engine's principal send surface exists and is
+  production-consumed* — (b) is not blocked by missing engine API:
+  `Engine::build_pending_tx` / `submit_pending_tx`
+  (`engine/pending.rs:836`/`:845`, async variants `:861`/`:870`),
+  consumed by `shekyl-wallet-rpc`'s send handlers
+  (`send.rs` `build_pending_tx` over `TxRequest`/`TxRecipient`). (b)'s
+  cost is GUI-side bridging work (its command layer is wallet2-shaped),
+  not engine gaps. The full principal-surface inventory (history,
+  subaddresses, restore flows) remains a pre-flight item.
+- **Second dependency edge (review finding):** `start_pscan_if_staker`
+  yields a live handle only when the open path found `staking_enabled`
+  (`start.rs:520` docstring). The production setter chain **has landed
+  on `dev`** (§2.3), but its caller is wallet-rpc — without a GUI-side
+  activation surface or a pinned cross-tool flow, DS-PR-3 compiles,
+  passes its tests, and returns `Ok(None)` forever in production: the
+  `P`-balance surface is permanently empty and the adoption is an
+  armed gate with no trigger. The `staking_enabled`-reachability path
+  for GUI wallets is therefore a **named DS-PR-3 dependency** (§4) and
+  a pre-flight item alongside the principal-surface check.
+
 **Rejected alternative.** Read-only parse of the persisted
 `PScanStatePostcard` payload without running the P-scan task — a stale
 snapshot with no cursor discipline; drains would plan against outputs
@@ -244,7 +289,7 @@ the same self-grep + signature discipline as `drain_amount.rs`: it takes
 `DrainBalance` (the scalar), never `&[PFundingOutputRecord]` /
 `DrainCandidate`; the `fd1_arm_*` template extends to it.
 
-### DS-6 — The F-D4 §16.4 funding default (accepted rider)
+### DS-6 — The F-D4 §16.4 funding default: in-scope and **gating** (ANSWERED, review round 2026-07-19)
 
 Gate-6 §12.9 decision 3 accepted the funding default as F-D2-class:
 **self-fund by default via GF-4b lineage; external growth-funding is a
@@ -252,11 +297,25 @@ loud override routed through the entry standoff**, with its growth-gating
 cost (portfolio expansion gated on accumulated rewards ≥ FLOOR) stated
 up front. This is a *funding-path* (value-in) default, not a drain
 default — it rides the same subsystem PR chain because both are
-`shekyl-gui-wallet` wallet-flow defaults under the F-D2 label, but it is
-a separable slice (DS-6 can land in its own sub-PR without blocking
-DS-3/DS-4/DS-5, and vice versa). Whether Gate-6 counts it inside "F-D2
-landed" for the R4 close is a **review question for this round** — §12.4
-build notes don't name it; §12.9 decision 3 attaches it to F-D2.
+`shekyl-gui-wallet` wallet-flow defaults under the F-D2 label.
+
+**Disposition: in-scope and gating for the R4 close.** The §12.9 R4
+decision-round text writes the re-formed close as "F-D1 + F-D2 **(incl.
+funding default)** + deletion PR + F-D5 §14.4 disposition," and the
+07-17 UPDATEs carry it verbatim ("remaining: F-D1, F-D2 (incl. funding
+default)" → "R4 open on F-D1 + F-D2 only"). §12.9's close wording is
+authoritative — later, ratified, decision-round text beats the §12.4
+build-note enumeration, which listed the three drain layers without
+restating the funding default (a §12.4↔§12.9 split: anyone reading
+§12.4 alone under-scoped R4 — the close condition existed only in the
+join). Reconciled 2026-07-19 by a dated §12.4 amendment adding "(incl.
+the §16.4 funding default)" to the build note, so R4's scope reads
+correctly from one section.
+
+Two orthogonal properties, both true: DS-6 is **slice-independent**
+(it can land in its own sub-PR, DS-PR-5, without blocking
+DS-3/DS-4/DS-5, and vice versa) and **close-gating** (R4 does not close
+without it). Separable ≠ optional.
 
 ### DS-7 — Shape-era language sweep (re-walk item (b))
 
@@ -273,7 +332,7 @@ updates so the new code never cites retired discipline.
 |-------|------|---------|-----------|
 | DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry | round closure + pre-flight |
 | DS-PR-2 | shekyl-core | Drain dispatch seam (claim-dispatch sibling): choke-point submit on persona transport, retirement wiring | DS-PR-1 |
-| DS-PR-3 | shekyl-gui-wallet | Staker-mode engine adoption (DS-2 shape as ratified): open + `start_pscan_if_staker` + parked handle; aggregate `P`-balance read | DS-PR-1 (API exists) |
+| DS-PR-3 | shekyl-gui-wallet | Staker-mode engine adoption (DS-2 shape as ratified): open + `start_pscan_if_staker` + parked handle; aggregate `P`-balance read | DS-PR-1 (API exists) **+ a `staking_enabled` production path reachable from the GUI's wallet world** (setter chain landed on `dev` via wallet-rpc `stake` → `Engine::first_stake` → `persist_bond_record`, §2.3; the GUI-side activation surface or pinned cross-tool flow is the missing edge — without it DS-PR-3 returns `Ok(None)` forever) |
 | DS-PR-4 | shekyl-gui-wallet | Drain-send UI: amount entry + DS-5 defaults + confirm; calls the one engine entry point | DS-PR-2, DS-PR-3 |
 | DS-PR-5 | shekyl-gui-wallet | DS-6 funding default (separable) | DS-PR-3 |
 | DS-PR-6 | shekyl-core | DS-7 doc sweep + Gate-6/M1/FOLLOWUPS close-out lines | last |
@@ -283,10 +342,13 @@ first; the GUI consumes released surface, never the reverse.
 
 ## 5. What this round does not decide
 
-- The DS-2 sub-question (dual-open vs engine-first) — pre-flight
-  substrate check owed, then maintainer ratification.
-- Whether DS-6 is inside the R4 close's "F-D2 landed" — maintainer
-  ratification against Gate-6 §12.9 decision 3's text.
+- The DS-2 sub-question (dual-open vs engine-first) — the pre-flight
+  source checks are recorded in DS-2 (principal path wallet2-only
+  today; engine principal send exists and is production-consumed;
+  `staking_enabled` GUI-reachability is the missing edge); the
+  **ratification** of (a) vs (b) is still owed. *(DS-6's close-scope
+  question, previously listed here, is ANSWERED — in-scope/gating per
+  §12.9; see DS-6.)*
 - UI visual design (page placement, staking-page integration) — product
   surface, not firewall surface; falls out at DS-PR-4.
 - Threat-model addenda (rule 26 A3) — owed as a late-round pass (Round
@@ -298,3 +360,16 @@ first; the GUI consumes released surface, never the reverse.
 - **2026-07-19 — Round 1 opened (this document).** Substrate enumerated
   at source (§2); DS-1…DS-7 drafted with proposed dispositions; slicing
   proposed (§4). Awaiting review.
+- **2026-07-19 — Review round 1 (three findings, all applied).**
+  (1) **DS-6 ANSWERED in-scope/gating** — §12.9's ratified close
+  wording ("F-D2 (incl. funding default)") is authoritative over the
+  §12.4 enumeration; §12.4 reconciled by dated amendment; the
+  separable-vs-optional conflation in §5 untangled. (2) **DS-2 gained
+  its missing dependency edge** — `start_pscan_if_staker` requires
+  `staking_enabled` at open (`start.rs:520`); the production setter
+  chain landed on `dev` (stake-activation entry, wallet-rpc-side), but
+  GUI reachability is unestablished; folded into DS-PR-3's dependency
+  cell and the pre-flight. GUI pre-flight source checks run and
+  recorded (principal path wallet2-only; engine principal send exists,
+  production-consumed by wallet-rpc). (3) §2.3's `start.rs:500` cite
+  corrected to `:520`.
