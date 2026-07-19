@@ -172,6 +172,14 @@ asserts exactly-one), and the DQ-F fire lane
 test — is a compile-time fact; CI asserts both prune paths fire and the
 production-witness sweep refuses post-prune). Guard-2 status: **logic-discharged;
 production-firing gated on the staker-activation round (#332)**.
+**UPDATE 2026-07-18 (PR-4b): PRODUCTION-DISCHARGED.** The activation entry landed
+(#336) and PR-4b landed the daemon bond-post battery + promoted the regtest
+tripwire: the e2e now stakes through the production `Engine::first_stake` entry
+(the `arm1_watch_pruning_live` witness minted inside it), the sealed post is
+re-lifted and submitted over real RPC, the bond confirms on-chain, and the scan
+observes the confirmed post and **prunes the swept funding records from the
+sealed state** — the DQ-F production fire, asserted live
+(`regtest_e2e.rs::e2e_staker_bond_post_reaches_the_daemon_submit_gap`).
 
 ---
 

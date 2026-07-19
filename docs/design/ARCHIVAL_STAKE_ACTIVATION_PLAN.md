@@ -394,6 +394,20 @@ its production-discharge rides the same PR-4b-gated lane). The
 `stake_in` principal-side funding shape and the reopen-friction polish
 (`FOLLOWUPS` V3.x) stay with their own homes.
 
+**UPDATE 2026-07-18 — arm #1 PRODUCTION-DISCHARGED (PR-4b).** The blocker landed
+(the bond-post Phase-C battery) and the regtest tripwire is promoted exactly as
+named above: `e2e_staker_bond_post_reaches_the_daemon_submit_gap` now enters
+through `Engine::first_stake` (preflight sweep → durable persist → assemble →
+pending seal — the `arm1_watch_pruning_live` witness minted inside the entry,
+no `for_test` deviation on the path), re-lifts the sealed post
+(`PBoundBytes::from_pending`) through the audited posture→submitter choke
+point, and asserts accepted → mined → bond-post match + `BondPostChange`
+change funding re-discovered with the **swept funding records PRUNED from the
+sealed state** — the DQ-F production fire, live. Arm #3's production-discharge
+form (a crashed real `stake` flow collected at the next production open) is
+now **unblocked** but not driven by this harness; it remains open with its
+fire-lane test (`sp_r0_arm3_fire.rs`) as the logic evidence.
+
 ### 5.9 POST-REVIEW HARDENING (2026-07-18, same branch — high-effort review findings, all fixed)
 
 A full review of the first implementation surfaced ten defects; every one is fixed on

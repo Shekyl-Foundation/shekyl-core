@@ -296,9 +296,14 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     // claimed identity key, so the BP3 record probe (keyed on the claim)
     // and the BP5 auth pin (keyed on the pubkey) bind the same P. The
     // deterministic archival legs run before the expensive proofs — the
-    // check *set* is the C++ oracle's; only its internal order differs,
-    // which is verdict-invisible (every leg here is Malformed except the
-    // BP3 conflict, which only fires on otherwise-valid bytes).
+    // check *set* is the C++ oracle's (which also probes the record before
+    // its FCMP/PQC legs); only the balance/Bp+ placement differs, and the
+    // BP3 conflict deliberately outranks the proof legs: a consumed claim
+    // slot is terminal for this P regardless of proof validity (a
+    // resubmission with repaired proofs fails BP3 again), so
+    // `DoubleSpendConflict` is the more actionable verdict even when later
+    // legs would also have refused — the engine's most-terminal-first
+    // doctrine, applied inside the battery.
     if p_canonical_id_from_hybrid_pubkey(&bond.hybrid_public_key).as_bytes() != &bond.p_canonical_id
     {
         return Err(VerifyFailure::Malformed);

@@ -21,9 +21,11 @@
   clear Phase A") are corrected — no wire contradiction existed.
   Non-JoinMarket post kinds (`Unbond`/`HoldingsUpdate`/`Rebond`) refuse
   loudly under a named rule-21 reopening criterion. The PR-4a staker-harness
-  tripwire is promoted to accepted-and-applied (bond mined, bond-post match
-  + `BondPostChange` change funding re-discovered by the production
-  P-scan). The emission submit leg remains open on its FOLLOWUPS item and
+  tripwire is promoted to accepted-and-applied — staking through the
+  production `Engine::first_stake` entry (bond mined, bond-post match +
+  `BondPostChange` change funding re-discovered by the production P-scan,
+  swept funding records pruned from the sealed state: the SP-R0 arm-#1
+  **production discharge**, DQ-F fire live). The emission submit leg remains open on its FOLLOWUPS item and
   still gates PR-4c.
 
   Driving the battery live surfaced and fixed **two latent production

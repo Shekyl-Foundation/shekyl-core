@@ -1360,9 +1360,14 @@ subset — key images, pseudo-outs, and leaf hashes from `spend_indices`
 only, the `blockchain.cpp:3762-3800` shape) → K13 over every input (the
 bond slot's identity-key signature included). The deterministic archival
 legs run before the expensive proofs; the check *set* is the C++ oracle's
-and only its internal order differs, which is verdict-invisible (every leg
-is `Malformed` except the BP3 conflict, which fires only on
-otherwise-valid bytes). Semantic legs are the **same
+(which also probes the record before its FCMP/PQC legs — only the
+balance/Bp+ placement differs), and the BP3 conflict **deliberately
+outranks the proof legs**: a consumed claim slot is terminal for this `P`
+regardless of proof validity (a resubmission with repaired proofs fails
+BP3 again), so `DoubleSpendConflict` is the more actionable verdict even
+when a later proof leg would also have refused — the most-terminal-first
+doctrine applied inside the battery. Every other leg is `Malformed`, so
+the internal order is otherwise verdict-invisible. Semantic legs are the **same
 `shekyl-archival-retention` functions** the C++
 `check_archival_bond_post_input` dispatches to over FFI, so the two paths
 share the verifying code.

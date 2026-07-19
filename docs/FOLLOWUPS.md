@@ -8507,6 +8507,12 @@ one place to confirm each item's relationship to the wallet stack.
   only — production-firing remains gated on the staker-activation round (#332)**; the entry
   closes on the production discharge. The "nothing removes an output" poison text above is the
   pre-arm-#1 record, kept for lineage.
+  **UPDATE 2026-07-18 (PR-4b): PRODUCTION-DISCHARGED — this entry closes.** The
+  activation entry (#336) + the PR-4b bond-post battery landed, and the promoted
+  regtest e2e stakes through the production `Engine::first_stake` path, confirms
+  the bond on-chain, and asserts the swept funding records are pruned from the
+  sealed state (the DQ-F production fire, live —
+  `ARCHIVAL_BOND_SP_R0_PLAN.md` §4 build record).
   See [`ARCHIVAL_BOND_WI2_ASSEMBLY.md`](design/ARCHIVAL_BOND_WI2_ASSEMBLY.md) §3.2/§3.5 and
   [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12 (SP-R0).
   **2d-2 tip-consumer enrollment note:** assemble-time `anchor_t0` (via

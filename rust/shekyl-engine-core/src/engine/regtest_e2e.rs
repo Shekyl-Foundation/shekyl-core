@@ -1420,28 +1420,31 @@ async fn pscan_until(
 /// verifies the wallet-built post over real RPC. The trailing assertions
 /// pin the full loop: submit accepted, bond mined, and the rung-2
 /// bond-post match + `BondPostChange` change funding re-discovered by this
-/// same production scan — the substrate the emission-claim e2e (PR-4c)
-/// spends from. (This test was the PR-4a daemon-gap tripwire pinning the
-/// old unimplemented-arm `Malformed` refusal; PR-4b promoted it.)
+/// same production scan, with the swept pre-post funding records PRUNED
+/// from the sealed state — the SP-R0 arm-#1 **production fire** (DQ-F):
+/// the stake enters through [`Engine::first_stake`], whose preflight sweep
+/// mints the `arm1_watch_pruning_live` witness, so the whole
+/// persist → assemble → seal → dispatch → confirm → prune loop runs on
+/// production code. The surviving funding set is the `BondPostChange`
+/// change — the substrate the emission-claim e2e (PR-4c) spends from.
+/// (This test was the PR-4a daemon-gap tripwire pinning the old
+/// unimplemented-arm `Malformed` refusal; PR-4b promoted it.)
 ///
 /// Bounded deviations from production, each named:
-/// - [`SpentRecordsDurablyPruned::for_test`] — the test-only mint; the same
-///   witness every bond-path test passes (`super::bond_assembly`). SP-R0
-///   arm #1 pruning **has landed** (`arm1_watch_pruning_live` is the sole
-///   production mint), so this deviation is convention, not a gap: the
-///   harness skips touring the scan-side watch to keep the bond-path focus.
-/// - The assembled bytes are dispatched directly through the audited
-///   posture→submitter choke point (`for_posture` + `submit_bound`) rather
-///   than WI-3's block-timed dispatch driver: the driver's decorrelation
-///   offsets span up to ~600 blocks (its timing law has its own KATs); the
-///   harness proves the chain-facing contract.
+/// - The sealed pending post is re-lifted (`PBoundBytes::from_pending`) and
+///   dispatched directly through the audited posture→submitter choke point
+///   rather than by WI-3's block-timed dispatch driver: the driver's
+///   decorrelation offsets span up to ~600 blocks (its timing law has its
+///   own KATs); the harness proves the chain-facing contract.
 /// - A shallow P-scan finality horizon + tight cadence via the injectable
 ///   `start_pscan_with` seam (see [`PSCAN_TEST_REORG_DEPTH`]).
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
 async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
-    use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
-    use super::stake_engine::{PSlot, StakeEngineError};
+    use super::bond_assembly::PBoundBytes;
+    use super::bond_orchestrator::FirstStakeError;
+    use super::pscan::start::pending_post_store_for_engine;
+    use super::stake_engine::PSlot;
     use super::traits::DaemonEngine;
     use super::transaction_submitter::BroadcastSubmitter;
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
@@ -1534,84 +1537,71 @@ async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
         .count();
     eprintln!("pscan discovered {discovered} persona funding output(s)");
 
-    // Production bond post. The funding must be spendable at the anchored
-    // REFERENCE block (tip − REF_ANCHOR_AGE), which lags tip maturity — retry
-    // the production assemble, mining between attempts (the same shape as the
-    // spend e2e's reference-spendability loop).
-    let fee = AtomicUnits::from_raw(bond_fee);
-    let mut assembled = None;
+    // Production stake entry (SA-R1 `first_stake` — the SP-R0 arm-#1
+    // PRODUCTION-DISCHARGE leg): preflight funding sweep → durable
+    // `persist_bond_record` → sign + assemble → the `.wallet.pending` seal,
+    // driven exactly as the credentialed `stake` RPC drives it. The
+    // `arm1_watch_pruning_live` witness is minted inside the entry, so no
+    // `for_test` deviation remains on this path. The funding must be
+    // spendable at the anchored REFERENCE block (tip − REF_ANCHOR_AGE),
+    // which lags tip maturity — the typed W1-clean `Funding` refusal is the
+    // wait-and-retry arm (the same shape as the spend e2e's
+    // reference-spendability loop; nothing durable is written by a refused
+    // attempt).
+    let mut outcome = None;
     for _ in 0..MAX_MINE_BATCHES {
-        let (handle, ticket) = {
-            let g = arc.read().await;
-            let stake = g.stake_handle().expect("staker wallet has a stake engine");
-            // Assembly authorizes on the handle alone (held-set membership
-            // at the current generation) — no activation: rotation is a
-            // persona-lifecycle operation, not an assembly precondition.
-            let handle = stake.mint_handle(slot).await.expect("mint handle");
-            // Idempotent re-persist: a fresh ticket for this attempt.
-            let ticket = g.persist_bond_record(slot).expect("persist bond record");
-            (handle, ticket)
-        };
-        match super::Engine::assemble_bond_post(
-            arc.clone(),
-            handle,
-            ticket,
-            holdings.clone(),
-            fee,
-            &SpentRecordsDurablyPruned::for_test(),
-        )
-        .await
-        {
-            Ok(a) => {
-                assembled = Some(a);
+        match super::Engine::first_stake(arc.clone(), SLOT).await {
+            Ok(o) => {
+                outcome = Some(o);
                 break;
             }
-            Err(StakeEngineError::Assembly(BondAssemblyError::InsufficientFunding {
-                available,
-                required,
-            })) => {
-                eprintln!(
-                    "persona funding not yet reference-spendable \
-                     ({available}/{required}); mining more"
-                );
+            Err(FirstStakeError::Funding(detail)) => {
+                eprintln!("first-stake funding not ready ({detail}); mining more");
                 daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
                 refresh(&arc).await;
             }
-            // The same lag one notch earlier: the funding output exists but
-            // nothing has matured past the reference height yet, so the
-            // eligible set is still empty.
-            Err(StakeEngineError::Assembly(BondAssemblyError::NoSpendableFunding)) => {
-                eprintln!("persona funding set empty at the reference height; mining more");
+            // Post-persist mid-flow failure — the documented W2 window
+            // (e.g. the funding output cleared the preflight sweep but is
+            // not yet drained into the REFERENCE curve tree the membership
+            // path is fetched against). The production recovery is
+            // re-invoking `stake` (`persist_bond_record` is re-entrant;
+            // the resume path re-mints the ticket), so the retry here
+            // exercises the W2 resume exactly as a wallet would.
+            Err(FirstStakeError::Engine(detail)) => {
+                eprintln!("first-stake W2 mid-flow failure ({detail}); mining and resuming");
                 daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
                 refresh(&arc).await;
             }
-            // The same reference lag one stage later: the funding output
-            // cleared the sweep's spendability filter but is not yet drained
-            // into the REFERENCE curve tree the membership path is fetched
-            // against — the typed wait-and-retry arm.
-            Err(StakeEngineError::Assembly(BondAssemblyError::OutputNotYetDrained { gindex })) => {
-                eprintln!("funding output {gindex} not yet in the reference tree; mining more");
-                daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
-                refresh(&arc).await;
-            }
-            Err(e) => panic!("assemble bond post: {e:?}"),
+            Err(e) => panic!("first_stake: {e}"),
         }
     }
-    let assembled =
-        assembled.expect("bond post must assemble once the funding is reference-spendable");
+    let outcome =
+        outcome.expect("first_stake must succeed once the funding is reference-spendable");
     eprintln!(
-        "assembled bond post: {} B, {} funding input(s)",
-        assembled.bound_tx.bytes().len(),
-        assembled.funding_gindexes.len(),
+        "first_stake sealed the bond post: slot {}, {} swept input(s), resumed={}",
+        outcome.p_slot, outcome.swept_inputs, outcome.resumed
     );
 
-    // Dispatch the assembled bytes through the audited posture→submitter
-    // choke point (see the module docs for why WI-3's block-timed driver is
-    // deliberately not exercised here).
-    let persona_id = *assembled.bound_tx.persona();
+    // Re-lift the sealed pending post (SA-DQ-5: `first_stake` never
+    // broadcasts) and dispatch through the audited posture→submitter choke
+    // point — exactly what WI-3's block-timed driver does when the post
+    // comes due (see the module docs for why the driver's decorrelation
+    // timing is deliberately not exercised here).
+    let post = {
+        let pending_write_lock = { arc.read().await.pending_write_lock.clone() };
+        let store = pending_post_store_for_engine(arc.clone(), pending_write_lock);
+        store
+            .read(|block| block.posts().first().cloned())
+            .await
+            .expect("pending-post read")
+            .expect("first_stake seals exactly one pending post")
+    };
+    let bound = PBoundBytes::from_pending(&post);
+    let persona_id = *bound.persona();
+    let swept_gindexes: Vec<u64> = post.funding_gindexes.iter().map(|g| g.to_raw()).collect();
     let daemon_client = { arc.read().await.daemon().clone() };
     let submitter = BroadcastSubmitter::local(persona_id, Arc::new(daemon_client));
-    let verdict = submitter.submit_bound(assembled.bound_tx.clone()).await;
+    let verdict = submitter.submit_bound(bound).await;
 
     // Accepted-and-applied (the promoted PR-4a tripwire): the daemon's
     // PR-4b bond-post Phase-C battery verifies the wallet-built post over
@@ -1687,16 +1677,11 @@ async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
     // spends), so the persona's surviving funding set is the bond-post
     // change — the rung-2 substrate PR-4c spends from — not a superset of
     // the {discovered} pre-post record(s).
-    let swept: Vec<u64> = assembled
-        .funding_gindexes
-        .iter()
-        .map(|g| g.to_raw())
-        .collect();
     assert!(
         state
             .funding_outputs()
             .iter()
-            .all(|r| !swept.contains(&r.gindex.to_raw())),
+            .all(|r| !swept_gindexes.contains(&r.gindex.to_raw())),
         "the swept funding record must be pruned from the sealed set (SP-R0 arm 1)"
     );
     eprintln!(
