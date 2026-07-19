@@ -861,7 +861,7 @@ impl Engine<SoloSigner> {
     /// where `cursor` is the **scan-reconciled monotone** persona cursor
     /// ([`StakingBlock::monotone_current_slot_from_record`]) — never at or below
     /// an observed bonded slot, so a stale/rolled-back `p_slot` can never re-derive
-    /// a rotated-past persona as "current". The bonded slots are unioned in because
+    /// a moved-past persona as "current". The bonded slots are unioned in because
     /// under Model D the seed is dropped after this function returns, so a persona
     /// absent from the held set is unreachable for the wallet's life — and a
     /// retired-but-bonded persona's `bond_spend` key is needed to unbond it.
@@ -920,9 +920,9 @@ impl Engine<SoloSigner> {
             staking.bonded_slots.iter().copied().collect();
         for offset in 0..=ARCHIVAL_PERSONA_LOOKAHEAD {
             // `cursor + offset` can saturate at `u32::MAX` only for a wallet that
-            // has rotated ~4 billion times; `checked_add` drops the out-of-range
+            // has advanced ~4 billion slots; `checked_add` drops the out-of-range
             // tail rather than wrapping to slot 0 (which would re-derive a
-            // rotated-past persona — the exact unlinkability break the monotone
+            // moved-past persona — the exact unlinkability break the monotone
             // cursor prevents).
             if let Some(slot) = cursor.checked_add(offset) {
                 slots.insert(slot);

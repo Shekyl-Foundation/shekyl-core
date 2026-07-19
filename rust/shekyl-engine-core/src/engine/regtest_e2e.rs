@@ -1563,7 +1563,7 @@ async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
             let g = arc.read().await;
             let stake = g.stake_handle().expect("staker wallet has a stake engine");
             // Assembly authorizes on the handle alone (held-set membership
-            // at the current generation) — no activation: rotation is a
+            // at the current generation) — no activation: moving the active slot is a
             // persona-lifecycle operation, not an assembly precondition.
             let handle = stake.mint_handle(slot).await.expect("mint handle");
             // Idempotent re-persist: a fresh ticket for this attempt.

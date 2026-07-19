@@ -4149,7 +4149,7 @@ session is omitted from this record):
   the shared daemon/host coupled phases across wallets that session,
   and the session counts for nothing — including its (context-only,
   ungradeable) production row `r = 1.312`. Artifact preserved:
-  `gf7-seal-receipts-2026-07-19-invalid.jsonl`.
+  `docs/completed/reference/gf7-seal-artifacts/`.
 - **Stopping rule, stated before session 2 launched:** one re-run; a
   second consecutive INVALID stops the re-rolling and opens a §19.8
   harness-decoupling design round (re-running until the validity gate
@@ -4190,8 +4190,9 @@ session is omitted from this record):
   input #2 is discharged. Remaining open inputs: GF-4/F-D2's
   drain-send subsystem and the §17.9 Gate-7 calibration. Artifacts:
   `gf7-seal-receipts-session2.jsonl` +
-  `gf7-seal-grade-session2-pass.json` (local `rust/target/`, same
-  retention as the prior sessions'). *(Superseded same-PR: the
+  `gf7-seal-grade-session2-pass.json` (archived with all three
+  sessions' artifacts under `docs/completed/reference/gf7-seal-artifacts/`
+  — PR #337 closure commit; previously `rust/target/`-local). *(Superseded same-PR: the
   seal-input status this bullet asserts was withdrawn on scope
   review — §19.10. The measurement record above stands as written.)*
 
@@ -4264,6 +4265,18 @@ behavior the design forecloses; its PASS therefore cannot serve as
 `K_COVER` seal evidence. **Leg (b)'s seal-input status is
 withdrawn.** The `K_COVER` seal is re-dispositioned in
 `ARCHIVAL_REWARD_GATE_M1.md` §4 (2026-07-19 update).
+
+#### 19.10.2a The §19.4 in-model leg, same scope
+
+The §19.4 harness-timestamp sweep (`wallclock_leg.rs`) grades the same
+`K = 2` sibling construction in-model, and its PROVISIONAL-PASS rides
+the `--gf7-timeline` criterion-9.9 conjunction. The same foreclosure
+applies: its rows stand as **model records** (the sub-`T` cliff, the
+dispersal-range shape), and its contribution to the timeline
+conjunction is retained as a **model-consistency check** — not a
+channel grade. Its module doc carries this scope note; no code change
+(the sim is hermetic and its verdict strings are already
+status-neutral).
 
 #### 19.10.3 What is retained
 

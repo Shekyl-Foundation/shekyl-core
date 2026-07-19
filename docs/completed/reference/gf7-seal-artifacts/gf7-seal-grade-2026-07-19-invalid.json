@@ -1,0 +1,40 @@
+{
+  "tick_ms": 60000,
+  "ratio_bound": 2.0,
+  "production": {
+    "runs": 24,
+    "tasks": 240,
+    "hits": 35,
+    "p_link": 0.14583333333333334,
+    "ratio": 1.3125,
+    "clustered_se_p": 0.02250536704641183,
+    "clustered_se_ratio": 0.20254830341770647
+  },
+  "production_m1_context": {
+    "runs": 24,
+    "tasks": 240,
+    "hits": 25,
+    "p_link": 0.10416666666666667,
+    "ratio": 0.9375,
+    "clustered_se_p": 0.02209922179319295,
+    "clustered_se_ratio": 0.19889299613873657
+  },
+  "controls": [
+    {
+      "name": "positive: dispersal 0 (phase-lock caught)",
+      "p_link": 0.875,
+      "baseline": 0.1111111111111111,
+      "expectation": "P(link) >= 0.8",
+      "passed": true
+    },
+    {
+      "name": "negative: cross-wallet pseudo-siblings",
+      "p_link": 0.16666666666666666,
+      "baseline": 0.1111111111111111,
+      "expectation": "|P(link) - 0.111| <= 0.05",
+      "passed": false
+    }
+  ],
+  "noise_floor_ms": 405.7870838409734,
+  "verdict": "INVALID (negative: cross-wallet pseudo-siblings failed)"
+}

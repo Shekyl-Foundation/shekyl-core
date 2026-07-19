@@ -22,11 +22,20 @@
 //! sealing form is receipt-side timestamping by the sim-owned observer over
 //! the live dispatch driver, named as the carrier in §19.1. The grade below
 //! is therefore PROVISIONAL by construction, exactly like every §7
-//! synthesis conclusion. The sealing form itself ran and **graded PASS
-//! 2026-07-18** (measurement doc §19.9; harness
+//! synthesis conclusion. The sealing form's standing lives in the
+//! measurement doc (§19.9 record, §19.10 scope; harness
 //! `shekyl-engine-core::gf7_sealing_run`, grader `gf7_seal.rs` /
-//! `--gf7-seal`) — leg (b) is closed; this module remains the model-side
-//! checkpoint it always was.
+//! `--gf7-seal`) — asserted there, never here; this module remains the
+//! model-side checkpoint it always was.
+//!
+//! # Scope (WI-4 §19.10.2a, 2026-07-19)
+//!
+//! This leg grades the `K = 2` sibling construction **in-model**. Per the
+//! §19.10 scope correction the concurrently-posting-sibling premise is
+//! design-foreclosed; these rows stand as model records (the sub-`T`
+//! cliff, the dispersal-range shape) and the leg's contribution to the
+//! `--gf7-timeline` conjunction is a model-consistency check, not a
+//! channel grade.
 //!
 //! # A-priori bound (committed §19.2, before this code existed)
 //!

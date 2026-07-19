@@ -6120,6 +6120,19 @@ sustainability is unaffected by the recalibration.
   *Blocker:* cross-cutting (stake_engine + ~10 threat/design docs); a dedicated
   read-per-site pass, not a mechanical sweep. *Target:* naturally alongside the
   MS-5 / E′ `state.rs` rework (same surface); the docs half can lead.
+  **UPDATE 2026-07-19 (PR #337 closure commit) — the code half is EXECUTED,
+  read-per-site:** every persona-"rotation" site in `stake_engine.rs`,
+  `backing_set.rs`, `claim_dispatch.rs`, `lifecycle.rs`, and `regtest_e2e.rs`
+  renamed to activation vocabulary (activation / active-slot move /
+  activation-wipe / activation `generation` / moved-past persona; four test fns
+  renamed; password/KDF, snapshot, and address-rotation sites verified untouched).
+  Cost tally updated: a **third** phantom was reconstructed from the noun before
+  the rename (a "rotation seam" timing channel, PR #337 review thread — retracted;
+  WI-4 §19.10). The docs half: historical/ratified records carry dated correction
+  annotations instead of rewrites (`ARCHIVAL_TM1_CLUSTERING.md` /
+  `ARCHIVAL_FIREWALL_THREATS.md` blocks, landed 2026-07-19); the
+  `PRINCIPAL_STAKE_LIFECYCLE.md:389` co-trigger split remains open with its
+  original target.
 
 - **PQC Multisig: MSW-6 landing residue.** The scheme_id relaxation
   landed subtractively; five items it deliberately did not fold in

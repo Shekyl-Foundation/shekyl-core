@@ -48,7 +48,7 @@
 //! persona's epochs and sign with another's keys — a claim the daemon
 //! rejects, but a foot-gun the seam can simply not have). Deliberately
 //! **not** an activation: a claim is a read-and-sign operation, and
-//! rotating the active slot on it would invalidate every in-flight
+//! moving the active slot on it would invalidate every in-flight
 //! operation's handles and wipe a retired ephemeral persona as a side
 //! effect of an unrelated request.
 //!
