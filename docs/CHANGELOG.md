@@ -82,9 +82,11 @@
 
 - **wallet/sim: GF-7 leg-(b) sealing-run harness + grader landed; first
   session's PASS withdrawn in-PR after review; hardened re-run graded
-  PASS 2026-07-19 — leg (b) CLOSED, `K_COVER` seal input #2 discharged
+  PASS 2026-07-19; seal-input status then WITHDRAWN on scope review and
+  the `K_COVER` seal re-dispositioned as designed
   (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19.8 design / §19.9.1 withdrawal /
-  §19.9.2 re-grade).** The receipt-timestamped live-driver
+  §19.9.2 re-grade / §19.10 scope correction; `ARCHIVAL_REWARD_GATE_M1.md`
+  §4 2026-07-19 update).** The receipt-timestamped live-driver
   form: a `#[cfg(test)]` + `gf7-hooks` harness in `shekyl-engine-core`
   (`gf7_sealing_run.rs`, `#[ignore]`d, `SHEKYLD_BIN`-gated) drives the
   **production** P-scan task + dispatch driver against a live
@@ -113,9 +115,30 @@
   cross-wallet coupling, exactly its job — and session 2 graded **PASS**
   (gate row `r = 0.412`, clustered SE 0.121, ≈ 13 SEs under the committed
   bound 2; positive control 0.875 ≥ 0.80, negative 0.087 at chance,
-  receipt-noise floor 413.9 ms of `T = 60 s`). Rule-94 registrations in
-  the same slice: the §17.9 Gate-7 calibration and the terminal `K_COVER`
-  seal act each gained an `IMPLEMENTATION_INDEX.md` front row.
+  receipt-noise floor 413.9 ms of `T = 60 s`). **Scope review (same PR,
+  §19.10):** the form's `K = 2` concurrently-posting-persona premise is
+  design-foreclosed — the grounded persona-lifecycle enumeration
+  (§19.10.1) shows `2 + E + H (+R)` wallet-timed `P`-attributed txs per
+  persona lifetime and `stake_engine` has no rotation scheme — so
+  **leg (b)'s seal-input status is withdrawn** (the TM-1 "does the design
+  do this?" correction class, applied to WI-4's own arm); measurement
+  records stand, and the hardened instrument + CI lane are retained as a
+  dispersal-regression tripwire. `K_COVER`'s seal predicate is now stated
+  once in M1 §4 and dispositioned as designed: partition-proof operand
+  DISCHARGED (§14.4), value paired to the **measured** cover floor
+  (`N ≈ 10` min / `20` with margin; thin-cover failure `r = 3.54` is the
+  enforced fact) via the §14 founder schedule; the GF-4/F-D2 seal seat is
+  removed (F-W10 — not an on-chain observable; stays a Gate-6 build
+  item); the §17.9 calibration reduces to a one-page recorded derivation.
+  Companion corrections landed with the sweep: TM-1/FIREWALL_THREATS
+  "sequential rotation" wording (claims an unenforced code property),
+  `V3_STAKER_ARCHIVAL.md` registration-tx line and Gate-6 refund-output
+  line (both superseded by gate-4), and a FOLLOWUPS wallet-UX item for
+  thin-cover disclosure at bond/claim time (warn-don't-prohibit on user
+  acts; the enforced invariant stays consensus-side). Rule-94
+  registrations in the same slice: the §17.9 Gate-7 calibration and the
+  terminal `K_COVER` seal act each gained an `IMPLEMENTATION_INDEX.md`
+  front row.
 
 - **fcmp: F-D1 drain-amount taint-carve BUILT (`ARCHIVAL_FIREWALL_GATE6.md`
   §12.3) + F-D2 core-side aggregate-only surface (§12.4).** The `P`→principal

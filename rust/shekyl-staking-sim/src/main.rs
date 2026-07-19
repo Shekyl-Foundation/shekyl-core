@@ -26,7 +26,8 @@
 //! `--gf7-seal <artifact>` (also `--gf7-seal=<artifact>`; the §19.8 leg-(b)
 //! SEALING form — grades the receipts artifact the `shekyl-engine-core`
 //! `gf7_sealing_run` harness wrote from a live-driver run, same circular
-//! statistic and `r < 2` bound; K_COVER seal input #2); `--partition-adversary` (the §14.4
+//! statistic and `r < 2` bound; per WI-4 §19.10 a dispersal-regression
+//! tripwire, no longer a K_COVER seal input); `--partition-adversary` (the §14.4
 //! founder-cover partition-adversary arm — gating lemma + witness-typed
 //! controls, per the same doc's §14/§17 launch-posture round).
 

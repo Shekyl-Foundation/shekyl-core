@@ -4040,7 +4040,7 @@ contention across concurrent runs would be an unmodeled timing input).
   future arm whose channel model includes assemble-time effects
   (none is named today).
 
-### 19.9 Result addendum (2026-07-18/19): first run's PASS withdrawn (§19.9.1); hardened re-run graded PASS (§19.9.2) — leg (b) CLOSED
+### 19.9 Result addendum (2026-07-18/19): first run's PASS withdrawn (§19.9.1); hardened re-run graded PASS (§19.9.2); seal-input status withdrawn on scope review (§19.10)
 
 The §19.8 design executed as committed, no geometry deviations. Run
 identity: harness `shekyl-engine-core::engine::gf7_sealing_run`
@@ -4191,4 +4191,94 @@ session is omitted from this record):
   drain-send subsystem and the §17.9 Gate-7 calibration. Artifacts:
   `gf7-seal-receipts-session2.jsonl` +
   `gf7-seal-grade-session2-pass.json` (local `rust/target/`, same
-  retention as the prior sessions').
+  retention as the prior sessions'). *(Superseded same-PR: the
+  seal-input status this bullet asserts was withdrawn on scope
+  review — §19.10. The measurement record above stands as written.)*
+
+### 19.10 Scope correction (2026-07-19): the sealing form's premise is design-foreclosed — leg (b) WITHDRAWN as a `K_COVER` seal input; instrument retained as a dispersal tripwire
+
+The PR #337 review thread interrogated what this form operationally
+measures, grounding every step at source. The findings supersede the
+seal-input framing of §§19.1–19.9 while leaving the measurement
+records (§19.9.2) standing as honest records of a hardened
+instrument. This is the same correction class as TM-1's own closure
+("ask *does the design actually do this?* before the rigor") and the
+F-W7/F-W8/F-W10 phantom-observable retirements — applied, this time,
+to this document's own arm.
+
+#### 19.10.1 The persona lifecycle, enumerated (the channel-existence filter)
+
+On-chain / P2P-visible events for one archival persona `P`
+(evidence: `ARCHIVAL_BOND_GATE4.md` §§3–4, `ARCHIVAL_RETENTION_GATE2.md`
+§5, `REWARD_EMISSION_LEG.md`, `ARCHIVAL_FIREWALL_GATE6.md` §12,
+`V3_STAKER_ARCHIVAL.md` §firewall):
+
+| Event | Public tx? | Names `P`? | Timed by |
+| --- | --- | --- | --- |
+| Funding (principal→`P`) | ordinary FCMP++ transfer | **no** | wallet (gate-6 jitter pin) |
+| JoinMarket | `txin_archival_bond_post` | yes (P, shard set, cleartext bond) | **wallet** |
+| Challenge | none (beacon-derived) | — | beacon |
+| Serve-credit response | `txin_archival_serve_credit_response`, one per `(shard, epoch)` | yes | **beacon window** |
+| Reward emission | `txin_archival_reward_emission` — self-service mint, not coinbase | yes (cleartext amount) | **wallet** (claim choice, ≤15-epoch batch, `W = 26`) |
+| Slash | **no tx** (consensus-internal mutation) | yes (public event) | consensus |
+| Rebond | bond post; credit zero legal-and-common; self-funded from `P`'s reward lineage (Gate-6 Decision 4) | yes | wallet |
+| Unbond | bond post; event names `P`; **no identifiable refund output** | yes | wallet (cooldown-gated) |
+| Drain (`P`→principal) | ordinary FCMP++ spend | **no** (F-W10) | wallet |
+
+Wallet-clock-timed, `P`-attributed transactions per persona lifetime:
+`2 + E + H (+ R)` — JoinMarket, Unbond, `E` emission claims
+(`⌈L/15⌉ ≤ E ≤ L`), `H ≥ 0` holdings changes, `R` rebonds. Minimum
+realistic lifetime: **3**.
+
+#### 19.10.2 The foreclosure
+
+The §19.8.2 geometry models a wallet driving `K = 2` **concurrently
+posting** personas at `m = 4` posts each on one sweep clock. No code
+path produces that behavior:
+
+1. **No rotation scheme exists.** `stake_engine.rs` implements
+   rotation as a caller-driven *operation* (one active key bundle,
+   `generation` counter, atomic wipe — `stake_engine.rs:25–66`);
+   nothing schedules or triggers it. Multiple concurrently-**bonded**
+   personas are supported (rotates-while-bonded, the derive-forward
+   union — `:20`, `:32`) for unbond reachability, but nothing creates
+   a second *posting* persona, and the `1/R` economics make running
+   one self-defeating (TM-1). Correction notes to TM-1's "sequential
+   rotation (never two active personas)" wording — which overstated
+   the enforced property — land with this PR in
+   `ARCHIVAL_TM1_CLUSTERING.md` / `ARCHIVAL_FIREWALL_THREATS.md`.
+2. **The operational sample stream is §19.10.1's, not §19.8.2's.**
+   One JoinMarket, one Unbond, `E` claim transactions — not `m = 4`
+   accumulations per persona per run. `m = 4` was instrument
+   magnification (grade-pessimistic-lifecycles), legitimate as
+   conservatism but not a usage model.
+3. **Named assumptions, previously implicit:** the receipts measure
+   the *emit* instant — the claim that this upper-bounds every
+   downstream observer assumes the daemon-relay/transport path adds
+   only wallet-independent noise (no shared per-wallet quantizer);
+   and the grade bounds the *committed observer's* advantage, not
+   channel information (below-chance structure passes silently).
+
+**Consequence:** the sibling channel this form grades requires a
+behavior the design forecloses; its PASS therefore cannot serve as
+`K_COVER` seal evidence. **Leg (b)'s seal-input status is
+withdrawn.** The `K_COVER` seal is re-dispositioned in
+`ARCHIVAL_REWARD_GATE_M1.md` §4 (2026-07-19 update).
+
+#### 19.10.3 What is retained
+
+- **The instrument, as a dispersal tripwire.** If the dispersal draw
+  silently breaks (a dropped sleep, a zeroed bound), even the few
+  real posts a wallet ever makes acquire an exact-phase corroborator
+  — ≈ 400 ms of `T = 60 000 ms` filters a background candidate set
+  by ~75–150× — against the entry/exit pair and any user-chosen
+  multi-persona overlap. The hardened harness + grader (§19.9.1) and
+  the `gf7-hooks` CI compile lane are kept for that purpose. No
+  further sealing re-runs are required by anything.
+- **The measurement records.** §19.9.2's two disclosed sessions
+  (INVALID + PASS) stand as the record of what the hardened
+  instrument measured on its synthetic geometry, including the
+  session-level dispersion disclosure.
+- **The hardening itself** (fail-loud miner watch, geometry
+  enforcement, period tie, `Arm`-typed label binding, CI lane) —
+  correct regardless of the form's scope.

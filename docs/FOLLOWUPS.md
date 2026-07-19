@@ -9198,9 +9198,22 @@ one place to confirm each item's relationship to the wallet stack.
   re-roll-until-green). Session 2 (4 h 42 m, 24 + 8 runs, 2 560 receipts): gate row
   `r = 0.412` (clustered SE 0.121, ≈ 13 SEs under the bound), positive control 0.875,
   negative 0.087 at chance, noise floor 413.9 ms (stable across sessions; §19.1 reopening
-  criterion untripped). Inter-session gate-row dispersion disclosed in §19.9.2. `K_COVER`
-  seal input #2 discharged; the seal's remaining open inputs are GF-4/F-D2's drain-send
-  subsystem and the §17.9 Gate-7 calibration.
+  criterion untripped). Inter-session gate-row dispersion disclosed in §19.9.2.
+  **UPDATE 2026-07-19 (same PR, scope review) — leg-(b) seal-input status WITHDRAWN
+  (WI-4 §19.10); `K_COVER` re-dispositioned (M1 §4).** The form's `K = 2`
+  concurrently-posting-persona premise is design-foreclosed: the persona-lifecycle
+  enumeration (WI-4 §19.10.1) shows `2 + E + H (+R)` wallet-timed `P`-attributed txs per
+  persona *lifetime* (funding + drain unattributable; slash is a consensus mutation), and
+  `stake_engine` has no rotation scheme — nothing creates a second posting persona, and
+  `1/R` economics punish one. The §19.9.2 measurement records stand; the hardened
+  instrument + `gf7-hooks` CI lane are retained as a **dispersal-regression tripwire**
+  (a silently-broken draw would give the few real posts an exact-phase corroborator,
+  ~75–150× background filter). No further sealing re-runs are required by anything.
+  `K_COVER`'s seal predicate is now stated once in M1 §4: partition-proof operand
+  (DISCHARGED, §14.4) + value paired to the measured cover floor (`N ≈ 10` min / `20`
+  with margin) via the §14 founder schedule — evidentiary predicate as discharged as
+  design permits; the remaining act is landing the value + commitment and clearing the
+  sentinel (PF-9 unchanged).
   **Hermeticity pin (rule 21, PR #292 review — trips on the archival CLI-knob work):**
   `run_wallclock_leg()` is deliberately hermetic (fixed seed/trials/N; the a-priori-committed
   §19.4 surface must not float on a harness flag). Inert today — no CLI knob moves the gf7
@@ -9216,6 +9229,18 @@ one place to confirm each item's relationship to the wallet stack.
   [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §13 (result),
   §14 (launch posture), [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
   §4 and [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
+
+- **Wallet UX: thin-cover exposure disclosure at bond/claim time (registered 2026-07-19,
+  PR #337 review thread).** On the user's own acts the design is warn-don't-prohibit —
+  `K_COVER` gates only the system's reward lever (bonding stays legal during gated epochs,
+  unbond is never cover-gated) — but no wallet surface currently *says* so. When the
+  staker UX lands (activation front, #332 lineage), the wallet should disclose at
+  JoinMarket / claim time when the current cover is thin (a rule-82 failure-mode surface;
+  phrased per rule 81 — outcome language, no protocol vocabulary): entering or claiming
+  during a thin-cover window carries elevated linkage exposure (the measured WI-4 §13.2
+  thin-cover regime), and gated epochs earn nothing. Disclosure-shaped, never a block;
+  the enforced invariant stays consensus-side (M1). **Target: with the staker-activation
+  UX; pre-genesis.**
 - **2d-2 2c-2a — submit-outcome handling: the wallet CONSUMES `SubmitVerdict`; the partition is
   no longer a design object (SUPERSEDED 2026-07-04 by
   [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md), D4; absorbed remainders

@@ -3,9 +3,15 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! GF-7 leg-(b) sealing re-run harness (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`
+//! GF-7 leg-(b) sealing-run harness (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`
 //! §19.8) — the receipt-timestamped live-driver form of the wall-clock
-//! sweep-phase channel grade (K_COVER seal input #2).
+//! sweep-phase channel grade. **Scope (§19.10, 2026-07-19): retained as a
+//! dispersal-regression tripwire** — the graded `K = 2` concurrent-persona
+//! geometry is instrument magnification over a design-foreclosed behavior,
+//! and the form's former `K_COVER` seal-input status is withdrawn; what this
+//! harness guards is that the dispersal decoupler executes in shipped code
+//! (a silently-broken draw would give a wallet's few real posts an
+//! exact-phase corroborator).
 //!
 //! What runs here is the **production** task + dispatch code path
 //! (`run_pscan_task` at `PScanConfig::production()` + `DEFAULT_PSCAN_CADENCE`,
