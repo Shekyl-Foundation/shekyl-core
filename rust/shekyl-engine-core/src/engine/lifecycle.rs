@@ -1142,9 +1142,9 @@ impl Engine<SoloSigner> {
             .collect();
         // SA-R1-a: the intent slot is tagged bonded-ELECT (actor-local, never
         // persisted): the bonded tag is what makes a persona scannable
-        // (`bonded_scan_inputs`) and rotation-wipe-proof, and first-stake
+        // (`bonded_scan_inputs`) and activation-wipe-proof, and first-stake
         // needs both — the `stake_in` funding output must be discoverable by
-        // the P-scan before the sweep can validate it, and a rotation must
+        // the P-scan before the sweep can validate it, and an activation must
         // not wipe the elect's keys mid-bootstrap. If the first-stake aborts,
         // the tag dies with the actor (transient); durable bondedness remains
         // solely `persist_bond_record`'s write.

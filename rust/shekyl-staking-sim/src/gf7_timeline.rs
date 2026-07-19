@@ -62,10 +62,10 @@
 //! same `bounded_uniform` the live driver uses, for distributional parity). It
 //! is the **continue/redesign checkpoint, not the seal**: the report is marked
 //! PROVISIONAL. The sealing re-run against WI-3's *live* `BondPostDispatched`
-//! emission is the WI-3↔WI-4 reconvergence leg (b) (rule 21) — **graded PASS
-//! 2026-07-18** (measurement doc §19.9; `gf7_seal.rs` / `--gf7-seal`), so
-//! leg (b) is closed; the remote-daemon posture residual on the steady-state
-//! arms is unchanged.
+//! emission is the WI-3↔WI-4 reconvergence leg (b) (rule 21); its seal
+//! standing lives in the measurement doc (§19.9 record / §19.10 scope;
+//! `gf7_seal.rs` / `--gf7-seal`), asserted there, never in this sim. The
+//! remote-daemon posture residual on the steady-state arms is unchanged.
 
 use serde::Serialize;
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};

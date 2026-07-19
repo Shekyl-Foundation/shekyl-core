@@ -95,12 +95,13 @@ const PREMINE_BLOCKS: u64 = shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOC
 const MINE_BATCH_BLOCKS: u64 = 20;
 /// Background generator interval (§19.8.2 chain row: ~1 block / 30 s).
 const BACKGROUND_MINE_INTERVAL: Duration = Duration::from_secs(30);
-/// Background-miner tolerance: consecutive `generateblocks` failures before
-/// the miner task dies (and the run loop's health check fails the session
-/// loudly). Three misses ≈ 90 s without chain advancement — noise against
-/// the 720-block finality horizon — while a persistent failure (daemon gone,
-/// port dead) must kill the session, not silently freeze the chain under a
-/// grading run (§19.8.2 chain row is part of the committed geometry).
+/// Background-miner tolerance: the maximum number of *consecutive*
+/// `generateblocks` failures the session absorbs; the next one past this fails
+/// the run loud (via the health check). Three misses ≈ 90 s without chain
+/// advancement — noise against the 720-block finality horizon — while a
+/// persistent failure (daemon gone, port dead) must kill the session, not
+/// silently freeze the chain under a grading run (§19.8.2 chain row is part of
+/// the committed geometry).
 const MINER_MAX_CONSECUTIVE_FAILURES: u32 = 3;
 /// The production cadence `T` in ms, derived from the engine's own constant
 /// (never a mirrored literal). Triple duty, one value: the `φ` stagger window
@@ -573,9 +574,10 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
                          ({consecutive_failures}/{MINER_MAX_CONSECUTIVE_FAILURES}): {e}"
                     );
                     assert!(
-                        consecutive_failures < MINER_MAX_CONSECUTIVE_FAILURES,
-                        "background miner: {MINER_MAX_CONSECUTIVE_FAILURES} consecutive \
-                         generateblocks failures — chain advancement lost"
+                        consecutive_failures <= MINER_MAX_CONSECUTIVE_FAILURES,
+                        "background miner: {consecutive_failures} consecutive generateblocks \
+                         failures (tolerance {MINER_MAX_CONSECUTIVE_FAILURES}) — \
+                         chain advancement lost"
                     );
                 }
             }

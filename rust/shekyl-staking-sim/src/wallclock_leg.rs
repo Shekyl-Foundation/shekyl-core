@@ -221,8 +221,9 @@ pub struct WallclockControl {
 #[derive(Serialize)]
 pub struct WallclockLegReport {
     /// Always true here: this is the harness-timestamp synthesis grade;
-    /// leg (b) closes only at the §19.1 sealing form (receipt-timestamped
-    /// live-driver re-run — graded PASS 2026-07-18, measurement doc §19.9).
+    /// leg (b)'s seal standing lives at the §19.1 sealing form
+    /// (receipt-timestamped live-driver re-run — measurement doc §19.9 record
+    /// / §19.10 scope), asserted there, never in this model-side leg.
     pub provisional: bool,
     pub tick_ms: u64,
     pub ratio_bound: f64,
