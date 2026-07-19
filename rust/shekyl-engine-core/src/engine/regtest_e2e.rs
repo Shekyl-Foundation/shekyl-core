@@ -75,6 +75,12 @@ struct GetInfoResp {
     /// `mine_until_pool_empty`).
     #[serde(default)]
     tx_pool_size: u64,
+    /// Cumulative burned atomic units — the §9.5 conservation observable's
+    /// pool/burn side (`archival_budget_accrual`'s `staker_pool_amount`
+    /// term lands here on a no-staker block; `blockchain_db` rolls it back
+    /// on pop). The emission e2e reads its delta across the claim/pop.
+    #[serde(default)]
+    total_burned: u64,
 }
 
 /// `generateblocks` result fields we care about.
@@ -108,6 +114,17 @@ impl RegtestDaemon {
 
     /// Spawn the daemon and wait until its RPC answers `get_info`.
     pub(super) async fn start() -> RegtestDaemon {
+        Self::start_with_settlement_epoch_blocks(None).await
+    }
+
+    /// Spawn the daemon with an optional `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
+    /// override on the child's environment (the fakechain-only regtest
+    /// lever the daemon arms at startup, `blockchain.cpp:619`). The emission
+    /// e2e passes `Some(seb)` so epoch closes land in minutes; the wallet
+    /// process arms the same value in-process (it does its own epoch
+    /// arithmetic when it assembles a claim, and gates on the lever —
+    /// `lifecycle.rs`). `None` runs the genesis-pinned schedule.
+    pub(super) async fn start_with_settlement_epoch_blocks(seb: Option<u64>) -> RegtestDaemon {
         // Serialize across this test binary so no two in-process daemons race on
         // a port. Each instance uses a unique ephemeral port + temp datadir and
         // kills its own child (+ removes its datadir) on Drop, so no global daemon
@@ -123,7 +140,8 @@ impl RegtestDaemon {
         std::fs::create_dir_all(&data_dir).expect("create data dir");
 
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
-        let child = Command::new(&bin)
+        let mut cmd = Command::new(&bin);
+        cmd
             .args([
                 "--regtest",
                 "--offline",
@@ -142,7 +160,14 @@ impl RegtestDaemon {
             ])
             .stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
-            .stdin(Stdio::null())
+            .stdin(Stdio::null());
+        // The SEB lever rides the child env (the daemon reads it at startup,
+        // arms on fakechain, refuses loudly on a bad value). Absent ⇒ the
+        // daemon never reads it and runs the genesis schedule.
+        if let Some(seb) = seb {
+            cmd.env("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", seb.to_string());
+        }
+        let child = cmd
             .spawn()
             .unwrap_or_else(|e| panic!("spawn {}: {e}", bin.display()));
 
@@ -206,6 +231,43 @@ impl RegtestDaemon {
             .await
             .expect("get_info")
             .height
+    }
+
+    /// Cumulative `total_burned` — the §9.5 conservation observable's
+    /// pool/burn side. The emission e2e asserts on its delta across a
+    /// no-staker close (the `staker_pool_amount` term accrues) and its
+    /// reversal on pop.
+    pub(super) async fn total_burned(&self) -> u64 {
+        self.rpc
+            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .await
+            .expect("get_info")
+            .total_burned
+    }
+
+    /// Inject an archival serve-credit bit for `(P, shard, E)` — the
+    /// FAKECHAIN-only regtest lever (`on_inject_archival_serve_credit`,
+    /// bits-only, **not** pop-symmetric: a pop below the injection height
+    /// desyncs the bit, so every reorg leg floors its depth above it). The
+    /// injected bit gives the epoch a non-zero `Σwork` and the persona a
+    /// positive claimant share at close.
+    pub(super) async fn inject_serve_credit(
+        &self,
+        p_canonical_id: &shekyl_types::PCanonicalId,
+        shard_id: u64,
+        settlement_epoch: u64,
+    ) {
+        self.rpc
+            .rpc_call::<_, serde_json::Value>(
+                "inject_archival_serve_credit",
+                Some(json!({
+                    "p_canonical_id": hex::encode(p_canonical_id.to_bytes()),
+                    "shard_id": shard_id,
+                    "settlement_epoch": settlement_epoch,
+                })),
+            )
+            .await
+            .expect("inject_archival_serve_credit");
     }
 
     /// The ephemeral RPC port the daemon bound. Observability harnesses open
