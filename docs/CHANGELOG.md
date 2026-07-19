@@ -24,6 +24,29 @@
   `DAEMON_SUBMIT_VERDICT.md` §8.7.2 E-row matrix pins every leg at
   source; the FOLLOWUPS "daemon Rust submit engine" item closes, and
   PR-4c (the E4-gate e2e) has no remaining daemon-side gap.
+- **wallet: SP-R0 arm #2 — the done-side retirement ledger + atomic
+  retire-time prune (`feat/sp-r0-arm2-retire-gc`).**
+  `RetiredPersonaRecord` rows land in `PScanState`
+  (**`PSCAN_STATE_VERSION` 6 → 7**, schema snapshot regenerated), written
+  by `PScanAccrual::retire_persona`: the persona's `bond_post_matches`
+  rows and the `pending_unbonds` trigger leave in the same mutation that
+  appends the record — one atomic seal (the bound on
+  `bond_post_matches` growth, the most privacy-sensitive structure in
+  the state). Funding rows are already gone by then: the **funded-gate**
+  defers retire until the slot is drained (arm #1 pruned each spend as
+  it was observed), with a defense-in-depth retain + `debug_assert`
+  behind the gate. The durable prune fires only
+  under the DQ-D **sweep-corroborated tip clamp**
+  `min(claimed_tip, verified_frontier + reorg_depth)` (the WI-3 R2-1
+  reserve, consumed as corroboration; a low-claiming source defers the
+  prune — fail-safe; the actor key-wipe keeps its frontier basis). At
+  open, retired slots are cleaned from the live `bonded_slots` hint
+  before derive ("stop deriving slot N"; an emptied hint reverts the
+  wallet to a non-staker), with the derive-forward subtraction following
+  from the monotone cursor. Guard-2: logic-discharged at the
+  task/accrual/lifecycle test level (disclosed cfg(test)-evidence
+  deviation — claim-window reachability); production-discharge rides the
+  PR-4b-gated regtest lane.
 
 - **daemon: bond-post Phase-C submit battery (PR-4b, bond-post half).** The
   Rust submit engine's `SubmitTxKind::BondPost` arm is no longer an
