@@ -44,9 +44,11 @@
 #     build_pending_tx, submit_pending_tx, discard_pending_tx,
 #     get_transfers, get_transfer_by_id,
 #     refresh, rescan_blockchain,
-#     get_height, get_version
+#     get_height, get_version,
+#     stake                                        (#332 staker-activation
+#                                                   entry)
 #   RESERVED (prerequisite in parentheses):
-#     stake, unstake, claim, get_stakes            (Stage 3 StakeEngine +
+#     unstake, claim, get_stakes                   (Stage 3 StakeEngine +
 #                                                   Phase 2b orchestrator;
 #                                                   reward path blocked on
 #                                                   REWARD_EMISSION_LEG.md
@@ -160,6 +162,7 @@ components:
             - rescan_blockchain
             - get_height
             - get_version
+            - stake
         params:
           description: Per-method params object; see `*Params` schemas.
           type: object
@@ -232,6 +235,9 @@ components:
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29400   # UNKNOWN_TRANSFER_ID
+        - -29500   # STAKE_NOT_READY
+        - -29501   # STAKE_IN_FLIGHT
+        - -29502   # ALREADY_STAKED
         - -29900   # TENANT_UNAVAILABLE
       description: |
         Allocated codes (this commit). Per-method additions extend this enum
@@ -263,6 +269,18 @@ components:
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
           -29201 DAEMON_UNREACHABLE       refresh/rescan: daemon RPC failed
           -29400 UNKNOWN_TRANSFER_ID      get_transfer_by_id: no match
+          -29500 STAKE_NOT_READY          stake: persona funding not ready
+                                          (W1-clean refusal — fund via
+                                          stake_in and/or let the persona
+                                          scan catch up, then retry;
+                                          data: {"detail": "..."} — never
+                                          amounts)
+          -29501 STAKE_IN_FLIGHT          stake: a signed bond post is
+                                          already sealed awaiting its
+                                          scheduled broadcast
+          -29502 ALREADY_STAKED           stake: a confirmed bond exists
+                                          for a bonded persona (idempotent
+                                          refusal)
           -29900 TENANT_UNAVAILABLE       server: wallet-dir tenancy (reserved
                                           for the multi-tenant sub-PR)
 
@@ -423,6 +441,45 @@ components:
     ChangePasswordResult:
       type: object
       description: Empty object on success.
+
+    StakeParams:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          description: >
+            Wallet password — load-bearing, not UX: a mid-session wallet
+            holds no seed, and only a credentialed reopen re-materializes
+            it for the bootstrap persona derivation (SA-R1-d). Verified
+            against the sealed envelope BEFORE the reopen closes anything,
+            so a wrong password refuses (-29004) with the wallet still
+            open. Crosses a local transport only.
+
+    StakeResult:
+      type: object
+      required: [slot, swept_inputs, resumed, state]
+      description: >
+        The first-stake continuation completed and the signed bond post is
+        durably sealed awaiting its scheduled broadcast (no broadcast
+        happens on this call — the dispatch driver sends at its GF-7
+        offset). Re-invoking `stake` after a mid-flow failure resumes the
+        durable slot (`resumed: true`).
+      properties:
+        slot:
+          type: integer
+          description: The persona slot the first bond was posted for.
+        swept_inputs:
+          type: integer
+          description: >
+            Funding inputs the sweep consumed (the common case is exactly
+            1 — the structured stake_in output).
+        resumed:
+          type: boolean
+          description: Whether this call resumed a crashed first-stake.
+        state:
+          type: string
+          enum: [pending_dispatch]
 
     # ── Balance / address ────────────────────────────────────────────
     GetBalanceParams:

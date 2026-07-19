@@ -68,6 +68,13 @@ pub enum WalletRpcErrorCode {
     DaemonUnreachable = -29201,
     /// `get_transfer_by_id`: no match.
     UnknownTransferId = -29400,
+    /// Stake: funding not ready (W1-clean refusal — fund the persona /
+    /// let the scan catch up, then retry).
+    StakeNotReady = -29500,
+    /// Stake: a signed bond post is already awaiting dispatch.
+    StakeInFlight = -29501,
+    /// Stake: the wallet already holds a confirmed bond (idempotency).
+    AlreadyStaked = -29502,
     /// Server: wallet-dir tenancy unavailable.
     TenantUnavailable = -29900,
 }
@@ -161,6 +168,22 @@ pub enum WalletRpcError {
     /// `get_transfer_by_id`: no match.
     #[error("unknown transfer id")]
     UnknownTransferId,
+    /// Stake: funding not ready — a W1-clean refusal (nothing durable was
+    /// written): fund the persona and/or wait for the wallet's persona scan
+    /// to catch up, then call `stake` again.
+    #[error("stake not ready: fund the wallet's staking balance and retry once synced")]
+    StakeNotReady {
+        /// Server-side detail (`error.data.detail`) — operational cause, no
+        /// secrets or amounts.
+        detail: String,
+    },
+    /// Stake: a signed bond post is already sealed and awaiting its
+    /// scheduled broadcast; no action needed.
+    #[error("stake already in flight: the bond will broadcast at its scheduled time")]
+    StakeInFlight,
+    /// Stake: the wallet already staked (a confirmed bond exists).
+    #[error("already staking")]
+    AlreadyStaked,
 }
 
 impl WalletRpcError {
@@ -190,6 +213,9 @@ impl WalletRpcError {
             Self::SubmitRejected { .. } => WalletRpcErrorCode::SubmitRejected,
             Self::SubmitAmbiguous => WalletRpcErrorCode::SubmitAmbiguous,
             Self::UnknownTransferId => WalletRpcErrorCode::UnknownTransferId,
+            Self::StakeNotReady { .. } => WalletRpcErrorCode::StakeNotReady,
+            Self::StakeInFlight => WalletRpcErrorCode::StakeInFlight,
+            Self::AlreadyStaked => WalletRpcErrorCode::AlreadyStaked,
         }
     }
 
@@ -205,6 +231,7 @@ impl WalletRpcError {
             Self::CapabilityForbids { capability } => Some(json!({ "capability": capability })),
             Self::ContentGenMismatch { content_gen } => Some(json!({ "content_gen": content_gen })),
             Self::SubmitRejected { data } => Some(data.clone()),
+            Self::StakeNotReady { detail } => Some(json!({ "detail": detail })),
             _ => None,
         }
     }
