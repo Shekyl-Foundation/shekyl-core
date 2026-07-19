@@ -460,6 +460,42 @@ mod tests {
         assert_eq!(b.rewards_received_unspent, AtomicUnits::from_raw(333));
     }
 
+    /// WI-RPC-1 pin 2 (hint-not-truth): when the `StakingBlock::bonded_slots`
+    /// hint diverges from the authoritative reconcile evidence — e.g. phantom
+    /// slots left by a crash in the persist-before-use window — the staked
+    /// reads report the authoritative value, never the hint.
+    ///
+    /// This bites against any future change that routes `bonded_slots` (or a
+    /// count derived from it) into the balance aggregation; it does NOT cover
+    /// the `staking_enabled` gate (the one `StakingBlock` field that *is*
+    /// authoritative and is read by `staking_read_view` directly).
+    #[test]
+    fn hint_divergence_reads_authoritative_not_bonded_slots() {
+        use shekyl_engine_state::staking_block::StakingBlock;
+
+        // Hint claims three live-bonded slots…
+        let hint = StakingBlock::new(true, 3, vec![0, 1, 2]);
+        assert_eq!(hint.bonded_slots.len(), 3);
+
+        // …but the authoritative evidence supports exactly one live bond.
+        let s = state(
+            vec![bond_match(1, 0)],
+            BTreeMap::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let b = staked_balance_from_records(Some(&s), None).expect("balance");
+
+        let authoritative = AtomicUnits::from_raw(ARCHIVAL_BOND_FLOOR_ATOMIC);
+        let hint_derived =
+            AtomicUnits::from_raw(hint.bonded_slots.len() as u64 * ARCHIVAL_BOND_FLOOR_ATOMIC);
+        assert_eq!(b.bonded_principal_confirmed, authoritative);
+        assert_ne!(
+            b.bonded_principal_confirmed, hint_derived,
+            "divergence fixture degenerate: hint and authoritative agree"
+        );
+    }
+
     /// Money sums fail closed on overflow, never wrap.
     #[test]
     fn overflow_fails_closed() {

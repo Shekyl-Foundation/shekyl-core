@@ -572,6 +572,28 @@ mod tests {
                 tx.weight(),
                 "predict_weight ≠ wire weight for n_in={n_in} n_out={n_out} depth={depth} fee={fee}"
             );
+            // WI-RPC-1 pin 5 (fee single-source): the `(size, weight)` pair
+            // the RPC `estimate_tx_size_and_weight` projects must equal the
+            // wire tx's own `serialized_len()` / `weight()` — the size is
+            // derived by clawback subtraction, never a second byte model.
+            // This bites against a re-derived / drifted size formula; it does
+            // NOT cover the RPC dispatch plumbing (the HTTP-level test does).
+            let (size, weight) = predict_size_and_weight(
+                InputCount::clamped(n_in),
+                OutputCount::clamped(n_out),
+                depth,
+                fee,
+            );
+            assert_eq!(
+                weight,
+                tx.weight(),
+                "predict_size_and_weight weight ≠ wire weight for n_in={n_in} n_out={n_out}"
+            );
+            assert_eq!(
+                size,
+                tx.serialized_len(),
+                "predict_size_and_weight size ≠ wire serialized_len for n_in={n_in} n_out={n_out}"
+            );
         }
     }
 
