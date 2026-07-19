@@ -422,6 +422,42 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   m_nettype = test_options != NULL ? FAKECHAIN : nettype;
   m_offline = offline;
   m_fixed_difficulty = fixed_difficulty;
+
+  if (shekyl_archival_settlement_epoch_override_present())
+  {
+    // Same shape as the SEEDHASH_EPOCH_* gate below: the settlement-epoch
+    // schedule is consensus (epoch close boundaries, serve-credit epochs,
+    // bond join epochs, emission claim windows all derive from it), and
+    // SHEKYL_SETTLEMENT_EPOCH_BLOCKS is the fakechain-only lever that
+    // makes epoch-close e2e coverage affordable. A node inheriting it
+    // from a leaked environment would close epochs at wrong heights and
+    // fork every public peer — refuse on the lever's PRESENCE, before
+    // any question of its validity.
+    //
+    // This gate runs BEFORE anything touches the DB: arming must precede
+    // the process's first epoch arithmetic, and on a fresh datadir the
+    // genesis add below reaches it (add_block →
+    // process_archival_epoch_close_at_height) — arming after that latches
+    // the genesis schedule first and the arm refuses as ArmedTooLate
+    // (caught live by the PR-4c emission e2e's first daemon spawn).
+    if (m_nettype != FAKECHAIN)
+    {
+      MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS override active on a public network: the settlement-epoch schedule is consensus-critical and the override is a fakechain-only (regtest) lever; refusing to start. Unset SHEKYL_SETTLEMENT_EPOCH_BLOCKS to run this node.");
+      return false;
+    }
+    // FAKECHAIN: arm the override. An unarmed process ignores the lever
+    // wholesale, so this is the single gate a regtest schedule passes
+    // through — and an invalid value refuses loudly here instead of
+    // silently running the genesis schedule until the harness times out.
+    if (!shekyl_archival_settlement_epoch_arm_regtest())
+    {
+      const char *raw = getenv("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
+      MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " is not a valid override (expected an integer in 2..=10000, and arming must precede any epoch arithmetic); refusing to start. Fix the value or unset the variable.");
+      return false;
+    }
+    MWARNING("SHEKYL_SETTLEMENT_EPOCH_BLOCKS override active on fakechain: settlement epochs are " << shekyl_archival_settlement_epoch_blocks() << " blocks instead of the genesis-pinned schedule — epoch closes, serve-credit windows, and emission claims computed under this schedule are valid only among fakechain nodes running the same override");
+  }
+
   if (m_hardfork == nullptr)
   {
     if (m_nettype ==  FAKECHAIN || m_nettype == STAGENET)
@@ -596,33 +632,6 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
         return false;
       }
       MWARNING("SEEDHASH_EPOCH_* override active on fakechain: the RandomX seed-epoch schedule differs from mainnet defaults — blocks produced under this schedule validate only among fakechain nodes running the same override, and captured vectors will not match mainnet seedheights");
-    }
-    if (shekyl_archival_settlement_epoch_override_present())
-    {
-      // Same shape as the SEEDHASH_EPOCH_* gate above: the settlement-epoch
-      // schedule is consensus (epoch close boundaries, serve-credit epochs,
-      // bond join epochs, emission claim windows all derive from it), and
-      // SHEKYL_SETTLEMENT_EPOCH_BLOCKS is the fakechain-only lever that
-      // makes epoch-close e2e coverage affordable. A node inheriting it
-      // from a leaked environment would close epochs at wrong heights and
-      // fork every public peer — refuse on the lever's PRESENCE, before
-      // any question of its validity.
-      if (m_nettype != FAKECHAIN)
-      {
-        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS override active on a public network: the settlement-epoch schedule is consensus-critical and the override is a fakechain-only (regtest) lever; refusing to start. Unset SHEKYL_SETTLEMENT_EPOCH_BLOCKS to run this node.");
-        return false;
-      }
-      // FAKECHAIN: arm the override. An unarmed process ignores the lever
-      // wholesale, so this is the single gate a regtest schedule passes
-      // through — and an invalid value refuses loudly here instead of
-      // silently running the genesis schedule until the harness times out.
-      if (!shekyl_archival_settlement_epoch_arm_regtest())
-      {
-        const char *raw = getenv("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
-        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " is not a valid override (expected an integer in 2..=10000, and arming must precede any epoch arithmetic); refusing to start. Fix the value or unset the variable.");
-        return false;
-      }
-      MWARNING("SHEKYL_SETTLEMENT_EPOCH_BLOCKS override active on fakechain: settlement epochs are " << shekyl_archival_settlement_epoch_blocks() << " blocks instead of the genesis-pinned schedule — epoch closes, serve-credit windows, and emission claims computed under this schedule are valid only among fakechain nodes running the same override");
     }
     if (m_nettype == FAKECHAIN)
     {
