@@ -478,7 +478,11 @@ async fn dispatch_retires(
     // in this loop mutates `funding_outputs` (retire_persona only drops a
     // *drained* slot's rows, of which there are none), so it stays consistent
     // across the candidates.
-    let funded_slots = FundedSlots::from_slots(accrual.funding_outputs().iter().map(|f| f.p_slot));
+    // Built once per retire pass; each candidate's message clones the
+    // pointer, not the set (the sweep can carry thousands of candidates).
+    let funded_slots = std::sync::Arc::new(FundedSlots::from_slots(
+        accrual.funding_outputs().iter().map(|f| f.p_slot),
+    ));
     // Snapshot the candidates so the await loop holds no borrow of `accrual`.
     let candidates: Vec<(PCanonicalId, SettlementEpoch)> = accrual
         .pending_unbonds()
@@ -506,7 +510,7 @@ async fn dispatch_retires(
             RetirementWitness::from_confirmed_unbond(id, unbond_epoch, ts).is_some()
         });
         match stake
-            .retire_bonded_persona(witness, funded_slots.clone())
+            .retire_bonded_persona(witness, std::sync::Arc::clone(&funded_slots))
             .await?
         {
             // Wiped: the actor side is done (the slot was drained, per the

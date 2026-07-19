@@ -9,10 +9,13 @@
   `RetiredPersonaRecord` rows land in `PScanState`
   (**`PSCAN_STATE_VERSION` 6 → 7**, schema snapshot regenerated), written
   by `PScanAccrual::retire_persona`: the persona's `bond_post_matches`
-  rows, the slot's `funding_outputs` records, and the `pending_unbonds`
-  trigger all leave in the same mutation that appends the record — one
-  atomic seal (the bound on `bond_post_matches` growth, the most
-  privacy-sensitive structure in the state). The durable prune fires only
+  rows and the `pending_unbonds` trigger leave in the same mutation that
+  appends the record — one atomic seal (the bound on
+  `bond_post_matches` growth, the most privacy-sensitive structure in
+  the state). Funding rows are already gone by then: the **funded-gate**
+  defers retire until the slot is drained (arm #1 pruned each spend as
+  it was observed), with a defense-in-depth retain + `debug_assert`
+  behind the gate. The durable prune fires only
   under the DQ-D **sweep-corroborated tip clamp**
   `min(claimed_tip, verified_frontier + reorg_depth)` (the WI-3 R2-1
   reserve, consumed as corroboration; a low-claiming source defers the

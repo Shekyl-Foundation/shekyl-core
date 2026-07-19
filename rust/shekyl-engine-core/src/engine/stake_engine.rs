@@ -2864,7 +2864,10 @@ pub(crate) struct RetireBondedPersona {
     /// Slots the caller knows still hold unspent funding — the funded-gate
     /// operand. The handler resolves the witness to a slot and refuses the
     /// irreversible wipe if the slot is in this set (returns `SkippedFunded`).
-    pub funded_slots: FundedSlots,
+    /// `Arc` so a sweep with many retire candidates clones a pointer per
+    /// message, not the set (the containment properties — redacting `Debug`,
+    /// no `Serialize` — ride through the `Arc` unchanged).
+    pub funded_slots: std::sync::Arc<FundedSlots>,
 }
 
 // The retire is infallible at the actor — all outcomes are valid and idempotent,
@@ -3238,7 +3241,7 @@ impl StakeEngineHandle {
     pub(crate) async fn retire_bonded_persona(
         &self,
         witness: RetirementWitness,
-        funded_slots: FundedSlots,
+        funded_slots: std::sync::Arc<FundedSlots>,
     ) -> Result<RetireOutcome, StakeEngineError> {
         self.actor
             .ask(RetireBondedPersona {
@@ -4290,7 +4293,7 @@ mod tests {
 
         assert_eq!(
             handle
-                .retire_bonded_persona(witness, FundedSlots::default())
+                .retire_bonded_persona(witness, std::sync::Arc::new(FundedSlots::default()))
                 .await
                 .expect("retire"),
             RetireOutcome::Retired {
@@ -4307,7 +4310,7 @@ mod tests {
         .expect("eligible");
         assert_eq!(
             handle
-                .retire_bonded_persona(again, FundedSlots::default())
+                .retire_bonded_persona(again, std::sync::Arc::new(FundedSlots::default()))
                 .await
                 .expect("retire"),
             RetireOutcome::NotHeld,
@@ -4335,7 +4338,7 @@ mod tests {
         let funded = FundedSlots::from_slots([PSlot::from_raw(0)]);
         assert_eq!(
             handle
-                .retire_bonded_persona(witness(), funded)
+                .retire_bonded_persona(witness(), std::sync::Arc::new(funded))
                 .await
                 .expect("retire"),
             RetireOutcome::SkippedFunded {
@@ -4347,7 +4350,7 @@ mod tests {
         // Drained now (empty funded set) → the same witness retires it.
         assert_eq!(
             handle
-                .retire_bonded_persona(witness(), FundedSlots::default())
+                .retire_bonded_persona(witness(), std::sync::Arc::new(FundedSlots::default()))
                 .await
                 .expect("retire"),
             RetireOutcome::Retired {
@@ -4370,7 +4373,7 @@ mod tests {
         .expect("eligible");
         assert_eq!(
             handle
-                .retire_bonded_persona(witness, FundedSlots::default())
+                .retire_bonded_persona(witness, std::sync::Arc::new(FundedSlots::default()))
                 .await
                 .expect("retire"),
             RetireOutcome::SkippedActive {
@@ -4393,7 +4396,7 @@ mod tests {
         .expect("eligible");
         assert_eq!(
             handle
-                .retire_bonded_persona(witness, FundedSlots::default())
+                .retire_bonded_persona(witness, std::sync::Arc::new(FundedSlots::default()))
                 .await
                 .expect("retire"),
             RetireOutcome::NotHeld

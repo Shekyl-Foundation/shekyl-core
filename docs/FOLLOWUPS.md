@@ -8371,6 +8371,32 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.x — staker archival and visualization ship
 
+- **P-drain mechanism re-walk — CryptoNote holdover audit (rule 16; method note 5:
+  "carry from X" is a re-walk trigger, not an exemption).** Ratified finding
+  (2026-07-19, maintainer analysis at source): the anti-sweep / decorrelate-the-drains
+  discipline was a CryptoNote-lineage carry, wrong on two independent layers. **Layer 1 —
+  it defended an observable FCMP++ deletes:** the membership proof breaks the
+  input→output link (a drain reveals neither which outputs it consumed nor a
+  consolidation signature; F-W10's output-count phantom), so "one identifiable exit
+  event" does not exist on-chain. **Layer 2 — it was powerless against the one real
+  residual:** the off-chain principal↔user aggregate (§18.12) is slice-invariant — ten
+  decorrelated partial drains deliver the same lifetime total as one sweep. The
+  exit-standoff apparatus is already deleted (F-W7); privacy is correctly re-homed to
+  the **amount** channel: F-D1 lineage-blind selection (structural, built) + F-D2
+  round-number/random-split default (unbuilt, rides the drain-send subsystem). As
+  built, sweep = the `target == spendable` boundary of `plan_drain` (largest-first
+  selection takes every mature output, zero change) — no separate primitive, no
+  structural block. **The re-walk (land before/with the F-D2 drain-send subsystem
+  build, Gate-6 R4's last open item):** (a) fee/change mechanics — the planner is
+  fee-agnostic; decide whether drain-everything is `target = spendable − fee` at the
+  caller or an assembly-side fee carve, and whether a first-class sweep entry should
+  exist rather than each caller computing the boundary; (b) sweep drain docs/comments
+  for remaining shape-era language and assumptions (decorrelation, consolidation
+  visibility, split-the-exit) and re-walk each against the FCMP++ threat model rather
+  than carrying it; (c) confirm F-D2's default is specified against the amount channel
+  only (the surviving channel) and cannot silently re-introduce shape machinery.
+  **Target: V3.0** (with the drain-send subsystem; the audit is cheap, the carve
+  decisions freeze with the wallet's exit UX).
 - **Principal-side default-on Tor — flip `--proxy` from opt-in to default, opt-out loud.**
   Source-verified at the WI-4 arc closure (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §18.13):
   the persona side is Tor-mandatory **by construction** (`shekyl-p-transport` fails the
@@ -8418,8 +8444,10 @@ one place to confirm each item's relationship to the wallet stack.
   forbidden (DQ-F Guard 2).
   **UPDATE 2026-07-18 — arm #2 BUILT (`feat/sp-r0-arm2-retire-gc`).** The done-side
   `RetiredPersonaRecord` ledger in `PScanState` (v6→7 + regenerated snapshot), the atomic
-  retire-time prune (`PScanAccrual::retire_persona` — matches + funding + pending trigger
-  leave with the record, one seal), the DQ-D tip-clamp corroboration (a low-claiming source
+  retire-time prune (`PScanAccrual::retire_persona` — matches + pending trigger leave with
+  the record, one seal; funding rows are already gone by then — the funded-gate defers
+  retire until the slot is drained, arm #1 having pruned each spend as observed, with a
+  defense-in-depth retain + debug_assert behind the gate), the DQ-D tip-clamp corroboration (a low-claiming source
   defers the prune, fail-safe), and the open-time records-driven hint clean (retired slots
   never re-derive; an emptied hint reverts to non-staker). Guard-2: logic-discharged at the
   task/accrual/lifecycle test level (cfg(test) evidence construction — the claim-window
