@@ -7,12 +7,14 @@ code.**
 Charter: `ARCHIVAL_FIREWALL_GATE6.md` §12.4 names F-D2's remaining half a
 **whole unbuilt `P`-value-out (drain-send) subsystem in
 `shekyl-gui-wallet`**, and Gate-6 §12.8's re-formed R4 close condition is
-down to F-D1 (BUILT) + F-D2. The GF-4 line is `K_COVER` seal input #3 of
-four (`ARCHIVAL_REWARD_GATE_M1.md` §4 seal-input list, item 2 of the
-remaining three there; #1 §14.4 partition discharged 2026-07-11, #2 GF-7
-leg-(b) discharged 2026-07-18 via the in-flight PR #337), so this
-subsystem is on the genesis critical path: each open seal input extends
-the genesis date one-for-one (PF-9 stressnet-entry pin).
+down to F-D1 (BUILT) + F-D2. Seal-path note (2026-07-19, PR #337 scope
+review, merged before this round's first review): the GF-4/F-D1+F-D2
+`K_COVER` seal seat was **REMOVED** (`ARCHIVAL_REWARD_GATE_M1.md` §4 —
+the drain is not an on-chain observable per F-W10, and the exit-timing
+observable is a ratified phantom per F-W7/F-W8), so this subsystem is
+**not** seal evidence and does not gate the `K_COVER` seal act. It
+remains pre-genesis work on its own Gate-6 track: R4 is open on F-D2
+alone, and the FOLLOWUPS "P-drain mechanism re-walk" riders are V3.0.
 
 Process: this round cites **`26-sub-pr-design-discipline.mdc`**
 explicitly — the work is a multi-sub-PR subsystem crossing an FFI-adjacent
@@ -49,8 +51,8 @@ that the default is specified against the **amount channel only** — the
 one surviving channel (timing phantom per F-W7, output-count phantom per
 F-W10).
 
-Closing F-D2 closes Gate-6 R4, which discharges `K_COVER` seal input
-GF-4/F-D1+F-D2 (M1 §4 item 2).
+Closing F-D2 closes Gate-6 R4 — the gate's own close, not a `K_COVER`
+seal input (seat removed 2026-07-19; see the charter note above).
 
 ## 2. Substrate — verified at source, 2026-07-19
 

@@ -454,7 +454,13 @@ lens for **every** future firewall round, not just `TM-1`.
    wallet-default (which shards a rotation serves), not a genesis-frozen on-chain shape.
    **Methodological note:** ask *"does the design do this?"* before applying the rigor —
    the substrate (sequential rotation) had already answered the simultaneous-persona
-   question; the answer simply wasn't applied until now.
+   question; the answer simply wasn't applied until now. *(Correction 2026-07-19, PR
+   #337: "the design rotates personas sequentially (`stake_engine`: never two active
+   personas)" overstates the enforced property — the engine enforces one active key
+   bundle, supports concurrently-bonded personas for unbond reachability, and has no
+   rotation scheduler; the foreclosure rests on single-persona operation + `1/R`
+   economics + disclosure. Full note: `ARCHIVAL_TM1_CLUSTERING.md` correction block;
+   WI-4 §19.10.)*
 2. **[Done] Funding-side completeness gate (`TM-3`)** — built into 2d-1 as SP-7
    (`CoverDiscovery` + root-anchored cursor): cold-start re-fund gated on a
    header-root-confirmed-complete view, never on absence, and surfaced rather than

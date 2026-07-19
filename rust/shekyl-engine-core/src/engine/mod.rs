@@ -272,6 +272,15 @@ pub(crate) mod fault_injecting_pending_tx;
 pub(crate) mod fault_injecting_refresh;
 pub mod fee_estimator;
 pub(crate) mod fee_snapshot;
+/// GF-7 leg-(b) sealing re-run harness (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`
+/// §19.8): drives the **production** P-scan task + dispatch driver
+/// (`start_pscan_sealing_run`, production config/cadence, real sleeps)
+/// against a live `shekyld --regtest` and writes the receipts artifact that
+/// `shekyl-staking-sim --gf7-seal` grades. `#[ignore]`d; requires
+/// `SHEKYLD_BIN` and the non-default `gf7-hooks` feature; multi-hour by
+/// design (§19.8.2 wall-clock budget).
+#[cfg(all(test, feature = "gf7-hooks"))]
+mod gf7_sealing_run;
 pub(crate) mod key_actor;
 /// §5.3 B9 dispatch-overhead bench support. Gated behind
 /// `bench-internals`; re-exported through [`crate::__bench_internals`]

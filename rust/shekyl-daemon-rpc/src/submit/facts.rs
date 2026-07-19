@@ -12,6 +12,7 @@
 //! mempool implements it natively. Facts are plain data — the shim fetches,
 //! the engine decides. Zero verdict logic lives behind this trait.
 
+use shekyl_archival_retention::{BadInterval, HoldingsDescriptor};
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
 
 use crate::submit::certificate::VerificationCertificate;
@@ -119,6 +120,100 @@ pub struct SubmitFacts {
     ///
     /// [`SubmitTxKind::BondPost`]: crate::submit::SubmitTxKind::BondPost
     pub bond_record_exists: Option<bool>,
+    /// §8.7.2 rows E6/E7: the emission-arm fact bundle — the claimant's
+    /// pre-block bond record and one frozen as-of-`E` snapshot per claimed
+    /// epoch. `Some` iff the snapshot was asked to probe (the engine passes
+    /// the vin-derived `(P_canonical_id, epochs)` for an
+    /// [`SubmitTxKind::Emission`] submission only); a `None` on an emission
+    /// submission is a shim contract violation, pre-checked by the engine.
+    ///
+    /// [`SubmitTxKind::Emission`]: crate::submit::SubmitTxKind::Emission
+    pub emission: Option<EmissionFacts>,
+    /// §8.7.2 row E6's Phase-D re-check bit: the claim slot moved — the
+    /// claimant bond record is gone **or** a claimed epoch now overlaps the
+    /// record's `claimed_settlement_epochs` (a competing claim connected
+    /// during Phase C). Fact-shaped like the key-image descriptors: the
+    /// C++ shim computes the predicate from the reparsed blob under the
+    /// Phase-D lock; **Rust classifies** it (`DoubleSpendConflict`).
+    /// `Some` iff an emission probe ran on this snapshot.
+    pub emission_claim_conflict: Option<bool>,
+}
+
+/// §8.7.2 emission-arm facts (rows E6 + E7), owned POD marshaled by the
+/// snapshot shim under the same lock scope as every other fact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmissionFacts {
+    /// E6: the claimant's pre-block bond record; `None` = no record
+    /// (the claims battery rejects — `BondMissing` → the claim-slot
+    /// conflict classification).
+    pub bond: Option<EmissionBondFacts>,
+    /// E7: one frozen as-of-`E` snapshot per claimed epoch, claim order
+    /// (alignment is re-checked by `emission_vin_verify_claims`).
+    pub snapshots: Vec<EmissionEpochSnapshotFacts>,
+}
+
+/// E6: the claimant bond record's verify operands
+/// (`ClaimantBondRecord`'s owned twin).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmissionBondFacts {
+    /// `E_join` — the step-2 `E ≥ E_join + 1` operand.
+    pub join_settlement_epoch: u64,
+    /// The record's holdings descriptor (step 2 demands equality with the
+    /// vin's).
+    pub holdings: HoldingsDescriptor,
+    /// The record's claimed-epoch set — step 3's read-only dedup operand.
+    pub claimed_settlement_epochs: Vec<u64>,
+}
+
+/// E7: one frozen as-of-`E` gather snapshot
+/// (`ShekylArchivalEmissionEpochSnapshot`'s owned twin; the verifier
+/// borrows these into `EpochCloseInputs::verify_view`, the single-sourced
+/// view constructor the C++ oracle's FFI shim also uses).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmissionEpochSnapshotFacts {
+    /// A frozen `budget(E)` row exists — absent means the epoch never
+    /// closed (or was pruned): `Malformed` (§8.7.2 row E7).
+    pub has_budget_row: bool,
+    pub settlement_epoch: u64,
+    /// The close-processing height `(E+1)·SEB` (shard-age operand).
+    pub close_block_height: u64,
+    /// Persisted finalized `Σwork(E)` milli — the stored denominator.
+    pub sigma_work_milli: u64,
+    /// Persisted frozen `budget(E)` atomic.
+    pub budget_atomic: u64,
+    /// Claimant `P`'s index into `bonds`, `None` when `P` has no
+    /// serve-credit row in `E`.
+    pub claimant_bond_idx: Option<usize>,
+    /// The frozen bond rows (`EpochCloseBond`'s owned twin).
+    pub bonds: Vec<EmissionCloseBondFacts>,
+    /// The frozen shard registry rows.
+    pub shards: Vec<EmissionShardFacts>,
+    /// The frozen serve-credit pairs, as indices into `bonds`/`shards`.
+    pub credit_pairs: Vec<EmissionCreditPairFacts>,
+}
+
+/// One frozen bond row (owned `EpochCloseBond`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmissionCloseBondFacts {
+    pub join_settlement_epoch: u64,
+    pub is_foundation_complete_tree: bool,
+    pub bad_intervals: Vec<BadInterval>,
+}
+
+/// One frozen shard registry row (owned `EpochCloseShard` — mirrored
+/// because the retention type carries no `Eq`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmissionShardFacts {
+    pub shard_id: u64,
+    pub has_segment: bool,
+    pub freeze_height: u64,
+}
+
+/// One frozen serve-credit pair (owned `CreditPair` mirror).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmissionCreditPairFacts {
+    pub bond_idx: usize,
+    pub shard_idx: usize,
 }
 
 /// The snapshot shim failed internally (§3.4: DB exception, marshalling
@@ -148,9 +243,10 @@ pub enum CommitOutcome {
     /// check (F23). `Accepted ⇒ in pool at commit-check time`.
     Committed,
     /// A mutable premise moved between the Phase-B snapshot and the commit
-    /// lock. Carries the fresh facts; **Rust classifies**, most-terminal-
-    /// first (§3.1) — the shim never chooses a verdict.
-    Raced(SubmitFacts),
+    /// lock. Carries the fresh facts (boxed: the emission fact bundle makes
+    /// the snapshot the enum's dominant variant); **Rust classifies**,
+    /// most-terminal-first (§3.1) — the shim never chooses a verdict.
+    Raced(Box<SubmitFacts>),
     /// The insert tail succeeded but the tail's `prune()` evicted the tx
     /// under pool pressure (F23 / defect 0.7) — classified
     /// `Rejected{FeeTooLow}` (pool-pressure variant).
@@ -183,6 +279,7 @@ pub trait SubmitStateShim {
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
         bond_p_canonical_id: Option<&[u8; 32]>,
+        emission_probe: Option<(&[u8; 32], &[u64])>,
     ) -> Result<SubmitFacts, ShimFault>;
 
     /// Phase D: one short pool→blockchain lock scope — release-mode txid
@@ -218,8 +315,15 @@ impl<T: SubmitStateShim + ?Sized> SubmitStateShim for std::sync::Arc<T> {
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
         bond_p_canonical_id: Option<&[u8; 32]>,
+        emission_probe: Option<(&[u8; 32], &[u64])>,
     ) -> Result<SubmitFacts, ShimFault> {
-        (**self).snapshot_facts(txid, key_images, reference_block, bond_p_canonical_id)
+        (**self).snapshot_facts(
+            txid,
+            key_images,
+            reference_block,
+            bond_p_canonical_id,
+            emission_probe,
+        )
     }
 
     fn commit(

@@ -22,21 +22,21 @@
 //! seed at function end (the same lifetime the `KeyActor` already imposes on the
 //! seed it derives `AllKeysBlob` from). The actor therefore holds only **derived
 //! material** (same `!Clone` + per-field `ZeroizeOnDrop` class as `AllKeysBlob`),
-//! never the root. Rotation switches the active bundle and wipes the retired one
+//! never the root. Activation switches the active bundle and wipes the retired one
 //! — it never re-acquires the seed. Lookahead-exhaustion and first-stake-mid-
 //! session collapse onto **reopen** (re-runs `assemble()` with the transient
 //! seed); there is no re-auth/KEK machinery.
 //!
 //! ## Why the *bonded union*, not a clean lookahead window
 //!
-//! The archival model rotates *while bonded*: a retired persona's bonds sit
+//! The archival model moves the active slot *while bonded*: a retired persona's bonds sit
 //! on-chain as dormant balances (no simultaneous wire activity → the firewall
 //! permits it), and unbonding one later needs that persona's `bond_spend` key.
 //! Because the seed is gone after `assemble()`, a persona absent from the
 //! pre-derived set is unreachable for the wallet's life — so a retired-but-
 //! bonded persona under a bare `{p_slot ..= p_slot+k}` window would brick
 //! unbonding. The held set is therefore the **bonded union plus the lookahead**,
-//! and rotation-wipe wipes **only personas with no live bond** (typed contract
+//! and activation-wipe wipes **only personas with no live bond** (typed contract
 //! #4, [`HeldPersona`]). The live-bond slot set arrives from the persisted
 //! [`StakingBlock`](shekyl_engine_state::StakingBlock) `bonded_slots` hint.
 //!
@@ -56,14 +56,14 @@
 //! a persona in the held set, never a raw [`PSlot`] validated per use. "Use an
 //! unheld persona" then has no expressible form: the membership check collapses
 //! to the single slot→handle minting boundary ([`MintPersonaHandle`]). The
-//! handle is **operation-scoped** — it carries the actor's rotation
-//! `generation`, and every rotation that wipes a persona advances it, so a
-//! handle retained across a rotation is rejected ([`StakeEngineError::StaleHandle`])
+//! handle is **operation-scoped** — it carries the actor's activation
+//! `generation`, and every activation that wipes a persona advances it, so a
+//! handle retained across an activation is rejected ([`StakeEngineError::StaleHandle`])
 //! rather than signing against zeroized memory. [`StakeEngineError::LookaheadExhausted`]
 //! stays a *real* domain error (the budget is consumed → reopen), distinct from
 //! the typed-away can't-happen state.
 //!
-//! # Atomic rotation (§10.1 robustness #2 / §10.9)
+//! # Atomic activation (§10.1 robustness #2 / §10.9)
 //!
 //! Activating a held slot is a **single state transition**: a single assignment
 //! installs the new active slot, then the retired slot is wiped iff it is
@@ -224,20 +224,20 @@ pub(crate) use shekyl_types::PSlot;
 ///
 /// `k` is the one tuning knob of Model D. The derive-forward set at open is
 /// `{persisted bonded slots} ∪ {cursor ..= cursor + k}`: the bonded slots are
-/// reachable for unbonding, and the `k`-slot window covers rotations that
-/// happen *during* the session without re-acquiring the seed. Rotation is
+/// reachable for unbonding, and the `k`-slot window covers activations that
+/// happen *during* the session without re-acquiring the seed. Activation is
 /// sequential (`i → i+1`), so a window of `k` future slots covers `k` in-session
-/// rotations before the lookahead is exhausted and the wallet must be reopened
+/// activations before the lookahead is exhausted and the wallet must be reopened
 /// (the root-free recovery path) to derive further.
 ///
-/// - **Lower bound.** `k = 0` degenerates to "reopen to rotate" — still
-///   correct and root-free, but every rotation costs a reopen.
+/// - **Lower bound.** `k = 0` degenerates to "reopen to activate" — still
+///   correct and root-free, but every activation costs a reopen.
 /// - **Upper bound.** Each unit of `k` is one extra PQ keygen at open and one
 ///   extra resident `ArchivalPKeys` bundle; the cost is linear in `k` and paid
 ///   only by stakers. Large `k` widens the memory blast radius (held derived
-///   personas) without benefit, since most sessions rotate at most once.
-/// - **Chosen value `2`.** Most sessions use one persona and rotate at most
-///   once; `k = 2` covers the common case (current + two in-session rotations)
+///   personas) without benefit, since most sessions move the active slot at most once.
+/// - **Chosen value `2`.** Most sessions use one persona and move the active slot at most
+///   once; `k = 2` covers the common case (current + two in-session activations)
 ///   with a two-bundle resident cost. Raising it is a one-line change reviewed
 ///   against this rationale.
 pub(crate) const ARCHIVAL_PERSONA_LOOKAHEAD: u32 = 2;
@@ -245,7 +245,7 @@ pub(crate) const ARCHIVAL_PERSONA_LOOKAHEAD: u32 = 2;
 /// A held persona bundle tagged by whether it carries a **live bond**.
 ///
 /// This is **typed contract #4** ([`ARCHIVAL_BOND_CONSTRUCTION.md`] §10.2):
-/// rotation-wipe must wipe only personas with *no* live bond, because a
+/// activation-wipe must wipe only personas with *no* live bond, because a
 /// retired-but-bonded persona's `bond_spend` key is needed to unbond it later
 /// and — under Model D, with the seed gone after `assemble()` — a wiped persona
 /// is unreachable for the wallet's life. Rather than guard that with a runtime
@@ -264,7 +264,7 @@ enum HeldPersona {
     /// while bonded — its `bond_spend` key must stay reachable to unbond.
     Bonded(BondedPersona),
     /// A pre-derived lookahead persona with no live bond. The *only* variant
-    /// the rotation-wipe path accepts.
+    /// the activation-wipe path accepts.
     Ephemeral(EphemeralPersona),
 }
 
@@ -376,7 +376,7 @@ pub(crate) enum RetireOutcome {
     NotHeld,
     /// The matching persona is the **active** slot; left in place. A terminal
     /// persona should not be active, but if it is we do not wipe it mid-use — the
-    /// next rotation moves `active` away and the retire re-fires.
+    /// next activation moves `active` away and the retire re-fires.
     SkippedActive { slot: PSlot },
     /// The matching persona's slot still holds **unspent funding outputs**; left
     /// in place (the **funded-gate**). Wiping it would strand spendable `P`
@@ -427,18 +427,18 @@ impl std::fmt::Debug for FundedSlots {
 /// Minted only by [`MintPersonaHandle`] for a slot actually in the held set, so
 /// "activate an unheld persona" has no expressible form — the membership check
 /// lives at the single slot→handle boundary, not at every use site. The handle
-/// carries the actor's rotation [`generation`](StakeEngine::generation) at mint
+/// carries the actor's activation [`generation`](StakeEngine::generation) at mint
 /// time, and [`ActivatePersona`] consumes it **by value**: a handle authorizes
 /// exactly one activation.
 ///
-/// **Operation-scoped, two ways.** A rotation (an activation that changes the
+/// **Operation-scoped, two ways.** An activation (an activation that changes the
 /// active slot) advances the generation, so any handle minted before it is
-/// stale ([`StakeEngineError::StaleHandle`]); and the rotation removes the wiped
+/// stale ([`StakeEngineError::StaleHandle`]); and the activation removes the wiped
 /// ephemeral persona from the held set, so even a same-generation handle to it
 /// fails the membership check. A handle therefore cannot outlive the operation
 /// that minted it, which is what makes "sign against wiped memory" unexpressible.
 ///
-/// Signing (2c-2b) does **not** retain a handle across the rotation: it targets
+/// Signing (2c-2b) does **not** retain a handle across the activation: it targets
 /// the persona that activation made *active*, so the handle's single-activation
 /// scope is sufficient. Deliberately **not** `Clone` — there is no caller that
 /// needs to retain or duplicate a handle (mirrors the `AllKeysBlob` Not-Clone
@@ -546,7 +546,7 @@ pub(crate) enum StakeEngineError {
     StakeActorUnavailable,
 
     /// The requested slot is **not in the held derive-forward set** — the
-    /// lookahead budget `{p_slot ..= p_slot+k}` is consumed (rotated past the
+    /// lookahead budget `{p_slot ..= p_slot+k}` is consumed (moved past the
     /// pre-derived window). A *real* domain state, not a can't-happen: under
     /// Model D the seed is gone after `assemble()`, so reaching a fresh slot
     /// requires re-deriving the union, i.e. **reopen the wallet**. Held distinct
@@ -558,12 +558,12 @@ pub(crate) enum StakeEngineError {
     )]
     LookaheadExhausted { requested: PSlot },
 
-    /// A [`PersonaHandle`] was presented after a rotation advanced the actor's
-    /// generation — i.e. it was retained across the rotation that is its own
+    /// A [`PersonaHandle`] was presented after an activation advanced the actor's
+    /// generation — i.e. it was retained across the activation that is its own
     /// separate operation (typed contract #2: handles are operation-scoped). The
     /// persona it named may have been wiped; using it would risk a use-after-
     /// wipe, so it is rejected. Non-terminal: mint a fresh handle and retry.
-    #[error("stale persona handle: re-mint a handle (a rotation occurred since it was issued)")]
+    #[error("stale persona handle: re-mint a handle (an activation occurred since it was issued)")]
     StaleHandle,
 
     /// The OS entropy source failed to supply bytes for the entry-gap timing draw
@@ -697,7 +697,7 @@ pub(crate) struct StakeEngineArgs {
     pub bundles: BTreeMap<PSlot, ArchivalPKeys>,
     /// Slots that carry a live bond (`consumer_held` or posted), from the
     /// persisted `bonded_slots` hint. Bundles in this set are tagged
-    /// [`HeldPersona::Bonded`] so rotation never wipes them; the rest are
+    /// [`HeldPersona::Bonded`] so activation never wipes them; the rest are
     /// [`HeldPersona::Ephemeral`]. A reconcilable hint, not consensus truth.
     pub bonded: BTreeSet<PSlot>,
     /// The initially-active slot (the scan-reconciled monotone current slot), or
@@ -747,18 +747,18 @@ pub(crate) enum TestSelfCert {
 /// set), **not** the master seed.
 ///
 /// The single-threaded message loop serializes access to `held`/`active`, so a
-/// rotation (install-new-active, then wipe-retired-iff-ephemeral) is atomic with
+/// activation (install-new-active, then wipe-retired-iff-ephemeral) is atomic with
 /// respect to other messages.
 #[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct StakeEngine {
     /// The held derive-forward set, keyed by slot and tagged bonded/ephemeral.
-    /// Rotation wipes only the ephemeral retired slot; bonded personas stay
+    /// Activation wipes only the ephemeral retired slot; bonded personas stay
     /// resident so unbonding remains reachable.
     held: BTreeMap<PSlot, HeldPersona>,
     /// The currently-active slot, or `None` when idle. Always a key of `held`
     /// when `Some`.
     active: Option<PSlot>,
-    /// Rotation generation. Advances on every rotation that changes `active`,
+    /// Activation generation. Advances on every activation that changes `active`,
     /// invalidating every [`PersonaHandle`] minted before it — the mechanism
     /// behind operation-scoped handles (typed contract #2).
     generation: u64,
@@ -788,7 +788,7 @@ pub(crate) struct StakeEngine {
 #[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 impl StakeEngine {
     /// Validate a presented handle: it must be from the current generation and
-    /// name a still-held slot. A generation mismatch means a rotation occurred
+    /// name a still-held slot. A generation mismatch means an activation occurred
     /// since the handle was minted (operation-scoped contract), so it is stale.
     fn validate_handle(&self, handle: &PersonaHandle) -> Result<(), StakeEngineError> {
         if handle.generation != self.generation {
@@ -1339,8 +1339,8 @@ impl Actor for StakeEngine {
 /// Mint a [`PersonaHandle`] for slot `p_slot` — the single slot→handle boundary
 /// (typed contract #2). Succeeds iff the slot is in the held derive-forward set;
 /// an unheld slot is [`StakeEngineError::LookaheadExhausted`] (reopen to extend
-/// the lookahead). The minted handle carries the current rotation generation, so
-/// it is valid only until the next rotation (operation-scoped).
+/// the lookahead). The minted handle carries the current activation generation, so
+/// it is valid only until the next activation (operation-scoped).
 #[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct MintPersonaHandle {
     pub p_slot: PSlot,
@@ -1370,7 +1370,7 @@ impl Message<MintPersonaHandle> for StakeEngine {
 /// Activate the persona named by `handle`, returning its public identity.
 ///
 /// No derivation happens — the bundle is already held (Model D). If a different
-/// slot is active this is a **rotation**: a single assignment installs the new
+/// slot is active this is an **activation**: a single assignment installs the new
 /// active slot, the retired slot is wiped iff ephemeral (typed contract #4), and
 /// the generation advances (invalidating every prior handle). There is never a
 /// window with two active personas and never a gap with none (§10.1 #2 / §10.9).
@@ -1391,7 +1391,7 @@ impl Message<ActivatePersona> for StakeEngine {
         let target = msg.handle.p_slot;
 
         // Idempotent: already active for this slot → return its identity, no
-        // rotation, no generation advance.
+        // activation, no generation advance.
         if self.active == Some(target) {
             return Ok(self.identity_of(target));
         }
@@ -1406,7 +1406,7 @@ impl Message<ActivatePersona> for StakeEngine {
         // The active slot changed, so this activation is an operation boundary:
         // advance the generation to invalidate every handle minted before it
         // (typed contract #2 — handles are single-activation). The handle just
-        // consumed was validated above against the pre-rotation generation, so
+        // consumed was validated above against the pre-activation generation, so
         // the ordering is correct.
         self.generation = self.generation.saturating_add(1);
 
@@ -1415,11 +1415,11 @@ impl Message<ActivatePersona> for StakeEngine {
 }
 
 /// Report the public identity of the **held** persona at `p_slot` — a pure
-/// projection, like [`ActivePersona`]: no activation, no rotation, no
+/// projection, like [`ActivePersona`]: no activation, no activation, no
 /// generation advance, so every outstanding handle stays valid. The claim
 /// request path (CB-3) uses this to derive the claimant's canonical id from
 /// actor-held state without the lifecycle side effects of
-/// [`ActivatePersona`] — a claim is a read-and-sign operation, and rotating
+/// [`ActivatePersona`] — a claim is a read-and-sign operation, and activating
 /// on it would both invalidate any in-flight operation's handles and wipe a
 /// retired ephemeral persona as a side effect of an unrelated request.
 /// An unheld slot is [`StakeEngineError::LookaheadExhausted`], exactly as
@@ -1513,7 +1513,7 @@ impl Message<ActivePersonaReceiveAddress> for StakeEngine {
 /// places, so the draw cannot be silently dropped between signing and
 /// scheduling.
 ///
-/// Does **not** advance the rotation generation — signing does not change
+/// Does **not** advance the activation generation — signing does not change
 /// the active slot or wipe any persona.
 ///
 /// # Caller workflow
@@ -2756,7 +2756,7 @@ pub(crate) fn key_image_from_spend_key_x(
 // end (DQ5). The handler holds `&mut self` across the offload `await`, so the
 // (unbounded) mailbox cannot process another message until it returns — which is
 // exactly why the task sends **bounded** `ScanStep`s, interleaving
-// rotation/sign/activate between batches (DQ6: bounded AND offloaded). Only the
+// activation/sign/activate between batches (DQ6: bounded AND offloaded). Only the
 // public `ScanStepResult` comes back.
 impl Message<ScanStep> for StakeEngine {
     type Reply = Result<ScanStepResult, StakeEngineError>;
@@ -2977,7 +2977,7 @@ impl StakeEngineHandle {
     /// The bundles were derived at `assemble()` while the master seed was
     /// transiently borrowed; the seed is dropped there and never reaches the
     /// actor (Model D). `bonded` tags which held slots carry a live bond
-    /// (rotation never wipes them); `active` is the initial current slot.
+    /// (activation never wipes them); `active` is the initial current slot.
     ///
     /// **Runtime hosting — require-ambient.** A [`StakeEngine`] is an async
     /// task; spawning one *requires* a Tokio runtime. `spawn` asserts an ambient
@@ -3079,7 +3079,7 @@ impl StakeEngineHandle {
     }
 
     /// Activate the persona named by `handle` and return its public identity.
-    /// Rotation (with ephemeral-only wipe) when a different slot is active.
+    /// Activation (with ephemeral-only wipe) when a different slot is active.
     pub(crate) async fn activate_persona(
         &self,
         handle: PersonaHandle,
@@ -3112,7 +3112,7 @@ impl StakeEngineHandle {
     }
 
     /// The public identity of the held persona at `p_slot` — a pure
-    /// projection: no activation, no rotation, no generation advance (see
+    /// projection: no activation, no activation, no generation advance (see
     /// [`PersonaIdentityOf`]).
     pub(crate) async fn persona_identity(
         &self,
@@ -3680,14 +3680,16 @@ mod tests {
         );
     }
 
-    // §10.1 robustness #2 — rotation replaces the active persona in a single
-    // transition: after rotating to slot 1, slot 1 is the *only* active persona.
+    // §10.1 robustness #2 — activation replaces the active persona in a single
+    // transition: after activating to slot 1, slot 1 is the *only* active persona.
     #[tokio::test]
-    async fn rotation_replaces_active_persona() {
+    async fn activation_replaces_active_persona() {
         let handle = spawn_over(&[0, 1], &[0, 1], None);
 
         let id0 = mint_and_activate(&handle, 0).await.expect("activate 0");
-        let id1 = mint_and_activate(&handle, 1).await.expect("rotate to 1");
+        let id1 = mint_and_activate(&handle, 1)
+            .await
+            .expect("activate slot 1");
         assert_ne!(
             bond_id_bytes(&id0),
             bond_id_bytes(&id1),
@@ -3704,17 +3706,17 @@ mod tests {
         assert_eq!(bond_id_bytes(&active), bond_id_bytes(&id1));
     }
 
-    // Typed contract #4 — rotation wipes the retired *ephemeral* persona: after
-    // rotating away from an unbonded slot, that slot is no longer held, so a
+    // Typed contract #4 — activation wipes the retired *ephemeral* persona: after
+    // moving away from an unbonded slot, that slot is no longer held, so a
     // subsequent mint is `LookaheadExhausted`.
     #[tokio::test]
-    async fn rotation_wipes_ephemeral_retired() {
+    async fn activation_wipes_ephemeral_retired() {
         let handle = spawn_over(&[0, 1], &[], None); // both ephemeral
 
         mint_and_activate(&handle, 0).await.expect("activate 0");
         mint_and_activate(&handle, 1)
             .await
-            .expect("rotate to 1 (wipes ephemeral 0)");
+            .expect("activate slot 1 (wipes ephemeral 0)");
 
         let err = handle
             .mint_handle(PSlot::from_raw(0))
@@ -3733,22 +3735,22 @@ mod tests {
         assert_eq!(active.p_slot, PSlot::from_raw(1));
     }
 
-    // Typed contract #4 — rotation keeps a retired *bonded* persona resident:
+    // Typed contract #4 — activation keeps a retired *bonded* persona resident:
     // unbonding it later stays reachable, so it can be re-activated after a
-    // rotation that passed over it.
+    // activation that passed over it.
     #[tokio::test]
-    async fn rotation_keeps_bonded_retired() {
+    async fn activation_keeps_bonded_retired() {
         let handle = spawn_over(&[0, 1], &[0], None); // slot 0 bonded, slot 1 ephemeral
 
         let id0 = mint_and_activate(&handle, 0).await.expect("activate 0");
         mint_and_activate(&handle, 1)
             .await
-            .expect("rotate to 1 (bonded 0 stays)");
+            .expect("activate slot 1 (bonded 0 stays)");
 
         // Slot 0 is still held — re-mintable and re-activatable.
         let id0_again = mint_and_activate(&handle, 0)
             .await
-            .expect("bonded slot 0 survived the rotation");
+            .expect("bonded slot 0 survived the activation");
         assert_eq!(
             bond_id_bytes(&id0_again),
             bond_id_bytes(&id0),
@@ -3756,29 +3758,29 @@ mod tests {
         );
     }
 
-    // Typed contract #2 — a handle minted before a rotation is stale afterward:
-    // the rotation advanced the actor's generation, so the retained handle is
+    // Typed contract #2 — a handle minted before an activation is stale afterward:
+    // the activation advanced the actor's generation, so the retained handle is
     // rejected rather than acting against a possibly-wiped persona.
     #[tokio::test]
-    async fn stale_handle_after_rotation_is_rejected() {
-        // Both bonded so the rotation cannot wipe — isolating the generation
+    async fn stale_handle_after_activation_is_rejected() {
+        // Both bonded so the activation cannot wipe — isolating the generation
         // guard from the membership guard.
         let handle = spawn_over(&[0, 1], &[0, 1], None);
 
         // Mint a handle for slot 0 up front, then rotate via a *different*
-        // handle, leaving the slot-0 handle straddling the rotation.
+        // handle, leaving the slot-0 handle straddling the activation.
         let stale = handle
             .mint_handle(PSlot::from_raw(0))
             .await
             .expect("mint slot 0");
         mint_and_activate(&handle, 1)
             .await
-            .expect("rotate to 1 (advances generation)");
+            .expect("activate slot 1 (advances generation)");
 
         let err = handle
             .activate_persona(stale)
             .await
-            .expect_err("a handle retained across a rotation is stale");
+            .expect_err("a handle retained across an activation is stale");
         assert!(
             matches!(err, StakeEngineError::StaleHandle),
             "expected StaleHandle, got {err:?}"
@@ -4361,7 +4363,7 @@ mod tests {
     }
 
     /// The active persona is never wiped mid-use — retire skips it (the next
-    /// rotation moves `active` away, then the retire re-fires).
+    /// activation moves `active` away, then the retire re-fires).
     #[tokio::test]
     async fn retire_skips_the_active_persona() {
         let handle = spawn_over(&[0], &[0], Some(0)); // persona 0 bonded AND active

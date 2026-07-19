@@ -504,23 +504,75 @@ the ratification):
 1. **GF-7 leg-(b) sealing form** — the WI-4 §19.1 receipt-timestamped
    live-driver re-run (harness-timestamp form graded PROVISIONAL-PASS
    2026-07-11; the seal input is the re-run, not the emission's
-   existence).
+   existence). **DISCHARGED 2026-07-18, WITHDRAWN same day (PR #337
+   review; WI-4 §19.9.1), RE-DISCHARGED 2026-07-19 (WI-4 §19.9.2):**
+   the first run's harness could not detect background-miner death
+   (grade withdrawn, harness/grader hardened in-PR); under the
+   hardened harness, session 1 graded INVALID (the §19.8.3 negative
+   control biting on shared-host coupling — disclosed) and session 2
+   graded **PASS** (gate row `r = 0.412`, clustered SE 0.121, both
+   controls bite). Leg (b) is CLOSED. **Seal-input status WITHDRAWN
+   on scope review (2026-07-19, same PR; WI-4 §19.10):** the form's
+   `K = 2` concurrently-posting-persona premise is design-foreclosed
+   (persona-lifecycle enumeration, WI-4 §19.10.1; no rotation scheme
+   exists in `stake_engine`), so its PASS cannot serve as seal
+   evidence. The instrument is retained as a dispersal-regression
+   tripwire; the measurement records stand.
 2. **GF-4 exit-seam / value-channel rounds** — narrowed to
    **F-D1 + F-D2** (Gate-6 §12 re-formed R4 close; conditions (iii)
    and (iv) both discharged 2026-07-17). *Merged-state refresh
    (2026-07-18, PR #328): F-D1 is BUILT (M1 arm proven-to-bite then
    armed) and F-D2's core aggregate-only surface LANDED; R4's last
    open item is the unbuilt drain-send subsystem in
-   `shekyl-gui-wallet` (Gate-6 §12.3/§12.4 build notes).*
+   `shekyl-gui-wallet` (Gate-6 §12.3/§12.4 build notes).* **Seal-seat
+   REMOVED (2026-07-19, PR #337):** the drain is not an on-chain
+   observable (F-W10, ratified) and the exit-timing observable is a
+   ratified phantom (F-W7/F-W8) — the drain-send subsystem is a build
+   item on its own Gate-6 track, not evidence for a consensus
+   constant. Removing the seat changes no Gate-6 obligation.
 3. **§17.9 Gate-7 calibration** — adversarial-max-attrition margin +
-   per-channel thickness-reachability.
+   per-channel thickness-reachability. **REDUCED to a recorded
+   derivation (2026-07-19, PR #337; disposition below).**
 
-The PF-9 stressnet-entry pin below is unchanged: seal precedes Phase
-7.7 entry, so each open input above extends the genesis date
-one-for-one (`docs/RELEASE_CHECKLIST.md` 4-week clock starts only
-after seal). Process note: the §14.4-clearing PR (#291) did not sweep
-this document's gate lines — a cleared gate's sweep belongs to the PR
-that clears it; this update is that sweep, executed late.
+**UPDATE (2026-07-19) — seal predicate stated once, and the seal
+dispositioned as designed (PR #337 review thread).** What `K_COVER`'s
+seal actually requires, derived from the design decisions already
+ratified rather than accumulated inputs:
+
+- **(a) The gate operand is partition-proof.** DISCHARGED: the §14.4
+  partition run (PARTITION-PASS, RATIFIED, PR #291) plus the §11 M2/M3
+  operand pins (segment-table count, monotone, single counting site,
+  boundary-inclusive, decode-loud) — all landed.
+- **(b) The value is paired with a launch-posture commitment sized to
+  the measured cover floor.** The floor is **already measured** (WI-4):
+  the entry-seam channel — the only channel with a measured population
+  dependence in the persona lifecycle (WI-4 §19.10.1) — bounds at
+  worst `r = 1.86` at `N = 10` (thin margin), holds `r < 2` across
+  `N ∈ {10, 20, 50}`, and **fails at thin cover** (`r = 3.54`), which
+  is the fact this gate exists to enforce. Floor: `N ≈ 10` minimum,
+  `N ≈ 20` with margin. The operand (segment count) is deliberately a
+  partition-proof **proxy** — no consensus-computable function maps
+  segments to persona population — so sufficiency rests, by design,
+  on the §14 founder-cover schedule: `M ≥ ~20` staggered founder
+  personas held through the pre-gate window, net of adversarial max
+  attrition with no replacement backstop (§17.9's R7 basis). Per the
+  `RELEASE_CHECKLIST.md` mechanism-vs-economics queueing rule, an
+  organic-adoption-dependent derivation is unsealable; the
+  founder-schedule pairing is the only sealable form.
+
+**Disposition: the seal's evidentiary predicate is as discharged as
+the design permits.** No further measurement gates it — the remaining
+act is the act itself: choose `K_COVER` as the segment count whose
+crossing time covers the founder-cover rollout, record the
+founder-schedule commitment (`M`, stagger) in the calibration record,
+land the value in `config/consensus_constants.json`, and clear
+`k_cover_provisional` (sentinel mechanics below). PF-9 unchanged:
+that act remains the Phase 7.7 stressnet-entry prerequisite.
+
+Process note: the §14.4-clearing PR (#291) did not sweep this
+document's gate lines — a cleared gate's sweep belongs to the PR that
+clears it; the 2026-07-18 update was that sweep, executed late, and
+this update is the scope-review sweep of the input list it created.
 
 **Placement.** `k_cover` enters `config/consensus_constants.json`
 (the single source of truth for consensus constants whose C++/Rust

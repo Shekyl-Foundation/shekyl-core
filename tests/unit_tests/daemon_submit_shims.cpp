@@ -128,6 +128,21 @@ public:
     return true;
   }
 
+  // §8.7.2 E6 probe substrate: the full-record read the emission claim-slot
+  // predicate and fact marshal consume (claimed epochs + holdings).
+  std::vector<uint64_t> bond_claimed_epochs;
+  virtual bool get_archival_bond_value(const crypto::hash&,
+    shekyl::db::ArchivalBondValue& out) const override
+  {
+    if (!bond_record_present)
+      return false;
+    out = {};
+    out.join_settlement_epoch = 3;
+    out.holdings_kind = static_cast<uint8_t>(cryptonote::archival_holdings_kind::CompleteTree);
+    out.claimed_settlement_epochs = bond_claimed_epochs;
+    return true;
+  }
+
   // Fault-injection hook: when set, add_txpool_tx throws, standing in for an
   // LMDB map-full/resize or I/O failure in the insert tail after
   // insert_key_images has already mutated the in-memory key-image index.
@@ -408,6 +423,25 @@ struct ShimFixture
       reinterpret_cast<const uint8_t*>(ki.data), 1,
       reinterpret_cast<const uint8_t*>(cert_ref.data),
       bond_p_id ? reinterpret_cast<const uint8_t*>(bond_p_id->data) : nullptr,
+      /*emission_p_canonical_id=*/nullptr, /*emission_epochs=*/nullptr, 0,
+      /*out_emission=*/nullptr,
+      &facts, &ki_conflict);
+  }
+
+  int snapshot_emission(const SubmitTx& s, const crypto::hash& emission_p_id,
+    const uint64_t* epochs, size_t n_epochs,
+    shekyl_submit_facts_ffi& facts, uint8_t& ki_conflict,
+    shekyl_submit_emission_facts_handle** out_emission = nullptr)
+  {
+    const crypto::key_image& ki = std::get<txin_to_key>(s.tx.vin[0]).k_image;
+    return daemon_submit::snapshot_facts(bap.txpool, bap.bc,
+      reinterpret_cast<const uint8_t*>(s.txid.data),
+      reinterpret_cast<const uint8_t*>(ki.data), 1,
+      reinterpret_cast<const uint8_t*>(cert_ref.data),
+      /*bond_p_canonical_id=*/nullptr,
+      reinterpret_cast<const uint8_t*>(emission_p_id.data),
+      epochs, n_epochs,
+      out_emission,
       &facts, &ki_conflict);
   }
 
@@ -490,13 +524,79 @@ TEST(daemon_submit_shims, snapshot_probes_bond_record_iff_requested)
   EXPECT_EQ(facts.bond_record_exists, 1);
 }
 
+// §8.7.2 E6: the emission claim-slot predicate — record gone or claimed
+// epoch overlap — rides the probed/conflict validity-gated pair; probed
+// only when the emission key is passed.
+TEST(daemon_submit_shims, snapshot_probes_emission_claim_slot_iff_requested)
+{
+  ShimFixture fx;
+  SubmitTx s = fx.make_tx(0, 0);
+  crypto::hash p_id;
+  memset(&p_id, 0xE7, sizeof(p_id));
+  const uint64_t epochs[2] = {11, 12};
+
+  shekyl_submit_facts_ffi facts;
+  uint8_t ki_conflict = 0;
+  ASSERT_EQ(fx.snapshot(s, facts, ki_conflict), SHEKYL_SUBMIT_OK);
+  EXPECT_EQ(facts.emission_probed, 0);
+
+  // No record → conflict.
+  ASSERT_EQ(fx.snapshot_emission(s, p_id, epochs, 2, facts, ki_conflict), SHEKYL_SUBMIT_OK);
+  EXPECT_EQ(facts.emission_probed, 1);
+  EXPECT_EQ(facts.emission_claim_conflict, 1);
+
+  // Record present, disjoint claimed set → no conflict.
+  fx.db->bond_record_present = true;
+  fx.db->bond_claimed_epochs = {5, 9};
+  ASSERT_EQ(fx.snapshot_emission(s, p_id, epochs, 2, facts, ki_conflict), SHEKYL_SUBMIT_OK);
+  EXPECT_EQ(facts.emission_probed, 1);
+  EXPECT_EQ(facts.emission_claim_conflict, 0);
+
+  // Overlapping claimed set → conflict.
+  fx.db->bond_claimed_epochs = {5, 12};
+  ASSERT_EQ(fx.snapshot_emission(s, p_id, epochs, 2, facts, ki_conflict), SHEKYL_SUBMIT_OK);
+  EXPECT_EQ(facts.emission_claim_conflict, 1);
+}
+
+// §8.7.2 E6/E7: the fact-bundle marshal — bond fields + one snapshot per
+// claimed epoch (the TestDB's default gather leaves has_budget_row false,
+// which is a marshaled fact, not a shim fault).
+TEST(daemon_submit_shims, snapshot_marshals_emission_fact_bundle)
+{
+  ShimFixture fx;
+  fx.db->bond_record_present = true;
+  fx.db->bond_claimed_epochs = {5};
+  SubmitTx s = fx.make_tx(0, 0);
+  crypto::hash p_id;
+  memset(&p_id, 0xE7, sizeof(p_id));
+  const uint64_t epochs[2] = {11, 12};
+
+  shekyl_submit_facts_ffi facts;
+  uint8_t ki_conflict = 0;
+  shekyl_submit_emission_facts_handle* handle = nullptr;
+  ASSERT_EQ(fx.snapshot_emission(s, p_id, epochs, 2, facts, ki_conflict, &handle),
+    SHEKYL_SUBMIT_OK);
+  ASSERT_NE(handle, nullptr);
+  const shekyl_submit_emission_facts_ffi* view = shekyl_submit_emission_facts_view(handle);
+  ASSERT_NE(view, nullptr);
+  EXPECT_EQ(view->bond_present, 1);
+  EXPECT_EQ(view->bond.join_settlement_epoch, 3u);
+  ASSERT_EQ(view->bond.claimed_epochs_len, 1u);
+  EXPECT_EQ(view->bond.claimed_epochs[0], 5u);
+  ASSERT_EQ(view->snapshots_len, 2u);
+  EXPECT_EQ(view->snapshots[0].has_budget_row, 0);
+  EXPECT_EQ(view->snapshots[1].has_budget_row, 0);
+  shekyl_submit_emission_facts_free(handle);
+}
+
 TEST(daemon_submit_shims, snapshot_null_args_are_internal_fault)
 {
   ShimFixture fx;
   shekyl_submit_facts_ffi facts;
   uint8_t ki_conflict = 0;
   EXPECT_EQ(daemon_submit::snapshot_facts(fx.bap.txpool, fx.bap.bc,
-      nullptr, nullptr, 0, nullptr, nullptr, &facts, &ki_conflict),
+      nullptr, nullptr, 0, nullptr, nullptr, nullptr, nullptr, 0, nullptr,
+      &facts, &ki_conflict),
     SHEKYL_SUBMIT_INTERNAL_FAULT);
 }
 

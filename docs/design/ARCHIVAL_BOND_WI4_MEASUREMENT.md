@@ -3905,3 +3905,417 @@ as a single-N verdict.
   happens, not one hop away); this section and the FOLLOWUPS carrier
   then point at it. Until that section exists, the FOLLOWUPS leg-(b)
   residual entry is the read-path carrier.
+
+### 19.8 Addendum (2026-07-18): sealing-form run design — committed before the harness exists
+
+This section is the §19.1 sealing form converted to a committed run
+design, in the same §3.5 ordering §19 itself used: **the geometry,
+controls, and grading below are committed in this reviewed document
+before any harness code exists**, and the harness commit lands after
+this doc commit (auditable by git history). The sealing form's job is
+narrower than the §19.4 sweep and must not be confused with it: the
+sweep graded the *modeled* channel; this run grades the **real-code
+residues the model cannot see** (seal latency, fetch-burst skew,
+scheduler jitter) at the production posture, consuming the same
+statistic and the same bound (§19.6).
+
+#### 19.8.1 Placement and containment (disposition, with one precisification)
+
+- **The harness lives in `shekyl-engine-core`** as `#[ignore]`d
+  integration tests under `#[cfg(test)]` + the `gf7-hooks` feature —
+  the `regtest_e2e.rs` shape (spawned `shekyld --regtest` via
+  `SHEKYLD_BIN`; Track-2 lane). The recording observer that stamps
+  receipt instants is **harness-local test code**, following the
+  landed gate-8 precedent (`gf7_emits_bond_post_dispatched_per_submit`
+  already hosts a `cfg(test)` recorder inside the engine crate). This
+  **precisifies, not weakens, the hooks-spec layer-2 wording**: "the
+  only recording impl lives in `shekyl-staking-sim`" reads as *the
+  only recording impl reachable by a production build*; `cfg(test)`
+  recorders compile out of every artifact the no-emit guard defends,
+  and the guard's three layers are untouched (no dependency edge
+  changes, no feature on normal/build edges).
+- **The grading stays sim-side.** The harness writes a receipts
+  artifact (JSON lines: run ordinal, wallet ordinal, persona slot
+  ordinal, receipt instant in ms from the run epoch, ground-truth
+  sibling designation, arm label, and — §19.9.1 hardening addendum —
+  the recording cadence `cadence_ms`, validated against the grader's
+  `TICK_MS` at load so the two crates' periods cannot silently
+  diverge); `shekyl-staking-sim` gains a
+  `--gf7-seal <artifact>` mode that grades it with the **same**
+  circular statistic (`wallclock_leg.rs` `circular_mean` /
+  `circular_distance`) and the **same** committed bound
+  (`RATIO_BOUND`, r < 2). "Sim-owned receipt observer" (§19.1) is
+  therefore realized as: harness-owned *timestamping*, sim-owned
+  *judgment* — the payload ban stays intact (timestamps live in the
+  recorder, never in event payloads), and the statistic stays
+  single-sourced in the sim.
+- **One new seam, feature-gated:** `start_pscan_with` constructs the
+  dispatch driver internally with the no-op observer; the harness
+  needs a `#[cfg(feature = "gf7-hooks")]` `pub(crate)` variant that
+  injects the recording observer (and, for the positive control
+  **only**, a `DispatchConfig` override). Production control flow is
+  byte-identical with the feature off (layer-3 requirement).
+
+#### 19.8.2 Run geometry (pre-committed)
+
+| Parameter | Value | Rationale |
+| --- | --- | --- |
+| Posture | `PScanConfig::production()`, `DEFAULT_PSCAN_CADENCE` (`T = 60 s`), `DispatchConfig::production` (dispersal = `T`) | the §19.1 pin: production code path, production cadence, real sleeps |
+| Anonymity set `N` | 10 wallets | the gate anchor (`RunConfig::default`, §19.7 — both sides of the §19.6 conjunction cover N = 10). Residues are per-wallet code-path properties; N-scaling was graded in-model and is not re-opened here |
+| Wallet size `K` | 2 personas | the gate row (§19.4) |
+| Posts per persona `m` | 4 | accumulation is what makes a small systematic residue (correlated seal latency across a wallet's personas) detectable — an `m = 1` observer is too weak for exactly the effect this form exists to catch (§19.5 tripwire logic). `m = 1` is reported as a free context sub-row (first arrival per persona) |
+| Graded runs `R` | 24 | 240 naming tasks; binomial SE at chance `p = 1/9` ≈ 0.021, resolving `r` to ≈ ±0.19 at N = 10 against a bound of 2 — adequate a-priori for a confirmatory form whose expectation is `r ≈ 1` |
+| Phase `φ` | each wallet's task start instant, drawn uniformly staggered over `[0, T)` by the harness | §19.1: the embedder call contributes only the start instant; the harness places `φ ~ U[0, T)` by design |
+| Chain | one `shekyld --regtest` shared across the whole seal session, pre-mined past the production finality horizon (≈ `ARCHIVAL_REORG_DEPTH_BLOCKS` + 30 blocks) before the first run; a background generator mines ~1 block / 30 s during runs | with `reorg_depth = 720` a sub-horizon chain gives the sweep an empty scan window forever — the fetch-burst residue this form exists to catch would be idled away. Pre-mining once (≈ 30 min) puts every sweep on real per-tick fetch work; run independence comes from fresh wallets + fresh `φ` draws, and shared-infrastructure phase coupling is exactly what the §19.8.3 negative control trips on |
+| Posts | seeded directly into `.wallet.pending` (`PendingPostBlock` is `pub`) with `due = anchor_t0` (due immediately) and synthetic tx bytes; round `j+1` is appended through the engine-held `pending_write_lock` (the WI-2 two-writer discipline) after round `j`'s receipts arrive, so the task — and its `φ` — never restarts | the emit precedes the send (`dispatch.rs` phase 3), so the receipt instant is outcome-independent; the daemon's terminal rejection of synthetic bytes retires the record, which is what permits re-seeding under the one-live-post rule |
+
+Wall-clock budget, named so the run is planned and not aborted:
+each round costs `K` ticks per wallet (one dispatch per tick), so a
+run is ≈ `m · K · T` ≈ 8 min plus setup; `R = 24` graded runs plus
+controls ≈ 4–5 h, sequential (runs are not parallelized — scheduler
+contention across concurrent runs would be an unmodeled timing input).
+
+#### 19.8.3 Controls (adapted to the live form; a failed control grades the run INVALID)
+
+1. **Positive (phase-lock caught):** `dispersal_bound = 0` at
+   production cadence, `m = 4`, `R = 8` — the only permitted config
+   deviation, confined to this arm (the §19.1 "non-production config
+   does not satisfy" clause binds the *graded* rows; a control that
+   removes the defense to prove the observer can see the naked
+   fingerprint is the same structure §19.3 committed in-model).
+   `P(link) ≥ 0.80` or the whole run is INVALID. This arm doubles as
+   the receipt-noise-floor measurement: the spread of sibling arrival
+   phases at `d = 0` **is** the scheduler/seal-latency noise, which
+   the §19.1 reopening criterion needs measured, not assumed.
+2. **Negative (severed pairing):** graded from the **same** production
+   runs at zero extra runtime — designate cross-wallet pseudo-sibling
+   pairs (personas on independent wallets, independent `φ`) and grade
+   the identical naming task; `P(link)` must sit within tolerance of
+   chance (`NEGATIVE_CONTROL_TOL`, ±0.05). This is the live analogue
+   of §19.3.2's generator-decoupling tripwire: it trips if the harness
+   itself (shared daemon, shared host) couples phases across wallets.
+
+#### 19.8.4 Grading and verdict (pre-committed)
+
+- **Statistic:** identical to §19.2 — arrival instant mod `T`;
+  per-persona circular mean over its `m` receipts; link score =
+  circular distance; the observer names the minimum-distance
+  candidate among the `N − 1`.
+- **Bound:** `r = P(link) · (N − 1) < 2` on the production rows
+  (`m = 4` is the gate row; `m = 1` context). Same bound, same
+  pre-rejection of `r < 1` (§13.4), no cross-subsidy (§13.5).
+- **Clustered dispersion, named a-priori:** the 10 naming tasks
+  within a run share arrivals, so alongside the pooled `P(link)` the
+  grader reports the run-level SE (SD of the 24 per-run means /
+  √24). **Escalation rule, committed now:** if the pooled point
+  estimate lands within two clustered SEs of the bound, the verdict
+  is deferred and `R` is extended (same geometry, more runs) until it
+  does not — the bar never moves, only the sample size.
+- **Verdict integration:** per §19.6, the leg-(b) line closes on this
+  form; the sealing record lands in this document as a dated §19.9
+  result addendum, and the same PR sweeps the WI-4 index row, the M1
+  §4 seal-input list, and the FOLLOWUPS leg-(b) residual entry
+  (cleared-gate sweep obligation).
+
+#### 19.8.5 Rejections carried by this design (rule-21 shape)
+
+- **Rejected: `tokio::time::pause()` / virtual time.** It would make
+  the grid cheap and would mask every wall-clock residue this form
+  exists to measure. Reopening criterion: none for the sealing form
+  (virtual time is definitionally out of scope for a wall-clock
+  grade); a *pre-screening* paused-clock harness may exist as a dev
+  aid but its output can never enter the sealing verdict.
+- **Rejected: re-running the full §19.4 sweep live.** The sweep
+  graded the model; its sub-`T` cliff and `2T` no-op rows stand. The
+  sealing form grades the production posture + controls only.
+  Reopening criterion: a sealing-run measurement that *contradicts*
+  the model (production row fails, or the noise floor from control 1
+  is of order the phase resolution — the §19.1 reopening criterion) —
+  in which case the model's standing is re-evaluated wholesale, not
+  row-by-row.
+- **Rejected: real assembled bond posts (full WI-2 funding path) in
+  the harness.** The channel under grade ends at the emit; assembly
+  contributes nothing to `φ + k·T + d` and would cost regtest
+  funding orchestration per wallet per round. Reopening criterion: a
+  future arm whose channel model includes assemble-time effects
+  (none is named today).
+
+### 19.9 Result addendum (2026-07-18/19): first run's PASS withdrawn (§19.9.1); hardened re-run graded PASS (§19.9.2); seal-input status withdrawn on scope review (§19.10)
+
+The §19.8 design executed as committed, no geometry deviations. Run
+identity: harness `shekyl-engine-core::engine::gf7_sealing_run`
+(`gf7-hooks`, `#[ignore]`d), one `shekyld --regtest` built from the
+same tree (a stale daemon predating the `ek_bind_tag` address change
+rejects the harness's wallet addresses — binary freshness is a
+run precondition), pre-mine 750 blocks (603 s), 24 production runs +
+8 positive-control runs sequential, 80 receipts each (2 560 total),
+4 h 42 m wall clock. Grader: `shekyl-staking-sim --gf7-seal`.
+
+| Row | `P(link)` | clustered SE | `r` | bound |
+| --- | --- | --- | --- | --- |
+| production `m = 4` (**gate**) | 0.142 | 0.022 | **1.275** (SE 0.195) | `< 2` |
+| production `m = 1` (context) | 0.075 | 0.020 | 0.675 (SE 0.182) | — |
+
+- **Verdict: PASS.** The gate row sits 0.725 under the bound —
+  ≈ 3.7 clustered SEs, outside the §19.8.4 two-SE escalation band,
+  so `R` is not extended. Live grade is consistent with the §19.4
+  in-model band (`r ∈ [0.84, 1.32]`): the real-code residues this
+  form existed to catch (seal latency, fetch-burst skew, scheduler
+  jitter) do not materially erode the dispersal defense.
+- **Controls bite (§19.8.3):** positive (`dispersal_bound = 0`)
+  `P(link) = 0.850 ≥ 0.80` — the observer sees the naked phase-lock;
+  negative (cross-wallet pseudo-siblings) `P(link) = 0.108`, within
+  ±0.05 of chance `1/9` — no harness-induced cross-wallet phase
+  coupling from the shared daemon/host.
+- **Receipt-noise floor measured (the §19.1 reopening criterion's
+  operand): 473.7 ms** of `T = 60 000 ms` (≈ 0.8%) — two orders
+  under the phase resolution, so the §19.8.5 model-contradiction
+  reopening criterion is not tripped; the §19.4 model's standing is
+  unchanged.
+- **Leg (b) closes here** per §19.6: the §19.1 sealing form is the
+  seal input, and this run is that form. `K_COVER` seal input #2 is
+  discharged; the remaining open inputs are GF-4/F-D2's drain-send
+  subsystem and the §17.9 Gate-7 calibration (M1 §4 list swept in
+  this same PR per §19.8.4's verdict-integration obligation).
+
+#### 19.9.1 Grade withdrawal (2026-07-18, same day — PR #337 review)
+
+The PR #337 high-effort review surfaced harness/grader defects that
+undermine the grade above as *evidence*, and the grade is withdrawn
+rather than annotated (fix-everything-pre-genesis discipline; the
+§19.8 committed design itself — geometry, controls, grading — is
+unchanged: everything below is enforcement of the committed design,
+not motion of any bar):
+
+1. **The background generator's death was undetectable.** The miner
+   ran in a detached task whose panic was swallowed (`JoinHandle`
+   only `abort()`ed at session end, never awaited or health-checked),
+   so one transient RPC failure would have silently frozen the chain
+   for the rest of the session. The §19.8.2 chain row (~1 block /
+   30 s under an advancing finality horizon) is therefore
+   **unverifiable from the artifact** for the 4 h 42 m session — the
+   committed geometry cannot be shown to have held, which is exactly
+   the evidentiary standard a seal input must meet.
+2. **The grader never enforced the committed session geometry.**
+   `R = 24 + 8` and run-ordinal contiguity went unchecked; because
+   the harness appends run-by-run (crash-safety), a killed session
+   leaves complete-looking runs and could have graded PASS on an
+   under-powered sample. (Did not bite for this artifact — 2 560
+   receipts = the full 32 runs — but unenforced geometry makes the
+   grade unauditable.)
+3. **The recording period was three untied literals.** The grader's
+   `TICK_MS`, the harness's stagger window, and the engine's
+   `DEFAULT_PSCAN_CADENCE` lived in two crates with no tie; a
+   cadence retune would have folded receipts by the wrong modulus
+   and could still print PASS.
+4. **The documented CLI form silently ran the wrong program.**
+   `--gf7-seal <path>` (this document's own §19.8.1 wording) fell
+   through to the default staking simulation with no error.
+
+Hardening landed in the same PR: fail-loud miner watch (bounded
+transient tolerance, then the run loop's health check fails the
+session ≤ one poll late), grader enforcement of the `R` floors +
+ordinal contiguity + per-row period tie (schema addendum: every row
+carries `cadence_ms`, stamped from `DEFAULT_PSCAN_CADENCE` by a
+serde-derived writer and validated `== TICK_MS` at load), the arm
+label/config/seed-domain bound into one `Arm` type (a mislabeled
+row is unconstructible), both CLI forms with a loud missing-path
+error, and a CI clippy lane that compiles the `gf7-hooks` harness so
+the §19.1 reopening-criterion re-run cannot rot silently.
+
+**Consequence:** leg (b) REOPENS; `K_COVER` seal input #2 returns to
+the open list; the pre-withdrawal artifact no longer grades (schema)
+and a re-run under the hardened harness is required. The cleared-gate
+sweep sites (WI-4 index row, M1 §4 seal-input list, FOLLOWUPS leg-(b)
+entry, Gate-6 arm-4 row, sim status strings) are re-swept to open in
+this same PR — the sim verdict strings are now status-neutral by
+design (they point at this section instead of asserting its outcome,
+so a future grade/withdrawal cannot strand them again). The hardened
+re-run and its grade are §19.9.2.
+
+#### 19.9.2 Hardened re-run graded (2026-07-19): PASS — leg (b) CLOSED
+
+Two sessions ran under the hardened harness, disclosed in full (no
+session is omitted from this record):
+
+- **Session 1 (2026-07-18 22:30 → 07-19 03:11, 4 h 41 m, 24 + 8 runs,
+  2 560 receipts, zero miner retries): INVALID — the §19.8.3 negative
+  control tripped.** Cross-wallet pseudo-siblings named at
+  `P(link) = 0.167` (40/240), breaching the committed ±0.05 tolerance
+  around chance `1/9` by 0.006; mild broad elevation across runs (no
+  single pathological run; worst runs 4–5 hits). The grader's
+  arithmetic was independently recomputed from the raw artifact
+  (matched exactly), so this is the control doing its committed job:
+  the shared daemon/host coupled phases across wallets that session,
+  and the session counts for nothing — including its (context-only,
+  ungradeable) production row `r = 1.312`. Artifact preserved:
+  `docs/completed/reference/gf7-seal-artifacts/`.
+- **Stopping rule, stated before session 2 launched:** one re-run; a
+  second consecutive INVALID stops the re-rolling and opens a §19.8
+  harness-decoupling design round (re-running until the validity gate
+  passes would be selection).
+- **Session 2 (2026-07-19 03:20 → 08:02, 4 h 42 m, pre-mine 750
+  blocks / 540 s, 24 + 8 runs, 2 560 receipts, zero miner retries):
+  PASS, both controls bite.**
+
+| Row | `P(link)` | clustered SE | `r` | bound |
+| --- | --- | --- | --- | --- |
+| production `m = 4` (**gate**) | 0.046 | 0.013 | **0.412** (SE 0.121) | `< 2` |
+| production `m = 1` (context) | 0.117 | 0.019 | 1.050 (SE 0.168) | — |
+
+- **Controls (§19.8.3):** positive (`dispersal_bound = 0`)
+  `P(link) = 0.875 ≥ 0.80`; negative (cross-wallet pseudo-siblings)
+  `P(link) = 0.087`, within ±0.05 of chance. Receipt-noise floor
+  **413.9 ms** of `T = 60 000 ms` — stable across all three sessions
+  (406–474 ms), two orders under the phase resolution; the §19.1
+  reopening criterion is not tripped.
+- **Verdict: PASS.** The gate row sits ≈ 13 clustered SEs under the
+  bound, far outside the §19.8.4 escalation band.
+- **Dispersion note (recorded, not graded):** the gate row varies
+  across sessions more than within-session clustered SEs suggest
+  (0.412 here vs 1.275 / 1.312 in the withdrawn and INVALID
+  sessions) — the real-code residue is host-condition-dependent.
+  This is disclosed rather than pooled because the committed §19.8.4
+  grading is per-session with validity gated by the controls; the
+  favorable observation is that **every session ever observed,
+  including the two that do not count, sits ≥ 3 clustered SEs under
+  the bound**, and 0.412 lies below the §19.4 in-model band
+  ([0.84, 1.32]) in the direction of the channel being *weaker* than
+  modeled. No committed criterion triggers on a below-band pass
+  (§19.8.5 enumerates production-row failure and a noise floor of
+  order the phase resolution); a reviewer who wants a
+  below-band-triggered reopening criterion should amend §19.8.5
+  before the next re-grade, not this record.
+- **Leg (b) closes** per §19.6 on this valid session; `K_COVER` seal
+  input #2 is discharged. Remaining open inputs: GF-4/F-D2's
+  drain-send subsystem and the §17.9 Gate-7 calibration. Artifacts:
+  `gf7-seal-receipts-session2.jsonl` +
+  `gf7-seal-grade-session2-pass.json` (archived with all three
+  sessions' artifacts under `docs/completed/reference/gf7-seal-artifacts/`
+  — PR #337 closure commit; previously `rust/target/`-local). *(Superseded same-PR: the
+  seal-input status this bullet asserts was withdrawn on scope
+  review — §19.10. The measurement record above stands as written.)*
+
+### 19.10 Scope correction (2026-07-19): the sealing form's premise is design-foreclosed — leg (b) WITHDRAWN as a `K_COVER` seal input; instrument retained as a dispersal tripwire
+
+The PR #337 review thread interrogated what this form operationally
+measures, grounding every step at source. The findings supersede the
+seal-input framing of §§19.1–19.9 while leaving the measurement
+records (§19.9.2) standing as honest records of a hardened
+instrument. This is the same correction class as TM-1's own closure
+("ask *does the design actually do this?* before the rigor") and the
+F-W7/F-W8/F-W10 phantom-observable retirements — applied, this time,
+to this document's own arm.
+
+#### 19.10.1 The persona lifecycle, enumerated (the channel-existence filter)
+
+On-chain / P2P-visible events for one archival persona `P`
+(evidence: `ARCHIVAL_BOND_GATE4.md` §§3–4, `ARCHIVAL_RETENTION_GATE2.md`
+§5, `REWARD_EMISSION_LEG.md`, `ARCHIVAL_FIREWALL_GATE6.md` §12,
+`V3_STAKER_ARCHIVAL.md` §firewall):
+
+| Event | Public tx? | Names `P`? | Timed by |
+| --- | --- | --- | --- |
+| Funding (principal→`P`) | ordinary FCMP++ transfer | **no** | wallet (gate-6 jitter pin) |
+| JoinMarket | `txin_archival_bond_post` | yes (P, shard set, cleartext bond) | **wallet** |
+| Challenge | none (beacon-derived) | — | beacon |
+| Serve-credit response | `txin_archival_serve_credit_response`, one per `(shard, epoch)` | yes | **beacon window** |
+| Reward emission | `txin_archival_reward_emission` — self-service mint, not coinbase | yes (cleartext amount) | **wallet** (claim choice, ≤15-epoch batch, `W = 26`) |
+| Slash | **no tx** (consensus-internal mutation) | yes (public event) | consensus |
+| Rebond | bond post; credit zero legal-and-common; self-funded from `P`'s reward lineage (Gate-6 Decision 4) | yes | wallet |
+| Unbond | bond post; event names `P`; **no identifiable refund output** | yes | wallet (cooldown-gated) |
+| Drain (`P`→principal) | ordinary FCMP++ spend | **no** (F-W10) | wallet |
+
+Wallet-clock-timed, `P`-attributed transactions per persona lifetime:
+`2 + E + H (+ R)` — JoinMarket, Unbond, `E` emission claims
+(`⌈L/15⌉ ≤ E ≤ L`), `H ≥ 0` holdings changes, `R` rebonds. Minimum
+realistic lifetime: **3**.
+
+#### 19.10.2 The foreclosure
+
+The §19.8.2 geometry models a wallet driving `K = 2` **concurrently
+posting** personas at `m = 4` posts each on one sweep clock. No code
+path produces that behavior:
+
+1. **No rotation scheme exists.** `stake_engine.rs` implements
+   rotation as a caller-driven *operation* (one active key bundle,
+   `generation` counter, atomic wipe — `stake_engine.rs:25–66`);
+   nothing schedules or triggers it. Multiple concurrently-**bonded**
+   personas are supported (rotates-while-bonded, the derive-forward
+   union — `:20`, `:32`) for unbond reachability, but nothing creates
+   a second *posting* persona, and the `1/R` economics make running
+   one self-defeating (TM-1). Correction notes to TM-1's "sequential
+   rotation (never two active personas)" wording — which overstated
+   the enforced property — land with this PR in
+   `ARCHIVAL_TM1_CLUSTERING.md` / `ARCHIVAL_FIREWALL_THREATS.md`.
+2. **The operational sample stream is §19.10.1's, not §19.8.2's.**
+   One JoinMarket, one Unbond, `E` claim transactions — not `m = 4`
+   accumulations per persona per run. `m = 4` was instrument
+   magnification (grade-pessimistic-lifecycles), legitimate as
+   conservatism but not a usage model.
+3. **Named assumptions — one now VERIFIED at source (2026-07-19,
+   closure round):** the receipts measure the *emit* instant, and the
+   claim that this upper-bounds every downstream observer assumed the
+   daemon-relay path adds only wallet-independent noise. **Verified:**
+   between the wallet→daemon submit boundary (the only place
+   `φ + k·T + d` exists) and the wire sits the inherited Dandelion++
+   diffusion layer (`src/cryptonote_config.h:101-106`,
+   `levin_notify.cpp`) — a per-tx Poisson embargo of mean **39 s**
+   (`DANDELIONPP_EMBARGO_AVERAGE`, drawn on the daemon's clock), a
+   ~5 s Poisson fluff flush, 2 stem hops at 20% fluff probability,
+   10-min ± 30 s epochs, and over Tor a hold until an anonymous
+   connection exists. Against the `T = 60 s` period the embargo alone
+   attenuates the phase signal to
+   `1/√(1+(2π·39/60)²) ≈ 0.24` of its amplitude (× ~0.89 for the
+   fluff flush, further for stem/tor-wait): a network-position
+   observer receives φ at ≈ 5× attenuation *per sample*, against the
+   §19.10.1 lifetime sample count of ~2. **The only party who
+   observes the cadence seam un-diffused is whoever runs the daemon,
+   at the submit boundary, pre-Dandelion++** — which is the user
+   under the SP-T2 own-node default, and the already-named
+   remote-daemon unmet residual otherwise (§13, D-B1 family): the
+   transport-end walk reproduces the posture disposition
+   independently. One narrow residue stays named rather than assumed:
+   the fluff flush is a per-*connection* timer, so two txs
+   coincidentally in the same embargo window can flush in a
+   correlated batch — a coincidence-window effect on the foreclosed
+   premise, recorded here so it lives in the record, not in
+   anybody's head. The second assumption stands as before: the grade
+   bounds the *committed observer's* advantage, not channel
+   information (below-chance structure passes silently).
+
+**Consequence:** the sibling channel this form grades requires a
+behavior the design forecloses; its PASS therefore cannot serve as
+`K_COVER` seal evidence. **Leg (b)'s seal-input status is
+withdrawn.** The `K_COVER` seal is re-dispositioned in
+`ARCHIVAL_REWARD_GATE_M1.md` §4 (2026-07-19 update).
+
+#### 19.10.2a The §19.4 in-model leg, same scope
+
+The §19.4 harness-timestamp sweep (`wallclock_leg.rs`) grades the same
+`K = 2` sibling construction in-model, and its PROVISIONAL-PASS rides
+the `--gf7-timeline` criterion-9.9 conjunction. The same foreclosure
+applies: its rows stand as **model records** (the sub-`T` cliff, the
+dispersal-range shape), and its contribution to the timeline
+conjunction is retained as a **model-consistency check** — not a
+channel grade. Its module doc carries this scope note; no code change
+(the sim is hermetic and its verdict strings are already
+status-neutral).
+
+#### 19.10.3 What is retained
+
+- **The instrument, as a dispersal tripwire.** If the dispersal draw
+  silently breaks (a dropped sleep, a zeroed bound), even the few
+  real posts a wallet ever makes acquire an exact-phase corroborator
+  — ≈ 400 ms of `T = 60 000 ms` filters a background candidate set
+  by ~75–150× — against the entry/exit pair and any user-chosen
+  multi-persona overlap. The hardened harness + grader (§19.9.1) and
+  the `gf7-hooks` CI compile lane are kept for that purpose. No
+  further sealing re-runs are required by anything.
+- **The measurement records.** §19.9.2's two disclosed sessions
+  (INVALID + PASS) stand as the record of what the hardened
+  instrument measured on its synthetic geometry, including the
+  session-level dispersion disclosure.
+- **The hardening itself** (fail-loud miner watch, geometry
+  enforcement, period tie, `Arm`-typed label binding, CI lane) —
+  correct regardless of the form's scope.
