@@ -8517,11 +8517,12 @@ one place to confirm each item's relationship to the wallet stack.
   defers the prune, fail-safe), and the open-time records-driven hint clean (retired slots
   never re-derive; an emptied hint reverts to non-staker). Guard-2: logic-discharged at the
   task/accrual/lifecycle test level (cfg(test) evidence construction — the claim-window
-  reachability deviation, disclosed in the plan's arm-#2 build record); production-discharge =
-  extend the promoted regtest lane (PR-4b landed via #338; the lane enters through the
-  production `first_stake` — arm #1 production-discharged there) with the retire leg
-  (unbond post + armed settlement-epoch override for the W-lapse) — drivable, not yet
-  driven.
+  reachability deviation, disclosed in the plan's arm-#2 build record); production-discharge:
+  corrected 2026-07-19 — NOT yet drivable (the prior "drivable" claim was wrong). The
+  retire trigger is a confirmed `Unbond`, whose block-path verifies exist but whose
+  submit-side battery is JoinMarket-only (§8.7.1) with no wallet constructor — named
+  blockers: the non-JM submit battery (the PR-4b sibling) AND the wallet unbond entry;
+  the settlement-epoch override rides whichever lands last.
   **Rule (load-bearing — travels
   with the item):** GC **only** on *confirmed-absence within `covered`* (the range the reconcile set
   can vouch for), **never** on absence-from-one-source — the SP-6 "absence ≠ unscanned" discipline;
