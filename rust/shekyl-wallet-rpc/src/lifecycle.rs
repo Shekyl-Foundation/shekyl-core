@@ -256,13 +256,32 @@ async fn open_wallet_engine(
 /// sole-ownership reclaim (restore + fail loud if another task holds a
 /// clone) → persist-for-close (restore + fail loud on I/O). On success the
 /// tenant slot is left in the **closing** reservation; the caller either
-/// `clear_closing`s (a plain close) or transitions to `begin_opening` (a
-/// reopen).
+/// `clear_closing`s (a plain close) or, for a reopen, `clear_closing`s and
+/// then `begin_opening`s (in that order — `begin_opening` debug-asserts
+/// `!is_busy()`, so the closing reservation must drop first; the reopen
+/// path does both under one tenant-mutex hold so no other call can slip
+/// into the gap).
+///
+/// `expected_name`, when given, refuses (without touching the tenant) if
+/// the currently open wallet is not the named one — the guard that keeps a
+/// close-and-reopen caller from closing a wallet that was swapped in
+/// between its inspection phase and this call.
 async fn take_and_close_tenant(
     tenants: &tokio::sync::Mutex<TenantState>,
+    expected_name: Option<&str>,
 ) -> Result<String, WalletRpcError> {
     let (name, shared, pscan) = {
         let mut state = tenants.lock().await;
+        if let Some(expected) = expected_name {
+            // Same mutex hold as `take_open`: check-then-take is atomic.
+            if state.tenant.open_name() != Some(expected) {
+                return Err(WalletRpcError::InternalError(
+                    "the open wallet changed while the request was in flight; \
+                     nothing was closed — retry"
+                        .into(),
+                ));
+            }
+        }
         state
             .tenant
             .take_open()
@@ -301,7 +320,7 @@ pub(crate) async fn close_wallet(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "close_wallet")?;
-    take_and_close_tenant(tenants).await?;
+    take_and_close_tenant(tenants, None).await?;
     tenants.lock().await.tenant.clear_closing();
     Ok(json!({}))
 }
@@ -449,12 +468,6 @@ async fn wrap_and_start_pscan(
     Ok((shared, pscan))
 }
 
-/// Re-arm the P-scan task on a restore path (a close that could not complete
-/// leaves the wallet open). Unlike [`wrap_and_start_pscan`], a start failure
-/// here degrades to `None` rather than propagating: the restore must not itself
-/// fail and re-strand the engine, and the primary error the caller returns is
-/// the close failure, not this. The failure is logged (never silent), and the
-/// dark-scan window lasts only until the next successful close / reopen.
 /// Params for `stake` (the wallet-level first-stake entry,
 /// `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.1 SA-DQ-1/SA-R1-d).
 #[derive(serde::Deserialize)]
@@ -490,21 +503,38 @@ pub(crate) async fn stake(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     let p: StakeParams = parse_required_object(params, "stake")?;
+    // Same password hand-off as create/open/change_password: consume the
+    // serde String into Zeroizing before ANY other work, so every path —
+    // including the continue path that never uses it and every early error
+    // return — wipes it on drop (rule 35).
+    let password = Zeroizing::new(p.password.into_bytes());
 
     // Phase 1 — inspect the open tenant: capability gate, idempotency reads,
     // slot choice (the engine's monotone cursor for a fresh stake; the
     // recorded bonded slot for a W2 resume — the user never names a slot,
-    // rule 81). The arc clone drops before any reopen (its liveness would
-    // fail the close's sole-ownership reclaim).
+    // rule 81). The tenant lock is held once for the engine clone, the
+    // wallet name (which binds the later close to THIS wallet — a swapped
+    // tenant refuses instead of being closed), and the parked-scan flag.
     // Auth note: on the continue/resume path (a StakeEngine already
     // resident) the password is NOT re-verified — the open session is the
     // authorization boundary, exactly as for every other method on an open
     // wallet; the password is consumed only when a credentialed reopen is
     // actually needed. Slot note: the resume pick is the FIRST bonded slot —
     // the single-slot genesis case; a multi-slot W2 resume re-invokes after
-    // the arm-#3 open-time GC has collected the true phantoms.
+    // the arm-#3 open-time GC has collected the true phantoms. The engine
+    // re-validates the slot against its own state either way (`WrongSlot`),
+    // so a stale read here refuses loudly rather than acting.
+    let (shared, name, has_scan) = {
+        let state = tenants.lock().await;
+        let shared = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
+        let name = state
+            .tenant
+            .open_name()
+            .ok_or(WalletRpcError::WalletNotOpen)?
+            .to_owned();
+        (shared, name, state.tenant.has_pscan())
+    };
     let (needs_intent_open, slot) = {
-        let shared = require_open_engine(tenants).await?;
         let g = shared.read().await;
         let capability = g.capability();
         if capability != Capability::Full {
@@ -523,23 +553,44 @@ pub(crate) async fn stake(
         } else {
             staking.monotone_current_slot_from_record()
         };
-        (!g.has_stake_engine(), slot)
+        // A resident actor with NO parked scan (a start failure on an
+        // earlier intent reopen, or a scan lost to a failed-close restore)
+        // also takes the reopen: retrying into a dark scan would spin on a
+        // funding discovery that can never happen (fail-closed, self-heal).
+        (!g.has_stake_engine() || !has_scan, slot)
     };
 
-    if needs_intent_open {
-        reopen_with_first_stake_intent(tenants, p.password, slot).await?;
-    }
-
-    let shared = require_open_engine(tenants).await?;
+    // The engine the continuation runs on IS the engine that was inspected
+    // (continue path) or the one the intent reopen just installed — never a
+    // re-acquired tenant slot a concurrent open could have swapped.
+    let shared = if needs_intent_open {
+        // Sole-ownership: this clone must drop before the close inside the
+        // reopen reclaims the arc.
+        drop(shared);
+        reopen_with_first_stake_intent(tenants, &name, password, slot).await?
+    } else {
+        drop(password); // unused on the continue path — zeroizes here
+        shared
+    };
     let outcome = Engine::first_stake(shared, slot).await.map_err(|e| {
         use shekyl_engine_core::FirstStakeError as E;
         match e {
             E::BondInFlight => WalletRpcError::StakeInFlight,
             E::AlreadyStaked => WalletRpcError::AlreadyStaked,
             E::Funding(detail) => WalletRpcError::StakeNotReady { detail },
+            // Daemon-side fee failure: the build-path code whose remedy
+            // (check the daemon, retry) actually matches — never the
+            // "fund and retry" misdiagnosis (rule 82).
+            E::FeeEstimate(_) => WalletRpcError::FeeEstimationFailed,
+            // W1-clean internal failures: state file / persona-id reads.
+            // Funding cannot fix these, so they are not `-29500`.
+            E::State(d) => WalletRpcError::InternalError(format!(
+                "stake preflight failed ({d}); nothing durable was written"
+            )),
             E::NoStakeEngine => {
                 WalletRpcError::InternalError("stake: no stake engine after intent open".into())
             }
+            E::WrongSlot { .. } => WalletRpcError::InternalError(format!("stake: {e}")),
             // W2: durable slot may exist without a post — a `stake` re-invoke
             // resumes. Say so in the operator-facing text (rule 82).
             E::Persist(d) | E::Engine(d) => WalletRpcError::InternalError(format!(
@@ -561,59 +612,121 @@ pub(crate) async fn stake(
 /// persist-for-close) and reopen it carrying the **transient** first-stake
 /// intent, then start the on-demand P-scan (the intent-spawned actor makes
 /// the persona scannable; `start_pscan_if_staker` would park `None` since
-/// `staking_enabled` is still false).
+/// `staking_enabled` is still false). Returns the installed engine arc, so
+/// the caller continues on exactly the wallet this function opened.
+///
+/// Ordering is the guardrail: **everything refusable happens before the
+/// close.** The password is verified against the sealed envelope and the
+/// daemon connection established while the wallet is still open, so a
+/// mistyped password or an unreachable daemon refuses with the wallet
+/// untouched — a failed `stake` must not log the user out. After the close,
+/// the only reopen failures left are real file/system faults; those attempt
+/// a best-effort plain reopen (same verified credentials) before giving up,
+/// so even that residue usually restores the session.
 async fn reopen_with_first_stake_intent(
     tenants: &tokio::sync::Mutex<TenantState>,
-    password: String,
+    expected_name: &str,
+    password: Zeroizing<Vec<u8>>,
     slot: u32,
-) -> Result<(), WalletRpcError> {
-    let password = Zeroizing::new(password.into_bytes());
+) -> Result<SharedEngine, WalletRpcError> {
+    let (base, network, daemon_address) = {
+        let state = tenants.lock().await;
+        (
+            wallet_base(&state.wallet_dir, expected_name),
+            state.network,
+            state.daemon_address.clone(),
+        )
+    };
+
+    // Verify-then-close (envelope KDF + AEAD auth, lock-free read; see
+    // `WalletFile::verify_password`): the common failure — a wrong
+    // password — refuses HERE, wallet still open.
+    tokio::task::block_in_place(|| {
+        shekyl_engine_file::WalletFile::verify_password(&base, password.as_slice())
+    })
+    .map_err(|e| match e {
+        shekyl_engine_file::WalletFileError::Envelope(_) => WalletRpcError::InvalidPassword,
+        other => WalletRpcError::InternalError(format!("stake: password verification: {other}")),
+    })?;
+    // Connect-then-close: a daemon refusal also lands pre-close.
+    let daemon = make_daemon(&daemon_address).await?;
 
     // Close via the shared choreography (identical restore-on-failure
-    // semantics as `close_wallet`), then transition the reservation
-    // closing → opening.
-    let name = take_and_close_tenant(tenants).await?;
-    let (base, network, daemon_address) = {
+    // semantics as `close_wallet`), name-bound so a concurrently swapped
+    // wallet refuses instead of being closed, then transition the
+    // reservation closing → opening under ONE mutex hold (no gap a
+    // concurrent open could claim).
+    let name = take_and_close_tenant(tenants, Some(expected_name)).await?;
+    {
         let mut state = tenants.lock().await;
-        let base = wallet_base(&state.wallet_dir, &name);
         state.tenant.clear_closing();
         state.tenant.begin_opening();
-        (base, state.network, state.daemon_address.clone())
-    };
+    }
 
     // Reopen with the intent (the transient SA-R1-a parameter — it exists
     // only on this call path and is `None` in every other open).
-    let reopened: Result<Engine<SoloSigner>, WalletRpcError> = async {
-        let daemon = make_daemon(&daemon_address).await?;
+    let reopened = tokio::task::block_in_place(|| {
         let creds = Credentials::password_only(password.as_slice());
-        let opened = tokio::task::block_in_place(|| {
-            Engine::<SoloSigner>::open_full_with_first_stake_intent(
-                &base,
-                &creds,
-                network,
-                daemon,
-                SafetyOverrides::none(),
-                slot,
-            )
-        })
-        .map_err(WalletRpcError::from)?;
-        Ok(match opened {
-            OpenedEngine::Loaded(w) => w,
-            OpenedEngine::Restored { wallet, .. } => wallet,
-        })
-    }
-    .await;
+        Engine::<SoloSigner>::open_full_with_first_stake_intent(
+            &base,
+            &creds,
+            network,
+            daemon,
+            SafetyOverrides::none(),
+            slot,
+        )
+    });
     let engine = match reopened {
-        Ok(v) => v,
+        Ok(OpenedEngine::Loaded(w)) | Ok(OpenedEngine::Restored { wallet: w, .. }) => w,
         Err(e) => {
-            tenants.lock().await.tenant.clear_opening();
-            return Err(e);
+            // Credentials verified and daemon connected above, so this is a
+            // real file/system fault. Best-effort restore: a plain reopen
+            // with the same verified password, re-arming the scan for a
+            // staker — the user should not be logged out by a fault in a
+            // non-close RPC.
+            let restored = async {
+                let pw = Zeroizing::new(password.as_slice().to_vec());
+                let (engine, _hint) =
+                    open_wallet_engine(&base, network, &daemon_address, pw).await?;
+                wrap_and_start_pscan(engine).await
+            }
+            .await;
+            let mut state = tenants.lock().await;
+            match restored {
+                Ok((shared, pscan)) => {
+                    state.tenant.set_open(expected_name, shared, pscan);
+                    tracing::warn!(
+                        error = %e,
+                        "first-stake intent reopen failed; the wallet was restored open \
+                         without the intent"
+                    );
+                    return Err(WalletRpcError::InternalError(format!(
+                        "stake: intent reopen failed ({e}); the wallet remains open — retry"
+                    )));
+                }
+                Err(restore_err) => {
+                    state.tenant.clear_opening();
+                    tracing::error!(
+                        error = %e,
+                        restore_error = %restore_err,
+                        "first-stake intent reopen failed AND the restore reopen failed; \
+                         the wallet is closed"
+                    );
+                    return Err(WalletRpcError::InternalError(format!(
+                        "stake: intent reopen failed ({e}) and the wallet could not be \
+                         restored open; run open_wallet"
+                    )));
+                }
+            }
         }
     };
 
     // On-demand P-scan under intent (fail-closed: without the scan the
     // `stake_in` funding can never validate, so a dark scan here is a
-    // guaranteed-stuck stake, not a degraded one).
+    // guaranteed-stuck stake, not a degraded one). On a start failure the
+    // wallet stays open with the actor resident and NO parked scan — the
+    // exact state the `stake` entry's `has_pscan` check routes back through
+    // this reopen, so a retry re-attempts the scan instead of spinning dark.
     let shared: SharedEngine = Arc::new(RwLock::new(engine));
     match Engine::start_pscan(shared.clone()).await {
         Ok(handle) => {
@@ -621,22 +734,31 @@ async fn reopen_with_first_stake_intent(
                 .lock()
                 .await
                 .tenant
-                .set_open(name, shared, Some(handle));
-            Ok(())
+                .set_open(name, shared.clone(), Some(handle));
+            Ok(shared)
         }
         Err(e) => {
             tracing::warn!(
                 error = %e,
-                "first-stake intent reopen: on-demand P-scan failed to start"
+                "first-stake intent reopen: on-demand P-scan failed to start; the next \
+                 stake retry will reopen and re-attempt it"
             );
             tenants.lock().await.tenant.set_open(name, shared, None);
             Err(WalletRpcError::InternalError(format!(
-                "stake: persona scan failed to start ({e}); wallet remains open"
+                "stake: persona scan failed to start ({e}); wallet remains open — retry"
             )))
         }
     }
 }
 
+/// Re-arm the P-scan task on a restore path (a close that could not complete
+/// leaves the wallet open). Unlike [`wrap_and_start_pscan`], a start failure
+/// here degrades to `None` rather than propagating: the restore must not itself
+/// fail and re-strand the engine, and the primary error the caller returns is
+/// the close failure, not this. The failure is logged (never silent), and the
+/// dark-scan window lasts only until the next successful close / reopen (the
+/// `stake` entry also self-heals it: a resident actor with no parked scan
+/// takes the intent reopen, which re-arms the scan).
 async fn restart_pscan(shared: &SharedEngine) -> Option<PScanHandle> {
     match Engine::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
@@ -788,12 +910,14 @@ mod tests {
 
     /// The `stake` handler end-to-end against the never-connecting daemon:
     /// the full SA-R1-a intent dance runs (close → reopen-with-intent →
-    /// actor + on-demand P-scan parked), the continuation refuses at the
-    /// first daemon-touching pre-persist step (`-29500`, W1-clean), the
-    /// wallet REMAINS OPEN as an intent-spawned tenant, and a retry takes
-    /// the continue path (no second reopen) to the same clean refusal.
+    /// actor + on-demand P-scan parked), the continuation fails W1-clean at
+    /// the first daemon-touching pre-persist step — reported as `-29102`
+    /// (fee estimation), the code whose remedy matches, NOT the `-29500`
+    /// "fund and retry" misdiagnosis (rule 82) — the wallet REMAINS OPEN as
+    /// an intent-spawned tenant, and a retry takes the continue path (no
+    /// second reopen) to the same clean outcome.
     #[tokio::test(flavor = "multi_thread")]
-    async fn stake_runs_the_intent_dance_and_refuses_w1_clean() {
+    async fn stake_runs_the_intent_dance_and_fails_w1_clean_at_the_daemon_seam() {
         let dir = tempfile::tempdir().expect("tempdir");
         let tenants = tenants_in(dir.path());
 
@@ -818,12 +942,12 @@ mod tests {
             crate::error::WalletRpcError::InvalidParams(_)
         ));
 
-        // The real call: intent dance + W1-clean refusal at the daemon seam.
+        // The real call: intent dance + W1-clean daemon-fault diagnosis.
         let err = stake(&tenants, &json!({ "password": "pw" }))
             .await
-            .expect_err("unreachable daemon refuses pre-persist");
+            .expect_err("unreachable daemon fails pre-persist");
         assert!(
-            matches!(err, crate::error::WalletRpcError::StakeNotReady { .. }),
+            matches!(err, crate::error::WalletRpcError::FeeEstimationFailed),
             "got {err:?}"
         );
         // The wallet stayed open, now intent-spawned with the scan parked.
@@ -840,16 +964,49 @@ mod tests {
         }
         assert_pscan(&tenants, true, "on-demand P-scan parked under intent").await;
 
-        // Retry: the continue path (actor resident, no reopen) — same clean
-        // refusal, still nothing durable.
+        // Retry: the continue path (actor resident + scan parked, no
+        // reopen) — same clean outcome, still nothing durable.
         let err = stake(&tenants, &json!({ "password": "pw" }))
             .await
-            .expect_err("retry refuses identically");
+            .expect_err("retry fails identically");
         assert!(matches!(
             err,
-            crate::error::WalletRpcError::StakeNotReady { .. }
+            crate::error::WalletRpcError::FeeEstimationFailed
         ));
 
+        close_wallet(&tenants, &json!({})).await.expect("close");
+    }
+
+    /// Verify-then-close: a `stake` with a wrong password refuses with
+    /// `-29004` and the wallet REMAINS OPEN — the reopen leg must never
+    /// close the wallet before the password is verified (a failed non-close
+    /// RPC logging the user out was the review's finding).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stake_with_a_wrong_password_refuses_and_keeps_the_wallet_open() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = tenants_in(dir.path());
+
+        create_wallet(
+            &tenants,
+            &json!({ "name": "stakeme", "password": "pw" }),
+            fast_kdf(),
+        )
+        .await
+        .expect("create");
+
+        let err = stake(&tenants, &json!({ "password": "wrong" }))
+            .await
+            .expect_err("wrong password refuses");
+        assert!(
+            matches!(err, crate::error::WalletRpcError::InvalidPassword),
+            "got {err:?}"
+        );
+
+        // Still open (the wrong password never reached a close), and a
+        // normal close still works.
+        crate::tenant::require_open_engine(&tenants)
+            .await
+            .expect("wallet still open after the refusal");
         close_wallet(&tenants, &json!({})).await.expect("close");
     }
 }

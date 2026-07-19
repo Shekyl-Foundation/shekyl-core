@@ -203,6 +203,23 @@ pub(crate) struct PhantomSlotSweep {
 /// absence-≠-unscanned is [`PReconcileSet`]'s type-level gate. The `p_slot`
 /// cursor is **never lowered**: a dropped slot stays burned (the monotone
 /// no-reuse invariant, `StakingBlock::monotone_current_slot`).
+///
+/// # Binding contract for the release side (GF-7 dispatch, not yet built)
+///
+/// The two-condition guard above is airtight **only while** the pending
+/// record's durable removal is ordered **at-or-after** the durable seal of
+/// the match-bearing pscan state. Nothing in this crate releases a pending
+/// post today, so the ordering cannot currently be violated — but the GF-7
+/// dispatch driver will, and it MUST write the release in the same atomic
+/// seal transaction as (or strictly after) the pscan-state seal that
+/// carries the observed [`BondPostMatch`](super::pscan::scan_step::BondPostMatch).
+/// A release that becomes durable first opens a crash window where this GC
+/// sees "no pending record + stale confirmed-absence" and drops a REAL
+/// on-chain bond — permanently, since the burned cursor forbids re-adopting
+/// the slot. The dispatch PR must land a crash-ordering test against this
+/// exact window before any release path ships (mirrored in
+/// `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` and on
+/// [`PendingPostState`](shekyl_engine_state::pending_post_block::PendingPostState)).
 pub(crate) fn reconcile_phantom_bonded_slots<E>(
     staking: &mut StakingBlock,
     evidence: &PReconcileSet,
@@ -456,6 +473,49 @@ mod tests {
         assert!(g.ledger.staking.staking_enabled);
         assert_eq!(g.ledger.staking.bonded_slots, vec![7]);
         assert_eq!(g.ledger.staking.p_slot, 8);
+    }
+
+    /// A corrupt (undecodable) pscan seal must NOT brick a staker's wallet
+    /// open: the arm-#3 phantom GC degrades to keeping every recorded slot
+    /// (warn loud, skip the sweep) — the seal is auxiliary, re-derivable
+    /// scan state, and the conservative failure direction is keep, never
+    /// drop. The scan path itself still fails loud on the same seal at
+    /// `start_pscan` (fail-closed for the scan, not for the open).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn corrupt_pscan_seal_degrades_the_gc_and_still_opens() {
+        let tmp = tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"pw");
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+        let network: Network = params.network;
+        let engine =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        engine
+            .persist_bond_record(PSlot::from_raw(2))
+            .expect("persist bond record");
+        engine.close(&creds).expect("close");
+
+        // Truncated garbage where the sealed pscan state should be.
+        std::fs::write(
+            shekyl_engine_file::paths::pscan_state_path_from(&base_path),
+            b"not a sealed pscan state",
+        )
+        .expect("corrupt the seal");
+
+        let reopened = Engine::<SoloSigner>::open_full(
+            &base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("open must survive a corrupt auxiliary seal")
+        .into_wallet();
+        let g = reopened.ledger.read();
+        assert!(g.ledger.staking.staking_enabled, "no wrongful GC");
+        assert_eq!(g.ledger.staking.bonded_slots, vec![2], "slots kept");
     }
 
     /// The persist→reopen seam wires Model D end to end: a fresh wallet is a

@@ -8416,6 +8416,15 @@ one place to confirm each item's relationship to the wallet stack.
   harness on the production code path (CI observes the GC fire — a real phantom collected);
   **production-firing** gated on the activation round (#332). A bare "discharged" is
   forbidden (DQ-F Guard 2).
+  **UPDATE 2026-07-18 — arm #2 BUILT (`feat/sp-r0-arm2-retire-gc`).** The done-side
+  `RetiredPersonaRecord` ledger in `PScanState` (v6→7 + regenerated snapshot), the atomic
+  retire-time prune (`PScanAccrual::retire_persona` — matches + funding + pending trigger
+  leave with the record, one seal), the DQ-D tip-clamp corroboration (a low-claiming source
+  defers the prune, fail-safe), and the open-time records-driven hint clean (retired slots
+  never re-derive; an emptied hint reverts to non-staker). Guard-2: logic-discharged at the
+  task/accrual/lifecycle test level (cfg(test) evidence construction — the claim-window
+  reachability deviation, disclosed in the plan's arm-#2 build record); production-discharge
+  rides the PR-4b-gated regtest lane.
   **Rule (load-bearing — travels
   with the item):** GC **only** on *confirmed-absence within `covered`* (the range the reconcile set
   can vouch for), **never** on absence-from-one-source — the SP-6 "absence ≠ unscanned" discipline;

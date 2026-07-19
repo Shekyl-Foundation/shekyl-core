@@ -393,3 +393,58 @@ and assert the sealed-state prune when PR-4b lands). Arm #3 landed in this same 
 its production-discharge rides the same PR-4b-gated lane). The
 `stake_in` principal-side funding shape and the reopen-friction polish
 (`FOLLOWUPS` V3.x) stay with their own homes.
+
+### 5.9 POST-REVIEW HARDENING (2026-07-18, same branch — high-effort review findings, all fixed)
+
+A full review of the first implementation surfaced ten defects; every one is fixed on
+this branch (fix-all-pre-genesis discipline). The load-bearing changes, each with a
+regression test:
+
+- **Wallet-level idempotency + slot guards (`Engine::first_stake`).** The SA-DQ-1
+  refusal was per-slot (only the passed slot's persona was checked), so a call naming
+  any other slot minted a durable second first-stake. Now: pending-post check is
+  wallet-level (`-29501` on ANY sealed post); `AlreadyStaked` sweeps **every** recorded
+  bonded persona; and a new typed `WrongSlot` refusal pins the actionable slot — a
+  resume acts only on a recorded bonded slot, a fresh stake only on the monotone
+  cursor (the no-reuse invariant, enforced at the `pub` boundary so no embedder slot
+  value can mint or re-activate).
+- **Verify-then-close (`stake` RPC).** The intent reopen closed the wallet before the
+  password was ever checked — a mistyped password logged the user out. Now the
+  password is verified against the sealed envelope (`WalletFile::verify_password`,
+  lock-free read) and the daemon connected **before** the close; post-close reopen
+  faults attempt a best-effort plain restore reopen. The close is also name-bound
+  (`take_and_close_tenant(expected_name)`), and the continuation runs on the exact
+  engine arc inspected/installed — no tenant re-acquire a concurrent open could swap.
+- **Dark-scan self-heal (`stake` RPC).** A failed `start_pscan` after the intent
+  reopen left the actor resident with no scan; every retry took the continue path and
+  spun on `-29500` forever. `needs_intent_open` now also fires when no P-scan handle
+  is parked, so a retry reopens and re-arms the scan.
+- **Refusal taxonomy split (rule 82).** Internal reads (pending/pscan seal, persona
+  id) and the daemon fee estimate were all mapped to the `-29500` "fund and retry"
+  refusal. New `FirstStakeError::State` (internal, W1-clean) and `::FeeEstimate`
+  (→ `-29102`) keep the funding refusal for genuine fund/sync states only.
+- **Amount-free error surface, both paths.** The post-persist assemble/sign path
+  rendered `InsufficientFunding {available, required}` (and `OutputNotYetDrained
+  {gindex}`) verbatim. `funding_refusal_detail` is now the single sanitizer (gindex
+  arm included) and `engine_failure_detail` routes the nested assembly arms through
+  it; the amount-free KAT covers all three surfaces.
+- **One sweep body.** The W1 preflight was a hand copy of the assemble sweep and had
+  already drifted (it omitted the `BondFloorZero` refusal — a zero-floor first-stake
+  would have persisted, then failed as a W2 phantom). Both now call the single
+  `sweep_bond_funding`.
+- **Arm-#3 GC degrades on a corrupt seal.** A truncated/undecodable pscan or pending
+  seal made `Engine::open_full` hard-fail for any staker — an auxiliary, re-derivable
+  cache bricking wallet open. The GC now skips (keep every slot, `warn!`) on seal
+  read/decode failure; the scan path still fails loud on the same seal.
+- **GF-7 release-ordering contract (pinned, not yet exercisable).** The GC's
+  wrongful-drop safety rests on the pending record being durably released only
+  at-or-after the match-bearing pscan seal is durable. Nothing releases a pending
+  post today; the contract is now binding doc on `reconcile_phantom_bonded_slots`
+  and `PendingPostState`, and the GF-7 dispatch PR must land a crash-ordering test
+  against that window before any release path ships.
+- **Zeroizing password on every path.** `stake`'s password is consumed into
+  `Zeroizing` immediately after parse (the continue path and every early error
+  previously dropped a plain `String`).
+- **Spec caught up.** `docs/api/wallet_rpc.yaml` now specifies `stake` (params,
+  result, `-29500..-29502`) — the code's error-code enum claims the yaml as its
+  source of truth, and the method had landed without it.

@@ -1024,10 +1024,6 @@ impl<
         &self.daemon
     }
 
-    /// Clone the archival-bond [`StakeEngineHandle`], or `None` if no stake
-    /// engine is running. The handle is the `view_sk`-vault actor's address; the
-    /// 2d-1 P-scan task ([`start_pscan`](Self::start_pscan)) clones it to offload
-    /// each scan-step. Cloning the handle clones an `ActorRef`, not the vault.
     /// Whether a StakeEngine actor is resident (a staker open, or an
     /// open-with-first-stake-intent). The embedder-facing predicate the
     /// `stake` entry uses to decide whether the SA-R1-a intent reopen is
@@ -1036,6 +1032,10 @@ impl<
         self.stake.is_some()
     }
 
+    /// Clone the archival-bond [`StakeEngineHandle`], or `None` if no stake
+    /// engine is running. The handle is the `view_sk`-vault actor's address; the
+    /// 2d-1 P-scan task ([`start_pscan`](Self::start_pscan)) clones it to offload
+    /// each scan-step. Cloning the handle clones an `ActorRef`, not the vault.
     pub(crate) fn stake_handle(&self) -> Option<StakeEngineHandle> {
         self.stake.clone()
     }

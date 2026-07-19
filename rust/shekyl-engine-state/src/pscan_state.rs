@@ -58,7 +58,7 @@ use crate::pscan_cursor::PScanCursor;
 /// migration at any step: pre-genesis, a version mismatch means re-scan (rule 15).
 /// Distinct from the inner [`PScanCursor`]'s own version (nested, like the wallet
 /// ledger over its sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 6;
+pub const PSCAN_STATE_VERSION: u32 = 7;
 
 /// The GF-4b mint-lineage ladder for a `P`-owned funding output — the
 /// scan-provenance classification (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3;
@@ -227,6 +227,43 @@ impl std::fmt::Debug for PFundingOutputRecord {
 /// log path, and the persisted state is the form most likely to hit one (a deserialize
 /// error). The other fields render normally — `bond_post_matches` is the high-bar field
 /// (see the field doc + the redacting `BondPostRecord::Debug`).
+/// One retired persona — a row of the **authoritative done-side slot ledger**
+/// (SP-R0 arm #2; `ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` §"Records-driven
+/// retirement"). Written exactly once, by the token-corroborated retire-time
+/// prune, in the same atomic seal that drops the persona's
+/// `funding_outputs` / `bond_post_matches` / `pending_unbonds` rows.
+///
+/// The ledger is *authoritative for retirement and monotonicity, advisory
+/// for live bonds* (the one-sentence invariant): the open path subtracts
+/// retired slots from the derive-forward set ("stop deriving slot N" — the
+/// fix the forever-derive problem was waiting for) and drops them from the
+/// live `bonded_slots` hint; nothing ever treats it as authority about live
+/// chain state.
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+pub struct RetiredPersonaRecord {
+    /// The retired persona's slot ordinal — what the derive-forward
+    /// subtraction keys on ("stop deriving slot N").
+    pub p_slot: PSlot,
+    /// The retired persona's public canonical id (matches the
+    /// `pending_unbonds` / `bond_post_matches` keying).
+    pub p_canonical_id: PCanonicalId,
+    /// The settlement epoch the `Unbond` was confirmed in (carried from the
+    /// `pending_unbonds` entry this record replaces).
+    pub unbond_epoch: SettlementEpoch,
+    /// The settlement epoch the retire-time prune ran in (the settled epoch
+    /// at prune time — after the claim-window lapse, by construction).
+    pub retired_epoch: SettlementEpoch,
+}
+
+impl std::fmt::Debug for RetiredPersonaRecord {
+    /// Redacted: a retired row is still a row of `P`'s persona history
+    /// (slot × id × epochs) — same no-clear-`Debug` discipline as
+    /// [`BondPostRecord`].
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RetiredPersonaRecord(<redacted persona-history>)")
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct PScanState {
     /// Per-state schema version — [`PSCAN_STATE_VERSION`] on construction,
@@ -243,14 +280,14 @@ pub struct PScanState {
     /// epoch its `Unbond` was confirmed in (2d-1 DQ8).
     ///
     /// The **sole durable record** that a persona is unbonded: the `Unbond` block
-    /// is behind the cursor and never re-scanned, and the StakeEngine union wipe is
-    /// not durable until SP-6 (the persona re-derives on restart with no notion of
-    /// "unbonded"). So this entry is what **re-triggers** the retire on each
-    /// restart — it is kept until SP-6 durably removes the persona, **not** dropped
-    /// when the retire fires (dropping it would let the re-derived persona regrow
-    /// the union permanently). Public content (the id is a public on-chain
-    /// pseudonym handle), bounded by `P`'s own unbonded-persona count (not
-    /// adversary-controllable).
+    /// is behind the cursor and never re-scanned. This entry **re-triggers** the
+    /// retire on each restart, surviving until SP-R0 **arm #2**'s
+    /// token-corroborated retire-time prune removes it — in the same atomic seal
+    /// that writes the [`RetiredPersonaRecord`] and drops the persona's match +
+    /// funding rows (the removal the pre-arm-#2 design said it was "kept until").
+    /// An uncorroborated retire (the DQ-D tip clamp declines) leaves it in place
+    /// to re-fire. Public content (the id is a public on-chain pseudonym handle),
+    /// bounded by `P`'s own unbonded-persona count (not adversary-controllable).
     pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
     /// Matched archival bond-posts (`p_canonical_id` ∈ `P`'s personas) accumulated
     /// across the scan — the **reconcile evidence** SP-6 binds to the verified
@@ -268,6 +305,10 @@ pub struct PScanState {
     /// ingested), and per-epoch sums of these records equal the `accruals`
     /// entries by construction. Bounded by `P`'s own funding inflow.
     funding_outputs: Vec<PFundingOutputRecord>,
+    /// The done-side slot ledger (SP-R0 arm #2): personas durably retired by
+    /// the token-corroborated retire-time prune. Append-only; bounded by
+    /// `P`'s own retired-persona count. See [`RetiredPersonaRecord`].
+    retired_records: Vec<RetiredPersonaRecord>,
 }
 
 impl std::fmt::Debug for PScanState {
@@ -283,6 +324,7 @@ impl std::fmt::Debug for PScanState {
             .field("pending_unbonds", &self.pending_unbonds)
             .field("bond_post_matches", &"<redacted persona-history>")
             .field("funding_outputs", &"<redacted funding-history>")
+            .field("retired_records", &"<redacted persona-history>")
             .finish()
     }
 }
@@ -298,6 +340,7 @@ impl PScanState {
             pending_unbonds: BTreeMap::new(),
             bond_post_matches: Vec::new(),
             funding_outputs: Vec::new(),
+            retired_records: Vec::new(),
         }
     }
 
@@ -311,12 +354,14 @@ impl PScanState {
     /// scan is exhaustive over that verified range), and `funding_outputs` holds
     /// every recovered funding output over the same range (per-epoch sums equal the
     /// `accruals` entries).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cursor: PScanCursor,
         accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
         pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
         bond_post_matches: Vec<BondPostRecord>,
         funding_outputs: Vec<PFundingOutputRecord>,
+        retired_records: Vec<RetiredPersonaRecord>,
     ) -> Self {
         Self {
             version: PSCAN_STATE_VERSION,
@@ -325,6 +370,7 @@ impl PScanState {
             pending_unbonds,
             bond_post_matches,
             funding_outputs,
+            retired_records,
         }
     }
 
@@ -359,6 +405,12 @@ impl PScanState {
     /// `[0, synced_height)` (the exhaustively-scanned verified range).
     pub fn bond_post_matches(&self) -> &[BondPostRecord] {
         &self.bond_post_matches
+    }
+
+    /// The done-side slot ledger (SP-R0 arm #2) — retired personas, in
+    /// retire order.
+    pub fn retired_records(&self) -> &[RetiredPersonaRecord] {
+        &self.retired_records
     }
 
     /// The per-output funding-discovery records (WI-2 D-A1) — the `P`-local
@@ -475,6 +527,7 @@ mod tests {
             pending(&[(0xAB, 7)]),
             bond_posts(&[(12_345, 0xAB, 0), (39_000, 0xCD, 2)]),
             vec![funding_output(3, 77, 100, 12_400)],
+            Vec::new(),
         );
         let bytes = state.to_postcard_bytes().expect("serialize");
         let back = PScanState::from_postcard_bytes(&bytes).expect("deserialize");
@@ -531,6 +584,7 @@ mod tests {
                 funding_output(3, 77, 100, 12_400),
                 funding_output(3, 78, 200, 12_401),
             ],
+            Vec::new(),
         );
         let rendered = format!("{state:?}");
         assert!(
@@ -564,6 +618,7 @@ mod tests {
             pending(&[]),
             bond_posts(&[(123_456, 0xAB, 2), (789_012, 0xCD, 0)]),
             vec![],
+            Vec::new(),
         );
         let rendered = format!("{state:?}");
         assert!(
@@ -594,6 +649,7 @@ mod tests {
             pending(&[]),
             bond_posts(&[]),
             vec![],
+            Vec::new(),
         );
         assert_eq!(
             state.accrual_for(SettlementEpoch::from_raw(4)),
@@ -613,6 +669,7 @@ mod tests {
             pending(&[]),
             bond_posts(&[]),
             vec![],
+            Vec::new(),
         );
         assert_eq!(state.total_accrued(), Some(AtomicUnits::from_raw(60)));
     }
@@ -625,6 +682,7 @@ mod tests {
             pending(&[]),
             bond_posts(&[]),
             vec![],
+            Vec::new(),
         );
         assert_eq!(state.total_accrued(), None, "must not wrap a money total");
     }
@@ -634,6 +692,7 @@ mod tests {
         // A wrong-version state, serialized through the real path (the test child
         // module can reach the private fields).
         let wrong = PScanState {
+            retired_records: Vec::new(),
             version: PSCAN_STATE_VERSION + 1,
             cursor: PScanCursor::genesis(),
             accruals: BTreeMap::new(),

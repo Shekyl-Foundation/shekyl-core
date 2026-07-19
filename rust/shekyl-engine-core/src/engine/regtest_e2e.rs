@@ -1450,11 +1450,11 @@ async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
     const SLOT: u32 = 0;
     const MINE_BATCH_BLOCKS: u64 = 10;
     const MAX_MINE_BATCHES: usize = 24;
-    /// Size ceiling for the bond-fee derivation. The single-funding-input bond
-    /// post measures ~22.5 KB; the ceiling gives the estimate ~40% headroom so
-    /// the fee baked in at assembly clears the daemon's per-byte floor even if
-    /// input count or proof size drifts.
-    const BOND_SIZE_CEILING_BYTES: usize = 32 * 1024;
+    // Fee ceiling: the production constant (promoted from this harness to
+    // the stake entry's seam) — one definition, no drift. The
+    // single-funding-input bond post measures ~22.5 KB, so 32 KiB gives the
+    // estimate ~40% headroom over the daemon's per-byte floor.
+    use super::bond_orchestrator::BOND_SIZE_CEILING_BYTES;
     /// Extra persona funding above `floor + fee`, so the sweep-all bond leaves
     /// a non-zero change output — the persona's rung-2 `BondPostChange` funding
     /// for the follow-on emission-claim leg.

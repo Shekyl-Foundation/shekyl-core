@@ -173,6 +173,29 @@ test — is a compile-time fact; CI asserts both prune paths fire and the
 production-witness sweep refuses post-prune). Guard-2 status: **logic-discharged;
 production-firing gated on the staker-activation round (#332)**.
 
+**BUILD RECORD (2026-07-18, `feat/sp-r0-arm2-retire-gc`) — arm #2 BUILT.** The done-side
+ledger landed as designed (2d-1 §"Records-driven retirement"): `RetiredPersonaRecord`
+rows in `PScanState` (**`PSCAN_STATE_VERSION` 6 → 7**, snapshot regenerated per rule 42),
+written by the **atomic retire-time prune** `PScanAccrual::retire_persona` — the
+persona's `bond_post_matches` rows, the slot's `funding_outputs` records, and the
+`pending_unbonds` trigger all leave in the same mutation that appends the record, sealed
+by the task's one atomic write (the §15 pin; the bound on `bond_post_matches` growth).
+**DQ-D consumed as designed:** the durable prune fires only under the sweep-corroborated
+tip clamp `min(claimed_tip, verified_frontier + reorg_depth)` — the WI-3 R2-1 reserve,
+consumed as *corroboration*; a low-claiming source merely defers the prune (fail-safe),
+and the actor key-wipe keeps its frontier basis. **The open path** applies the
+records-driven clean before derive ("stop deriving slot N"): retired slots leave the
+live hint, an emptied hint reverts the wallet to a non-staker, and the derive-forward
+subtraction follows from the monotone cursor (no second mechanism). **DQ-E:** the clamp
+primitive now exists at the retire site; `anchor_t0`'s enrollment stays with its named
+FOLLOWUPS item (the 2d-2 tip-consumer enrollment note). **Guard-2 status, stated
+honestly for ratification:** arm #2 is **logic-discharged at the task/accrual/lifecycle
+test level** — the ~270k-block claim-window reachability makes a `not(test)`
+fire-harness lane impractical (evidence construction uses the cfg(test) batch
+constructor; a conscious, disclosed deviation from the arm-#1/#3 lane form) — and
+**production-discharge rides the same PR-4b-gated regtest lane** (with the armed
+settlement-epoch override for the W-lapse) named at the tripwire.
+
 ---
 
 ## 5. Design questions — ratified dispositions (2026-07-18)
