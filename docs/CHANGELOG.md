@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+### Added
+
+- **wallet: SP-R0 arm #1 — spent-funding-record prune via key-image watch
+  (logic-discharged).** The `P`-scan dual extractor gains arm (c): each
+  scanned tx's FCMP++ `ToKey` key images are matched against an in-actor
+  watch-set of the key images of `P`'s held funding outputs (derived from the
+  vault via the single shared `KI = x·Hp(O)` definition assemble also uses;
+  DQ-A structural containment — redacting `Debug`, no `Serialize`,
+  zeroize-on-drop, tripwire-enforced). Derivation is offloaded off the actor's
+  async executor (DQ5/DQ6) with per-record quarantine: a deterministically
+  underivable record is skipped loudly, never a scan halt (assemble re-derives
+  the same bundle and fails identically, so a quarantined record can never be
+  swept into a bond post). A hit
+  prunes the matching `PScanState::funding_outputs` record at ingest
+  (extend-then-retain — a discover-then-spend within one scan step nets to no
+  record; the in-step blind spot is closed by the handler's trailing pass), no
+  `PSCAN_STATE_VERSION` bump (D-2: element removal is wire-identical +
+  pre-genesis fresh-sync). Mints the **sole production
+  `SpentRecordsDurablyPruned` constructor** (`arm1_watch_pruning_live`),
+  discharging the GF4b-5 structural go-live gate on `sweep_funding_outputs`
+  and its five consumers. DQ-F fire lane:
+  `shekyl-engine-core/tests/sp_r0_arm1_fire.rs` (harness compiled
+  `test-helpers` + `not(test)`, so Guard 1 — no `for_test()` on the path
+  under test — is a compile-time fact) drives the production
+  scan/watch/prune/witness path; CI asserts both prune paths fire.
+  **Guard 2: logic-discharged only — production-firing gated on the
+  staker-activation round** (`ARCHIVAL_BOND_SP_R0_PLAN.md` §4 build record).
+
+### Changed
+
+- **ci: `Rust: audit, test, determinism` split into its own workflow
+  (`ci/gh-actions/rust`).** The Rust audit/test/determinism gate moved out of
+  `ci/gh-actions/cli` (`build.yml`) into `rust-audit-test.yml` so a flaked
+  C/C++ `compile_by_OS` runner can be re-run without waiting for this
+  ~35–48m job to conclude (GitHub only allows re-running failed jobs once the
+  whole workflow run finishes). The job never depended on the OS builds — no
+  `needs:`, no artifact download, its own `Swatinem/rust-cache` — so the job
+  body is byte-identical and only the containing workflow (and its
+  concurrency group) changed. **No branch-protection change is needed:**
+  required status checks are keyed by the bare job name
+  (`Rust: audit, test, determinism`) plus the GitHub Actions app, not by the
+  workflow name, so the existing required-check context keeps matching this
+  job in its new workflow.
+
 ### Removed
 
 - **multisig: `group_id` deleted — group identity is the address

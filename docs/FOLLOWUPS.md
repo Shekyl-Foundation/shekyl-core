@@ -8455,6 +8455,21 @@ one place to confirm each item's relationship to the wallet stack.
   (test-only constructor aside), so wiring assemble live without durable pruning fails to
   compile (GF4b-5). Landing this item = implementing the pruning per the SP-R0 discipline above
   **and** minting the witness at that seam.
+  **UPDATE 2026-07-18 — arm #1 BUILT + LOGIC-DISCHARGED (`feat/sp-r0-arm1-funding-prune`).**
+  The (c)-arm spent-key-image watch (`run_dual_extractor` arm (c) + the in-actor derive-on-add
+  cache with DQ-A structural containment: redacting `Debug`, no `Serialize`, tripwire-enforced),
+  prune-at-ingest (`PScanAccrual::ingest`, extend-then-retain so a discover-then-spend within
+  one step nets to no record; in-step blind spot closed by the handler's trailing pass), and
+  the **sole production `SpentRecordsDurablyPruned` constructor**
+  (`arm1_watch_pruning_live`, tripwire updated to exactly-one) all landed. The DQ-F fire lane
+  (`shekyl-engine-core/tests/sp_r0_arm1_fire.rs`, harness compiled
+  `feature = "test-helpers"` + `not(test)` so Guard 1 is a compile-time fact) drives the
+  production scan/watch/prune/witness path and CI asserts both prune paths **fire**
+  (fire counter `PScanAccrual::spent_pruned_total`, cross-step and in-step, non-zero) and the
+  production-witness sweep refuses post-prune. Per Guard 2: this item is **logic-discharged
+  only — production-firing remains gated on the staker-activation round (#332)**; the entry
+  closes on the production discharge. The "nothing removes an output" poison text above is the
+  pre-arm-#1 record, kept for lineage.
   See [`ARCHIVAL_BOND_WI2_ASSEMBLY.md`](design/ARCHIVAL_BOND_WI2_ASSEMBLY.md) §3.2/§3.5 and
   [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12 (SP-R0).
   **2d-2 tip-consumer enrollment note:** assemble-time `anchor_t0` (via

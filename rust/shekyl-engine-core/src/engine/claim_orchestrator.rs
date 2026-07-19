@@ -61,10 +61,13 @@
 //!
 //! ## The SP-R0 witness
 //!
-//! [`SpentRecordsDurablyPruned`] has no production constructor yet (SP-R0);
-//! the orchestrator takes it by reference and threads it to the sweep, so the
-//! compile-time sequencing witness holds end-to-end: production callers exist
-//! only once SP-R0 lands, tests mint via `for_test()`.
+//! [`SpentRecordsDurablyPruned`]'s precondition is **discharged** (SP-R0
+//! arm #1, 2026-07-18): `arm1_watch_pruning_live` is its sole production
+//! constructor. The orchestrator still takes the witness by reference and
+//! threads it to the sweep — the type stays load-bearing (any future build
+//! that conditions the watch/prune must confront it) — but it is **no longer
+//! a compile block**: production-caller sequencing is the #332
+//! staker-activation entry's responsibility. Tests mint via `for_test()`.
 
 use std::collections::BTreeSet;
 

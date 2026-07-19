@@ -227,7 +227,7 @@ jobs:
       - name: cargo clippy -D warnings (harness + sys)
         working-directory: rust
         # Targeted at the two new crates. The workspace-wide clippy
-        # gate runs in `build.yml`'s `rust-audit-and-test` job; this
+        # gate runs in `rust-audit-test.yml`'s `rust-audit-and-test` job; this
         # narrower invocation re-runs clippy against the harness in
         # the substrate-correct environment (with
         # `RANDOMX_V2_INSTALL_DIR` set, so `gen_canonical_outputs`

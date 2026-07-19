@@ -1427,9 +1427,11 @@ async fn pscan_until(
 /// substrate the emission-claim e2e, PR-4c, spends from).
 ///
 /// Bounded deviations from production, each named:
-/// - [`SpentRecordsDurablyPruned::for_test`] — SP-R0 pruning has not landed;
-///   this is the same witness every bond-path test passes
-///   (`super::bond_assembly`).
+/// - [`SpentRecordsDurablyPruned::for_test`] — the test-only mint; the same
+///   witness every bond-path test passes (`super::bond_assembly`). SP-R0
+///   arm #1 pruning **has landed** (`arm1_watch_pruning_live` is the sole
+///   production mint), so this deviation is convention, not a gap: the
+///   harness skips touring the scan-side watch to keep the bond-path focus.
 /// - The assembled bytes are dispatched directly through the audited
 ///   posture→submitter choke point (`for_posture` + `submit_bound`) rather
 ///   than WI-3's block-timed dispatch driver: the driver's decorrelation

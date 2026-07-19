@@ -151,6 +151,28 @@ radius. The coupling is registered at the definition site too
 (`config/consensus_constants.json`, `_comment_archival_timing`), so a faster-finality
 retune meets the warning where the retune happens.
 
+**BUILD RECORD (2026-07-18, `feat/sp-r0-arm1-funding-prune`) — arm #1 BUILT +
+LOGIC-DISCHARGED.** As designed above, plus one addition the design round did not
+anticipate: the **in-step blind spot**. An output discovered at height `h` can be spent at
+`h' > h` *within the same scan step*, and its key image is derivable only in-actor after
+the closure returns — a watch gap that would have broken D-2's absence-as-evidence
+argument for large catch-up batches. Closed structurally: the extractor collects the
+post-first-discovery spend key images (`DualExtractOutput::trailing_key_images`, empty in
+the no-discovery common case) and the handler derives the step's discoveries and matches
+them before returning. Landed surfaces: extractor arm (c) (`scan_step.rs`), the
+`KeyImageWatchSet` with DQ-A containment (redacting `Debug`, no `Serialize`,
+self-parse tripwire), the in-actor derive-on-add/drop-on-prune cache
+(`stake_engine.rs` `refresh_watch_cache`/`derive_watch_key_image` — same
+`derive_p_source_secrets_bundle` leg as assemble), prune-at-ingest with the DQ-F fire
+counter (`accrual.rs` `spent_pruned_total`), the **sole production
+`SpentRecordsDurablyPruned` constructor** (`arm1_watch_pruning_live`; tripwire now
+asserts exactly-one), and the DQ-F fire lane
+(`shekyl-engine-core/tests/sp_r0_arm1_fire.rs`; harness compiled
+`feature = "test-helpers"` + `not(test)` so Guard 1 — no `for_test()` on the path under
+test — is a compile-time fact; CI asserts both prune paths fire and the
+production-witness sweep refuses post-prune). Guard-2 status: **logic-discharged;
+production-firing gated on the staker-activation round (#332)**.
+
 ---
 
 ## 5. Design questions — ratified dispositions (2026-07-18)

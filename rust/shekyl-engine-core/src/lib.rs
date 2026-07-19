@@ -77,6 +77,12 @@ pub mod __test_helpers {
     use crate::engine::{Engine, SoloSigner};
     use shekyl_types::PSlot;
 
+    /// SP-R0 arm #1 DQ-F fire lane (see `engine/pscan/arm1_fire.rs`).
+    /// `not(test)`: the harness only exists in compilations where
+    /// `#[cfg(test)]` constructors do not (Guard 1, structural).
+    #[cfg(not(test))]
+    pub use crate::engine::pscan::arm1_fire::{run_arm1_fire, Arm1FireReport};
+
     /// Turn an open [`Engine`] into a staker: persist a bond record for `slot`,
     /// which sets `staking_enabled` durably, so a subsequent reopen spawns the
     /// [`StakeEngine`](crate::engine::stake_engine::StakeEngine) and the

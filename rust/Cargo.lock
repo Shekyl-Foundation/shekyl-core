@@ -3957,6 +3957,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
  "shekyl-economics",
+ "shekyl-engine-core",
  "shekyl-engine-file",
  "shekyl-engine-prefs",
  "shekyl-engine-state",

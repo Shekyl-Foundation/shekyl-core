@@ -17,7 +17,7 @@
 # full `cargo check + clippy + test --features multisig` across three
 # crates behind it — prose can't affect the Rust build.
 #
-# Clippy posture mirrors build.yml's rust-audit-and-test job:
+# Clippy posture mirrors rust-audit-test.yml's rust-audit-and-test job:
 #   - toolchain pinned to rust/rust-toolchain.toml (1.94.0), not @stable
 #   - `-D warnings` only on the clippy argv (`-- -D warnings`), NOT via
 #     job-level RUSTFLAGS (that promotes rustc warnings in path deps

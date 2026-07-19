@@ -29,7 +29,7 @@ use super::block_source::{BlockSource, BlockSourceError};
 use super::cadence::ScanSchedule;
 use super::dispatch::{DispatchError, DispatchTick};
 use super::exhaustiveness::{verify_exhaustive, ExhaustivenessError};
-use super::scan_step::{BlockRange, BondPostMatch, MAX_SCAN_STEP_BLOCKS};
+use super::scan_step::{BlockRange, BondPostMatch, FundingOutputMatch, MAX_SCAN_STEP_BLOCKS};
 use crate::engine::stake_engine::{
     RetireOutcome, RetirementWitness, StakeEngineError, StakeEngineHandle,
 };
@@ -265,6 +265,12 @@ where
         );
     }
 
+    // SP-R0 arm #1: the held-funding list rides every `ScanStep` (the actor's
+    // watch-cache refresh needs the authoritative list). Snapshot it once as a
+    // shared slice and re-snapshot only when an ingest changed it — the
+    // steady-state step then sends an `Arc` bump instead of deep-cloning every
+    // record's ~1 KB ML-KEM ciphertext per batch of a long catch-up.
+    let mut held_funding: Arc<[FundingOutputMatch]> = accrual.funding_outputs().into();
     while accrual.next_height().to_raw() < horizon {
         // Cancellation is checked per batch, not just between sweeps: a cold-start
         // catch-up is many batches, and shutdown must not wait for the whole sweep.
@@ -324,12 +330,24 @@ where
             &blocks,
         )?;
 
-        // Offloaded dual extraction behind the actor; only public results return.
-        let result = stake.scan_step(range, blocks).await?;
+        // Offloaded dual extraction behind the actor; only public results
+        // return. The held-funding list (as of the frontier) rides along so
+        // the actor can refresh its key-image watch cache (SP-R0 arm #1,
+        // DQ-A) before the step runs.
+        let result = stake
+            .scan_step(range, blocks, Arc::clone(&held_funding))
+            .await?;
         // Ingest against the *verified batch* (not a bare hash): it is what advances the
         // accrual's verified-`covered` range, so the frontier can only move behind a
         // `VerifiedBatch` (the structural reconcile-evidence guard).
         accrual.ingest(&result, &verified)?;
+        // Re-snapshot the shared held list only when this ingest changed it
+        // (a discovery extended it, a prune shrank it) — `ingest` is the only
+        // mutator of `funding_outputs`, so an unchanged step reuses the
+        // snapshot.
+        if !result.funding_outputs.is_empty() || !result.spent_funding.is_empty() {
+            held_funding = accrual.funding_outputs().into();
+        }
         record_unbonds(accrual, &result.bond_post_matches);
 
         // Seal (cursor + accruals + pending unbonds + bond-post matches) atomically —
