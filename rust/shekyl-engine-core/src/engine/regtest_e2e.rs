@@ -217,9 +217,7 @@ impl RegtestDaemon {
                             .join("\n")
                     })
                     .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"));
-                panic!(
-                    "daemon exited early ({status}) before RPC became ready; log tail:\n{tail}"
-                );
+                panic!("daemon exited early ({status}) before RPC became ready; log tail:\n{tail}");
             }
             match self
                 .rpc
@@ -1882,25 +1880,36 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 ///
 /// **Block geography (pinned).** One settlement epoch is sized to hold the
 /// whole bond substrate (`SEB = 512` ≫ the ~300 blocks the confirmed-bond
-/// fixture mines), so the fixture, the serve-credit injection, and the
-/// bond's own fee-paying txs all land in epoch 0, and the pinned ordering
+/// fixture mines), so the bond joins in epoch 0 — and the onset stagger
+/// (`good_through`: a bond is a market member from `join_epoch + 1`, never
+/// in its join epoch) makes **epoch 1 the first claimable epoch**: the
+/// serve credit is injected for epoch 1, epoch 1 is mined closed, and the
+/// claim targets it. Epoch 0 closes zero-work along the way — the
+/// no-staker epoch whose budget is never minted (claims are wallet-timed
+/// mints; an unclaimable epoch's accrual simply never enters supply) —
+/// and the claim builder must EXCLUDE it (`claimed_epochs == [1]`), which
+/// is the no-staker leg's e2e observable. The pinned ordering
 /// `inject < referenceBlock < epoch_close < claim ≤ tip` follows from
 /// claiming within `REF_ANCHOR_AGE` blocks of the close (the close-detect
-/// loop mines in 3-block steps so the overshoot stays inside that window).
-/// Blocks between the close and the claim carry no epoch-1 serve credit —
-/// the zero-staker stretch the A5b pop leg straddles.
+/// loop mines in 3-block steps so the overshoot stays inside that
+/// window). Blocks between the close and the claim carry no epoch-2 serve
+/// credit — the zero-staker stretch the A5b pop leg straddles.
 ///
 /// **Conservation (A6, `§9.5 item 8`).** The claim's reward vout must equal
-/// `budget_atomic(0)` byte-exactly — the daemon's per-block accrual
+/// `budget_atomic(1)` byte-exactly — the daemon's per-block accrual
 /// `staker_emission + staker_pool_amount` (blockchain.cpp) summed over the
-/// epoch, i.e. BOTH halves of the staker inflow. The fee-pool half is live,
-/// not vacuously zero: epoch 0 contains real fee-paying txs (the funding
-/// transfer + the ~1.5e9-fee bond post), and `compute_burn_split` ties the
-/// halves — `total_burned > 0` over the same range proves `burn_pct > 0`
-/// fired on those fees, and the same split call then produced a nonzero
-/// `staker_pool_amount` (pool = burned·share, destroyed = burned − pool).
-/// The claim itself carries real `ToKey` fee inputs (`fee_gindexes`
-/// non-empty), not the Q11 zero-fee form.
+/// epoch, i.e. the staker-inflow identity over real RPC. At regtest e2e
+/// activity the fee-pool half is **genuinely zero by the law**, and the
+/// test pins that executably: `get_tx_volume_avg` is an integer per-block
+/// mean over `SHEKYL_TX_VOLUME_WINDOW`, a handful of e2e txs floors it to
+/// 0, and a zero volume operand zeroes `burn_pct` — so `compute_burn_split`
+/// legitimately yields `staker_pool_amount = 0` (asserted via
+/// `total_burned == 0`, the tied observable). Driving the pool half
+/// positive needs a sustained ≥ 1 tx/block average — infeasible in an e2e;
+/// the positive-pool split coverage is the B5 unit KAT family. The claim
+/// itself still carries real `ToKey` fee inputs (`fee_gindexes`
+/// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
+/// runs live.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
 async fn e2e_emission_claim_accepted_and_applied() {
@@ -1918,11 +1927,14 @@ async fn e2e_emission_claim_accepted_and_applied() {
 
     const SLOT: u32 = 0;
     /// Settlement-epoch size under the lever: large enough that the whole
-    /// confirmed-bond substrate (~300 blocks) fits inside epoch 0 with
-    /// injection room to spare, small enough that closing epoch 0 (and
-    /// later the zero-work epoch 1, for the burn leg) is cheap mining.
+    /// confirmed-bond substrate (~300 blocks) fits inside epoch 0 (pinning
+    /// the join epoch), small enough that mining epoch 1 closed is cheap.
     const SEB: u64 = 512;
     const SHARD_ID: u64 = 0;
+    /// The claimed epoch. The bond joins in epoch 0 and the onset stagger
+    /// (`good_through`) defers market membership to `join + 1`, so epoch 1
+    /// is the first epoch whose serve credit carries weight.
+    const TARGET_EPOCH: u64 = 1;
     /// Persona funding above `floor + bond fee`: becomes the sweep-all
     /// bond's `BondPostChange` change output — the claim's fee-input
     /// substrate. Sized ≳ 2.5× the young-chain fee scale (~1.5e9) so the
@@ -1954,73 +1966,91 @@ async fn e2e_emission_claim_accepted_and_applied() {
         fixture.confirmed_tip_height
     );
 
-    // (A2) Inject one serve-credit bit for (persona, shard 0, epoch 0)
-    // BEFORE the close, so epoch 0 closes with nonzero Σwork and this
-    // claimant holds all of it (single claimant, uncapped ⇒ its share is
-    // the whole budget).
+    // (A2) Inject one serve-credit bit for (persona, shard 0, TARGET_EPOCH).
+    // The bit store is epoch-keyed and injection is height-free, but the
+    // injection HEIGHT is what the pop legs must stay above (the store is
+    // not pop-symmetric), so it is recorded here. Single claimant holding
+    // all Σwork ⇒ its share is the whole epoch budget.
     let inject_height = daemon.height().await;
     daemon
-        .inject_serve_credit(&fixture.persona_id, SHARD_ID, 0)
+        .inject_serve_credit(&fixture.persona_id, SHARD_ID, TARGET_EPOCH)
         .await;
-    eprintln!("serve credit injected for epoch 0 at height {inject_height}");
+    eprintln!("serve credit injected for epoch {TARGET_EPOCH} at height {inject_height}");
 
-    // (A1 close) Mine until the daemon reports epoch 0 closed (budget row
-    // written), in 3-block steps so the tip overshoots the close by less
-    // than `REF_ANCHOR_AGE` — the pinned `referenceBlock < epoch_close`
+    // (A1 close) Mine until the daemon reports TARGET_EPOCH closed (budget
+    // row written), in 3-block steps so the tip overshoots the close by
+    // less than `REF_ANCHOR_AGE` — the pinned `referenceBlock < epoch_close`
     // ordering depends on claiming inside that window.
     let p_id_bytes = fixture.persona_id.to_bytes();
-    let epoch0 = loop {
+    let epoch_row = loop {
         let src = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
             .await
             .expect("claim-source fetch");
-        if let Some(e0) = src
+        if let Some(row) = src
             .epochs
             .iter()
-            .find(|e| e.settlement_epoch == 0 && e.has_budget_row)
+            .find(|e| e.settlement_epoch == TARGET_EPOCH && e.has_budget_row)
         {
-            break e0.clone();
+            break row.clone();
         }
         let h = daemon.height().await;
         assert!(
-            h < SEB + 64,
-            "epoch 0 never closed with a budget row by height {h} (SEB {SEB})"
+            h < (TARGET_EPOCH + 1) * SEB + 64,
+            "epoch {TARGET_EPOCH} never closed with a budget row by height {h} (SEB {SEB})"
         );
         daemon.generate_blocks(3, &fixture.principal).await;
     };
     let total_burned_at_close = daemon.total_burned().await;
     eprintln!(
-        "epoch 0 closed at {}: budget {} atomic, sigma-work {} milli, {} credit pair(s); \
-         total_burned {}",
-        epoch0.close_block_height,
-        epoch0.budget_atomic,
-        epoch0.sigma_work_milli,
-        epoch0.credit_pairs.len(),
+        "epoch {TARGET_EPOCH} closed at {}: budget {} atomic, sigma-work {} milli, \
+         {} credit pair(s); total_burned {}",
+        epoch_row.close_block_height,
+        epoch_row.budget_atomic,
+        epoch_row.sigma_work_milli,
+        epoch_row.credit_pairs.len(),
         total_burned_at_close,
     );
     assert!(
-        !epoch0.credit_pairs.is_empty(),
+        !epoch_row.credit_pairs.is_empty(),
         "the injected serve credit must surface in the closed epoch's credit pairs"
     );
     assert!(
-        epoch0.sigma_work_milli > 0,
-        "the closed epoch must carry the injected work"
+        epoch_row.sigma_work_milli > 0,
+        "the closed epoch must carry the injected work (membership from join+1)"
     );
     assert!(
-        epoch0.budget_atomic > 0,
+        epoch_row.budget_atomic > 0,
         "the closed epoch must have accrued a positive budget"
     );
     assert!(
-        epoch0.claimant_bond_idx.is_some(),
+        epoch_row.claimant_bond_idx.is_some(),
         "the fixture's bond must be a claimant in the closed epoch"
     );
-    // A6 pool-half liveness: fees were mined in epoch 0 (funding transfer +
-    // bond post) and the burn law fired on them — `compute_burn_split` ties
-    // `actually_destroyed` and `staker_pool_amount` to the same
-    // `burned = fees·burn_pct`, so a positive burn proves the budget's
-    // fee-pool half was accrued live, not skipped.
-    assert!(
-        total_burned_at_close > 0,
-        "fee burn must have fired on epoch 0's real fee txs (pool-half liveness, §9.5 item 8)"
+    // A6 pool-half disposition (module docs): at e2e activity the integer
+    // per-block volume mean floors to 0, a zero volume operand zeroes
+    // `burn_pct`, and `compute_burn_split` then yields a zero pool half AND
+    // a zero destroyed half from the same `burned` product — `total_burned`
+    // is the tied observable, pinned here so an operand-law change
+    // re-surfaces this disposition instead of silently shifting the budget.
+    assert_eq!(
+        total_burned_at_close, 0,
+        "regtest e2e activity must floor the volume mean to 0 ⇒ zero fee burn \
+         (pool-half disposition, §9.5 item 8; positive-pool coverage is the B5 KATs)"
+    );
+    // The no-staker epoch: epoch 0 (the join epoch) closed zero-work — its
+    // budget row exists but Σwork is 0, so nothing of it is claimable and
+    // its accrual never mints (never enters supply).
+    let src_now = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source fetch");
+    let join_epoch_row = src_now
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == 0 && e.has_budget_row)
+        .expect("the join epoch must have closed with a budget row");
+    assert_eq!(
+        join_epoch_row.sigma_work_milli, 0,
+        "the join epoch must close zero-work (onset stagger: no membership in the join epoch)"
     );
 
     // (A3) Build and dispatch the claim through the production CB-3 path.
@@ -2095,15 +2125,16 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // over real RPC.
     assert_eq!(
         receipt.claim.claimed_epochs,
-        vec![0],
-        "the claim must claim exactly the closed epoch 0"
+        vec![TARGET_EPOCH],
+        "the claim must claim exactly the work-bearing epoch — the zero-work join epoch \
+         is EXCLUDED (the no-staker leg: unclaimable accrual never mints)"
     );
     assert!(
         !receipt.claim.fee_gindexes.is_empty(),
         "the claim must carry real ToKey fee inputs (A6)"
     );
     assert_eq!(
-        receipt.claim.total_reward, epoch0.budget_atomic,
+        receipt.claim.total_reward, epoch_row.budget_atomic,
         "single-claimant reward must equal the epoch's accrued budget byte-exactly \
          (conservation, both inflow halves)"
     );
@@ -2116,10 +2147,10 @@ async fn e2e_emission_claim_accepted_and_applied() {
         "inject ({inject_height}) must precede the claim reference (~{reference_est})"
     );
     assert!(
-        reference_est < epoch0.close_block_height,
+        reference_est < epoch_row.close_block_height,
         "the claim reference (~{reference_est}) must precede the epoch close ({}) — \
          the A5c pop-through-reference geometry",
-        epoch0.close_block_height
+        epoch_row.close_block_height
     );
 
     // Applied: mine the claim in, then past the scan horizon; the daemon's
@@ -2129,9 +2160,9 @@ async fn e2e_emission_claim_accepted_and_applied() {
     mine_until_pool_drains(&daemon, &fixture.principal, "accepted emission claim", 1).await;
     let claim_mined_by_height = daemon.height().await;
     assert!(
-        epoch0.close_block_height < claim_mined_by_height,
+        epoch_row.close_block_height < claim_mined_by_height,
         "claim mined ({claim_mined_by_height}) after the close ({})",
-        epoch0.close_block_height
+        epoch_row.close_block_height
     );
     let src = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
         .await
@@ -2143,8 +2174,8 @@ async fn e2e_emission_claim_accepted_and_applied() {
         .claimed_settlement_epochs
         .clone();
     assert!(
-        claimed.contains(&0),
-        "the daemon's claimed-set row for epoch 0 must land (got {claimed:?})"
+        claimed.contains(&TARGET_EPOCH),
+        "the daemon's claimed-set row for epoch {TARGET_EPOCH} must land (got {claimed:?})"
     );
 
     // ── (A5a) Depth-1 pop: undo exactly the claim block ──
@@ -2166,16 +2197,16 @@ async fn e2e_emission_claim_accepted_and_applied() {
         .expect("bond context after depth-1 pop")
         .claimed_settlement_epochs;
     assert!(
-        !claimed_after_pop.contains(&0),
+        !claimed_after_pop.contains(&TARGET_EPOCH),
         "depth-1 pop must clear the claimed-set row (got {claimed_after_pop:?})"
     );
-    let e0_popped = src_popped
+    let row_popped = src_popped
         .epochs
         .iter()
-        .find(|e| e.settlement_epoch == 0 && e.has_budget_row)
+        .find(|e| e.settlement_epoch == TARGET_EPOCH && e.has_budget_row)
         .expect("the budget row must survive a pop above the close");
     assert_eq!(
-        e0_popped.budget_atomic, epoch0.budget_atomic,
+        row_popped.budget_atomic, epoch_row.budget_atomic,
         "the budget row must be untouched by a pop above the close"
     );
     let pool_after_pop = daemon
@@ -2195,7 +2226,10 @@ async fn e2e_emission_claim_accepted_and_applied() {
         .await
         .expect("get_info")
         .tx_pool_size;
-    assert_eq!(pool_after_remine, 0, "the re-mined block must re-include the claim");
+    assert_eq!(
+        pool_after_remine, 0,
+        "the re-mined block must re-include the claim"
+    );
     assert_eq!(daemon.height().await, tip_with_claim);
     let src_remined = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
         .await
@@ -2206,17 +2240,17 @@ async fn e2e_emission_claim_accepted_and_applied() {
             .as_ref()
             .expect("bond context after re-mine")
             .claimed_settlement_epochs
-            .contains(&0),
+            .contains(&TARGET_EPOCH),
         "re-mining the identical claim must re-apply the claimed-set row"
     );
-    let e0_remined = src_remined
+    let row_remined = src_remined
         .epochs
         .iter()
-        .find(|e| e.settlement_epoch == 0 && e.has_budget_row)
+        .find(|e| e.settlement_epoch == TARGET_EPOCH && e.has_budget_row)
         .expect("budget row after re-mine");
     assert_eq!(
-        (e0_remined.budget_atomic, e0_remined.sigma_work_milli),
-        (epoch0.budget_atomic, epoch0.sigma_work_milli),
+        (row_remined.budget_atomic, row_remined.sigma_work_milli),
+        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
         "conservation operands must hold byte-identically across pop + re-mine (A5a)"
     );
     eprintln!("A5a depth-1 pop/re-mine: claimed-set cleared and re-applied byte-identically");
@@ -2233,11 +2267,11 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // template-skipped until the re-close lands).
     let tip = daemon.height().await;
     assert!(
-        inject_height < epoch0.close_block_height,
+        inject_height < epoch_row.close_block_height,
         "pop floor (close {}) must sit strictly above the inject ({inject_height})",
-        epoch0.close_block_height
+        epoch_row.close_block_height
     );
-    let straddle_depth = tip - epoch0.close_block_height;
+    let straddle_depth = tip - epoch_row.close_block_height;
     daemon.pop_blocks(straddle_depth).await;
     let src_straddle = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
         .await
@@ -2246,12 +2280,12 @@ async fn e2e_emission_claim_accepted_and_applied() {
         !src_straddle
             .epochs
             .iter()
-            .any(|e| e.settlement_epoch == 0 && e.has_budget_row),
+            .any(|e| e.settlement_epoch == TARGET_EPOCH && e.has_budget_row),
         "the straddling pop must undo the close (budget row deleted)"
     );
     if let Some(bond) = src_straddle.bond.as_ref() {
         assert!(
-            !bond.claimed_settlement_epochs.contains(&0),
+            !bond.claimed_settlement_epochs.contains(&TARGET_EPOCH),
             "the straddling pop must clear the claimed-set row"
         );
     }
@@ -2265,14 +2299,14 @@ async fn e2e_emission_claim_accepted_and_applied() {
     let src_reclosed = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
         .await
         .expect("claim-source after re-close");
-    let e0_reclosed = src_reclosed
+    let row_reclosed = src_reclosed
         .epochs
         .iter()
-        .find(|e| e.settlement_epoch == 0 && e.has_budget_row)
-        .expect("epoch 0 must re-close from the pop-surviving credit bits");
+        .find(|e| e.settlement_epoch == TARGET_EPOCH && e.has_budget_row)
+        .expect("the epoch must re-close from the pop-surviving credit bits");
     assert_eq!(
-        (e0_reclosed.budget_atomic, e0_reclosed.sigma_work_milli),
-        (epoch0.budget_atomic, epoch0.sigma_work_milli),
+        (row_reclosed.budget_atomic, row_reclosed.sigma_work_milli),
+        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
         "the re-closed epoch must be byte-identical (accrual blocks below the floor \
          untouched; credit bits pop-surviving)"
     );
@@ -2282,13 +2316,13 @@ async fn e2e_emission_claim_accepted_and_applied() {
             .as_ref()
             .expect("bond context after re-close")
             .claimed_settlement_epochs
-            .contains(&0),
+            .contains(&TARGET_EPOCH),
         "the claim must re-apply after the re-close (A5b)"
     );
     eprintln!(
         "A5b straddling pop (depth {straddle_depth}, floor {}): close undone and \
          re-closed byte-identically, claim re-applied",
-        epoch0.close_block_height
+        epoch_row.close_block_height
     );
 
     daemon
@@ -2319,46 +2353,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
          EmissionReward output(s) of {expected_reward} atomic re-discovered by the \
          production P-scan (inject {inject_height} < ref ~{reference_est} < close {} < \
          claim ≤ {claim_mined_by_height})",
-        epoch0.close_block_height,
-    );
-
-    // ── Burn leg: a zero-work epoch close burns its accrual ──
-    // Epoch 1 accrued budget over its whole span but holds no serve credit
-    // (nothing was injected after epoch 0), so its close must route the
-    // accrued budget to the burn row — `total_burned` strictly increases
-    // across the close — and write no claimable budget row. The mined
-    // stretch is fee-free (empty templates), so the close is the only burn
-    // source in the delta: this isolates the no-staker burn direction e2e
-    // (previously unit-only coverage).
-    let burned_before_e1_close = daemon.total_burned().await;
-    let e1_close_target = epoch0.close_block_height + SEB + 2;
-    let h_now = daemon.height().await;
-    assert!(
-        h_now < e1_close_target,
-        "epoch 1 must still be open here (height {h_now}, close target {e1_close_target})"
-    );
-    daemon
-        .generate_blocks(e1_close_target - h_now, &fixture.principal)
-        .await;
-    let burned_after_e1_close = daemon.total_burned().await;
-    assert!(
-        burned_after_e1_close > burned_before_e1_close,
-        "closing the zero-work epoch 1 must burn its accrued budget \
-         (total_burned {burned_before_e1_close} -> {burned_after_e1_close})"
-    );
-    let src_e1 = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source after epoch-1 close");
-    assert!(
-        !src_e1
-            .epochs
-            .iter()
-            .any(|e| e.settlement_epoch == 1 && e.has_budget_row),
-        "a zero-work close must not leave a claimable budget row"
-    );
-    eprintln!(
-        "burn leg: zero-work epoch 1 close burned {} atomic (no claimable row)",
-        burned_after_e1_close - burned_before_e1_close
+        epoch_row.close_block_height,
     );
 
     // ── (A5c) Deep pop through the claim's reference block ──
@@ -2369,13 +2364,12 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // structurally stranded — its proof binds a reference root that no
     // longer exists on the rebuilt chain. The correct terminal state: the
     // chain re-converges to the same height (the stranded tx must never
-    // re-apply or wedge the miner), epoch 0 re-closes byte-identically
-    // from the pop-surviving credit bits, the zero-work epoch 1 re-burns,
-    // and the claimed-set stays EMPTY. Building the replacement claim
-    // against the rebuilt root is the retire/resubmit slice (the named B2
-    // follow-on, matching the bond precedent): the wallet's
-    // one-live-claim-per-persona rule holds the pending record until that
-    // slice retires it.
+    // re-apply or wedge the miner), the claimed epoch re-closes
+    // byte-identically from the pop-surviving credit bits, and the
+    // claimed-set stays EMPTY. Building the replacement claim against the
+    // rebuilt root is the retire/resubmit slice (the named B2 follow-on,
+    // matching the bond precedent): the wallet's one-live-claim-per-persona
+    // rule holds the pending record until that slice retires it.
     let tip_c = daemon.height().await;
     let pop_floor_c = reference_est - 1;
     assert!(
@@ -2384,11 +2378,6 @@ async fn e2e_emission_claim_accepted_and_applied() {
     );
     let depth_c = tip_c - pop_floor_c;
     daemon.pop_blocks(depth_c).await;
-    let burned_after_pop_c = daemon.total_burned().await;
-    assert!(
-        burned_after_pop_c < burned_after_e1_close,
-        "the deep pop must reverse burn state (pop symmetry of the burn row)"
-    );
     daemon.generate_blocks(depth_c, &fixture.principal).await;
     assert_eq!(
         daemon.height().await,
@@ -2398,40 +2387,27 @@ async fn e2e_emission_claim_accepted_and_applied() {
     let src_c = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
         .await
         .expect("claim-source after deep-pop re-mine");
-    let e0_c = src_c
+    let row_c = src_c
         .epochs
         .iter()
-        .find(|e| e.settlement_epoch == 0 && e.has_budget_row)
-        .expect("epoch 0 must re-close on the rebuilt chain");
+        .find(|e| e.settlement_epoch == TARGET_EPOCH && e.has_budget_row)
+        .expect("the claimed epoch must re-close on the rebuilt chain");
     assert_eq!(
-        (e0_c.budget_atomic, e0_c.sigma_work_milli),
-        (epoch0.budget_atomic, epoch0.sigma_work_milli),
+        (row_c.budget_atomic, row_c.sigma_work_milli),
+        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
         "the rebuilt close must be byte-identical (bits survive; accrual below the floor)"
     );
     if let Some(bond) = src_c.bond.as_ref() {
         assert!(
-            !bond.claimed_settlement_epochs.contains(&0),
+            !bond.claimed_settlement_epochs.contains(&TARGET_EPOCH),
             "the stranded claim must NOT re-apply against the rebuilt root (its proof \
              binds a popped reference)"
         );
     }
-    let burned_after_remine_c = daemon.total_burned().await;
-    // Byte-equality is deliberately not asserted here: the re-mined chain
-    // legitimately lacks the stranded claim tx, so its fee's burn share is
-    // absent. The bounds pin both directions — the epoch-1 re-burn landed,
-    // and nothing burned that the original chain hadn't.
-    assert!(
-        burned_after_remine_c > burned_after_pop_c,
-        "the zero-work epoch 1 must re-burn on the rebuilt chain"
-    );
-    assert!(
-        burned_after_remine_c <= burned_after_e1_close,
-        "the rebuilt chain must not out-burn the original (stranded claim's fee absent)"
-    );
     eprintln!(
         "A5c deep pop (depth {depth_c}, floor {pop_floor_c} < ref): chain re-converged, \
-         epoch 0 re-closed byte-identically, claimed-set empty (stranded claim inert), \
-         burn re-applied within bounds — replacement claim is the B2 retire/resubmit slice"
+         epoch re-closed byte-identically, claimed-set empty (stranded claim inert) — \
+         replacement claim is the B2 retire/resubmit slice"
     );
 }
 
