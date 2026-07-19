@@ -60,6 +60,14 @@ pub const PENDING_POST_VERSION: u32 = 4;
 /// There is deliberately **no persisted `Confirmed` arm**: confirmation
 /// *removes* the record (§3.5) — retirement and reservation release are one
 /// atomic seal, so a live record always means a live reservation.
+///
+/// **Removal-ordering contract (binding on the GF-7 dispatch driver):** a
+/// record's durable removal must not become visible before the
+/// match-bearing pscan-state seal that justified it is itself durable — the
+/// live record is the bridge the open-time phantom `bonded_slots` GC relies
+/// on across the scan lag (see `shekyl-engine-core`'s
+/// `reconcile_phantom_bonded_slots`); removing it first opens a crash
+/// window where a real on-chain bond is GC'd as a phantom.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub enum PendingPostState {
     /// Assembled and sealed; not yet handed to any submitter.

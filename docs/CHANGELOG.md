@@ -47,6 +47,47 @@
     (and would have crashed block relay on any archival-vin block).
     Fixed with the file's own `holds_alternative` skip idiom — archival
     vins carry no key image and no amount.
+- **wallet: the staker-activation entry — first-stake goes production
+  (`ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.8).** New wallet-rpc `stake`
+  method (`Capability::Full`-gated; refusals `-29500 StakeNotReady` /
+  `-29501 StakeInFlight` / `-29502 AlreadyStaked`; password crosses only
+  the local transport into `Zeroizing`). SA-R1-a: `Engine::
+  open_full_with_first_stake_intent` spawns the StakeEngine for a
+  non-staker under a **transient** intent (never persisted; an aborted
+  first-stake leaves nothing durable — pin test included), with the
+  on-demand P-scan started under intent so `stake_in` funding can
+  scan-discover. `Engine::first_stake` composes the ratified order:
+  idempotency/W2 split (new `persona_canonical_id` actor projection) →
+  preflight sweep (W1-clean, production witness) → re-entrant
+  `persist_bond_record` → sign/assemble → the `.wallet.pending` seal; no
+  broadcast on the path (GF-7 preserved structurally — the bond dispatch
+  driver sends at its offset). SA-R1-c: multi-input bond posts are now a
+  consciously-logged exception (`tracing::warn!` at assemble). Retires
+  the GF4b rule-21 dead-code half (b) on all five witness consumers.
+  Same PR: **SP-R0 arm #3** (open-time phantom `bonded_slots` GC at the
+  derive-time locus, phantom ⟺ no-pending ∧ absent-within-covered with
+  the pending-record bridge as the wrongful-GC argument; logic-discharged
+  by the SA-DQ-3 co-designed crash-fixture lane). Guard-2: arms #1/#3
+  production-discharge is **blocked on the PR-4b daemon submit-legs
+  battery** (named; the regtest tripwire's promotion note carries the
+  conversion instruction). **Post-review hardening (same branch,
+  `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.9):** wallet-level idempotency +
+  typed `WrongSlot` guards on `first_stake` (a call naming another slot
+  can no longer mint a second first-stake); verify-then-close on the
+  intent reopen (new `WalletFile::verify_password` — a wrong password or
+  daemon fault refuses with the wallet still open; name-bound close +
+  best-effort restore for the residue); dark-scan self-heal (a retry
+  reopens when no P-scan handle is parked); rule-82 taxonomy split (new
+  `State` / `FeeEstimate` arms — internal/daemon faults no longer
+  misdiagnosed as the `-29500` funding refusal; fee faults map to
+  `-29102`); the amount/gindex-free sanitizer now covers the post-persist
+  assemble/sign path; one shared `sweep_bond_funding` body for
+  preflight + assemble (`BondFloorZero` now refuses W1-clean); the
+  arm-#3 GC degrades (keep-all + warn) instead of bricking open on a
+  corrupt auxiliary seal; the GF-7 pending-release ordering contract is
+  pinned on `reconcile_phantom_bonded_slots` + `PendingPostState`;
+  `stake`'s password is `Zeroizing` on every path; and
+  `docs/api/wallet_rpc.yaml` now specifies `stake` + `-29500..-29502`.
 
 - **wallet: SP-R0 arm #1 — spent-funding-record prune via key-image watch
   (logic-discharged).** The `P`-scan dual extractor gains arm (c): each
