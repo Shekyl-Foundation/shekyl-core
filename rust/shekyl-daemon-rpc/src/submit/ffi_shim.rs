@@ -96,11 +96,17 @@ fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, (
 /// violation (an invalid holdings kind or shard set) — a contract fault,
 /// never a guessed fact.
 unsafe fn emission_facts_from_ffi(view: &ffi::SubmitEmissionFactsFfi) -> Result<EmissionFacts, ()> {
-    unsafe fn slice<'a, T>(ptr: *const T, len: usize) -> &'a [T] {
+    // Null-iff-empty, enforced fail-closed: a non-zero length behind a NULL
+    // pointer is a malformed handle (a C++ marshal defect), rejected as a
+    // contract fault rather than dereferenced (the same guard shape as the
+    // FFI crate's flat_commitment_keys).
+    unsafe fn slice<'a, T>(ptr: *const T, len: usize) -> Result<&'a [T], ()> {
         if len == 0 {
-            &[]
+            Ok(&[])
+        } else if ptr.is_null() {
+            Err(())
         } else {
-            unsafe { std::slice::from_raw_parts(ptr, len) }
+            Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
         }
     }
     let bond = if view.bond_present == 0 {
@@ -108,38 +114,38 @@ unsafe fn emission_facts_from_ffi(view: &ffi::SubmitEmissionFactsFfi) -> Result<
     } else {
         let kind = HoldingsKind::from_u8(view.bond.holdings_kind).map_err(|_| ())?;
         let shard_ids =
-            ShardSet::new(unsafe { slice(view.bond.shard_ids, view.bond.shard_ids_len) }.to_vec())
+            ShardSet::new(unsafe { slice(view.bond.shard_ids, view.bond.shard_ids_len) }?.to_vec())
                 .map_err(|_| ())?;
         Some(EmissionBondFacts {
             join_settlement_epoch: view.bond.join_settlement_epoch,
             holdings: HoldingsDescriptor { kind, shard_ids },
             claimed_settlement_epochs: unsafe {
                 slice(view.bond.claimed_epochs, view.bond.claimed_epochs_len)
-            }
+            }?
             .to_vec(),
         })
     };
-    let raw_snaps = unsafe { slice(view.snapshots, view.snapshots_len) };
+    let raw_snaps = unsafe { slice(view.snapshots, view.snapshots_len) }?;
     let mut snapshots = Vec::with_capacity(raw_snaps.len());
     for snap in raw_snaps {
-        let bonds = unsafe { slice(snap.bonds, snap.bonds_len) }
-            .iter()
-            .map(|b| EmissionCloseBondFacts {
+        let mut bonds = Vec::with_capacity(snap.bonds_len);
+        for b in unsafe { slice(snap.bonds, snap.bonds_len) }? {
+            bonds.push(EmissionCloseBondFacts {
                 join_settlement_epoch: b.join_settlement_epoch,
                 is_foundation_complete_tree: b.is_foundation_complete_tree != 0,
                 bad_intervals: unsafe {
                     // Flattened (start, end_exclusive) pairs: 2 × len u64s.
                     slice(b.bad_intervals_ptr, b.bad_intervals_len * 2)
-                }
+                }?
                 .chunks_exact(2)
                 .map(|pair| BadInterval {
                     start_epoch: pair[0],
                     end_exclusive: pair[1],
                 })
                 .collect(),
-            })
-            .collect();
-        let shards = unsafe { slice(snap.shards, snap.shards_len) }
+            });
+        }
+        let shards = unsafe { slice(snap.shards, snap.shards_len) }?
             .iter()
             .map(|sh| EmissionShardFacts {
                 shard_id: sh.shard_id,
@@ -147,7 +153,7 @@ unsafe fn emission_facts_from_ffi(view: &ffi::SubmitEmissionFactsFfi) -> Result<
                 freeze_height: sh.freeze_height,
             })
             .collect();
-        let credit_pairs = unsafe { slice(snap.credit_pairs, snap.credit_pairs_len) }
+        let credit_pairs = unsafe { slice(snap.credit_pairs, snap.credit_pairs_len) }?
             .iter()
             .map(|cp| EmissionCreditPairFacts {
                 bond_idx: cp.bond_idx,
