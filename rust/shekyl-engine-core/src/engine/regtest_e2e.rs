@@ -202,9 +202,23 @@ impl RegtestDaemon {
             // would only delay an unhelpful timeout. Point at the captured log so
             // the real cause is one `cat` away.
             if let Ok(Some(status)) = self.child.try_wait() {
+                // Inline the log tail: Drop removes the datadir (log
+                // included) as this panic unwinds, so "see the log file"
+                // would point at nothing.
+                let tail: String = std::fs::read_to_string(&log_path)
+                    .map(|s| {
+                        s.lines()
+                            .rev()
+                            .take(15)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"));
                 panic!(
-                    "daemon exited early ({status}) before RPC became ready; see {}",
-                    log_path.display()
+                    "daemon exited early ({status}) before RPC became ready; log tail:\n{tail}"
                 );
             }
             match self
@@ -257,7 +271,7 @@ impl RegtestDaemon {
         settlement_epoch: u64,
     ) {
         self.rpc
-            .rpc_call::<_, serde_json::Value>(
+            .json_rpc_call::<serde_json::Value>(
                 "inject_archival_serve_credit",
                 Some(json!({
                     "p_canonical_id": hex::encode(p_canonical_id.to_bytes()),
@@ -1486,18 +1500,25 @@ async fn pscan_until(
     }
 }
 
-/// Mine in small batches until the tx pool drains — the locally-submitted
-/// tx's only route into a block on this offline daemon.
+/// Mine in `blocks_per_batch` batches until the tx pool drains — the
+/// locally-submitted tx's only route into a block on this offline daemon.
 ///
 /// The submit path inserts at `relay_method::local` under the Dandelion++
 /// embargo, and the miner only includes broadcast-visible txs
 /// (`fill_block_template`'s `matches(relay_category::legacy)` gate); the
 /// stem cannot send here, so inclusion waits for the embargo to expire and
-/// fluff. Mining in batches rather than assuming one batch suffices.
-async fn mine_until_pool_drains(daemon: &RegtestDaemon, principal: &str, what: &str) {
+/// fluff. Mining in batches rather than assuming one batch suffices. Pass
+/// `blocks_per_batch = 1` when the caller needs the tx's block to be the
+/// tip at return (the emission e2e's depth-1 pop leg pops exactly it).
+async fn mine_until_pool_drains(
+    daemon: &RegtestDaemon,
+    principal: &str,
+    what: &str,
+    blocks_per_batch: u64,
+) {
     let mine_deadline = Instant::now() + Duration::from_secs(240);
     loop {
-        daemon.generate_blocks(5, principal).await;
+        daemon.generate_blocks(blocks_per_batch, principal).await;
         let info = daemon
             .rpc
             .json_rpc_call::<GetInfoResp>("get_info", None)
@@ -1734,7 +1755,7 @@ async fn stake_persona_to_confirmed_bond(
     // `BondPostChange` change-funding output beyond the pre-post set (the
     // outputs the emission-claim e2e, PR-4c, spends from).
     //
-    mine_until_pool_drains(daemon, &principal, "accepted bond post").await;
+    mine_until_pool_drains(daemon, &principal, "accepted bond post", 5).await;
     daemon
         .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &principal)
         .await;
@@ -2105,7 +2126,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // claimed-set row must land and the production P-scan must re-discover
     // the reward as the persona's rung-1 EmissionReward funding, amount
     // equal to the loud vout.
-    mine_until_pool_drains(&daemon, &fixture.principal, "accepted emission claim").await;
+    mine_until_pool_drains(&daemon, &fixture.principal, "accepted emission claim", 1).await;
     let claim_mined_by_height = daemon.height().await;
     assert!(
         epoch0.close_block_height < claim_mined_by_height,
@@ -2125,6 +2146,151 @@ async fn e2e_emission_claim_accepted_and_applied() {
         claimed.contains(&0),
         "the daemon's claimed-set row for epoch 0 must land (got {claimed:?})"
     );
+
+    // ── (A5a) Depth-1 pop: undo exactly the claim block ──
+    // The batch-1 drain left the claim block as the tip. Popping it must
+    // clear the daemon's claimed-set row and return the claim tx to the
+    // pool (`pop_block_from_blockchain` is tx-conserving), with the budget
+    // row untouched (the pop stays above the close); re-mining must
+    // re-include the identical bytes (popped txs re-enter at
+    // `relay_method::block`, broadcast-visible — no embargo) and re-apply
+    // the claimed-set row, the conservation operands byte-identical.
+    let tip_with_claim = daemon.height().await;
+    daemon.pop_blocks(1).await;
+    let src_popped = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after depth-1 pop");
+    let claimed_after_pop = &src_popped
+        .bond
+        .as_ref()
+        .expect("bond context after depth-1 pop")
+        .claimed_settlement_epochs;
+    assert!(
+        !claimed_after_pop.contains(&0),
+        "depth-1 pop must clear the claimed-set row (got {claimed_after_pop:?})"
+    );
+    let e0_popped = src_popped
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == 0 && e.has_budget_row)
+        .expect("the budget row must survive a pop above the close");
+    assert_eq!(
+        e0_popped.budget_atomic, epoch0.budget_atomic,
+        "the budget row must be untouched by a pop above the close"
+    );
+    let pool_after_pop = daemon
+        .rpc
+        .json_rpc_call::<GetInfoResp>("get_info", None)
+        .await
+        .expect("get_info")
+        .tx_pool_size;
+    assert_eq!(
+        pool_after_pop, 1,
+        "the popped claim tx must return to the pool"
+    );
+    daemon.generate_blocks(1, &fixture.principal).await;
+    let pool_after_remine = daemon
+        .rpc
+        .json_rpc_call::<GetInfoResp>("get_info", None)
+        .await
+        .expect("get_info")
+        .tx_pool_size;
+    assert_eq!(pool_after_remine, 0, "the re-mined block must re-include the claim");
+    assert_eq!(daemon.height().await, tip_with_claim);
+    let src_remined = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after depth-1 re-mine");
+    assert!(
+        src_remined
+            .bond
+            .as_ref()
+            .expect("bond context after re-mine")
+            .claimed_settlement_epochs
+            .contains(&0),
+        "re-mining the identical claim must re-apply the claimed-set row"
+    );
+    let e0_remined = src_remined
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == 0 && e.has_budget_row)
+        .expect("budget row after re-mine");
+    assert_eq!(
+        (e0_remined.budget_atomic, e0_remined.sigma_work_milli),
+        (epoch0.budget_atomic, epoch0.sigma_work_milli),
+        "conservation operands must hold byte-identically across pop + re-mine (A5a)"
+    );
+    eprintln!("A5a depth-1 pop/re-mine: claimed-set cleared and re-applied byte-identically");
+
+    // ── (A5b) Epoch-straddling pop: undo the close itself ──
+    // Depth reaches the close block; the floor stays strictly above the
+    // injection height — the serve-credit store is NOT pop-symmetric, so a
+    // pop below the inject would desync the bits. The popped range holds
+    // the close and the post-close blocks that carry no epoch-1 serve
+    // credit (the zero-staker stretch). Undoing the close must delete the
+    // budget row and the claimed-set row together; re-mining must re-close
+    // epoch 0 from the pop-surviving credit bits byte-identically, then
+    // re-apply the claim (the drain loop tolerates the claim being
+    // template-skipped until the re-close lands).
+    let tip = daemon.height().await;
+    assert!(
+        inject_height < epoch0.close_block_height,
+        "pop floor (close {}) must sit strictly above the inject ({inject_height})",
+        epoch0.close_block_height
+    );
+    let straddle_depth = tip - epoch0.close_block_height;
+    daemon.pop_blocks(straddle_depth).await;
+    let src_straddle = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after straddling pop");
+    assert!(
+        !src_straddle
+            .epochs
+            .iter()
+            .any(|e| e.settlement_epoch == 0 && e.has_budget_row),
+        "the straddling pop must undo the close (budget row deleted)"
+    );
+    if let Some(bond) = src_straddle.bond.as_ref() {
+        assert!(
+            !bond.claimed_settlement_epochs.contains(&0),
+            "the straddling pop must clear the claimed-set row"
+        );
+    }
+    mine_until_pool_drains(
+        &daemon,
+        &fixture.principal,
+        "re-applied emission claim (A5b)",
+        1,
+    )
+    .await;
+    let src_reclosed = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after re-close");
+    let e0_reclosed = src_reclosed
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == 0 && e.has_budget_row)
+        .expect("epoch 0 must re-close from the pop-surviving credit bits");
+    assert_eq!(
+        (e0_reclosed.budget_atomic, e0_reclosed.sigma_work_milli),
+        (epoch0.budget_atomic, epoch0.sigma_work_milli),
+        "the re-closed epoch must be byte-identical (accrual blocks below the floor \
+         untouched; credit bits pop-surviving)"
+    );
+    assert!(
+        src_reclosed
+            .bond
+            .as_ref()
+            .expect("bond context after re-close")
+            .claimed_settlement_epochs
+            .contains(&0),
+        "the claim must re-apply after the re-close (A5b)"
+    );
+    eprintln!(
+        "A5b straddling pop (depth {straddle_depth}, floor {}): close undone and \
+         re-closed byte-identically, claim re-applied",
+        epoch0.close_block_height
+    );
+
     daemon
         .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &fixture.principal)
         .await;
@@ -2154,6 +2320,118 @@ async fn e2e_emission_claim_accepted_and_applied() {
          production P-scan (inject {inject_height} < ref ~{reference_est} < close {} < \
          claim ≤ {claim_mined_by_height})",
         epoch0.close_block_height,
+    );
+
+    // ── Burn leg: a zero-work epoch close burns its accrual ──
+    // Epoch 1 accrued budget over its whole span but holds no serve credit
+    // (nothing was injected after epoch 0), so its close must route the
+    // accrued budget to the burn row — `total_burned` strictly increases
+    // across the close — and write no claimable budget row. The mined
+    // stretch is fee-free (empty templates), so the close is the only burn
+    // source in the delta: this isolates the no-staker burn direction e2e
+    // (previously unit-only coverage).
+    let burned_before_e1_close = daemon.total_burned().await;
+    let e1_close_target = epoch0.close_block_height + SEB + 2;
+    let h_now = daemon.height().await;
+    assert!(
+        h_now < e1_close_target,
+        "epoch 1 must still be open here (height {h_now}, close target {e1_close_target})"
+    );
+    daemon
+        .generate_blocks(e1_close_target - h_now, &fixture.principal)
+        .await;
+    let burned_after_e1_close = daemon.total_burned().await;
+    assert!(
+        burned_after_e1_close > burned_before_e1_close,
+        "closing the zero-work epoch 1 must burn its accrued budget \
+         (total_burned {burned_before_e1_close} -> {burned_after_e1_close})"
+    );
+    let src_e1 = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after epoch-1 close");
+    assert!(
+        !src_e1
+            .epochs
+            .iter()
+            .any(|e| e.settlement_epoch == 1 && e.has_budget_row),
+        "a zero-work close must not leave a claimable budget row"
+    );
+    eprintln!(
+        "burn leg: zero-work epoch 1 close burned {} atomic (no claimable row)",
+        burned_after_e1_close - burned_before_e1_close
+    );
+
+    // ── (A5c) Deep pop through the claim's reference block ──
+    // The pop floor sits just below the claim's reference anchor (still far
+    // above the inject), so the pop undoes the claim, both epoch closes,
+    // and the block the claim's FCMP++ membership proof anchors to.
+    // Re-mined blocks carry new hashes, so the popped claim tx is
+    // structurally stranded — its proof binds a reference root that no
+    // longer exists on the rebuilt chain. The correct terminal state: the
+    // chain re-converges to the same height (the stranded tx must never
+    // re-apply or wedge the miner), epoch 0 re-closes byte-identically
+    // from the pop-surviving credit bits, the zero-work epoch 1 re-burns,
+    // and the claimed-set stays EMPTY. Building the replacement claim
+    // against the rebuilt root is the retire/resubmit slice (the named B2
+    // follow-on, matching the bond precedent): the wallet's
+    // one-live-claim-per-persona rule holds the pending record until that
+    // slice retires it.
+    let tip_c = daemon.height().await;
+    let pop_floor_c = reference_est - 1;
+    assert!(
+        inject_height < pop_floor_c,
+        "the A5c floor ({pop_floor_c}) must stay above the inject ({inject_height})"
+    );
+    let depth_c = tip_c - pop_floor_c;
+    daemon.pop_blocks(depth_c).await;
+    let burned_after_pop_c = daemon.total_burned().await;
+    assert!(
+        burned_after_pop_c < burned_after_e1_close,
+        "the deep pop must reverse burn state (pop symmetry of the burn row)"
+    );
+    daemon.generate_blocks(depth_c, &fixture.principal).await;
+    assert_eq!(
+        daemon.height().await,
+        tip_c,
+        "the chain must re-converge past the stranded claim (no miner wedge)"
+    );
+    let src_c = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after deep-pop re-mine");
+    let e0_c = src_c
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == 0 && e.has_budget_row)
+        .expect("epoch 0 must re-close on the rebuilt chain");
+    assert_eq!(
+        (e0_c.budget_atomic, e0_c.sigma_work_milli),
+        (epoch0.budget_atomic, epoch0.sigma_work_milli),
+        "the rebuilt close must be byte-identical (bits survive; accrual below the floor)"
+    );
+    if let Some(bond) = src_c.bond.as_ref() {
+        assert!(
+            !bond.claimed_settlement_epochs.contains(&0),
+            "the stranded claim must NOT re-apply against the rebuilt root (its proof \
+             binds a popped reference)"
+        );
+    }
+    let burned_after_remine_c = daemon.total_burned().await;
+    // Byte-equality is deliberately not asserted here: the re-mined chain
+    // legitimately lacks the stranded claim tx, so its fee's burn share is
+    // absent. The bounds pin both directions — the epoch-1 re-burn landed,
+    // and nothing burned that the original chain hadn't.
+    assert!(
+        burned_after_remine_c > burned_after_pop_c,
+        "the zero-work epoch 1 must re-burn on the rebuilt chain"
+    );
+    assert!(
+        burned_after_remine_c <= burned_after_e1_close,
+        "the rebuilt chain must not out-burn the original (stranded claim's fee absent)"
+    );
+    eprintln!(
+        "A5c deep pop (depth {depth_c}, floor {pop_floor_c} < ref): chain re-converged, \
+         epoch 0 re-closed byte-identically, claimed-set empty (stranded claim inert), \
+         burn re-applied within bounds — replacement claim is the B2 retire/resubmit slice"
     );
 }
 
