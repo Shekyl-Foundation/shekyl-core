@@ -414,13 +414,13 @@ pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
 };
 pub use sealing_keys::StateWrapKey;
-pub use staking_read::{StakedBalance, StakedOutput, StakingReadError, StakingReadView};
 /// The MS-5 multisig signer marker — only present under `--features multisig`.
 #[cfg(feature = "multisig")]
 pub use signer::MultisigSignerV2;
 pub use signer::{
     EngineSignerKind, LocalSigner, SignedTransfer, Signer, SoloSigner, TransferSigningContext,
 };
+pub use staking_read::{StakedBalance, StakedOutput, StakingReadError, StakingReadView};
 pub use view_material::ViewMaterial;
 
 use std::marker::PhantomData;
