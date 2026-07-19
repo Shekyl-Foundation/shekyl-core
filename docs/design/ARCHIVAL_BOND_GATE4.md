@@ -224,7 +224,16 @@ directions in one bond-post tx; either term on a paying emission tx.
 On connect: `bonded_total_atomic` and global `total_bonded_atomic` (§4.5) move in lockstep
 with the cleartext term.
 
-### 3.3 Transaction envelope
+**Fee — RATIFIED (2026-07-19, maintainer; `V3_WALLET_DECISION_LOG.md` "P-lane fees").**
+Every bond post — credit *and* debit paths, `Unbond` included — carries the **standard
+weight-priced floor fee**; no fee-less bond-post class exists (zero-fee is `Malformed` at
+submit, `DAEMON_SUBMIT_VERDICT.md`). The balance equation above already carries `fee`
+uniformly and the §3.3 envelope already admits `txin_to_key` inputs on every `post_kind`,
+so this is construction policy, not wire change: debit-path posts fund the fee with
+FCMP++ fee inputs exactly as credit paths fund `bond_credit` (§7.3 of
+ARCHIVAL_BOND_CONSTRUCTION.md — typed `P`-space pool: cover + earnings outputs, exit-fee
+reserve, no fee knob). The debit term is **never** fee-diminished: `Unbond` outputs
+receive the full released `bonded_total`; the fee closes through the fee inputs.
 
 A bond-post transaction contains:
 

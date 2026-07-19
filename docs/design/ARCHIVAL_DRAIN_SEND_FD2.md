@@ -324,6 +324,27 @@ quote and assembly ⇒ spurious `Unaffordable`). Reopen if the assembly
 carve proves unable to express a fee-bumping/replace flow (named
 criterion; no such flow exists for `P`-side txs today).
 
+**Interaction registered (2026-07-19, merged mid-round; not decided
+here).** The `P`-lane fee-uniformity ratification
+(`V3_WALLET_DECISION_LOG.md` 2026-07-19 "`P`-lane fees") landed on `dev`
+during this round. Its enumeration ("all five bond-post kinds and the
+emission claim") does not name the drain tx, but the drain spends the
+same typed `P`-space pool (cover + claim outputs) the decision governs,
+so three of its consequences bind or plausibly bind the DS-4 assembly:
+(i) the **canonical-floor fee derivation** (no estimator multiplier, no
+user knob) should be the drain's fee function too — one fee rule per
+lane; (ii) the **typed `P`-space pool selector** the rider lands is the
+same source-set type the drain selector wants (principal outputs
+unrepresentable — DS-1's re-map is the drain-side face of the same
+hygiene); (iii) the **`EXIT_FEE_RESERVE_ATOMIC` spend-floor** applies to
+"every mid-life constructor" — whether a *partial* drain from a live
+persona is a mid-life constructor in that sense (it should be: draining
+the pool below the exit reserve strands the `Unbond`) vs. a
+post-retirement sweep (reserve moot) needs one sentence of disposition
+when DS-PR-1 lands the assembly. Carried into the DS-PR-1 scope cell;
+the fee-uniformity rider itself rides the `Unbond` constructor family
+and is not blocked on this round.
+
 ### DS-5 — The default itself (the §12.4 affordance, re-walk item (c))
 
 **Proposal.** The drain-amount field defaults **empty**; the two offered
@@ -385,7 +406,7 @@ updates so the new code never cites retired discipline.
 
 | Slice | Repo | Content | Depends on |
 |-------|------|---------|-----------|
-| DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry | round closure + pre-flight |
+| DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry (fee function = the canonical floor per the 2026-07-19 fee-uniformity ratification; one-sentence exit-reserve disposition for partial drains — see the DS-4 interaction note) | round closure + pre-flight |
 | DS-PR-2 | shekyl-core | Drain dispatch seam (claim-dispatch sibling): choke-point submit on persona transport, retirement wiring | DS-PR-1 |
 | DS-PR-3 | shekyl-gui-wallet | Aggregate `P`-balance read surface (the DS-2 remainder — the adoption shape itself landed as GUI-PR1/PR3, §2.4: open + `start_pscan_if_staker` + parked handle + `activate_staker`) | DS-PR-1 (aggregate-read API exists). *Former second edge — a `staking_enabled` production path reachable from the GUI — closed 2026-07-19 by GUI-PR3 `activate_staker` → `Engine::first_stake` (§2.3); former "native wallet lifecycle" edge closed by the same landing (GUI-PR1 `EngineSession`, §2.4)* |
 | DS-PR-4 | shekyl-gui-wallet | Drain-send UI: amount entry + DS-5 defaults + confirm; calls the one engine entry point | DS-PR-2, DS-PR-3 |
