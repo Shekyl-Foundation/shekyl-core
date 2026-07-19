@@ -9158,10 +9158,23 @@ one place to confirm each item's relationship to the wallet stack.
   PROVISIONAL-PASS; the sub-`T` cliff is steep (`T/4` fails at every `m`; `T/2` fails from
   `m = 4`), so the production range is load-bearing, not slack. The finer-hook alternative
   was **rejected** (hooks §3 wall-clock payload ban stays intact) with a §19.1 reopening
-  criterion. **Open remainder (narrowed):** the §19.1 sealing form — receipt-side
+  criterion.   **Open remainder (narrowed):** the §19.1 sealing form — receipt-side
   timestamping by the sim-owned observer over the live dispatch driver, consuming the same
   statistic and bound. Leg (b) closes only there; the in-model pass is the
   continue/redesign checkpoint, not the seal.
+  **UPDATE 2026-07-18 — sealing form graded: PASS, leg (b) CLOSED (record: WI-4 §19.9).**
+  The §19.8 run design was committed to the doc ahead of the harness (§3.5 ordering), then
+  executed live: production task+dispatch code path (`start_pscan_sealing_run` seam,
+  `gf7-hooks`, `#[cfg(test)]` harness in `shekyl-engine-core`; grading single-sourced in
+  `shekyl-staking-sim --gf7-seal`) against a fresh-built `shekyld --regtest`, 24 graded
+  runs + 8 positive-control (2 560 receipts, 4 h 42 m). Gate row (`m = 4`) `r = 1.275`
+  (clustered SE 0.195) under the committed bound 2, ≈ 3.7 SEs clear — the §19.8.4
+  escalation band is untouched; `m = 1` context `r = 0.675`. Both controls bite
+  (positive `dispersal = 0` at 0.850 ≥ 0.80; negative pseudo-siblings at 0.108 ≈ chance).
+  Receipt-noise floor 474 ms of `T = 60 s` — the §19.1 reopening criterion's operand
+  measured, not assumed, and two orders under phase resolution. `K_COVER` seal input #2
+  is discharged; the seal's remaining open inputs are GF-4/F-D2's drain-send subsystem
+  and the §17.9 Gate-7 calibration (both registered in `IMPLEMENTATION_INDEX.md`).
   **Hermeticity pin (rule 21, PR #292 review — trips on the archival CLI-knob work):**
   `run_wallclock_leg()` is deliberately hermetic (fixed seed/trials/N; the a-priori-committed
   §19.4 surface must not float on a harness flag). Inert today — no CLI knob moves the gf7

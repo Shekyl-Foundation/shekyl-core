@@ -20,9 +20,13 @@
 //! event field is a production-fingerprint hazard) stays intact. This
 //! module *is* the harness-timestamp form for the pre-live grade; the
 //! sealing form is receipt-side timestamping by the sim-owned observer over
-//! the live dispatch driver, named as the carrier in §19.1 and tracked in
-//! `docs/FOLLOWUPS.md`. The grade below is therefore PROVISIONAL by
-//! construction, exactly like every §7 synthesis conclusion.
+//! the live dispatch driver, named as the carrier in §19.1. The grade below
+//! is therefore PROVISIONAL by construction, exactly like every §7
+//! synthesis conclusion. The sealing form itself ran and **graded PASS
+//! 2026-07-18** (measurement doc §19.9; harness
+//! `shekyl-engine-core::gf7_sealing_run`, grader `gf7_seal.rs` /
+//! `--gf7-seal`) — leg (b) is closed; this module remains the model-side
+//! checkpoint it always was.
 //!
 //! # A-priori bound (committed §19.2, before this code existed)
 //!
@@ -209,7 +213,7 @@ pub struct WallclockControl {
 pub struct WallclockLegReport {
     /// Always true here: this is the harness-timestamp synthesis grade;
     /// leg (b) closes only at the §19.1 sealing form (receipt-timestamped
-    /// live-driver re-run), tracked in `docs/FOLLOWUPS.md`.
+    /// live-driver re-run — graded PASS 2026-07-18, measurement doc §19.9).
     pub provisional: bool,
     pub tick_ms: u64,
     pub ratio_bound: f64,
@@ -416,7 +420,8 @@ fn run_with(trials: u32, seed: u64) -> WallclockLegReport {
     } else if !observer_strength_ok {
         "INVALID (modeled observer weaker than the channel — §19.5 tripwire)".to_string()
     } else if gate_rows_pass {
-        "PROVISIONAL-PASS (harness-timestamp synthesis; sealing form §19.1 open)".to_string()
+        "PROVISIONAL-PASS (harness-timestamp synthesis; sealing form graded PASS 2026-07-18, §19.9)"
+            .to_string()
     } else {
         "PROVISIONAL-FAIL (dispersal-redesign signal; pre-live)".to_string()
     };

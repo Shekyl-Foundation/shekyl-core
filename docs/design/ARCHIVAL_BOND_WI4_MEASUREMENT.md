@@ -4036,3 +4036,41 @@ contention across concurrent runs would be an unmodeled timing input).
   funding orchestration per wallet per round. Reopening criterion: a
   future arm whose channel model includes assemble-time effects
   (none is named today).
+
+### 19.9 Result addendum (2026-07-18): sealing run graded — PASS, leg (b) CLOSED
+
+The §19.8 design executed as committed, no geometry deviations. Run
+identity: harness `shekyl-engine-core::engine::gf7_sealing_run`
+(`gf7-hooks`, `#[ignore]`d), one `shekyld --regtest` built from the
+same tree (a stale daemon predating the `ek_bind_tag` address change
+rejects the harness's wallet addresses — binary freshness is a
+run precondition), pre-mine 750 blocks (603 s), 24 production runs +
+8 positive-control runs sequential, 80 receipts each (2 560 total),
+4 h 42 m wall clock. Grader: `shekyl-staking-sim --gf7-seal`.
+
+| Row | `P(link)` | clustered SE | `r` | bound |
+| --- | --- | --- | --- | --- |
+| production `m = 4` (**gate**) | 0.142 | 0.022 | **1.275** (SE 0.195) | `< 2` |
+| production `m = 1` (context) | 0.075 | 0.020 | 0.675 (SE 0.182) | — |
+
+- **Verdict: PASS.** The gate row sits 0.725 under the bound —
+  ≈ 3.7 clustered SEs, outside the §19.8.4 two-SE escalation band,
+  so `R` is not extended. Live grade is consistent with the §19.4
+  in-model band (`r ∈ [0.84, 1.32]`): the real-code residues this
+  form existed to catch (seal latency, fetch-burst skew, scheduler
+  jitter) do not materially erode the dispersal defense.
+- **Controls bite (§19.8.3):** positive (`dispersal_bound = 0`)
+  `P(link) = 0.850 ≥ 0.80` — the observer sees the naked phase-lock;
+  negative (cross-wallet pseudo-siblings) `P(link) = 0.108`, within
+  ±0.05 of chance `1/9` — no harness-induced cross-wallet phase
+  coupling from the shared daemon/host.
+- **Receipt-noise floor measured (the §19.1 reopening criterion's
+  operand): 473.7 ms** of `T = 60 000 ms` (≈ 0.8%) — two orders
+  under the phase resolution, so the §19.8.5 model-contradiction
+  reopening criterion is not tripped; the §19.4 model's standing is
+  unchanged.
+- **Leg (b) closes here** per §19.6: the §19.1 sealing form is the
+  seal input, and this run is that form. `K_COVER` seal input #2 is
+  discharged; the remaining open inputs are GF-4/F-D2's drain-send
+  subsystem and the §17.9 Gate-7 calibration (M1 §4 list swept in
+  this same PR per §19.8.4's verdict-integration obligation).
