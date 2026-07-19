@@ -4,6 +4,26 @@
 
 ### Added
 
+- **daemon: emission-claim Phase-C submit battery (PR-4b completion).**
+  The Rust submit engine accepts the second and last transaction kind the
+  E4 e2e needs: `SubmitTxKind::Emission` classifies at Phase A (the
+  opaque vin is decoded + validated once under the canonical
+  `emission_wire` codec; loud reward sum must be non-zero; the FCMP++
+  proof presence couples to the fee-input count), Phase B marshals the
+  §8.7.2 E6/E7 fact bundle (claimant bond record + one frozen as-of-E
+  gather snapshot per claimed epoch, through a C++-owned handle inside
+  the single snapshot lock scope), and Phase C runs the battery natively:
+  O6, the mint-side CT balance (`Σ pseudoOuts + Σ loud vouts =
+  Σ out_masks + fee` via the shared archival balance's debit slot), Bp+,
+  the E2 auth-slot/claim-key binding, the F-C1c vin-less signable hash,
+  and the `emission_vin_verify_claims`/`_backing`/`_auth` minters — the
+  same `shekyl-archival-retention` functions the C++ oracle reaches over
+  FFI — plus the shared fee-input FCMP++ subset and whole-tx PQC legs.
+  Phase D re-probes the claim slot from the reparsed blob (record gone or
+  epoch consumed → `DoubleSpendConflict`). The
+  `DAEMON_SUBMIT_VERDICT.md` §8.7.2 E-row matrix pins every leg at
+  source; the FOLLOWUPS "daemon Rust submit engine" item closes, and
+  PR-4c (the E4-gate e2e) has no remaining daemon-side gap.
 - **wallet: SP-R0 arm #2 — the done-side retirement ledger + atomic
   retire-time prune (`feat/sp-r0-arm2-retire-gc`).**
   `RetiredPersonaRecord` rows land in `PScanState`

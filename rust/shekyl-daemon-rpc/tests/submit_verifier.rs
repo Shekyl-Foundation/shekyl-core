@@ -130,6 +130,8 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
         // the max (100).
         chain_height: ChainCount::from_raw(fx.reference_height + 6),
         bond_record_exists: None,
+        emission: None,
+        emission_claim_conflict: None,
     }
 }
 
@@ -1010,6 +1012,8 @@ fn non_spend_kinds_refuse_loudly() {
         weight_limit: 149_400,
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,
+        emission: None,
+        emission_claim_conflict: None,
     };
     assert_eq!(
         verify(&parsed, &facts),
@@ -1081,7 +1085,10 @@ fn bond_race_at_commit_classifies_double_spend_conflict() {
     let fx = bond_fixture();
     let mut fresh = bond_admitting_facts();
     fresh.bond_record_exists = Some(true);
-    let shim = MockShim::new(bond_admitting_facts(), CommitOutcome::Raced(fresh));
+    let shim = MockShim::new(
+        bond_admitting_facts(),
+        CommitOutcome::Raced(Box::new(fresh)),
+    );
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     assert_eq!(
         engine

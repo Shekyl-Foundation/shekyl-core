@@ -20,7 +20,8 @@ use shekyl_daemon_rpc::submit::{
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 use shekyl_types::{BlockHeight, ChainCount};
 use submit_fixtures::{
-    admitting_facts, hexify, serve_credit_tx, spend_tx, MockShim, MockVerifier, FIXTURE_ROOT,
+    admitting_facts, emission_tx, hexify, serve_credit_tx, spend_tx, MockShim, MockVerifier,
+    FIXTURE_ROOT,
 };
 
 type MockEngine = SubmitEngine<Arc<MockShim>, Arc<MockVerifier>>;
@@ -339,6 +340,7 @@ fn snapshot_fault_is_a_fault_not_a_verdict() {
             _key_images: &[[u8; 32]],
             _reference_block: &shekyl_types::BlockHash,
             _bond_p_canonical_id: Option<&[u8; 32]>,
+            _emission_probe: Option<(&[u8; 32], &[u64])>,
         ) -> Result<SubmitFacts, shekyl_daemon_rpc::submit::ShimFault> {
             Err(shekyl_daemon_rpc::submit::ShimFault)
         }
@@ -380,7 +382,7 @@ fn raced_in_chain_wins_over_every_other_premise() {
     fresh.key_image_conflicts = vec![KeyImageConflict::Other, KeyImageConflict::Free];
     fresh.reference = None;
     fresh.fee_per_byte = u64::MAX;
-    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         SubmitVerdict::AlreadyInChain { height: 201 },
@@ -394,7 +396,7 @@ fn raced_in_pool_classifies_already_in_pool() {
     // bytes won the commit.
     let mut fresh = base_facts();
     fresh.in_pool = true;
-    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         SubmitVerdict::AlreadyInPool
@@ -410,7 +412,7 @@ fn raced_key_image_conflict_beats_stale_root() {
     fresh.key_image_conflicts = vec![KeyImageConflict::Free, KeyImageConflict::Other];
     fresh.reference = None;
     fresh.fee_per_byte = u64::MAX;
-    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::DoubleSpendConflict)
@@ -426,7 +428,7 @@ fn raced_own_tx_key_image_is_not_a_conflict() {
     let mut fresh = base_facts();
     fresh.key_image_conflicts = vec![KeyImageConflict::OwnTx, KeyImageConflict::OwnTx];
     fresh.reference = None;
-    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::StaleRoot)
@@ -439,7 +441,7 @@ fn raced_reference_gone_classifies_stale_root() {
     // at D: a reorg — rebuild against a fresh root.
     let mut fresh = base_facts();
     fresh.reference = None;
-    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::StaleRoot)
@@ -452,7 +454,7 @@ fn raced_root_mismatch_classifies_stale_root() {
     // equal-height alternative — the certificate's root premise failed.
     let mut fresh = base_facts();
     fresh.reference.as_mut().unwrap().root = [0xBB; 32];
-    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::StaleRoot)
@@ -465,7 +467,7 @@ fn raced_reference_aged_out_classifies_stale_root() {
     // fresh height 251 with ref at 150 (MAX_AGE 100) is out of window.
     let mut fresh = base_facts();
     fresh.chain_height = ChainCount::from_raw(251);
-    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::StaleRoot)
@@ -478,7 +480,7 @@ fn raced_fee_floor_rise_classifies_fee_too_low() {
     // the exact zombie-Accepted shape the redesign abolishes.
     let mut fresh = base_facts();
     fresh.fee_per_byte = 1_000_000;
-    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::FeeTooLow)
@@ -490,7 +492,7 @@ fn raced_with_no_changed_premise_is_a_shim_contract_fault() {
     // `Raced` whose fresh facts re-classify nothing is a shim defect —
     // loud fault, never a guessed verdict.
     let fresh = base_facts();
-    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert!(matches!(
         engine
             .submit(&spend_hex(), SubmitCaller::Owner)
@@ -572,7 +574,7 @@ fn foreign_raced_embargoed_duplicate_conceals_as_accepted() {
     let mut fresh = base_facts();
     fresh.in_pool = true;
     fresh.in_pool_broadcast = false;
-    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Foreign).unwrap(),
         SubmitVerdict::Accepted
@@ -585,9 +587,64 @@ fn foreign_raced_broadcast_duplicate_reveals_already_in_pool() {
     let mut fresh = base_facts();
     fresh.in_pool = true;
     fresh.in_pool_broadcast = true;
-    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Foreign).unwrap(),
         SubmitVerdict::AlreadyInPool
     );
+}
+
+// ─── The emission arm (§8.7.2 E6/E7 plumbing + race classification) ─────
+
+#[test]
+fn emission_snapshot_carries_the_probe_and_missing_facts_fault() {
+    // The engine derives the probe from the decoded vin and passes it to
+    // the shim; a snapshot that comes back without the E6/E7 bundle is a
+    // ShimContract fault, never a guessed verdict.
+    let tx = emission_tx(1_000_000);
+    let parsed = parse_submission(&hexify(&tx)).expect("emission clears Phase A");
+    let facts = admitting_facts(&parsed); // emission: None — the contract breach
+    let shim = MockShim::new(facts, CommitOutcome::Committed);
+    let engine = SubmitEngine::new(Arc::clone(&shim), MockVerifier::passing());
+    assert!(
+        matches!(
+            engine.submit(&hexify(&tx), SubmitCaller::Owner),
+            Err(EngineFault::ShimContract(_))
+        ),
+        "an emission snapshot without the E6/E7 bundle must fault loudly"
+    );
+    let snapshots = shim.snapshots.lock().unwrap();
+    let (p_id, epochs) = snapshots[0]
+        .emission_probe
+        .as_ref()
+        .expect("the snapshot request carried the emission probe");
+    assert_eq!(epochs, &vec![11, 12]);
+    assert_ne!(*p_id, [0u8; 32]);
+}
+
+#[test]
+fn emission_claim_slot_race_classifies_double_spend_conflict() {
+    // §8.7.2 E6 at Phase D: the fresh facts carry the claim-slot conflict
+    // bit (record gone / epoch consumed) — most-terminal classification is
+    // DoubleSpendConflict, and no relay follows.
+    let tx = emission_tx(1_000_000);
+    let parsed = parse_submission(&hexify(&tx)).expect("emission clears Phase A");
+    let mut facts = admitting_facts(&parsed);
+    facts.emission = Some(shekyl_daemon_rpc::submit::EmissionFacts {
+        bond: None,
+        snapshots: Vec::new(),
+    });
+    let mut fresh = facts.clone();
+    fresh.emission_claim_conflict = Some(true);
+    let shim = MockShim::new(facts, CommitOutcome::Raced(Box::new(fresh)));
+    let engine = SubmitEngine::new(Arc::clone(&shim), MockVerifier::passing());
+    assert_eq!(
+        engine
+            .submit(&hexify(&tx), SubmitCaller::Owner)
+            .expect("no engine fault"),
+        SubmitVerdict::Rejected {
+            cause: RejectCause::DoubleSpendConflict
+        },
+    );
+    assert_eq!(shim.relay_count(), 0, "raced ⇒ no relay nudge");
 }

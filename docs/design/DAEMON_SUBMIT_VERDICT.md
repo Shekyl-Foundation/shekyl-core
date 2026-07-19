@@ -1414,6 +1414,48 @@ pool-insert); block validation arbitrates, and the loser strands until the
 F22 leg-1 sweep evicts it. Parity preserved, no regression, recorded so
 nobody files it as a hole later.
 
+### 8.7.2 Emission-arm legs (PR-4b completion — pinned at source 2026-07-19)
+
+The §8.7.1 matrix (F36) predates the C-1 emission arm; these rows extend it
+with the same discipline. Sources: `ver_non_input_consensus`'s emission
+branch (`tx_verification_utils.cpp`, `verCtSemanticsEmission` →
+`rctSigs.cpp:348-370`) and `check_tx_inputs`' `is_archival_emission_tx`
+branch (`blockchain.cpp:3801-4110`). The semantic battery is already Rust
+(`shekyl-archival-retention::emission_verify` — the witness-minting
+`emission_vin_verify_claims` / `_backing` / `_auth` + the assembling
+`emission_vin_verify`), reached by the C++ oracle through
+`shekyl_emission_vin_verify`; the engine calls the minters natively.
+
+| # | Check | Site | Disposition |
+| --- | --- | --- | --- |
+| EV1 | `pqc_auths == vin` count; `pseudoOuts == ToKey subset`; `outPk == vout` | `tx_verification_utils.cpp` emission branch; `blockchain.cpp:3893` | **A** — `shekyl-wire` `validate()` couplings (every shape) |
+| EV2 | Loud vout amount sum does not overflow | same branch → `shekyl_checked_sum_amounts` | **A** — wire `check_money_overflow` parity sum |
+| EV3 | `total_reward > 0` (Σ loud vouts non-zero) | same branch | **A** — engine static (Phase A, emission kind) |
+| EV4 | CT semantics: canonical Bp+ layout; balance `Σ pseudoOuts + total_reward = Σ out_masks + fee` (mint rides the debit slot); Bp+ verify | `verCtSemanticsEmission` → `verArchivalCtBalanceAndRange` | **C** — native `verify_bond_post_ct_balance` with `BondTerm::Debit(total_reward)` + the shared Bp+ leg |
+| E1 | Vin `canonical_bytes` parse → (`P_canonical_id`, claimed epochs, `1..=MAX`) | `blockchain.cpp:3812` → `shekyl_archival_emission_vin_extract` | **C** — native `emission_wire` decode; Phase A pre-parses for the probe key (parse failure → `Malformed`) |
+| E2 | Emission slot's `pqc_auths` pubkey derives the vin's `P_canonical_id` | `:3830-3845` | **A** — structural cross-field (BP2/BP5 analogue, same canonical-id function); `Malformed` |
+| E3 | Reference block exists + age window — **required even with zero fee inputs** (the backing proof verifies against this root) | `:3865-3886` | engine Phase C — Emission joins the spending-shape reference arm (`ReferenceNotFound` / `ReferenceTooRecent` / `StaleRoot`) |
+| E4 | `curve_trees_tree_depth ∈ [1, current]` | `:3890` | engine Phase C (row-K10 shape) → `StaleRoot` |
+| E5 | Signable hash = prefix hash **with the emission vin removed** (F-C1c) | `:3907-3919` | **C** — native recompute over the parsed wire tx; feeds E10 |
+| E6 | Claimant bond record facts: present, `join_settlement_epoch`, holdings kind + held shards, `claimed_settlement_epochs` | `:3922-3924` | **B fact + D re-check** — a record consumed/extended during C is a claim-slot race: vin-epoch ∩ record-claimed ≠ ∅ **or** record gone → `DoubleSpendConflict`; the commit re-derives (P, epochs) from the reparsed blob, so no expected-state input is needed |
+| E7 | Per-claimed-epoch as-of-E snapshots: frozen budget row present; close height; `Σwork`; bonds/shards/credit-pair rows; claimant bond idx | `:3926-3960` → `gather_archival_emission_epoch_snapshot` | **B facts** — the large marshal (`shekyl_archival_emission_epoch_snapshot` POD rows, C++-owned handle freed after copy). Frozen-at-close ⇒ **no D re-check** (deep-reorg drift is block-validation-backstopped, the SC7 posture). Absent budget row → `Malformed` (the builder only claims finalized epochs — `EpochSkip::NotFinalized` is its own predicate — so an unclosed-epoch submit is a builder defect, not a retry) |
+| E8 | Claims battery (steps 1–5: window, join bound, per-vin + record dedup, share recompute, reward arithmetic vs budget + `vout_reward_sum`) | `shekyl_emission_vin_verify` step 1–5 | **C** — native `emission_vin_verify_claims`; violations → `Malformed`, record-dedup overlap → `DoubleSpendConflict` (E6's classification) |
+| E9 | Membership-only backing proof vs the reference root | same call, step 6 | **C** — native `emission_vin_verify_backing`; `Malformed` (root drift classes → `StaleRoot` via the shared error mapping) |
+| E10 | Dual hybrid auths — Auth-B (backing key, leaf-bound) + Auth-P (claim key) over the reward-commit set + E5's signable hash | same call, step 8 | **C** — native `emission_vin_verify_auth`; `Malformed` |
+| E11 | Fee-input FCMP++ over the `ToKey` subset; `n_fee == 0 ⇒ fcmp_proof` **empty**, `n_fee > 0 ⇒` non-empty | `:4046-4108` | **C** — the shared funding-subset K12 leg (bond-arm shape), **skipped when `n_fee == 0`** exactly as the oracle skips it; the empty/non-empty coupling is an engine Phase-A static (wire `validate()` does not pin it). The Q11 zero-fee form is representable (prunable present with empty proof + empty pseudo-outs; a prunable-LESS ct cannot carry outputs) and admitted; the wallet never builds it (`ClaimFeeInputsRequired`) |
+| E12 | Whole-tx PQC auth battery (every slot, emission slot included) | `verify_transaction_pqc_auth` | **C** — shared `verify_pqc_auths` (K13) |
+| E13 | Block-level per-(P, E) cross-tx dedup | `emission_block_claims_unique` (block path); `fill_block_template` dedup | **out of submit scope** — same pool-level scope-honesty posture as §8.7.1's bond note; block validation arbitrates |
+
+**Fee floor:** no SP-T4a analogue. An emission claim carries a real,
+weight-priced fee (Q11: with zero fee inputs it is paid out of the mint —
+the balance closes through the debit slot), so the engine's standard
+`fee_meets_floor` arithmetic applies unchanged.
+
+**Classification rule** (extends §8.7.1's): state conflicts — E6's
+consumed/extended claim slot — → `DoubleSpendConflict`; every
+window/shape/proof failure → `Malformed`; snapshot-root drift classes →
+`StaleRoot` exactly as the spend arm maps them.
+
 ### 8.8 `tx_sanity_check` (`tx_sanity_check.cpp:42-102`) — F29
 
 | # | Check | Site | Disposition |
