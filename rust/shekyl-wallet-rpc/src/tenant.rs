@@ -212,11 +212,14 @@ impl Tenant {
         self.closing = false;
     }
 
-    /// Whether a P-scan task is parked for the open wallet. Test-only: the WI-1
-    /// lifecycle test asserts a staker open parks a handle and a non-staker open
-    /// does not — the check that survives `pub` (a live embedder call site,
-    /// observed by behavior, not a `dead_code` lint a `pub` item can't trip).
-    #[cfg(test)]
+    /// Whether a P-scan task is parked for the open wallet.
+    ///
+    /// Two consumers: the `stake` entry, which treats a resident StakeEngine
+    /// with **no** parked scan as still needing the intent reopen (a dark
+    /// scan is a guaranteed-stuck stake, so the reopen re-arms it rather
+    /// than letting every retry spin on a scan that is not running), and the
+    /// WI-1 lifecycle test asserting a staker open parks a handle (the
+    /// behavioral check that survives `pub`).
     pub(crate) fn has_pscan(&self) -> bool {
         self.pscan.is_some()
     }

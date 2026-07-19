@@ -755,7 +755,8 @@ impl Engine<SoloSigner> {
 
     /// Internal field-by-field assembly used by [`Self::create`] and
     /// [`Self::open_full`]. Pulled out so the cache invariants
-    /// (network, capability) are established in exactly one place.
+    /// (network, capability) are established in exactly one place, and the
+    /// arm-#3 phantom GC runs before the persona derive on every open path.
     #[allow(clippy::too_many_arguments)]
     fn assemble(
         mut file: WalletFile,
@@ -782,70 +783,59 @@ impl Engine<SoloSigner> {
         // in-memory (persisted by the normal save discipline; a lost drop
         // re-GCs at the next open — idempotent). Wrongful-GC safety rests on
         // the pending-record bridge; see `reconcile_phantom_bonded_slots`.
+        //
+        // A seal read/decode failure DEGRADES to skipping the GC (keep
+        // every slot, warn loud) rather than failing the open: the seals
+        // are auxiliary, re-derivable scan state, and a corrupt one must
+        // not brick wallet open (the user could no longer even spend
+        // principal). Keeping is the conservative direction — a wrongly
+        // kept phantom costs one persona derive; a wrongful drop is the
+        // forbidden stuck-funds failure. The staker's scan path still fails
+        // loud on the same corrupt seal at `start_pscan` (fail-closed for
+        // the scan, not for the open).
         if !ledger.staking.bonded_slots.is_empty() {
-            let sealed = file
-                .open_pscan_state(state_wrap_key.as_bytes())
-                .map_err(|e| {
-                    OpenError::Io(IoError::Scanner {
-                        detail: format!("arm-3 phantom GC: pscan seal read failed: {e}"),
-                    })
-                })?;
-            if let Some(bytes) = sealed {
-                let state =
-                    shekyl_engine_state::pscan_state::PScanState::from_postcard_bytes(&bytes)
-                        .map_err(|e| {
-                            OpenError::Io(IoError::Scanner {
-                                detail: format!("arm-3 phantom GC: pscan seal decode failed: {e}"),
+            match load_phantom_gc_evidence(&file, &state_wrap_key) {
+                Ok(Some((evidence, pending_slots))) => {
+                    let derivation_network = network_to_derivation(network);
+                    let sweep = super::stake_persist::reconcile_phantom_bonded_slots(
+                        &mut ledger.staking,
+                        &evidence,
+                        &pending_slots,
+                        |slot| -> Result<_, OpenError> {
+                            let keys = derive_archival_p_keys(
+                                master_seed,
+                                derivation_network,
+                                seed_format,
+                                slot,
+                            )
+                            .map_err(|e| {
+                                OpenError::Key(KeyError::Primitive {
+                                    detail: rederivation_failure_detail(&e),
+                                })
+                            })?;
+                            super::stake_engine::persona_canonical_id(&keys).map_err(|_| {
+                                OpenError::Key(KeyError::Primitive {
+                                    detail: "persona canonical id encode failed",
+                                })
                             })
-                        })?;
-                let evidence =
-                    super::pscan::accrual::PScanAccrual::from_state(&state).reconcile_set();
-                let pending_slots: std::collections::BTreeSet<u32> = match file
-                    .open_pending_posts(state_wrap_key.as_bytes())
-                    .map_err(|e| OpenError::Io(IoError::Scanner {
-                        detail: format!("arm-3 phantom GC: pending seal read failed: {e}"),
-                    }))? {
-                    Some(bytes) => {
-                        shekyl_engine_state::pending_post_block::PendingPostBlock::from_postcard_bytes(&bytes)
-                            .map_err(|e| OpenError::Io(IoError::Scanner {
-                                detail: format!("arm-3 phantom GC: pending seal decode failed: {e}"),
-                            }))?
-                            .posts()
-                            .iter()
-                            .map(|p| p.p_slot.to_raw())
-                            .collect()
+                        },
+                    )?;
+                    if !sweep.dropped.is_empty() {
+                        tracing::info!(
+                            dropped = sweep.dropped.len(),
+                            staking_disabled = sweep.staking_disabled,
+                            "SP-R0 arm #3: phantom bonded_slots collected at open"
+                        );
                     }
-                    None => std::collections::BTreeSet::new(),
-                };
-                let derivation_network = network_to_derivation(network);
-                let sweep = super::stake_persist::reconcile_phantom_bonded_slots(
-                    &mut ledger.staking,
-                    &evidence,
-                    &pending_slots,
-                    |slot| -> Result<_, OpenError> {
-                        let keys = derive_archival_p_keys(
-                            master_seed,
-                            derivation_network,
-                            seed_format,
-                            slot,
-                        )
-                        .map_err(|e| {
-                            OpenError::Key(KeyError::Primitive {
-                                detail: rederivation_failure_detail(&e),
-                            })
-                        })?;
-                        super::stake_engine::persona_canonical_id(&keys).map_err(|_| {
-                            OpenError::Key(KeyError::Primitive {
-                                detail: "persona canonical id encode failed",
-                            })
-                        })
-                    },
-                )?;
-                if !sweep.dropped.is_empty() {
-                    tracing::info!(
-                        dropped = sweep.dropped.len(),
-                        staking_disabled = sweep.staking_disabled,
-                        "SP-R0 arm #3: phantom bonded_slots collected at open"
+                }
+                // No sealed scan state yet — nothing to reconcile against.
+                Ok(None) => {}
+                Err(detail) => {
+                    tracing::warn!(
+                        %detail,
+                        "SP-R0 arm #3: phantom bonded_slots GC skipped — sealed scan \
+                         evidence unreadable; keeping every recorded slot (the wallet \
+                         opens; a staker's scan will fail loud on the same seal)"
                     );
                 }
             }
@@ -1311,6 +1301,49 @@ impl<
     }
 }
 
+/// Read + decode the sealed evidence the arm-#3 phantom GC consumes: the
+/// pscan seal (reconcile evidence) and the pending-post seal (the W3 /
+/// scan-lag bridge). `Ok(None)` if no pscan seal exists yet; `Err(detail)`
+/// on ANY read/decode failure — including a pending seal that cannot be
+/// read while the pscan seal can, because a GC run without the pending
+/// bridge could wrongfully drop a W3 slot. The caller degrades an `Err` to
+/// skipping the GC (keep every slot, warn loud), never to an open failure.
+fn load_phantom_gc_evidence(
+    file: &WalletFile,
+    state_wrap_key: &super::sealing_keys::StateWrapKey,
+) -> Result<
+    Option<(
+        super::pscan::reconcile::PReconcileSet,
+        std::collections::BTreeSet<u32>,
+    )>,
+    String,
+> {
+    let Some(bytes) = file
+        .open_pscan_state(state_wrap_key.as_bytes())
+        .map_err(|e| format!("pscan seal read failed: {e}"))?
+    else {
+        return Ok(None);
+    };
+    let state = shekyl_engine_state::pscan_state::PScanState::from_postcard_bytes(&bytes)
+        .map_err(|e| format!("pscan seal decode failed: {e}"))?;
+    let evidence = super::pscan::accrual::PScanAccrual::from_state(&state).reconcile_set();
+    let pending_slots: std::collections::BTreeSet<u32> = match file
+        .open_pending_posts(state_wrap_key.as_bytes())
+        .map_err(|e| format!("pending seal read failed: {e}"))?
+    {
+        Some(bytes) => {
+            shekyl_engine_state::pending_post_block::PendingPostBlock::from_postcard_bytes(&bytes)
+                .map_err(|e| format!("pending seal decode failed: {e}"))?
+                .posts()
+                .iter()
+                .map(|p| p.p_slot.to_raw())
+                .collect()
+        }
+        None => std::collections::BTreeSet::new(),
+    };
+    Ok(Some((evidence, pending_slots)))
+}
+
 /// Render a `shekyl-crypto-pq::CryptoError` into the static-string
 /// detail expected by [`KeyError::Primitive`]. The message shape is
 /// stable across the `shekyl-crypto-pq` API; we list the primitives
@@ -1753,9 +1786,11 @@ mod tests {
         plain.close(&creds).expect("close");
 
         // Intent open (actor resident), unreachable daemon: the first
-        // pre-persist step to touch the daemon fails → a `Funding` refusal,
-        // and — the W1 pin — nothing durable was written: the wallet
-        // reopens as a plain non-staker.
+        // pre-persist step to touch the daemon (the fee estimate) fails →
+        // the `FeeEstimate` arm (a daemon fault, deliberately NOT the
+        // `Funding` "fund and retry" misdiagnosis — rule 82), and — the W1
+        // pin — nothing durable was written: the wallet reopens as a plain
+        // non-staker.
         let intent = Engine::<SoloSigner>::open_full_with_first_stake_intent(
             &fix.base_path,
             &creds,
@@ -1770,7 +1805,10 @@ mod tests {
         let err = Engine::first_stake(arc.clone(), 0)
             .await
             .expect_err("unreachable daemon must refuse pre-persist");
-        assert!(matches!(err, FirstStakeError::Funding(_)), "got {err:?}");
+        assert!(
+            matches!(err, FirstStakeError::FeeEstimate(_)),
+            "got {err:?}"
+        );
         {
             let g = arc.read().await;
             assert!(
