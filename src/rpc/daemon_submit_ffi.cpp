@@ -165,17 +165,6 @@ struct shekyl_submit_emission_facts_handle
   shekyl_submit_emission_facts_ffi view{};
 };
 
-const shekyl_submit_emission_facts_ffi* shekyl_submit_emission_facts_view(
-  const shekyl_submit_emission_facts_handle* h)
-{
-  return h ? &h->view : nullptr;
-}
-
-void shekyl_submit_emission_facts_free(shekyl_submit_emission_facts_handle* h)
-{
-  delete h;
-}
-
 namespace {
 
 // The §4.1 fact collection. Caller holds the §4.4 pool→blockchain lock
@@ -646,6 +635,20 @@ int relay_tx(tx_memory_pool& pool, i_cryptonote_protocol& protocol,
 // ── extern "C" wrappers: resolve core objects from the handle, delegate ────
 
 extern "C" {
+
+// The §8.7.2 emission fact-bundle accessors. (Definitions live in this
+// block for explicitness/consistency — the header's extern "C"
+// declarations would confer C linkage either way.)
+const shekyl_submit_emission_facts_ffi* shekyl_submit_emission_facts_view(
+  const shekyl_submit_emission_facts_handle* h)
+{
+  return h ? &h->view : nullptr;
+}
+
+void shekyl_submit_emission_facts_free(shekyl_submit_emission_facts_handle* h)
+{
+  delete h;
+}
 
 int shekyl_submit_snapshot_facts(core_rpc_handle* h,
   const uint8_t* txid,
