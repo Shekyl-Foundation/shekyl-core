@@ -21,7 +21,15 @@
   closes Gate-6 R4; per PR #337's scope review (merged into this round
   before its first review) the former GF-4/F-D1+F-D2 `K_COVER` seal
   seat is REMOVED (M1 §4, F-W10) — F-D2 stays a pre-genesis Gate-6
-  build item, not seal evidence.
+  build item, not seal evidence. *Review round 2 (2026-07-19):* the
+  "GUI holds no `Engine`" substrate line above is superseded —
+  gui-wallet `dev` landed GUI-PR0…GUI-PR3 the same day (`EngineSession`
+  embeds `engine-core::Engine` in-process, engine backend default-on,
+  `start_pscan_if_staker` at every engine open, `activate_staker` →
+  `Engine::first_stake`); DS-2 RATIFIED engine-first (dual-open
+  rejected), the `shekyl-engine-rpc`-is-a-wallet2-shim crate-role
+  correction recorded, and DS-PR-3 re-scoped to its remainder (the
+  aggregate `P`-balance read; doc §2.4/DS-2/round log).
 
 - **daemon: emission-claim Phase-C submit battery (PR-4b completion).**
   The Rust submit engine accepts the second and last transaction kind the

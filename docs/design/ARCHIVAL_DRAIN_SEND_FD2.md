@@ -33,8 +33,11 @@ F-D2 is recorded as landed when **all three layers exist and the arms
 hold** (Gate-6 §12.4 build notes, verified at source 2026-07-19):
 
 1. **A `P`-scan data source in the GUI process** — `plan_drain` needs
-   `&[PFundingOutputRecord]` from `PScanState.funding_outputs`; the GUI
-   today has no `P`-scan state at all.
+   `&[PFundingOutputRecord]` from `PScanState.funding_outputs`.
+   *(UPDATE 2026-07-19, review round 2: the P-scan task itself now runs
+   in the GUI process — GUI-PR1 starts `start_pscan_if_staker` at every
+   engine open, §2.4; the layer's remainder is the aggregate read
+   surface over it.)*
 2. **A drain tx-assembly path** — `plan_drain` returns a `DrainPlan`
    (amount, input gindices, change), not a signed/broadcast transaction;
    the assemble→sign→broadcast follow-on (the claim-assembly analog) is
@@ -112,43 +115,90 @@ seal input (seat removed 2026-07-19; see the charter note above).
   `feat/stake-activation-entry`) wired wallet-rpc `"stake"`
   (`handlers.rs:48`) → `Engine::first_stake` (`bond_orchestrator.rs:537`)
   / `open_full_with_first_stake_intent` → `persist_bond_record`, which
-  flips `staking_enabled = true` (`stake_persist.rs:150`). The
-  production caller is **wallet-rpc, not the GUI** — a GUI-held engine
-  wallet becomes a staker only via a GUI-side activation surface
-  (calling `Engine::first_stake` in-process) or a documented cross-tool
-  flow (stake via wallet-rpc, then open the same engine wallet in the
-  GUI). Neither exists today; DS-PR-3 inherits this as a named
-  dependency (see DS-2 and §4).
+  flips `staking_enabled = true` (`stake_persist.rs:150`).
+- **GUI-side activation surface — landed on gui-wallet `dev`**
+  (re-verified 2026-07-19, review round 2; supersedes this round's
+  earlier "wallet-rpc-only caller" state): GUI-PR3 (`c73444c`) wires the
+  Tauri `activate_staker` command (`commands.rs:623`) →
+  `EngineSession::activate_staker` (`engine_session.rs:352`) →
+  `Engine::first_stake` (`:403`), with the optional intent reopen via
+  `open_full_with_first_stake_intent` (`:461`). The
+  `staking_enabled`-reachability edge DS-PR-3 was gated on **exists in
+  production** for GUI-held engine wallets (see DS-2 and §4).
 
-### 2.4 GUI substrate (`shekyl-gui-wallet`, verified 2026-07-19)
+### 2.4 GUI substrate (`shekyl-gui-wallet`) — **engine-first as of gui-wallet `dev` 2026-07-19; re-verified review round 2**
 
-- The GUI is a Tauri app whose backend links the engine crates
-  **in-process** (`src-tauri/Cargo.toml:32–36`: `shekyl-engine-rpc`
-  path-dep with `rust-scanner`/`native-sign`, `shekyl-engine-core`
-  path-dep). No wallet-RPC server is involved (Gate-6 §12.4: "the
-  blocker is not RPC").
-- Today's wallet object is **C++ `wallet2` via FFI** (`wallet_bridge.rs`
-  `Option<Wallet2>` handle, `:51`); `shekyl-engine-core` is imported
-  for exactly one type — `DaemonClient` in the scanner sync loop
-  (`wallet_bridge.rs:36`, `:341`). **`Engine` is not constructed anywhere
-  in the GUI.** Wallet files are wallet2 `.keys` stems under the wallet
-  dir (`commands.rs:386–:403`); no engine `.wallet` file is opened or
-  created.
-- **No `P`-side surface exists**: zero hits for
-  pscan/persona/bond/`funding_outputs` in GUI code. The existing
-  `Staking.tsx` page is the *principal accrual-pool* stake/claim surface
-  (a different product axis), not archival `P`-scan.
-- The principal send path: `Send.tsx` amount `useState("")` (blank, no
-  pre-fill of any kind) → `invoke("transfer")` → `commands::transfer`
-  (`commands.rs:802`) → `Wallet2::transfer_native` (C++ prepare → Rust
-  sign → C++ finalize, `wallet_bridge.rs:770–:788`).
+**Crate-role correction first (review round 2), because a misreading
+here propagated:** the GUI links two engine crates with entirely
+different natures. `shekyl-engine-rpc` is the **wallet2 FFI shim
+crate** — its `create_wallet`/`open_wallet`/
+`restore_deterministic_wallet`/`get_address`/`get_transfers`
+(`engine-rpc/src/engine.rs:195`/`:210`/`:222`/`:287`/`:323`) are Rust
+names over `ffi::wallet2_ffi_*` C++ calls (`:104`/`:205`/`:288`); it is
+not a native wallet. The **native wallet lifecycle lives in
+`shekyl-engine-core::Engine`** (create via `EngineCreateParams`,
+`open_full`, restore, `primary_address` at `engine/mod.rs:974`, ledger
+balance, pending-tx send, refresh), wallet2-free (zero `wallet2`/FFI
+references outside comments), operating on its own `.wallet`/
+`.wallet.keys` envelope (`shekyl-engine-file`), production-consumed by
+`shekyl-wallet-rpc`'s lifecycle. Reading engine-rpc's Rust method names
+as a native wallet was the error; the two wallet worlds are distinct
+file formats and code paths.
+
+**Current state (gui-wallet `dev` at `c73444c`, GUI-PR0…GUI-PR3 landed
+2026-07-19):**
+
+- The GUI backend now embeds `shekyl-engine-core::Engine` **directly
+  in-process** via `EngineSession` (`engine_session.rs`, GUI-PR1
+  `c7da109`) — create / restore-from-BIP-39 / open / close /
+  `primary_address` / ledger balance / one-shot transfer
+  (`build_pending_tx_async` → `submit_pending_tx_async`,
+  `engine_session.rs:601`) / fee estimate / transfer history
+  (GUI-PR2 `03eb868`). No `wallet2_ffi` on this path.
+- The engine backend is **default-on** (`SHEKYL_ENGINE_BACKEND` env,
+  default true — `engine_session.rs:922`; held in
+  `AppState.engine_backend`, `state.rs:117`). Tauri commands branch
+  engine-first: `create_wallet` (`commands.rs:671`), `open_wallet`
+  (`:728–:759`, opens engine files when they exist, refuses to
+  silently fall back when the flag is on), `import_wallet_from_seed`
+  (`:846`), `transfer` (`:1052`).
+- **The WI-1 P-scan lifecycle shape is already adopted:** every engine
+  open path runs `wrap_and_start_pscan` → `Engine::start_pscan_if_staker`
+  and parks the `PScanHandle` (`engine_session.rs:854–:870`; fail-closed
+  at open, degrade-to-`None` on restore re-arm `:873`).
+- The **wallet2 path survives as the legacy fallback only**
+  (`wallet_bridge.rs` `Option<Wallet2>` handle `:51`; `.keys` stems;
+  reached when the engine flag is off or only legacy files exist). Its
+  retirement rides the wallet2-retirement track (the `transfer_details`
+  C++→Rust migration, `docs/FOLLOWUPS.md` V3.1 queue), which is now
+  **orthogonal to this subsystem** — the drain path never touches
+  wallet2.
+- **Still true: no `P`-side read surface exists.** `EngineSession::balance`
+  reads the principal ledger only (`engine_session.rs:579`); nothing
+  surfaces `drain_balance`'s aggregate scalar. That remainder — not
+  engine adoption — is DS-PR-3's content.
+
+*Superseded Round-1 state (recorded 2026-07-19 at round open, accurate
+for the pre-GUI-PR0…3 tree):* wallet object was C++ `wallet2` via FFI;
+`shekyl-engine-core` imported only for `DaemonClient` in the scanner
+sync loop (`wallet_bridge.rs:36`, `:341`); `Engine` not constructed
+anywhere; principal send was `Send.tsx` → `commands::transfer` →
+`Wallet2::transfer_native`. All four claims are now stale for the
+engine-backend default path; they remain accurate for the legacy
+fallback. The "exactly one type — `DaemonClient`" line in particular is
+superseded: `engine_session.rs:28–:32` imports the full `Engine`
+surface, and `DaemonClient` is also constructed there (`make_daemon`,
+`:843`).
 
 ### 2.5 What the substrate implies
 
 The three §1 layers are **not GUI-local features**. Layer 1 is *engine
 adoption in the GUI process* (the GUI must hold an `Engine` for staker
 wallets — `PScanState` lives in the engine wallet file and is maintained
-by the engine's P-scan task). Layer 2 is *engine-core work*
+by the engine's P-scan task) — **substantially landed** as of
+GUI-PR0…GUI-PR3 (§2.4): the GUI holds an `Engine`, starts the P-scan at
+open, and can activate a staker; the layer's remainder is the aggregate
+`P`-balance read. Layer 2 is *engine-core work*
 (secrets + membership proofs + persona transport — Rust per rule 20;
 new code originates in `shekyl-core` per rule 10; the GUI is a
 consumer). Only layer 3 is genuinely GUI work.
@@ -175,52 +225,57 @@ records to UI-adjacent code; contradicts the §12.3 single-trust-boundary
 pin. Reopen only if the engine entry point is structurally unable to
 serve a GUI progress/cancellation need (named criterion; none known).
 
-### DS-2 — GUI data source: staker-mode engine adoption, wallet-rpc shape
+### DS-2 — GUI data source: staker-mode engine adoption — **RATIFIED engine-first (review round 2, 2026-07-19)**
 
-**Proposal.** The GUI adopts the WI-1 lifecycle for staker wallets: open
-the engine wallet, call `start_pscan_if_staker`, park the `PScanHandle`
-(quiet `None` keeps non-staker wallets zero-cost). The `P`-balance
-surface the UI reads is `drain_balance`'s aggregate scalar — the
-decomposition never crosses into the GUI (F-D2 core-side contract).
+**Proposal (ratified).** The GUI adopts the WI-1 lifecycle for staker
+wallets: open the engine wallet, call `start_pscan_if_staker`, park the
+`PScanHandle` (quiet `None` keeps non-staker wallets zero-cost). The
+`P`-balance surface the UI reads is `drain_balance`'s aggregate
+scalar — the decomposition never crosses into the GUI (F-D2 core-side
+contract).
 
-**Open sub-question for review (the round's largest unknown):** the GUI
-today manages wallet2 `.keys` files only. Does staker-mode adoption mean
-(a) dual-open (wallet2 for principal ops + engine wallet for `P`-side)
-with the wallet-file pairing rule pinned, or (b) engine-first for
-staker wallets (staker wallets are engine wallets, period, and the GUI's
-wallet2 path never learns about `P`)? (b) is cleaner and matches the
-rewrite direction (Phase 5 deletes the C++ wallet), but its cost —
-whether the GUI's principal surfaces work against an engine wallet
-today — needs the pre-flight substrate check before this round can
-close. **Not decided here.**
+**Ratification (review round 2).** Engine-first / native-in-process —
+option (b) — is **ratified**; dual-open (a) is **rejected** (dead: the
+wallet-file pairing rule it would need has no consumer, and the landed
+substrate below makes the split moot). The ratification does *not* rest
+on the retracted "the engine already has the principal core, so
+engine-first is mostly a swap" claim (see the retraction note below);
+it rests on the source-verified state of gui-wallet `dev`, which
+adopted the engine-first shape while this round was in review (§2.4):
+`EngineSession` embeds `Engine`, the engine backend is default-on with
+wallet2 as legacy fallback, every engine open runs
+`start_pscan_if_staker` and parks the handle, and GUI-PR3's
+`activate_staker` closes the `staking_enabled`-reachability edge. What
+remains of DS-2's adoption is only the aggregate `P`-balance read —
+DS-PR-3's actual content.
 
-**Pre-flight results recorded (review round, 2026-07-19 — source
-checks, not the ratification):**
+**Retraction note (review round 2), so the record doesn't inherit the
+error:** an earlier review-round claim read `shekyl-engine-rpc`'s Rust
+method names (`create_wallet`/`open_wallet`/`get_address`/…) as a
+native wallet lifecycle. Retracted: that crate is the **wallet2 FFI
+shim** (`ffi::wallet2_ffi_*`, §2.4). What is native is (i) the scan
+path (`shekyl-scanner`), (ii) the **engine send surface** —
+`Engine::build_pending_tx` / `submit_pending_tx`
+(`engine/pending.rs:836`/`:845`, async variants `:861`/`:870`),
+production-consumed by `shekyl-wallet-rpc`'s send handlers and now by
+`EngineSession::transfer` — and (iii) the `engine-core` wallet
+lifecycle itself (create/open/restore/address/balance/history on the
+`.wallet` envelope, §2.4), which is a **separate wallet world from
+wallet2**, not a migration of it. Named caveats on (iii), verified at
+source: mid-session seed re-display is unavailable by design
+(`EngineSession::seed_unavailable_message`, mnemonic retained only
+until the create response is delivered), and no subaddress surface
+exists. The C++ `wallet2` retirement (`transfer_details` migration,
+FOLLOWUPS V3.1) governs the *legacy fallback's* deletion timeline and
+is orthogonal to this subsystem.
 
-- *The GUI's principal path is wallet2-only today.* `Send.tsx` →
-  `commands::transfer` (`commands.rs:802`) → `Wallet2::transfer_native`
-  (`wallet_bridge.rs:770–:788`); the `wallet_bridge.rs` module doc
-  itself marks Engine adoption as future work (`:24–:28`). No principal
-  surface in the GUI executes against an engine `.wallet`.
-- *The engine's principal send surface exists and is
-  production-consumed* — (b) is not blocked by missing engine API:
-  `Engine::build_pending_tx` / `submit_pending_tx`
-  (`engine/pending.rs:836`/`:845`, async variants `:861`/`:870`),
-  consumed by `shekyl-wallet-rpc`'s send handlers
-  (`send.rs` `build_pending_tx` over `TxRequest`/`TxRecipient`). (b)'s
-  cost is GUI-side bridging work (its command layer is wallet2-shaped),
-  not engine gaps. The full principal-surface inventory (history,
-  subaddresses, restore flows) remains a pre-flight item.
-- **Second dependency edge (review finding):** `start_pscan_if_staker`
-  yields a live handle only when the open path found `staking_enabled`
-  (`start.rs:520` docstring). The production setter chain **has landed
-  on `dev`** (§2.3), but its caller is wallet-rpc — without a GUI-side
-  activation surface or a pinned cross-tool flow, DS-PR-3 compiles,
-  passes its tests, and returns `Ok(None)` forever in production: the
-  `P`-balance surface is permanently empty and the adoption is an
-  armed gate with no trigger. The `staking_enabled`-reachability path
-  for GUI wallets is therefore a **named DS-PR-3 dependency** (§4) and
-  a pre-flight item alongside the principal-surface check.
+**Superseded pre-flight items** (Round-1 review, accurate pre-GUI-PR0…3,
+kept for the record): "the GUI's principal path is wallet2-only today"
+and "no principal surface executes against an engine `.wallet`" — both
+now false on the engine-backend default path (§2.4); "the full
+principal-surface inventory remains a pre-flight item" — discharged by
+GUI-PR1/PR2 for create/open/restore/address/balance/send/fee/history,
+with the two named caveats above.
 
 **Rejected alternative.** Read-only parse of the persisted
 `PScanStatePostcard` payload without running the P-scan task — a stale
@@ -332,7 +387,7 @@ updates so the new code never cites retired discipline.
 |-------|------|---------|-----------|
 | DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry | round closure + pre-flight |
 | DS-PR-2 | shekyl-core | Drain dispatch seam (claim-dispatch sibling): choke-point submit on persona transport, retirement wiring | DS-PR-1 |
-| DS-PR-3 | shekyl-gui-wallet | Staker-mode engine adoption (DS-2 shape as ratified): open + `start_pscan_if_staker` + parked handle; aggregate `P`-balance read | DS-PR-1 (API exists) **+ a `staking_enabled` production path reachable from the GUI's wallet world** (setter chain landed on `dev` via wallet-rpc `stake` → `Engine::first_stake` → `persist_bond_record`, §2.3; the GUI-side activation surface or pinned cross-tool flow is the missing edge — without it DS-PR-3 returns `Ok(None)` forever) |
+| DS-PR-3 | shekyl-gui-wallet | Aggregate `P`-balance read surface (the DS-2 remainder — the adoption shape itself landed as GUI-PR1/PR3, §2.4: open + `start_pscan_if_staker` + parked handle + `activate_staker`) | DS-PR-1 (aggregate-read API exists). *Former second edge — a `staking_enabled` production path reachable from the GUI — closed 2026-07-19 by GUI-PR3 `activate_staker` → `Engine::first_stake` (§2.3); former "native wallet lifecycle" edge closed by the same landing (GUI-PR1 `EngineSession`, §2.4)* |
 | DS-PR-4 | shekyl-gui-wallet | Drain-send UI: amount entry + DS-5 defaults + confirm; calls the one engine entry point | DS-PR-2, DS-PR-3 |
 | DS-PR-5 | shekyl-gui-wallet | DS-6 funding default (separable) | DS-PR-3 |
 | DS-PR-6 | shekyl-core | DS-7 doc sweep + Gate-6/M1/FOLLOWUPS close-out lines | last |
@@ -342,13 +397,10 @@ first; the GUI consumes released surface, never the reverse.
 
 ## 5. What this round does not decide
 
-- The DS-2 sub-question (dual-open vs engine-first) — the pre-flight
-  source checks are recorded in DS-2 (principal path wallet2-only
-  today; engine principal send exists and is production-consumed;
-  `staking_enabled` GUI-reachability is the missing edge); the
-  **ratification** of (a) vs (b) is still owed. *(DS-6's close-scope
-  question, previously listed here, is ANSWERED — in-scope/gating per
-  §12.9; see DS-6.)*
+- *(DS-2's dual-open-vs-engine-first sub-question, previously listed
+  here, is RATIFIED engine-first — review round 2; see DS-2. DS-6's
+  close-scope question is ANSWERED — in-scope/gating per §12.9; see
+  DS-6.)*
 - UI visual design (page placement, staking-page integration) — product
   surface, not firewall surface; falls out at DS-PR-4.
 - Threat-model addenda (rule 26 A3) — owed as a late-round pass (Round
@@ -373,3 +425,22 @@ first; the GUI consumes released surface, never the reverse.
   recorded (principal path wallet2-only; engine principal send exists,
   production-consumed by wallet-rpc). (3) §2.3's `start.rs:500` cite
   corrected to `:520`.
+- **2026-07-19 — Review round 2 (retraction applied + substrate
+  re-verified; DS-2 ratified).** (1) **Crate-role retraction applied**:
+  `shekyl-engine-rpc`'s lifecycle methods are wallet2 FFI shims
+  (`ffi::wallet2_ffi_*`), not a native wallet — the round-1 review's
+  "engine already has the principal core" reading is retracted; the
+  DS-2 pre-flight record now scopes the native claim to the **engine
+  send surface** plus the separately-verified `engine-core` lifecycle
+  (§2.4, DS-2). (2) **GUI substrate re-verified and found moved**:
+  GUI-PR0…GUI-PR3 landed on gui-wallet `dev` 2026-07-19 (`3f01f2d`,
+  `c7da109`, `03eb868`, `c73444c`) — `EngineSession` embeds
+  `engine-core::Engine` in-process, engine backend default-on,
+  `start_pscan_if_staker` runs at every engine open, and
+  `activate_staker` → `Engine::first_stake` closes the
+  `staking_enabled`-reachability edge; §2.4 superseded with a dated
+  rewrite (including the `DaemonClient` "exactly one type" correction).
+  (3) **DS-2 RATIFIED engine-first** on the landed substrate (not on
+  the retracted claim); dual-open rejected; DS-PR-3 re-scoped to its
+  remainder (aggregate `P`-balance read) with its former dependency
+  edges recorded closed (§4).
