@@ -540,6 +540,25 @@ impl WalletFile {
         Ok((handle, outcome))
     }
 
+    /// Verify `password` against the sealed keys envelope at `base_path`
+    /// **without** opening the wallet: reads `.wallet.keys` and runs the
+    /// full KDF + AEAD auth check, then drops the opened material
+    /// (zeroize-on-drop). A wrong password surfaces as the same envelope
+    /// error [`Self::open`] would produce.
+    ///
+    /// Deliberately does **not** take the keys-file lock, so it is callable
+    /// while another handle holds the wallet open. The intended caller is a
+    /// credentialed close-and-reopen choreography (the RPC first-stake
+    /// entry), which must refuse a wrong password **before** tearing down
+    /// the open wallet it is about to reopen — verify-then-close, so a
+    /// mistyped password can never log the user out. Read-only: no file is
+    /// created, written, or locked.
+    pub fn verify_password(base_path: &Path, password: &[u8]) -> Result<(), WalletFileError> {
+        let keys_bytes = std::fs::read(keys_path_from(base_path))?;
+        let _opened = open_keys_file(password, &keys_bytes)?;
+        Ok(())
+    }
+
     /// Rewrite `.wallet` with the given ledger state. Does **not**
     /// touch `.wallet.keys`; write-once is enforced by construction
     /// (the function physically never names that path as a write

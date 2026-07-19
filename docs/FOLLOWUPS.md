@@ -203,6 +203,13 @@ sustainability is unaffected by the recalibration.
   already-public holdings descriptor); re-evaluation shape: gate-6 round
   entry plus closure of this item citing it. *Target: V3.0 (pre-genesis).*
 
+  **UPDATE 2026-07-18 (`feat/stake-activation-entry`): the enforcement half landed** —
+  SA-R1-c count gate at `assemble_bond_post` (post-sweep `tracing::warn!` on
+  `swept_inputs > 1`; consciously-logged exception, never a refusal — GF4b-2 is
+  self-privacy). The common-case one-input first bond is one-input by construction of
+  the clean path (P holds exactly the one `stake_in` output). The **funding-shape half**
+  (principal-side `stake_in` emitting one structured `bond_floor + cover` output) stays
+  homed in `PRINCIPAL_STAKE_LIFECYCLE.md` — co-gating, pre-genesis.
 - **[Done] Domain-newtype the residual raw fields on `PFundingOutputRecord` and
   the WI-2 sweep amounts (spawned GF-4b audit sweep, 2026-07-08; closed
   2026-07-11 on `feat/wi2-bond-orchestrator`).** Landed with the WI-2
@@ -4912,6 +4919,36 @@ sustainability is unaffected by the recalibration.
   **Target: V3.0 pre-genesis — PR-4b; the E4 gate (PR-4c e2e) is
   sequenced behind it.** Closed when both batteries land and the
   tripwire is promoted.
+  **UPDATE 2026-07-18 — gap (i) CLOSED (PR-4b, bond-post half).** The
+  JoinMarket bond-post Phase-C battery is wired in
+  `verifier.rs::verify_bond_post` (§8.7.1 BP-rows closure note): O6 →
+  bond CT balance → BP2/BP5/BP3+BP4 (native
+  `shekyl-archival-retention` calls — the same functions the C++
+  oracle reaches over FFI) → Bp+ → funding-subset FCMP++ → all-input
+  PQC. `SubmitFacts` gained the BP3 `bond_record_exists` fact (probe
+  keyed on the vin's claimed id, snapshot + Phase-D re-probe from the
+  reparsed blob; record-appears-during-C races to
+  `DoubleSpendConflict`). The stale `verifier.rs` reachability docs
+  (the "§13 wire reshape" reopen and "bond posts cannot clear Phase A"
+  claim) are corrected — there was **no wire contradiction**
+  (`shekyl-wire` has sized `pseudoOuts` by the `ToKey` subset since the
+  §13 coupling closure, 2026-07-05). Non-JoinMarket post kinds
+  (Unbond/HoldingsUpdate/Rebond) refuse at the submit battery under a
+  named rule-21 reopen (§8.7.1 closure note: their submit fact sets +
+  Phase-D re-check semantics are unspecified and no wallet constructs
+  them). The PR-4a tripwire is promoted to the accepted-and-applied +
+  scan-re-discovery leg — and running it live surfaced + fixed two
+  latent production bugs (`docs/CHANGELOG.md`): the ordinary transfer
+  path omitted the `tx_extra 0x07` PQC leaf-hash blob (every transfer
+  output ingested with a zero `h_pqc` leaf ⇒ unspendable; first
+  observable at the first real spend of a transfer output), and
+  `Blockchain::prepare_handle_incoming_blocks` crashed
+  (`bad_variant_access`) on any block carrying an archival vin (three
+  unguarded `std::get<txin_to_key>` scan-table walks). **Gap (ii) — the
+  emission submit leg — remains this item's open half** (Phase-A
+  classification for `Input::ArchivalRewardEmission`, fee/vout statics,
+  verifier rows over `emission_vin_verify_*`); PR-4c stays sequenced
+  behind it.
 
 - **Single-sig address decode enforces the Bech32m variant**
   (added 2026-07-17, PR #323 Copilot round). `bech32m_decode` in
@@ -8377,6 +8414,32 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.x — staker archival and visualization ship
 
+- **P-drain mechanism re-walk — CryptoNote holdover audit (rule 16; method note 5:
+  "carry from X" is a re-walk trigger, not an exemption).** Ratified finding
+  (2026-07-19, maintainer analysis at source): the anti-sweep / decorrelate-the-drains
+  discipline was a CryptoNote-lineage carry, wrong on two independent layers. **Layer 1 —
+  it defended an observable FCMP++ deletes:** the membership proof breaks the
+  input→output link (a drain reveals neither which outputs it consumed nor a
+  consolidation signature; F-W10's output-count phantom), so "one identifiable exit
+  event" does not exist on-chain. **Layer 2 — it was powerless against the one real
+  residual:** the off-chain principal↔user aggregate (§18.12) is slice-invariant — ten
+  decorrelated partial drains deliver the same lifetime total as one sweep. The
+  exit-standoff apparatus is already deleted (F-W7); privacy is correctly re-homed to
+  the **amount** channel: F-D1 lineage-blind selection (structural, built) + F-D2
+  round-number/random-split default (unbuilt, rides the drain-send subsystem). As
+  built, sweep = the `target == spendable` boundary of `plan_drain` (largest-first
+  selection takes every mature output, zero change) — no separate primitive, no
+  structural block. **The re-walk (land before/with the F-D2 drain-send subsystem
+  build, Gate-6 R4's last open item):** (a) fee/change mechanics — the planner is
+  fee-agnostic; decide whether drain-everything is `target = spendable − fee` at the
+  caller or an assembly-side fee carve, and whether a first-class sweep entry should
+  exist rather than each caller computing the boundary; (b) sweep drain docs/comments
+  for remaining shape-era language and assumptions (decorrelation, consolidation
+  visibility, split-the-exit) and re-walk each against the FCMP++ threat model rather
+  than carrying it; (c) confirm F-D2's default is specified against the amount channel
+  only (the surviving channel) and cannot silently re-introduce shape machinery.
+  **Target: V3.0** (with the drain-send subsystem; the audit is cheap, the carve
+  decisions freeze with the wallet's exit UX).
 - **Principal-side default-on Tor — flip `--proxy` from opt-in to default, opt-out loud.**
   Source-verified at the WI-4 arc closure (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §18.13):
   the persona side is Tor-mandatory **by construction** (`shekyl-p-transport` fails the
@@ -8422,6 +8485,20 @@ one place to confirm each item's relationship to the wallet stack.
   harness on the production code path (CI observes the GC fire — a real phantom collected);
   **production-firing** gated on the activation round (#332). A bare "discharged" is
   forbidden (DQ-F Guard 2).
+  **UPDATE 2026-07-18 — arm #2 BUILT (`feat/sp-r0-arm2-retire-gc`).** The done-side
+  `RetiredPersonaRecord` ledger in `PScanState` (v6→7 + regenerated snapshot), the atomic
+  retire-time prune (`PScanAccrual::retire_persona` — matches + pending trigger leave with
+  the record, one seal; funding rows are already gone by then — the funded-gate defers
+  retire until the slot is drained, arm #1 having pruned each spend as observed, with a
+  defense-in-depth retain + debug_assert behind the gate), the DQ-D tip-clamp corroboration (a low-claiming source
+  defers the prune, fail-safe), and the open-time records-driven hint clean (retired slots
+  never re-derive; an emptied hint reverts to non-staker). Guard-2: logic-discharged at the
+  task/accrual/lifecycle test level (cfg(test) evidence construction — the claim-window
+  reachability deviation, disclosed in the plan's arm-#2 build record); production-discharge =
+  extend the promoted regtest lane (PR-4b landed via #338; the lane enters through the
+  production `first_stake` — arm #1 production-discharged there) with the retire leg
+  (unbond post + armed settlement-epoch override for the W-lapse) — drivable, not yet
+  driven.
   **Rule (load-bearing — travels
   with the item):** GC **only** on *confirmed-absence within `covered`* (the range the reconcile set
   can vouch for), **never** on absence-from-one-source — the SP-6 "absence ≠ unscanned" discipline;
@@ -8483,6 +8560,12 @@ one place to confirm each item's relationship to the wallet stack.
   only — production-firing remains gated on the staker-activation round (#332)**; the entry
   closes on the production discharge. The "nothing removes an output" poison text above is the
   pre-arm-#1 record, kept for lineage.
+  **UPDATE 2026-07-18 (PR-4b): PRODUCTION-DISCHARGED — this entry closes.** The
+  activation entry (#336) + the PR-4b bond-post battery landed, and the promoted
+  regtest e2e stakes through the production `Engine::first_stake` path, confirms
+  the bond on-chain, and asserts the swept funding records are pruned from the
+  sealed state (the DQ-F production fire, live —
+  `ARCHIVAL_BOND_SP_R0_PLAN.md` §4 build record).
   See [`ARCHIVAL_BOND_WI2_ASSEMBLY.md`](design/ARCHIVAL_BOND_WI2_ASSEMBLY.md) §3.2/§3.5 and
   [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12 (SP-R0).
   **2d-2 tip-consumer enrollment note:** assemble-time `anchor_t0` (via

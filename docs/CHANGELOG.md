@@ -4,6 +4,117 @@
 
 ### Added
 
+- **wallet: SP-R0 arm #2 — the done-side retirement ledger + atomic
+  retire-time prune (`feat/sp-r0-arm2-retire-gc`).**
+  `RetiredPersonaRecord` rows land in `PScanState`
+  (**`PSCAN_STATE_VERSION` 6 → 7**, schema snapshot regenerated), written
+  by `PScanAccrual::retire_persona`: the persona's `bond_post_matches`
+  rows and the `pending_unbonds` trigger leave in the same mutation that
+  appends the record — one atomic seal (the bound on
+  `bond_post_matches` growth, the most privacy-sensitive structure in
+  the state). Funding rows are already gone by then: the **funded-gate**
+  defers retire until the slot is drained (arm #1 pruned each spend as
+  it was observed), with a defense-in-depth retain + `debug_assert`
+  behind the gate. The durable prune fires only
+  under the DQ-D **sweep-corroborated tip clamp**
+  `min(claimed_tip, verified_frontier + reorg_depth)` (the WI-3 R2-1
+  reserve, consumed as corroboration; a low-claiming source defers the
+  prune — fail-safe; the actor key-wipe keeps its frontier basis). At
+  open, retired slots are cleaned from the live `bonded_slots` hint
+  before derive ("stop deriving slot N"; an emptied hint reverts the
+  wallet to a non-staker), with the derive-forward subtraction following
+  from the monotone cursor. Guard-2: logic-discharged at the
+  task/accrual/lifecycle test level (disclosed cfg(test)-evidence
+  deviation — claim-window reachability); production-discharge rides the
+  PR-4b-gated regtest lane.
+
+- **daemon: bond-post Phase-C submit battery (PR-4b, bond-post half).** The
+  Rust submit engine's `SubmitTxKind::BondPost` arm is no longer an
+  unimplemented refusal: `DaemonTxVerifier` runs the §8.7.1 BP battery for
+  JoinMarket bond-posts — O6 mask checks, the bond CT balance
+  (`Σ pseudoOuts + bond_debit = Σ out_masks + fee + bond_credit`), BP2
+  canonical-id recomputation, the BP5 identity-key auth pin, BP3 record
+  claim-slot + BP4 economic battery (native
+  `shekyl-archival-retention::verify_join_market_bond_post` — the same
+  function the C++ oracle reaches over FFI), Bp+, FCMP++ over the `ToKey`
+  funding subset, and PQC hybrid auth over every input. `SubmitFacts` gains
+  the BP3 `bond_record_exists` fact (Phase-B probe keyed on the vin's
+  claimed id; Phase-D re-probe from the reparsed blob races a
+  record-appearing-during-verify to `DoubleSpendConflict`). The stale
+  `verifier.rs` reachability docs ("§13 wire reshape" / "bond posts cannot
+  clear Phase A") are corrected — no wire contradiction existed.
+  Non-JoinMarket post kinds (`Unbond`/`HoldingsUpdate`/`Rebond`) refuse
+  loudly under a named rule-21 reopening criterion. The PR-4a staker-harness
+  tripwire is promoted to accepted-and-applied — staking through the
+  production `Engine::first_stake` entry (bond mined, bond-post match +
+  `BondPostChange` change funding re-discovered by the production P-scan,
+  swept funding records pruned from the sealed state: the SP-R0 arm-#1
+  **production discharge**, DQ-F fire live). The emission submit leg remains open on its FOLLOWUPS item and
+  still gates PR-4c.
+
+  Driving the battery live surfaced and fixed **two latent production
+  bugs** (each invisible until a bond post could actually reach FCMP++
+  verification and a block):
+
+  - **wallet: ordinary transfers omitted the `tx_extra 0x07` PQC
+    leaf-hash blob — every transfer output was unspendable.** The
+    curve-tree leaf's 4th component `H(pqc_pk)` can only come from the
+    sender (the PQC key is KEM-derived), and an output ingested without
+    the field carries a zero leaf hash no spend can ever satisfy. The
+    bond/emission assembly paths always appended it; `sign_bridge.rs`'s
+    transfer assembly did not, so transfer-created outputs (e.g. persona
+    funding) failed FCMP++ verification at first spend
+    (`BatchVerificationFailed`). Fixed: the transfer path now appends the
+    per-output `h_pqc` blob exactly as the bond path does.
+  - **daemon: `Blockchain::prepare_handle_incoming_blocks` crashed on any
+    block carrying an archival vin.** Three scan-table prefill loops did
+    an unguarded `std::get<txin_to_key>` over every vin; the first mined
+    bond-post threw `std::bad_variant_access` out of `generateblocks`
+    (and would have crashed block relay on any archival-vin block).
+    Fixed with the file's own `holds_alternative` skip idiom — archival
+    vins carry no key image and no amount.
+- **wallet: the staker-activation entry — first-stake goes production
+  (`ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.8).** New wallet-rpc `stake`
+  method (`Capability::Full`-gated; refusals `-29500 StakeNotReady` /
+  `-29501 StakeInFlight` / `-29502 AlreadyStaked`; password crosses only
+  the local transport into `Zeroizing`). SA-R1-a: `Engine::
+  open_full_with_first_stake_intent` spawns the StakeEngine for a
+  non-staker under a **transient** intent (never persisted; an aborted
+  first-stake leaves nothing durable — pin test included), with the
+  on-demand P-scan started under intent so `stake_in` funding can
+  scan-discover. `Engine::first_stake` composes the ratified order:
+  idempotency/W2 split (new `persona_canonical_id` actor projection) →
+  preflight sweep (W1-clean, production witness) → re-entrant
+  `persist_bond_record` → sign/assemble → the `.wallet.pending` seal; no
+  broadcast on the path (GF-7 preserved structurally — the bond dispatch
+  driver sends at its offset). SA-R1-c: multi-input bond posts are now a
+  consciously-logged exception (`tracing::warn!` at assemble). Retires
+  the GF4b rule-21 dead-code half (b) on all five witness consumers.
+  Same PR: **SP-R0 arm #3** (open-time phantom `bonded_slots` GC at the
+  derive-time locus, phantom ⟺ no-pending ∧ absent-within-covered with
+  the pending-record bridge as the wrongful-GC argument; logic-discharged
+  by the SA-DQ-3 co-designed crash-fixture lane). Guard-2: arms #1/#3
+  production-discharge is **blocked on the PR-4b daemon submit-legs
+  battery** (named; the regtest tripwire's promotion note carries the
+  conversion instruction). **Post-review hardening (same branch,
+  `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.9):** wallet-level idempotency +
+  typed `WrongSlot` guards on `first_stake` (a call naming another slot
+  can no longer mint a second first-stake); verify-then-close on the
+  intent reopen (new `WalletFile::verify_password` — a wrong password or
+  daemon fault refuses with the wallet still open; name-bound close +
+  best-effort restore for the residue); dark-scan self-heal (a retry
+  reopens when no P-scan handle is parked); rule-82 taxonomy split (new
+  `State` / `FeeEstimate` arms — internal/daemon faults no longer
+  misdiagnosed as the `-29500` funding refusal; fee faults map to
+  `-29102`); the amount/gindex-free sanitizer now covers the post-persist
+  assemble/sign path; one shared `sweep_bond_funding` body for
+  preflight + assemble (`BondFloorZero` now refuses W1-clean); the
+  arm-#3 GC degrades (keep-all + warn) instead of bricking open on a
+  corrupt auxiliary seal; the GF-7 pending-release ordering contract is
+  pinned on `reconcile_phantom_bonded_slots` + `PendingPostState`;
+  `stake`'s password is `Zeroizing` on every path; and
+  `docs/api/wallet_rpc.yaml` now specifies `stake` + `-29500..-29502`.
+
 - **wallet: SP-R0 arm #1 — spent-funding-record prune via key-image watch
   (logic-discharged).** The `P`-scan dual extractor gains arm (c): each
   scanned tx's FCMP++ `ToKey` key images are matched against an in-actor

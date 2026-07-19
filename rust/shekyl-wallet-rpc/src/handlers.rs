@@ -45,6 +45,7 @@ pub async fn dispatch(
         "get_height" => queries::get_height(tenants, params).await,
         "refresh" => sync::refresh(tenants, params).await,
         "build_pending_tx" => send::build_pending_tx(tenants, params).await,
+        "stake" => lifecycle::stake(tenants, params).await,
         "submit_pending_tx" => send::submit_pending_tx(tenants, params).await,
         "discard_pending_tx" => send::discard_pending_tx(tenants, params).await,
         other => Err(WalletRpcError::MethodNotFound(other.to_owned())),

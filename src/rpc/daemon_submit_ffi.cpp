@@ -67,7 +67,9 @@ static_assert(offsetof(shekyl_submit_facts_ffi, in_chain) == 1, "in_chain offset
 static_assert(offsetof(shekyl_submit_facts_ffi, ref_block_found) == 2, "ref_block_found offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, tree_depth) == 3, "tree_depth offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_pool_broadcast) == 4, "in_pool_broadcast offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, reserved) == 5, "reserved offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, bond_record_probed) == 5, "bond_record_probed offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, bond_record_exists) == 6, "bond_record_exists offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, reserved) == 7, "reserved offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, ref_height) == 8, "ref_height offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, root) == 16, "root offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, fee_per_byte) == 48, "fee_per_byte offset");
@@ -143,12 +145,28 @@ uint8_t classify_key_image(tx_memory_pool& pool, Blockchain& bc,
 //   `have_tx(_, legacy)` identity check disclosed exactly this narrower fact
 //   to foreign callers; an embargoed self-resubmit was caught later and
 //   lossily by add_tx's existing-tx arm (`OK + not_relayed`).
+//   `bond_record_probed`/`bond_record_exists` carry the §8.7.1 BP3 fact —
+//   the archival bond record for the bond-post vin's claimed p_canonical_id
+//   (the claim is pinned to the pubkey by the Rust verifier's BP2 leg).
+//   Probed iff `bond_p_canonical_id` is non-null: the engine passes it for a
+//   bond-post submission (snapshot), and the commit re-derives it from the
+//   reparsed blob (re-check) so a bond-post block landing during Phase C
+//   surfaces as a Raced fresh fact that Rust classifies DoubleSpendConflict.
 void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
   const crypto::hash& txid, const std::vector<crypto::key_image>& key_images,
   const crypto::hash& reference_block,
+  const crypto::hash* bond_p_canonical_id,
   shekyl_submit_facts_ffi& facts, uint8_t* ki_conflicts)
 {
   memset(&facts, 0, sizeof(facts));
+
+  if (bond_p_canonical_id)
+  {
+    std::vector<uint8_t> existing_pubkey;
+    facts.bond_record_probed = 1;
+    facts.bond_record_exists =
+      bc.get_db().get_archival_bond_hybrid_pubkey(*bond_p_canonical_id, existing_pubkey) ? 1 : 0;
+  }
 
   facts.in_pool = pool.have_tx(txid, relay_category::all) ? 1 : 0;
   facts.in_pool_broadcast = pool.have_tx(txid, relay_category::legacy) ? 1 : 0;
@@ -202,6 +220,7 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
   const uint8_t* txid,
   const uint8_t* key_images, size_t n_key_images,
   const uint8_t* reference_block,
+  const uint8_t* bond_p_canonical_id,
   shekyl_submit_facts_ffi* out_facts,
   uint8_t* out_ki_conflicts) noexcept
 {
@@ -217,6 +236,9 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
 
     const crypto::hash id = hash_from_bytes(txid);
     const crypto::hash ref = hash_from_bytes(reference_block);
+    crypto::hash bond_p_id{};
+    if (bond_p_canonical_id)
+      bond_p_id = hash_from_bytes(bond_p_canonical_id);
     std::vector<crypto::key_image> kis(n_key_images);
     for (size_t i = 0; i < n_key_images; ++i)
       memcpy(kis[i].data, key_images + i * 32, 32);
@@ -225,7 +247,8 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
     std::lock_guard<tx_memory_pool> pool_lock(pool);
     std::lock_guard<Blockchain> bc_lock(bc);
 
-    collect_facts_locked(pool, bc, id, kis, ref, *out_facts, out_ki_conflicts);
+    collect_facts_locked(pool, bc, id, kis, ref,
+      bond_p_canonical_id ? &bond_p_id : nullptr, *out_facts, out_ki_conflicts);
 
     if (out_facts->fee_per_byte == 0)
     {
@@ -305,12 +328,20 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
     }
 
     // Blob-derived key images, `txin_to_key` in vin order — the same
-    // extraction as the engine's ParsedSubmission (phase_a.rs).
+    // extraction as the engine's ParsedSubmission (phase_a.rs). The
+    // bond-post vin's claimed p_canonical_id rides along for the §8.7.1
+    // BP3 re-probe (blob-derived, exactly as the snapshot probe was
+    // engine-derived from the same bytes).
     std::vector<crypto::key_image> kis;
     kis.reserve(tx.vin.size());
+    const crypto::hash* bond_p_id = nullptr;
     for (const auto& in : tx.vin)
+    {
       if (std::holds_alternative<txin_to_key>(in))
         kis.push_back(std::get<txin_to_key>(in).k_image);
+      else if (std::holds_alternative<txin_archival_bond_post>(in))
+        bond_p_id = &std::get<txin_archival_bond_post>(in).p_canonical_id;
+    }
     if (kis.size() != n_key_images)
     {
       MERROR("submit commit: key-image count mismatch: blob " << kis.size()
@@ -326,7 +357,7 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
     std::lock_guard<Blockchain> bc_lock(bc);
 
     shekyl_submit_facts_ffi fresh;
-    collect_facts_locked(pool, bc, id, kis, cert_ref, fresh, out_fresh_ki_conflicts);
+    collect_facts_locked(pool, bc, id, kis, cert_ref, bond_p_id, fresh, out_fresh_ki_conflicts);
     if (fresh.fee_per_byte == 0)
     {
       MERROR("submit commit: fee-per-byte derivation failed");
@@ -360,6 +391,12 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
         fresh.ref_height != cert_ref_height ||
         memcmp(fresh.root, cert_root, sizeof(fresh.root)) != 0 ||
         !ref_age_window_holds(fresh.chain_height, fresh.ref_height);
+    if (!raced)
+      // §8.7.1 BP3 re-check: Phase C verified the bond record ABSENT for
+      // a (JoinMarket) bond-post; a record now present means a competing
+      // bond-post block landed during C — Rust classifies the claim-slot
+      // DoubleSpendConflict from these fresh facts.
+      raced = fresh.bond_record_probed != 0 && fresh.bond_record_exists != 0;
     if (!raced)
       // F34 fee re-gate against fresh params, mirroring add_tx's
       // gate-before-tail order (tx_pool.cpp) — mechanism reuse; Rust
@@ -445,6 +482,7 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
   const uint8_t* txid,
   const uint8_t* key_images, size_t n_key_images,
   const uint8_t* reference_block,
+  const uint8_t* bond_p_canonical_id,
   shekyl_submit_facts_ffi* out_facts,
   uint8_t* out_ki_conflicts)
 {
@@ -452,7 +490,8 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
     return SHEKYL_SUBMIT_INTERNAL_FAULT;
   core& c = h->rpc->get_core();
   return daemon_submit::snapshot_facts(c.get_pool(), c.get_blockchain_storage(),
-    txid, key_images, n_key_images, reference_block, out_facts, out_ki_conflicts);
+    txid, key_images, n_key_images, reference_block, bond_p_canonical_id,
+    out_facts, out_ki_conflicts);
 }
 
 int shekyl_submit_commit_tx(core_rpc_handle* h,
@@ -513,6 +552,8 @@ void shekyl_submit_facts_test_fill(shekyl_submit_facts_ffi* out, uint64_t seed)
   out->ref_block_found = static_cast<uint8_t>(submit_facts_field_value(seed, 2));
   out->tree_depth = static_cast<uint8_t>(submit_facts_field_value(seed, 3));
   out->in_pool_broadcast = static_cast<uint8_t>(submit_facts_field_value(seed, 10));
+  out->bond_record_probed = static_cast<uint8_t>(submit_facts_field_value(seed, 12));
+  out->bond_record_exists = static_cast<uint8_t>(submit_facts_field_value(seed, 13));
   out->ref_height = submit_facts_field_value(seed, 4);
   for (size_t i = 0; i < sizeof(out->root); ++i)
     out->root[i] = static_cast<uint8_t>(submit_facts_field_value(seed, 5) >> ((i % 8) * 8));

@@ -6822,9 +6822,15 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
       its = m_scan_table.find(tx_prefix_hash);
       assert(its != m_scan_table.end());
 
-      // get all amounts from tx.vin(s)
+      // get all amounts from tx.vin(s). Archival vins (bond-post,
+      // serve-credit, reward-emission) carry no key image and no amount —
+      // skip them, matching every other vin walk on the block path (an
+      // unguarded std::get here threw bad_variant_access on the first
+      // mined bond-post, surfaced by the PR-4b e2e).
       for (const auto &txin : tx.vin)
       {
+        if (!std::holds_alternative<txin_to_key>(txin))
+          continue;
         const txin_to_key &in_to_key = std::get<txin_to_key>(txin);
 
         // check for duplicate
@@ -6850,9 +6856,12 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
           tx_map.emplace(amount, std::vector<output_data_t>());
       }
 
-      // add new absolute_offsets to offset_map
+      // add new absolute_offsets to offset_map (same archival-vin skip as
+      // the amounts walk above)
       for (const auto &txin : tx.vin)
       {
+        if (!std::holds_alternative<txin_to_key>(txin))
+          continue;
         const txin_to_key &in_to_key = std::get<txin_to_key>(txin);
         // no need to check for duplicate here.
         auto absolute_offsets = relative_output_offsets_to_absolute(in_to_key.key_offsets);
@@ -6917,8 +6926,11 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
       if (its == m_scan_table.end())
         SCAN_TABLE_QUIT("Tx not found on scan table from incoming blocks.");
 
+      // Same archival-vin skip as the collection walks above.
       for (const auto &txin : tx.vin)
       {
+        if (!std::holds_alternative<txin_to_key>(txin))
+          continue;
         const txin_to_key &in_to_key = std::get<txin_to_key>(txin);
         auto needed_offsets = relative_output_offsets_to_absolute(in_to_key.key_offsets);
 

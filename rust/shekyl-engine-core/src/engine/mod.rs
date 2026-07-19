@@ -402,6 +402,7 @@ pub use pending::{
 // re-exported so embedders holding the `PScanHandle` (the module keeps the
 // handle embedder-held, not engine-held — see `pscan::start`'s docs) can name
 // the types without reaching into the `pub(crate)` pscan internals.
+pub use bond_orchestrator::{FirstStakeError, FirstStakeOutcome};
 pub use pscan::start::{PScanHandle, PScanStartError, DEFAULT_PSCAN_CADENCE};
 pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
@@ -1030,6 +1031,14 @@ impl<
     /// `TestDaemon` and observe the same accessor shape.
     pub fn daemon(&self) -> &D {
         &self.daemon
+    }
+
+    /// Whether a StakeEngine actor is resident (a staker open, or an
+    /// open-with-first-stake-intent). The embedder-facing predicate the
+    /// `stake` entry uses to decide whether the SA-R1-a intent reopen is
+    /// needed; deliberately a bool — the handle itself stays crate-private.
+    pub fn has_stake_engine(&self) -> bool {
+        self.stake.is_some()
     }
 
     /// Clone the archival-bond [`StakeEngineHandle`], or `None` if no stake

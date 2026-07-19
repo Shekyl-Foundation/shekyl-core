@@ -44,6 +44,9 @@
 //! consumer, so the producer carries `#[allow(dead_code)]`.
 
 use shekyl_engine_state::StakingBlock;
+use shekyl_types::PCanonicalId;
+
+use super::pscan::reconcile::PReconcileSet;
 
 use super::error::PersistenceError;
 use super::lifecycle::drive_persistence;
@@ -166,9 +169,207 @@ impl<
     }
 }
 
+/// What one open-time phantom sweep did (SP-R0 **arm #3**).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PhantomSlotSweep {
+    /// Slots dropped from `bonded_slots` (confirmed-absent, no pending post).
+    pub(crate) dropped: Vec<u32>,
+    /// Whether the sweep emptied `bonded_slots` and flipped
+    /// `staking_enabled` off (the wallet reverts to a non-staker).
+    pub(crate) staking_disabled: bool,
+}
+
+/// SP-R0 **arm #3** — the open-time phantom `bonded_slots` GC
+/// (`ARCHIVAL_BOND_SP_R0_PLAN.md` §3; FOLLOWUPS "2d full-scan reconciliation
+/// of `bonded_slots` / `p_slot`"). Runs at the derive-time locus the
+/// `StakingBlock` hint design anticipated: **before** the persona derive, so
+/// a phantom staker reopens as a clean non-staker (no actor, no scan, no
+/// derivation "for nothing").
+///
+/// A slot is phantom **iff** it has **no pending post** AND its persona is
+/// [`ReconcileVerdict::AbsentWithinCovered`] over the sealed scan evidence.
+/// The two conditions are jointly airtight against wrongful GC of a *real*
+/// bond (the stuck-funds failure this design forbids):
+///
+/// - pre-broadcast and pre-confirmation, the signed post sits durably in
+///   `.wallet.pending` — the pending guard skips it (W3);
+/// - post-confirmation but pre-scan-coverage, the pending record **still
+///   exists** — dispatch releases it only on the scan's own reorg-deep
+///   `BondPostMatch` (never on a daemon claim), so the pending record is the
+///   bridge across the scan lag; once released, the match is in the evidence
+///   and the verdict is `Present`.
+///
+/// `OutsideCovered` (nothing scanned / frontier at zero) keeps every slot —
+/// absence-≠-unscanned is [`PReconcileSet`]'s type-level gate. The `p_slot`
+/// cursor is **never lowered**: a dropped slot stays burned (the monotone
+/// no-reuse invariant, `StakingBlock::monotone_current_slot`).
+///
+/// # Binding contract for the release side (GF-7 dispatch, not yet built)
+///
+/// The two-condition guard above is airtight **only while** the pending
+/// record's durable removal is ordered **at-or-after** the durable seal of
+/// the match-bearing pscan state. Nothing in this crate releases a pending
+/// post today, so the ordering cannot currently be violated — but the GF-7
+/// dispatch driver will, and it MUST write the release in the same atomic
+/// seal transaction as (or strictly after) the pscan-state seal that
+/// carries the observed [`BondPostMatch`](super::pscan::scan_step::BondPostMatch).
+/// A release that becomes durable first opens a crash window where this GC
+/// sees "no pending record + stale confirmed-absence" and drops a REAL
+/// on-chain bond — permanently, since the burned cursor forbids re-adopting
+/// the slot. The dispatch PR must land a crash-ordering test against this
+/// exact window before any release path ships (mirrored in
+/// `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` and on
+/// [`PendingPostState`](shekyl_engine_state::pending_post_block::PendingPostState)).
+pub(crate) fn reconcile_phantom_bonded_slots<E>(
+    staking: &mut StakingBlock,
+    evidence: &PReconcileSet,
+    pending_slots: &std::collections::BTreeSet<u32>,
+    mut id_of_slot: impl FnMut(u32) -> Result<PCanonicalId, E>,
+) -> Result<PhantomSlotSweep, E> {
+    let mut dropped = Vec::new();
+    for &slot in &staking.bonded_slots {
+        if pending_slots.contains(&slot) {
+            continue; // W3 / scan-lag bridge: a pending post is never phantom.
+        }
+        let id = id_of_slot(slot)?;
+        // The whole-covered absence form; `OutsideCovered` (including the
+        // nothing-scanned case) keeps the slot — the type's
+        // absence-≠-unscanned gate does the work.
+        if matches!(
+            evidence.reconcile_full_scan(id),
+            crate::engine::pscan::reconcile::ReconcileVerdict::AbsentWithinCovered
+        ) {
+            dropped.push(slot);
+        }
+    }
+    if !dropped.is_empty() {
+        staking.bonded_slots.retain(|s| !dropped.contains(s));
+    }
+    let staking_disabled = staking.bonded_slots.is_empty() && !dropped.is_empty();
+    if staking_disabled {
+        staking.staking_enabled = false;
+    }
+    Ok(PhantomSlotSweep {
+        dropped,
+        staking_disabled,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::engine::pscan::exhaustiveness::VerifiedBatch;
+    use crate::engine::pscan::scan_step::BondPostMatch;
+    use shekyl_types::BlockHeight;
+
+    fn staking(bonded: &[u32]) -> StakingBlock {
+        StakingBlock {
+            staking_enabled: !bonded.is_empty(),
+            bonded_slots: bonded.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    fn id(b: u8) -> PCanonicalId {
+        PCanonicalId::from_bytes([b; 32])
+    }
+
+    /// Evidence covering `[0, high)` carrying `matches`.
+    fn evidence(high: u64, matches: Vec<BondPostMatch>) -> PReconcileSet {
+        PReconcileSet::from_verified_scan(
+            VerifiedBatch::for_test(0, high, [1; 32]).range(),
+            matches,
+        )
+    }
+
+    fn match_for(persona: PCanonicalId, height: u64) -> BondPostMatch {
+        BondPostMatch {
+            height: BlockHeight::from_raw(height),
+            p_canonical_id: persona,
+            post_kind: 0,
+        }
+    }
+
+    /// Arm #3 unit matrix: pending-guarded, present, absent, unscanned —
+    /// only confirmed-absent-and-unpended drops; emptying flips the flag.
+    #[test]
+    fn phantom_sweep_drops_only_confirmed_absent_unpended_slots() {
+        // Slot 0: pending post (W3 bridge) — kept even though absent.
+        // Slot 1: present in evidence — kept.
+        // Slot 2: absent within covered, no pending — DROPPED.
+        let mut st = staking(&[0, 1, 2]);
+        let ev = evidence(100, vec![match_for(id(1), 10)]);
+        let pending: std::collections::BTreeSet<u32> = [0u32].into_iter().collect();
+        let sweep = reconcile_phantom_bonded_slots(&mut st, &ev, &pending, |slot| {
+            Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
+        })
+        .expect("sweep");
+        assert_eq!(sweep.dropped, vec![2]);
+        assert!(!sweep.staking_disabled, "slots remain");
+        assert_eq!(st.bonded_slots, vec![0, 1]);
+        assert!(st.staking_enabled);
+    }
+
+    /// Nothing exhaustively scanned ⇒ `OutsideCovered` ⇒ nothing drops —
+    /// the absence-≠-unscanned gate, exercised through the sweep.
+    #[test]
+    fn phantom_sweep_keeps_everything_when_nothing_is_covered() {
+        let mut st = staking(&[7]);
+        let ev = evidence(0, Vec::new());
+        let sweep = reconcile_phantom_bonded_slots(
+            &mut st,
+            &ev,
+            &std::collections::BTreeSet::new(),
+            |_| Ok::<_, ()>(id(9)),
+        )
+        .expect("sweep");
+        assert!(sweep.dropped.is_empty());
+        assert_eq!(st.bonded_slots, vec![7], "unscanned absence never GCs");
+        assert!(st.staking_enabled);
+    }
+
+    /// Emptying `bonded_slots` reverts the wallet to a non-staker, and the
+    /// cursor is untouched (the dropped slot stays burned).
+    #[test]
+    fn phantom_sweep_emptying_disables_staking_and_keeps_the_cursor() {
+        let mut st = staking(&[3]);
+        let cursor_before = st.p_slot;
+        let ev = evidence(50, Vec::new());
+        let sweep = reconcile_phantom_bonded_slots(
+            &mut st,
+            &ev,
+            &std::collections::BTreeSet::new(),
+            |_| Ok::<_, ()>(id(3)),
+        )
+        .expect("sweep");
+        assert_eq!(sweep.dropped, vec![3]);
+        assert!(sweep.staking_disabled);
+        assert!(!st.staking_enabled);
+        assert!(st.bonded_slots.is_empty());
+        assert_eq!(
+            st.p_slot, cursor_before,
+            "no-reuse: the cursor never lowers"
+        );
+    }
+
+    /// A derivation error aborts the sweep with NO mutation — fail closed,
+    /// never a partial drop.
+    #[test]
+    fn phantom_sweep_derivation_failure_leaves_state_untouched() {
+        let mut st = staking(&[1, 2]);
+        let ev = evidence(50, Vec::new());
+        let err = reconcile_phantom_bonded_slots(
+            &mut st,
+            &ev,
+            &std::collections::BTreeSet::new(),
+            |slot| if slot == 2 { Err("boom") } else { Ok(id(1)) },
+        )
+        .expect_err("derivation failure propagates");
+        assert_eq!(err, "boom");
+        assert_eq!(st.bonded_slots, vec![1, 2], "no partial mutation on error");
+        assert!(st.staking_enabled);
+    }
 
     use shekyl_address::Network;
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
@@ -272,6 +473,49 @@ mod tests {
         assert!(g.ledger.staking.staking_enabled);
         assert_eq!(g.ledger.staking.bonded_slots, vec![7]);
         assert_eq!(g.ledger.staking.p_slot, 8);
+    }
+
+    /// A corrupt (undecodable) pscan seal must NOT brick a staker's wallet
+    /// open: the arm-#3 phantom GC degrades to keeping every recorded slot
+    /// (warn loud, skip the sweep) — the seal is auxiliary, re-derivable
+    /// scan state, and the conservative failure direction is keep, never
+    /// drop. The scan path itself still fails loud on the same seal at
+    /// `start_pscan` (fail-closed for the scan, not for the open).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn corrupt_pscan_seal_degrades_the_gc_and_still_opens() {
+        let tmp = tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"pw");
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+        let network: Network = params.network;
+        let engine =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        engine
+            .persist_bond_record(PSlot::from_raw(2))
+            .expect("persist bond record");
+        engine.close(&creds).expect("close");
+
+        // Truncated garbage where the sealed pscan state should be.
+        std::fs::write(
+            shekyl_engine_file::paths::pscan_state_path_from(&base_path),
+            b"not a sealed pscan state",
+        )
+        .expect("corrupt the seal");
+
+        let reopened = Engine::<SoloSigner>::open_full(
+            &base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("open must survive a corrupt auxiliary seal")
+        .into_wallet();
+        let g = reopened.ledger.read();
+        assert!(g.ledger.staking.staking_enabled, "no wrongful GC");
+        assert_eq!(g.ledger.staking.bonded_slots, vec![2], "slots kept");
     }
 
     /// The persist→reopen seam wires Model D end to end: a fresh wallet is a

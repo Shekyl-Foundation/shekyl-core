@@ -857,6 +857,17 @@ holdings/registry reads — exactly as `check_archival_serve_credit_input`
 does today (`blockchain.cpp:4288-4319`); the derivation is Rust either way,
 so this is fact-fetching, not logic.
 
+**PR-4b status.** The bond-post (JoinMarket) slice of that extension is
+implemented: the snapshot takes an optional `bond_p_canonical_id` (the
+vin's claimed id, non-NULL for a bond-post submission) and fills the
+validity-gated pair `bond_record_probed`/`bond_record_exists` (the BP3
+fact; `SubmitFacts::bond_record_exists: Option<bool>` Rust-side). The
+commit shim re-derives the id from the reparsed blob's bond-post vin and
+re-probes under the Phase-D lock — a record appearing during Phase C is
+`Raced{fresh}`, classified `DoubleSpendConflict` (the claim-slot leg).
+The serve-credit SC facts and the non-JoinMarket bond fact sets remain
+future work (§8.7.1 closure notes).
+
 ### 4.2 `shekyl_submit_commit_tx`
 
 In: blob, engine txid, meta fields (weight, fee), certificate facts
@@ -1332,11 +1343,47 @@ called at `:3614`; funding spend inputs run the regular K battery over
 
 | # | Check | Site | Disposition |
 | --- | --- | --- | --- |
-| BP1 | Hybrid pubkey length == `PQC_HYBRID_SINGLE_KEY_LEN` | `:4187-4191` | **A** ⚠ — confirm `shekyl-wire`'s per-arm archival bounds cover it, else engine rule; `Malformed` |
-| BP2 | `p_canonical_id` recomputation from pubkey | `:4193-4205` | **C** — already Rust behind `shekyl_archival_p_canonical_id_from_pubkey`; engine calls natively; `Malformed` |
+| BP1 | Hybrid pubkey length == `PQC_HYBRID_SINGLE_KEY_LEN` | `:4187-4191` | **A** — ⚠ resolved (PR-4b): `shekyl-wire` `BondPost::read`/`validate` pin the exact canonical length, so a `ParsedSubmission` cannot carry a violation; `Malformed` at Phase A |
+| BP2 | `p_canonical_id` recomputation from pubkey | `:4193-4205` | **C** — already Rust behind `shekyl_archival_p_canonical_id_from_pubkey`; engine calls natively (`p_canonical_id_from_hybrid_pubkey`); `Malformed` |
 | BP3 | Bond record does not already exist (DB) | `:4207-4208`, consumed at `bond_post.rs:73-75` | **B fact + D re-check** — a bond-post block landing during C flips it; conflict → `DoubleSpendConflict` (claim-slot leg) |
 | BP4 | Economic battery: post-kind, holdings-shape consistency, credit/debit exclusivity, debit == 0, **bond-floor equality** | `:4212-4226` → `verify_join_market_bond_post`, `bond_post.rs:40-78`; floor per `bond_floor.rs:19-30` | **C** — already Rust (`shekyl-archival-retention`), native call; violations → `Malformed` |
 | BP5 | `pqc_auths[i].hybrid_public_key == bond.hybrid_public_key` | `:3620-3626` | **A** — structural cross-field check; `Malformed` |
+
+**PR-4b closure (the BP rows are wired).** `verifier.rs::verify_bond_post`
+runs the battery natively for the **JoinMarket** kind: O6 → the bond CT
+balance (`verify_bond_post_ct_balance`, the `(credit, debit) → BondTerm`
+conversion at the battery edge mirroring the FFI boundary's) → BP2 → BP5 →
+BP3+BP4 (`verify_join_market_bond_post` over the Phase-B
+`bond_record_exists` fact; `RecordExists → DoubleSpendConflict`, all else
+`Malformed`) → Bp+ → the **funding-arm K12** (FCMP++ over the `ToKey`
+subset — key images, pseudo-outs, and leaf hashes from `spend_indices`
+only, the `blockchain.cpp:3762-3800` shape) → K13 over every input (the
+bond slot's identity-key signature included). The deterministic archival
+legs run before the expensive proofs; the check *set* is the C++ oracle's
+(which also probes the record before its FCMP/PQC legs — only the
+balance/Bp+ placement differs), and the BP3 conflict **deliberately
+outranks the proof legs**: a consumed claim slot is terminal for this `P`
+regardless of proof validity (a resubmission with repaired proofs fails
+BP3 again), so `DoubleSpendConflict` is the more actionable verdict even
+when a later proof leg would also have refused — the most-terminal-first
+doctrine applied inside the battery. Every other leg is `Malformed`, so
+the internal order is otherwise verdict-invisible. Semantic legs are the **same
+`shekyl-archival-retention` functions** the C++
+`check_archival_bond_post_input` dispatches to over FFI, so the two paths
+share the verifying code.
+
+**Non-JoinMarket kinds (Unbond / HoldingsUpdate / Rebond) — scoped out
+with a named reopen (rule 21).** The block path verifies them today
+(`archival_bond_post_kind` dispatch, all Rust-backed), but their
+*submit-side* fact sets — per-shard last-served cursors, the
+slash-settlement watermark, interval logs, the settlement epoch — and each
+fact's Phase-D re-check/race classification are not specified in this
+matrix, and no wallet constructs these kinds
+(`shekyl-archival-bond-builder` is JoinMarket-only). The submit battery
+refuses them `Malformed` (loud, logged). Reopening criterion: a wallet
+construction leg for a non-JoinMarket kind lands, or this matrix grows
+rows for it — then extend `SubmitFacts` with that kind's fact set (with
+Phase-D re-check semantics) and dispatch it in the same arm.
 
 Serve-credit rows (`check_archival_serve_credit_input`,
 `blockchain.cpp:4231-4379`, called at `:3602`):
@@ -1376,12 +1423,13 @@ nobody files it as a hole later.
 | S3 | Decoy-median heuristics | `:57-101` | **DEL** — **vacuous, verified**: they operate on `key_offsets`, which FCMP++ requires empty (row K3), so `n_indices == 0` and the function early-returns `true` at `:78-82`. Not merely obsolete — dead at runtime today. Rule-60 deletion, reason recorded |
 
 **Freeze rule:** rows marked ⚠ (I3, N3, N6, N7, N8, M3, M8, O6, K13, and
-§8.7.1's BP1 + SC1) must be resolved — Rust location named or port
-completed, with KAT/pinned vectors — before the §2 contract freezes and
-PR-2's crate version is declared stable. The archival economic/semantic
-legs (BP2–BP4, SC4, SC8) are already Rust with named sources and carry no
-⚠; their obligation is the native-call binding, covered by PR-3. Everything
-else is verified as of this document.
+§8.7.1's SC1 — BP1 resolved at PR-4b, wire-covered) must be resolved —
+Rust location named or port completed, with KAT/pinned vectors — before
+the §2 contract freezes and PR-2's crate version is declared stable. The
+archival economic/semantic legs (BP2–BP4, SC4, SC8) are already Rust with
+named sources and carry no ⚠; the bond-post native-call binding landed at
+PR-4b (the closure note above); the serve-credit binding remains gated on
+SP-T4a. Everything else is verified as of this document.
 
 ---
 

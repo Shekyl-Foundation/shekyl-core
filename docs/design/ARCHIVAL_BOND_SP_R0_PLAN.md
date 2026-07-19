@@ -172,6 +172,73 @@ asserts exactly-one), and the DQ-F fire lane
 test — is a compile-time fact; CI asserts both prune paths fire and the
 production-witness sweep refuses post-prune). Guard-2 status: **logic-discharged;
 production-firing gated on the staker-activation round (#332)**.
+**UPDATE 2026-07-18 (PR-4b): PRODUCTION-DISCHARGED.** The activation entry landed
+(#336) and PR-4b landed the daemon bond-post battery + promoted the regtest
+tripwire: the e2e now stakes through the production `Engine::first_stake` entry
+(the `arm1_watch_pruning_live` witness minted inside it), the sealed post is
+re-lifted and submitted over real RPC, the bond confirms on-chain, and the scan
+observes the confirmed post and **prunes the swept funding records from the
+sealed state** — the DQ-F production fire, asserted live
+(`regtest_e2e.rs::e2e_staker_bond_post_reaches_the_daemon_submit_gap`).
+
+**BUILD RECORD (2026-07-18, `feat/sp-r0-arm2-retire-gc`) — arm #2 BUILT.** The done-side
+ledger landed as designed (2d-1 §"Records-driven retirement"): `RetiredPersonaRecord`
+rows in `PScanState` (**`PSCAN_STATE_VERSION` 6 → 7**, snapshot regenerated per rule 42),
+written by the **atomic retire-time prune** `PScanAccrual::retire_persona` — the
+persona's `bond_post_matches` rows and the `pending_unbonds` trigger leave in the same
+mutation that appends the record, sealed by the task's one atomic write (the §15 pin; the
+bound on `bond_post_matches` growth). The slot's `funding_outputs` are **not** pruned
+here — see the funded-gate in the review-sweep addendum below.
+**DQ-D consumed as designed:** the durable prune fires only under the sweep-corroborated
+tip clamp `min(claimed_tip, verified_frontier + reorg_depth)` — the WI-3 R2-1 reserve,
+consumed as *corroboration*; a low-claiming source merely defers the prune (fail-safe),
+and the actor key-wipe keeps its frontier basis. **The open path** applies the
+records-driven clean before derive ("stop deriving slot N"): retired slots leave the
+live hint, an emptied hint reverts the wallet to a non-staker, and the derive-forward
+subtraction follows from the monotone cursor (no second mechanism). **DQ-E:** the clamp
+primitive now exists at the retire site; `anchor_t0`'s enrollment stays with its named
+FOLLOWUPS item (the 2d-2 tip-consumer enrollment note). **Guard-2 status, stated
+honestly for ratification:** arm #2 is **logic-discharged at the task/accrual/lifecycle
+test level** — the ~270k-block claim-window reachability makes a `not(test)`
+fire-harness lane impractical (evidence construction uses the cfg(test) batch
+constructor; a conscious, disclosed deviation from the arm-#1/#3 lane form) — and
+**production-discharge = extending the promoted regtest lane** — PR-4b LANDED
+(#338, 2026-07-19) and that lane now enters through the production `first_stake`
+(arm #1 PRODUCTION-DISCHARGED there, per the §4 arm-#1 UPDATE); arm #2's leg adds
+the unbond post + the armed settlement-epoch override for the W-lapse — drivable
+now, not yet driven.
+
+**REVIEW-SWEEP ADDENDUM (2026-07-19, high-effort review of PR #339).** Six findings
+addressed; the load-bearing one is a stranded-funds gap.
+
+- **Funded-gate (correctness — the one that changes behavior).** The witness gates only the
+  *reward-collateral* stuck-funds dimension (`Unbond` + `W`-lapse). It did **not** gate the
+  *funding-output* dimension: a slot reaching retire could still hold unspent
+  `funding_outputs` (a post-`Unbond` emission arrival, a reorg re-add, an incomplete drain —
+  draining is amount-targeted `select_for_drain`, not a lump sweep). The actor wipe is
+  irreversible and the open path stops deriving a retired slot, so wiping a *funded* slot
+  strands spendable `P` funds. **Fix:** the retire handler now refuses the wipe for a funded
+  slot — a new `RetireOutcome::SkippedFunded` gated on a `FundedSlots` operand the task
+  derives from `accrual.funding_outputs()` — and defers (leaving the durable `pending_unbonds`
+  trigger) until the funding drains (arm #1 prunes the last output on its spend). This makes
+  the invariant `retire_persona` assumed (a drained slot) **structural**: the function now
+  never prunes `funding_outputs`, guarded by a `debug_assert`. The claim-window witness and
+  the funded-gate are the two complementary halves of "never wipe a persona while spendable
+  value remains behind its keys."
+- **Held-funding cache freshness (correctness).** The task now re-snapshots the actor's
+  held-funding watch list after any pruning dispatch (defensive under the funded-gate, which
+  already keeps retire from mutating `funding_outputs`).
+- **`RetiredLedger` (efficiency/security).** The per-retire idempotency check is now an
+  O(log n) index (a `BTreeSet` derived from the records, rebuilt on load, never separately
+  serialized) instead of an O(n) scan over the append-only vector, wrapped with the records so
+  the two cannot desync; redacting `Debug`. The vector's unbounded growth is inherent (it is
+  the durable "stop deriving slot N" source) and documented as such, not a leak.
+- **Docs/cleanup.** The two per-step seals are documented as both load-bearing (cursor-durability
+  vs prune-durability, the second firing only on a rare pruning step) rather than merged; the
+  uncorroborated-retire re-fire comment corrected ("re-fires after a **restart**", not "a later
+  sweep" — the session dedup blocks that); a dead `let _ = corroborated;` discard removed; the
+  `PScanState.funding_outputs` / `pending_unbonds` field docs reconciled with the funded-gate
+  (retire no longer prunes funding; the drain is amount-targeted, not a sweep).
 
 ---
 

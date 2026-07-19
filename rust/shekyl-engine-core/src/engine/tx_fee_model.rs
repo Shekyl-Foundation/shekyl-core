@@ -146,6 +146,15 @@ fn extra_kem_field_weight() -> usize {
     1 + varint_len(KEM_CIPHERTEXT_LEN as u64) + KEM_CIPHERTEXT_LEN
 }
 
+/// `ExtraField::PqcLeafHashes` (`0x07`): tag + varint(len) + `n_out × 32`
+/// `H(pqc_pk)` leaf hashes — the field whose omission ingests an output
+/// with a zero `h_pqc` leaf (unspendable); the transfer path appends it
+/// (sign_bridge.rs, PR-4b), so every predicted spend carries it.
+fn extra_leaf_hashes_field_weight(n_out: usize) -> usize {
+    let blob = n_out * 32;
+    1 + varint_len(blob as u64) + blob
+}
+
 /// One per-input `PqcAuth`: auth_version + scheme_id + flags(u16) +
 /// varint(pk_len) ‖ pk + varint(sig_len) ‖ sig.
 fn pqc_auth_weight() -> usize {
@@ -200,7 +209,9 @@ pub(crate) fn predict_weight(
     let bp_clawback = bp_plus_clawback_weight(n_out);
     let n_in = n_in.get();
     let n_out = n_out.get();
-    let extra_len = EXTRA_PUBKEY_FIELD_WEIGHT + n_out * extra_kem_field_weight();
+    let extra_len = EXTRA_PUBKEY_FIELD_WEIGHT
+        + n_out * extra_kem_field_weight()
+        + extra_leaf_hashes_field_weight(n_out);
     [
         varint_len(TX_VERSION),            // version
         varint_len(0u64),                  // unlock_time
@@ -480,11 +491,16 @@ mod tests {
                 l: vec![[0; 32]; nlr],
                 r: vec![[0; 32]; nlr],
             };
-            let extra = Extra::for_hybrid_transfer(
-                ED25519_BASEPOINT_POINT,
-                (0..n_out).map(|_| vec![0u8; KEM_CIPHERTEXT_LEN]),
-            )
-            .serialize();
+            let extra = {
+                let mut e = Extra::for_hybrid_transfer(
+                    ED25519_BASEPOINT_POINT,
+                    (0..n_out).map(|_| vec![0u8; KEM_CIPHERTEXT_LEN]),
+                );
+                // The 0x07 leaf-hash blob the transfer path appends
+                // (sign_bridge.rs) — real serializer, same as the KEM term.
+                e.push_pqc_leaf_hashes(vec![0u8; n_out * 32]);
+                e.serialize()
+            };
             let tx = Transaction {
                 prefix: TxPrefix {
                     unlock_time: 0,

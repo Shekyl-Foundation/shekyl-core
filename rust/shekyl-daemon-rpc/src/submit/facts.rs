@@ -103,6 +103,22 @@ pub struct SubmitFacts {
     /// review). The ref-age comparison consumes the raw count deliberately
     /// — that is the consensus shape (`blockchain.cpp:3745-3765`).
     pub chain_height: ChainCount,
+    /// §8.7.1 row BP3: an archival bond record exists for the submitted
+    /// bond-post's `p_canonical_id` (`get_archival_bond_hybrid_pubkey`
+    /// probe, read under the same lock scope as the other facts).
+    ///
+    /// `Some(exists)` iff the snapshot was asked to probe (the engine
+    /// passes the bond id for a [`SubmitTxKind::BondPost`] submission
+    /// only); `None` for every other shape. A `None` on a bond-post is a
+    /// shim contract violation, surfaced by the engine as
+    /// [`crate::submit::EngineFault::ShimContract`] before the verifier
+    /// runs — never a guessed fact. On the Phase-D `Raced(fresh)` leg the
+    /// commit shim re-probes from the reparsed blob, so a bond-post block
+    /// landing during Phase C classifies `DoubleSpendConflict` (the
+    /// claim-slot leg) from fresh facts.
+    ///
+    /// [`SubmitTxKind::BondPost`]: crate::submit::SubmitTxKind::BondPost
+    pub bond_record_exists: Option<bool>,
 }
 
 /// The snapshot shim failed internally (§3.4: DB exception, marshalling
@@ -152,6 +168,13 @@ pub enum CommitOutcome {
 pub trait SubmitStateShim {
     /// Phase B: one short pool→blockchain lock scope, reads only (§4.1).
     ///
+    /// `bond_p_canonical_id` is `Some` for a bond-post submission — the
+    /// vin's claimed `p_canonical_id`, keyed exactly as the C++ oracle
+    /// probes it (`blockchain.cpp` `check_archival_bond_post_input`; the
+    /// claim is independently pinned to the pubkey by the verifier's BP2
+    /// leg) — and asks the shim to fill
+    /// [`SubmitFacts::bond_record_exists`]. `None` skips the probe.
+    ///
     /// `Err(ShimFault)` is the shim's internal-failure arm (DB exception,
     /// marshalling fault) — never a verdict input.
     fn snapshot_facts(
@@ -159,6 +182,7 @@ pub trait SubmitStateShim {
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
+        bond_p_canonical_id: Option<&[u8; 32]>,
     ) -> Result<SubmitFacts, ShimFault>;
 
     /// Phase D: one short pool→blockchain lock scope — release-mode txid
@@ -193,8 +217,9 @@ impl<T: SubmitStateShim + ?Sized> SubmitStateShim for std::sync::Arc<T> {
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
+        bond_p_canonical_id: Option<&[u8; 32]>,
     ) -> Result<SubmitFacts, ShimFault> {
-        (**self).snapshot_facts(txid, key_images, reference_block)
+        (**self).snapshot_facts(txid, key_images, reference_block, bond_p_canonical_id)
     }
 
     fn commit(

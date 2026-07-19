@@ -21,13 +21,14 @@ pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 pub use engine::MultisigSignerV2;
 pub use engine::{
     Capability, CapabilityInput, ChangePasswordError, Credentials, DaemonClient, DaemonOp,
-    DiagnosticSink, Engine, EngineCreateParams, EngineSignerKind, FeePriority, IoError, KeyError,
-    LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine, PScanHandle,
-    PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
-    RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
-    RefreshReorgEvent, RefreshSummary, ReservationId, ScannableBlock, SendError, SoloSigner,
-    StateWrapKey, SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient,
-    TxRecipientSummary, TxRequest, ViewMaterial,
+    DiagnosticSink, Engine, EngineCreateParams, EngineSignerKind, FeePriority, FirstStakeError,
+    FirstStakeOutcome, IoError, KeyError, LocalRefresh, MalformedKind, Network, NoopDiagnosticSink,
+    OpenError, OpenedEngine, PScanHandle, PScanStartError, PendingTx, PendingTxError,
+    PersistenceError, ProtocolErrorKind, RefreshDiagnostic, RefreshError, RefreshHandle,
+    RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
+    ReservationId, ScannableBlock, SendError, SoloSigner, StateWrapKey, SuppressedClass,
+    TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
+    ViewMaterial,
 };
 pub use outbound_label::label_plaintext_for_payment_uri;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
@@ -81,7 +82,9 @@ pub mod __test_helpers {
     /// `not(test)`: the harness only exists in compilations where
     /// `#[cfg(test)]` constructors do not (Guard 1, structural).
     #[cfg(not(test))]
-    pub use crate::engine::pscan::arm1_fire::{run_arm1_fire, Arm1FireReport};
+    pub use crate::engine::pscan::arm1_fire::{
+        run_arm1_fire, run_arm3_fire, Arm1FireReport, Arm3FireReport,
+    };
 
     /// Turn an open [`Engine`] into a staker: persist a bond record for `slot`,
     /// which sets `staking_enabled` durably, so a subsequent reopen spawns the

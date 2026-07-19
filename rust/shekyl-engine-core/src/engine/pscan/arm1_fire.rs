@@ -3,10 +3,13 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! SP-R0 arm #1 — the DQ-F **logic-discharge fire harness**
+//! SP-R0 arms #1 and #3 — the DQ-F **logic-discharge fire harnesses**
 //! (`ARCHIVAL_BOND_SP_R0_PLAN.md` §5 DQ-F, precisified 2026-07-18).
+//! [`run_arm1_fire`] drives the spent-record pruning arm; [`run_arm3_fire`]
+//! drives the open-time phantom `bonded_slots` GC (the SA-DQ-3 co-designed
+//! crash fixture) — both on production code paths, per their own docs.
 //!
-//! Drives the arm on the **production code path** and reports the GC firing:
+//! Drives arm #1 on the **production code path** and reports the GC firing:
 //! a real funding output is discovered by the production dual extractor, its
 //! key image is derived **in-actor** by the production watch refresh, a real
 //! on-chain spend of it is matched by arm (c), and the record is pruned by the
@@ -48,10 +51,14 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::Input;
 
 use crate::engine::bond_assembly::{sweep_funding_outputs, SpentRecordsDurablyPruned};
+use crate::engine::lifecycle::{Credentials, EngineCreateParams};
 use crate::engine::pscan::accrual::PScanAccrual;
 use crate::engine::pscan::exhaustiveness::verify_exhaustive;
 use crate::engine::pscan::scan_step::{BlockRange, FundingOutputMatch};
 use crate::engine::stake_engine::{derive_funding_key_image, StakeEngineHandle};
+use crate::engine::{CapabilityInput, DaemonClient, Engine, Network, SoloSigner};
+use shekyl_crypto_pq::wallet_envelope::KdfParams;
+use shekyl_engine_file::SafetyOverrides;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 
 /// What the fire lane asserts (all counts produced by production code).
@@ -229,5 +236,179 @@ pub async fn run_arm1_fire() -> Result<Arm1FireReport, String> {
         records_after_cross_step: records_after_a,
         records_after_in_step: records_after_b,
         sweep_refuses_after_prune,
+    })
+}
+
+/// What the arm-#3 fire lane asserts (all state produced by production code).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Arm3FireReport {
+    /// Pre-evidence control: with no sealed scan (`OutsideCovered`), the
+    /// durable slot survived a reopen (absence-≠-unscanned held).
+    pub unscanned_slot_survived: bool,
+    /// With sealed confirmed-absence evidence, the reopen collected the
+    /// phantom slot (the GC fired on the production open path).
+    pub phantom_dropped: bool,
+    /// The sweep emptied `bonded_slots` and reverted the wallet to a
+    /// non-staker (no actor spawned at the post-GC open).
+    pub reverted_to_non_staker: bool,
+}
+
+/// SP-R0 **arm #3** DQ-F fire lane — the fixture SA-DQ-3 co-designed with the
+/// activation round: an **activation-induced persist-then-no-broadcast
+/// crash**. `persist_bond_record` runs (the durable point of a first-stake),
+/// dispatch never happens (the crash), the production scan exhausts a covered
+/// range with no bond post, and the next **production open**
+/// (`Engine::open_full` → the assemble-time arm-#3 sweep) collects the
+/// phantom. Guard 1 holds as in the arm-#1 lane: this module is `not(test)`,
+/// so the evidence can only come from the production
+/// `verify_exhaustive`/`ingest`/seal path — `VerifiedBatch::for_test` does
+/// not exist here.
+pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireReport, String> {
+    let base = scratch_dir.join("wallet");
+    let password: &[u8] = b"arm3-fire";
+    let creds = Credentials::password_only(password);
+
+    let dummy_daemon = || async {
+        let rpc = shekyl_rpc_transport::SimpleRequestRpc::new("http://127.0.0.1:1".to_string())
+            .await
+            .map_err(|e| format!("rpc stub: {e}"))?;
+        Ok::<_, String>(DaemonClient::new(rpc))
+    };
+
+    // Create the wallet, then simulate the SA-DQ-3 crash: persist the bond
+    // record (the activation's durable point) and stop — no assemble, no
+    // pending post, no broadcast.
+    // Explicit production-shape construction (the RPC/CLI construction path,
+    // not the cfg(test) convenience — which does not exist in this
+    // compilation). Minimum-wall-clock KDF so the lane runs under a debug
+    // build; Stagenet+Bip39 is a permitted pair.
+    let params = EngineCreateParams {
+        base_path: &base,
+        credentials: &creds,
+        network: Network::Stagenet,
+        capability: CapabilityInput::Full {
+            master_seed_64: &SEED,
+            seed_format: SeedFormat::Bip39,
+        },
+        creation_timestamp: 0,
+        restore_height_hint: 0,
+        kdf: KdfParams {
+            m_log2: 0x08,
+            t: 1,
+            p: 1,
+        },
+        overrides: SafetyOverrides::none(),
+        prefs: shekyl_engine_prefs::WalletPrefs::default(),
+    };
+    let network = params.network;
+    Engine::<SoloSigner>::create(params, dummy_daemon().await?)
+        .map_err(|e| format!("create: {e}"))?
+        .close(&creds)
+        .map_err(|e| format!("close create: {e}"))?;
+    let opened = Engine::<SoloSigner>::open_full(
+        &base,
+        &creds,
+        network,
+        dummy_daemon().await?,
+        SafetyOverrides::none(),
+    )
+    .map_err(|e| format!("open: {e}"))?
+    .into_wallet();
+    opened
+        .persist_bond_record(PSlot::from_raw(SLOT))
+        .map_err(|e| format!("persist: {e}"))?;
+    opened.close(&creds).map_err(|e| format!("close: {e}"))?;
+
+    // Control: no sealed scan evidence yet — every verdict is
+    // `OutsideCovered`, so the reopen must KEEP the slot (and spawn the
+    // staker actor for it).
+    let control = Engine::<SoloSigner>::open_full(
+        &base,
+        &creds,
+        network,
+        dummy_daemon().await?,
+        SafetyOverrides::none(),
+    )
+    .map_err(|e| format!("control reopen: {e}"))?
+    .into_wallet();
+    let unscanned_slot_survived = {
+        let ledger = control.ledger();
+        ledger.staking.staking_enabled && ledger.staking.bonded_slots.contains(&SLOT)
+    } && control.has_stake_engine();
+    control
+        .close(&creds)
+        .map_err(|e| format!("close control: {e}"))?;
+
+    // Build confirmed-absence evidence through the production path: scan a
+    // chained fixture range (no bond posts anywhere) with the persona's real
+    // scanner, then seal it with the production pscan seal.
+    // The WALLET's persona (same seed, the wallet's own network/format pair)
+    // — the derive-equivalence discipline: one primitive, the wallet's
+    // parameters.
+    let keys = derive_archival_p_keys(
+        &SEED,
+        crate::engine::lifecycle::network_to_derivation(network),
+        SeedFormat::Bip39,
+        SLOT,
+    )
+    .map_err(|e| format!("derive wallet persona: {e}"))?;
+    let scanner = crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona(&keys)
+        .map_err(|e| format!("scanner: {e}"))?;
+    let b0 = chain(build_typical_case_scannable_block(1), [0u8; 32]);
+    let b1 = chain(build_typical_case_scannable_block(1), b0.block.hash());
+    let blocks = vec![b0, b1];
+    let verified = verify_exhaustive(BlockHeight::from_raw(0), [0u8; 32], &blocks)
+        .map_err(|e| format!("exhaustiveness: {e}"))?;
+    let range =
+        BlockRange::new(BlockHeight::from_raw(0), BlockHeight::from_raw(2)).ok_or("range")?;
+    let out = crate::engine::pscan::scan_step::run_dual_extractor(
+        vec![(SLOT, scanner)],
+        &std::collections::BTreeMap::new(),
+        range,
+        &blocks,
+        &crate::engine::pscan::scan_step::KeyImageWatchSet::new(),
+    )
+    .map_err(|e| format!("extract: {e}"))?;
+    let mut accrual = PScanAccrual::genesis();
+    accrual
+        .ingest(&out.result, &verified)
+        .map_err(|e| format!("ingest: {e}"))?;
+    let state = accrual.to_state();
+    let bytes = state
+        .to_postcard_bytes()
+        .map_err(|e| format!("encode: {e}"))?;
+    {
+        let (file, _outcome) =
+            shekyl_engine_file::WalletFile::open(&base, password, network, SafetyOverrides::none())
+                .map_err(|e| format!("file open: {e:?}"))?;
+        let key = crate::engine::sealing_keys::state_wrap_key_from_wallet_file(&file);
+        file.save_pscan_state(key.as_bytes(), &bytes)
+            .map_err(|e| format!("seal: {e}"))?;
+    }
+
+    // The fire: the production open runs the arm-#3 sweep before derive.
+    let after = Engine::<SoloSigner>::open_full(
+        &base,
+        &creds,
+        network,
+        dummy_daemon().await?,
+        SafetyOverrides::none(),
+    )
+    .map_err(|e| format!("post-evidence reopen: {e}"))?
+    .into_wallet();
+    let (phantom_dropped, reverted) = {
+        let ledger = after.ledger();
+        (
+            !ledger.staking.bonded_slots.contains(&SLOT),
+            !ledger.staking.staking_enabled,
+        )
+    };
+    let reverted_to_non_staker = reverted && !after.has_stake_engine();
+    after.close(&creds).map_err(|e| format!("close: {e}"))?;
+
+    Ok(Arm3FireReport {
+        unscanned_slot_survived,
+        phantom_dropped,
+        reverted_to_non_staker,
     })
 }

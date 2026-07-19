@@ -163,9 +163,18 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         };
 
         // ── Phase B: POD fact snapshot (shim 1, one short lock) ────────
+        // A bond-post additionally asks for the §8.7.1 BP3 record fact,
+        // keyed on the vin's claimed p_canonical_id (BP2 pins the claim to
+        // the pubkey in Phase C).
+        let bond_p_canonical_id = parsed.bond_post().map(|(_, bond)| bond.p_canonical_id);
         let facts = self
             .shim
-            .snapshot_facts(&parsed.txid, &parsed.key_images, &parsed.reference_block)
+            .snapshot_facts(
+                &parsed.txid,
+                &parsed.key_images,
+                &parsed.reference_block,
+                bond_p_canonical_id.as_ref(),
+            )
             .map_err(|_| EngineFault::SnapshotFault)?;
 
         // Early return on identity only. In-chain outranks in-pool (a
@@ -289,6 +298,16 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             SubmitTxKind::ServeCreditOnly => None,
         };
 
+        // The §8.7.1 BP3 fact contract: a bond-post's snapshot must carry
+        // the record probe (the engine asked for it above). A missing fact
+        // is a shim defect — loud, never a guessed verdict (§3.4); the
+        // verifier can then consume `Some` totally.
+        if parsed.kind == SubmitTxKind::BondPost && facts.bond_record_exists.is_none() {
+            return Err(EngineFault::ShimContract(
+                "bond-post snapshot carries no bond_record_exists fact (BP3 probe skipped?)",
+            ));
+        }
+
         // Fee floor against the snapshot params (row P2; re-gated at D
         // against fresh params, F34). Serve-credit txs carry fee 0 by
         // consensus and the floor is never 0, so the non-spending arm
@@ -367,6 +386,15 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // 3. Terminal conflict: a *different* transaction consumed one of
         //    our inputs while we verified.
         if fresh.key_image_conflicts.contains(&KeyImageConflict::Other) {
+            return Ok(SubmitVerdict::Rejected {
+                cause: RejectCause::DoubleSpendConflict,
+            });
+        }
+        // 3b. Claim-slot conflict, the §8.7.1 BP3 re-check: a bond-post
+        //     block for the same P landed while we verified (Phase C
+        //     required the record absent). Same terminality as the
+        //     key-image leg — someone else consumed the claim slot.
+        if parsed.kind == SubmitTxKind::BondPost && fresh.bond_record_exists == Some(true) {
             return Ok(SubmitVerdict::Rejected {
                 cause: RejectCause::DoubleSpendConflict,
             });
