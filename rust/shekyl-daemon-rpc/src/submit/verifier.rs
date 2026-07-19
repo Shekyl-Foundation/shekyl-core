@@ -195,18 +195,11 @@ fn verify_spend(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), Ve
 
     // ── K12: FCMP++ membership + SAL ────────────────────────────────────
     // Native call to the exact consensus function the C++ oracle reaches
-    // through `shekyl_fcmp_verify` (blockchain.cpp:3835-3850). The engine
-    // has already bounded `tree_depth ∈ [1, current]` (row K10); the +1
-    // conversion to the library's layer count matches the C++ caller's
-    // `fcmp_layers = curve_trees_tree_depth + 1`. Every input of a spend
-    // is `ToKey`, so the leaf set is all auths.
-    let reference = facts.reference.ok_or(VerifyFailure::StaleRoot)?;
-    let layers = u8::try_from(prunable.tree_depth)
-        .ok()
-        .and_then(|depth| depth.checked_add(1))
-        .ok_or(VerifyFailure::StaleRoot)?;
+    // through `shekyl_fcmp_verify` (blockchain.cpp:3835-3850). Every input
+    // of a spend is `ToKey`, so the leaf set is all auths.
+    let (tree_root, layers) = fcmp_reference_layers(facts, prunable)?;
     let leaf_auths: Vec<&PqcAuth> = pqc_auths.iter().collect();
-    verify_fcmp(parsed, prunable, &leaf_auths, &reference.root, layers)?;
+    verify_fcmp(parsed, prunable, &leaf_auths, &tree_root, layers)?;
 
     // ── K13: PQC hybrid auth (per-input scheme validity; MSW-6 dropped the
     // former tx-wide scheme-id agreement — see verify_pqc_auths) ─────────
@@ -356,11 +349,7 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     // contributes no leaf. `parsed.key_images` and `pseudo_outs` are
     // already ToKey-subset by construction; the auth subset is selected by
     // vin arm here.
-    let reference = facts.reference.ok_or(VerifyFailure::StaleRoot)?;
-    let layers = u8::try_from(prunable.tree_depth)
-        .ok()
-        .and_then(|depth| depth.checked_add(1))
-        .ok_or(VerifyFailure::StaleRoot)?;
+    let (tree_root, layers) = fcmp_reference_layers(facts, prunable)?;
     let funding_auths: Vec<&PqcAuth> = parsed
         .tx
         .prefix
@@ -369,7 +358,7 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
         .zip(pqc_auths.iter())
         .filter_map(|(input, auth)| matches!(input, Input::ToKey { .. }).then_some(auth))
         .collect();
-    verify_fcmp(parsed, prunable, &funding_auths, &reference.root, layers)?;
+    verify_fcmp(parsed, prunable, &funding_auths, &tree_root, layers)?;
 
     // ── K13: PQC hybrid auth over EVERY input, the bond-post slot
     // included — exactly the C++ `verify_transaction_pqc_auth` battery ───
@@ -399,6 +388,28 @@ fn retention_vin(bond: &WireBondPost, bond_spend_pk: &[u8]) -> Option<ArchivalBo
         bond_credit: bond.bond_credit,
         bond_debit: bond.bond_debit,
     })
+}
+
+/// Resolve the FCMP++ reference root + library layer count for a K12 leg,
+/// shared by the spend and bond-post arms so the layer convention and the
+/// StaleRoot mapping are single-sourced — a future change to either cannot
+/// split the two arms into disagreeing accept/reject behaviour on the submit
+/// surface. `facts.reference` is the pinned tree snapshot the engine bounded
+/// against (absent ⇒ `StaleRoot`); the `tree_depth + 1` conversion matches
+/// the C++ caller's `fcmp_layers = curve_trees_tree_depth + 1`, and a depth
+/// that cannot be represented as a layer count is a snapshot inconsistency a
+/// rebuild against a fresh root fixes (the `StaleRoot` contract), not a
+/// malformed-bytes reject.
+fn fcmp_reference_layers(
+    facts: &SubmitFacts,
+    prunable: &Prunable,
+) -> Result<([u8; 32], u8), VerifyFailure> {
+    let reference = facts.reference.ok_or(VerifyFailure::StaleRoot)?;
+    let layers = u8::try_from(prunable.tree_depth)
+        .ok()
+        .and_then(|depth| depth.checked_add(1))
+        .ok_or(VerifyFailure::StaleRoot)?;
+    Ok((reference.root, layers))
 }
 
 /// O6: commitment mask non-triviality, shared by the spend and bond-post
@@ -493,9 +504,13 @@ fn verify_fcmp(
     // One leaf hash per spending input, submission order — the same
     // `H_blake2b(dst ‖ hybrid_public_key)` Selene scalar the C++ caller
     // computes per input via `shekyl_fcmp_pqc_leaf_hash`
-    // (blockchain.cpp:3810-3820). `pqc_auths.len() == vin.len()` is
-    // `validate()`'s arity rule, so the count check below is a loud
-    // refusal, not an assumption.
+    // (blockchain.cpp:3810-3820). The caller passes `leaf_auths` already
+    // narrowed to the leaf-contributing subset (every auth for a spend, the
+    // `ToKey` funding subset for a bond-post), and `parsed.key_images` is the
+    // matching subset by construction; the count check below enforces that
+    // index alignment as a loud refusal, not an assumption. (`validate()`'s
+    // arity rule covers the full `pqc_auths.len() == vin.len()`; the subset
+    // alignment it does not, so it is checked here.)
     let key_images: Vec<KeyImage> = parsed
         .key_images
         .iter()

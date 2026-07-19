@@ -1440,7 +1440,7 @@ async fn pscan_until(
 ///   `start_pscan_with` seam (see [`PSCAN_TEST_REORG_DEPTH`]).
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
-async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
+async fn e2e_staker_bond_post_accepted_and_applied() {
     use super::bond_assembly::PBoundBytes;
     use super::bond_orchestrator::FirstStakeError;
     use super::pscan::start::pending_post_store_for_engine;
