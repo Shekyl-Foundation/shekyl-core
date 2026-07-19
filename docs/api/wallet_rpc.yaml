@@ -47,16 +47,29 @@
 #     get_height, get_version,
 #     stake                                        (#332 staker-activation
 #                                                   entry)
+#   SPECIFIED (WI-RPC-1 — receiving / fee / staking-read projection):
+#     create_payment_request, list_payment_requests,
+#     make_uri, parse_uri                          (FA-8d engine substrate;
+#                                                   rid-on-URI receiving —
+#                                                   no subaddress/account
+#                                                   model exists)
+#     estimate_tx_size_and_weight,
+#     get_default_fee_priority                     (predict_weight /
+#                                                   fee-converge projection)
+#     get_staked_balance, get_staked_outputs,
+#     staking_info                                 (authoritative staking
+#                                                   read view; read-only)
 #   RESERVED (prerequisite in parentheses):
 #     unstake, claim, get_stakes                   (Stage 3 StakeEngine +
 #                                                   Phase 2b orchestrator;
 #                                                   reward path blocked on
 #                                                   REWARD_EMISSION_LEG.md
 #                                                   PR-E1..E3 / C-1)
-#     create_payment_request, list_payment_requests,
 #     match_transfer_to_request                    (Phase 2c orchestrator
-#                                                   wrappers over the FA-8
-#                                                   engine substrate)
+#                                                   wrapper over the FA-8
+#                                                   engine substrate; the
+#                                                   create/list/URI half
+#                                                   landed with WI-RPC-1)
 #     get_tx_key, get_tx_proof, check_tx_proof,
 #     get_reserve_proof, check_reserve_proof       (Phase 2c proofs
 #                                                   orchestration over
@@ -163,6 +176,15 @@ components:
             - get_height
             - get_version
             - stake
+            - create_payment_request
+            - list_payment_requests
+            - make_uri
+            - parse_uri
+            - estimate_tx_size_and_weight
+            - get_default_fee_priority
+            - get_staked_balance
+            - get_staked_outputs
+            - staking_info
         params:
           description: Per-method params object; see `*Params` schemas.
           type: object
@@ -765,3 +787,334 @@ components:
             changes incompatibly. Pre-genesis this stays 1 — incompatible
             changes are atomic cutovers, not versioned skew (rule 16
             user-absent-context inversion).
+
+    # ── Receiving (payment requests / URI) — WI-RPC-1 ────────────────
+    # Shekyl has NO subaddresses and NO accounts. The receive-attribution
+    # surface is the payment request: an opaque non-zero u48 `rid` riding
+    # the `shekyl:` URI. The wallet matches incoming payments to requests
+    # and un-matches on reorg; the RPC projects that bookkeeping only.
+    PaymentRequestId:
+      type: string
+      pattern: "^[1-9][0-9]*$"
+      description: >
+        Opaque payment-request reference (`rid`): non-zero, fits the u48-LE
+        wire encoding (max 281474976710655). Decimal string on the wire
+        (JSON numbers lose precision past 2^53 as a policy; u48 fits, but
+        the id is opaque and string-typed for stability).
+
+    PaymentRequestState:
+      type: string
+      enum: [PENDING, MATCHED, EXPIRED, CANCELLED]
+
+    PaymentRequest:
+      type: object
+      required: [id, label, amount, created_at, state]
+      description: >
+        Client-facing projection of the engine's payment-request
+        bookkeeping. Accounting facts only; no key material.
+      properties:
+        id:
+          $ref: "#/components/schemas/PaymentRequestId"
+        label:
+          type: string
+          description: Merchant-local label (may be empty).
+        amount:
+          $ref: "#/components/schemas/AtomicUnits"
+        created_at:
+          type: integer
+          format: int64
+          description: Block height at creation (the request clock is height).
+        expiry:
+          type: integer
+          format: int64
+          description: Absolute expiry height. Absent when the request has none.
+        state:
+          $ref: "#/components/schemas/PaymentRequestState"
+        matched_tx_hash:
+          $ref: "#/components/schemas/Hex32"
+          description: Present iff state is MATCHED.
+        matched_output_index:
+          type: integer
+          format: int64
+          description: Present iff state is MATCHED.
+
+    CreatePaymentRequestParams:
+      type: object
+      required: [label, amount]
+      description: >
+        The one mutating receiving method: local bookkeeping, persisted via
+        the wallet's normal crash-atomic save path (no second writer).
+      properties:
+        label:
+          type: string
+        amount:
+          $ref: "#/components/schemas/AtomicUnits"
+        expiry:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Optional absolute expiry height.
+
+    CreatePaymentRequestResult:
+      type: object
+      required: [id, uri]
+      properties:
+        id:
+          $ref: "#/components/schemas/PaymentRequestId"
+        uri:
+          type: string
+          description: >
+            `shekyl:` URI carrying the wallet's primary address and this
+            `rid`, composed from the STORED request so the URI cannot
+            drift from the bookkeeping.
+
+    ListPaymentRequestsParams:
+      type: object
+      properties:
+        filter:
+          type: string
+          enum: [ALL, PENDING, MATCHED]
+          default: ALL
+          description: Unknown filter values are rejected (-32602), never ALL.
+
+    ListPaymentRequestsResult:
+      type: object
+      required: [payment_requests]
+      properties:
+        payment_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/PaymentRequest"
+
+    MakeUriParams:
+      type: object
+      description: >
+        Freeform URI composition. The address is not format-validated here
+        (mirrors `shekyl_address::format_payment_uri`); `rid`, when given,
+        must be non-zero and u48-fitting (-32602 otherwise).
+      properties:
+        address:
+          type: string
+          description: Defaults to the open wallet's primary address.
+        amount:
+          $ref: "#/components/schemas/AtomicUnits"
+        label:
+          type: string
+        rid:
+          $ref: "#/components/schemas/PaymentRequestId"
+        expiry:
+          type: integer
+          format: int64
+          minimum: 0
+
+    MakeUriResult:
+      type: object
+      required: [uri]
+      properties:
+        uri:
+          type: string
+
+    ParseUriParams:
+      type: object
+      required: [uri]
+      properties:
+        uri:
+          type: string
+
+    ParseUriResult:
+      type: object
+      required: [address]
+      description: >
+        Parsed query components. The address string is not format-validated
+        at parse time (mirrors `shekyl_address::parse_payment_uri`).
+      properties:
+        address:
+          type: string
+        amount:
+          $ref: "#/components/schemas/AtomicUnits"
+        label:
+          type: string
+        rid:
+          $ref: "#/components/schemas/PaymentRequestId"
+        expiry:
+          type: integer
+          format: int64
+
+    # ── Fees — WI-RPC-1 ──────────────────────────────────────────────
+    EstimateTxSizeAndWeightParams:
+      type: object
+      required: [n_inputs, n_outputs]
+      description: >
+        Offline size/weight estimate for a hypothetical shape. Projects the
+        engine's `predict_weight` byte model — the same single source the
+        build path uses; never a second byte model. Counts outside the
+        model's supported range are rejected (-32602), not clamped.
+      properties:
+        n_inputs:
+          type: integer
+          minimum: 1
+        n_outputs:
+          type: integer
+          minimum: 2
+        fee:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Expected fee (feeds the weight's own varint(fee) term).
+            Omitted → "0", a floor estimate within 9 bytes of exact.
+
+    EstimateTxSizeAndWeightResult:
+      type: object
+      required: [size, weight, tree_depth]
+      properties:
+        size:
+          type: integer
+          format: int64
+          description: Serialized transaction size in bytes.
+        weight:
+          type: integer
+          format: int64
+          description: >
+            Fee weight in bytes (size + Bp+ verification clawback; equals
+            the wire `Transaction::weight()`).
+        tree_depth:
+          type: integer
+          description: Curve-tree depth the FCMP++ proof-size term used.
+
+    GetDefaultFeePriorityParams:
+      type: object
+      description: Shape defaults to the canonical 2-in/2-out transfer.
+      properties:
+        n_inputs:
+          type: integer
+          minimum: 1
+        n_outputs:
+          type: integer
+          minimum: 2
+
+    GetDefaultFeePriorityResult:
+      type: object
+      required:
+        [default_priority, economy_fee, standard_fee, priority_fee, tree_depth]
+      description: >
+        One daemon fee snapshot + the same converge fixpoint the build path
+        runs, per named tier. A failed snapshot is -29102 (the same code
+        the build path uses).
+      properties:
+        default_priority:
+          type: string
+          enum: [STANDARD]
+        economy_fee:
+          $ref: "#/components/schemas/AtomicUnits"
+        standard_fee:
+          $ref: "#/components/schemas/AtomicUnits"
+        priority_fee:
+          $ref: "#/components/schemas/AtomicUnits"
+        tree_depth:
+          type: integer
+
+    # ── Staking reads — WI-RPC-1 ─────────────────────────────────────
+    # Read-only projections of the authoritative staking view (reconcile
+    # evidence + sealed pending posts + funding outputs). NEVER derived
+    # from the StakingBlock `bonded_slots` hint. The staking ACTION surface
+    # (unstake, claim) remains RESERVED.
+    StakedBalance:
+      type: object
+      required:
+        [
+          bonded_principal_confirmed,
+          bonded_principal_pending,
+          rewards_received_unspent,
+        ]
+      description: Three separate fields, never conflated.
+      properties:
+        bonded_principal_confirmed:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: Bond principal locked under confirmed live bonds.
+        bonded_principal_pending:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Bond principal committed by in-flight (sealed, unconfirmed)
+            posts.
+        rewards_received_unspent:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Emission-reward money received and still unspent in
+            staking-side outputs. NOT "accrued but unclaimed" — that is a
+            future surface (reward path blocked on REWARD_EMISSION_LEG.md
+            PR-E1..E3 / C-1).
+
+    StakedOutput:
+      type: object
+      required: [gindex, amount, p_slot, unlock_height, confirmed]
+      properties:
+        gindex:
+          type: string
+          pattern: "^[0-9]+$"
+          description: Global (chain-wide) output index, decimal string (u64).
+        amount:
+          $ref: "#/components/schemas/AtomicUnits"
+        p_slot:
+          type: integer
+          description: Owning persona slot ordinal.
+        unlock_height:
+          type: integer
+          format: int64
+          description: Height at which the output becomes spendable.
+        confirmed:
+          type: boolean
+          description: >
+            Always true at V3.0 — the staking scan records outputs only
+            behind the finality horizon. Present so the shape never
+            changes if a pre-finality view is added later.
+
+    GetStakedBalanceParams:
+      type: object
+      description: No parameters.
+
+    GetStakedBalanceResult:
+      $ref: "#/components/schemas/StakedBalance"
+
+    GetStakedOutputsParams:
+      type: object
+      properties:
+        confirmed_only:
+          type: boolean
+          default: true
+          description: >
+            Accepted for wire-shape stability; the authoritative set
+            contains only finality-confirmed outputs at V3.0, so `false`
+            changes nothing.
+
+    GetStakedOutputsResult:
+      type: object
+      required: [staked_outputs]
+      properties:
+        staked_outputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/StakedOutput"
+
+    StakingInfoParams:
+      type: object
+      description: No parameters.
+
+    StakingInfoResult:
+      type: object
+      required: [staking_enabled, balance, staked_output_count]
+      properties:
+        staking_enabled:
+          type: boolean
+          description: >
+            Whether staking is enabled for this wallet (the StakingBlock's
+            own contract — the one field it IS authoritative for).
+        balance:
+          $ref: "#/components/schemas/StakedBalance"
+        staked_output_count:
+          type: integer
+          format: int64
+        pscan_synced_height:
+          type: integer
+          format: int64
+          description: >
+            The staking scan's sealed frontier height. Absent when the
+            wallet has never scanned as a staker.
