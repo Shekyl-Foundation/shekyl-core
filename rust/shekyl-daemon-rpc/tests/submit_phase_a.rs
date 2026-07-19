@@ -19,7 +19,8 @@ use shekyl_wire::{
     BondPost, BondPostKind, Ct, CtBase, Holdings, Input, Output, Transaction, TxPrefix,
 };
 use submit_fixtures::{
-    hexify, serve_credit_tx, spend_tx, spend_tx_with_kis, valid_key_images, FIXTURE_REF_BLOCK,
+    emission_tx, emission_vin_bytes, hexify, serve_credit_tx, spend_tx, spend_tx_with_kis,
+    valid_key_images, FIXTURE_REF_BLOCK,
 };
 
 fn reject_reason(tx_hex: &str) -> String {
@@ -306,4 +307,88 @@ fn funded_bond_post_with_spend_subset_pseudo_outs_admits() {
     // trailing garbage.
     let reason = reject_reason(&hexify(&bond_post_tx(1, 2)));
     assert!(reason.contains("trailing"), "unexpected reason: {reason}");
+}
+
+// ─── The emission arm (§8.7.2 rows E1/EV3/E11 — Phase-A statics) ────────
+
+#[test]
+fn emission_tx_classifies_and_carries_the_decoded_vin() {
+    let parsed =
+        parse_submission(&hexify(&emission_tx(1_000))).expect("emission tx clears Phase A");
+    assert_eq!(parsed.kind, SubmitTxKind::Emission);
+    assert_eq!(
+        parsed.key_images.len(),
+        1,
+        "key images come from the fee inputs only"
+    );
+    // E1: the vin decoded once at admission; the probe accessor exposes the
+    // derived claimant id + claimed epochs for Phase B.
+    let (p_id, epochs) = parsed.emission_probe().expect("probe facts present");
+    assert_eq!(epochs, &[11, 12]);
+    assert_ne!(p_id, [0u8; 32], "the claimant id is derived, never zero");
+}
+
+#[test]
+fn emission_vin_that_fails_the_codec_rejects() {
+    // E1: a blob that clears the wire transport bound but not the
+    // emission_wire codec is Malformed at admission.
+    let mut tx = emission_tx(1_000);
+    for input in &mut tx.prefix.inputs {
+        if let Input::ArchivalRewardEmission { canonical_bytes } = input {
+            canonical_bytes.truncate(canonical_bytes.len() / 2);
+        }
+    }
+    let reason = reject_reason(&hexify(&tx));
+    assert!(
+        reason.contains("emission vin"),
+        "unexpected reason: {reason}"
+    );
+}
+
+#[test]
+fn emission_with_zero_loud_vout_sum_rejects() {
+    // EV3: the mint must be loud — an all-confidential vout set cannot
+    // carry an emission claim.
+    let mut tx = emission_tx(1_000);
+    for output in &mut tx.prefix.outputs {
+        output.amount = 0;
+    }
+    let reason = reject_reason(&hexify(&tx));
+    assert!(
+        reason.contains("loud reward"),
+        "unexpected reason: {reason}"
+    );
+}
+
+#[test]
+fn emission_proof_presence_couples_to_fee_inputs() {
+    // E11's static: fee inputs ⇒ non-empty FCMP++ proof. (The converse —
+    // no fee inputs ⇒ no proof — is wire-unrepresentable at submit: a
+    // prunable-less ct cannot carry outputs, §8.7.2 row E11 note.)
+    let mut tx = emission_tx(1_000);
+    if let Ct::Fcmp {
+        prunable: Some(prunable),
+        ..
+    } = &mut tx.ct
+    {
+        prunable.fcmp_proof.clear();
+    }
+    let reason = reject_reason(&hexify(&tx));
+    assert!(
+        reason.contains("fee inputs but an empty"),
+        "unexpected reason: {reason}"
+    );
+}
+
+#[test]
+fn emission_vin_bytes_decode_under_the_retention_codec() {
+    // Fixture sanity: the synthetic vin is decodable (the Phase-A E1 leg's
+    // positive control), tag byte included.
+    let bytes = emission_vin_bytes();
+    assert_eq!(bytes[0], 0x04, "leading wire tag");
+    let mut cursor = bytes.as_slice();
+    let vin = shekyl_archival_retention::ArchivalRewardEmissionVin::read(&mut cursor)
+        .expect("fixture vin decodes");
+    assert!(cursor.is_empty(), "fixture vin decodes exactly");
+    vin.validate().expect("fixture vin validates");
 }

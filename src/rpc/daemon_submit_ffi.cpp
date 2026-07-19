@@ -51,8 +51,10 @@
 
 #include <boost/uuid/nil_generator.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -60,7 +62,7 @@
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc.submit"
 
 // ── §4.5 layout pins (mirrored by const asserts in shekyl-daemon-rpc) ──────
-static_assert(sizeof(shekyl_submit_facts_ffi) == 88, "SubmitFactsFfi size");
+static_assert(sizeof(shekyl_submit_facts_ffi) == 96, "SubmitFactsFfi size");
 static_assert(alignof(shekyl_submit_facts_ffi) == 8, "SubmitFactsFfi align");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_pool) == 0, "in_pool offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_chain) == 1, "in_chain offset");
@@ -69,14 +71,16 @@ static_assert(offsetof(shekyl_submit_facts_ffi, tree_depth) == 3, "tree_depth of
 static_assert(offsetof(shekyl_submit_facts_ffi, in_pool_broadcast) == 4, "in_pool_broadcast offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, bond_record_probed) == 5, "bond_record_probed offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, bond_record_exists) == 6, "bond_record_exists offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, reserved) == 7, "reserved offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, ref_height) == 8, "ref_height offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, root) == 16, "root offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, fee_per_byte) == 48, "fee_per_byte offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, fee_quantization_mask) == 56, "fee_quantization_mask offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, weight_limit) == 64, "weight_limit offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, chain_height) == 72, "chain_height offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, in_chain_height) == 80, "in_chain_height offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, emission_probed) == 7, "emission_probed offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, emission_claim_conflict) == 8, "emission_claim_conflict offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, reserved) == 9, "reserved offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, ref_height) == 16, "ref_height offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, root) == 24, "root offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, fee_per_byte) == 56, "fee_per_byte offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, fee_quantization_mask) == 64, "fee_quantization_mask offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, weight_limit) == 72, "weight_limit offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, chain_height) == 80, "chain_height offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, in_chain_height) == 88, "in_chain_height offset");
 
 using namespace cryptonote;
 
@@ -122,6 +126,52 @@ uint8_t classify_key_image(tx_memory_pool& pool, Blockchain& bc,
   return SHEKYL_SUBMIT_KI_FREE;
 }
 
+// Overlap of the vin's claimed epochs with the record's claimed set — the
+// §8.7.2 E6 claim-slot predicate (both sides strictly increasing; a linear
+// scan over ≤ MAX_SETTLEMENT_EPOCHS × record set is cheap).
+bool emission_epochs_overlap(const uint64_t* vin_epochs, size_t n,
+  const std::vector<uint64_t>& claimed)
+{
+  for (size_t i = 0; i < n; ++i)
+    if (std::find(claimed.begin(), claimed.end(), vin_epochs[i]) != claimed.end())
+      return true;
+  return false;
+}
+
+} // anonymous namespace
+
+// Opaque owner of the §8.7.2 E6/E7 fact buffers: every pointer in `view`
+// aliases the vectors held here, so the handle must outlive the Rust copy
+// (the shim copies during the snapshot call and frees immediately after).
+struct shekyl_submit_emission_facts_handle
+{
+  // E6 storage.
+  std::vector<uint64_t> bond_shard_ids;
+  std::vector<uint64_t> bond_claimed_epochs;
+  // E7 storage: the snapshots own the row values; the ffi_* vectors alias
+  // their bad_intervals_flat (to_ffi_bonds contract), so snapshot order is
+  // load-bearing for lifetime.
+  std::vector<cryptonote::ArchivalEmissionEpochSnapshot> snaps;
+  std::vector<std::vector<shekyl_archival_epoch_close_bond>> ffi_bonds;
+  std::vector<std::vector<shekyl_archival_epoch_close_shard>> ffi_shards;
+  std::vector<std::vector<shekyl_archival_credit_pair>> ffi_pairs;
+  std::vector<shekyl_submit_emission_snapshot_ffi> pod_snaps;
+  shekyl_submit_emission_facts_ffi view{};
+};
+
+const shekyl_submit_emission_facts_ffi* shekyl_submit_emission_facts_view(
+  const shekyl_submit_emission_facts_handle* h)
+{
+  return h ? &h->view : nullptr;
+}
+
+void shekyl_submit_emission_facts_free(shekyl_submit_emission_facts_handle* h)
+{
+  delete h;
+}
+
+namespace {
+
 // The §4.1 fact collection. Caller holds the §4.4 pool→blockchain lock
 // order; everything here is a read.
 //
@@ -156,6 +206,8 @@ void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
   const crypto::hash& txid, const std::vector<crypto::key_image>& key_images,
   const crypto::hash& reference_block,
   const crypto::hash* bond_p_canonical_id,
+  const crypto::hash* emission_p_canonical_id,
+  const uint64_t* emission_epochs, size_t n_emission_epochs,
   shekyl_submit_facts_ffi& facts, uint8_t* ki_conflicts)
 {
   memset(&facts, 0, sizeof(facts));
@@ -166,6 +218,19 @@ void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
     facts.bond_record_probed = 1;
     facts.bond_record_exists =
       bc.get_db().get_archival_bond_hybrid_pubkey(*bond_p_canonical_id, existing_pubkey) ? 1 : 0;
+  }
+
+  if (emission_p_canonical_id)
+  {
+    // §8.7.2 E6 claim-slot predicate, fact-shaped (Rust classifies): the
+    // claimant record is gone, or a claimed epoch is already consumed.
+    facts.emission_probed = 1;
+    shekyl::db::ArchivalBondValue record{};
+    const bool present =
+      bc.get_db().get_archival_bond_value(*emission_p_canonical_id, record);
+    facts.emission_claim_conflict = (!present
+      || emission_epochs_overlap(emission_epochs, n_emission_epochs,
+           record.claimed_settlement_epochs)) ? 1 : 0;
   }
 
   facts.in_pool = pool.have_tx(txid, relay_category::all) ? 1 : 0;
@@ -221,6 +286,9 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
   const uint8_t* key_images, size_t n_key_images,
   const uint8_t* reference_block,
   const uint8_t* bond_p_canonical_id,
+  const uint8_t* emission_p_canonical_id,
+  const uint64_t* emission_epochs, size_t n_emission_epochs,
+  shekyl_submit_emission_facts_handle** out_emission,
   shekyl_submit_facts_ffi* out_facts,
   uint8_t* out_ki_conflicts) noexcept
 {
@@ -228,17 +296,25 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
   {
     if (!txid || !reference_block || !out_facts ||
         (n_key_images > 0 && (!key_images || !out_ki_conflicts)) ||
-        n_key_images > MAX_SUBMIT_KEY_IMAGES)
+        n_key_images > MAX_SUBMIT_KEY_IMAGES ||
+        (emission_p_canonical_id != nullptr &&
+          (n_emission_epochs == 0 || !emission_epochs ||
+           n_emission_epochs > SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS)))
     {
       MERROR("submit snapshot: bad arguments (marshalling fault)");
       return SHEKYL_SUBMIT_INTERNAL_FAULT;
     }
+    if (out_emission)
+      *out_emission = nullptr;
 
     const crypto::hash id = hash_from_bytes(txid);
     const crypto::hash ref = hash_from_bytes(reference_block);
     crypto::hash bond_p_id{};
     if (bond_p_canonical_id)
       bond_p_id = hash_from_bytes(bond_p_canonical_id);
+    crypto::hash emission_p_id{};
+    if (emission_p_canonical_id)
+      emission_p_id = hash_from_bytes(emission_p_canonical_id);
     std::vector<crypto::key_image> kis(n_key_images);
     for (size_t i = 0; i < n_key_images; ++i)
       memcpy(kis[i].data, key_images + i * 32, 32);
@@ -248,7 +324,65 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
     std::lock_guard<Blockchain> bc_lock(bc);
 
     collect_facts_locked(pool, bc, id, kis, ref,
-      bond_p_canonical_id ? &bond_p_id : nullptr, *out_facts, out_ki_conflicts);
+      bond_p_canonical_id ? &bond_p_id : nullptr,
+      emission_p_canonical_id ? &emission_p_id : nullptr,
+      emission_epochs, n_emission_epochs,
+      *out_facts, out_ki_conflicts);
+
+    // §8.7.2 E6/E7 fact-bundle marshal, same lock scope: the record's
+    // verify operands + one frozen as-of-E snapshot per claimed epoch
+    // (the block path's exact gather + to_ffi_* marshal).
+    if (emission_p_canonical_id && out_emission)
+    {
+      auto handle = std::make_unique<shekyl_submit_emission_facts_handle>();
+      shekyl::db::ArchivalBondValue record{};
+      const bool present = bc.get_db().get_archival_bond_value(emission_p_id, record);
+      handle->view.bond_present = present ? 1 : 0;
+      if (present)
+      {
+        handle->bond_shard_ids = record.held_shard_ids;
+        handle->bond_claimed_epochs = record.claimed_settlement_epochs;
+        handle->view.bond.join_settlement_epoch = record.join_settlement_epoch;
+        handle->view.bond.holdings_kind = static_cast<uint8_t>(record.holdings_kind);
+        handle->view.bond.shard_ids =
+          handle->bond_shard_ids.empty() ? nullptr : handle->bond_shard_ids.data();
+        handle->view.bond.shard_ids_len = handle->bond_shard_ids.size();
+        handle->view.bond.claimed_epochs =
+          handle->bond_claimed_epochs.empty() ? nullptr : handle->bond_claimed_epochs.data();
+        handle->view.bond.claimed_epochs_len = handle->bond_claimed_epochs.size();
+      }
+      handle->snaps.resize(n_emission_epochs);
+      handle->ffi_bonds.resize(n_emission_epochs);
+      handle->ffi_shards.resize(n_emission_epochs);
+      handle->ffi_pairs.resize(n_emission_epochs);
+      handle->pod_snaps.resize(n_emission_epochs);
+      for (size_t k = 0; k < n_emission_epochs; ++k)
+      {
+        bc.get_db().gather_archival_emission_epoch_snapshot(
+          emission_p_id, emission_epochs[k], handle->snaps[k]);
+        const auto& snap = handle->snaps[k];
+        handle->ffi_bonds[k] = snap.to_ffi_bonds();
+        handle->ffi_shards[k] = snap.to_ffi_shards();
+        handle->ffi_pairs[k] = snap.to_ffi_credit_pairs();
+        shekyl_submit_emission_snapshot_ffi& pod = handle->pod_snaps[k];
+        pod.has_budget_row = snap.has_budget_row ? 1 : 0;
+        pod.settlement_epoch = snap.settlement_epoch;
+        pod.close_block_height = snap.close_block_height;
+        pod.sigma_work_milli = snap.sigma_work_milli;
+        pod.budget_atomic = snap.budget_atomic;
+        pod.claimant_bond_idx = snap.claimant_bond_idx;
+        pod.bonds = handle->ffi_bonds[k].empty() ? nullptr : handle->ffi_bonds[k].data();
+        pod.bonds_len = handle->ffi_bonds[k].size();
+        pod.shards = handle->ffi_shards[k].empty() ? nullptr : handle->ffi_shards[k].data();
+        pod.shards_len = handle->ffi_shards[k].size();
+        pod.credit_pairs = handle->ffi_pairs[k].empty() ? nullptr : handle->ffi_pairs[k].data();
+        pod.credit_pairs_len = handle->ffi_pairs[k].size();
+      }
+      handle->view.snapshots =
+        handle->pod_snaps.empty() ? nullptr : handle->pod_snaps.data();
+      handle->view.snapshots_len = handle->pod_snaps.size();
+      *out_emission = handle.release();
+    }
 
     if (out_facts->fee_per_byte == 0)
     {
@@ -335,12 +469,34 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
     std::vector<crypto::key_image> kis;
     kis.reserve(tx.vin.size());
     const crypto::hash* bond_p_id = nullptr;
+    const txin_archival_reward_emission* emission_vin = nullptr;
     for (const auto& in : tx.vin)
     {
       if (std::holds_alternative<txin_to_key>(in))
         kis.push_back(std::get<txin_to_key>(in).k_image);
       else if (std::holds_alternative<txin_archival_bond_post>(in))
         bond_p_id = &std::get<txin_archival_bond_post>(in).p_canonical_id;
+      else if (std::holds_alternative<txin_archival_reward_emission>(in))
+        emission_vin = &std::get<txin_archival_reward_emission>(in);
+    }
+    // §8.7.2 E6 re-probe operands, blob-derived exactly as the snapshot's
+    // were engine-derived from the same bytes (the BP3 pattern).
+    crypto::hash emission_p_id{};
+    uint64_t emission_epochs[SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS] = {};
+    size_t emission_epochs_len = 0;
+    if (emission_vin)
+    {
+      const uint8_t extract_rc = shekyl_archival_emission_vin_extract(
+        emission_vin->canonical_bytes.data(), emission_vin->canonical_bytes.size(),
+        reinterpret_cast<uint8_t*>(emission_p_id.data),
+        emission_epochs, SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS, &emission_epochs_len);
+      if (extract_rc != SHEKYL_EMISSION_VIN_OK || emission_epochs_len == 0)
+      {
+        // The engine verified these bytes at Phase C; a failed re-extract
+        // is an internal inconsistency, never a verdict (§3.4).
+        MERROR("submit commit: emission vin re-extract failed on engine-verified bytes");
+        return SHEKYL_SUBMIT_INTERNAL_FAULT;
+      }
     }
     if (kis.size() != n_key_images)
     {
@@ -357,7 +513,9 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
     std::lock_guard<Blockchain> bc_lock(bc);
 
     shekyl_submit_facts_ffi fresh;
-    collect_facts_locked(pool, bc, id, kis, cert_ref, bond_p_id, fresh, out_fresh_ki_conflicts);
+    collect_facts_locked(pool, bc, id, kis, cert_ref, bond_p_id,
+      emission_vin ? &emission_p_id : nullptr, emission_epochs, emission_epochs_len,
+      fresh, out_fresh_ki_conflicts);
     if (fresh.fee_per_byte == 0)
     {
       MERROR("submit commit: fee-per-byte derivation failed");
@@ -397,6 +555,11 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
       // bond-post block landed during C — Rust classifies the claim-slot
       // DoubleSpendConflict from these fresh facts.
       raced = fresh.bond_record_probed != 0 && fresh.bond_record_exists != 0;
+    if (!raced)
+      // §8.7.2 E6 re-check: the emission claim slot moved during C (record
+      // gone, or a claimed epoch consumed by a competing claim) — Rust
+      // classifies DoubleSpendConflict from these fresh facts.
+      raced = fresh.emission_probed != 0 && fresh.emission_claim_conflict != 0;
     if (!raced)
       // F34 fee re-gate against fresh params, mirroring add_tx's
       // gate-before-tail order (tx_pool.cpp) — mechanism reuse; Rust
@@ -483,6 +646,9 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
   const uint8_t* key_images, size_t n_key_images,
   const uint8_t* reference_block,
   const uint8_t* bond_p_canonical_id,
+  const uint8_t* emission_p_canonical_id,
+  const uint64_t* emission_epochs, size_t n_emission_epochs,
+  shekyl_submit_emission_facts_handle** out_emission,
   shekyl_submit_facts_ffi* out_facts,
   uint8_t* out_ki_conflicts)
 {
@@ -491,6 +657,7 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
   core& c = h->rpc->get_core();
   return daemon_submit::snapshot_facts(c.get_pool(), c.get_blockchain_storage(),
     txid, key_images, n_key_images, reference_block, bond_p_canonical_id,
+    emission_p_canonical_id, emission_epochs, n_emission_epochs, out_emission,
     out_facts, out_ki_conflicts);
 }
 
@@ -554,6 +721,8 @@ void shekyl_submit_facts_test_fill(shekyl_submit_facts_ffi* out, uint64_t seed)
   out->in_pool_broadcast = static_cast<uint8_t>(submit_facts_field_value(seed, 10));
   out->bond_record_probed = static_cast<uint8_t>(submit_facts_field_value(seed, 12));
   out->bond_record_exists = static_cast<uint8_t>(submit_facts_field_value(seed, 13));
+  out->emission_probed = static_cast<uint8_t>(submit_facts_field_value(seed, 14));
+  out->emission_claim_conflict = static_cast<uint8_t>(submit_facts_field_value(seed, 15));
   out->ref_height = submit_facts_field_value(seed, 4);
   for (size_t i = 0; i < sizeof(out->root); ++i)
     out->root[i] = static_cast<uint8_t>(submit_facts_field_value(seed, 5) >> ((i % 8) * 8));

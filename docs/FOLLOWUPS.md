@@ -4949,6 +4949,23 @@ sustainability is unaffected by the recalibration.
   classification for `Input::ArchivalRewardEmission`, fee/vout statics,
   verifier rows over `emission_vin_verify_*`); PR-4c stays sequenced
   behind it.
+  **UPDATE 2026-07-19 — gap (ii) CLOSED; this item CLOSES.** The emission
+  submit leg landed as the PR-4b completion: §8.7.2 E-rows pinned at
+  source (`DAEMON_SUBMIT_VERDICT.md`), `SubmitTxKind::Emission` with the
+  Phase-A statics (E1 vin decode+validate, EV3 loud-sum, E11 proof
+  coupling), the E6/E7 fact bundle (`SubmitFacts::emission` — bond
+  record + per-epoch frozen snapshots, marshaled through a C++-owned
+  handle under the one Phase-B lock scope), the native battery
+  (`verifier.rs::verify_emission`: mint-balance via
+  `verify_bond_post_ct_balance(Debit)`, E2/E5 bindings, the
+  `emission_vin_verify_claims/backing/auth` minters — the same functions
+  the C++ oracle reaches over FFI — plus the shared funding-subset K12
+  and K13), and the E6 Phase-D re-probe (blob-derived, claim-slot race →
+  `DoubleSpendConflict`). **PR-4c now has no daemon-side gap**: its e2e
+  (mine to an epoch close under the SEB lever, build via the production
+  claim path, submit, accepted-and-applied + pop + conservation legs)
+  is the remaining E4-gate work and provides the emission arm's live
+  acceptance coverage.
 
 - **Single-sig address decode enforces the Bech32m variant**
   (added 2026-07-17, PR #323 Copilot round). `bech32m_decode` in

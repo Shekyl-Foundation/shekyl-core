@@ -71,8 +71,9 @@ pub mod consensus {
 pub use certificate::VerificationCertificate;
 pub use engine::{EngineFault, SubmitCaller, SubmitEngine};
 pub use facts::{
-    CommitOutcome, KeyImageConflict, ReferenceFacts, ShimFault, SubmitFacts, SubmitStateShim,
-    TxMeta,
+    CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
+    EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, KeyImageConflict,
+    ReferenceFacts, ShimFault, SubmitFacts, SubmitStateShim, TxMeta,
 };
 pub use ffi_shim::FfiSubmitShim;
 pub use gate::phase_c_semaphore;
