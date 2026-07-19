@@ -146,6 +146,23 @@ top-up) that the draw does not induce premature re-funding — and it therefore
 positive `C_min` also reserves `cover == 0` cleanly for the named opt-out (no tail
 draw overlaps it — DQ6).
 
+> **Addendum (2026-07-19) — the runway's drains are now enumerated: `P`-lane fees
+> ride it (`V3_WALLET_DECISION_LOG.md` "P-lane fees").** Every `P`-attributed
+> transaction (all bond-post kinds, `Unbond` included, and emission claims) pays
+> the standard weight-priced floor fee **from this runway** — cover first,
+> earnings as they carry — realizing exactly the working-capital role this
+> section names. Two consequences live here: (1) the wallet enforces an
+> **exit-fee reserve** (`EXIT_FEE_RESERVE_ATOMIC`) as a **spend-time** floor on
+> the `P`-space pool so the terminal `Unbond` is always fundable — spend-time
+> *only*, never a draw-time input, per the §1.9 DQ4 stance (the cover is an
+> entropy draw, privacy-primary; working-capital use is downstream); (2) the
+> pinned `C_min = 1 rung (750,000,000 atomic)` needs **no re-derivation** — it
+> dominates any realistic fee by orders of magnitude; the reserve constant lands
+> with a pinned dominance assert against `COVER_RUNWAY_FLOOR_ATOMIC` so the
+> dominance is checked, not assumed. Construction rules (typed `P`-space pool,
+> destitute escape via the Q11 claim form, no fee knob):
+> `ARCHIVAL_BOND_CONSTRUCTION.md` §7.3.
+
 ### 2.3 The distribution can't be pinned independently of `bond_floor` structure
 
 `bond_floor = ARCHIVAL_BOND_FLOOR_ATOMIC (750_000_000) × shard_count`
