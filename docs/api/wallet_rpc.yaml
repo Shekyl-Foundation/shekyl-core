@@ -65,6 +65,15 @@
 #                                                   reward path blocked on
 #                                                   REWARD_EMISSION_LEG.md
 #                                                   PR-E1..E3 / C-1)
+#       CONTRACT PIN (P-lane fee uniformity, ratified 2026-07-19,
+#       V3_WALLET_DECISION_LOG.md "P-lane fees"): when these schemas land
+#       they carry NO fee parameter — no FeePriority, no amount, no
+#       cover-amount input. Every P-lane tx pays the canonical weight-priced
+#       floor fee from persona working capital (cover + earnings); a
+#       user-visible fee control would be a wallet-fingerprint channel in a
+#       cleartext field on P-attributed transactions. Unbonding is an
+#       autonomous first-class process: the surfaced method is at most a
+#       trigger plus read-only progress, never a parameterized action.
 #     match_transfer_to_request                    (Phase 2c orchestrator
 #                                                   wrapper over the FA-8
 #                                                   engine substrate; the
@@ -941,6 +950,11 @@ components:
           format: int64
 
     # ── Fees — WI-RPC-1 ──────────────────────────────────────────────
+    # Scope: the PRINCIPAL send surface only. The P lane (bond posts,
+    # unbond, emission claims) pays the canonical weight-priced floor fee
+    # from persona working capital with no tier and no knob (P-lane fee
+    # uniformity, V3_WALLET_DECISION_LOG.md "P-lane fees", 2026-07-19) —
+    # these estimate/priority methods never apply to it.
     EstimateTxSizeAndWeightParams:
       type: object
       required: [n_inputs, n_outputs]
