@@ -4040,7 +4040,7 @@ contention across concurrent runs would be an unmodeled timing input).
   future arm whose channel model includes assemble-time effects
   (none is named today).
 
-### 19.9 Result addendum (2026-07-18): first sealing run graded PASS — grade WITHDRAWN same day (§19.9.1); leg (b) re-run pending
+### 19.9 Result addendum (2026-07-18/19): first run's PASS withdrawn (§19.9.1); hardened re-run graded PASS (§19.9.2) — leg (b) CLOSED
 
 The §19.8 design executed as committed, no geometry deviations. Run
 identity: harness `shekyl-engine-core::engine::gf7_sealing_run`
@@ -4130,4 +4130,65 @@ sweep sites (WI-4 index row, M1 §4 seal-input list, FOLLOWUPS leg-(b)
 entry, Gate-6 arm-4 row, sim status strings) are re-swept to open in
 this same PR — the sim verdict strings are now status-neutral by
 design (they point at this section instead of asserting its outcome,
-so a future grade/withdrawal cannot strand them again).
+so a future grade/withdrawal cannot strand them again). The hardened
+re-run and its grade are §19.9.2.
+
+#### 19.9.2 Hardened re-run graded (2026-07-19): PASS — leg (b) CLOSED
+
+Two sessions ran under the hardened harness, disclosed in full (no
+session is omitted from this record):
+
+- **Session 1 (2026-07-18 22:30 → 07-19 03:11, 4 h 41 m, 24 + 8 runs,
+  2 560 receipts, zero miner retries): INVALID — the §19.8.3 negative
+  control tripped.** Cross-wallet pseudo-siblings named at
+  `P(link) = 0.167` (40/240), breaching the committed ±0.05 tolerance
+  around chance `1/9` by 0.006; mild broad elevation across runs (no
+  single pathological run; worst runs 4–5 hits). The grader's
+  arithmetic was independently recomputed from the raw artifact
+  (matched exactly), so this is the control doing its committed job:
+  the shared daemon/host coupled phases across wallets that session,
+  and the session counts for nothing — including its (context-only,
+  ungradeable) production row `r = 1.312`. Artifact preserved:
+  `gf7-seal-receipts-2026-07-19-invalid.jsonl`.
+- **Stopping rule, stated before session 2 launched:** one re-run; a
+  second consecutive INVALID stops the re-rolling and opens a §19.8
+  harness-decoupling design round (re-running until the validity gate
+  passes would be selection).
+- **Session 2 (2026-07-19 03:20 → 08:02, 4 h 42 m, pre-mine 750
+  blocks / 540 s, 24 + 8 runs, 2 560 receipts, zero miner retries):
+  PASS, both controls bite.**
+
+| Row | `P(link)` | clustered SE | `r` | bound |
+| --- | --- | --- | --- | --- |
+| production `m = 4` (**gate**) | 0.046 | 0.013 | **0.412** (SE 0.121) | `< 2` |
+| production `m = 1` (context) | 0.117 | 0.019 | 1.050 (SE 0.168) | — |
+
+- **Controls (§19.8.3):** positive (`dispersal_bound = 0`)
+  `P(link) = 0.875 ≥ 0.80`; negative (cross-wallet pseudo-siblings)
+  `P(link) = 0.087`, within ±0.05 of chance. Receipt-noise floor
+  **413.9 ms** of `T = 60 000 ms` — stable across all three sessions
+  (406–474 ms), two orders under the phase resolution; the §19.1
+  reopening criterion is not tripped.
+- **Verdict: PASS.** The gate row sits ≈ 13 clustered SEs under the
+  bound, far outside the §19.8.4 escalation band.
+- **Dispersion note (recorded, not graded):** the gate row varies
+  across sessions more than within-session clustered SEs suggest
+  (0.412 here vs 1.275 / 1.312 in the withdrawn and INVALID
+  sessions) — the real-code residue is host-condition-dependent.
+  This is disclosed rather than pooled because the committed §19.8.4
+  grading is per-session with validity gated by the controls; the
+  favorable observation is that **every session ever observed,
+  including the two that do not count, sits ≥ 3 clustered SEs under
+  the bound**, and 0.412 lies below the §19.4 in-model band
+  ([0.84, 1.32]) in the direction of the channel being *weaker* than
+  modeled. No committed criterion triggers on a below-band pass
+  (§19.8.5 enumerates production-row failure and a noise floor of
+  order the phase resolution); a reviewer who wants a
+  below-band-triggered reopening criterion should amend §19.8.5
+  before the next re-grade, not this record.
+- **Leg (b) closes** per §19.6 on this valid session; `K_COVER` seal
+  input #2 is discharged. Remaining open inputs: GF-4/F-D2's
+  drain-send subsystem and the §17.9 Gate-7 calibration. Artifacts:
+  `gf7-seal-receipts-session2.jsonl` +
+  `gf7-seal-grade-session2-pass.json` (local `rust/target/`, same
+  retention as the prior sessions').

@@ -9189,8 +9189,17 @@ one place to confirm each item's relationship to the wallet stack.
   documented CLI form that silently ran the wrong mode. Grade withdrawn; harness/grader
   hardened in the same PR (fail-loud miner watch, `R`-floor + contiguity + per-row
   `cadence_ms == TICK_MS` enforcement, `Arm`-typed label/config binding, CI clippy lane
-  compiling the `gf7-hooks` harness). **Leg (b) is OPEN pending the hardened re-run**;
-  `K_COVER` seal input #2 back on the open list alongside GF-4/F-D2's drain-send
+  compiling the `gf7-hooks` harness).
+  **UPDATE 2026-07-19 — hardened re-run graded: PASS, leg (b) CLOSED (WI-4 §19.9.2, both
+  sessions disclosed).** Session 1 graded INVALID — the §19.8.3 negative control tripped
+  (`P(link) = 0.167` vs ±0.05 around chance; shared-host cross-wallet coupling; grader
+  arithmetic independently recomputed and confirmed) — and counts for nothing; a stopping
+  rule was stated before session 2 (second INVALID ⇒ §19.8 decoupling design round, never
+  re-roll-until-green). Session 2 (4 h 42 m, 24 + 8 runs, 2 560 receipts): gate row
+  `r = 0.412` (clustered SE 0.121, ≈ 13 SEs under the bound), positive control 0.875,
+  negative 0.087 at chance, noise floor 413.9 ms (stable across sessions; §19.1 reopening
+  criterion untripped). Inter-session gate-row dispersion disclosed in §19.9.2. `K_COVER`
+  seal input #2 discharged; the seal's remaining open inputs are GF-4/F-D2's drain-send
   subsystem and the §17.9 Gate-7 calibration.
   **Hermeticity pin (rule 21, PR #292 review — trips on the archival CLI-knob work):**
   `run_wallclock_leg()` is deliberately hermetic (fixed seed/trials/N; the a-priori-committed

@@ -81,9 +81,10 @@
 ### Added
 
 - **wallet/sim: GF-7 leg-(b) sealing-run harness + grader landed; first
-  session's PASS withdrawn in-PR after review — leg (b) open pending the
-  hardened re-run (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19.8 design /
-  §19.9 record / §19.9.1 withdrawal).** The receipt-timestamped live-driver
+  session's PASS withdrawn in-PR after review; hardened re-run graded
+  PASS 2026-07-19 — leg (b) CLOSED, `K_COVER` seal input #2 discharged
+  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19.8 design / §19.9.1 withdrawal /
+  §19.9.2 re-grade).** The receipt-timestamped live-driver
   form: a `#[cfg(test)]` + `gf7-hooks` harness in `shekyl-engine-core`
   (`gf7_sealing_run.rs`, `#[ignore]`d, `SHEKYLD_BIN`-gated) drives the
   **production** P-scan task + dispatch driver against a live
@@ -106,10 +107,15 @@
   both CLI forms with a loud missing-path error, sim verdict strings made
   status-neutral (they point at §19.9 instead of asserting its outcome),
   and a CI clippy lane compiling the `gf7-hooks` combination so the
-  reopening-criterion re-run harness cannot rot silently. Rule-94
-  registrations in the same slice: the §17.9 Gate-7 calibration and the
-  terminal `K_COVER` seal act each gained an `IMPLEMENTATION_INDEX.md`
-  front row.
+  reopening-criterion re-run harness cannot rot silently. The hardened
+  re-run then executed (both sessions disclosed, §19.9.2): session 1
+  graded INVALID — the §19.8.3 negative control biting on shared-host
+  cross-wallet coupling, exactly its job — and session 2 graded **PASS**
+  (gate row `r = 0.412`, clustered SE 0.121, ≈ 13 SEs under the committed
+  bound 2; positive control 0.875 ≥ 0.80, negative 0.087 at chance,
+  receipt-noise floor 413.9 ms of `T = 60 s`). Rule-94 registrations in
+  the same slice: the §17.9 Gate-7 calibration and the terminal `K_COVER`
+  seal act each gained an `IMPLEMENTATION_INDEX.md` front row.
 
 - **fcmp: F-D1 drain-amount taint-carve BUILT (`ARCHIVAL_FIREWALL_GATE6.md`
   §12.3) + F-D2 core-side aggregate-only surface (§12.4).** The `P`→principal
