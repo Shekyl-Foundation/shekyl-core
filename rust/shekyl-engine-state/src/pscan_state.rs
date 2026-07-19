@@ -407,14 +407,14 @@ impl PScanState {
         &self.bond_post_matches
     }
 
-    /// The per-output funding-discovery records (WI-2 D-A1) — the `P`-local
-    /// output set bond assembly selects from, complete over `[0, synced_height)`.
     /// The done-side slot ledger (SP-R0 arm #2) — retired personas, in
     /// retire order.
     pub fn retired_records(&self) -> &[RetiredPersonaRecord] {
         &self.retired_records
     }
 
+    /// The per-output funding-discovery records (WI-2 D-A1) — the `P`-local
+    /// output set bond assembly selects from, complete over `[0, synced_height)`.
     pub fn funding_outputs(&self) -> &[PFundingOutputRecord] {
         &self.funding_outputs
     }
