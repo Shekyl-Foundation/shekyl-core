@@ -420,7 +420,12 @@ fn run_with(trials: u32, seed: u64) -> WallclockLegReport {
     } else if !observer_strength_ok {
         "INVALID (modeled observer weaker than the channel — §19.5 tripwire)".to_string()
     } else if gate_rows_pass {
-        "PROVISIONAL-PASS (harness-timestamp synthesis; sealing form graded PASS 2026-07-18, §19.9)"
+        // Status-neutral by design: this sim cannot know the live sealing
+        // form's current standing (grades, withdrawals, and §19.1 reopenings
+        // happen outside it), so the verdict names where that standing lives
+        // instead of asserting it.
+        "PROVISIONAL-PASS (harness-timestamp synthesis; the §19.1 sealing form is graded \
+         separately — `--gf7-seal`, §19.8/§19.9)"
             .to_string()
     } else {
         "PROVISIONAL-FAIL (dispersal-redesign signal; pre-live)".to_string()

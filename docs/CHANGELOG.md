@@ -80,10 +80,11 @@
 
 ### Added
 
-- **wallet/sim: GF-7 leg-(b) sealing re-run — graded PASS, leg (b) CLOSED
-  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19.8 design / §19.9 record; `K_COVER`
-  seal input #2 discharged).** The receipt-timestamped live-driver form:
-  a `#[cfg(test)]` + `gf7-hooks` harness in `shekyl-engine-core`
+- **wallet/sim: GF-7 leg-(b) sealing-run harness + grader landed; first
+  session's PASS withdrawn in-PR after review — leg (b) open pending the
+  hardened re-run (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19.8 design /
+  §19.9 record / §19.9.1 withdrawal).** The receipt-timestamped live-driver
+  form: a `#[cfg(test)]` + `gf7-hooks` harness in `shekyl-engine-core`
   (`gf7_sealing_run.rs`, `#[ignore]`d, `SHEKYLD_BIN`-gated) drives the
   **production** P-scan task + dispatch driver against a live
   `shekyld --regtest` through a new feature-gated seam
@@ -91,15 +92,24 @@
   positive-control-only `DispatchConfig` override injected; byte-identical
   control flow with the feature off), writing a receipts artifact that
   `shekyl-staking-sim --gf7-seal` grades with the same circular statistic
-  and committed bound (`r = P(link)·(N−1) < 2`). Executed 2026-07-18:
-  24 production + 8 positive-control runs (2 560 receipts, 4 h 42 m);
-  gate row `r = 1.275` (clustered SE 0.195, escalation band untouched),
-  positive control 0.850 ≥ 0.80, negative control at chance, receipt-noise
-  floor 474 ms of `T = 60 s`. Cleared-gate sweep landed with it (WI-4 index
-  row, M1 §4 seal-input list, FOLLOWUPS leg-(b) entry, Gate-6 row, sim
-  status strings). Rule-94 registrations in the same slice: the §17.9
-  Gate-7 calibration and the terminal `K_COVER` seal act each gained an
-  `IMPLEMENTATION_INDEX.md` front row.
+  and committed bound (`r = P(link)·(N−1) < 2`). A first 4 h 42 m session
+  graded PASS (gate row `r = 1.275`), then the PR #337 review found the
+  harness could not detect background-miner death (chain-advancement
+  geometry unverifiable from the artifact), the grader enforced neither
+  `R = 24 + 8` nor run-ordinal contiguity, the recording period was three
+  untied literals across two crates, and the documented space-separated
+  `--gf7-seal` form silently ran the default simulation — the grade is
+  withdrawn (WI-4 §19.9.1) and the hardening landed in this same PR:
+  fail-loud miner watch, grader `R`-floor/contiguity/`cadence_ms == TICK_MS`
+  enforcement (artifact rows now self-describe their period), an `Arm` type
+  binding label/seed-domain/config so a mislabeled row is unconstructible,
+  both CLI forms with a loud missing-path error, sim verdict strings made
+  status-neutral (they point at §19.9 instead of asserting its outcome),
+  and a CI clippy lane compiling the `gf7-hooks` combination so the
+  reopening-criterion re-run harness cannot rot silently. Rule-94
+  registrations in the same slice: the §17.9 Gate-7 calibration and the
+  terminal `K_COVER` seal act each gained an `IMPLEMENTATION_INDEX.md`
+  front row.
 
 - **fcmp: F-D1 drain-amount taint-carve BUILT (`ARCHIVAL_FIREWALL_GATE6.md`
   §12.3) + F-D2 core-side aggregate-only surface (§12.4).** The `P`→principal

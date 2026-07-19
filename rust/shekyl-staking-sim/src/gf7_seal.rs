@@ -35,12 +35,23 @@ use crate::wallclock_leg::{
 };
 
 /// Anonymity set `N` (§19.8.2): wallets per run. The naming task presents
-/// `N − 1` candidates, so chance is `1/(N − 1)`.
-const WALLETS: usize = 10;
+/// `N − 1` candidates, so chance is `1/(N − 1)`. `pub(crate)`: `main.rs`
+/// renders the report (the binary's print convention) and needs the geometry
+/// for the header lines.
+pub(crate) const WALLETS: usize = 10;
 /// Wallet size `K` (§19.8.2): personas (slots) per wallet.
 const PERSONAS_PER_WALLET: u64 = 2;
 /// Posts per persona `m` (§19.8.2): the gate row's accumulation.
-const POSTS_PER_PERSONA: usize = 4;
+pub(crate) const POSTS_PER_PERSONA: usize = 4;
+/// Committed session geometry (§19.8.2 / §19.8.3): graded production runs
+/// `R` and positive-control runs. The harness appends the artifact
+/// run-by-run (crash-safety), so a killed session leaves a
+/// truncated-but-well-formed file of complete runs — these floors are what
+/// keeps such an artifact from grading as the committed session. `≥`, not
+/// `==`: the §19.8.4 escalation rule extends `R` (same geometry, more runs);
+/// fewer is always a truncated session.
+const PRODUCTION_RUNS: usize = 24;
+const POSITIVE_CONTROL_RUNS: usize = 8;
 /// The arm labels the harness writes (`gf7_sealing_run.rs`).
 const PRODUCTION_ARM: &str = "production";
 const POSITIVE_CONTROL_ARM: &str = "positive-control";
@@ -57,6 +68,12 @@ struct ReceiptRow {
     slot: u64,
     receipt_ms: u64,
     sibling_group: usize,
+    /// The cadence the harness recorded under (stamped per row from the
+    /// engine's `DEFAULT_PSCAN_CADENCE`). Validated against [`TICK_MS`] on
+    /// load: the two crates deliberately share no code (no-emit guard), so
+    /// this is the load-time tie that keeps the grader's fold period from
+    /// silently diverging from the recorded period.
+    cadence_ms: u64,
 }
 
 /// One run's receipts, keyed `(wallet, slot) → arrival instants (ms from the
@@ -91,6 +108,15 @@ fn load_artifact(path: &str) -> BTreeMap<String, BTreeMap<usize, RunReceipts>> {
             row.wallet,
             row.slot
         );
+        assert_eq!(
+            row.cadence_ms,
+            TICK_MS,
+            "gf7-seal: line {}: artifact recorded at cadence {} ms but this grader folds \
+             mod TICK_MS = {} ms — mismatched period; regrade with a matching grader",
+            idx + 1,
+            row.cadence_ms,
+            TICK_MS
+        );
         arms.entry(row.arm)
             .or_default()
             .entry(row.run)
@@ -100,6 +126,29 @@ fn load_artifact(path: &str) -> BTreeMap<String, BTreeMap<usize, RunReceipts>> {
             .push(row.receipt_ms);
     }
     for (arm, runs) in &arms {
+        // Session geometry (§19.8.2/§19.8.3): the harness appends run-by-run,
+        // so a killed session leaves complete-looking runs — without these
+        // checks a truncated artifact would pool an under-powered sample and
+        // could still print PASS. Ordinals must be contiguous from 0 (the
+        // harness's run counter), and each arm must reach its committed floor.
+        assert!(
+            runs.keys().copied().eq(0..runs.len()),
+            "gf7-seal: {arm}: non-contiguous run ordinals {:?} — mixed or corrupt artifact",
+            runs.keys().collect::<Vec<_>>()
+        );
+        let floor = if arm == PRODUCTION_ARM {
+            PRODUCTION_RUNS
+        } else if arm == POSITIVE_CONTROL_ARM {
+            POSITIVE_CONTROL_RUNS
+        } else {
+            panic!("gf7-seal: unknown arm `{arm}` in the artifact");
+        };
+        assert!(
+            runs.len() >= floor,
+            "gf7-seal: {arm}: {} runs in the artifact, committed session geometry needs \
+             ≥ {floor} (§19.8.2) — truncated session; re-run, don't grade",
+            runs.len()
+        );
         for (run, receipts) in runs {
             assert_eq!(
                 receipts.len(),
@@ -132,47 +181,40 @@ fn persona_phase(arrivals: &[u64], first_only: bool) -> f64 {
     circular_mean(&phases)
 }
 
-/// One run's naming-task hit count for the **sibling** task (§19.8.4): for
-/// each wallet `w`, the probe is persona `(w, 0)`; the `N − 1` candidates
-/// are the true sibling `(w, 1)` plus the slot-0 personas of the next
-/// `N − 2` wallets (mod `N`); a hit is naming the sibling. Deterministic
-/// candidate selection keeps chance exactly `1/(N − 1)` per task.
-fn run_sibling_hits(receipts: &RunReceipts, first_only: bool) -> usize {
+/// One run's naming-task hit count. The probe is persona `(w, 0)` for each
+/// wallet `w`; the marked candidate is the slot-1 persona of
+/// `marked_wallet_of(w)`; the `N − 2` unmarked candidates are the slot-0
+/// personas of the next wallets after `w` in cyclic order, skipping the
+/// marked wallet. One loop serves both naming tasks so the gate row and the
+/// negative control stay semantically parallel by construction — same phase
+/// computation, same [`names_marked`] tie behavior, same
+/// `1/(N − 1)` chance per task:
+///
+/// - **Sibling task** (§19.8.4 gate row): `marked_wallet_of = |w| w` — the
+///   true sibling `(w, 1)` plus the next `N − 2` wallets' slot-0 personas.
+/// - **Negative control** (§19.8.3 control 2): `marked_wallet_of =
+///   |w| (w + 1) % N` — a cross-wallet *pseudo-sibling* (independent wallet,
+///   independent `φ`). A systematic hit rate above tolerance means the
+///   harness itself (shared daemon, shared host) couples phases across
+///   wallets, and the session is INVALID.
+fn run_naming_hits(
+    receipts: &RunReceipts,
+    first_only: bool,
+    marked_wallet_of: impl Fn(usize) -> usize,
+) -> usize {
     let mut hits = 0;
     for w in 0..WALLETS {
         let probe = persona_phase(&receipts[&(w, 0)], first_only);
+        let marked = marked_wallet_of(w);
         let mut candidates: Vec<(bool, f64)> = Vec::with_capacity(WALLETS - 1);
-        candidates.push((true, persona_phase(&receipts[&(w, 1)], first_only)));
-        for step in 1..=(WALLETS - 2) {
-            let x = (w + step) % WALLETS;
-            candidates.push((false, persona_phase(&receipts[&(x, 0)], first_only)));
-        }
-        if names_marked(probe, &candidates) {
-            hits += 1;
-        }
-    }
-    hits
-}
-
-/// One run's naming-task hit count for the **negative control** (§19.8.3
-/// control 2): the probe `(w, 0)` is paired with a cross-wallet
-/// *pseudo-sibling* `((w + 1) mod N, 1)` — independent wallet, independent
-/// `φ` — plus the slot-0 personas of the remaining `N − 2` wallets. Chance
-/// stays `1/(N − 1)`; any systematic hit rate above tolerance means the
-/// harness itself (shared daemon, shared host) couples phases across
-/// wallets, and the session is INVALID.
-fn run_pseudo_sibling_hits(receipts: &RunReceipts) -> usize {
-    let mut hits = 0;
-    for w in 0..WALLETS {
-        let pseudo = (w + 1) % WALLETS;
-        let probe = persona_phase(&receipts[&(w, 0)], false);
-        let mut candidates: Vec<(bool, f64)> = Vec::with_capacity(WALLETS - 1);
-        candidates.push((true, persona_phase(&receipts[&(pseudo, 1)], false)));
-        for x in 0..WALLETS {
-            if x != w && x != pseudo {
-                candidates.push((false, persona_phase(&receipts[&(x, 0)], false)));
-            }
-        }
+        candidates.push((true, persona_phase(&receipts[&(marked, 1)], first_only)));
+        candidates.extend(
+            (1..WALLETS)
+                .map(|step| (w + step) % WALLETS)
+                .filter(|&x| x != marked)
+                .take(WALLETS - 2)
+                .map(|x| (false, persona_phase(&receipts[&(x, 0)], first_only))),
+        );
         if names_marked(probe, &candidates) {
             hits += 1;
         }
@@ -270,8 +312,9 @@ pub struct GF7SealReport {
     pub verdict: String,
 }
 
-/// Grade the artifact per §19.8.4 and render the report (summary to stderr,
-/// JSON to stdout — the binary's established convention).
+/// Grade the artifact per §19.8.4. Rendering is `main.rs`'s
+/// `print_gf7_seal_report` (summary to stderr, JSON to stdout — the binary's
+/// established convention).
 pub fn run(artifact_path: &str) -> GF7SealReport {
     let arms = load_artifact(artifact_path);
     let production_runs = arms
@@ -284,11 +327,11 @@ pub fn run(artifact_path: &str) -> GF7SealReport {
     // The gate row + the m = 1 context sub-row.
     let prod_hits: Vec<usize> = production_runs
         .values()
-        .map(|r| run_sibling_hits(r, false))
+        .map(|r| run_naming_hits(r, false, |w| w))
         .collect();
     let prod_m1_hits: Vec<usize> = production_runs
         .values()
-        .map(|r| run_sibling_hits(r, true))
+        .map(|r| run_naming_hits(r, true, |w| w))
         .collect();
     let production = pool(&prod_hits);
     let production_m1_context = pool(&prod_m1_hits);
@@ -296,7 +339,7 @@ pub fn run(artifact_path: &str) -> GF7SealReport {
     // Control 1 (positive, phase-lock caught): dispersal = 0 runs must link.
     let pos_hits: Vec<usize> = control_runs
         .values()
-        .map(|r| run_sibling_hits(r, false))
+        .map(|r| run_naming_hits(r, false, |w| w))
         .collect();
     let positive = pool(&pos_hits);
 
@@ -318,7 +361,7 @@ pub fn run(artifact_path: &str) -> GF7SealReport {
     // production runs at zero extra runtime.
     let neg_hits: Vec<usize> = production_runs
         .values()
-        .map(run_pseudo_sibling_hits)
+        .map(|r| run_naming_hits(r, false, |w| (w + 1) % WALLETS))
         .collect();
     let negative = pool(&neg_hits);
 
@@ -367,62 +410,6 @@ pub fn run(artifact_path: &str) -> GF7SealReport {
     }
 }
 
-/// Render the report: interpretation + table to stderr, JSON to stdout.
-pub fn print_report(report: &GF7SealReport) {
-    eprintln!(
-        "shekyl-staking-sim — GF-7 leg-(b) SEALING form (ARCHIVAL_BOND_WI4_MEASUREMENT.md §19.8)"
-    );
-    eprintln!(
-        "Receipt-timestamped live-driver re-run: production task+dispatch code path against a"
-    );
-    eprintln!(
-        "  live shekyld --regtest (harness: shekyl-engine-core gf7_sealing_run.rs, gf7-hooks)."
-    );
-    eprintln!(
-        "  Same statistic and bound as §19.4 (circular mean/distance; r = P(link)·(N−1) < {:.1});",
-        report.ratio_bound
-    );
-    eprintln!(
-        "  T = {} ms; N = {WALLETS}; chance 1/(N−1) = {:.3}. Clustered SE is run-level (the 10",
-        report.tick_ms,
-        1.0 / (WALLETS - 1) as f64
-    );
-    eprintln!("  tasks within a run share arrivals); the two-SE escalation band defers, never");
-    eprintln!("  moves the bar (§19.8.4).");
-    eprintln!();
-    eprintln!("Controls (§19.8.3; either failing grades the session INVALID):");
-    for c in &report.controls {
-        eprintln!(
-            "  [{}] {:<42} P(link)={:.3} baseline={:.3}  ({})",
-            if c.passed { "ok" } else { "FAIL" },
-            c.name,
-            c.p_link,
-            c.baseline,
-            c.expectation,
-        );
-    }
-    eprintln!(
-        "  Receipt-noise floor (sibling phase spread at dispersal 0): {:.1} ms of T = {} ms",
-        report.noise_floor_ms, report.tick_ms
-    );
-    eprintln!();
-    eprintln!(
-        "  {:<24} {:>4} {:>5} {:>4} | {:>7} {:>6} {:>6} {:>6}",
-        "row", "runs", "tasks", "m", "P(link)", "seP", "r", "se_r",
-    );
-    let row = |label: &str, m: usize, e: &PooledEstimate| {
-        eprintln!(
-            "  {:<24} {:>4} {:>5} {:>4} | {:>7.3} {:>6.3} {:>6.3} {:>6.3}",
-            label, e.runs, e.tasks, m, e.p_link, e.clustered_se_p, e.ratio, e.clustered_se_ratio,
-        );
-    };
-    row("production (GATE)", POSTS_PER_PERSONA, &report.production);
-    row("production m=1 context", 1, &report.production_m1_context);
-    eprintln!();
-    eprintln!("Sealing verdict: {}", report.verdict);
-
-    match serde_json::to_string_pretty(report) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing gf7-seal report: {e}"),
-    }
-}
+// Report rendering lives in `main.rs` (`print_gf7_seal_report`), the
+// binary's convention for every sim mode — and the shape the debug-macro CI
+// gate enforces (non-`main.rs` modules carry no `eprintln!`/`println!`).

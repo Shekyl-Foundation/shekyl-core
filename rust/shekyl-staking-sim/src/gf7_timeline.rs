@@ -1003,9 +1003,13 @@ fn run_measurement(cfg: &RunConfig) -> MeasurementReport {
     } else if !wallclock_leg.observer_strength_ok {
         "INVALID (leg-b modeled observer weaker than the channel — §19.5 tripwire)".to_string()
     } else if steady_pass && wallclock_leg.pass {
+        // The sealing form's standing is deliberately not asserted here:
+        // this sim cannot know it (grades, withdrawals, and §19.1
+        // reopenings happen outside it), so the verdict points at where
+        // that standing lives instead.
         "PROVISIONAL-PASS (local-daemon posture only; remote-daemon posture unmet, \
-         named residual; wall-clock leg b graded in-model — §19.1 sealing form \
-         graded PASS 2026-07-18, §19.9)"
+         named residual; wall-clock leg b graded in-model — the §19.1 sealing form \
+         is graded separately (`--gf7-seal`, §19.8/§19.9))"
             .to_string()
     } else {
         "PROVISIONAL-FAIL (decorrelation-redesign signal; pre-WI-3-live)".to_string()

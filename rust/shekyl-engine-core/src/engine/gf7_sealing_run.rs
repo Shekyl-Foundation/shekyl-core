@@ -42,8 +42,14 @@
 //! most the in-flight run. Grade it with:
 //!
 //! ```text
-//! cargo run -p shekyl-staking-sim -- --gf7-seal=path/to/gf7-seal-receipts.jsonl
+//! cargo run -p shekyl-staking-sim -- --gf7-seal path/to/gf7-seal-receipts.jsonl
 //! ```
+
+// Self-declare as test code for the debug-macro CI gate (`build.yml`): the
+// `cfg` gate lives at the parent (`mod.rs`, `all(test, feature = "gf7-hooks")`),
+// which the gate's scan cannot see; this in-file marker is the `regtest_e2e.rs`
+// precedent and is redundant with (never wider than) the parent gate.
+#![cfg(test)]
 
 use std::io::Write as _;
 use std::sync::{Arc, Mutex};
@@ -54,11 +60,11 @@ use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
 use shekyl_types::{BlockHeight, PCanonicalId, PSlot};
 use tokio::sync::RwLock;
 
-use super::pscan::dispatch::DispatchConfig;
+use super::pscan::dispatch::{DispatchConfig, PendingPostStore, PendingSealStore};
 use super::pscan::start::{
     pending_post_store_for_engine, PScanHandle, SealingRunOverrides, DEFAULT_PSCAN_CADENCE,
 };
-use super::regtest_e2e::{persona_address, staker_wallet, RegtestDaemon};
+use super::regtest_e2e::{persona_address, staker_wallet, try_generate_blocks, RegtestDaemon};
 use super::{Engine, SoloSigner};
 
 // ---------------------------------------------------------------------------
@@ -83,8 +89,23 @@ const PREMINE_BLOCKS: u64 = shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOC
 const MINE_BATCH_BLOCKS: u64 = 20;
 /// Background generator interval (§19.8.2 chain row: ~1 block / 30 s).
 const BACKGROUND_MINE_INTERVAL: Duration = Duration::from_secs(30);
-/// The `φ` window: the production cadence `T`, in ms (staggers draw U[0, T)).
-const STAGGER_WINDOW_MS: u64 = 60_000;
+/// Background-miner tolerance: consecutive `generateblocks` failures before
+/// the miner task dies (and the run loop's health check fails the session
+/// loudly). Three misses ≈ 90 s without chain advancement — noise against
+/// the 720-block finality horizon — while a persistent failure (daemon gone,
+/// port dead) must kill the session, not silently freeze the chain under a
+/// grading run (§19.8.2 chain row is part of the committed geometry).
+const MINER_MAX_CONSECUTIVE_FAILURES: u32 = 3;
+/// The production cadence `T` in ms, derived from the engine's own constant
+/// (never a mirrored literal). Triple duty, one value: the `φ` stagger window
+/// (draws are U[0, T)), the period the §19.8.4 statistic folds by, and the
+/// `cadence_ms` stamp on every receipt row — the grader refuses an artifact
+/// whose recorded period differs from its own `TICK_MS` fold, so a cadence
+/// retune cannot silently invalidate the statistic.
+// (`as_secs * 1000` rather than `as_millis`: the latter returns `u128` and
+// would need a truncating cast; whole-second + subsec terms stay in u64.)
+const CADENCE_MS: u64 =
+    DEFAULT_PSCAN_CADENCE.as_secs() * 1000 + DEFAULT_PSCAN_CADENCE.subsec_millis() as u64;
 /// Per-run receipt deadline. A round costs `K` ticks (60 s each) plus a
 /// dispersal draw; `m = 4` rounds ≈ 8–12 min. Past 30 min something is wedged
 /// and the run must fail loudly (an incomplete run is ungradeable, and a
@@ -100,29 +121,76 @@ fn ordinal(x: usize) -> u64 {
     u64::try_from(x).expect("usize ordinal fits u64")
 }
 
+/// The two §19.8.2 arms. The artifact label, the seed-domain tag, the run
+/// count, and the dispatch override all derive from this one value, so a
+/// receipt's arm label can never be transposed against the config that
+/// produced it — the §19.1 "non-production config does not satisfy" clause
+/// binds the graded rows **by construction**, not by call-site convention
+/// (the grader trusts the label; a mislabeled row would be undetectable
+/// downstream).
+#[derive(Clone, Copy)]
+enum Arm {
+    Production,
+    PositiveControl,
+}
+
+impl Arm {
+    /// The label the grader keys arms by (`gf7_seal.rs` twin constants).
+    fn label(self) -> &'static str {
+        match self {
+            Arm::Production => "production",
+            Arm::PositiveControl => "positive-control",
+        }
+    }
+
+    /// The seed-domain tag: keeps wallet seeds / persona ids / `φ` draws
+    /// disjoint across arms.
+    fn tag(self) -> u64 {
+        match self {
+            Arm::Production => 0,
+            Arm::PositiveControl => 1,
+        }
+    }
+
+    /// Runs per arm (§19.8.2 / §19.8.3).
+    fn runs(self) -> usize {
+        match self {
+            Arm::Production => PRODUCTION_RUNS,
+            Arm::PositiveControl => POSITIVE_CONTROL_RUNS,
+        }
+    }
+
+    /// §19.8.3 control 1: `dispersal_bound = 0` at production cadence is the
+    /// ONLY permitted config deviation, structurally confined to the
+    /// positive-control arm — the production arm cannot carry an override.
+    fn dispatch_override(self) -> Option<DispatchConfig> {
+        match self {
+            Arm::Production => None,
+            Arm::PositiveControl => Some(DispatchConfig {
+                dispersal_bound: Duration::ZERO,
+                ..DispatchConfig::production(DEFAULT_PSCAN_CADENCE)
+            }),
+        }
+    }
+}
+
 /// One receipt row of the artifact (§19.8.1 schema: run ordinal, wallet
 /// ordinal, persona slot ordinal, receipt instant in ms from the run epoch,
-/// ground-truth sibling designation, arm label).
-#[derive(Clone)]
+/// ground-truth sibling designation, arm label, recording cadence). The
+/// sibling designation is the wallet ordinal: same `sibling_group` = same
+/// wallet = ground-truth siblings. Serialized with `serde` (already a
+/// dev-dependency) so the writer cannot drift from the grader's
+/// `#[derive(Deserialize)]` twin field-by-hand; `cadence_ms` is the load-time
+/// period tie (see [`CADENCE_MS`]).
+#[derive(Clone, serde::Serialize)]
 struct Receipt {
     arm: &'static str,
     run: usize,
     wallet: usize,
     slot: u64,
     receipt_ms: u64,
-}
-
-impl Receipt {
-    /// One JSON line. Hand-rendered (flat numeric fields + a fixed label) so
-    /// the test-only harness adds no serialization dependency; the grader
-    /// parses it with `serde_json`. The sibling designation is the wallet
-    /// ordinal: same `sibling_group` = same wallet = ground-truth siblings.
-    fn to_json_line(&self) -> String {
-        format!(
-            "{{\"arm\":\"{}\",\"run\":{},\"wallet\":{},\"slot\":{},\"receipt_ms\":{},\"sibling_group\":{}}}",
-            self.arm, self.run, self.wallet, self.slot, self.receipt_ms, self.wallet
-        )
-    }
+    sibling_group: usize,
+    cadence_ms: u64,
 }
 
 /// The harness-local recording observer (§19.8.1: following the landed gate-8
@@ -151,6 +219,8 @@ impl BroadcastTimelineObserver for ReceiptRecorder {
                     wallet: self.wallet,
                     slot: persona,
                     receipt_ms,
+                    sibling_group: self.wallet,
+                    cadence_ms: CADENCE_MS,
                 });
         }
     }
@@ -241,7 +311,8 @@ fn append_receipts(path: &std::path::Path, receipts: &[Receipt]) {
         .open(path)
         .expect("open artifact for append");
     for r in receipts {
-        writeln!(f, "{}", r.to_json_line()).expect("append receipt line");
+        let line = serde_json::to_string(r).expect("serialize receipt row");
+        writeln!(f, "{line}").expect("append receipt line");
     }
     f.flush().expect("flush artifact");
 }
@@ -255,20 +326,23 @@ struct WalletTask {
     seeded_rounds: [usize; PERSONAS_PER_WALLET],
 }
 
-/// Seed one round's post for `(wallet, slot)` through the engine-held pending
-/// write lock. Returns whether the push was accepted (refused while the
-/// previous round's record is still live — the caller retries on the next
-/// poll).
-async fn try_seed(
-    arc: &Arc<RwLock<Engine<SoloSigner>>>,
+/// Seed one round's post for `(wallet, slot)` through the wallet's
+/// [`PendingPostStore`] (built once per wallet — the store is two `Arc`s over
+/// engine + write lock, invariant for the wallet's lifetime, so the 500 ms
+/// retry poll must not rebuild it per call). Returns whether the push was
+/// accepted (refused while the previous round's record is still live — the
+/// caller retries on the next poll).
+async fn try_seed<S>(
+    store: &PendingPostStore<S>,
     arm_tag: u64,
     run: usize,
     wallet: usize,
     slot: usize,
     round: usize,
-) -> bool {
-    let write_lock = arc.read().await.pending_write_lock.clone();
-    let store = pending_post_store_for_engine(arc.clone(), write_lock);
+) -> bool
+where
+    S: PendingSealStore,
+{
     let persona = synthetic_persona(arm_tag, run, wallet, slot);
     let post = synthetic_post(persona, slot, round);
     store
@@ -293,32 +367,40 @@ fn receipt_count(sink: &Arc<Mutex<Vec<Receipt>>>, wallet: usize, slot: usize) ->
 /// One graded run (§19.8.2): `N` fresh staker wallets, each spawning the
 /// production P-scan task through the sealing seam at a fresh `φ` stagger;
 /// `m` rounds of synthetic posts per persona, re-seeded receipt-by-receipt;
-/// returns the run's receipts once every persona has exactly `m`.
+/// returns the run's receipts once every persona has exactly `m`. Fails
+/// loudly (≤ one poll interval late) if the background miner died — receipts
+/// recorded against a frozen chain violate the committed geometry and must
+/// never reach the artifact.
 async fn one_run(
     daemon: &RegtestDaemon,
-    arm: &'static str,
-    arm_tag: u64,
+    arm: Arm,
     run: usize,
-    dispatch_override: Option<DispatchConfig>,
+    miner: &tokio::task::JoinHandle<()>,
 ) -> Vec<Receipt> {
+    let arm_tag = arm.tag();
     let sink: Arc<Mutex<Vec<Receipt>>> = Arc::new(Mutex::new(Vec::new()));
     let epoch = Instant::now();
     let mut stagger_state = 0x7068_695f_6472_6177 ^ (arm_tag << 40) ^ ordinal(run);
 
     // Fresh wallets, created sequentially (KDF-bound), each seeded with round
     // 0 for both personas before its task starts — the first sweep's dispatch
-    // tick then has work immediately.
+    // tick then has work immediately. The wallet's `PendingPostStore` is
+    // built here, once, and reused by every retry poll.
     let mut wallets: Vec<(Arc<RwLock<Engine<SoloSigner>>>, tempfile::TempDir)> =
         Vec::with_capacity(WALLETS);
+    let mut stores = Vec::with_capacity(WALLETS);
     for wallet in 0..WALLETS {
         let seed = wallet_seed(arm_tag, run, wallet);
         let (arc, tmp, _principal) =
             staker_wallet(daemon.rpc_port(), &seed, PSlot::from_raw(0)).await;
+        let write_lock = arc.read().await.pending_write_lock.clone();
+        let store = pending_post_store_for_engine(arc.clone(), write_lock);
         for slot in 0..PERSONAS_PER_WALLET {
-            let pushed = try_seed(&arc, arm_tag, run, wallet, slot, 0).await;
+            let pushed = try_seed(&store, arm_tag, run, wallet, slot, 0).await;
             assert!(pushed, "round-0 seed must land on a fresh wallet");
         }
         wallets.push((arc, tmp));
+        stores.push(store);
     }
 
     // φ ~ U[0, T): the task start instant is the phase (§19.8.2). Every
@@ -326,15 +408,16 @@ async fn one_run(
     // the run epoch, not cumulative.
     let mut starts = Vec::with_capacity(WALLETS);
     for (wallet, (arc, _)) in wallets.iter().enumerate() {
-        let stagger_ms = splitmix64(&mut stagger_state) % STAGGER_WINDOW_MS;
+        let stagger_ms = splitmix64(&mut stagger_state) % CADENCE_MS;
         let observer = ReceiptRecorder {
-            arm,
+            arm: arm.label(),
             run,
             wallet,
             epoch,
             sink: sink.clone(),
         };
         let arc_for_start = arc.clone();
+        let dispatch_override = arm.dispatch_override();
         starts.push(tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(stagger_ms)).await;
             Engine::<SoloSigner>::start_pscan_sealing_run(
@@ -364,8 +447,18 @@ async fn one_run(
     // `j`'s record is still live (terminal rejection pending), so we retry.
     let deadline = Instant::now() + RUN_DEADLINE;
     loop {
+        // Miner health first: a dead generator freezes the chain, and every
+        // receipt recorded after that violates the §19.8.2 chain row. The
+        // task only ever ends by panicking (persistent RPC failure), so
+        // `is_finished` is exactly "the chain stopped advancing".
+        assert!(
+            !miner.is_finished(),
+            "{} run {run}: the background miner died — chain advancement lost; \
+             the session is invalid",
+            arm.label()
+        );
         let mut all_done = true;
-        for (wallet, task) in tasks.iter_mut().enumerate() {
+        for (wallet, (task, store)) in tasks.iter_mut().zip(&stores).enumerate() {
             for slot in 0..PERSONAS_PER_WALLET {
                 let got = receipt_count(&sink, wallet, slot);
                 let seeded = task.seeded_rounds[slot];
@@ -380,7 +473,7 @@ async fn one_run(
                 }
                 if got == seeded && seeded < POSTS_PER_PERSONA {
                     let round = seeded;
-                    if try_seed(&task.arc, arm_tag, run, wallet, slot, round).await {
+                    if try_seed(store, arm_tag, run, wallet, slot, round).await {
                         task.seeded_rounds[slot] += 1;
                     }
                 }
@@ -391,7 +484,8 @@ async fn one_run(
         }
         assert!(
             Instant::now() < deadline,
-            "{arm} run {run}: receipts incomplete after {}s — wedged run fails loudly",
+            "{} run {run}: receipts incomplete after {}s — wedged run fails loudly",
+            arm.label(),
             RUN_DEADLINE.as_secs()
         );
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -407,7 +501,8 @@ async fn one_run(
     assert_eq!(
         receipts.len(),
         WALLETS * PERSONAS_PER_WALLET * POSTS_PER_PERSONA,
-        "{arm} run {run}: receipt count mismatch"
+        "{} run {run}: receipt count mismatch",
+        arm.label()
     );
     receipts
 }
@@ -447,7 +542,11 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
 
     // Background generator: ~1 block / 30 s on an independent RPC client for
     // the whole session, so the finality horizon keeps advancing under the
-    // production reorg depth.
+    // production reorg depth. Transient RPC failures are tolerated up to
+    // `MINER_MAX_CONSECUTIVE_FAILURES` (each logged); a persistent failure
+    // panics the task, which the run loop's `is_finished` health check
+    // converts into a loud session failure — a silently frozen chain must
+    // never grade.
     let miner_rpc = shekyl_rpc_transport::SimpleRequestRpc::new(format!(
         "http://127.0.0.1:{}",
         daemon.rpc_port()
@@ -456,53 +555,44 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
     .expect("miner rpc");
     let miner_addr_bg = miner_address.clone();
     let miner = tokio::spawn(async move {
-        use shekyl_rpc_client::Rpc;
+        let mut consecutive_failures = 0u32;
         loop {
             tokio::time::sleep(BACKGROUND_MINE_INTERVAL).await;
-            let _: serde_json::Value = miner_rpc
-                .json_rpc_call(
-                    "generateblocks",
-                    Some(serde_json::json!({
-                        "amount_of_blocks": 1u64,
-                        "wallet_address": miner_addr_bg,
-                        "starting_nonce": 0u32,
-                    })),
-                )
-                .await
-                .expect("background generateblocks");
+            match try_generate_blocks(&miner_rpc, 1, &miner_addr_bg).await {
+                Ok(_) => consecutive_failures = 0,
+                Err(e) => {
+                    consecutive_failures += 1;
+                    eprintln!(
+                        "background generateblocks failed \
+                         ({consecutive_failures}/{MINER_MAX_CONSECUTIVE_FAILURES}): {e}"
+                    );
+                    assert!(
+                        consecutive_failures < MINER_MAX_CONSECUTIVE_FAILURES,
+                        "background miner: {MINER_MAX_CONSECUTIVE_FAILURES} consecutive \
+                         generateblocks failures — chain advancement lost"
+                    );
+                }
+            }
         }
     });
 
-    // Production arm: the graded rows (§19.8.4 gate row).
-    for run in 0..PRODUCTION_RUNS {
-        let started = Instant::now();
-        let receipts = one_run(&daemon, "production", 0, run, None).await;
-        append_receipts(&artifact, &receipts);
-        eprintln!(
-            "production run {}/{PRODUCTION_RUNS} done in {}s ({} receipts)",
-            run + 1,
-            started.elapsed().as_secs(),
-            receipts.len()
-        );
-    }
-
-    // Positive-control arm (§19.8.3 control 1): `dispersal_bound = 0` at
-    // production cadence — the ONLY permitted config deviation, confined to
-    // this arm. Doubles as the receipt-noise-floor measurement.
-    let control_config = DispatchConfig {
-        dispersal_bound: Duration::ZERO,
-        ..DispatchConfig::production(DEFAULT_PSCAN_CADENCE)
-    };
-    for run in 0..POSITIVE_CONTROL_RUNS {
-        let started = Instant::now();
-        let receipts = one_run(&daemon, "positive-control", 1, run, Some(control_config)).await;
-        append_receipts(&artifact, &receipts);
-        eprintln!(
-            "positive-control run {}/{POSITIVE_CONTROL_RUNS} done in {}s ({} receipts)",
-            run + 1,
-            started.elapsed().as_secs(),
-            receipts.len()
-        );
+    // Both arms sequential (§19.8.2): the graded production rows, then the
+    // §19.8.3 positive control. Label, seed domain, run count, and dispatch
+    // override all ride the `Arm` value.
+    for arm in [Arm::Production, Arm::PositiveControl] {
+        for run in 0..arm.runs() {
+            let started = Instant::now();
+            let receipts = one_run(&daemon, arm, run, &miner).await;
+            append_receipts(&artifact, &receipts);
+            eprintln!(
+                "{} run {}/{} done in {}s ({} receipts)",
+                arm.label(),
+                run + 1,
+                arm.runs(),
+                started.elapsed().as_secs(),
+                receipts.len()
+            );
+        }
     }
 
     miner.abort();

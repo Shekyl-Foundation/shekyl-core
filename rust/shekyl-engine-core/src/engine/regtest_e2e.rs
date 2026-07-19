@@ -213,15 +213,7 @@ impl RegtestDaemon {
 
     /// Mine `n` blocks to `address` (FAKECHAIN-gated daemon RPC).
     pub(super) async fn generate_blocks(&self, n: u64, address: &str) -> GenerateBlocksResp {
-        self.rpc
-            .json_rpc_call::<GenerateBlocksResp>(
-                "generateblocks",
-                Some(json!({
-                    "amount_of_blocks": n,
-                    "wallet_address": address,
-                    "starting_nonce": 0u32,
-                })),
-            )
+        try_generate_blocks(&self.rpc, n, address)
             .await
             .expect("generateblocks")
     }
@@ -236,6 +228,29 @@ impl RegtestDaemon {
             .await
             .expect("pop_blocks");
     }
+}
+
+/// Mine `n` blocks to `address` over `rpc` (FAKECHAIN-gated `generateblocks`),
+/// returning the RPC error instead of panicking. Free-standing so a caller
+/// that cannot borrow a [`RegtestDaemon`] into a `'static` task — the GF-7
+/// sealing-run background miner, which owns an independent client and must
+/// tolerate transient failures — shares the one request shape with
+/// [`RegtestDaemon::generate_blocks`] rather than hand-rolling a copy that
+/// drifts.
+pub(super) async fn try_generate_blocks(
+    rpc: &SimpleRequestRpc,
+    n: u64,
+    address: &str,
+) -> Result<GenerateBlocksResp, shekyl_rpc_client::RpcError> {
+    rpc.json_rpc_call::<GenerateBlocksResp>(
+        "generateblocks",
+        Some(json!({
+            "amount_of_blocks": n,
+            "wallet_address": address,
+            "starting_nonce": 0u32,
+        })),
+    )
+    .await
 }
 
 impl Drop for RegtestDaemon {

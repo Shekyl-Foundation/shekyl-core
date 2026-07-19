@@ -504,10 +504,13 @@ the ratification):
 1. **GF-7 leg-(b) sealing form** — the WI-4 §19.1 receipt-timestamped
    live-driver re-run (harness-timestamp form graded PROVISIONAL-PASS
    2026-07-11; the seal input is the re-run, not the emission's
-   existence). **DISCHARGED 2026-07-18:** the sealing run executed
-   per the committed §19.8 design and graded **PASS** (gate row
-   `r = 1.275` under the bound 2, controls bite; record: WI-4 §19.9).
-   Leg (b) is CLOSED.
+   existence). **DISCHARGED 2026-07-18, then WITHDRAWN same day
+   (PR #337 review; WI-4 §19.9.1):** the first sealing run graded
+   PASS (gate row `r = 1.275`), but the harness could not detect
+   background-miner death, so the committed chain-advancement
+   geometry is unverifiable from that artifact — the grade is
+   withdrawn, the harness/grader hardened in the same PR, and this
+   input is **OPEN pending the hardened re-run**.
 2. **GF-4 exit-seam / value-channel rounds** — narrowed to
    **F-D1 + F-D2** (Gate-6 §12 re-formed R4 close; conditions (iii)
    and (iv) both discharged 2026-07-17). *Merged-state refresh

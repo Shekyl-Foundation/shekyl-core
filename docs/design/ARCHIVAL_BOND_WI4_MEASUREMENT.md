@@ -3937,7 +3937,10 @@ statistic and the same bound (§19.6).
 - **The grading stays sim-side.** The harness writes a receipts
   artifact (JSON lines: run ordinal, wallet ordinal, persona slot
   ordinal, receipt instant in ms from the run epoch, ground-truth
-  sibling designation, arm label); `shekyl-staking-sim` gains a
+  sibling designation, arm label, and — §19.9.1 hardening addendum —
+  the recording cadence `cadence_ms`, validated against the grader's
+  `TICK_MS` at load so the two crates' periods cannot silently
+  diverge); `shekyl-staking-sim` gains a
   `--gf7-seal <artifact>` mode that grades it with the **same**
   circular statistic (`wallclock_leg.rs` `circular_mean` /
   `circular_distance`) and the **same** committed bound
@@ -4037,7 +4040,7 @@ contention across concurrent runs would be an unmodeled timing input).
   future arm whose channel model includes assemble-time effects
   (none is named today).
 
-### 19.9 Result addendum (2026-07-18): sealing run graded — PASS, leg (b) CLOSED
+### 19.9 Result addendum (2026-07-18): first sealing run graded PASS — grade WITHDRAWN same day (§19.9.1); leg (b) re-run pending
 
 The §19.8 design executed as committed, no geometry deviations. Run
 identity: harness `shekyl-engine-core::engine::gf7_sealing_run`
@@ -4074,3 +4077,57 @@ run precondition), pre-mine 750 blocks (603 s), 24 production runs +
   discharged; the remaining open inputs are GF-4/F-D2's drain-send
   subsystem and the §17.9 Gate-7 calibration (M1 §4 list swept in
   this same PR per §19.8.4's verdict-integration obligation).
+
+#### 19.9.1 Grade withdrawal (2026-07-18, same day — PR #337 review)
+
+The PR #337 high-effort review surfaced harness/grader defects that
+undermine the grade above as *evidence*, and the grade is withdrawn
+rather than annotated (fix-everything-pre-genesis discipline; the
+§19.8 committed design itself — geometry, controls, grading — is
+unchanged: everything below is enforcement of the committed design,
+not motion of any bar):
+
+1. **The background generator's death was undetectable.** The miner
+   ran in a detached task whose panic was swallowed (`JoinHandle`
+   only `abort()`ed at session end, never awaited or health-checked),
+   so one transient RPC failure would have silently frozen the chain
+   for the rest of the session. The §19.8.2 chain row (~1 block /
+   30 s under an advancing finality horizon) is therefore
+   **unverifiable from the artifact** for the 4 h 42 m session — the
+   committed geometry cannot be shown to have held, which is exactly
+   the evidentiary standard a seal input must meet.
+2. **The grader never enforced the committed session geometry.**
+   `R = 24 + 8` and run-ordinal contiguity went unchecked; because
+   the harness appends run-by-run (crash-safety), a killed session
+   leaves complete-looking runs and could have graded PASS on an
+   under-powered sample. (Did not bite for this artifact — 2 560
+   receipts = the full 32 runs — but unenforced geometry makes the
+   grade unauditable.)
+3. **The recording period was three untied literals.** The grader's
+   `TICK_MS`, the harness's stagger window, and the engine's
+   `DEFAULT_PSCAN_CADENCE` lived in two crates with no tie; a
+   cadence retune would have folded receipts by the wrong modulus
+   and could still print PASS.
+4. **The documented CLI form silently ran the wrong program.**
+   `--gf7-seal <path>` (this document's own §19.8.1 wording) fell
+   through to the default staking simulation with no error.
+
+Hardening landed in the same PR: fail-loud miner watch (bounded
+transient tolerance, then the run loop's health check fails the
+session ≤ one poll late), grader enforcement of the `R` floors +
+ordinal contiguity + per-row period tie (schema addendum: every row
+carries `cadence_ms`, stamped from `DEFAULT_PSCAN_CADENCE` by a
+serde-derived writer and validated `== TICK_MS` at load), the arm
+label/config/seed-domain bound into one `Arm` type (a mislabeled
+row is unconstructible), both CLI forms with a loud missing-path
+error, and a CI clippy lane that compiles the `gf7-hooks` harness so
+the §19.1 reopening-criterion re-run cannot rot silently.
+
+**Consequence:** leg (b) REOPENS; `K_COVER` seal input #2 returns to
+the open list; the pre-withdrawal artifact no longer grades (schema)
+and a re-run under the hardened harness is required. The cleared-gate
+sweep sites (WI-4 index row, M1 §4 seal-input list, FOLLOWUPS leg-(b)
+entry, Gate-6 arm-4 row, sim status strings) are re-swept to open in
+this same PR — the sim verdict strings are now status-neutral by
+design (they point at this section instead of asserting its outcome,
+so a future grade/withdrawal cannot strand them again).
