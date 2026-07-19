@@ -1742,8 +1742,23 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     );
 
     // Close, reopen: the arm-#3 sweep runs at open, before derive.
+    //
+    // Sole-ownership reclaim is deliberate and deterministic here, not
+    // brittle: `Engine::close(self, ..)` CONSUMES the engine (a lock-guard
+    // close is not type-possible), and every clone-holder has provably
+    // exited by this point — `pscan_until` shut its task down before
+    // returning (the WI-1 shutdown contract releases the task's engine-arc
+    // clone) and `refresh` joins to completion. This is the same fail-loud
+    // posture as `close_wallet`'s production reclaim: if a future edit
+    // leaves a task holding a clone, the panic below names the bug rather
+    // than letting the test proceed against a still-live wallet.
     let creds = super::lifecycle::Credentials::password_only(b"pr4-staker");
-    let lock = Arc::try_unwrap(arc).unwrap_or_else(|_| panic!("sole owner"));
+    let lock = Arc::try_unwrap(arc).unwrap_or_else(|_| {
+        panic!(
+            "engine arc still has co-owners at close: a spawned task \
+             (scan/refresh) was not shut down before the reopen step"
+        )
+    });
     lock.into_inner()
         .close(&creds)
         .expect("close phantom staker");
