@@ -4253,12 +4253,36 @@ path produces that behavior:
    accumulations per persona per run. `m = 4` was instrument
    magnification (grade-pessimistic-lifecycles), legitimate as
    conservatism but not a usage model.
-3. **Named assumptions, previously implicit:** the receipts measure
-   the *emit* instant — the claim that this upper-bounds every
-   downstream observer assumes the daemon-relay/transport path adds
-   only wallet-independent noise (no shared per-wallet quantizer);
-   and the grade bounds the *committed observer's* advantage, not
-   channel information (below-chance structure passes silently).
+3. **Named assumptions — one now VERIFIED at source (2026-07-19,
+   closure round):** the receipts measure the *emit* instant, and the
+   claim that this upper-bounds every downstream observer assumed the
+   daemon-relay path adds only wallet-independent noise. **Verified:**
+   between the wallet→daemon submit boundary (the only place
+   `φ + k·T + d` exists) and the wire sits the inherited Dandelion++
+   diffusion layer (`src/cryptonote_config.h:101-106`,
+   `levin_notify.cpp`) — a per-tx Poisson embargo of mean **39 s**
+   (`DANDELIONPP_EMBARGO_AVERAGE`, drawn on the daemon's clock), a
+   ~5 s Poisson fluff flush, 2 stem hops at 20% fluff probability,
+   10-min ± 30 s epochs, and over Tor a hold until an anonymous
+   connection exists. Against the `T = 60 s` period the embargo alone
+   attenuates the phase signal to
+   `1/√(1+(2π·39/60)²) ≈ 0.24` of its amplitude (× ~0.89 for the
+   fluff flush, further for stem/tor-wait): a network-position
+   observer receives φ at ≈ 5× attenuation *per sample*, against the
+   §19.10.1 lifetime sample count of ~2. **The only party who
+   observes the cadence seam un-diffused is whoever runs the daemon,
+   at the submit boundary, pre-Dandelion++** — which is the user
+   under the SP-T2 own-node default, and the already-named
+   remote-daemon unmet residual otherwise (§13, D-B1 family): the
+   transport-end walk reproduces the posture disposition
+   independently. One narrow residue stays named rather than assumed:
+   the fluff flush is a per-*connection* timer, so two txs
+   coincidentally in the same embargo window can flush in a
+   correlated batch — a coincidence-window effect on the foreclosed
+   premise, recorded here so it lives in the record, not in
+   anybody's head. The second assumption stands as before: the grade
+   bounds the *committed observer's* advantage, not channel
+   information (below-chance structure passes silently).
 
 **Consequence:** the sibling channel this form grades requires a
 behavior the design forecloses; its PASS therefore cannot serve as
