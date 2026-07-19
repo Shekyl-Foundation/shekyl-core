@@ -376,11 +376,13 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
 /// then the shared funding-subset K12 and whole-tx K13.
 ///
 /// EV1/EV2 are structural in `shekyl-wire`; EV3, E1 (parse+validate) and
-/// the E11 proof-presence coupling are Phase-A statics. The zero-fee-input
-/// consensus form (Q11) is wire-unrepresentable at submit (a prunable-less
-/// ct cannot carry outputs), and the wallet never builds it
-/// (`ClaimFeeInputsRequired`), so this battery requires the prunable —
-/// §8.7.2 row E11's note.
+/// the E11 proof-presence coupling are Phase-A statics. The Q11
+/// zero-fee-input form is representable (a prunable with an EMPTY proof
+/// and empty pseudo-outs — the prunable itself must be present, since a
+/// prunable-less ct cannot carry outputs) and consensus-valid; the wallet
+/// never builds it (`ClaimFeeInputsRequired`), but the battery admits it:
+/// the fee-subset K12 leg is skipped when there are no fee inputs, exactly
+/// as the C++ oracle skips it — §8.7.2 row E11's note.
 fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFailure> {
     let Ct::Fcmp {
         fee,
@@ -590,16 +592,22 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
 
     // ── E11: fee-input FCMP++ over the ToKey subset (blockchain.cpp:
     // 4046-4108 — the bond-arm funding shape; the full prefix hash, not
-    // the vin-less signable) ────────────────────────────────────────────
-    let fee_auths: Vec<&PqcAuth> = parsed
-        .tx
-        .prefix
-        .inputs
-        .iter()
-        .zip(pqc_auths.iter())
-        .filter_map(|(input, auth)| matches!(input, Input::ToKey { .. }).then_some(auth))
-        .collect();
-    verify_fcmp(parsed, prunable, &fee_auths, &reference.root, layers)?;
+    // the vin-less signable). With zero fee inputs the proof is EMPTY by
+    // Phase A's coupling and the leg is skipped exactly as the C++ oracle
+    // skips it (`if (num_spend == 0)`, blockchain.cpp:4050) — the Q11
+    // mint-pays-fee form is consensus-valid even though the wallet never
+    // builds it (`ClaimFeeInputsRequired`).
+    if !parsed.key_images.is_empty() {
+        let fee_auths: Vec<&PqcAuth> = parsed
+            .tx
+            .prefix
+            .inputs
+            .iter()
+            .zip(pqc_auths.iter())
+            .filter_map(|(input, auth)| matches!(input, Input::ToKey { .. }).then_some(auth))
+            .collect();
+        verify_fcmp(parsed, prunable, &fee_auths, &reference.root, layers)?;
+    }
 
     // ── E12 / K13: PQC hybrid auth over EVERY slot, emission included ───
     verify_pqc_auths(parsed, pqc_auths)

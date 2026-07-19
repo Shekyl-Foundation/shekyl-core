@@ -132,8 +132,14 @@ uint8_t classify_key_image(tx_memory_pool& pool, Blockchain& bc,
 bool emission_epochs_overlap(const uint64_t* vin_epochs, size_t n,
   const std::vector<uint64_t>& claimed)
 {
+  // `claimed` is the record's claimed_settlement_epochs — persisted
+  // strictly increasing (the codec's claimed_epochs_well_formed bound), so
+  // the membership test is a binary search: this predicate runs inside the
+  // §4.4 short lock scope and the claimed set grows for a persona's whole
+  // life. (The verdict-critical dedup re-runs in the Rust claims battery;
+  // this is the Phase-B/D race bit.)
   for (size_t i = 0; i < n; ++i)
-    if (std::find(claimed.begin(), claimed.end(), vin_epochs[i]) != claimed.end())
+    if (std::binary_search(claimed.begin(), claimed.end(), vin_epochs[i]))
       return true;
   return false;
 }

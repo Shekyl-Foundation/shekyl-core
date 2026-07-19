@@ -378,10 +378,56 @@ fn emission_with_zero_loud_vout_sum_rejects() {
 }
 
 #[test]
+fn zero_fee_input_emission_admits_with_empty_proof() {
+    // The Q11 mint-pays-fee form (§8.7.2 row E11): no ToKey inputs, a
+    // prunable with an EMPTY fcmp proof and empty pseudo-outs. Consensus
+    // admits it (the oracle skips the fee-subset verify), so Phase A must
+    // too — the wallet never builds it, but the submit surface tracks
+    // consensus, not the wallet.
+    let mut tx = emission_tx(1_000);
+    tx.prefix
+        .inputs
+        .retain(|i| !matches!(i, Input::ToKey { .. }));
+    if let Ct::Fcmp {
+        pqc_auths,
+        prunable: Some(prunable),
+        ..
+    } = &mut tx.ct
+    {
+        pqc_auths.truncate(1); // one slot: the emission vin
+        prunable.fcmp_proof.clear();
+        prunable.pseudo_outs.clear();
+    }
+    let parsed = parse_submission(&hexify(&tx)).expect("zero-fee emission clears Phase A");
+    assert_eq!(parsed.kind, SubmitTxKind::Emission);
+    assert!(parsed.key_images.is_empty());
+
+    // The converse coupling: no fee inputs + a NON-empty proof rejects.
+    let mut tx = emission_tx(1_000);
+    tx.prefix
+        .inputs
+        .retain(|i| !matches!(i, Input::ToKey { .. }));
+    if let Ct::Fcmp {
+        pqc_auths,
+        prunable: Some(prunable),
+        ..
+    } = &mut tx.ct
+    {
+        pqc_auths.truncate(1);
+        prunable.pseudo_outs.clear();
+    }
+    let reason = reject_reason(&hexify(&tx));
+    assert!(
+        reason.contains("must not carry"),
+        "unexpected reason: {reason}"
+    );
+}
+
+#[test]
 fn emission_proof_presence_couples_to_fee_inputs() {
-    // E11's static: fee inputs ⇒ non-empty FCMP++ proof. (The converse —
-    // no fee inputs ⇒ no proof — is wire-unrepresentable at submit: a
-    // prunable-less ct cannot carry outputs, §8.7.2 row E11 note.)
+    // E11's static: fee inputs ⇒ non-empty FCMP++ proof (the converse —
+    // no fee inputs ⇒ empty proof — is the zero-fee admission test
+    // above).
     let mut tx = emission_tx(1_000);
     if let Ct::Fcmp {
         prunable: Some(prunable),
