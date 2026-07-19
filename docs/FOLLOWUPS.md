@@ -8427,6 +8427,12 @@ one place to confirm each item's relationship to the wallet stack.
   only (the surviving channel) and cannot silently re-introduce shape machinery.
   **Target: V3.0** (with the drain-send subsystem; the audit is cheap, the carve
   decisions freeze with the wallet's exit UX).
+  **UPDATE 2026-07-19:** the drain-send subsystem design round opened —
+  `docs/design/ARCHIVAL_DRAIN_SEND_FD2.md` (Round 1 DRAFT). Items (a)/(b)/(c)
+  are carried there explicitly: (a) is DS-4 (assembly-side fee carve +
+  first-class sweep entry proposed), (b) is DS-7, (c) is DS-5's
+  specified-against-the-amount-channel-only construction + arm. This entry
+  closes when the round's sub-PRs land the three items.
 - **Principal-side default-on Tor — flip `--proxy` from opt-in to default, opt-out loud.**
   Source-verified at the WI-4 arc closure (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §18.13):
   the persona side is Tor-mandatory **by construction** (`shekyl-p-transport` fails the

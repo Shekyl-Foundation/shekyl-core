@@ -4,6 +4,23 @@
 
 ### Added
 
+- **docs: F-D2 drain-send subsystem design round opened
+  (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, Round 1 DRAFT).** Scopes
+  Gate-6 R4's last open item — the unbuilt `P`-value-out subsystem in
+  `shekyl-gui-wallet` — against the verified substrate: the GUI holds no
+  `Engine`/`P`-scan state (wallet2 FFI only), the core-side planner
+  (`plan_drain`) is fee-agnostic with no data source and no consumer, and
+  the claim pipeline is the assembly analog. Design questions DS-1…DS-7
+  drafted (assembly locus, staker-mode engine adoption, destination pin,
+  assembly-side fee carve + first-class sweep entry, round-number /
+  random-split default with an F-D1-sibling arm, the accepted F-D4 §16.4
+  funding default, shape-era doc sweep) with cross-repo sub-PR slicing
+  (rule 26 cited; pre-flight owed before code). Carries the FOLLOWUPS
+  "P-drain mechanism re-walk" items (a)/(b)/(c). Rule-94 registrations:
+  the `DS-` family + the drain-send current-front row. Closing F-D2
+  closes Gate-6 R4 and discharges the GF-4/F-D1+F-D2 `K_COVER` seal
+  input (M1 §4 item 2).
+
 - **wallet: SP-R0 arm #2 — the done-side retirement ledger + atomic
   retire-time prune (`feat/sp-r0-arm2-retire-gc`).**
   `RetiredPersonaRecord` rows land in `PScanState`

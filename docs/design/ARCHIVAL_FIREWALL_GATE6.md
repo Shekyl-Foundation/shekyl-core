@@ -2227,6 +2227,17 @@ The build lands only the piece that lives in `shekyl-core`:
   **F-D2 is not recorded as landed** until that subsystem + its default exist; the
   R4 close keeps the user-eye residual visibly open, not quietly absorbed.
 
+  **UPDATE 2026-07-19: the drain-send subsystem design round OPENED** —
+  [`ARCHIVAL_DRAIN_SEND_FD2.md`](ARCHIVAL_DRAIN_SEND_FD2.md) (Round 1 DRAFT,
+  DS-1…DS-7; rule 26 cited). The round scopes the three layers above against
+  the verified substrate (the GUI holds no `Engine` and no `P`-scan state;
+  the claim pipeline is the assembly analog; the §7.4 persona-transport pin
+  applies to drain fetch/broadcast), proposes the sub-PR slicing, and
+  carries the FOLLOWUPS "P-drain mechanism re-walk" riders (fee/change
+  mechanics, shape-era sweep, amount-channel-only confirmation) and the
+  accepted §16.4 funding default. F-D2's status is unchanged (open on the
+  subsystem); the round is its build path.
+
 ### 12.5 F-D3 — exit-seam standoff mechanism (one-sided, cooldown-anchored; gate FIRED 2026-07-15)
 
 The exit seam's dominant adversary is **correlated mass-unbonding** (§18.1): a market event fires
