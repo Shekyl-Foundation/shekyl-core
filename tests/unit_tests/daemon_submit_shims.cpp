@@ -116,6 +116,18 @@ public:
     return root_at(height);
   }
 
+  // §8.7.1 BP3 probe substrate: settable bond-record presence, standing in
+  // for the archival bond table (the base default is record-absent).
+  bool bond_record_present = false;
+  virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash&,
+    std::vector<uint8_t>& out_pubkey) const override
+  {
+    if (!bond_record_present)
+      return false;
+    out_pubkey.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xAB);
+    return true;
+  }
+
   // Fault-injection hook: when set, add_txpool_tx throws, standing in for an
   // LMDB map-full/resize or I/O failure in the insert tail after
   // insert_key_images has already mutated the in-memory key-image index.
@@ -348,13 +360,54 @@ struct ShimFixture
     return s;
   }
 
-  int snapshot(const SubmitTx& s, shekyl_submit_facts_ffi& facts, uint8_t& ki_conflict)
+  // A bond-post-shaped tx: the regular FCMP++ shape plus a JoinMarket
+  // txin_archival_bond_post (canonical-length keys, one funding ToKey, so
+  // pseudoOuts stays at the spend count) and its pqc_auths slot. Shape-level
+  // like make_tx — the commit shim only reparses, hashes, and extracts.
+  SubmitTx make_bond_post_tx(uint8_t variant, uint8_t ki_variant)
+  {
+    SubmitTx s = make_tx(variant, ki_variant);
+    cryptonote::txin_archival_bond_post bond{};
+    bond.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xD0 + variant);
+    memset(&bond.p_canonical_id, 0xE0 + variant, sizeof(bond.p_canonical_id));
+    bond.post_kind = 0; // JoinMarket
+    bond.bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xD8 + variant);
+    bond.holdings.kind = cryptonote::archival_holdings_kind::CompleteTree;
+    bond.bonded_total_atomic = 750000000;
+    bond.bond_credit = 750000000;
+    bond.bond_debit = 0;
+    s.tx.vin.push_back(bond);
+    cryptonote::pqc_authentication auth{};
+    auth.auth_version = 1;
+    auth.scheme_id = 0;
+    auth.flags = 0;
+    s.tx.pqc_auths.push_back(auth);
+    // make_tx hashed the pre-bond tx and `transaction` caches its hash;
+    // drop the stale cache before re-serializing and re-hashing.
+    s.tx.invalidate_hashes();
+    s.blob = cryptonote::tx_to_blob(s.tx);
+    EXPECT_FALSE(s.blob.empty());
+    s.txid = cryptonote::get_transaction_hash(s.tx);
+    s.weight = s.blob.size();
+    // Re-derive the floor-clearing fee for the grown blob (make_tx derived
+    // it for the pre-bond size).
+    const uint64_t fee_per_byte = bap.bc.get_current_fee_per_byte();
+    const uint64_t mask = Blockchain::get_fee_quantization_mask();
+    const uint64_t needed = (s.weight * fee_per_byte + mask - 1) / mask * mask;
+    s.fee = needed * 2;
+    EXPECT_TRUE(bap.bc.check_fee(s.weight, s.fee));
+    return s;
+  }
+
+  int snapshot(const SubmitTx& s, shekyl_submit_facts_ffi& facts, uint8_t& ki_conflict,
+    const crypto::hash* bond_p_id = nullptr)
   {
     const crypto::key_image& ki = std::get<txin_to_key>(s.tx.vin[0]).k_image;
     return daemon_submit::snapshot_facts(bap.txpool, bap.bc,
       reinterpret_cast<const uint8_t*>(s.txid.data),
       reinterpret_cast<const uint8_t*>(ki.data), 1,
       reinterpret_cast<const uint8_t*>(cert_ref.data),
+      bond_p_id ? reinterpret_cast<const uint8_t*>(bond_p_id->data) : nullptr,
       &facts, &ki_conflict);
   }
 
@@ -412,13 +465,38 @@ TEST(daemon_submit_shims, snapshot_unknown_reference_reports_not_found)
   EXPECT_EQ(facts.ref_block_found, 0);
 }
 
+// §8.7.1 BP3: the bond-record probe runs iff a p_canonical_id is passed,
+// and reports presence through the probed/exists validity-gated pair.
+TEST(daemon_submit_shims, snapshot_probes_bond_record_iff_requested)
+{
+  ShimFixture fx;
+  SubmitTx s = fx.make_tx(0, 0);
+  crypto::hash p_id;
+  memset(&p_id, 0xE0, sizeof(p_id));
+
+  shekyl_submit_facts_ffi facts;
+  uint8_t ki_conflict = 0;
+  ASSERT_EQ(fx.snapshot(s, facts, ki_conflict), SHEKYL_SUBMIT_OK);
+  EXPECT_EQ(facts.bond_record_probed, 0);
+  EXPECT_EQ(facts.bond_record_exists, 0);
+
+  ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id), SHEKYL_SUBMIT_OK);
+  EXPECT_EQ(facts.bond_record_probed, 1);
+  EXPECT_EQ(facts.bond_record_exists, 0);
+
+  fx.db->bond_record_present = true;
+  ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id), SHEKYL_SUBMIT_OK);
+  EXPECT_EQ(facts.bond_record_probed, 1);
+  EXPECT_EQ(facts.bond_record_exists, 1);
+}
+
 TEST(daemon_submit_shims, snapshot_null_args_are_internal_fault)
 {
   ShimFixture fx;
   shekyl_submit_facts_ffi facts;
   uint8_t ki_conflict = 0;
   EXPECT_EQ(daemon_submit::snapshot_facts(fx.bap.txpool, fx.bap.bc,
-      nullptr, nullptr, 0, nullptr, &facts, &ki_conflict),
+      nullptr, nullptr, 0, nullptr, nullptr, &facts, &ki_conflict),
     SHEKYL_SUBMIT_INTERNAL_FAULT);
 }
 
@@ -719,6 +797,44 @@ TEST(daemon_submit_shims, reference_too_recent_after_pop_reports_raced)
 // commit's check_fee re-gate against fresh params catches what the
 // post-prune check cannot. Simulated by a fee below the (unchanged) floor,
 // which is exactly what a floor-rise looks like to the re-gate.
+// §8.7.1 BP3 re-check: a bond record appearing for the reparsed blob's
+// bond-post P during Phase C is a claim-slot race — RACED with the fresh
+// probed/exists pair set, so Rust classifies DoubleSpendConflict. The probe
+// keys on the blob's own vin: a record-present DB does not race a
+// non-bond-post commit.
+TEST(daemon_submit_shims, bond_record_appearing_during_verification_reports_raced)
+{
+  ShimFixture fx;
+  fx.db->bond_record_present = true;
+
+  SubmitTx bond = fx.make_bond_post_tx(0, 0);
+  shekyl_submit_facts_ffi fresh;
+  uint8_t fresh_ki = 0;
+  EXPECT_EQ(fx.commit(bond, fresh, fresh_ki), SHEKYL_SUBMIT_RACED);
+  EXPECT_EQ(fresh.bond_record_probed, 1);
+  EXPECT_EQ(fresh.bond_record_exists, 1);
+  EXPECT_FALSE(fx.db->txpool_has_tx(bond.txid, relay_category::all));
+
+  // The same DB state does not race a regular spend: no bond vin, no
+  // probe — the commit lands clean (fresh facts are only written on RACED,
+  // so the OK itself is the assertion).
+  SubmitTx spend = fx.make_tx(1, 1);
+  EXPECT_EQ(fx.commit(spend, fresh, fresh_ki), SHEKYL_SUBMIT_OK);
+}
+
+// The record-absent bond-post commit proceeds through the attested insert
+// tail exactly like a spend — the probe alone never races.
+TEST(daemon_submit_shims, bond_post_commit_clean_when_record_absent)
+{
+  ShimFixture fx;
+  SubmitTx bond = fx.make_bond_post_tx(0, 0);
+
+  shekyl_submit_facts_ffi fresh;
+  uint8_t fresh_ki = 0;
+  EXPECT_EQ(fx.commit(bond, fresh, fresh_ki), SHEKYL_SUBMIT_OK);
+  EXPECT_TRUE(fx.db->txpool_has_tx(bond.txid, relay_category::all));
+}
+
 TEST(daemon_submit_shims, fee_regate_below_fresh_floor_reports_raced)
 {
   ShimFixture fx;

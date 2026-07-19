@@ -71,6 +71,10 @@ pub(super) struct RegtestDaemon {
 #[derive(Deserialize, Debug)]
 struct GetInfoResp {
     height: u64,
+    /// Pool population — the mined-yet signal for a submitted tx (see
+    /// `mine_until_pool_empty`).
+    #[serde(default)]
+    tx_pool_size: u64,
 }
 
 /// `generateblocks` result fields we care about.
@@ -1410,18 +1414,15 @@ async fn pscan_until(
 /// ([`Engine::assemble_bond_post`](super::Engine::assemble_bond_post) →
 /// posture→submitter choke point) dispatches the bond post over real RPC.
 ///
-/// **Daemon-gap tripwire (the trailing assertion).** The daemon's Rust submit
-/// engine has no bond-post Phase-C battery yet: `DaemonTxVerifier`'s
-/// `SubmitTxKind::BondPost` arm refuses `Malformed` unconditionally
-/// (`shekyl-daemon-rpc/src/submit/verifier.rs`). Its rule-21 reopening
-/// criterion — the §13 (F1/F3) wire reshape — has *fired* (bond posts now
-/// clear Phase A; this harness proved it live: an underfunded fee draws
-/// `FeeTooLow`, which only Phase C emits), so the battery is due; it lands as
-/// the PR-4b submit-legs PR (`DAEMON_SUBMIT_VERDICT.md` §8.7.1 BP rows). The
-/// assertion pins today's exact verdict: when PR-4b lands, it fails loudly
-/// and flips to accepted-and-applied (bond mined; rung-2 bond-post match +
-/// `BondPostChange` change funding re-discovered by this same scan — the
-/// substrate the emission-claim e2e, PR-4c, spends from).
+/// **Accepted-and-applied (the promoted PR-4a tripwire).** The daemon's
+/// PR-4b bond-post Phase-C battery (`DAEMON_SUBMIT_VERDICT.md` §8.7.1 BP
+/// rows; `shekyl-daemon-rpc/src/submit/verifier.rs::verify_bond_post`)
+/// verifies the wallet-built post over real RPC. The trailing assertions
+/// pin the full loop: submit accepted, bond mined, and the rung-2
+/// bond-post match + `BondPostChange` change funding re-discovered by this
+/// same production scan — the substrate the emission-claim e2e (PR-4c)
+/// spends from. (This test was the PR-4a daemon-gap tripwire pinning the
+/// old unimplemented-arm `Malformed` refusal; PR-4b promoted it.)
 ///
 /// Bounded deviations from production, each named:
 /// - [`SpentRecordsDurablyPruned::for_test`] — the test-only mint; the same
@@ -1440,10 +1441,9 @@ async fn pscan_until(
 #[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
 async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
     use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
-    use super::error::TerminalErrorKind;
     use super::stake_engine::{PSlot, StakeEngineError};
     use super::traits::DaemonEngine;
-    use super::transaction_submitter::{BroadcastSubmitError, BroadcastSubmitter, SubmitterError};
+    use super::transaction_submitter::BroadcastSubmitter;
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
     use shekyl_units::AtomicUnits;
 
@@ -1608,36 +1608,102 @@ async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
     // Dispatch the assembled bytes through the audited posture→submitter
     // choke point (see the module docs for why WI-3's block-timed driver is
     // deliberately not exercised here).
+    let persona_id = *assembled.bound_tx.persona();
     let daemon_client = { arc.read().await.daemon().clone() };
-    let submitter =
-        BroadcastSubmitter::local(*assembled.bound_tx.persona(), Arc::new(daemon_client));
+    let submitter = BroadcastSubmitter::local(persona_id, Arc::new(daemon_client));
     let verdict = submitter.submit_bound(assembled.bound_tx.clone()).await;
 
-    // The daemon-gap tripwire (module docs above): the wallet-built bond post
-    // reaches the daemon's Phase-C verifier and draws its unimplemented-arm
-    // refusal, verbatim. Anything else — acceptance (PR-4b landed: promote
-    // this into the accepted-and-applied + scan-re-discovery leg), a Phase-A
-    // reject, a transport error — fails loudly here.
-    match verdict {
-        Err(BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal {
-            kind: TerminalErrorKind::Malformed,
-        })) => {
-            eprintln!(
-                "bond post cleared Phase A and drew the Phase-C unimplemented-arm \
-                 refusal — the PR-4b submit-legs gap, pinned"
-            );
+    // Accepted-and-applied (the promoted PR-4a tripwire): the daemon's
+    // PR-4b bond-post Phase-C battery verifies the wallet-built post over
+    // real RPC. Any rejection — Phase A, Phase C, transport — fails loudly.
+    let receipt = verdict.unwrap_or_else(|e| {
+        panic!(
+            "daemon must accept the wallet-built bond post \
+             (PR-4b battery landed; got {e:?})"
+        )
+    });
+    eprintln!("bond post accepted by the daemon submit engine: {receipt:?}");
+
+    // Applied: mine the accepted post into a block, then past the scan
+    // horizon, and re-run the production P-scan — the sealed state must
+    // carry the persona's bond-post match (rung-2 substrate) and a
+    // `BondPostChange` change-funding output beyond the pre-post set (the
+    // outputs the emission-claim e2e, PR-4c, spends from).
+    //
+    // The submit path inserts at `relay_method::local` under the
+    // Dandelion++ embargo, and the miner only includes broadcast-visible
+    // txs (`fill_block_template`'s `matches(relay_category::legacy)`
+    // gate); on this offline daemon the stem cannot send, so inclusion
+    // waits for the embargo to expire and fluff. Mine in batches until the
+    // pool drains rather than assuming one batch suffices.
+    use shekyl_engine_state::pscan_state::MintLineageOutput;
+    let mine_deadline = Instant::now() + Duration::from_secs(240);
+    loop {
+        daemon.generate_blocks(5, &principal).await;
+        let info = daemon
+            .rpc
+            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .await
+            .expect("get_info");
+        if info.tx_pool_size == 0 {
+            break;
         }
-        Ok(success) => panic!(
-            "daemon ACCEPTED the bond post ({success:?}): the PR-4b bond-post battery \
-             has landed — promote this tripwire into the accepted-and-applied leg \
-             (mine past the scan horizon; assert a bond-post match + a BondPostChange \
-             funding output beyond the {discovered} discovered pre-post)"
-        ),
-        Err(other) => panic!(
-            "bond post must reach the Phase-C unimplemented-arm refusal, \
-             not fail earlier: {other:?}"
-        ),
+        assert!(
+            Instant::now() < mine_deadline,
+            "accepted bond post never left the pool (embargo/template gap?)"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
     }
+    daemon
+        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &principal)
+        .await;
+    refresh(&arc).await;
+    let state = pscan_until(
+        &arc,
+        &pscan_seal,
+        "the bond-post match + BondPostChange change funding",
+        |s| {
+            s.bond_post_matches()
+                .iter()
+                .any(|m| m.p_canonical_id == persona_id)
+                && s.funding_outputs()
+                    .iter()
+                    .any(|r| r.p_slot == slot && r.lineage == MintLineageOutput::BondPostChange)
+        },
+    )
+    .await;
+    let post_change = state
+        .funding_outputs()
+        .iter()
+        .filter(|r| r.p_slot == slot && r.lineage == MintLineageOutput::BondPostChange)
+        .count();
+    let total = state
+        .funding_outputs()
+        .iter()
+        .filter(|r| r.p_slot == slot)
+        .count();
+    // The swept pre-post funding records are PRUNED at scan time (SP-R0
+    // arm 1: the key-image watch fires on the bond post's own funding
+    // spends), so the persona's surviving funding set is the bond-post
+    // change — the rung-2 substrate PR-4c spends from — not a superset of
+    // the {discovered} pre-post record(s).
+    let swept: Vec<u64> = assembled
+        .funding_gindexes
+        .iter()
+        .map(|g| g.to_raw())
+        .collect();
+    assert!(
+        state
+            .funding_outputs()
+            .iter()
+            .all(|r| !swept.contains(&r.gindex.to_raw())),
+        "the swept funding record must be pruned from the sealed set (SP-R0 arm 1)"
+    );
+    eprintln!(
+        "bond post accepted-and-applied: match re-discovered; {post_change} \
+         BondPostChange output(s), {total} persona funding output(s) \
+         ({discovered} pre-post record(s) swept+pruned)"
+    );
 }
 
 /// Capture blocks `0..=tip` as one fixture chain (deterministic projection only).

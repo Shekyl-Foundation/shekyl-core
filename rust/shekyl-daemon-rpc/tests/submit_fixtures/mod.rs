@@ -188,6 +188,7 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         fee_quantization_mask: 1,
         weight_limit: 149_400,
         chain_height: ChainCount::from_raw(200),
+        bond_record_exists: None,
     }
 }
 
@@ -211,6 +212,9 @@ pub struct SnapshotRecord {
     pub txid: TxHash,
     pub key_images: Vec<[u8; 32]>,
     pub reference_block: BlockHash,
+    /// The §8.7.1 BP3 probe key the engine passed (bond-post submissions
+    /// only).
+    pub bond_p_canonical_id: Option<[u8; 32]>,
 }
 
 /// Deterministic [`SubmitStateShim`]: serves a fixed snapshot, replays a
@@ -255,11 +259,13 @@ impl SubmitStateShim for MockShim {
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
+        bond_p_canonical_id: Option<&[u8; 32]>,
     ) -> Result<SubmitFacts, ShimFault> {
         self.snapshots.lock().unwrap().push(SnapshotRecord {
             txid: *txid,
             key_images: key_images.to_vec(),
             reference_block: *reference_block,
+            bond_p_canonical_id: bond_p_canonical_id.copied(),
         });
         Ok(self.facts.clone())
     }
