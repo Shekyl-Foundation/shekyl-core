@@ -134,8 +134,14 @@ unsafe fn emission_facts_from_ffi(view: &ffi::SubmitEmissionFactsFfi) -> Result<
                 join_settlement_epoch: b.join_settlement_epoch,
                 is_foundation_complete_tree: b.is_foundation_complete_tree != 0,
                 bad_intervals: unsafe {
-                    // Flattened (start, end_exclusive) pairs: 2 × len u64s.
-                    slice(b.bad_intervals_ptr, b.bad_intervals_len * 2)
+                    // Flattened (start, end_exclusive) pairs: 2 × len u64s;
+                    // the pair count is C++-supplied, so the doubling is
+                    // checked — overflow is a malformed handle, rejected
+                    // fail-closed like the null case.
+                    slice(
+                        b.bad_intervals_ptr,
+                        b.bad_intervals_len.checked_mul(2).ok_or(())?,
+                    )
                 }?
                 .chunks_exact(2)
                 .map(|pair| BadInterval {

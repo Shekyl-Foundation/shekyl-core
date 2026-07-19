@@ -346,6 +346,23 @@ fn emission_vin_that_fails_the_codec_rejects() {
 }
 
 #[test]
+fn emission_vin_with_trailing_bytes_rejects() {
+    // E1 is length-exact (the C++ oracle's parse_emission_vin bound):
+    // trailing bytes inside the opaque blob are invisible to the outer
+    // tx's byte-canonicality check and would only surface at the
+    // commit-path re-extract — as an internal fault, not a verdict —
+    // so Phase A forecloses them.
+    let mut tx = emission_tx(1_000);
+    for input in &mut tx.prefix.inputs {
+        if let Input::ArchivalRewardEmission { canonical_bytes } = input {
+            canonical_bytes.push(0x00);
+        }
+    }
+    let reason = reject_reason(&hexify(&tx));
+    assert!(reason.contains("trailing"), "unexpected reason: {reason}");
+}
+
+#[test]
 fn emission_with_zero_loud_vout_sum_rejects() {
     // EV3: the mint must be loud — an all-confidential vout set cannot
     // carry an emission claim.
