@@ -202,11 +202,20 @@ honestly for ratification:** arm #2 is **logic-discharged at the task/accrual/li
 test level** — the ~270k-block claim-window reachability makes a `not(test)`
 fire-harness lane impractical (evidence construction uses the cfg(test) batch
 constructor; a conscious, disclosed deviation from the arm-#1/#3 lane form) — and
-**production-discharge = extending the promoted regtest lane** — PR-4b LANDED
-(#338, 2026-07-19) and that lane now enters through the production `first_stake`
-(arm #1 PRODUCTION-DISCHARGED there, per the §4 arm-#1 UPDATE); arm #2's leg adds
-the unbond post + the armed settlement-epoch override for the W-lapse — drivable
-now, not yet driven.
+**production-discharge — corrected at source (2026-07-19): NOT yet drivable.**
+The prior "drivable now" claim was wrong: arm #2's retire trigger is a confirmed
+`Unbond` post, and while the consensus **block-path** verifies for non-JoinMarket
+kinds exist (`shekyl-archival-retention` runs them today), the **submit-side**
+fact sets are JoinMarket-only (`DAEMON_SUBMIT_VERDICT.md` §8.7.1 pins the JM BP
+rows only) and **no wallet constructs these kinds yet** — so no Unbond can reach
+a regtest chain through any production path. Named blockers: the non-JoinMarket
+submit battery (the PR-4b sibling for `Unbond`/`Rebond`/`HoldingsUpdate` rows)
+**and** the wallet-side unbond entry. The armed settlement-epoch override for
+the W-lapse rides whichever lands last. Arm #3's production-discharge leg, by
+contrast, needs no post at all and **LANDED 2026-07-19**
+(`e2e_arm3_phantom_slot_collected_at_open`: the SA-DQ-3 persist-then-no-broadcast
+crash against the live chain, collected by the production open; SHEKYLD_BIN
+cadence, the same gating as the promoted arm-#1 lane).
 
 **REVIEW-SWEEP ADDENDUM (2026-07-19, high-effort review of PR #339).** Six findings
 addressed; the load-bearing one is a stranded-funds gap.
