@@ -766,6 +766,7 @@ mod tests {
                 },
             ],
             Vec::new(),
+            Vec::new(),
         );
         store.save(&state_a).await.expect("save A");
         assert!(pscan_path.exists(), ".wallet.pscan written by the seal");
@@ -780,6 +781,7 @@ mod tests {
             PScanCursor::at(BlockHeight::from_raw(9_000), [0x2B; 32]),
             accruals(&[(0, 100), (1, 250), (2, 75)]),
             pending(&[(0xAB, 1)]),
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         );
