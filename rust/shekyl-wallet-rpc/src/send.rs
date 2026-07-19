@@ -12,10 +12,9 @@ use std::num::NonZeroU64;
 use serde::Deserialize;
 use serde_json::Value;
 use shekyl_engine_core::{FeePriority, ReservationId, TxRecipient, TxRequest};
-use shekyl_units::AtomicUnits;
 
 use crate::error::WalletRpcError;
-use crate::params::parse_required_object;
+use crate::params::{parse_atomic_units, parse_required_object};
 use crate::project::pending_tx_result;
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{DiscardPendingTxResult, SubmitPendingTxResult, SubmitVerdictView};
@@ -145,13 +144,6 @@ fn parse_fee_priority(p: FeePriorityParams) -> Result<FeePriority, WalletRpcErro
             Ok(FeePriority::Custom(nz))
         }
     }
-}
-
-fn parse_atomic_units(s: &str) -> Result<AtomicUnits, WalletRpcError> {
-    let raw: u64 = s.parse().map_err(|_| {
-        WalletRpcError::InvalidParams(format!("amount must be a decimal atomic-units string: {s}"))
-    })?;
-    Ok(AtomicUnits::from_raw(raw))
 }
 
 fn parse_reservation_id(s: &str) -> Result<ReservationId, WalletRpcError> {

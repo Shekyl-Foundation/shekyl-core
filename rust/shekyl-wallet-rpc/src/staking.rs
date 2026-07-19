@@ -75,6 +75,14 @@ pub(crate) async fn staking_info(
 
 /// Compute the authoritative view under the engine read guard.
 ///
+/// `staking_read_view` opens and decrypts the sealed `.wallet.pscan` /
+/// `.wallet.pending` files inline (envelope KDF + AEAD + postcard decode), so
+/// it is run through [`tokio::task::block_in_place`] — the same off-the-worker
+/// discipline `lifecycle.rs` uses for its synchronous engine calls, so a large
+/// seal cannot stall the tokio worker (and any tenant scheduled on it) for the
+/// decrypt. The engine runtime is always multi-threaded (`#[tokio::main]`), so
+/// `block_in_place` never hits its `current_thread` panic.
+///
 /// A corrupt or version-mismatched seal fails closed as `InternalError` with
 /// a stable, detail-free client message (the cause can carry filesystem
 /// paths; it is logged server-side only — same discipline as the
@@ -84,7 +92,7 @@ async fn read_view(
 ) -> Result<StakingReadView, WalletRpcError> {
     let shared = require_open_engine(tenants).await?;
     let engine = shared.read().await;
-    engine.staking_read_view().map_err(|e| {
+    tokio::task::block_in_place(|| engine.staking_read_view()).map_err(|e| {
         tracing::warn!(error = %e, "staking read view failed");
         WalletRpcError::InternalError("staking state failed to load".into())
     })

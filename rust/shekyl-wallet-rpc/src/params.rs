@@ -10,6 +10,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
+use shekyl_units::AtomicUnits;
 
 use crate::error::WalletRpcError;
 
@@ -58,4 +59,16 @@ pub(crate) fn parse_optional_object<T: for<'de> Deserialize<'de> + Default>(
             "{method} params must be an object or omitted"
         ))),
     }
+}
+
+/// Parse a client-supplied decimal atomic-units amount string.
+///
+/// One home for the amount-string contract shared by the receiving and send
+/// surfaces (`create_payment_request` / `make_uri` / `build_pending_tx`): a
+/// bare decimal `u64` of atomic units, rejected as `InvalidParams` otherwise.
+pub(crate) fn parse_atomic_units(s: &str) -> Result<AtomicUnits, WalletRpcError> {
+    let raw: u64 = s.parse().map_err(|_| {
+        WalletRpcError::InvalidParams(format!("amount must be a decimal atomic-units string: {s}"))
+    })?;
+    Ok(AtomicUnits::from_raw(raw))
 }

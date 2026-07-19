@@ -97,33 +97,40 @@ pub(crate) async fn get_default_fee_priority(
     })
 }
 
-/// Validate an input count into the type-bounded fee-path range.
+/// Validate a client-supplied transaction count against the OpenAPI contract
+/// range, rejecting (not clamping) an out-of-contract value.
+///
+/// Two bounds meet here:
+/// - the **contract floor** `min` — a caller-visible per-field minimum
+///   (`n_inputs` ≥ 1, `n_outputs` ≥ 2: a valid transfer always carries a
+///   payment/change output pair, per `docs/api/wallet_rpc.yaml`);
+/// - the bounded type's own `1..=MAX` ceiling — `clamp` maps the raw count
+///   through it, so a value the clamp would have altered is above `MAX`.
 ///
 /// The bounded types clamp silently at the Engine boundary (their internal
-/// contract); at the RPC boundary an out-of-range count is a caller error,
-/// so reject instead of clamping.
-fn parse_input_count(n: i64) -> Result<InputCount, WalletRpcError> {
-    let raw = usize::try_from(n)
-        .map_err(|_| WalletRpcError::InvalidParams("n_inputs must be a positive integer".into()))?;
-    let bounded = InputCount::clamped(raw);
-    if bounded.get() != raw {
-        return Err(WalletRpcError::InvalidParams(
-            "n_inputs out of range for a valid transaction".into(),
-        ));
+/// weight-predictor contract); at the RPC boundary an out-of-range count is a
+/// caller error, so reject instead of clamping.
+fn parse_count(
+    n: i64,
+    min: usize,
+    field: &str,
+    clamp: impl Fn(usize) -> usize,
+) -> Result<usize, WalletRpcError> {
+    let raw = usize::try_from(n).map_err(|_| {
+        WalletRpcError::InvalidParams(format!("{field} must be a positive integer"))
+    })?;
+    if raw < min || clamp(raw) != raw {
+        return Err(WalletRpcError::InvalidParams(format!(
+            "{field} out of range for a valid transaction"
+        )));
     }
-    Ok(bounded)
+    Ok(raw)
 }
 
-/// Validate an output count into the type-bounded fee-path range.
+fn parse_input_count(n: i64) -> Result<InputCount, WalletRpcError> {
+    parse_count(n, 1, "n_inputs", |r| InputCount::clamped(r).get()).map(InputCount::clamped)
+}
+
 fn parse_output_count(n: i64) -> Result<OutputCount, WalletRpcError> {
-    let raw = usize::try_from(n).map_err(|_| {
-        WalletRpcError::InvalidParams("n_outputs must be a positive integer".into())
-    })?;
-    let bounded = OutputCount::clamped(raw);
-    if bounded.get() != raw {
-        return Err(WalletRpcError::InvalidParams(
-            "n_outputs out of range for a valid transaction".into(),
-        ));
-    }
-    Ok(bounded)
+    parse_count(n, 2, "n_outputs", |r| OutputCount::clamped(r).get()).map(OutputCount::clamped)
 }

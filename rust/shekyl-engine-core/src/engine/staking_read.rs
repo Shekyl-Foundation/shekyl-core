@@ -32,8 +32,11 @@
 //!   pending-unbond nor retired. The bond principal is the consensus bond
 //!   floor by construction (the WI-2 assemble path bonds exactly the floor).
 //! - **`bonded_principal_pending`** — the same floor over in-flight posts in
-//!   the sealed [`PendingPostBlock`] (Pending or Dispatched — either way not
-//!   yet confirmed on-chain).
+//!   the sealed [`PendingPostBlock`] (Pending or Dispatched) **whose bond has
+//!   not yet been observed confirmed on-chain**. A post that has confirmed is
+//!   kept in the block only transiently (the removal-ordering contract's
+//!   phantom-GC bridge); it is counted as confirmed, never as both — the two
+//!   principal legs are disjoint across the whole reconcile window.
 //! - **`rewards_received_unspent`** — Σ amount over **unspent** `P`-funding
 //!   outputs whose mint lineage is
 //!   [`MintLineageOutput::EmissionReward`]. This is *received* reward money
@@ -41,10 +44,12 @@
 //!   rewards, which require a daemon claimable-epoch query and are a separate
 //!   design item (see `docs/FOLLOWUPS.md`).
 
+use std::collections::BTreeSet;
+
 use shekyl_engine_file::WalletFileError;
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PScanState};
 use shekyl_engine_state::{PendingPostBlock, WalletLedgerError};
-use shekyl_types::{BlockHeight, GlobalOutputIndex, PSlot};
+use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 use shekyl_units::AtomicUnits;
 
 use crate::consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
@@ -169,18 +174,33 @@ pub(crate) fn staked_balance_from_records(
     pscan: Option<&PScanState>,
     pending: Option<&PendingPostBlock>,
 ) -> Result<StakedBalance, StakingReadError> {
+    // Distinct personas with a confirmed JoinMarket bond post (`post_kind == 0`)
+    // observed on-chain. This is the single source both principal legs derive
+    // from: the live subset (below) is the confirmed principal, and membership
+    // here is exactly what disqualifies an in-flight post from the *pending*
+    // principal. A pending post whose bond has confirmed is kept in the sealed
+    // `PendingPostBlock` only transiently — the removal-ordering contract holds
+    // its record live as the phantom-`bonded_slots` GC bridge until the
+    // match-bearing pscan seal is durable (`pending_post_block.rs`) — so
+    // counting it as pending *and* confirmed would report one physical bond as
+    // both for the whole reconcile window (2× the floor to a UI summing them).
+    let confirmed_bonds: BTreeSet<PCanonicalId> = match pscan {
+        None => BTreeSet::new(),
+        Some(state) => state
+            .bond_post_matches()
+            .iter()
+            .filter(|m| m.post_kind == 0)
+            .map(|m| m.p_canonical_id)
+            .collect(),
+    };
+
     let bonded_principal_confirmed = match pscan {
         None => AtomicUnits::ZERO,
         Some(state) => {
-            // Distinct personas with a confirmed JoinMarket bond post that are
-            // neither pending-unbond nor durably retired — the live-bond set
-            // the SP-6 reconcile evidence supports.
-            let mut live: std::collections::BTreeSet<_> = state
-                .bond_post_matches()
-                .iter()
-                .filter(|m| m.post_kind == 0)
-                .map(|m| m.p_canonical_id)
-                .collect();
+            // The live-bond set: confirmed personas that are neither
+            // pending-unbond nor durably retired — the set the SP-6 reconcile
+            // evidence supports.
+            let mut live = confirmed_bonds.clone();
             for unbonded in state.pending_unbonds().keys() {
                 live.remove(unbonded);
             }
@@ -193,7 +213,20 @@ pub(crate) fn staked_balance_from_records(
 
     let bonded_principal_pending = match pending {
         None => AtomicUnits::ZERO,
-        Some(block) => principal_for_bond_count(block.posts().len())?,
+        Some(block) => {
+            // Only posts whose bond has not yet been observed confirmed
+            // on-chain. A post whose persona is already in `confirmed_bonds`
+            // is counted as confirmed (or excluded there as unbonding/retired)
+            // and must not be re-counted here — key on the raw match set, not
+            // the live set, so a bond that confirmed *and* is already
+            // unbonding is excluded from pending too.
+            let count = block
+                .posts()
+                .iter()
+                .filter(|post| !confirmed_bonds.contains(&post.persona))
+                .count();
+            principal_for_bond_count(count)?
+        }
     };
 
     let rewards_received_unspent = match pscan {
@@ -439,6 +472,62 @@ mod tests {
             AtomicUnits::from_raw(2 * ARCHIVAL_BOND_FLOOR_ATOMIC)
         );
         assert_eq!(b.bonded_principal_confirmed, AtomicUnits::ZERO);
+    }
+
+    /// Reconcile-window disjointness: a bond whose post has confirmed on-chain
+    /// (a `post_kind == 0` match in the pscan seal) but whose `PendingPostBlock`
+    /// record is still live (the removal-ordering GC bridge) is counted as
+    /// confirmed **only** — never in both legs. A distinct persona with an
+    /// in-flight post but no match yet still counts as pending.
+    #[test]
+    fn confirmed_bond_not_double_counted_as_pending() {
+        // pscan: persona 1's bond has confirmed on-chain.
+        let s = state(
+            vec![bond_match(1, 0)],
+            BTreeMap::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        // pending block: persona 1's record is still live (GC bridge) and
+        // persona 2 has a genuinely unconfirmed in-flight post.
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_post(pending_post(1)));
+        assert!(block.push_post(pending_post(2)));
+
+        let b = staked_balance_from_records(Some(&s), Some(&block)).expect("balance");
+        let floor = AtomicUnits::from_raw(ARCHIVAL_BOND_FLOOR_ATOMIC);
+        assert_eq!(
+            b.bonded_principal_confirmed, floor,
+            "persona 1 counts once, as confirmed"
+        );
+        assert_eq!(
+            b.bonded_principal_pending, floor,
+            "only persona 2 (no match yet) is pending; persona 1 is not re-counted"
+        );
+    }
+
+    /// A bond that has confirmed **and** entered pending-unbond within the
+    /// reconcile window is excluded from pending (keyed on the raw match set,
+    /// not the live set) — it counts in neither leg, not as phantom pending.
+    #[test]
+    fn confirmed_then_unbonding_post_is_not_pending() {
+        let mut unbonds = BTreeMap::new();
+        unbonds.insert(persona(1), SettlementEpoch::from_raw(9));
+        let s = state(vec![bond_match(1, 0)], unbonds, Vec::new(), Vec::new());
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_post(pending_post(1)));
+
+        let b = staked_balance_from_records(Some(&s), Some(&block)).expect("balance");
+        assert_eq!(
+            b.bonded_principal_confirmed,
+            AtomicUnits::ZERO,
+            "confirmed-but-unbonding is excluded from confirmed"
+        );
+        assert_eq!(
+            b.bonded_principal_pending,
+            AtomicUnits::ZERO,
+            "and its still-live post is not counted as pending"
+        );
     }
 
     /// Rewards-received-unspent sums exactly the EmissionReward-lineage

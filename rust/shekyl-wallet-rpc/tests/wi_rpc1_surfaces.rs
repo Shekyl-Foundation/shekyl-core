@@ -277,6 +277,17 @@ async fn fee_estimate_shape_bounds_and_daemon_failure() {
     .await;
     assert_eq!(oversize_out["error"]["code"], -32602, "{oversize_out}");
 
+    // A single output is below the contract minimum (a valid transfer always
+    // carries a payment/change pair, `n_outputs >= 2`) → invalid params, not a
+    // silent estimate for an unbuildable shape.
+    let one_out = rpc(
+        state.clone(),
+        "estimate_tx_size_and_weight",
+        json!({ "n_inputs": 2, "n_outputs": 1 }),
+    )
+    .await;
+    assert_eq!(one_out["error"]["code"], -32602, "{one_out}");
+
     // Unreachable daemon → fee snapshot fails → -29102.
     let quote = rpc(state, "get_default_fee_priority", json!({})).await;
     assert_eq!(quote["error"]["code"], -29102, "{quote}");

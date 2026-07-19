@@ -19,7 +19,7 @@ use shekyl_engine_state::{PaymentRequest, PaymentRequestId, PaymentRequestState}
 use shekyl_units::AtomicUnits;
 
 use crate::error::WalletRpcError;
-use crate::params::{parse_optional_object, parse_required_object};
+use crate::params::{parse_atomic_units, parse_optional_object, parse_required_object};
 use crate::project::atomic_units_string;
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
@@ -81,7 +81,14 @@ pub(crate) async fn create_payment_request(
             created_at,
             expiry,
         })
-        .map_err(|e| WalletRpcError::InternalError(format!("persist payment request: {e}")))?;
+        .map_err(|e| {
+            // A `PersistenceError` can carry `WalletFileError` display strings
+            // that embed filesystem paths (e.g. "refusing to overwrite … at
+            // {path}"); keep those server-side and return a stable, detail-free
+            // client message — same discipline as staking's `read_view` mapping.
+            tracing::warn!(error = %e, "create_payment_request: persist failed");
+            WalletRpcError::InternalError("failed to persist payment request".into())
+        })?;
 
     let address = engine
         .primary_address()
@@ -212,13 +219,6 @@ fn parse_filter(
             "unknown payment-request filter: {other}"
         ))),
     }
-}
-
-fn parse_atomic_units(s: &str) -> Result<AtomicUnits, WalletRpcError> {
-    let raw: u64 = s.parse().map_err(|_| {
-        WalletRpcError::InvalidParams(format!("amount must be a decimal atomic-units string: {s}"))
-    })?;
-    Ok(AtomicUnits::from_raw(raw))
 }
 
 /// Parse a `rid` param: decimal string, non-zero, u48-fitting (the on-wire
