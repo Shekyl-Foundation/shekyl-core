@@ -1566,14 +1566,38 @@ struct ConfirmedBondFixture {
     confirmed_tip_height: u64,
 }
 
+/// How the confirmed-bond fixture enters the stake.
+enum FixtureStake {
+    /// The production [`Engine::first_stake`] entry (SP-R0 arm-#1
+    /// production discharge) — the SA-R1 genesis posture: JoinMarket
+    /// **CompleteTree** holdings. A complete-tree bond is foundation-shaped
+    /// and market-EXCLUDED (`ARCHIVAL_CONSENSUS_STATE.md` §3.3 E-2;
+    /// `market_member_at_epoch` returns false), so this arm's bond can
+    /// never carry Σwork — it exercises the stake entry, not the reward
+    /// market.
+    FirstStake,
+    /// The composed production steps — `mint_handle` →
+    /// `persist_bond_record` → [`Engine::assemble_bond_post`] (which seals
+    /// the pending post exactly as `first_stake` does) — with
+    /// caller-chosen holdings: the **market** bond shape
+    /// (`ShardSetCompact`) the emission-claim e2e earns from. Named
+    /// deviation (PR-4c finding): no wallet entry posts a market bond
+    /// today — `first_stake` hardcodes the CompleteTree genesis posture —
+    /// so the market-bond wallet entry is a named follow-on, and until it
+    /// lands this composition of the same production functions is the
+    /// claimable-bond path.
+    MarketBond(shekyl_archival_retention::HoldingsDescriptor),
+}
+
 /// Fund → stake → dispatch → confirm: the production staking sequence both
 /// PR-4 e2e legs share (rule 19: one definition — the bond e2e asserts on
 /// the returned fixture, the emission e2e builds its claim on it). The
-/// caller owns the daemon spawn (and with it the SEB lever decision) and
-/// the funding cushion: the cushion is (approximately) the persona's
-/// `BondPostChange` change output, so the emission caller sizes it to fund
-/// real ToKey claim-fee inputs where the bond caller only needs it
-/// non-zero.
+/// caller owns the daemon spawn (and with it the SEB lever decision), the
+/// stake entry (see [`FixtureStake`] — the emission e2e needs a market
+/// bond), and the funding cushion: the cushion is (approximately) the
+/// persona's `BondPostChange` change output, so the emission caller sizes
+/// it to fund real ToKey claim-fee inputs where the bond caller only needs
+/// it non-zero.
 ///
 /// Every step retries-until-ready (funding maturity, reference
 /// spendability, the Dandelion++ embargo), so the block geography is a
@@ -1583,12 +1607,13 @@ async fn stake_persona_to_confirmed_bond(
     seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
     slot_raw: u32,
     funding_cushion: u64,
+    stake_entry: FixtureStake,
 ) -> ConfirmedBondFixture {
-    use super::bond_assembly::PBoundBytes;
+    use super::bond_assembly::{BondAssemblyError, PBoundBytes, SpentRecordsDurablyPruned};
     use super::bond_orchestrator::FirstStakeError;
     use super::bond_orchestrator::BOND_SIZE_CEILING_BYTES;
     use super::pscan::start::pending_post_store_for_engine;
-    use super::stake_engine::PSlot;
+    use super::stake_engine::{PSlot, StakeEngineError};
     use super::traits::DaemonEngine;
     use super::transaction_submitter::BroadcastSubmitter;
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
@@ -1625,11 +1650,15 @@ async fn stake_persona_to_confirmed_bond(
 
     // Fund the principal past the persona's needs (2×: the transfer's own fee
     // + selection churn), then fund the persona with one ordinary transfer.
-    let holdings = HoldingsDescriptor {
-        kind: HoldingsKind::CompleteTree,
-        shard_ids: ShardSet::empty(),
+    // The floor follows the entry's holdings shape.
+    let floor_holdings = match &stake_entry {
+        FixtureStake::FirstStake => HoldingsDescriptor {
+            kind: HoldingsKind::CompleteTree,
+            shard_ids: ShardSet::empty(),
+        },
+        FixtureStake::MarketBond(h) => h.clone(),
     };
-    let funding = AtomicUnits::from_raw(bond_floor(&holdings) + bond_fee + funding_cushion);
+    let funding = AtomicUnits::from_raw(bond_floor(&floor_holdings) + bond_fee + funding_cushion);
     mine_until_unlocked_at_least(
         daemon,
         &arc,
@@ -1670,50 +1699,127 @@ async fn stake_persona_to_confirmed_bond(
         .count();
     eprintln!("pscan discovered {pre_post_discovered} persona funding output(s)");
 
-    // Production stake entry (SA-R1 `first_stake` — the SP-R0 arm-#1
-    // PRODUCTION-DISCHARGE leg): preflight funding sweep → durable
-    // `persist_bond_record` → sign + assemble → the `.wallet.pending` seal,
-    // driven exactly as the credentialed `stake` RPC drives it. The
-    // `arm1_watch_pruning_live` witness is minted inside the entry, so no
-    // `for_test` deviation remains on this path. The funding must be
-    // spendable at the anchored REFERENCE block (tip − REF_ANCHOR_AGE),
-    // which lags tip maturity — the typed W1-clean `Funding` refusal is the
-    // wait-and-retry arm (the same shape as the spend e2e's
-    // reference-spendability loop; nothing durable is written by a refused
-    // attempt).
-    let mut outcome = None;
-    for _ in 0..MAX_MINE_BATCHES {
-        match super::Engine::first_stake(arc.clone(), slot_raw).await {
-            Ok(o) => {
-                outcome = Some(o);
-                break;
+    // The stake entry (both arms end at the same `.wallet.pending` seal —
+    // `assemble_bond_post`'s push_post — so everything downstream is
+    // shared). The funding must be spendable at the anchored REFERENCE
+    // block (tip − REF_ANCHOR_AGE), which lags tip maturity, so each arm
+    // retries its typed not-ready refusals while mining.
+    match &stake_entry {
+        // Production SA-R1 entry (SP-R0 arm-#1 PRODUCTION-DISCHARGE leg):
+        // preflight funding sweep → durable `persist_bond_record` → sign +
+        // assemble → seal, driven exactly as the credentialed `stake` RPC
+        // drives it; the `arm1_watch_pruning_live` witness is minted
+        // inside the entry, so no `for_test` deviation remains here.
+        FixtureStake::FirstStake => {
+            let mut outcome = None;
+            for _ in 0..MAX_MINE_BATCHES {
+                match super::Engine::first_stake(arc.clone(), slot_raw).await {
+                    Ok(o) => {
+                        outcome = Some(o);
+                        break;
+                    }
+                    Err(FirstStakeError::Funding(detail)) => {
+                        eprintln!("first-stake funding not ready ({detail}); mining more");
+                        daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                        refresh(&arc).await;
+                    }
+                    // Post-persist mid-flow failure — the documented W2
+                    // window (e.g. the funding output cleared the preflight
+                    // sweep but is not yet drained into the REFERENCE curve
+                    // tree). The production recovery is re-invoking `stake`
+                    // (`persist_bond_record` is re-entrant; the resume path
+                    // re-mints the ticket), so the retry exercises the W2
+                    // resume exactly as a wallet would.
+                    Err(FirstStakeError::Engine(detail)) => {
+                        eprintln!(
+                            "first-stake W2 mid-flow failure ({detail}); mining and resuming"
+                        );
+                        daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                        refresh(&arc).await;
+                    }
+                    Err(e) => panic!("first_stake: {e}"),
+                }
             }
-            Err(FirstStakeError::Funding(detail)) => {
-                eprintln!("first-stake funding not ready ({detail}); mining more");
-                daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
-                refresh(&arc).await;
+            let outcome =
+                outcome.expect("first_stake must succeed once the funding is reference-spendable");
+            eprintln!(
+                "first_stake sealed the bond post: slot {}, {} swept input(s), resumed={}",
+                outcome.p_slot, outcome.swept_inputs, outcome.resumed
+            );
+        }
+        // Market bond: the same production functions `first_stake`
+        // composes, with the holdings the entry does not yet parameterize
+        // (see [`FixtureStake::MarketBond`]). Assembly authorizes on the
+        // handle alone; `persist_bond_record` is idempotent, so each retry
+        // re-mints a fresh ticket.
+        FixtureStake::MarketBond(holdings) => {
+            let fee = AtomicUnits::from_raw(bond_fee);
+            let mut sealed = false;
+            for _ in 0..MAX_MINE_BATCHES {
+                let (handle, ticket) = {
+                    let g = arc.read().await;
+                    let stake = g.stake_handle().expect("staker wallet has a stake engine");
+                    let handle = stake.mint_handle(slot).await.expect("mint handle");
+                    let ticket = g.persist_bond_record(slot).expect("persist bond record");
+                    (handle, ticket)
+                };
+                match super::Engine::assemble_bond_post(
+                    arc.clone(),
+                    handle,
+                    ticket,
+                    holdings.clone(),
+                    fee,
+                    &SpentRecordsDurablyPruned::for_test(),
+                )
+                .await
+                {
+                    Ok(a) => {
+                        eprintln!(
+                            "assembled market bond post: {} B, {} funding input(s)",
+                            a.bound_tx.bytes().len(),
+                            a.funding_gindexes.len(),
+                        );
+                        sealed = true;
+                        break;
+                    }
+                    // The reference-spendability ladder, one typed arm per
+                    // stage: value shortfall at the reference, empty
+                    // eligible set, and swept-but-not-yet-drained into the
+                    // reference tree.
+                    Err(StakeEngineError::Assembly(BondAssemblyError::InsufficientFunding {
+                        available,
+                        required,
+                    })) => {
+                        eprintln!(
+                            "persona funding not yet reference-spendable \
+                             ({available}/{required}); mining more"
+                        );
+                        daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                        refresh(&arc).await;
+                    }
+                    Err(StakeEngineError::Assembly(BondAssemblyError::NoSpendableFunding)) => {
+                        eprintln!("persona funding set empty at the reference height; mining more");
+                        daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                        refresh(&arc).await;
+                    }
+                    Err(StakeEngineError::Assembly(BondAssemblyError::OutputNotYetDrained {
+                        gindex,
+                    })) => {
+                        eprintln!(
+                            "funding output {gindex} not yet in the reference tree; mining more"
+                        );
+                        daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                        refresh(&arc).await;
+                    }
+                    Err(e) => panic!("assemble market bond post: {e:?}"),
+                }
             }
-            // Post-persist mid-flow failure — the documented W2 window
-            // (e.g. the funding output cleared the preflight sweep but is
-            // not yet drained into the REFERENCE curve tree the membership
-            // path is fetched against). The production recovery is
-            // re-invoking `stake` (`persist_bond_record` is re-entrant;
-            // the resume path re-mints the ticket), so the retry here
-            // exercises the W2 resume exactly as a wallet would.
-            Err(FirstStakeError::Engine(detail)) => {
-                eprintln!("first-stake W2 mid-flow failure ({detail}); mining and resuming");
-                daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
-                refresh(&arc).await;
-            }
-            Err(e) => panic!("first_stake: {e}"),
+            assert!(
+                sealed,
+                "the market bond post must assemble once the funding is reference-spendable"
+            );
         }
     }
-    let outcome =
-        outcome.expect("first_stake must succeed once the funding is reference-spendable");
-    eprintln!(
-        "first_stake sealed the bond post: slot {}, {} swept input(s), resumed={}",
-        outcome.p_slot, outcome.swept_inputs, outcome.resumed
-    );
 
     // Re-lift the sealed pending post (SA-DQ-5: `first_stake` never
     // broadcasts) and dispatch through the audited posture→submitter choke
@@ -1833,7 +1939,14 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
     let daemon = RegtestDaemon::start().await;
     let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let slot = PSlot::from_raw(SLOT);
-    let fixture = stake_persona_to_confirmed_bond(&daemon, &seed, SLOT, FUNDING_CUSHION).await;
+    let fixture = stake_persona_to_confirmed_bond(
+        &daemon,
+        &seed,
+        SLOT,
+        FUNDING_CUSHION,
+        FixtureStake::FirstStake,
+    )
+    .await;
 
     let post_change = fixture
         .state
@@ -1957,8 +2070,26 @@ async fn e2e_emission_claim_accepted_and_applied() {
     let daemon = RegtestDaemon::start_with_settlement_epoch_blocks(Some(SEB)).await;
     let seed = [0x55u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let slot = PSlot::from_raw(SLOT);
-    let fixture =
-        stake_persona_to_confirmed_bond(&daemon, &seed, SLOT, CLAIM_FUNDING_CUSHION).await;
+    // The claimable bond must be a MARKET bond (`ShardSetCompact`): the
+    // `first_stake` genesis posture (CompleteTree) is foundation-shaped and
+    // market-excluded (E-2), so its Σwork is zero forever — surfaced by
+    // this e2e's first close. The declared shard need not be frozen
+    // (`bond_post.rs`: adding an unfrozen shard is valid), and an unfrozen
+    // credited shard carries age 0 ⇒ `g(0) = WORK_MILLI_SCALE` ⇒ positive
+    // work.
+    let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
+        kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
+        shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
+            .expect("one-shard holdings"),
+    };
+    let fixture = stake_persona_to_confirmed_bond(
+        &daemon,
+        &seed,
+        SLOT,
+        CLAIM_FUNDING_CUSHION,
+        FixtureStake::MarketBond(market_holdings),
+    )
+    .await;
     assert!(
         fixture.confirmed_tip_height + 16 < SEB,
         "the bond substrate (tip {}) must fit inside epoch 0 (close {SEB}) with injection \
