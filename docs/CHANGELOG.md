@@ -4,6 +4,27 @@
 
 ### Added
 
+- **wallet: SP-R0 arm #2 — the done-side retirement ledger + atomic
+  retire-time prune (`feat/sp-r0-arm2-retire-gc`).**
+  `RetiredPersonaRecord` rows land in `PScanState`
+  (**`PSCAN_STATE_VERSION` 6 → 7**, schema snapshot regenerated), written
+  by `PScanAccrual::retire_persona`: the persona's `bond_post_matches`
+  rows, the slot's `funding_outputs` records, and the `pending_unbonds`
+  trigger all leave in the same mutation that appends the record — one
+  atomic seal (the bound on `bond_post_matches` growth, the most
+  privacy-sensitive structure in the state). The durable prune fires only
+  under the DQ-D **sweep-corroborated tip clamp**
+  `min(claimed_tip, verified_frontier + reorg_depth)` (the WI-3 R2-1
+  reserve, consumed as corroboration; a low-claiming source defers the
+  prune — fail-safe; the actor key-wipe keeps its frontier basis). At
+  open, retired slots are cleaned from the live `bonded_slots` hint
+  before derive ("stop deriving slot N"; an emptied hint reverts the
+  wallet to a non-staker), with the derive-forward subtraction following
+  from the monotone cursor. Guard-2: logic-discharged at the
+  task/accrual/lifecycle test level (disclosed cfg(test)-evidence
+  deviation — claim-window reachability); production-discharge rides the
+  PR-4b-gated regtest lane.
+
 - **wallet: the staker-activation entry — first-stake goes production
   (`ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.8).** New wallet-rpc `stake`
   method (`Capability::Full`-gated; refusals `-29500 StakeNotReady` /
@@ -27,7 +48,24 @@
   by the SA-DQ-3 co-designed crash-fixture lane). Guard-2: arms #1/#3
   production-discharge is **blocked on the PR-4b daemon submit-legs
   battery** (named; the regtest tripwire's promotion note carries the
-  conversion instruction).
+  conversion instruction). **Post-review hardening (same branch,
+  `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.9):** wallet-level idempotency +
+  typed `WrongSlot` guards on `first_stake` (a call naming another slot
+  can no longer mint a second first-stake); verify-then-close on the
+  intent reopen (new `WalletFile::verify_password` — a wrong password or
+  daemon fault refuses with the wallet still open; name-bound close +
+  best-effort restore for the residue); dark-scan self-heal (a retry
+  reopens when no P-scan handle is parked); rule-82 taxonomy split (new
+  `State` / `FeeEstimate` arms — internal/daemon faults no longer
+  misdiagnosed as the `-29500` funding refusal; fee faults map to
+  `-29102`); the amount/gindex-free sanitizer now covers the post-persist
+  assemble/sign path; one shared `sweep_bond_funding` body for
+  preflight + assemble (`BondFloorZero` now refuses W1-clean); the
+  arm-#3 GC degrades (keep-all + warn) instead of bricking open on a
+  corrupt auxiliary seal; the GF-7 pending-release ordering contract is
+  pinned on `reconcile_phantom_bonded_slots` + `PendingPostState`;
+  `stake`'s password is `Zeroizing` on every path; and
+  `docs/api/wallet_rpc.yaml` now specifies `stake` + `-29500..-29502`.
 
 - **wallet: SP-R0 arm #1 — spent-funding-record prune via key-image watch
   (logic-discharged).** The `P`-scan dual extractor gains arm (c): each

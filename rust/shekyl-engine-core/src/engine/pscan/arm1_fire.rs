@@ -3,10 +3,13 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! SP-R0 arm #1 — the DQ-F **logic-discharge fire harness**
+//! SP-R0 arms #1 and #3 — the DQ-F **logic-discharge fire harnesses**
 //! (`ARCHIVAL_BOND_SP_R0_PLAN.md` §5 DQ-F, precisified 2026-07-18).
+//! [`run_arm1_fire`] drives the spent-record pruning arm; [`run_arm3_fire`]
+//! drives the open-time phantom `bonded_slots` GC (the SA-DQ-3 co-designed
+//! crash fixture) — both on production code paths, per their own docs.
 //!
-//! Drives the arm on the **production code path** and reports the GC firing:
+//! Drives arm #1 on the **production code path** and reports the GC firing:
 //! a real funding output is discovered by the production dual extractor, its
 //! key image is derived **in-actor** by the production watch refresh, a real
 //! on-chain spend of it is matched by arm (c), and the record is pruned by the
