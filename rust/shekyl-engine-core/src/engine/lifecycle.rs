@@ -795,7 +795,41 @@ impl Engine<SoloSigner> {
         // the scan, not for the open).
         if !ledger.staking.bonded_slots.is_empty() {
             match load_phantom_gc_evidence(&file, &state_wrap_key) {
-                Ok(Some((evidence, pending_slots))) => {
+                Ok(Some(PhantomGcEvidence {
+                    evidence,
+                    pending_slots,
+                    retired_slots,
+                })) => {
+                    // SP-R0 arm #2 — "stop deriving slot N": drop durably
+                    // RETIRED slots from the live hint before anything
+                    // derives (records-driven, the wallet's own ledger — no
+                    // absence inference, so no evidence gate needed). The
+                    // derive-forward subtraction follows for free: the
+                    // lookahead starts at the monotone cursor, which the
+                    // persist path keeps strictly above every observed
+                    // bonded slot, so a cleaned hint means no path
+                    // re-derives a retired persona. An emptied hint reverts
+                    // the wallet to a non-staker (a fully-retired wallet
+                    // must not spawn an actor "for nothing" every open —
+                    // the forever-derive problem the ledger exists to fix).
+                    if !retired_slots.is_empty() {
+                        let before = ledger.staking.bonded_slots.len();
+                        ledger
+                            .staking
+                            .bonded_slots
+                            .retain(|s| !retired_slots.contains(s));
+                        let dropped = before - ledger.staking.bonded_slots.len();
+                        if dropped > 0 {
+                            if ledger.staking.bonded_slots.is_empty() {
+                                ledger.staking.staking_enabled = false;
+                            }
+                            tracing::info!(
+                                dropped,
+                                reverted = !ledger.staking.staking_enabled,
+                                "SP-R0 arm #2: retired slots cleaned from the live hint at open"
+                            );
+                        }
+                    }
                     let derivation_network = network_to_derivation(network);
                     let sweep = super::stake_persist::reconcile_phantom_bonded_slots(
                         &mut ledger.staking,
@@ -1308,16 +1342,19 @@ impl<
 /// read while the pscan seal can, because a GC run without the pending
 /// bridge could wrongfully drop a W3 slot. The caller degrades an `Err` to
 /// skipping the GC (keep every slot, warn loud), never to an open failure.
+/// The sealed evidence the open-time SP-R0 sweeps consume, as one named
+/// bundle (arm #3's reconcile evidence + the W3 pending bridge + arm #2's
+/// done-side retired slots).
+struct PhantomGcEvidence {
+    evidence: super::pscan::reconcile::PReconcileSet,
+    pending_slots: std::collections::BTreeSet<u32>,
+    retired_slots: std::collections::BTreeSet<u32>,
+}
+
 fn load_phantom_gc_evidence(
     file: &WalletFile,
     state_wrap_key: &super::sealing_keys::StateWrapKey,
-) -> Result<
-    Option<(
-        super::pscan::reconcile::PReconcileSet,
-        std::collections::BTreeSet<u32>,
-    )>,
-    String,
-> {
+) -> Result<Option<PhantomGcEvidence>, String> {
     let Some(bytes) = file
         .open_pscan_state(state_wrap_key.as_bytes())
         .map_err(|e| format!("pscan seal read failed: {e}"))?
@@ -1327,6 +1364,13 @@ fn load_phantom_gc_evidence(
     let state = shekyl_engine_state::pscan_state::PScanState::from_postcard_bytes(&bytes)
         .map_err(|e| format!("pscan seal decode failed: {e}"))?;
     let evidence = super::pscan::accrual::PScanAccrual::from_state(&state).reconcile_set();
+    // SP-R0 arm #2: the done-side ledger's retired slots ride along so the
+    // caller can apply the records-driven hint clean before the phantom sweep.
+    let retired_slots: std::collections::BTreeSet<u32> = state
+        .retired_records()
+        .iter()
+        .map(|r| r.p_slot.to_raw())
+        .collect();
     let pending_slots: std::collections::BTreeSet<u32> = match file
         .open_pending_posts(state_wrap_key.as_bytes())
         .map_err(|e| format!("pending seal read failed: {e}"))?
@@ -1341,7 +1385,11 @@ fn load_phantom_gc_evidence(
         }
         None => std::collections::BTreeSet::new(),
     };
-    Ok(Some((evidence, pending_slots)))
+    Ok(Some(PhantomGcEvidence {
+        evidence,
+        pending_slots,
+        retired_slots,
+    }))
 }
 
 /// Render a `shekyl-crypto-pq::CryptoError` into the static-string
@@ -1832,6 +1880,100 @@ mod tests {
         .expect("reopen")
         .into_wallet();
         assert!(!after.has_stake_engine(), "still a clean non-staker");
+    }
+
+    /// SP-R0 arm #2 — the open-time records-driven clean: a durably RETIRED
+    /// slot is dropped from the live hint before derive (no evidence gate —
+    /// the wallet's own ledger), and an emptied hint reverts the wallet to
+    /// a non-staker; an unrelated retired slot leaves the live one alone.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn retired_records_clean_the_live_hint_at_open() {
+        use shekyl_engine_state::pscan_cursor::PScanCursor;
+        use shekyl_engine_state::pscan_state::{
+            PScanState, RetiredPersonaRecord, PSCAN_STATE_VERSION,
+        };
+        use shekyl_types::{PCanonicalId, PSlot, SettlementEpoch};
+        let _ = PSCAN_STATE_VERSION; // version pinned by the schema snapshot
+
+        let fix = make_create_fixture();
+        let creds = Credentials::password_only(b"correct horse");
+        let seed = fixed_seed();
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let network = params.network;
+        let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create");
+        engine
+            .persist_bond_record(PSlot::from_raw(0))
+            .expect("persist");
+        engine.close(&creds).expect("close");
+
+        let seal_retired = |slots: &[u32]| {
+            let (file, _outcome) = shekyl_engine_file::WalletFile::open(
+                &fix.base_path,
+                b"correct horse",
+                network,
+                SafetyOverrides::none(),
+            )
+            .expect("file open");
+            let key = super::super::sealing_keys::state_wrap_key_from_wallet_file(&file);
+            let state = PScanState::new(
+                PScanCursor::genesis(),
+                std::collections::BTreeMap::new(),
+                std::collections::BTreeMap::new(),
+                Vec::new(),
+                Vec::new(),
+                slots
+                    .iter()
+                    .map(|&slot| RetiredPersonaRecord {
+                        p_slot: PSlot::from_raw(slot),
+                        p_canonical_id: PCanonicalId::from_bytes(
+                            [u8::try_from(slot).unwrap_or(0xFF); 32],
+                        ),
+                        unbond_epoch: SettlementEpoch::from_raw(0),
+                        retired_epoch: SettlementEpoch::from_raw(30),
+                    })
+                    .collect(),
+            );
+            file.save_pscan_state(key.as_bytes(), &state.to_postcard_bytes().expect("encode"))
+                .expect("seal");
+        };
+
+        // Unrelated retired slot: the live slot survives, still a staker.
+        seal_retired(&[5]);
+        let opened = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("open")
+        .into_wallet();
+        assert!(opened.ledger().staking.staking_enabled);
+        assert!(opened.ledger().staking.bonded_slots.contains(&0));
+        assert!(opened.has_stake_engine());
+        opened.close(&creds).expect("close");
+
+        // The bonded slot itself retired: cleaned, reverted, no actor.
+        seal_retired(&[5, 0]);
+        let opened = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("open")
+        .into_wallet();
+        assert!(
+            !opened.ledger().staking.staking_enabled,
+            "an emptied hint reverts the wallet to a non-staker"
+        );
+        assert!(opened.ledger().staking.bonded_slots.is_empty());
+        assert!(
+            !opened.has_stake_engine(),
+            "no actor for a fully-retired wallet"
+        );
+        opened.close(&creds).expect("close");
     }
 
     /// Phase 1 query surface: `Engine::primary_address` assembles the

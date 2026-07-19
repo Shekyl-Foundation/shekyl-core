@@ -375,7 +375,17 @@ where
         // the trigger if the seal never landed. The wipe is idempotent (re-firing re-wipes),
         // so applying it after the seal is safe; the ordering makes the irreversible side
         // effect strictly follow the durability of what justifies it.
-        dispatch_retires(stake, accrual, retired_this_session, cancel).await?;
+        // SP-R0 arm #2: the retire pass may durably prune (the atomic
+        // retire-time removal). Re-seal promptly so the prune's durable
+        // form — the retired-record row plus the pruned rows' absence —
+        // lands now rather than a sweep later; a crash in between is safe
+        // either way (the pending trigger re-fires).
+        if dispatch_retires(stake, accrual, retired_this_session, cancel, tip, *config).await? {
+            store
+                .save(&accrual.to_state())
+                .await
+                .map_err(|e| PScanTaskError::Store(Box::new(e)))?;
+        }
     }
 
     // WI-3 end-of-sweep dispatch tick (§3.1): rides *this sweep's own* tip read
@@ -418,13 +428,34 @@ fn record_unbonds(accrual: &mut PScanAccrual, matches: &[BondPostMatch]) {
 /// [`epoch_is_claim_expired`]: shekyl_archival_retention::epoch_is_claim_expired
 async fn dispatch_retires(
     stake: &StakeEngineHandle,
-    accrual: &PScanAccrual,
+    accrual: &mut PScanAccrual,
     retired_this_session: &mut BTreeSet<PCanonicalId>,
     cancel: &CancellationToken,
-) -> Result<(), PScanTaskError> {
+    claimed_tip: BlockHeight,
+    config: PScanConfig,
+) -> Result<bool, PScanTaskError> {
     let Some(settled) = accrual.settled_epoch() else {
-        return Ok(()); // no epoch settled yet → nothing can have expired
+        return Ok(false); // no epoch settled yet → nothing can have expired
     };
+    // SP-R0 arm #2, DQ-D: the canonicity token for the IRREVERSIBLE durable
+    // prune — the sweep-corroborated tip clamp, min(claimed_tip,
+    // verified_frontier + reorg_depth), held in reserve since WI-3 R2-1 and
+    // consumed here as **corroboration** (records-driven: the trigger is the
+    // wallet's own pending record; the token only corroborates that the
+    // claim-window expiry is not an artifact of a forged-high verified view
+    // — a source lying LOW merely defers the prune, fail-safe). The actor
+    // key-wipe keeps its existing frontier basis (idempotent + re-derivable);
+    // only the durable removal takes the token gate.
+    let token_height = claimed_tip.to_raw().min(
+        accrual
+            .next_height()
+            .to_raw()
+            .saturating_add(config.reorg_depth),
+    );
+    let token_settled = settlement_epoch_at_height(token_height)
+        .checked_sub(1)
+        .map(SettlementEpoch::from_raw);
+    let mut pruned_any = false;
     // Snapshot the candidates so the await loop holds no borrow of `accrual`.
     let candidates: Vec<(PCanonicalId, SettlementEpoch)> = accrual
         .pending_unbonds()
@@ -439,7 +470,7 @@ async fn dispatch_retires(
         // round-trip, so a cancel must not wait for the whole list to drain. A half-done
         // pass is safe — pending entries are durable and re-fire next sweep.
         if cancel.is_cancelled() {
-            return Ok(());
+            return Ok(pruned_any);
         }
         // `e_last = unbond_epoch` (conservative); the witness exists only if it has
         // fallen out of the claim window.
@@ -447,10 +478,30 @@ async fn dispatch_retires(
         else {
             continue; // not yet expired — re-checked on a later sweep
         };
+        // DQ-D corroboration for the DURABLE side, shared by both wiped arms.
+        let corroborated = token_settled.is_some_and(|ts| {
+            RetirementWitness::from_confirmed_unbond(id, unbond_epoch, ts).is_some()
+        });
         match stake.retire_bonded_persona(witness).await? {
-            // Wiped, or already gone: don't re-message this session. The durable
-            // pending entry stays, so it re-fires after a restart.
-            RetireOutcome::Retired { .. } | RetireOutcome::NotHeld => {
+            // Wiped: the actor side is done. The durable side (arm #2) runs
+            // only under the token corroboration; otherwise the pending entry
+            // stays and the prune re-fires on a later sweep.
+            RetireOutcome::Retired { slot } => {
+                retired_this_session.insert(id);
+                if corroborated && accrual.retire_persona(id, slot, unbond_epoch, settled) {
+                    pruned_any = true;
+                }
+            }
+            // Already gone from the union this session. No durable prune
+            // here: if a prior session's wipe ran but its prune seal never
+            // landed, the un-pruned `bonded_slots` hint re-derives the
+            // persona at the next open, the actor holds it again, and the
+            // retire re-fires through the `Retired { slot }` arm above — the
+            // durable prune always eventually flows through the arm that
+            // knows the slot. (`corroborated` is unused on this arm by
+            // construction.)
+            RetireOutcome::NotHeld => {
+                let _ = corroborated;
                 retired_this_session.insert(id);
             }
             // Terminal-but-active: never wipe the active slot mid-use; retry on a
@@ -458,7 +509,7 @@ async fn dispatch_retires(
             RetireOutcome::SkippedActive { .. } => {}
         }
     }
-    Ok(())
+    Ok(pruned_any)
 }
 
 /// The long-running `P`-scan task: resume from `initial` (the state `start_pscan`
@@ -810,6 +861,7 @@ mod tests {
             BTreeMap::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
         store.save(&seeded).await.expect("seed");
         let mut accrual = PScanAccrual::from_state(&seeded);
@@ -905,8 +957,9 @@ mod tests {
             pending,
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
-        let accrual = PScanAccrual::from_state(&state);
+        let mut accrual = PScanAccrual::from_state(&state);
         assert_eq!(
             accrual.settled_epoch(),
             Some(SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1))
@@ -914,9 +967,16 @@ mod tests {
 
         let stake = spawn_stake(&[0]);
         let mut retired = BTreeSet::new();
-        dispatch_retires(&stake, &accrual, &mut retired, &CancellationToken::new())
-            .await
-            .expect("dispatch");
+        dispatch_retires(
+            &stake,
+            &mut accrual,
+            &mut retired,
+            &CancellationToken::new(),
+            BlockHeight::from_raw(u64::MAX),
+            PScanConfig::production(),
+        )
+        .await
+        .expect("dispatch");
         assert!(
             retired.contains(&canonical_id(&p)),
             "the expired persona was retired"
@@ -925,14 +985,74 @@ mod tests {
         // Dedup within the session: a second dispatch sends nothing new (the entry
         // stays in the accrual — the durable retire-trigger — but is suppressed).
         let before = retired.clone();
-        dispatch_retires(&stake, &accrual, &mut retired, &CancellationToken::new())
-            .await
-            .expect("dispatch 2");
+        dispatch_retires(
+            &stake,
+            &mut accrual,
+            &mut retired,
+            &CancellationToken::new(),
+            BlockHeight::from_raw(u64::MAX),
+            PScanConfig::production(),
+        )
+        .await
+        .expect("dispatch 2");
         assert_eq!(retired, before, "no re-dispatch within the session");
+        // SP-R0 arm #2 (semantics change, by design): under a corroborated
+        // token (claimed_tip = MAX here) the durable prune fires with the
+        // wipe — the pending entry is REMOVED in the same atomic mutation
+        // that writes the retired-record. "Kept until SP-6 durably removes
+        // the persona" has arrived at its removal.
+        assert!(
+            !accrual.pending_unbonds().contains_key(&canonical_id(&p)),
+            "the corroborated durable prune removes the pending trigger"
+        );
+        assert_eq!(accrual.retired_pruned_total(), 1, "arm-#2 fire counter");
+        assert_eq!(accrual.retired_records().len(), 1);
+    }
+
+    /// SP-R0 arm #2, DQ-D: a source claiming a LOW tip defers the durable
+    /// prune (the token clamp fails to corroborate the expiry) while the
+    /// actor wipe still fires on the frontier basis — fail-safe, and the
+    /// durable pending trigger survives to re-fire.
+    #[tokio::test]
+    async fn durable_prune_defers_when_the_claimed_tip_does_not_corroborate() {
+        let p = persona(0);
+        let cursor_height =
+            (MAX_CLAIM_AGE_W + 2) * shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
+        let mut pending = BTreeMap::new();
+        pending.insert(canonical_id(&p), SettlementEpoch::from_raw(0));
+        let mut accrual = PScanAccrual::from_state(&PScanState::new(
+            PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
+            BTreeMap::new(),
+            pending,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+        let stake = spawn_stake(&[0]);
+        let mut retired = BTreeSet::new();
+        // A claimed tip at genesis: token = min(0, frontier + depth) ⇒ no
+        // settled epoch at the token ⇒ no corroboration ⇒ no durable prune.
+        let pruned = dispatch_retires(
+            &stake,
+            &mut accrual,
+            &mut retired,
+            &CancellationToken::new(),
+            BlockHeight::from_raw(0),
+            PScanConfig::production(),
+        )
+        .await
+        .expect("dispatch");
+        assert!(!pruned, "no durable prune without corroboration");
+        assert!(
+            retired.contains(&canonical_id(&p)),
+            "the actor wipe still fired on the frontier basis"
+        );
         assert!(
             accrual.pending_unbonds().contains_key(&canonical_id(&p)),
-            "the durable pending entry is KEPT (re-fires after a restart, not dropped)"
+            "the durable pending trigger survives to re-fire"
         );
+        assert_eq!(accrual.retired_pruned_total(), 0);
+        assert!(accrual.retired_records().is_empty());
     }
 
     #[tokio::test]
@@ -943,11 +1063,12 @@ mod tests {
             (MAX_CLAIM_AGE_W + 1) * shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
         let mut pending = BTreeMap::new();
         pending.insert(canonical_id(&p), SettlementEpoch::from_raw(0));
-        let accrual = PScanAccrual::from_state(&PScanState::new(
+        let mut accrual = PScanAccrual::from_state(&PScanState::new(
             // Built for `dispatch_retires` (no sweep), so the frontier hash is inert.
             PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
             BTreeMap::new(),
             pending,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         ));
@@ -958,9 +1079,16 @@ mod tests {
 
         let stake = spawn_stake(&[0]);
         let mut retired = BTreeSet::new();
-        dispatch_retires(&stake, &accrual, &mut retired, &CancellationToken::new())
-            .await
-            .expect("dispatch");
+        dispatch_retires(
+            &stake,
+            &mut accrual,
+            &mut retired,
+            &CancellationToken::new(),
+            BlockHeight::from_raw(u64::MAX),
+            PScanConfig::production(),
+        )
+        .await
+        .expect("dispatch");
         assert!(
             retired.is_empty(),
             "U is still claimable at settled = U + W; retiring here would be stuck funds"

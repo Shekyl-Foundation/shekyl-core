@@ -4,6 +4,27 @@
 
 ### Added
 
+- **wallet: SP-R0 arm #2 — the done-side retirement ledger + atomic
+  retire-time prune (`feat/sp-r0-arm2-retire-gc`).**
+  `RetiredPersonaRecord` rows land in `PScanState`
+  (**`PSCAN_STATE_VERSION` 6 → 7**, schema snapshot regenerated), written
+  by `PScanAccrual::retire_persona`: the persona's `bond_post_matches`
+  rows, the slot's `funding_outputs` records, and the `pending_unbonds`
+  trigger all leave in the same mutation that appends the record — one
+  atomic seal (the bound on `bond_post_matches` growth, the most
+  privacy-sensitive structure in the state). The durable prune fires only
+  under the DQ-D **sweep-corroborated tip clamp**
+  `min(claimed_tip, verified_frontier + reorg_depth)` (the WI-3 R2-1
+  reserve, consumed as corroboration; a low-claiming source defers the
+  prune — fail-safe; the actor key-wipe keeps its frontier basis). At
+  open, retired slots are cleaned from the live `bonded_slots` hint
+  before derive ("stop deriving slot N"; an emptied hint reverts the
+  wallet to a non-staker), with the derive-forward subtraction following
+  from the monotone cursor. Guard-2: logic-discharged at the
+  task/accrual/lifecycle test level (disclosed cfg(test)-evidence
+  deviation — claim-window reachability); production-discharge rides the
+  PR-4b-gated regtest lane.
+
 - **wallet: the staker-activation entry — first-stake goes production
   (`ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.8).** New wallet-rpc `stake`
   method (`Capability::Full`-gated; refusals `-29500 StakeNotReady` /

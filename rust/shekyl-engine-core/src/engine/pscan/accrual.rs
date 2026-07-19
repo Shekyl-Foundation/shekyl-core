@@ -40,7 +40,9 @@ use std::collections::BTreeMap;
 
 use shekyl_archival_retention::consensus_state::{epoch_close_height, settlement_epoch_at_height};
 use shekyl_engine_state::pscan_cursor::PScanCursor;
-use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord, PScanState};
+use shekyl_engine_state::pscan_state::{
+    BondPostRecord, PFundingOutputRecord, PScanState, RetiredPersonaRecord,
+};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 
@@ -167,6 +169,13 @@ pub(crate) struct PScanAccrual {
     /// logic-discharge observer — the CI fire lane asserts it non-zero after
     /// driving a real spend through the production scan path.
     spent_pruned_total: u64,
+    /// The done-side slot ledger mirror (SP-R0 arm #2): personas durably
+    /// retired by the token-corroborated retire-time prune. Append-only.
+    retired_records: Vec<RetiredPersonaRecord>,
+    /// SP-R0 arm #2 fire counter: personas durably retired this run (the
+    /// DQ-F observer; not persisted — the durable record is the
+    /// retired-record row plus the pruned rows' absence from the seal).
+    retired_pruned_total: u64,
 }
 
 impl std::fmt::Debug for PScanAccrual {
@@ -183,6 +192,8 @@ impl std::fmt::Debug for PScanAccrual {
             .field("bond_post_matches", &"<redacted persona-history>")
             .field("funding_outputs", &"<redacted funding-history>")
             .field("spent_pruned_total", &self.spent_pruned_total)
+            .field("retired_records", &"<redacted persona-history>")
+            .field("retired_pruned_total", &self.retired_pruned_total)
             .finish()
     }
 }
@@ -200,6 +211,8 @@ impl PScanAccrual {
             bond_post_matches: Vec::new(),
             funding_outputs: Vec::new(),
             spent_pruned_total: 0,
+            retired_records: Vec::new(),
+            retired_pruned_total: 0,
         }
     }
 
@@ -235,6 +248,8 @@ impl PScanAccrual {
                 .map(FundingOutputMatch::from)
                 .collect(),
             spent_pruned_total: 0,
+            retired_records: state.retired_records().to_vec(),
+            retired_pruned_total: 0,
         }
     }
 
@@ -427,6 +442,7 @@ impl PScanAccrual {
                 .iter()
                 .map(PFundingOutputRecord::from)
                 .collect(),
+            self.retired_records.clone(),
         )
     }
 
@@ -444,6 +460,79 @@ impl PScanAccrual {
     /// logic-discharge lane asserts this non-zero).
     pub(crate) fn spent_pruned_total(&self) -> u64 {
         self.spent_pruned_total
+    }
+
+    /// SP-R0 **arm #2** — the atomic retire-time prune (the 2D2 §15 pin:
+    /// *"in the same atomic step"*). Drops the persona's `bond_post_matches`
+    /// rows and `pending_unbonds` entry, drops the slot's `funding_outputs`
+    /// records, and appends the [`RetiredPersonaRecord`] — one in-memory
+    /// mutation, persisted by the next seal's one atomic write (the same
+    /// coupling that makes accumulation idempotent makes the prune
+    /// crash-safe: either the whole retire lands or the durable
+    /// `pending_unbonds` trigger survives and the retire re-fires).
+    ///
+    /// This is the bound on the unbounded growth of `bond_post_matches` —
+    /// `P`'s persona-activity history, the most privacy-sensitive structure
+    /// in the state. The caller (the scan task) has already: (a) confirmed
+    /// the retire via the actor wipe (`RetireOutcome::Retired`), and (b)
+    /// corroborated the claim-window expiry against the DQ-D canonicity
+    /// token — this function is the *removal*, not the trigger (the SP-R0
+    /// framing pin).
+    pub(crate) fn retire_persona(
+        &mut self,
+        id: PCanonicalId,
+        slot: shekyl_types::PSlot,
+        unbond_epoch: SettlementEpoch,
+        retired_epoch: SettlementEpoch,
+    ) -> bool {
+        if self.retired_records.iter().any(|r| r.p_canonical_id == id) {
+            return false; // idempotent: already durably retired.
+        }
+        self.bond_post_matches.retain(|m| m.p_canonical_id != id);
+        self.funding_outputs.retain(|f| f.p_slot != slot);
+        self.pending_unbonds.remove(&id);
+        self.retired_records.push(RetiredPersonaRecord {
+            p_slot: slot,
+            p_canonical_id: id,
+            unbond_epoch,
+            retired_epoch,
+        });
+        self.retired_pruned_total += 1;
+        true
+    }
+
+    /// Test-only pending-unbond seeder (the production writer is
+    /// `record_unbonds` in the scan task, fed by real `Unbond` matches).
+    #[cfg(test)]
+    pub(crate) fn record_pending_unbond_for_test(
+        &mut self,
+        id: PCanonicalId,
+        epoch: SettlementEpoch,
+    ) {
+        self.pending_unbonds.insert(id, epoch);
+    }
+
+    /// The accumulated bond-post matches (the reconcile-evidence rows) —
+    /// exposed for the arm-#2 prune assertions.
+    #[cfg(test)]
+    pub(crate) fn bond_post_matches(&self) -> &[BondPostMatch] {
+        &self.bond_post_matches
+    }
+
+    /// SP-R0 arm #2 fire counter (see the field docs).
+    // rule-21: the non-test consumer is the arm-#2 production-discharge lane
+    // (PR-4b-gated regtest); until it lands the counter is asserted by the
+    // task-level tests.
+    #[allow(dead_code)]
+    pub(crate) fn retired_pruned_total(&self) -> u64 {
+        self.retired_pruned_total
+    }
+
+    /// The done-side slot ledger (retired personas, in retire order).
+    // rule-21: same consumer as the fire counter above.
+    #[allow(dead_code)]
+    pub(crate) fn retired_records(&self) -> &[RetiredPersonaRecord] {
+        &self.retired_records
     }
 
     /// Personas with a reorg-deep **JoinMarket** bond-post match — the WI-3
@@ -566,6 +655,70 @@ mod tests {
             "in-step spend nets to nothing"
         );
         assert_eq!(acc.spent_pruned_total(), 2);
+    }
+
+    /// SP-R0 arm #2: `retire_persona` is one atomic in-memory mutation —
+    /// the persona's matches + pending entry and the slot's funding records
+    /// all leave together with the retired-record append — idempotent on
+    /// re-fire, and round-trips the seal.
+    #[test]
+    fn retire_persona_prunes_atomically_and_round_trips() {
+        use shekyl_types::{PCanonicalId, PSlot};
+        let id = PCanonicalId::from_bytes([7; 32]);
+        let other = PCanonicalId::from_bytes([8; 32]);
+        let mut acc = PScanAccrual::genesis();
+        let mut r1 = step(0, 10, &[]);
+        r1.funding_outputs.push(funding_match(3, 5)); // slot 0 (funding_match pins p_slot 0)
+        r1.bond_post_matches.push(BondPostMatch {
+            height: BlockHeight::from_raw(4),
+            p_canonical_id: id,
+            post_kind: 0,
+        });
+        r1.bond_post_matches.push(BondPostMatch {
+            height: BlockHeight::from_raw(6),
+            p_canonical_id: other,
+            post_kind: 0,
+        });
+        acc.ingest(&r1, &VerifiedBatch::for_test(0, 10, [0x01; 32]))
+            .expect("ingest");
+        // seed the pending trigger the retire consumes
+        acc.record_pending_unbond_for_test(id, SettlementEpoch::from_raw(0));
+
+        assert!(acc.retire_persona(
+            id,
+            PSlot::from_raw(0),
+            SettlementEpoch::from_raw(0),
+            SettlementEpoch::from_raw(30),
+        ));
+        assert!(acc
+            .bond_post_matches()
+            .iter()
+            .all(|m| m.p_canonical_id != id));
+        assert!(
+            acc.bond_post_matches()
+                .iter()
+                .any(|m| m.p_canonical_id == other),
+            "other personas' history untouched"
+        );
+        assert!(acc.funding_outputs().is_empty(), "slot-0 funding pruned");
+        assert!(!acc.pending_unbonds().contains_key(&id));
+        assert_eq!(acc.retired_records().len(), 1);
+        assert_eq!(acc.retired_pruned_total(), 1);
+
+        // Idempotent on re-fire.
+        assert!(!acc.retire_persona(
+            id,
+            PSlot::from_raw(0),
+            SettlementEpoch::from_raw(0),
+            SettlementEpoch::from_raw(31),
+        ));
+        assert_eq!(acc.retired_records().len(), 1);
+        assert_eq!(acc.retired_pruned_total(), 1);
+
+        // Round-trips the seal.
+        let back = PScanAccrual::from_state(&acc.to_state());
+        assert_eq!(back.retired_records(), acc.retired_records());
+        assert!(!back.pending_unbonds().contains_key(&id));
     }
 
     fn epoch(e: u64) -> SettlementEpoch {

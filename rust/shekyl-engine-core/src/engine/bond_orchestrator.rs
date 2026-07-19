@@ -972,6 +972,7 @@ mod tests {
                     post_kind: 0,
                 }],
                 Vec::new(),
+                Vec::new(),
             );
             let bytes = state.to_postcard_bytes().expect("encode state");
             file.save_pscan_state(key.as_bytes(), &bytes)
