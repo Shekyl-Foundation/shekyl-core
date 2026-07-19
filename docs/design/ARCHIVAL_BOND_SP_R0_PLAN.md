@@ -172,6 +172,14 @@ asserts exactly-one), and the DQ-F fire lane
 test — is a compile-time fact; CI asserts both prune paths fire and the
 production-witness sweep refuses post-prune). Guard-2 status: **logic-discharged;
 production-firing gated on the staker-activation round (#332)**.
+**UPDATE 2026-07-18 (PR-4b): PRODUCTION-DISCHARGED.** The activation entry landed
+(#336) and PR-4b landed the daemon bond-post battery + promoted the regtest
+tripwire: the e2e now stakes through the production `Engine::first_stake` entry
+(the `arm1_watch_pruning_live` witness minted inside it), the sealed post is
+re-lifted and submitted over real RPC, the bond confirms on-chain, and the scan
+observes the confirmed post and **prunes the swept funding records from the
+sealed state** — the DQ-F production fire, asserted live
+(`regtest_e2e.rs::e2e_staker_bond_post_reaches_the_daemon_submit_gap`).
 
 **BUILD RECORD (2026-07-18, `feat/sp-r0-arm2-retire-gc`) — arm #2 BUILT.** The done-side
 ledger landed as designed (2d-1 §"Records-driven retirement"): `RetiredPersonaRecord`
@@ -194,8 +202,11 @@ honestly for ratification:** arm #2 is **logic-discharged at the task/accrual/li
 test level** — the ~270k-block claim-window reachability makes a `not(test)`
 fire-harness lane impractical (evidence construction uses the cfg(test) batch
 constructor; a conscious, disclosed deviation from the arm-#1/#3 lane form) — and
-**production-discharge rides the same PR-4b-gated regtest lane** (with the armed
-settlement-epoch override for the W-lapse) named at the tripwire.
+**production-discharge = extending the promoted regtest lane** — PR-4b LANDED
+(#338, 2026-07-19) and that lane now enters through the production `first_stake`
+(arm #1 PRODUCTION-DISCHARGED there, per the §4 arm-#1 UPDATE); arm #2's leg adds
+the unbond post + the armed settlement-epoch override for the W-lapse — drivable
+now, not yet driven.
 
 **REVIEW-SWEEP ADDENDUM (2026-07-19, high-effort review of PR #339).** Six findings
 addressed; the load-bearing one is a stranded-funds gap.

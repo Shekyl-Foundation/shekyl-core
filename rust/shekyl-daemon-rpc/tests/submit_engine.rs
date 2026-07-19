@@ -338,6 +338,7 @@ fn snapshot_fault_is_a_fault_not_a_verdict() {
             _txid: &shekyl_types::TxHash,
             _key_images: &[[u8; 32]],
             _reference_block: &shekyl_types::BlockHash,
+            _bond_p_canonical_id: Option<&[u8; 32]>,
         ) -> Result<SubmitFacts, shekyl_daemon_rpc::submit::ShimFault> {
             Err(shekyl_daemon_rpc::submit::ShimFault)
         }

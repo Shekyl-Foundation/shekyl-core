@@ -72,6 +72,9 @@ fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, (
         fee_quantization_mask: pod.fee_quantization_mask,
         weight_limit: pod.weight_limit,
         chain_height: ChainCount::from_raw(pod.chain_height),
+        // bond_record_exists is valid iff the BP3 probe ran (§8.7.1) —
+        // same validity-gate shape as in_chain_height.
+        bond_record_exists: (pod.bond_record_probed != 0).then_some(pod.bond_record_exists != 0),
     })
 }
 
@@ -104,15 +107,18 @@ impl SubmitStateShim for FfiSubmitShim {
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
+        bond_p_canonical_id: Option<&[u8; 32]>,
     ) -> Result<SubmitFacts, ShimFault> {
         let mut pod = ffi::SubmitFactsFfi::zeroed();
         let mut ki_conflicts = vec![0u8; key_images.len()];
 
         // SAFETY: txid/reference_block are 32-byte references; key_images is
         // a flat array of n × 32 bytes (contiguous by `[[u8; 32]]` layout);
-        // out pointers are sized above; the handle is live for the daemon's
-        // lifetime (CoreRpc's contract). The key-image in/out pointers honor
-        // the null-iff-empty contract via the ptr helpers (see their docs).
+        // bond_p_canonical_id is a 32-byte reference or NULL (the C++ side
+        // probes iff non-null); out pointers are sized above; the handle is
+        // live for the daemon's lifetime (CoreRpc's contract). The key-image
+        // in/out pointers honor the null-iff-empty contract via the ptr
+        // helpers (see their docs).
         let rc = unsafe {
             ffi::shekyl_submit_snapshot_facts(
                 self.core.raw_handle(),
@@ -120,6 +126,7 @@ impl SubmitStateShim for FfiSubmitShim {
                 const_ptr_or_null(key_images).cast::<u8>(),
                 key_images.len(),
                 reference_block.as_bytes().as_ptr(),
+                bond_p_canonical_id.map_or(std::ptr::null(), |id| id.as_ptr()),
                 &mut pod,
                 mut_ptr_or_null(ki_conflicts.as_mut_slice()),
             )
@@ -127,6 +134,13 @@ impl SubmitStateShim for FfiSubmitShim {
 
         if rc != ffi::SHEKYL_SUBMIT_OK {
             tracing::error!(rc, "submit snapshot shim returned fault");
+            return Err(ShimFault);
+        }
+        // The BP3 probe contract: requested ⇒ answered. A silently skipped
+        // probe would fault later as an engine ShimContract; catch it at
+        // the boundary it broke.
+        if bond_p_canonical_id.is_some() && pod.bond_record_probed == 0 {
+            tracing::error!("submit snapshot shim skipped the requested bond-record probe");
             return Err(ShimFault);
         }
         facts_from_ffi(&pod, &ki_conflicts).map_err(|()| {
@@ -210,7 +224,9 @@ mod tests {
             ref_block_found: ref_found,
             tree_depth: 9,
             in_pool_broadcast: 0,
-            reserved: [0; 3],
+            bond_record_probed: 0,
+            bond_record_exists: 0,
+            reserved: [0; 1],
             ref_height: 150,
             root: [0xAA; 32],
             fee_per_byte: 7,
@@ -268,6 +284,26 @@ mod tests {
         // A byte outside the documented set is a contract violation, not a
         // guessed fact.
         assert!(facts_from_ffi(&pod_with(1), &[3]).is_err());
+
+        // The BP3 probe pair converts under the same validity-gate shape
+        // as in_chain_height: unset probe → None (exists byte ignored),
+        // probed → Some(exists).
+        assert_eq!(facts.bond_record_exists, None);
+        let mut probed_pod = pod_with(1);
+        probed_pod.bond_record_probed = 1;
+        assert_eq!(
+            facts_from_ffi(&probed_pod, &[])
+                .expect("converts")
+                .bond_record_exists,
+            Some(false)
+        );
+        probed_pod.bond_record_exists = 1;
+        assert_eq!(
+            facts_from_ffi(&probed_pod, &[])
+                .expect("converts")
+                .bond_record_exists,
+            Some(true)
+        );
     }
 
     #[test]

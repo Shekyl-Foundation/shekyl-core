@@ -22,9 +22,28 @@
 //! (O6 mask non-triviality, N8 CT balance + Bp+ range proof), then
 //! `check_tx_inputs`'s (K12 FCMP++ membership, K13 PQC hybrid auth).
 //!
-//! ## Reachability honesty (SP-T4a / the bond-post wire contradiction)
+//! ## The bond-post battery (§8.7.1 BP rows + the funding-arm K battery)
 //!
-//! Only [`SubmitTxKind::Spend`] can reach this verifier today:
+//! [`SubmitTxKind::BondPost`] runs [`verify_bond_post`]: the spend legs
+//! (O6 masks, the **bond** CT balance
+//! `Σ pseudoOuts + bond_debit = Σ out_masks + fee + bond_credit`, Bp+,
+//! K12 FCMP++ over the `ToKey` funding subset, K13 PQC over every input)
+//! plus the archival BP legs, each a native call into
+//! `shekyl-archival-retention` — the same crate the C++ oracle's own
+//! `check_archival_bond_post_input` dispatches to over FFI, so the two
+//! paths share the verifying functions and cannot diverge semantically.
+//!
+//! There is **no wire contradiction**: since the §13 (F1/F3) coupling
+//! closure (2026-07-05, `GENESIS_TX_WIRE_FORMAT.md` §1.1) `shekyl-wire`
+//! sizes `pseudoOuts` by the `ToKey` **spend subset** for every shape —
+//! a bond-post input carries no pseudo-out; its cleartext `bond_credit`
+//! rides the balance equation — and `phase_a.rs` classifies and passes
+//! bond-posts. (An earlier revision of these docs claimed the C++ wire
+//! pinned `pseudoOuts == vin.size()` and bond-posts could not clear
+//! Phase A; the PR-4a staker harness disproved that live — an
+//! underfunded bond-post drew `FeeTooLow`, a Phase-C-only verdict.)
+//!
+//! ## Reachability honesty (the remaining refusal arms)
 //!
 //! - **Serve-credit-only** carries `fee == 0` by consensus (Phase A pins
 //!   it), and the engine's Phase-C fee floor rejects zero fee before the
@@ -33,22 +52,34 @@
 //!   fee-floor resolution lands; re-evaluation shape: extend
 //!   [`SubmitFacts`] with the §8.7.1 SC-row archival facts and implement
 //!   the serve-credit battery (SC1–SC8) in this match arm.
-//! - **Bond-post** cannot clear Phase A: the C++ wire layer pins
-//!   `pseudoOuts == vin.size()` while bond-post consensus demands
-//!   `== funding count` — contradictory for every funded bond-post, so
-//!   both C++ and the engine reject the shape before verification
-//!   (`phase_a.rs`). Reopening criterion: the §13 (F1/F3) wire reshape;
-//!   re-evaluation shape: extend [`SubmitFacts`] with the §8.7.1 BP-row
-//!   facts and implement the bond-post battery (BP1–BP5 + the funding-arm
-//!   K battery) in this match arm.
+//! - **Non-JoinMarket bond-posts** (`Unbond` / `HoldingsUpdate` /
+//!   `Rebond`, wire `BondPostKind::Other`): the semantic verifies exist in
+//!   `shekyl-archival-retention` (the block path runs them today), but
+//!   their submit-side fact sets — per-shard last-served cursors, the
+//!   slash-settlement watermark, interval logs, the settlement epoch —
+//!   and each fact's Phase-D re-check/race classification are not yet
+//!   specified in `DAEMON_SUBMIT_VERDICT.md` §8.7.1 (which pins the
+//!   JoinMarket BP rows only), and no wallet constructs these kinds yet
+//!   (`shekyl-archival-bond-builder` is JoinMarket-only). Refused
+//!   `Malformed` in [`verify_bond_post`]. Reopening criterion (rule 21):
+//!   a wallet construction leg for a non-JoinMarket kind lands, or the
+//!   §8.7.1 matrix grows rows for it — extend [`SubmitFacts`] with that
+//!   kind's fact set (with Phase-D re-check semantics) and dispatch it
+//!   here, exactly as the C++ oracle's `archival_bond_post_kind` dispatch
+//!   does.
 //!
-//! Until a criterion fires, the non-Spend arms refuse loudly-but-safely
+//! Until a criterion fires, these arms refuse loudly-but-safely
 //! (`Malformed`, the §7.6 non-panicking posture) rather than carrying an
 //! untested, unreachable battery.
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
 use rand_core::OsRng;
 
+use shekyl_archival_retention::{
+    p_canonical_id_from_hybrid_pubkey, verify_bond_post_ct_balance, verify_join_market_bond_post,
+    ArchivalBondPostVin, BondPostError, BondPostKind as RetentionBondPostKind, BondTerm,
+    HoldingsDescriptor, HoldingsKind, ShardSet,
+};
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::multisig::verify_multisig;
 use shekyl_crypto_pq::signature::{
@@ -58,9 +89,10 @@ use shekyl_ct_balance::verify_ct_balance;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof, VerifyError};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_units::AtomicUnits;
+use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 use shekyl_wire::transaction::{
-    BpPlus, Ct, PqcAuth, Prunable, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
+    BondPost as WireBondPost, BondPostKind as WireBondPostKind, BpPlus, Ct, CtBase, Holdings,
+    Input, PqcAuth, Prunable, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
 };
 use shekyl_wire::varint::write_varint;
 
@@ -99,14 +131,17 @@ impl TxVerifier for DaemonTxVerifier {
     fn verify(&self, parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFailure> {
         match parsed.kind {
             SubmitTxKind::Spend => verify_spend(parsed, facts),
-            // Unreachable today — see the module docs' reachability
-            // section for the two named reopening criteria (rule 21).
-            SubmitTxKind::BondPost | SubmitTxKind::ServeCreditOnly => {
+            SubmitTxKind::BondPost => verify_bond_post(parsed, facts),
+            // Unreachable today (the engine's Phase-C fee floor rejects the
+            // zero-fee consensus shape first) — see the module docs'
+            // reachability section for the SP-T4a reopening criterion
+            // (rule 21).
+            SubmitTxKind::ServeCreditOnly => {
                 tracing::error!(
                     kind = ?parsed.kind,
-                    "TxVerifier reached by a kind the engine's earlier phases \
-                     reject today (SP-T4a / bond-post wire contradiction); \
-                     refusing (no battery is implemented for this arm)"
+                    "TxVerifier reached by the serve-credit arm the engine's \
+                     fee floor rejects today (SP-T4a); refusing (no battery \
+                     is implemented for this arm)"
                 );
                 Err(VerifyFailure::Malformed)
             }
@@ -130,18 +165,7 @@ fn verify_spend(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), Ve
     };
 
     // ── O6: commitment mask non-triviality ──────────────────────────────
-    // Thin-port of `check_commitment_mask_valid` (blockchain.cpp:3242-3279),
-    // non-coinbase legs: reject `C == identity` (mask 0, amount 0) and
-    // `C == G` (mask 1, amount 0). Byte-compare over the compressed
-    // encoding, as the C++ compares `rct::key`s. The coinbase zeroCommit
-    // leg does not apply — Phase A rejects coinbase submissions.
-    for commitment in &base.commitments {
-        if *commitment == IDENTITY_COMPRESSED
-            || *commitment == ED25519_BASEPOINT_COMPRESSED.to_bytes()
-        {
-            return Err(VerifyFailure::Malformed);
-        }
-    }
+    check_commitment_masks(base)?;
 
     // ── N8 leg 1: CT cleartext balance ──────────────────────────────────
     // `sum(pseudoOuts) == sum(outPk) + fee·H` via the single-sourced
@@ -149,8 +173,9 @@ fn verify_spend(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), Ve
     // `verRctSemanticsSimple` dispatches to through
     // `shekyl_verify_ct_balance` (rctSigs.cpp:226-241). The arity
     // pre-checks around it (`outPk == enc_amounts == enc_labels`,
-    // `pseudoOuts == vin`, base pseudoOuts empty) are structural in
-    // `shekyl-wire`'s reader/validator and cannot fail here.
+    // `pseudoOuts == ToKey subset` — every spend input for this shape —
+    // and base pseudoOuts empty) are structural in `shekyl-wire`'s
+    // reader/validator and cannot fail here.
     // `as_flattened()` views `Vec<[u8; 32]>` as `&[u8]` with no per-submission
     // reallocation (the CT crate takes a flat byte slice).
     if verify_ct_balance(
@@ -166,16 +191,256 @@ fn verify_spend(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), Ve
     }
 
     // ── N8 leg 2: Bp+ aggregate range proof ─────────────────────────────
-    // `nbp == 1` is `validate()`'s §10 rule; the [0] index is therefore
-    // total, but stay non-panicking. The commitments are the outPk masks
-    // exactly as transmitted: the statement multiplies by `INV_EIGHT` for
-    // the transcript and clears the cofactor for evaluation — matching the
-    // C++ path, which reconstructs `V = outPk·(1/8)` at deserialization
-    // (cryptonote_format_utils.cpp:176) and evaluates `8·V`
-    // (bulletproofs_plus.cc). L/R round-count statics
-    // (`n_bulletproof_plus_amounts`) are enforced structurally by the WIP
-    // verifier's round check; unreduced-scalar rejection (`is_reduced`)
-    // by `read_scalar` in the conversion below.
+    verify_bpplus_leg(base, prunable)?;
+
+    // ── K12: FCMP++ membership + SAL ────────────────────────────────────
+    // Native call to the exact consensus function the C++ oracle reaches
+    // through `shekyl_fcmp_verify` (blockchain.cpp:3835-3850). Every input
+    // of a spend is `ToKey`, so the leaf set is all auths.
+    let (tree_root, layers) = fcmp_reference_layers(facts, prunable)?;
+    let leaf_auths: Vec<&PqcAuth> = pqc_auths.iter().collect();
+    verify_fcmp(parsed, prunable, &leaf_auths, &tree_root, layers)?;
+
+    // ── K13: PQC hybrid auth (per-input scheme validity; MSW-6 dropped the
+    // former tx-wide scheme-id agreement — see verify_pqc_auths) ─────────
+    verify_pqc_auths(parsed, pqc_auths)
+}
+
+/// The §8.7.1 bond-post battery: the spend legs over the bond-post shape
+/// (O6 → bond CT balance → Bp+ → funding-subset K12 → all-input K13), then
+/// the archival BP legs (BP2 canonical id, BP5 identity-key auth pin,
+/// BP3 record fact + BP4 economic battery), every semantic leg a native
+/// call into `shekyl-archival-retention` — the same functions the C++
+/// oracle's `check_archival_bond_post_input` reaches over FFI.
+///
+/// BP1 (hybrid pubkey length == `PQC_HYBRID_SINGLE_KEY_LEN`) and the
+/// JoinMarket `bond_spend_pk` length pin are structural in `shekyl-wire`
+/// (`BondPost::read`/`validate` enforce the exact canonical lengths), so a
+/// `ParsedSubmission` cannot carry a violation — the §8.7.1 BP1 ⚠ resolves
+/// to "wire-covered", recorded there.
+fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFailure> {
+    // Phase A guarantees the bond-post shape is `Ct::Fcmp` with a prunable
+    // proof and exactly one bond-post input; stay non-panicking (§7.6).
+    let Ct::Fcmp {
+        fee,
+        base,
+        pqc_auths,
+        prunable: Some(prunable),
+        ..
+    } = &parsed.tx.ct
+    else {
+        return Err(VerifyFailure::Malformed);
+    };
+    let Some((bond_index, bond)) = parsed.bond_post() else {
+        return Err(VerifyFailure::Malformed);
+    };
+
+    // Kind dispatch: JoinMarket only — the genesis wallet-constructible
+    // kind, and the only one whose submit-side fact set §8.7.1 pins. The
+    // non-JoinMarket kinds refuse loudly under their named rule-21
+    // reopening criterion (module docs).
+    let WireBondPostKind::JoinMarket { bond_spend_pk } = &bond.kind else {
+        tracing::error!(
+            kind = ?bond.kind,
+            "bond-post submit battery covers JoinMarket only (§8.7.1 BP \
+             rows); non-JoinMarket kinds refuse until their fact set + \
+             Phase-D re-check semantics are specified (rule-21 reopening \
+             criterion in the module docs)"
+        );
+        return Err(VerifyFailure::Malformed);
+    };
+
+    // ── O6: commitment mask non-triviality (blockchain.cpp:3380 runs the
+    // same check for every non-coinbase shape) ──────────────────────────
+    check_commitment_masks(base)?;
+
+    // ── N7 balance leg: the bond CT balance ─────────────────────────────
+    // `Σ pseudoOuts + bond_debit = Σ out_masks + fee + bond_credit` via the
+    // single-sourced `shekyl-archival-retention` equation — the same crate
+    // the C++ `verRctSemanticsBondPost` dispatches to through
+    // `shekyl_archival_verify_bond_post_ct_balance` (rctSigs.cpp:325-340).
+    // The `(credit, debit) → BondTerm` conversion — rejecting the both /
+    // neither / zero states — happens here at the untrusted-input edge,
+    // mirroring the FFI boundary's identical conversion, so the total core
+    // function stays total. `pseudoOuts == ToKey subset` arity is
+    // `validate()`'s coupling and cannot fail here.
+    let term = match (
+        NonZeroAtomicUnits::new(AtomicUnits::from_raw(bond.bond_credit)),
+        NonZeroAtomicUnits::new(AtomicUnits::from_raw(bond.bond_debit)),
+    ) {
+        (None, None) | (Some(_), Some(_)) => return Err(VerifyFailure::Malformed),
+        (Some(credit), None) => BondTerm::Credit(credit),
+        (None, Some(debit)) => BondTerm::Debit(debit),
+    };
+    if verify_bond_post_ct_balance(
+        prunable.pseudo_outs.as_flattened(),
+        base.commitments.as_flattened(),
+        *fee,
+        term,
+    )
+    .is_err()
+    {
+        return Err(VerifyFailure::Malformed);
+    }
+
+    // ── BP2: canonical-id recomputation from the vin's pubkey ───────────
+    // Native twin of `shekyl_archival_p_canonical_id_from_pubkey`
+    // (blockchain.cpp:4739-4751): the claimed id must derive from the
+    // claimed identity key, so the BP3 record probe (keyed on the claim)
+    // and the BP5 auth pin (keyed on the pubkey) bind the same P. The
+    // deterministic archival legs run before the expensive proofs — the
+    // check *set* is the C++ oracle's (which also probes the record before
+    // its FCMP/PQC legs); only the balance/Bp+ placement differs, and the
+    // BP3 conflict deliberately outranks the proof legs: a consumed claim
+    // slot is terminal for this P regardless of proof validity (a
+    // resubmission with repaired proofs fails BP3 again), so
+    // `DoubleSpendConflict` is the more actionable verdict even when later
+    // legs would also have refused — the engine's most-terminal-first
+    // doctrine, applied inside the battery.
+    if p_canonical_id_from_hybrid_pubkey(&bond.hybrid_public_key).as_bytes() != &bond.p_canonical_id
+    {
+        return Err(VerifyFailure::Malformed);
+    }
+
+    // ── BP5: credit-path authorization pins the IDENTITY key ────────────
+    // (gate-4 §3.5 step 5; blockchain.cpp:5079-5085): the bond slot's PQC
+    // auth key — whose signature over the whole-tx payload the K13 leg
+    // below verifies — must be P's identity key `P_pubkey`.
+    let Some(bond_auth) = pqc_auths.get(bond_index) else {
+        return Err(VerifyFailure::Malformed);
+    };
+    if bond_auth.hybrid_public_key != bond.hybrid_public_key {
+        return Err(VerifyFailure::Malformed);
+    }
+
+    // ── BP3 fact + BP4 economic battery ─────────────────────────────────
+    // `verify_join_market_bond_post` (shekyl-archival-retention) is the
+    // single verdict source both paths share: post-kind, holdings-shape
+    // consistency, credit/debit exclusivity, debit == 0, the bond-floor
+    // equality, and the record-absent claim slot. The engine pre-checked
+    // the fact's presence (ShimContract); the `None` arm here is the
+    // seam's non-panicking refusal for direct callers.
+    let Some(record_exists) = facts.bond_record_exists else {
+        tracing::error!(
+            "bond-post verifier called without the BP3 record fact \
+             (the engine's ShimContract pre-check makes this unreachable \
+             through the pipeline)"
+        );
+        return Err(VerifyFailure::Malformed);
+    };
+    let Some(vin) = retention_vin(bond, bond_spend_pk) else {
+        return Err(VerifyFailure::Malformed);
+    };
+    match verify_join_market_bond_post(&vin, record_exists) {
+        Ok(()) => {}
+        // §8.7.1 classification rule: the consumed claim slot is a state
+        // conflict — the DoubleSpendConflict claim-slot leg; every other
+        // violation is a window/shape failure → Malformed.
+        Err(BondPostError::RecordExists) => return Err(VerifyFailure::DoubleSpendConflict),
+        Err(_) => return Err(VerifyFailure::Malformed),
+    }
+
+    // ── N8 leg 2: Bp+ aggregate range proof over the output commitments ─
+    verify_bpplus_leg(base, prunable)?;
+
+    // ── Funding-arm K12: FCMP++ membership + SAL over the ToKey subset ──
+    // The C++ caller assembles key images / pseudo-outs / leaf hashes from
+    // `spend_indices` only (blockchain.cpp:3698-3800) — the bond-post input
+    // contributes no leaf. `parsed.key_images` and `pseudo_outs` are
+    // already ToKey-subset by construction; the auth subset is selected by
+    // vin arm here.
+    let (tree_root, layers) = fcmp_reference_layers(facts, prunable)?;
+    let funding_auths: Vec<&PqcAuth> = parsed
+        .tx
+        .prefix
+        .inputs
+        .iter()
+        .zip(pqc_auths.iter())
+        .filter_map(|(input, auth)| matches!(input, Input::ToKey { .. }).then_some(auth))
+        .collect();
+    verify_fcmp(parsed, prunable, &funding_auths, &tree_root, layers)?;
+
+    // ── K13: PQC hybrid auth over EVERY input, the bond-post slot
+    // included — exactly the C++ `verify_transaction_pqc_auth` battery ───
+    verify_pqc_auths(parsed, pqc_auths)
+}
+
+/// Marshal the wire bond-post vin into the retention crate's verify view.
+///
+/// Total for a `validate()`d JoinMarket vin (the wire read already enforced
+/// the shard-set bound + duplicate-freeness this re-checks); `None` only
+/// for a hand-built inconsistent value — the seam's non-panicking refusal.
+fn retention_vin(bond: &WireBondPost, bond_spend_pk: &[u8]) -> Option<ArchivalBondPostVin> {
+    let (kind, shard_ids) = match &bond.holdings {
+        Holdings::ShardSetCompact(ids) => (
+            HoldingsKind::ShardSetCompact,
+            ShardSet::new(ids.clone()).ok()?,
+        ),
+        Holdings::CompleteTree => (HoldingsKind::CompleteTree, ShardSet::empty()),
+    };
+    Some(ArchivalBondPostVin {
+        hybrid_public_key: bond.hybrid_public_key.clone(),
+        p_canonical_id: bond.p_canonical_id,
+        post_kind: RetentionBondPostKind::JoinMarket,
+        bond_spend_pk: bond_spend_pk.to_vec(),
+        holdings: HoldingsDescriptor { kind, shard_ids },
+        bonded_total_atomic: bond.bonded_total_atomic,
+        bond_credit: bond.bond_credit,
+        bond_debit: bond.bond_debit,
+    })
+}
+
+/// Resolve the FCMP++ reference root + library layer count for a K12 leg,
+/// shared by the spend and bond-post arms so the layer convention and the
+/// StaleRoot mapping are single-sourced — a future change to either cannot
+/// split the two arms into disagreeing accept/reject behaviour on the submit
+/// surface. `facts.reference` is the pinned tree snapshot the engine bounded
+/// against (absent ⇒ `StaleRoot`); the `tree_depth + 1` conversion matches
+/// the C++ caller's `fcmp_layers = curve_trees_tree_depth + 1`, and a depth
+/// that cannot be represented as a layer count is a snapshot inconsistency a
+/// rebuild against a fresh root fixes (the `StaleRoot` contract), not a
+/// malformed-bytes reject.
+fn fcmp_reference_layers(
+    facts: &SubmitFacts,
+    prunable: &Prunable,
+) -> Result<([u8; 32], u8), VerifyFailure> {
+    let reference = facts.reference.ok_or(VerifyFailure::StaleRoot)?;
+    let layers = u8::try_from(prunable.tree_depth)
+        .ok()
+        .and_then(|depth| depth.checked_add(1))
+        .ok_or(VerifyFailure::StaleRoot)?;
+    Ok((reference.root, layers))
+}
+
+/// O6: commitment mask non-triviality, shared by the spend and bond-post
+/// arms. Thin-port of `check_commitment_mask_valid`
+/// (blockchain.cpp:3284-3320), non-coinbase legs: reject `C == identity`
+/// (mask 0, amount 0) and `C == G` (mask 1, amount 0). Byte-compare over
+/// the compressed encoding, as the C++ compares `rct::key`s. The coinbase
+/// zeroCommit leg does not apply — Phase A rejects coinbase submissions.
+fn check_commitment_masks(base: &CtBase) -> Result<(), VerifyFailure> {
+    for commitment in &base.commitments {
+        if *commitment == IDENTITY_COMPRESSED
+            || *commitment == ED25519_BASEPOINT_COMPRESSED.to_bytes()
+        {
+            return Err(VerifyFailure::Malformed);
+        }
+    }
+    Ok(())
+}
+
+/// N8 leg 2: the Bp+ aggregate range proof, shared by the spend and
+/// bond-post arms. `nbp == 1` is `validate()`'s §10 rule; the single-proof
+/// destructure is therefore total, but stay non-panicking. The commitments
+/// are the outPk masks exactly as transmitted: the statement multiplies by
+/// `INV_EIGHT` for the transcript and clears the cofactor for evaluation —
+/// matching the C++ path, which reconstructs `V = outPk·(1/8)` at
+/// deserialization (cryptonote_format_utils.cpp:176) and evaluates `8·V`
+/// (bulletproofs_plus.cc). L/R round-count statics
+/// (`n_bulletproof_plus_amounts`) are enforced structurally by the WIP
+/// verifier's round check; unreduced-scalar rejection (`is_reduced`) by
+/// `read_scalar` in the wire conversion.
+fn verify_bpplus_leg(base: &CtBase, prunable: &Prunable) -> Result<(), VerifyFailure> {
     let [bp_wire] = prunable.bulletproofs.as_slice() else {
         return Err(VerifyFailure::Malformed);
     };
@@ -190,23 +455,7 @@ fn verify_spend(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), Ve
     if !bp.verify(&mut OsRng, &bp_commitments) {
         return Err(VerifyFailure::Malformed);
     }
-
-    // ── K12: FCMP++ membership + SAL ────────────────────────────────────
-    // Native call to the exact consensus function the C++ oracle reaches
-    // through `shekyl_fcmp_verify` (blockchain.cpp:3835-3850). The engine
-    // has already bounded `tree_depth ∈ [1, current]` (row K10); the +1
-    // conversion to the library's layer count matches the C++ caller's
-    // `fcmp_layers = curve_trees_tree_depth + 1`.
-    let reference = facts.reference.ok_or(VerifyFailure::StaleRoot)?;
-    let layers = u8::try_from(prunable.tree_depth)
-        .ok()
-        .and_then(|depth| depth.checked_add(1))
-        .ok_or(VerifyFailure::StaleRoot)?;
-    verify_fcmp(parsed, prunable, pqc_auths, &reference.root, layers)?;
-
-    // ── K13: PQC hybrid auth (per-input scheme validity; MSW-6 dropped the
-    // former tx-wide scheme-id agreement — see verify_pqc_auths) ─────────
-    verify_pqc_auths(parsed, pqc_auths)
+    Ok(())
 }
 
 /// Reassemble a [`Bulletproof`] from the wire [`BpPlus`].
@@ -237,26 +486,37 @@ fn bulletproof_from_wire(bp: &BpPlus) -> Option<Bulletproof> {
     Bulletproof::read_plus(&mut bytes.as_slice()).ok()
 }
 
-/// K12 proper: marshal the parsed spend into [`proof::verify`]'s inputs
-/// and map its error surface onto the [`VerifyFailure`] arms.
+/// K12 proper: marshal the parsed submission into [`proof::verify`]'s
+/// inputs and map its error surface onto the [`VerifyFailure`] arms.
+///
+/// `leaf_auths` selects which vin slots contribute membership leaves: every
+/// auth for a spend; the `ToKey` funding subset for a bond-post (the C++
+/// caller's `spend_indices` loop, blockchain.cpp:3762-3775). It must be
+/// index-aligned with `parsed.key_images` (both in vin order over the same
+/// subset).
 fn verify_fcmp(
     parsed: &ParsedSubmission,
     prunable: &Prunable,
-    pqc_auths: &[PqcAuth],
+    leaf_auths: &[&PqcAuth],
     tree_root: &[u8; 32],
     layers: u8,
 ) -> Result<(), VerifyFailure> {
-    // One leaf hash per input, submission order — the same
+    // One leaf hash per spending input, submission order — the same
     // `H_blake2b(dst ‖ hybrid_public_key)` Selene scalar the C++ caller
     // computes per input via `shekyl_fcmp_pqc_leaf_hash`
-    // (blockchain.cpp:3810-3820). `pqc_auths.len() == vin.len()` is
-    // `validate()`'s arity rule, so the zip below is total for a spend.
+    // (blockchain.cpp:3810-3820). The caller passes `leaf_auths` already
+    // narrowed to the leaf-contributing subset (every auth for a spend, the
+    // `ToKey` funding subset for a bond-post), and `parsed.key_images` is the
+    // matching subset by construction; the count check below enforces that
+    // index alignment as a loud refusal, not an assumption. (`validate()`'s
+    // arity rule covers the full `pqc_auths.len() == vin.len()`; the subset
+    // alignment it does not, so it is checked here.)
     let key_images: Vec<KeyImage> = parsed
         .key_images
         .iter()
         .map(|ki| KeyImage::from_canonical_bytes(*ki))
         .collect();
-    let pqc_hashes: Vec<PqcLeafScalar> = pqc_auths
+    let pqc_hashes: Vec<PqcLeafScalar> = leaf_auths
         .iter()
         .map(|auth| PqcLeafScalar::from_pqc_public_key(&auth.hybrid_public_key))
         .collect();
@@ -297,7 +557,13 @@ fn verify_fcmp(
         Err(VerifyError::TreeDepthTooLarge(_) | VerifyError::InvalidTreeRoot) => {
             Err(VerifyFailure::StaleRoot)
         }
-        Err(_) => Err(VerifyFailure::Malformed),
+        Err(e) => {
+            // Operator-facing diagnostic only (§2.2 wire minimalism: the
+            // verdict stays cause-coarse); enable the crate's debug level
+            // to see which proof-system arm refused.
+            tracing::debug!(error = ?e, "FCMP++ proof verification refused the submission");
+            Err(VerifyFailure::Malformed)
+        }
     }
 }
 

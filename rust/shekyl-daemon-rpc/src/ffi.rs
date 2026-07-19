@@ -66,7 +66,15 @@ pub struct SubmitFactsFfi {
     /// the narrower fact to a foreign caller so the submit endpoint is not a
     /// stem-presence oracle (§3.1 identity-category pin).
     pub in_pool_broadcast: u8,
-    pub reserved: [u8; 3],
+    /// The §8.7.1 BP3 record probe ran (the caller passed a bond
+    /// `p_canonical_id`, or the commit re-derived one from the blob's
+    /// bond-post vin). Gates the validity of `bond_record_exists`.
+    pub bond_record_probed: u8,
+    /// An archival bond record exists for the probed `p_canonical_id`
+    /// (`get_archival_bond_hybrid_pubkey`). Valid iff
+    /// `bond_record_probed`; zeroed otherwise.
+    pub bond_record_exists: u8,
+    pub reserved: [u8; 1],
     pub ref_height: u64,
     pub root: [u8; 32],
     pub fee_per_byte: u64,
@@ -89,7 +97,9 @@ impl SubmitFactsFfi {
             ref_block_found: 0,
             tree_depth: 0,
             in_pool_broadcast: 0,
-            reserved: [0; 3],
+            bond_record_probed: 0,
+            bond_record_exists: 0,
+            reserved: [0; 1],
             ref_height: 0,
             root: [0; 32],
             fee_per_byte: 0,
@@ -110,7 +120,9 @@ const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain) == 1);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, ref_block_found) == 2);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, tree_depth) == 3);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_pool_broadcast) == 4);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, reserved) == 5);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_probed) == 5);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_exists) == 6);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, reserved) == 7);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, ref_height) == 8);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, root) == 16);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, fee_per_byte) == 48);
@@ -155,6 +167,7 @@ extern "C" {
         key_images: *const u8,
         n_key_images: usize,
         reference_block: *const u8,
+        bond_p_canonical_id: *const u8,
         out_facts: *mut SubmitFactsFfi,
         out_ki_conflicts: *mut u8,
     ) -> i32;

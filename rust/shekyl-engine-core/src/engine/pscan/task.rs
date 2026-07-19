@@ -434,9 +434,13 @@ fn record_unbonds(accrual: &mut PScanAccrual, matches: &[BondPostMatch]) {
 
 /// Retire every pending persona whose claim window has closed against the
 /// **finalized** settled epoch. The witness's [`epoch_is_claim_expired`] check is
-/// the eligibility gate; entries are **kept** in the accrual (the durable
-/// retire-trigger) and only suppressed for the rest of this session via
-/// `retired_this_session`, so the retire re-fires once on the re-derived persona
+/// the eligibility gate. The pending entry's fate then splits with the DQ-D
+/// token (SP-R0 arm #2): under a **corroborated** durable prune,
+/// `retire_persona` **removes** it in the same mutation that writes the
+/// retired-record — the trigger has served its purpose; when the prune is
+/// **deferred** (token uncorroborated, or the wipe skipped), the entry is
+/// **kept** as the durable retire-trigger — suppressed for the rest of this
+/// session via `retired_this_session`, re-firing on the re-derived persona
 /// after a restart (Finding 1).
 ///
 /// [`epoch_is_claim_expired`]: shekyl_archival_retention::epoch_is_claim_expired

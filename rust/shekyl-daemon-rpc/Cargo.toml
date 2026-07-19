@@ -45,8 +45,15 @@ shekyl-wire = { path = "../shekyl-wire" }
 #   shekyl-ct-balance    — N8 CT cleartext balance (single-sourced equation)
 #   shekyl-curve-io      — CompressedPoint for the Bp+ commitment inputs
 #   shekyl-units         — AtomicUnits for the balance fee term
+#   shekyl-archival-retention — §8.7.1 BP rows (canonical id, bond CT
+#                          balance, verify_join_market_bond_post) — the
+#                          same functions the C++ oracle's
+#                          check_archival_bond_post_input reaches over FFI
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
+# (ARCHIVAL_REWARD_GATE_M1.md §4) — the submit battery never reads K_COVER.
+shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["provisional-k-cover"] }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
@@ -63,6 +70,9 @@ shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-consensus = { path = "../shekyl-consensus" }
+# JoinMarket bond-post vin construction for the bond battery oracle test —
+# the same production builder the StakeEngine assembles with.
+shekyl-archival-bond-builder = { path = "../shekyl-archival-bond-builder" }
 rand_chacha = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 http = "1"

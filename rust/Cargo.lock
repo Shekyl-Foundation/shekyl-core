@@ -3868,6 +3868,8 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "serde_json",
+ "shekyl-archival-bond-builder",
+ "shekyl-archival-retention",
  "shekyl-bulletproofs",
  "shekyl-consensus",
  "shekyl-crypto-pq",

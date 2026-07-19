@@ -28,6 +28,51 @@
   deviation — claim-window reachability); production-discharge rides the
   PR-4b-gated regtest lane.
 
+- **daemon: bond-post Phase-C submit battery (PR-4b, bond-post half).** The
+  Rust submit engine's `SubmitTxKind::BondPost` arm is no longer an
+  unimplemented refusal: `DaemonTxVerifier` runs the §8.7.1 BP battery for
+  JoinMarket bond-posts — O6 mask checks, the bond CT balance
+  (`Σ pseudoOuts + bond_debit = Σ out_masks + fee + bond_credit`), BP2
+  canonical-id recomputation, the BP5 identity-key auth pin, BP3 record
+  claim-slot + BP4 economic battery (native
+  `shekyl-archival-retention::verify_join_market_bond_post` — the same
+  function the C++ oracle reaches over FFI), Bp+, FCMP++ over the `ToKey`
+  funding subset, and PQC hybrid auth over every input. `SubmitFacts` gains
+  the BP3 `bond_record_exists` fact (Phase-B probe keyed on the vin's
+  claimed id; Phase-D re-probe from the reparsed blob races a
+  record-appearing-during-verify to `DoubleSpendConflict`). The stale
+  `verifier.rs` reachability docs ("§13 wire reshape" / "bond posts cannot
+  clear Phase A") are corrected — no wire contradiction existed.
+  Non-JoinMarket post kinds (`Unbond`/`HoldingsUpdate`/`Rebond`) refuse
+  loudly under a named rule-21 reopening criterion. The PR-4a staker-harness
+  tripwire is promoted to accepted-and-applied — staking through the
+  production `Engine::first_stake` entry (bond mined, bond-post match +
+  `BondPostChange` change funding re-discovered by the production P-scan,
+  swept funding records pruned from the sealed state: the SP-R0 arm-#1
+  **production discharge**, DQ-F fire live). The emission submit leg remains open on its FOLLOWUPS item and
+  still gates PR-4c.
+
+  Driving the battery live surfaced and fixed **two latent production
+  bugs** (each invisible until a bond post could actually reach FCMP++
+  verification and a block):
+
+  - **wallet: ordinary transfers omitted the `tx_extra 0x07` PQC
+    leaf-hash blob — every transfer output was unspendable.** The
+    curve-tree leaf's 4th component `H(pqc_pk)` can only come from the
+    sender (the PQC key is KEM-derived), and an output ingested without
+    the field carries a zero leaf hash no spend can ever satisfy. The
+    bond/emission assembly paths always appended it; `sign_bridge.rs`'s
+    transfer assembly did not, so transfer-created outputs (e.g. persona
+    funding) failed FCMP++ verification at first spend
+    (`BatchVerificationFailed`). Fixed: the transfer path now appends the
+    per-output `h_pqc` blob exactly as the bond path does.
+  - **daemon: `Blockchain::prepare_handle_incoming_blocks` crashed on any
+    block carrying an archival vin.** Three scan-table prefill loops did
+    an unguarded `std::get<txin_to_key>` over every vin; the first mined
+    bond-post threw `std::bad_variant_access` out of `generateblocks`
+    (and would have crashed block relay on any archival-vin block).
+    Fixed with the file's own `holds_alternative` skip idiom — archival
+    vins carry no key image and no amount.
 - **wallet: the staker-activation entry — first-stake goes production
   (`ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.8).** New wallet-rpc `stake`
   method (`Capability::Full`-gated; refusals `-29500 StakeNotReady` /
