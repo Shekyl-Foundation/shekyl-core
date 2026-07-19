@@ -825,7 +825,11 @@ principal) are **ordinary FCMP++ main-tree transfers** — firewall = base priva
   archiver **before** earning — peers present/observe backing off-chain; otherwise
   spam or ignored challenges. The **first on-chain reward emission** anchors bond
   state (holdings + claimed-epoch bitmap) — there is **no** separate registration
-  transaction; fusion removes the tx, not the event.
+  transaction; fusion removes the tx, not the event. *(Superseded, noted 2026-07-19:
+  gate 4 refined fusion to "no separate registration transaction **type** in the
+  retired stake sense" — join-Market **is** the registration event and rides its own
+  dedicated `txin_archival_bond_post` vin;
+  [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md) §2.3/§3.1.)*
 - **Reward emission crypto:** FCMP++ **membership-only control** at settlement-epoch
   cadence (prove backing, **no** key image in spent set). **No published
   reward-dedup tag** — `N_arch = x·G_arch` is **rejected** (stake-keyed tags

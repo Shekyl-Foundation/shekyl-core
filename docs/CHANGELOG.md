@@ -191,6 +191,66 @@
 
 ### Added
 
+- **wallet/sim: GF-7 leg-(b) sealing-run harness + grader landed; first
+  session's PASS withdrawn in-PR after review; hardened re-run graded
+  PASS 2026-07-19; seal-input status then WITHDRAWN on scope review and
+  the `K_COVER` seal re-dispositioned as designed
+  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19.8 design / §19.9.1 withdrawal /
+  §19.9.2 re-grade / §19.10 scope correction; `ARCHIVAL_REWARD_GATE_M1.md`
+  §4 2026-07-19 update).** The receipt-timestamped live-driver
+  form: a `#[cfg(test)]` + `gf7-hooks` harness in `shekyl-engine-core`
+  (`gf7_sealing_run.rs`, `#[ignore]`d, `SHEKYLD_BIN`-gated) drives the
+  **production** P-scan task + dispatch driver against a live
+  `shekyld --regtest` through a new feature-gated seam
+  (`start_pscan_sealing_run` — production config/cadence pinned, observer +
+  positive-control-only `DispatchConfig` override injected; byte-identical
+  control flow with the feature off), writing a receipts artifact that
+  `shekyl-staking-sim --gf7-seal` grades with the same circular statistic
+  and committed bound (`r = P(link)·(N−1) < 2`). A first 4 h 42 m session
+  graded PASS (gate row `r = 1.275`), then the PR #337 review found the
+  harness could not detect background-miner death (chain-advancement
+  geometry unverifiable from the artifact), the grader enforced neither
+  `R = 24 + 8` nor run-ordinal contiguity, the recording period was three
+  untied literals across two crates, and the documented space-separated
+  `--gf7-seal` form silently ran the default simulation — the grade is
+  withdrawn (WI-4 §19.9.1) and the hardening landed in this same PR:
+  fail-loud miner watch, grader `R`-floor/contiguity/`cadence_ms == TICK_MS`
+  enforcement (artifact rows now self-describe their period), an `Arm` type
+  binding label/seed-domain/config so a mislabeled row is unconstructible,
+  both CLI forms with a loud missing-path error, sim verdict strings made
+  status-neutral (they point at §19.9 instead of asserting its outcome),
+  and a CI clippy lane compiling the `gf7-hooks` combination so the
+  reopening-criterion re-run harness cannot rot silently. The hardened
+  re-run then executed (both sessions disclosed, §19.9.2): session 1
+  graded INVALID — the §19.8.3 negative control biting on shared-host
+  cross-wallet coupling, exactly its job — and session 2 graded **PASS**
+  (gate row `r = 0.412`, clustered SE 0.121, ≈ 13 SEs under the committed
+  bound 2; positive control 0.875 ≥ 0.80, negative 0.087 at chance,
+  receipt-noise floor 413.9 ms of `T = 60 s`). **Scope review (same PR,
+  §19.10):** the form's `K = 2` concurrently-posting-persona premise is
+  design-foreclosed — the grounded persona-lifecycle enumeration
+  (§19.10.1) shows `2 + E + H (+R)` wallet-timed `P`-attributed txs per
+  persona lifetime and `stake_engine` has no rotation scheme — so
+  **leg (b)'s seal-input status is withdrawn** (the TM-1 "does the design
+  do this?" correction class, applied to WI-4's own arm); measurement
+  records stand, and the hardened instrument + CI lane are retained as a
+  dispersal-regression tripwire. `K_COVER`'s seal predicate is now stated
+  once in M1 §4 and dispositioned as designed: partition-proof operand
+  DISCHARGED (§14.4), value paired to the **measured** cover floor
+  (`N ≈ 10` min / `20` with margin; thin-cover failure `r = 3.54` is the
+  enforced fact) via the §14 founder schedule; the GF-4/F-D2 seal seat is
+  removed (F-W10 — not an on-chain observable; stays a Gate-6 build
+  item); the §17.9 calibration reduces to a one-page recorded derivation.
+  Companion corrections landed with the sweep: TM-1/FIREWALL_THREATS
+  "sequential rotation" wording (claims an unenforced code property),
+  `V3_STAKER_ARCHIVAL.md` registration-tx line and Gate-6 refund-output
+  line (both superseded by gate-4), and a FOLLOWUPS wallet-UX item for
+  thin-cover disclosure at bond/claim time (warn-don't-prohibit on user
+  acts; the enforced invariant stays consensus-side). Rule-94
+  registrations in the same slice: the §17.9 Gate-7 calibration and the
+  terminal `K_COVER` seal act each gained an `IMPLEMENTATION_INDEX.md`
+  front row.
+
 - **fcmp: F-D1 drain-amount taint-carve BUILT (`ARCHIVAL_FIREWALL_GATE6.md`
   §12.3) + F-D2 core-side aggregate-only surface (§12.4).** The `P`→principal
   value-out (drain) path lands in `shekyl-engine-core/src/engine/` as three

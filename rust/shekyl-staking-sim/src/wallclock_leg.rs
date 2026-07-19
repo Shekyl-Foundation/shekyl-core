@@ -20,9 +20,22 @@
 //! event field is a production-fingerprint hazard) stays intact. This
 //! module *is* the harness-timestamp form for the pre-live grade; the
 //! sealing form is receipt-side timestamping by the sim-owned observer over
-//! the live dispatch driver, named as the carrier in §19.1 and tracked in
-//! `docs/FOLLOWUPS.md`. The grade below is therefore PROVISIONAL by
-//! construction, exactly like every §7 synthesis conclusion.
+//! the live dispatch driver, named as the carrier in §19.1. The grade below
+//! is therefore PROVISIONAL by construction, exactly like every §7
+//! synthesis conclusion. The sealing form's standing lives in the
+//! measurement doc (§19.9 record, §19.10 scope; harness
+//! `shekyl-engine-core::gf7_sealing_run`, grader `gf7_seal.rs` /
+//! `--gf7-seal`) — asserted there, never here; this module remains the
+//! model-side checkpoint it always was.
+//!
+//! # Scope (WI-4 §19.10.2a, 2026-07-19)
+//!
+//! This leg grades the `K = 2` sibling construction **in-model**. Per the
+//! §19.10 scope correction the concurrently-posting-sibling premise is
+//! design-foreclosed; these rows stand as model records (the sub-`T`
+//! cliff, the dispersal-range shape) and the leg's contribution to the
+//! `--gf7-timeline` conjunction is a model-consistency check, not a
+//! channel grade.
 //!
 //! # A-priori bound (committed §19.2, before this code existed)
 //!
@@ -63,11 +76,14 @@ pub const RATIO_BOUND: f64 = 2.0;
 
 /// Positive-control floor: naked phase-locking (`dispersal = 0`, `m ≥ 4`)
 /// must link at least this well or the arm is blind (§19.3 control 1).
-const POSITIVE_CONTROL_MIN: f64 = 0.80;
+/// Crate-visible: the §19.8 sealing-run grader (`gf7_seal`) applies the same
+/// committed floor to its live positive-control arm.
+pub(crate) const POSITIVE_CONTROL_MIN: f64 = 0.80;
 
 /// Negative-control tolerance around chance for the decoupled-generator
-/// tripwire (§19.3 control 2; M6.2 shape).
-const NEGATIVE_CONTROL_TOL: f64 = 0.05;
+/// tripwire (§19.3 control 2; M6.2 shape). Crate-visible for the same
+/// reason as [`POSITIVE_CONTROL_MIN`].
+pub(crate) const NEGATIVE_CONTROL_TOL: f64 = 0.05;
 
 /// One graded scenario point.
 struct Scenario {
@@ -105,8 +121,9 @@ fn persona_phases(rng: &mut SplitMix64, phase: u64, posts: usize, dispersal_ms: 
 }
 
 /// Circular mean angle of a persona's phases, in radians. `m ≥ 1` by
-/// construction of the sweep surface.
-fn circular_mean(phases: &[u64]) -> f64 {
+/// construction of the sweep surface. Crate-visible: the §19.8 sealing-run
+/// grader (`gf7_seal`) applies the same committed statistic to live receipts.
+pub(crate) fn circular_mean(phases: &[u64]) -> f64 {
     let (mut s, mut c) = (0.0f64, 0.0f64);
     for &p in phases {
         let theta = (p as f64) * std::f64::consts::TAU / (TICK_MS as f64);
@@ -117,7 +134,8 @@ fn circular_mean(phases: &[u64]) -> f64 {
 }
 
 /// Wrapped circular distance between two mean angles, in `[0, π]`.
-fn circular_distance(a: f64, b: f64) -> f64 {
+/// Crate-visible for the same reason as [`circular_mean`].
+pub(crate) fn circular_distance(a: f64, b: f64) -> f64 {
     let d = (a - b).rem_euclid(std::f64::consts::TAU);
     d.min(std::f64::consts::TAU - d)
 }
@@ -203,8 +221,9 @@ pub struct WallclockControl {
 #[derive(Serialize)]
 pub struct WallclockLegReport {
     /// Always true here: this is the harness-timestamp synthesis grade;
-    /// leg (b) closes only at the §19.1 sealing form (receipt-timestamped
-    /// live-driver re-run), tracked in `docs/FOLLOWUPS.md`.
+    /// leg (b)'s seal standing lives at the §19.1 sealing form
+    /// (receipt-timestamped live-driver re-run — measurement doc §19.9 record
+    /// / §19.10 scope), asserted there, never in this model-side leg.
     pub provisional: bool,
     pub tick_ms: u64,
     pub ratio_bound: f64,
@@ -411,7 +430,13 @@ fn run_with(trials: u32, seed: u64) -> WallclockLegReport {
     } else if !observer_strength_ok {
         "INVALID (modeled observer weaker than the channel — §19.5 tripwire)".to_string()
     } else if gate_rows_pass {
-        "PROVISIONAL-PASS (harness-timestamp synthesis; sealing form §19.1 open)".to_string()
+        // Status-neutral by design: this sim cannot know the live sealing
+        // form's current standing (grades, withdrawals, and §19.1 reopenings
+        // happen outside it), so the verdict names where that standing lives
+        // instead of asserting it.
+        "PROVISIONAL-PASS (harness-timestamp synthesis; the §19.1 sealing form is graded \
+         separately — `--gf7-seal`, §19.8/§19.9)"
+            .to_string()
     } else {
         "PROVISIONAL-FAIL (dispersal-redesign signal; pre-live)".to_string()
     };

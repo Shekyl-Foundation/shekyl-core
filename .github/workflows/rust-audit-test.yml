@@ -193,6 +193,22 @@ jobs:
         # workspace in one pass instead of stopping at the first crate's
         # first error, so reviewers see the full triage in one log.
         run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
+      - name: "cargo clippy: gf7-hooks harness lane (shekyl-engine-core)"
+        working-directory: rust
+        # The GF-7 sealing seam + harness (`pscan/start.rs` SealingRunOverrides,
+        # `gf7_sealing_run.rs`) are gated `cfg(all(test, feature = "gf7-hooks"))`
+        # — a combination NO other lane compiles: the workspace gates above run
+        # without the feature, and gf7-no-emit-guard.yml is metadata-only
+        # (`cargo tree`). Without this lane a refactor of any callee the
+        # harness binds (staker_wallet, DispatchConfig, PScanConfig) merges
+        # green and the WI-4 §19.1 reopening-criterion re-run harness is
+        # discovered broken exactly when the multi-hour re-run is demanded.
+        # Clippy (not test): the harness tests are `#[ignore]`d and need a
+        # live `shekyld`; type-checking all targets at `-D warnings` is the
+        # compile gate. The no-emit guard's layer-3 containment is untouched:
+        # this is a dev/test lane, and dev edges are deliberately in scope
+        # for the feature (see gf7-no-emit-guard.yml header).
+        run: cargo clippy -p shekyl-engine-core --all-targets --features gf7-hooks -- -D warnings
       - name: rustdoc -D warnings (shekyl-tor)
         working-directory: rust
         # shekyl-tor's docs carry load-bearing security contracts (the trust

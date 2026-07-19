@@ -217,15 +217,7 @@ impl RegtestDaemon {
 
     /// Mine `n` blocks to `address` (FAKECHAIN-gated daemon RPC).
     pub(super) async fn generate_blocks(&self, n: u64, address: &str) -> GenerateBlocksResp {
-        self.rpc
-            .json_rpc_call::<GenerateBlocksResp>(
-                "generateblocks",
-                Some(json!({
-                    "amount_of_blocks": n,
-                    "wallet_address": address,
-                    "starting_nonce": 0u32,
-                })),
-            )
+        try_generate_blocks(&self.rpc, n, address)
             .await
             .expect("generateblocks")
     }
@@ -248,6 +240,29 @@ impl Drop for RegtestDaemon {
         drop(self.child.wait());
         drop(std::fs::remove_dir_all(&self.data_dir));
     }
+}
+
+/// Mine `n` blocks to `address` over `rpc` (FAKECHAIN-gated `generateblocks`),
+/// returning the RPC error instead of panicking. Free-standing so a caller
+/// that cannot borrow a [`RegtestDaemon`] into a `'static` task — the GF-7
+/// sealing-run background miner, which owns an independent client and must
+/// tolerate transient failures — shares the one request shape with
+/// [`RegtestDaemon::generate_blocks`] rather than hand-rolling a copy that
+/// drifts.
+pub(super) async fn try_generate_blocks(
+    rpc: &SimpleRequestRpc,
+    n: u64,
+    address: &str,
+) -> Result<GenerateBlocksResp, shekyl_rpc_client::RpcError> {
+    rpc.json_rpc_call::<GenerateBlocksResp>(
+        "generateblocks",
+        Some(json!({
+            "amount_of_blocks": n,
+            "wallet_address": address,
+            "starting_nonce": 0u32,
+        })),
+    )
+    .await
 }
 
 /// Smoke test: the harness spawns a daemon, a fresh wallet's address is mineable,
@@ -1269,7 +1284,7 @@ const PSCAN_TEST_REORG_DEPTH: u64 = 4;
 /// pscan auto-start lifecycle test). Returns the arc'd engine, its tempdir
 /// (caller keeps it alive — it owns the wallet files), and the principal's
 /// encoded primary address.
-async fn staker_wallet(
+pub(super) async fn staker_wallet(
     rpc_port: u16,
     seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
     slot: super::stake_engine::PSlot,
@@ -1311,7 +1326,10 @@ async fn staker_wallet(
 /// bundle at open (`spawn_stake_engine_if_staker` → `derive_archival_p_keys`);
 /// the harness re-derives only the PUBLIC halves so the principal can fund the
 /// persona over an ordinary wallet-built transfer.
-fn persona_address(seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES], slot: u32) -> String {
+pub(super) fn persona_address(
+    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    slot: u32,
+) -> String {
     use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     let keys = derive_archival_p_keys(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
