@@ -77,7 +77,12 @@ enum {
 //   offset  4: in_pool_broadcast     (u8; txid pool-resident at `legacy`/broadcast category —
 //                                      the foreign-disclosable presence; differs from in_pool
 //                                      only for a Dandelion++-embargoed tx, §3.1 identity pin)
-//   offset  5: reserved[3]           (zeroed)
+//   offset  5: bond_record_probed    (u8; the §8.7.1 BP3 archival-bond-record probe ran —
+//                                      snapshot: caller passed a bond p_canonical_id;
+//                                      commit: the reparsed blob carries a bond-post vin)
+//   offset  6: bond_record_exists    (u8; valid iff bond_record_probed — a bond record
+//                                      exists for the probed p_canonical_id)
+//   offset  7: reserved[1]           (zeroed)
 //   offset  8: ref_height            (u64; reference block main-chain height)
 //   offset 16: root[32]              (curve-tree root at ref_height)
 //   offset 48: fee_per_byte          (u64; check_fee's derived floor param)
@@ -96,7 +101,9 @@ typedef struct shekyl_submit_facts_ffi {
     uint8_t ref_block_found;
     uint8_t tree_depth;
     uint8_t in_pool_broadcast;
-    uint8_t reserved[3];
+    uint8_t bond_record_probed;
+    uint8_t bond_record_exists;
+    uint8_t reserved[1];
     uint64_t ref_height;
     uint8_t root[32];
     uint64_t fee_per_byte;
@@ -111,12 +118,16 @@ typedef struct shekyl_submit_facts_ffi {
 //
 // txid / reference_block: 32 bytes each. key_images: n_key_images × 32
 // bytes, flat, submission order. out_ki_conflicts: n_key_images entries.
+// bond_p_canonical_id: 32 bytes or NULL — non-NULL for a bond-post
+// submission, keying the §8.7.1 BP3 archival-bond-record probe
+// (get_archival_bond_hybrid_pubkey) into bond_record_probed/exists.
 // Returns SHEKYL_SUBMIT_OK or SHEKYL_SUBMIT_INTERNAL_FAULT (DB exception /
 // bad arguments; never a verdict).
 int shekyl_submit_snapshot_facts(core_rpc_handle* h,
     const uint8_t* txid,
     const uint8_t* key_images, size_t n_key_images,
     const uint8_t* reference_block,
+    const uint8_t* bond_p_canonical_id,
     shekyl_submit_facts_ffi* out_facts,
     uint8_t* out_ki_conflicts);
 
@@ -125,9 +136,11 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
 // against the engine txid (§3.4; mismatch = INTERNAL_FAULT, never a
 // verdict); re-checks every mutable premise (identity, key images,
 // hash-anchored reference + age window, root == certificate root, the
-// check_fee re-gate against fresh params — F34); on clean, executes the
-// attested insert tail (tx_memory_pool::insert_attested_tx) and the
-// post-prune membership check (F23).
+// check_fee re-gate against fresh params — F34, and the §8.7.1 BP3
+// bond-record re-probe when the reparsed blob carries a bond-post vin —
+// a record appearing during Phase C is a claim-slot race); on clean,
+// executes the attested insert tail (tx_memory_pool::insert_attested_tx)
+// and the post-prune membership check (F23).
 //
 // cert_* carry the VerificationCertificate facts (§3.3). On RACED, the
 // fresh facts (same collection as shim 1, same lock scope) are written to
@@ -183,6 +196,7 @@ int snapshot_facts(cryptonote::tx_memory_pool& pool, cryptonote::Blockchain& bc,
     const uint8_t* txid,
     const uint8_t* key_images, size_t n_key_images,
     const uint8_t* reference_block,
+    const uint8_t* bond_p_canonical_id,
     shekyl_submit_facts_ffi* out_facts,
     uint8_t* out_ki_conflicts) noexcept;
 

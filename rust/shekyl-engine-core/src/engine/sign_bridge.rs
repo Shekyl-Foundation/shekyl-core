@@ -62,6 +62,13 @@ struct BuiltOutput {
     output_key: [u8; 32],
     view_tag: Option<u8>,
     kem_blob: Vec<u8>,
+    /// The output's `H(pqc_pk)` curve-tree leaf component, for the tx_extra
+    /// `0x07` leaf-hash blob (vout order). An output whose transaction omits
+    /// the field ingests with a **zero** `h_pqc` leaf and is unspendable —
+    /// no FCMP++ spend of it can satisfy the verifier's
+    /// `pqc_auths`-derived leaf hash (the PR-4b bond e2e surfaced this
+    /// live: the persona funding transfer's outputs could not fund a bond).
+    h_pqc: [u8; 32],
 }
 
 fn build_output(
@@ -110,6 +117,7 @@ fn build_output(
         output_key: constructed.output_key,
         view_tag: Some(constructed.view_tag_prefilter),
         kem_blob,
+        h_pqc: constructed.h_pqc,
     })
 }
 
@@ -262,7 +270,18 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         });
     }
 
-    let tx_extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs).serialize();
+    // tx_extra: tx pubkey + per-output KEM blobs + the `0x07` PQC leaf-hash
+    // blob (`H(pqc_pk)` per output, vout order). Without the `0x07` field
+    // every output of this transfer ingests into the curve tree with a zero
+    // `h_pqc` leaf and is **unspendable** — the FCMP++ verifier derives the
+    // leaf hash from the spender's pqc auth key, which can never equal zero.
+    // The bond/emission assembly paths (stake_engine.rs) have always
+    // appended it; the PR-4b bond e2e surfaced this gap live when a persona
+    // funding output built by this path could not fund a bond post.
+    let leaf_hash_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.h_pqc).collect();
+    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
+    extra.push_pqc_leaf_hashes(leaf_hash_blob);
+    let tx_extra = extra.serialize();
 
     let mut bundles = HashMap::new();
     for input in &tx.inputs {

@@ -250,9 +250,11 @@ impl Extra {
     /// The daemon's curve-tree ingestion reads this field to set each new
     /// output's `h_pqc` leaf component; an output ingested **without** it
     /// carries a zero leaf hash and can never satisfy the spend-side
-    /// `pqc_auths`-derived hash check — i.e. it is unspendable. Any
-    /// transaction whose outputs must be spendable (bond-post change, and
-    /// eventually the transfer path) appends this field.
+    /// `pqc_auths`-derived hash check — i.e. it is unspendable. Every
+    /// transaction whose outputs must be spendable appends this field:
+    /// bond-post/emission change (stake_engine.rs) and the ordinary
+    /// transfer path (sign_bridge.rs; its omission there made every
+    /// transfer output unspendable — surfaced live by the PR-4b bond e2e).
     pub fn push_pqc_leaf_hashes(&mut self, blob: Vec<u8>) {
         self.0.push(ExtraField::PqcLeafHashes(blob));
     }

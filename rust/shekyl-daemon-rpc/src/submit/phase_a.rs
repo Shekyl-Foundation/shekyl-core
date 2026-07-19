@@ -26,7 +26,7 @@
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::traits::IsIdentity;
 use shekyl_types::{BlockHash, TxHash};
-use shekyl_wire::transaction::{Ct, Input, Transaction, MAX_TX_SIZE};
+use shekyl_wire::transaction::{BondPost, Ct, Input, Transaction, MAX_TX_SIZE};
 
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 
@@ -73,6 +73,26 @@ pub struct ParsedSubmission {
     pub weight: u64,
     /// Shape class for Phase C's check-set dispatch.
     pub kind: SubmitTxKind,
+}
+
+impl ParsedSubmission {
+    /// The bond-post vin and its vin index — `Some` iff the submission is a
+    /// [`SubmitTxKind::BondPost`] (Phase A pinned exactly one bond-post
+    /// input for that kind). The engine keys the Phase-B BP3 record probe
+    /// on the vin's claimed `p_canonical_id` (exactly as the C++ oracle
+    /// does — the claim is pinned to the pubkey by the verifier's BP2 leg),
+    /// and the verifier's bond battery consumes the full vin.
+    pub fn bond_post(&self) -> Option<(usize, &BondPost)> {
+        self.tx
+            .prefix
+            .inputs
+            .iter()
+            .enumerate()
+            .find_map(|(i, input)| match input {
+                Input::BondPost(bp) => Some((i, bp.as_ref())),
+                _ => None,
+            })
+    }
 }
 
 /// A Phase-A refusal: wire verdict `Rejected{Malformed}` plus the

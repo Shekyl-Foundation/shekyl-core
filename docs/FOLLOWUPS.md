@@ -4919,6 +4919,36 @@ sustainability is unaffected by the recalibration.
   **Target: V3.0 pre-genesis — PR-4b; the E4 gate (PR-4c e2e) is
   sequenced behind it.** Closed when both batteries land and the
   tripwire is promoted.
+  **UPDATE 2026-07-18 — gap (i) CLOSED (PR-4b, bond-post half).** The
+  JoinMarket bond-post Phase-C battery is wired in
+  `verifier.rs::verify_bond_post` (§8.7.1 BP-rows closure note): O6 →
+  bond CT balance → BP2/BP5/BP3+BP4 (native
+  `shekyl-archival-retention` calls — the same functions the C++
+  oracle reaches over FFI) → Bp+ → funding-subset FCMP++ → all-input
+  PQC. `SubmitFacts` gained the BP3 `bond_record_exists` fact (probe
+  keyed on the vin's claimed id, snapshot + Phase-D re-probe from the
+  reparsed blob; record-appears-during-C races to
+  `DoubleSpendConflict`). The stale `verifier.rs` reachability docs
+  (the "§13 wire reshape" reopen and "bond posts cannot clear Phase A"
+  claim) are corrected — there was **no wire contradiction**
+  (`shekyl-wire` has sized `pseudoOuts` by the `ToKey` subset since the
+  §13 coupling closure, 2026-07-05). Non-JoinMarket post kinds
+  (Unbond/HoldingsUpdate/Rebond) refuse at the submit battery under a
+  named rule-21 reopen (§8.7.1 closure note: their submit fact sets +
+  Phase-D re-check semantics are unspecified and no wallet constructs
+  them). The PR-4a tripwire is promoted to the accepted-and-applied +
+  scan-re-discovery leg — and running it live surfaced + fixed two
+  latent production bugs (`docs/CHANGELOG.md`): the ordinary transfer
+  path omitted the `tx_extra 0x07` PQC leaf-hash blob (every transfer
+  output ingested with a zero `h_pqc` leaf ⇒ unspendable; first
+  observable at the first real spend of a transfer output), and
+  `Blockchain::prepare_handle_incoming_blocks` crashed
+  (`bad_variant_access`) on any block carrying an archival vin (three
+  unguarded `std::get<txin_to_key>` scan-table walks). **Gap (ii) — the
+  emission submit leg — remains this item's open half** (Phase-A
+  classification for `Input::ArchivalRewardEmission`, fee/vout statics,
+  verifier rows over `emission_vin_verify_*`); PR-4c stays sequenced
+  behind it.
 
 - **Single-sig address decode enforces the Bech32m variant**
   (added 2026-07-17, PR #323 Copilot round). `bech32m_decode` in
@@ -8477,6 +8507,12 @@ one place to confirm each item's relationship to the wallet stack.
   only — production-firing remains gated on the staker-activation round (#332)**; the entry
   closes on the production discharge. The "nothing removes an output" poison text above is the
   pre-arm-#1 record, kept for lineage.
+  **UPDATE 2026-07-18 (PR-4b): PRODUCTION-DISCHARGED — this entry closes.** The
+  activation entry (#336) + the PR-4b bond-post battery landed, and the promoted
+  regtest e2e stakes through the production `Engine::first_stake` path, confirms
+  the bond on-chain, and asserts the swept funding records are pruned from the
+  sealed state (the DQ-F production fire, live —
+  `ARCHIVAL_BOND_SP_R0_PLAN.md` §4 build record).
   See [`ARCHIVAL_BOND_WI2_ASSEMBLY.md`](design/ARCHIVAL_BOND_WI2_ASSEMBLY.md) §3.2/§3.5 and
   [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12 (SP-R0).
   **2d-2 tip-consumer enrollment note:** assemble-time `anchor_t0` (via

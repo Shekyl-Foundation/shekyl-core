@@ -1042,6 +1042,16 @@ push this PR past the 10-commit ceiling. Split per `06-branching.mdc`:
   rows over the landed `emission_vin_verify_*` FFI). Carried by the
   FOLLOWUPS "daemon Rust submit engine: bond-post + emission
   batteries" item (V3.0 queue).
+  **UPDATE 2026-07-18 — the bond-post half landed** (PR-4b as shipped:
+  `DAEMON_SUBMIT_VERDICT.md` §8.7.1 closure note; the stale "§13 wire
+  reshape / cannot clear Phase A" framing corrected — no wire
+  contradiction existed; the PR-4a tripwire promoted to
+  accepted-and-applied, surfacing + fixing two latent production bugs:
+  the transfer path's missing `0x07` leaf-hash blob — every transfer
+  output unspendable — and `prepare_handle_incoming_blocks`'s
+  `bad_variant_access` on archival-vin blocks; `docs/CHANGELOG.md`).
+  The **emission submit leg remains open** on the same FOLLOWUPS item
+  and still gates PR-4c.
 - **PR-4c (after 4b): the e2e proper.** Mine to an epoch close with
   injected served work under the SEB lever, build via PRs 1–3's
   production path through the CB-3 seam, submit over real RPC, assert
