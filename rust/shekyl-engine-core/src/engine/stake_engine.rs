@@ -378,6 +378,47 @@ pub(crate) enum RetireOutcome {
     /// persona should not be active, but if it is we do not wipe it mid-use — the
     /// next rotation moves `active` away and the retire re-fires.
     SkippedActive { slot: PSlot },
+    /// The matching persona's slot still holds **unspent funding outputs**; left
+    /// in place (the **funded-gate**). Wiping it would strand spendable `P`
+    /// funds: the wipe is irreversible and the open path stops deriving a retired
+    /// slot, so the funds behind the slot's keys become unrecoverable. The retire
+    /// re-fires on a later sweep once the funding is drained (arm #1 prunes the
+    /// last funding output on its spend).
+    SkippedFunded { slot: PSlot },
+}
+
+/// The set of `P` slots that still hold **unspent** funding outputs — the
+/// operand of the retire handler's funded-gate.
+///
+/// A persona whose slot is in this set is **not truly terminal**: spendable
+/// value remains behind its keys, so the witness-gated retire must never wipe
+/// it (the wipe is irreversible and the open path stops deriving a retired
+/// slot). The claim-window witness guards the *reward-collateral* stuck-funds
+/// dimension; this set guards the complementary *funding-output* dimension.
+///
+/// Redacting `Debug` and no `Serialize` (the `funding_outputs` discipline): the
+/// membership — which of `P`'s slots hold live value — is persona-correlating
+/// funding history and must not reach a clear log or a wire.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(crate) struct FundedSlots(BTreeSet<PSlot>);
+
+impl FundedSlots {
+    /// Build the set from the slots of the accrual's unspent funding outputs.
+    pub(crate) fn from_slots(slots: impl IntoIterator<Item = PSlot>) -> Self {
+        Self(slots.into_iter().collect())
+    }
+
+    /// True if `slot` still holds unspent funding (retire must be deferred).
+    pub(crate) fn contains(&self, slot: PSlot) -> bool {
+        self.0.contains(&slot)
+    }
+}
+
+impl std::fmt::Debug for FundedSlots {
+    /// Redacted — the funded-slot set is `P` funding history (see the type docs).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FundedSlots(<redacted funding-history>)")
+    }
 }
 
 /// An operation-scoped capability to **activate** a held persona (typed
@@ -1097,11 +1138,18 @@ impl StakeEngine {
     ///
     /// The witness already proves eligibility; this only *applies* it. **Idempotent
     /// and conservative:** a persona already gone is a [`RetireOutcome::NotHeld`]
-    /// no-op, and the **active** persona is left in place ([`RetireOutcome::
+    /// no-op; the **active** persona is left in place ([`RetireOutcome::
     /// SkippedActive`]) — a terminal persona should not be active, but we never wipe
-    /// the active slot mid-use. Only [`HeldPersona::Bonded`] is matched (an
-    /// ephemeral persona has no bond to be terminal).
-    fn retire_bonded(&mut self, witness: &RetirementWitness) -> RetireOutcome {
+    /// the active slot mid-use; and a slot that still holds unspent funding is left
+    /// in place ([`RetireOutcome::SkippedFunded`], the **funded-gate**) so the
+    /// irreversible wipe never strands spendable `P` funds. Only
+    /// [`HeldPersona::Bonded`] is matched (an ephemeral persona has no bond to be
+    /// terminal).
+    fn retire_bonded(
+        &mut self,
+        witness: &RetirementWitness,
+        funded_slots: &FundedSlots,
+    ) -> RetireOutcome {
         // Find the bonded persona whose canonical id matches the witness. A key
         // that fails to encode is skipped (it cannot be the match); the scan that
         // produced the witness already encoded it.
@@ -1117,6 +1165,13 @@ impl StakeEngine {
         };
         if self.active == Some(slot) {
             return RetireOutcome::SkippedActive { slot };
+        }
+        // Funded-gate: never wipe a slot that still holds unspent funding. The
+        // wipe is irreversible and the open path stops deriving a retired slot,
+        // so wiping a funded slot would strand spendable `P` funds. Defer until
+        // the funding is drained; the durable pending trigger re-fires the retire.
+        if funded_slots.contains(slot) {
+            return RetireOutcome::SkippedFunded { slot };
         }
         // Remove + wipe the now-terminal bonded persona. The match re-confirms the
         // `Bonded` variant, so `wipe_bonded` (typed contract #4's DQ8 exception) is
@@ -2806,6 +2861,10 @@ impl Message<ProjectPersonaCanonicalId> for StakeEngine {
 #[allow(dead_code)] // transient — the SP-5 scan task is the lib sender.
 pub(crate) struct RetireBondedPersona {
     pub witness: RetirementWitness,
+    /// Slots the caller knows still hold unspent funding — the funded-gate
+    /// operand. The handler resolves the witness to a slot and refuses the
+    /// irreversible wipe if the slot is in this set (returns `SkippedFunded`).
+    pub funded_slots: FundedSlots,
 }
 
 // The retire is infallible at the actor — all outcomes are valid and idempotent,
@@ -2820,7 +2879,7 @@ impl Message<RetireBondedPersona> for StakeEngine {
         msg: RetireBondedPersona,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        Ok(self.retire_bonded(&msg.witness))
+        Ok(self.retire_bonded(&msg.witness, &msg.funded_slots))
     }
 }
 
@@ -3169,16 +3228,23 @@ impl StakeEngineHandle {
 
     /// Retire a now-terminal bonded persona from the scan union (DQ8), wiping its
     /// key. The `witness` proves eligibility (`Unbond` + `W`-lapse + finality-deep)
-    /// — the actor cannot re-verify, so the witness is the guard. Idempotent: a
-    /// persona already gone returns [`RetireOutcome::NotHeld`]. The SP-5 task calls
-    /// this when it confirms a persona is terminal.
+    /// — the actor cannot re-verify, so the witness is the guard. `funded_slots`
+    /// carries the caller's set of slots still holding unspent funding: the actor
+    /// resolves the witness to a slot and, if funded, defers the wipe
+    /// ([`RetireOutcome::SkippedFunded`], the funded-gate) rather than strand the
+    /// funds. Idempotent: a persona already gone returns [`RetireOutcome::NotHeld`].
+    /// The SP-5 task calls this when it confirms a persona is terminal.
     #[allow(dead_code)] // transient — the driving task (PR-B / SP-5) is the non-test consumer.
     pub(crate) async fn retire_bonded_persona(
         &self,
         witness: RetirementWitness,
+        funded_slots: FundedSlots,
     ) -> Result<RetireOutcome, StakeEngineError> {
         self.actor
-            .ask(RetireBondedPersona { witness })
+            .ask(RetireBondedPersona {
+                witness,
+                funded_slots,
+            })
             .await
             .map_err(collapse_send_error)
     }
@@ -4223,7 +4289,10 @@ mod tests {
         .expect("eligible");
 
         assert_eq!(
-            handle.retire_bonded_persona(witness).await.expect("retire"),
+            handle
+                .retire_bonded_persona(witness, FundedSlots::default())
+                .await
+                .expect("retire"),
             RetireOutcome::Retired {
                 slot: PSlot::from_raw(0)
             }
@@ -4237,9 +4306,54 @@ mod tests {
         )
         .expect("eligible");
         assert_eq!(
-            handle.retire_bonded_persona(again).await.expect("retire"),
+            handle
+                .retire_bonded_persona(again, FundedSlots::default())
+                .await
+                .expect("retire"),
             RetireOutcome::NotHeld,
             "retiring an already-gone persona is an idempotent no-op"
+        );
+    }
+
+    /// The funded-gate: a terminal persona whose slot still holds unspent
+    /// funding is left in place ([`RetireOutcome::SkippedFunded`]) — wiping it
+    /// would strand the funds. Once drained (the slot leaves the funded set) the
+    /// same witness retires it.
+    #[tokio::test]
+    async fn retire_defers_a_funded_persona_then_wipes_once_drained() {
+        let handle = spawn_over(&[0], &[0], None); // persona 0 bonded, not active
+        let witness = || {
+            RetirementWitness::from_confirmed_unbond(
+                canonical_id(0),
+                SettlementEpoch::from_raw(0),
+                SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
+            )
+            .expect("eligible")
+        };
+
+        // Slot 0 still holds unspent funding → the wipe is refused.
+        let funded = FundedSlots::from_slots([PSlot::from_raw(0)]);
+        assert_eq!(
+            handle
+                .retire_bonded_persona(witness(), funded)
+                .await
+                .expect("retire"),
+            RetireOutcome::SkippedFunded {
+                slot: PSlot::from_raw(0)
+            },
+            "a funded slot is never wiped (stuck-funds guard)"
+        );
+
+        // Drained now (empty funded set) → the same witness retires it.
+        assert_eq!(
+            handle
+                .retire_bonded_persona(witness(), FundedSlots::default())
+                .await
+                .expect("retire"),
+            RetireOutcome::Retired {
+                slot: PSlot::from_raw(0)
+            },
+            "once drained the deferred retire fires"
         );
     }
 
@@ -4255,7 +4369,10 @@ mod tests {
         )
         .expect("eligible");
         assert_eq!(
-            handle.retire_bonded_persona(witness).await.expect("retire"),
+            handle
+                .retire_bonded_persona(witness, FundedSlots::default())
+                .await
+                .expect("retire"),
             RetireOutcome::SkippedActive {
                 slot: PSlot::from_raw(0)
             }
@@ -4275,7 +4392,10 @@ mod tests {
         )
         .expect("eligible");
         assert_eq!(
-            handle.retire_bonded_persona(witness).await.expect("retire"),
+            handle
+                .retire_bonded_persona(witness, FundedSlots::default())
+                .await
+                .expect("retire"),
             RetireOutcome::NotHeld
         );
     }

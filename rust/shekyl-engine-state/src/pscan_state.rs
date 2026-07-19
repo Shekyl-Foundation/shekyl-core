@@ -283,11 +283,14 @@ pub struct PScanState {
     /// is behind the cursor and never re-scanned. This entry **re-triggers** the
     /// retire on each restart, surviving until SP-R0 **arm #2**'s
     /// token-corroborated retire-time prune removes it — in the same atomic seal
-    /// that writes the [`RetiredPersonaRecord`] and drops the persona's match +
-    /// funding rows (the removal the pre-arm-#2 design said it was "kept until").
-    /// An uncorroborated retire (the DQ-D tip clamp declines) leaves it in place
-    /// to re-fire. Public content (the id is a public on-chain pseudonym handle),
-    /// bounded by `P`'s own unbonded-persona count (not adversary-controllable).
+    /// that writes the [`RetiredPersonaRecord`] and drops the persona's
+    /// `bond_post_matches` rows (the removal the pre-arm-#2 design said it was
+    /// "kept until"). The slot's `funding_outputs` are **not** dropped here: the
+    /// retire is **funded-gated** — deferred until the slot is drained — so a
+    /// retiring slot holds no funding rows to remove. An uncorroborated retire
+    /// (the DQ-D tip clamp declines) leaves this entry in place to re-fire. Public
+    /// content (the id is a public on-chain pseudonym handle), bounded by `P`'s
+    /// own unbonded-persona count (not adversary-controllable).
     pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
     /// Matched archival bond-posts (`p_canonical_id` ∈ `P`'s personas) accumulated
     /// across the scan — the **reconcile evidence** SP-6 binds to the verified
@@ -298,12 +301,20 @@ pub struct PScanState {
     /// `P`'s own posting.
     bond_post_matches: Vec<BondPostRecord>,
     /// Per-output funding-discovery records (WI-2 D-A1) — the `P`-local output
-    /// set bond assembly selects funding from (the "steady-state funding-output
-    /// discovery" reader of `ARCHIVAL_BOND_PR2_CHAIN.md` §3.6 reader (a)).
-    /// Ordered by scan (height, then gindex); everything behind the same
-    /// finality horizon as `accruals` (an entry exists iff its epoch delta was
-    /// ingested), and per-epoch sums of these records equal the `accruals`
-    /// entries by construction. Bounded by `P`'s own funding inflow.
+    /// set bond assembly and the drain planner select funding from (the
+    /// "steady-state funding-output discovery" reader of
+    /// `ARCHIVAL_BOND_PR2_CHAIN.md` §3.6 reader (a)). Ordered by scan (height,
+    /// then gindex); discovered behind the same finality horizon as `accruals`.
+    ///
+    /// **Tracks *unspent* funding, not the full inflow.** SP-R0 **arm #1** removes
+    /// a record when its output's spend is observed (the key-image watch prune),
+    /// so once anything is spent the per-epoch sums here are `≤` the cumulative
+    /// `accruals` inflow, not equal. SP-R0 **arm #2** (retire) does **not** prune
+    /// here — the retire is **funded-gated**, deferred until the slot's funding is
+    /// drained, so a retiring slot contributes no rows to remove. Draining is
+    /// amount-targeted coin selection (`plan_drain` / `select_for_drain`), not a
+    /// lump sweep, so the drain's own spends prune these records through arm #1
+    /// like any other spend. Bounded by `P`'s own funding inflow.
     funding_outputs: Vec<PFundingOutputRecord>,
     /// The done-side slot ledger (SP-R0 arm #2): personas durably retired by
     /// the token-corroborated retire-time prune. Append-only; bounded by

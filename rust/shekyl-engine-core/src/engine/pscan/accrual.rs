@@ -36,7 +36,7 @@
 //! accrual is nonetheless **partial** until the cursor passes it — see
 //! [`finalized_inflow`](PScanAccrual::finalized_inflow) for the type-level guard.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::consensus_state::{epoch_close_height, settlement_epoch_at_height};
 use shekyl_engine_state::pscan_cursor::PScanCursor;
@@ -118,6 +118,63 @@ pub(crate) enum AccrualError {
     },
 }
 
+/// The done-side slot ledger (SP-R0 arm #2): personas durably retired by the
+/// token-corroborated retire-time prune, in retire order, plus a membership
+/// index for O(log n) idempotency.
+///
+/// The `Vec` is the audit trail and the "stop deriving slot N" source (the open
+/// path reads it), so it must persist; the `BTreeSet` is a *derived* index
+/// (rebuilt from the records on load, never separately serialized) that turns
+/// the per-retire idempotency check from an O(n) linear scan over an
+/// append-only vector into an O(log n) lookup. Wrapping the two together makes
+/// them **structurally unable to desync**: [`push`](Self::push) is the only
+/// mutator and updates both, so a record is in the vector iff its id is in the
+/// set.
+///
+/// Redacting `Debug` (the `bond_post_matches` idiom): the retired-persona set is
+/// `P` persona-history and must not reach a clear log / `{:?}` path.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(crate) struct RetiredLedger {
+    /// The append-only done-side records (retire order) — the persisted half.
+    records: Vec<RetiredPersonaRecord>,
+    /// Derived membership index (`p_canonical_id`) for O(log n) idempotency;
+    /// rebuilt from `records` on load, never serialized on its own.
+    ids: BTreeSet<PCanonicalId>,
+}
+
+impl std::fmt::Debug for RetiredLedger {
+    /// Redacted — the retired set is persona-history (see the type docs).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RetiredLedger(<redacted persona-history>)")
+    }
+}
+
+impl RetiredLedger {
+    /// Rebuild the ledger from its persisted records, deriving the membership
+    /// index (the one place `ids` is populated other than [`push`](Self::push)).
+    fn from_records(records: Vec<RetiredPersonaRecord>) -> Self {
+        let ids = records.iter().map(|r| r.p_canonical_id).collect();
+        Self { records, ids }
+    }
+
+    /// True if `id` is already durably retired (the O(log n) idempotency check).
+    fn contains(&self, id: &PCanonicalId) -> bool {
+        self.ids.contains(id)
+    }
+
+    /// Append a retired record, keeping the index in lockstep. The caller has
+    /// already confirmed the id is not present ([`contains`](Self::contains)).
+    fn push(&mut self, record: RetiredPersonaRecord) {
+        self.ids.insert(record.p_canonical_id);
+        self.records.push(record);
+    }
+
+    /// The persisted records (retire order) — the `to_state` / accessor source.
+    fn records(&self) -> &[RetiredPersonaRecord] {
+        &self.records
+    }
+}
+
 /// The task's in-memory scan accrual: the frontier plus the per-epoch accumulated
 /// confirmed funding. The mutable working copy of [`PScanState`].
 ///
@@ -170,8 +227,13 @@ pub(crate) struct PScanAccrual {
     /// driving a real spend through the production scan path.
     spent_pruned_total: u64,
     /// The done-side slot ledger mirror (SP-R0 arm #2): personas durably
-    /// retired by the token-corroborated retire-time prune. Append-only.
-    retired_records: Vec<RetiredPersonaRecord>,
+    /// retired by the token-corroborated retire-time prune. Append-only records
+    /// plus a derived membership index ([`RetiredLedger`]) for O(log n) retire
+    /// idempotency. Its unbounded growth is inherent, not a leak: the records
+    /// are the durable "stop deriving slot N" source the open path reads, so a
+    /// retired slot must stay listed for the life of the wallet or it would be
+    /// re-derived back into the scan union.
+    retired: RetiredLedger,
     /// SP-R0 arm #2 fire counter: personas durably retired this run (the
     /// DQ-F observer; not persisted — the durable record is the
     /// retired-record row plus the pruned rows' absence from the seal).
@@ -192,7 +254,7 @@ impl std::fmt::Debug for PScanAccrual {
             .field("bond_post_matches", &"<redacted persona-history>")
             .field("funding_outputs", &"<redacted funding-history>")
             .field("spent_pruned_total", &self.spent_pruned_total)
-            .field("retired_records", &"<redacted persona-history>")
+            .field("retired", &self.retired)
             .field("retired_pruned_total", &self.retired_pruned_total)
             .finish()
     }
@@ -211,7 +273,7 @@ impl PScanAccrual {
             bond_post_matches: Vec::new(),
             funding_outputs: Vec::new(),
             spent_pruned_total: 0,
-            retired_records: Vec::new(),
+            retired: RetiredLedger::default(),
             retired_pruned_total: 0,
         }
     }
@@ -248,7 +310,7 @@ impl PScanAccrual {
                 .map(FundingOutputMatch::from)
                 .collect(),
             spent_pruned_total: 0,
-            retired_records: state.retired_records().to_vec(),
+            retired: RetiredLedger::from_records(state.retired_records().to_vec()),
             retired_pruned_total: 0,
         }
     }
@@ -442,7 +504,7 @@ impl PScanAccrual {
                 .iter()
                 .map(PFundingOutputRecord::from)
                 .collect(),
-            self.retired_records.clone(),
+            self.retired.records().to_vec(),
         )
     }
 
@@ -464,12 +526,11 @@ impl PScanAccrual {
 
     /// SP-R0 **arm #2** — the atomic retire-time prune (the 2D2 §15 pin:
     /// *"in the same atomic step"*). Drops the persona's `bond_post_matches`
-    /// rows and `pending_unbonds` entry, drops the slot's `funding_outputs`
-    /// records, and appends the [`RetiredPersonaRecord`] — one in-memory
-    /// mutation, persisted by the next seal's one atomic write (the same
-    /// coupling that makes accumulation idempotent makes the prune
-    /// crash-safe: either the whole retire lands or the durable
-    /// `pending_unbonds` trigger survives and the retire re-fires).
+    /// rows and `pending_unbonds` entry and appends the
+    /// [`RetiredPersonaRecord`] — one in-memory mutation, persisted by the next
+    /// seal's one atomic write (the same coupling that makes accumulation
+    /// idempotent makes the prune crash-safe: either the whole retire lands or
+    /// the durable `pending_unbonds` trigger survives and the retire re-fires).
     ///
     /// This is the bound on the unbounded growth of `bond_post_matches` —
     /// `P`'s persona-activity history, the most privacy-sensitive structure
@@ -478,6 +539,16 @@ impl PScanAccrual {
     /// corroborated the claim-window expiry against the DQ-D canonicity
     /// token — this function is the *removal*, not the trigger (the SP-R0
     /// framing pin).
+    ///
+    /// **Funded-gate invariant.** The actor refuses to wipe a slot that still
+    /// holds unspent funding (returns `RetireOutcome::SkippedFunded` instead of
+    /// `Retired`), so a slot reaching this call is already drained and the
+    /// `funding_outputs` retain below drops *zero* rows. That is the load-bearing
+    /// property: the actor wipe is irreversible and the open path stops deriving
+    /// a retired slot, so wiping a *funded* slot would strand spendable `P`
+    /// funds. The retain is kept as defense-in-depth (a future path that bypassed
+    /// the gate must not leave a phantom, unspendable funding row behind a wiped,
+    /// never-re-derived slot), guarded by a `debug_assert` that the invariant held.
     pub(crate) fn retire_persona(
         &mut self,
         id: PCanonicalId,
@@ -485,13 +556,17 @@ impl PScanAccrual {
         unbond_epoch: SettlementEpoch,
         retired_epoch: SettlementEpoch,
     ) -> bool {
-        if self.retired_records.iter().any(|r| r.p_canonical_id == id) {
-            return false; // idempotent: already durably retired.
+        if self.retired.contains(&id) {
+            return false; // idempotent: already durably retired (O(log n) index).
         }
+        debug_assert!(
+            !self.funding_outputs.iter().any(|f| f.p_slot == slot),
+            "funded-gate: a retiring slot must hold no unspent funding output",
+        );
         self.bond_post_matches.retain(|m| m.p_canonical_id != id);
         self.funding_outputs.retain(|f| f.p_slot != slot);
         self.pending_unbonds.remove(&id);
-        self.retired_records.push(RetiredPersonaRecord {
+        self.retired.push(RetiredPersonaRecord {
             p_slot: slot,
             p_canonical_id: id,
             unbond_epoch,
@@ -532,7 +607,7 @@ impl PScanAccrual {
     // rule-21: same consumer as the fire counter above.
     #[allow(dead_code)]
     pub(crate) fn retired_records(&self) -> &[RetiredPersonaRecord] {
-        &self.retired_records
+        self.retired.records()
     }
 
     /// Personas with a reorg-deep **JoinMarket** bond-post match — the WI-3
@@ -658,9 +733,11 @@ mod tests {
     }
 
     /// SP-R0 arm #2: `retire_persona` is one atomic in-memory mutation —
-    /// the persona's matches + pending entry and the slot's funding records
-    /// all leave together with the retired-record append — idempotent on
-    /// re-fire, and round-trips the seal.
+    /// the persona's matches + pending entry leave together with the
+    /// retired-record append — idempotent on re-fire, and round-trips the seal.
+    /// Per the funded-gate invariant the retiring slot is already drained (the
+    /// actor returns `SkippedFunded` for a funded slot), so a *different*,
+    /// still-live slot's funding is untouched by the retire.
     #[test]
     fn retire_persona_prunes_atomically_and_round_trips() {
         use shekyl_types::{PCanonicalId, PSlot};
@@ -668,6 +745,8 @@ mod tests {
         let other = PCanonicalId::from_bytes([8; 32]);
         let mut acc = PScanAccrual::genesis();
         let mut r1 = step(0, 10, &[]);
+        // A live slot-0 funding output belonging to a persona that is NOT
+        // retiring here — it must survive the retire of the drained slot below.
         r1.funding_outputs.push(funding_match(3, 5)); // slot 0 (funding_match pins p_slot 0)
         r1.bond_post_matches.push(BondPostMatch {
             height: BlockHeight::from_raw(4),
@@ -684,9 +763,11 @@ mod tests {
         // seed the pending trigger the retire consumes
         acc.record_pending_unbond_for_test(id, SettlementEpoch::from_raw(0));
 
+        // Retire `id` at a DRAINED slot (slot 5 holds no funding) — the
+        // funded-gate invariant the caller upholds.
         assert!(acc.retire_persona(
             id,
-            PSlot::from_raw(0),
+            PSlot::from_raw(5),
             SettlementEpoch::from_raw(0),
             SettlementEpoch::from_raw(30),
         ));
@@ -700,15 +781,20 @@ mod tests {
                 .any(|m| m.p_canonical_id == other),
             "other personas' history untouched"
         );
-        assert!(acc.funding_outputs().is_empty(), "slot-0 funding pruned");
+        assert_eq!(
+            acc.funding_outputs().len(),
+            1,
+            "a live slot's funding is untouched by another slot's retire"
+        );
         assert!(!acc.pending_unbonds().contains_key(&id));
         assert_eq!(acc.retired_records().len(), 1);
         assert_eq!(acc.retired_pruned_total(), 1);
 
-        // Idempotent on re-fire.
+        // Idempotent on re-fire (the O(log n) index short-circuits before any
+        // mutation or the funded-gate assert).
         assert!(!acc.retire_persona(
             id,
-            PSlot::from_raw(0),
+            PSlot::from_raw(5),
             SettlementEpoch::from_raw(0),
             SettlementEpoch::from_raw(31),
         ));
