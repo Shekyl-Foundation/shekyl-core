@@ -238,6 +238,28 @@ pub(crate) fn predict_weight(
     .sum()
 }
 
+/// Serialized byte size **and** fee weight for the tx the builder would
+/// produce from these counts, as one `(size, weight)` pair.
+///
+/// The two differ by exactly the Bp+ verification clawback
+/// ([`bp_plus_clawback_weight`], zero for `n_padded <= 2`): `weight` is what
+/// the fee model charges ([`predict_weight`], equal to
+/// `Transaction::weight()`), `size` is the wire bytes
+/// (`Transaction::write`'s length). Derived by subtraction from the one
+/// predictor rather than re-summing the field model, so the byte model stays
+/// single-source (the drift class the weight re-validation fixed).
+#[must_use]
+pub(crate) fn predict_size_and_weight(
+    n_in: InputCount,
+    n_out: OutputCount,
+    tree_depth: u8,
+    fee: u64,
+) -> (usize, usize) {
+    let weight = predict_weight(n_in, n_out, tree_depth, fee);
+    let size = weight - bp_plus_clawback_weight(n_out);
+    (size, weight)
+}
+
 /// Marginal weight of one additional input at `D_ref = MAX_TREE_DEPTH`.
 #[must_use]
 #[allow(dead_code)] // 2a-3 dust-fold consumes; 2a-2 uses `tx_fee::MARGINAL_INPUT_WEIGHT` stub.
