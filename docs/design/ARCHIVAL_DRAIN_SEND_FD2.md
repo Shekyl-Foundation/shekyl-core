@@ -432,7 +432,7 @@ updates so the new code never cites retired discipline.
 
 | Slice | Repo | Content | Depends on |
 |-------|------|---------|-----------|
-| DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry (fee function = the canonical floor per the 2026-07-19 fee-uniformity ratification; one-sentence exit-reserve disposition for partial drains — see the DS-4 interaction note); **threat-model forward-actions T-DS-4 (map each drain shape to an F-D4 §16 crossing class, confirm none new) + T-DS-5 (input selection inherits the GF-4b funding-input discipline, no drain-specific selector)** per §5; **composition arm: free-function drain orchestrator over a `DrainCtx` (never `&Engine`), no new `Engine` generic/inherent method, drain code in its own `drain_*` module set — §4 Composition discipline** | round closure + pre-flight *(core-side pre-flight run 2026-07-19, AUDIT §Round 0; thin re-confirm at open)* |
+| DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry (fee function = the canonical floor per the 2026-07-19 fee-uniformity ratification; one-sentence exit-reserve disposition for partial drains — see the DS-4 interaction note); **threat-model forward-actions T-DS-4 (map each drain shape to an F-D4 §16 crossing class, confirm none new) + T-DS-5 (input selection inherits the GF-4b funding-input discipline, no drain-specific selector) + T-DS-3 change-output arm (change → persona `P`-space pool, change-to-principal unrepresentable) + T-DS-6 shape pin (standard 2-out confidential payment+change) + T-DS-7 Monero-era field re-walk (byte-identical `unlock_time`=0 / `tx_extra` / `ct_type` vs an ordinary send)** per §5; **composition arm: free-function drain orchestrator over a `DrainCtx` (never `&Engine`), no new `Engine` generic/inherent method, drain code in its own `drain_*` module set — §4 Composition discipline** | round closure + pre-flight *(core-side pre-flight run 2026-07-19, AUDIT §Round 0; thin re-confirm at open)* |
 | DS-PR-2 | shekyl-core | Drain dispatch seam (claim-dispatch sibling): choke-point submit on persona transport, retirement wiring; **T-DS-2 arm: self-grep the drain submit routes through `PersonaIsolatedTransport`, never a default `DaemonClient`** (§5); **composition: dispatch is a `claim_dispatch`-sibling driver, not an `Engine` inherent method (§4)** | DS-PR-1 |
 | DS-PR-3 | shekyl-gui-wallet | Aggregate `P`-balance read surface (the DS-2 remainder — the adoption shape itself landed as GUI-PR1/PR3, §2.4: open + `start_pscan_if_staker` + parked handle + `activate_staker`) | DS-PR-1 (aggregate-read API exists). *Former second edge — a `staking_enabled` production path reachable from the GUI — closed 2026-07-19 by GUI-PR3 `activate_staker` → `Engine::first_stake` (§2.3); former "native wallet lifecycle" edge closed by the same landing (GUI-PR1 `EngineSession`, §2.4)* |
 | DS-PR-4 | shekyl-gui-wallet | Drain-send UI: amount entry + DS-5 defaults + confirm; calls the one engine entry point — **a thin façade delegate over the drain service, not a fat `Engine` workflow method (§4)** | DS-PR-2, DS-PR-3 |
@@ -486,7 +486,7 @@ no `Engine` generic — the same make-bad-states-unrepresentable
 discipline the `fd1_arm_*` guards and the fee-contract pin already use,
 so a monolith regression is caught mechanically, not by review vigilance.
 
-## 5. Threat-model addenda (Round 3 — rule 26 A3)
+## 5. Threat-model addenda (Rounds 3–4 — rule 26 A3)
 
 Late-round adversarial pass against named attacker objectives, run now
 that the shape survived review rounds 1–2 (A3 timing: after feature
@@ -506,13 +506,34 @@ persona's capital/earnings magnitude, link the persona to the
 operator's principal identity, or gain a fresh linking key from the
 drain that Gate-6's firewall doesn't already model.
 
+**Scope boundary.** This firewall defends against the **on-chain or
+network** observer only. The local/wallet-file adversary is out of scope
+**by design**: a self-drain inherently knows the persona↔principal
+linkage — it *is* the wallet performing the crossing — so no
+on-chain/network defense can or should hide it from the local host.
+At-rest secret exposure is `36-secret-locality.mdc`'s jurisdiction, not
+this subsystem's.
+
 | # | Attacker objective | Surface | Defense (substrate) | Disposition |
 |---|--------------------|---------|---------------------|-------------|
 | T-DS-1 | **Amount-channel recovery** — read the persona's capital/earnings magnitude or reward-sequence structure from the drain's amount / change / fee | DS-4 fee carve, DS-5 default affordances, drain-all | DS-5 defaults read only `{user intent, aggregate scalar, RNG}` (amount channel only — no reward-sequence coordinate, epoch, or per-output amount); drain-all `= spendable − fee`, the §18.12 lifetime-aggregate floor (irreducible, never a subsum); fee `= f(weight, daemon-rate)` with no capital term (this round, impl-verified §DS-4); CT hides on-chain amounts; the aggregate scalar never crosses into the GUI decomposed (F-D2 core-side contract) | **(a) in-scope** — defended by construction; no residual in the amount/fee dimension |
 | T-DS-2 | **Transport linkage** — link the drain's `P`-space spend to the operator's principal identity via broadcast transport (IP, timing correlation with other `P`-lane txs) | DS-PR-2 drain dispatch seam | DS-PR-2 is the claim-dispatch sibling: choke-point submit on the **persona** transport (`PersonaIsolatedTransport`, §2 transport pin), the same isolation bond-post / claim dispatch already use; the drain introduces no new broadcast path | **(a) in-scope** — reuses the established persona-transport choke-point. **Arm (→ DS-PR-2):** acceptance includes a self-grep that the drain submit routes through the persona transport, never a default `DaemonClient` |
-| T-DS-3 | **Mis-send / destination substitution** — cause drain funds to land at an attacker-chosen or externally-linkable output (wrong-destination bug, or a re-map binding a linkable principal output) | DS-1 record re-map at the trust boundary, DS-3 destination pin, DS-PR-4 confirm | Destination is pinned engine-side to the wallet's **own principal address** (DS-3), never caller-supplied; DS-1 re-map sits at the trust boundary under the F-D2 core-side contract (only the aggregate crosses to the GUI); DS-PR-4 surfaces the destination at confirm | **(a) in-scope**. **Discipline note:** the drain entry point MUST NOT accept a destination-address argument — a caller-supplied destination is unrepresentable on the surface (same make-bad-states-unrepresentable shape as the fee contract pin), and is the named reopening trigger |
+| T-DS-3 | **Mis-send / destination substitution** — cause drain funds to land at an attacker-chosen or externally-linkable output (wrong-destination bug, or a re-map binding a linkable principal output) | DS-1 record re-map at the trust boundary, DS-3 destination pin, DS-PR-4 confirm | Destination is pinned engine-side to the wallet's **own principal address** (DS-3), never caller-supplied; DS-1 re-map sits at the trust boundary under the F-D2 core-side contract (only the aggregate crosses to the GUI); DS-PR-4 surfaces the destination at confirm | **(a) in-scope**. **Discipline note:** the drain entry point MUST NOT accept a destination-address argument — a caller-supplied destination is unrepresentable on the surface (same make-bad-states-unrepresentable shape as the fee contract pin), and is the named reopening trigger. **Change-output arm (→ DS-PR-1):** the drain's *change* output (`DrainPlan.change`) is a **second** output whose destination DS-3 does not cover — DS-3 pins the *payment* to the principal. The transfer assembly's default (`signing_assembly.rs:126`: `Change { subaddress_index: 0 }`) directs change to the **principal** change address; a drain inheriting it would land change at the principal — a second principal-linked output *and* a mis-typed pool. The drain assembly MUST direct change back into the persona **`P`-space** pool and make change-to-principal unrepresentable |
 | T-DS-4 | **Crossing-class inflation** — use the drain to create a new observable `P`→principal crossing class beyond Gate-6 F-D4 §16's enumeration, yielding a fresh linking key | The drain is a `P`→principal value crossing; partial-drain-from-live-persona vs post-retirement sweep | F-D4 §16 already enumerates the mandatory/optional crossings; the drain must **map onto an existing class**, not add one. The DS-4 exit-reserve disposition (partial drain = mid-life constructor and so reserves `EXIT_FEE_RESERVE_ATOMIC`; post-retirement sweep = reserve moot) is the one-sentence disposition already owed at DS-PR-1 | **(c) forward-action → DS-PR-1** — DS-PR-1 states which F-D4 §16 crossing class each drain shape maps to and confirms none is new; closes with the exit-reserve sentence already in the DS-PR-1 scope cell. Cross-link: Gate-6 F-D4 §16, DS-4 interaction note |
 | T-DS-5 | **Funding-input-count leak** — infer the persona's UTXO granularity / capital structure from the drain's input count / weight | Drain input selection (`n_in`) → weight → fee, publicly visible | This is **GF-4b's funding-input-count territory** (cross-referenced this round under the fee heading); the drain fee rule deliberately does not launder it. The drain's input selection inherits the GF-4b funding-input discipline rather than defining a drain-specific selector | **(c) forward-action → DS-PR-1 / GF-4b** — DS-PR-1's input selection follows the GF-4b funding-input discipline. **Named reopening:** a drain-specific input-count policy distinct from GF-4b is a Gate-6 change, not a DS decision |
+| T-DS-6 | **Structural distinguishability of the drain *tx*** (Round 4) — fingerprint the drain by output *count/shape*, which is public under CT/FCMP++ even when amounts are hidden, splitting the anonymity set by shape before amount or destination matter (e.g. a change-free drain-all as a rare 1-output tx against a 2-output norm) | Output count (`vout`) — public even when amounts are CT-hidden | A spend with `n_out < 2` is **consensus-invalid** (`shekyl-wire/src/transaction.rs:1868` — "spend has N output(s), needs >= 2"), so a change-free 1-output drain-all is *unrepresentable on the wire*. DS-4's "change-free" is an **economic** property (no value returns), not a wire 1-output property: on the wire the drain is 2-out (principal payment + change; drain-all's change carries zero value but is a real committed output), identical in output count to the modal single-recipient confidential send. The drain's output shape mirrors the **transfer** path (2-out, all-confidential), not the claim path's loud reward vout | **(a) in-scope** — absorbed by the consensus 2-output floor + the standard payment+change assembly (settled at source this round). **Shape pin (→ DS-PR-1):** the drain assembles as a standard 2-out confidential payment+change. **Named reopening:** any drain assembly that could emit an output count/shape distinct from an ordinary confidential send |
+| T-DS-7 | **Monero-era field distinguisher** (Round 4) — a legacy prefix/extra field survives as a *variable* the drain sets and ordinary sends don't (or set differently), tagging the drain by wire vocabulary | `TransactionPrefix.unlock_time`, `tx_extra`, `ct_type`/version, `payment_id` | Substrate re-walk this round: `payment_id` is **absent** from the wire (no `TransactionPrefix` field; none in `shekyl-tx-builder`) — closed by absence. `ct_type` has a **single** accepted spend type at genesis (rule 60) — version/proof-variant trivially uniform. `unlock_time` is a **live** wire field (`transaction.rs:1202`) but the tx-builder emits `0` (`shekyl-tx-builder/src/wire.rs`) and the timestamp form is consensus-rejected — it is **builder-zeroed, not removed** (corrects "already rejected from genesis"). `tx_extra` is present but **structural** (tx pubkey + per-output KEM blobs + `0x07` PQC leaf-hash, `sign_bridge.rs`; opaque round-trip), with no payment-id sub-field | **(c) forward-action → DS-PR-1 (home: DS-7 shape-era re-walk)** — DS-PR-1 confirms the drain emits **byte-identical** `unlock_time` (0), `tx_extra` structure, and `ct_type`/version to an ordinary confidential send, no Monero-era field surviving as a variable distinguisher. Closed sub-surfaces: `payment_id` absent, single `ct_type`; confirm-at-build: `unlock_time`/`tx_extra` |
+
+**GF-7 disposition (drain vs the entry seam).** GF-7 grades the *entry*
+seam (bond-post dispatch timing; persona↔principal unlinkability). The
+drain is the *value-out* crossing, **not a GF-7 event**: its
+persona↔principal **timing** channel is disposed by the exit-timing
+**phantom** finding (F-W7/F-W8 — no principal-side observable within the
+seam; WI-4 §18.13 re-home) and F-W10 (the drain is not an identifiable
+transaction under FCMP++), not carried as a live GF-7 measurement. The
+drain's **transport** timing vs other `P`-lane txs is the separate
+T-DS-2 (persona-transport choke-point). So: timing-correlation →
+phantom (F-W7); transport-linkage → T-DS-2; no GF-7 re-grade is owed.
 
 **Coverage note.** T-DS-1…T-DS-3 are the three objectives §6 named as
 owed (amount channel, transport isolation, mis-send); T-DS-4 and T-DS-5
@@ -523,11 +544,25 @@ applies (A3 reopening criteria): the drain touches untrusted-input
 (caller intent), value assembly, and network transport, so the pass is
 non-optional.
 
+**Round 4 additions (2026-07-19).** T-DS-6 (output-shape meta-observable)
+and T-DS-7 (Monero-era field distinguisher) close the
+structural-distinguishability axis the first five left implicit, and the
+T-DS-3 change-output arm closes the change destination DS-3 didn't cover.
+All three were settled **at source** this round (consensus 2-out floor
+`transaction.rs:1868`; `payment_id` absent / `unlock_time` builder-zeroed
+/ `tx_extra` structural; `signing_assembly.rs:126` change default) —
+T-DS-6 absorbed, T-DS-7 + the change-arm forward-actioned to DS-PR-1. The
+GF-7 disposition line above records the drain as disposed by the
+exit-timing phantom finding, not a live GF-7 event; the scope-boundary
+paragraph excludes the local/wallet-file adversary by design.
+
 **Forward-actions (A5).** T-DS-2 arms DS-PR-2 (persona-transport
-self-grep); T-DS-4 and T-DS-5 carry into the DS-PR-1 scope cell
-(crossing-class mapping + GF-4b funding-input discipline) alongside the
-exit-reserve disposition already recorded there. Close each carry when
-the target sub-PR lands.
+self-grep); T-DS-4, T-DS-5, T-DS-7, and the T-DS-3 change-output arm
+carry into the DS-PR-1 scope cell (crossing-class mapping, GF-4b
+funding-input discipline, Monero-era field re-walk, change-to-`P` pin)
+alongside the exit-reserve disposition already recorded there; T-DS-6's
+2-out shape pin rides the same cell. Close each carry when the target
+sub-PR lands.
 
 ## 6. What this round does not decide
 
@@ -538,10 +573,11 @@ the target sub-PR lands.
 - UI visual design (page placement, staking-page integration) — product
   surface, not firewall surface; falls out at DS-PR-4.
 - ~~Threat-model addenda (rule 26 A3) — owed as a late-round pass~~ —
-  **discharged in §5** (Round 3, 2026-07-19): five attacker objectives
-  (T-DS-1…T-DS-5) graded and routed; the three named seeds (amount
-  channel, transport isolation, mis-send) plus the two substrate-surfaced
-  (crossing-class, funding-input) covered.
+  **discharged in §5** (Round 3, extended Round 4, 2026-07-19): seven
+  attacker objectives (T-DS-1…T-DS-7) graded and routed — amount channel,
+  transport isolation, mis-send (+ change-destination arm), crossing-class,
+  funding-input, output-shape, and Monero-era field distinguisher — plus
+  the GF-7 disposition and the local-adversary scope boundary.
 
 ## 7. Round log
 
@@ -626,3 +662,31 @@ the target sub-PR lands.
   as an F-D1-sibling self-grep acceptance property (drain orchestrator
   never names `Engine`). No design decision reopened — the subsystem was
   already aligned by construction; this records and locks it pre-code.
+- **2026-07-19 — Round 4 (threat-model, structural-distinguishability
+  axis; maintainer adversarial pass).** Reviewer raised the drain-*tx*
+  meta-observable the first five objectives missed (output shape, change
+  destination, Monero-era fields), plus two completeness items. Settled
+  **at source** rather than carried as assumptions: **T-DS-6** (output
+  count/shape) — **absorbed**: a spend with `n_out < 2` is
+  consensus-invalid (`shekyl-wire/src/transaction.rs:1868`), so a
+  change-free 1-out drain-all is unrepresentable; every drain is 2-out
+  like the modal confidential send (DS-4 "change-free" is economic, not
+  a wire 1-output property; drain output shape mirrors the *transfer*
+  path, not the claim's loud vout). **T-DS-3 change-output arm** —
+  forward-action: the transfer assembly defaults change to
+  `subaddress_index: 0` (principal; `signing_assembly.rs:126`), so the
+  drain must direct change to the persona `P`-space and make
+  change-to-principal unrepresentable. **T-DS-7** (Monero-era field
+  distinguisher) — forward-action + substrate correction: `payment_id`
+  absent (closed), single `ct_type` at genesis (closed), but
+  `unlock_time` is a live wire field builder-zeroed (`shekyl-tx-builder`),
+  *not* removed (corrects the reviewer's "rejected from genesis"), and
+  `tx_extra` is present-but-structural — DS-PR-1 confirms byte-identical
+  extra/`unlock_time`/version vs an ordinary send (home: DS-7 re-walk).
+  Completeness: **GF-7 disposition** line added (drain is not a GF-7
+  event — its persona↔principal timing is the F-W7/F-W10 phantom, its
+  transport is T-DS-2); **scope-boundary** paragraph added (local/
+  wallet-file adversary out of scope by design, rule-36's jurisdiction).
+  T-DS-6/T-DS-7/change-arm folded into the DS-PR-1 scope cell; §5 table +
+  coverage/forward-action notes + §6 discharge line updated. No prior
+  disposition reopened.

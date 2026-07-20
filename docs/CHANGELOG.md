@@ -5,8 +5,9 @@
 ### Added
 
 - **docs: F-D2 drain-send subsystem design round opened
-  (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, Round 1 DRAFT, three rounds
-  applied: rounds 1–2 review + Round 3 threat-model addenda).** Scopes
+  (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, Round 1 DRAFT, four rounds
+  applied: rounds 1–2 review + Round 3 threat-model addenda + Round 4
+  structural-distinguishability pass).** Scopes
   Gate-6 R4's last open item — the unbuilt
   `P`-value-out subsystem in `shekyl-gui-wallet` — against the verified
   substrate: gui-wallet `dev` embeds `engine-core::Engine` in-process
@@ -57,7 +58,20 @@
   generic/inherent method), drain code stays in its own `drain_*` module
   set (not the flagged `stake_engine.rs`/`local_pending_tx.rs` god-files),
   and DS-PR-4's entry point is a thin façade delegate — armed as an
-  F-D1-sibling self-grep acceptance property.
+  F-D1-sibling self-grep acceptance property. Round 4 (maintainer
+  adversarial pass) adds the structural-distinguishability axis, settled
+  at source: **T-DS-6** (drain-*tx* output shape) — **absorbed**, a spend
+  with `n_out < 2` is consensus-invalid (`shekyl-wire/transaction.rs:1868`)
+  so a change-free drain-all is not a 1-out tx but 2-out like the modal
+  confidential send (DS-4 "change-free" is economic, not a wire property);
+  **T-DS-3 change-output arm** (change → persona `P`-space, not the
+  transfer assembly's default principal `subaddress_index: 0` at
+  `signing_assembly.rs:126`) and **T-DS-7** (Monero-era field re-walk —
+  `payment_id` absent + single `ct_type` closed, `unlock_time`
+  builder-zeroed *not* removed, `tx_extra` structural) forward-actioned to
+  DS-PR-1; plus a GF-7 disposition line (drain is the F-W7/F-W10 phantom,
+  not a GF-7 event) and a local-adversary scope-boundary paragraph
+  (rule-36 jurisdiction). No prior disposition reopened.
 
 - **rpc: WI-RPC-1 — receiving, fee, and staking-read wallet-RPC surfaces.**
   `shekyl-wallet-rpc` gains nine JSON-RPC methods, each a pure projection
