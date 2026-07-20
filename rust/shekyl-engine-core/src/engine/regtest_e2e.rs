@@ -2454,7 +2454,14 @@ async fn e2e_emission_claim_accepted_and_applied() {
         "pop floor (close {}) must sit strictly above the inject ({inject_height})",
         epoch_row.close_block_height
     );
-    let straddle_depth = tip - epoch_row.close_block_height;
+    // Convention: `close_block_height` is the close OPERAND `(E+1)·SEB`;
+    // the close itself fires while CONNECTING the epoch's last block,
+    // index `close_block_height − 1` (blockchain_db.cpp: the accrual
+    // comment — "the close of epoch E fires while connecting E's last
+    // block (operand prev_height + 1)"), and `height()` is the chain
+    // LENGTH — so undoing the close means popping down to length
+    // `close_block_height − 1`.
+    let straddle_depth = tip - (epoch_row.close_block_height - 1);
     daemon.pop_blocks(straddle_depth).await;
     let src_straddle = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
         .await
