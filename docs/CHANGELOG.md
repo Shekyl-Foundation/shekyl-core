@@ -5,8 +5,9 @@
 ### Added
 
 - **docs: F-D2 drain-send subsystem design round opened
-  (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, Round 1 DRAFT, two review
-  rounds applied).** Scopes Gate-6 R4's last open item — the unbuilt
+  (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, Round 1 DRAFT, three rounds
+  applied: rounds 1–2 review + Round 3 threat-model addenda).** Scopes
+  Gate-6 R4's last open item — the unbuilt
   `P`-value-out subsystem in `shekyl-gui-wallet` — against the verified
   substrate: gui-wallet `dev` embeds `engine-core::Engine` in-process
   (`EngineSession`, engine backend default-on, `start_pscan_if_staker` at
@@ -35,7 +36,14 @@
   against the landed WI-RPC-1 fee surface — `tx_fee_model` /
   `fee_query` / wallet-RPC `fees.rs`; contract pin 3d22d1e), so the
   only fee-adjacent distinguisher left is weight/input-count itself —
-  GF-4b's funding-input-count territory, not the fee's.
+  GF-4b's funding-input-count territory, not the fee's. Round 3 runs
+  the rule-26 A3 threat-model addenda (§5): five attacker objectives
+  (T-DS-1…T-DS-5 — amount-channel, transport linkage, mis-send,
+  crossing-class inflation, funding-input leak) graded; T-DS-1/2/3
+  in-scope (defended by construction), T-DS-4/5 forward-actioned into
+  DS-PR-1 (F-D4 §16 crossing-class mapping + GF-4b funding-input
+  discipline), T-DS-2 arms DS-PR-2 (persona-transport self-grep). The
+  impl-time pre-flight (rule 26 Part B) remains owed at DS-PR-1 open.
 
 - **rpc: WI-RPC-1 — receiving, fee, and staking-read wallet-RPC surfaces.**
   `shekyl-wallet-rpc` gains nine JSON-RPC methods, each a pure projection

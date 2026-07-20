@@ -426,8 +426,8 @@ updates so the new code never cites retired discipline.
 
 | Slice | Repo | Content | Depends on |
 |-------|------|---------|-----------|
-| DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry (fee function = the canonical floor per the 2026-07-19 fee-uniformity ratification; one-sentence exit-reserve disposition for partial drains — see the DS-4 interaction note) | round closure + pre-flight |
-| DS-PR-2 | shekyl-core | Drain dispatch seam (claim-dispatch sibling): choke-point submit on persona transport, retirement wiring | DS-PR-1 |
+| DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry (fee function = the canonical floor per the 2026-07-19 fee-uniformity ratification; one-sentence exit-reserve disposition for partial drains — see the DS-4 interaction note); **threat-model forward-actions T-DS-4 (map each drain shape to an F-D4 §16 crossing class, confirm none new) + T-DS-5 (input selection inherits the GF-4b funding-input discipline, no drain-specific selector)** per §5 | round closure + pre-flight |
+| DS-PR-2 | shekyl-core | Drain dispatch seam (claim-dispatch sibling): choke-point submit on persona transport, retirement wiring; **T-DS-2 arm: self-grep the drain submit routes through `PersonaIsolatedTransport`, never a default `DaemonClient`** (§5) | DS-PR-1 |
 | DS-PR-3 | shekyl-gui-wallet | Aggregate `P`-balance read surface (the DS-2 remainder — the adoption shape itself landed as GUI-PR1/PR3, §2.4: open + `start_pscan_if_staker` + parked handle + `activate_staker`) | DS-PR-1 (aggregate-read API exists). *Former second edge — a `staking_enabled` production path reachable from the GUI — closed 2026-07-19 by GUI-PR3 `activate_staker` → `Engine::first_stake` (§2.3); former "native wallet lifecycle" edge closed by the same landing (GUI-PR1 `EngineSession`, §2.4)* |
 | DS-PR-4 | shekyl-gui-wallet | Drain-send UI: amount entry + DS-5 defaults + confirm; calls the one engine entry point | DS-PR-2, DS-PR-3 |
 | DS-PR-5 | shekyl-gui-wallet | DS-6 funding default (separable) | DS-PR-3 |
@@ -436,7 +436,48 @@ updates so the new code never cites retired discipline.
 Cross-repo note (rule 10): every engine-side API lands in `shekyl-core`
 first; the GUI consumes released surface, never the reverse.
 
-## 5. What this round does not decide
+## 5. Threat-model addenda (Round 3 — rule 26 A3)
+
+Late-round adversarial pass against named attacker objectives, run now
+that the shape survived review rounds 1–2 (A3 timing: after feature
+completeness, before closure). Grounded in the §2 substrate and the
+DS-1…DS-7 dispositions; no new substrate read is required. Each
+objective is graded and routed per A3 to **(a)** in-scope absorption,
+**(b)** discipline note, or **(c)** named forward-action. This is a
+design-round pass — the impl-time **pre-flight** (Part B: substrate
+re-check + artifact execution) remains owed at DS-PR-1 open and is not
+discharged here.
+
+The firewall the drain-send subsystem defends is the `P`-lane privacy
+boundary: an on-chain or network observer must not recover the
+persona's capital/earnings magnitude, link the persona to the
+operator's principal identity, or gain a fresh linking key from the
+drain that Gate-6's firewall doesn't already model.
+
+| # | Attacker objective | Surface | Defense (substrate) | Disposition |
+|---|--------------------|---------|---------------------|-------------|
+| T-DS-1 | **Amount-channel recovery** — read the persona's capital/earnings magnitude or reward-sequence structure from the drain's amount / change / fee | DS-4 fee carve, DS-5 default affordances, drain-all | DS-5 defaults read only `{user intent, aggregate scalar, RNG}` (amount channel only — no reward-sequence coordinate, epoch, or per-output amount); drain-all `= spendable − fee`, the §18.12 lifetime-aggregate floor (irreducible, never a subsum); fee `= f(weight, daemon-rate)` with no capital term (this round, impl-verified §DS-4); CT hides on-chain amounts; the aggregate scalar never crosses into the GUI decomposed (F-D2 core-side contract) | **(a) in-scope** — defended by construction; no residual in the amount/fee dimension |
+| T-DS-2 | **Transport linkage** — link the drain's `P`-space spend to the operator's principal identity via broadcast transport (IP, timing correlation with other `P`-lane txs) | DS-PR-2 drain dispatch seam | DS-PR-2 is the claim-dispatch sibling: choke-point submit on the **persona** transport (`PersonaIsolatedTransport`, §2 transport pin), the same isolation bond-post / claim dispatch already use; the drain introduces no new broadcast path | **(a) in-scope** — reuses the established persona-transport choke-point. **Arm (→ DS-PR-2):** acceptance includes a self-grep that the drain submit routes through the persona transport, never a default `DaemonClient` |
+| T-DS-3 | **Mis-send / destination substitution** — cause drain funds to land at an attacker-chosen or externally-linkable output (wrong-destination bug, or a re-map binding a linkable principal output) | DS-1 record re-map at the trust boundary, DS-3 destination pin, DS-PR-4 confirm | Destination is pinned engine-side to the wallet's **own principal address** (DS-3), never caller-supplied; DS-1 re-map sits at the trust boundary under the F-D2 core-side contract (only the aggregate crosses to the GUI); DS-PR-4 surfaces the destination at confirm | **(a) in-scope**. **Discipline note:** the drain entry point MUST NOT accept a destination-address argument — a caller-supplied destination is unrepresentable on the surface (same make-bad-states-unrepresentable shape as the fee contract pin), and is the named reopening trigger |
+| T-DS-4 | **Crossing-class inflation** — use the drain to create a new observable `P`→principal crossing class beyond Gate-6 F-D4 §16's enumeration, yielding a fresh linking key | The drain is a `P`→principal value crossing; partial-drain-from-live-persona vs post-retirement sweep | F-D4 §16 already enumerates the mandatory/optional crossings; the drain must **map onto an existing class**, not add one. The DS-4 exit-reserve disposition (partial drain = mid-life constructor and so reserves `EXIT_FEE_RESERVE_ATOMIC`; post-retirement sweep = reserve moot) is the one-sentence disposition already owed at DS-PR-1 | **(c) forward-action → DS-PR-1** — DS-PR-1 states which F-D4 §16 crossing class each drain shape maps to and confirms none is new; closes with the exit-reserve sentence already in the DS-PR-1 scope cell. Cross-link: Gate-6 F-D4 §16, DS-4 interaction note |
+| T-DS-5 | **Funding-input-count leak** — infer the persona's UTXO granularity / capital structure from the drain's input count / weight | Drain input selection (`n_in`) → weight → fee, publicly visible | This is **GF-4b's funding-input-count territory** (cross-referenced this round under the fee heading); the drain fee rule deliberately does not launder it. The drain's input selection inherits the GF-4b funding-input discipline rather than defining a drain-specific selector | **(c) forward-action → DS-PR-1 / GF-4b** — DS-PR-1's input selection follows the GF-4b funding-input discipline. **Named reopening:** a drain-specific input-count policy distinct from GF-4b is a Gate-6 change, not a DS decision |
+
+**Coverage note.** T-DS-1…T-DS-3 are the three objectives §6 named as
+owed (amount channel, transport isolation, mis-send); T-DS-4 and T-DS-5
+are the two the substrate surfaces once the shape is stable (the
+crossing-class and funding-input distinguishers Gate-6 already governs,
+which the drain must not re-open). No pure-orchestration exemption
+applies (A3 reopening criteria): the drain touches untrusted-input
+(caller intent), value assembly, and network transport, so the pass is
+non-optional.
+
+**Forward-actions (A5).** T-DS-2 arms DS-PR-2 (persona-transport
+self-grep); T-DS-4 and T-DS-5 carry into the DS-PR-1 scope cell
+(crossing-class mapping + GF-4b funding-input discipline) alongside the
+exit-reserve disposition already recorded there. Close each carry when
+the target sub-PR lands.
+
+## 6. What this round does not decide
 
 - *(DS-2's dual-open-vs-engine-first sub-question, previously listed
   here, is RATIFIED engine-first — review round 2; see DS-2. DS-6's
@@ -444,11 +485,13 @@ first; the GUI consumes released surface, never the reverse.
   DS-6.)*
 - UI visual design (page placement, staking-page integration) — product
   surface, not firewall surface; falls out at DS-PR-4.
-- Threat-model addenda (rule 26 A3) — owed as a late-round pass (Round
-  2–3) once the shape above survives review; the objectives are already
-  named (amount channel, transport isolation, mis-send).
+- ~~Threat-model addenda (rule 26 A3) — owed as a late-round pass~~ —
+  **discharged in §5** (Round 3, 2026-07-19): five attacker objectives
+  (T-DS-1…T-DS-5) graded and routed; the three named seeds (amount
+  channel, transport isolation, mis-send) plus the two substrate-surfaced
+  (crossing-class, funding-input) covered.
 
-## 6. Round log
+## 7. Round log
 
 - **2026-07-19 — Round 1 opened (this document).** Substrate enumerated
   at source (§2); DS-1…DS-7 drafted with proposed dispositions; slicing
@@ -457,7 +500,7 @@ first; the GUI consumes released surface, never the reverse.
   (1) **DS-6 ANSWERED in-scope/gating** — §12.9's ratified close
   wording ("F-D2 (incl. funding default)") is authoritative over the
   §12.4 enumeration; §12.4 reconciled by dated amendment; the
-  separable-vs-optional conflation in §5 untangled. (2) **DS-2 gained
+  separable-vs-optional conflation in §6 untangled. (2) **DS-2 gained
   its missing dependency edge** — `start_pscan_if_staker` requires
   `staking_enabled` at open (`start.rs:520`); the production setter
   chain landed on `dev` (stake-activation entry, wallet-rpc-side), but
@@ -485,3 +528,19 @@ first; the GUI consumes released surface, never the reverse.
   the retracted claim); dual-open rejected; DS-PR-3 re-scoped to its
   remainder (aggregate `P`-balance read) with its former dependency
   edges recorded closed (§4).
+- **2026-07-19 — Round 3 (threat-model addenda, rule 26 A3; §5).** Late-
+  round adversarial pass run now that the shape survived rounds 1–2.
+  Five attacker objectives graded (T-DS-1…T-DS-5): amount-channel
+  recovery, transport linkage, mis-send, crossing-class inflation,
+  funding-input-count leak. Dispositions: T-DS-1/2/3 **(a) in-scope**
+  (defended by construction — DS-4/DS-5 amount-channel-only affordances +
+  impl-verified weight-only fee; persona-transport choke-point; engine-
+  side destination pin), T-DS-4/5 **(c) forward-action** into the DS-PR-1
+  scope cell (F-D4 §16 crossing-class mapping + GF-4b funding-input
+  discipline). Discipline notes: drain entry point carries no
+  destination-address arg (T-DS-3) and no drain-specific input selector
+  (T-DS-5) — both make-bad-states-unrepresentable, matching the fee
+  contract pin. §6 A3 line marked discharged; DS-PR-2 gains the persona-
+  transport self-grep arm (T-DS-2). The impl-time **pre-flight** (Part B)
+  remains owed at DS-PR-1 open — A3 is a design-round pass, not the
+  pre-flight.
