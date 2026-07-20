@@ -579,7 +579,9 @@ partition event and takes a design round of its own.**
    **UPDATE 2026-07-16: landed.** `shekyl-standoff/src/exit.rs` — `ExitGapWindow` capability
    newtype (`wallet_default()` reads the sentinel; `kat_inject()` gated behind the permanent
    dev-only `exit-window-kat` feature — named per the `kat_forge` precedent so the PF-6a
-   tripwire's `for_kat` grep stays scoped to `KCover`), typed `ExitGap`, `draw_exit_gap` via the shared
+   tripwire's `for_kat` grep stays scoped to `KCover` *(that newtype and tripwire were
+deleted with the M1 gate, PR #346 — `DEFAULT_EXIT_GAP_WINDOW` must carry its own
+containment rather than share one)*), typed `ExitGap`, `draw_exit_gap` via the shared
    unbiased `bounded_uniform`, no order coin. Sentinel mechanics per the former `k_cover.rs`
    pattern: provisional ⇔ 0 (const-asserted), `compile_error!` unless the consumer enables
    the grep-able `provisional-exit-gap-window` acknowledgment feature (deleted at seal).

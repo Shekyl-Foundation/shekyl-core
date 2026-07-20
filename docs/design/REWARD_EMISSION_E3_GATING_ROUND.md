@@ -347,7 +347,9 @@ implementation, in dependency order:
    via the existing `shekyl_fcmp_verify`; step 8's `AuthVerified` has **no
    production constructor** (the ML-DSA minter is C-1's; KATs use a
    `consensus-kat`-gated forge, PF-6a shape, named `kat_forge` so the
-   KCover tripwire grep stays scoped). Implementation pins beyond the round
+   KCover tripwire grep stays scoped *(the `KCover` newtype and that tripwire were deleted
+with the M1 gate, PR #346; `kat_forge` keeps the name for its own sake — the scoping
+rationale no longer applies)*). Implementation pins beyond the round
    text: (a) **per-shard exactness** — each `ShardWorkEntry`'s
    `serve_credit_bit` must equal the ledger fact and `scarcity_milli` the
    member-masked recompute, so a wrong split can't hide behind a right

@@ -8885,7 +8885,17 @@ one place to confirm each item's relationship to the wallet stack.
   belongs behind a test-only seam (friend accessor) or exercised at the Rust/FFI layer.
   Deferred rather than churned now: this is the reward-gate slice still being wired (PR
   #264), and the real rule-20 endpoint is the LMDB store's Rust migration, not a
-  friend-declaration in the inherited C++. Fold the seam in with that completion.
+  friend-declaration in the inherited C++. ~~Fold the seam in with that completion.~~
+  **⚠️ TRIGGER DEAD, WORK STILL REAL (re-homed 2026-07-20).** "Reward-gate completion" can
+  never occur — the M1 gate was RETIRED 2026-07-19 (PR #346). This item was NOT closed by
+  that retirement: all three members still exist on the public `BlockchainLMDB` surface
+  (`db_lmdb.h`), and the rule-20 objection to a corruption-injection primitive on the
+  shipping DB class is unaffected by whether a reward gate consumes the count. Only the
+  *label* was wrong — `count_frozen_shards_at_close` is segment-freeze bookkeeping, not a
+  "reward-gate member", and it retains its production caller through the shard-age/work
+  math. **Re-triggered: now unblocked and standalone** (nothing is being wired around it
+  any more), with the same rule-20 endpoint — the LMDB store's Rust migration — and the
+  same fallback of a test-only seam if that migration is still distant at genesis freeze.
 - **Segment-freeze pipeline — design round required (opened by `ARCHIVAL_REWARD_GATE_M1.md`
   §1.3, 2026-07-06).** The production writer for `m_archival_shard_segment` does not exist
   (`put_archival_shard_segment`: unit-test fixture only; the `LMDB_SCHEMA.md` "curve-tree
@@ -8959,7 +8969,9 @@ one place to confirm each item's relationship to the wallet stack.
   chunk-bounds pins, and the §8 tripwire extensions (writer one-site, cursor
   accounting 2→4, division one-site). O-1..O-3 discharged; cross-referenced in M1
   §1.3. Pre-flight additions folded in: PF-8 transposition-distinguishing epoch-close
-  FFI fixture (S=3/H=40000/F=2, exact-sigma pin), PF-6a `KCover` capability newtype
+  FFI fixture (S=3/H=40000/F=2, exact-sigma pin), PF-6a `KCover` capability newtype *(DELETED with the gate machinery, PR #346 — the
+  newtype, its `consensus()`/`for_kat` constructors, the `consensus-kat` feature and its
+  tripwire are all gone; "permanent" below described the pre-retirement plan)*
   (`consensus()` sole production constructor; `for_kat` behind the permanent dev-only
   `consensus-kat` feature + tripwire).
 - **M1 reward gate — pre-flight process BREACH (PF-1, recorded 2026-07-06; a breach,
@@ -9120,7 +9132,9 @@ one place to confirm each item's relationship to the wallet stack.
   **retroactively** for recorded history ⇒ new wargame §14.3.4, P4 gains a
   **non-disclosure commitment** (consent-to-risk is not license-to-disclose; voluntary
   disclosure is a named cover-collapse event), and the `K_COVER` cover model gains a
-  **founder-strip sensitivity row** (§16.2 obligation 3). Attack 3 — the `K_COVER`
+  **founder-strip sensitivity row** (§16.2 obligation 3) *(§16.2's obligations attach to a
+  calibration record that no longer exists — gate retired PR #346; the sensitivity finding
+  stands as cover-model evidence but is owed to nothing)*. Attack 3 — the `K_COVER`
   cycle does not close: the validation projection (exchangeability) is `K`-independent
   (the breaking joint); the calibration projection is a monotone fixed point, not a
   vicious circle; the cover model must additionally carry **gate-open cohort dynamics**

@@ -2362,7 +2362,8 @@ sentinel `0`, compile-time refusal absent explicit acknowledgment) with the **de
 (smallest `SEB` multiple ≥ `max(` X-1 bound at the committed 10th percentile of the joint
 `(N_P, c)` stressnet read with exit-derived `N_t` per F-W5, `2 × SEB` `)`) and the value
 **sealed by the Phase 7.7 stressnet rate read** (`RELEASE_CHECKLIST.md` entry beside
-`K_COVER`/PF-9). F-W5 resolved 2026-07-16 (derivation doc §13): **exit-seam `N_t = 10`** —
+`K_COVER`/PF-9 — that row is struck as of PR #346; `DEFAULT_EXIT_GAP_WINDOW` now stands
+alone behind the stressnet read). F-W5 resolved 2026-07-16 (derivation doc §13): **exit-seam `N_t = 10`** —
 equal to the entry anchor by derivation, not inheritance (every seam-variant fact lands on
 `W`, a graded arm, or its own regime row; the repetition asymmetry — the binding observed
 repeatedly, keyed to the public `P_id` — cannot be priced into a per-event anchor and routes
@@ -3233,7 +3234,7 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   §5.4/§11): `DEFAULT_EXIT_GAP_WINDOW` adopts the `K_COVER` M1 §9.3 provisional-sentinel
   pattern (sentinel `0`, compile-time refusal absent explicit acknowledgment, dev-only arming), the value
   sealed by the Phase 7.7 stressnet rate read (`RELEASE_CHECKLIST.md` entry beside
-  `K_COVER`/PF-9 — a wallet default sizing an anonymity set is soft-frozen: post-ship change
+  `K_COVER`/PF-9, that row now struck per PR #346 — a wallet default sizing an anonymity set is soft-frozen: post-ship change
   is the §16.1 partition trap as a flag day). Frozen now instead: the decision rule (smallest
   `SEB` multiple ≥ the X-1 bound), the conservatism level (10th percentile of the joint
   `(N_P, c)` read — F-W4 killed the round-1 instance's stacked marginal worst cases), and the
