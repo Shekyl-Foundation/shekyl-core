@@ -154,7 +154,48 @@
   evidence + sealed pending posts + funding outputs — never the
   `bonded_slots` hint (hint-divergence KAT pins this). Staking actions
   (`unstake`, `claim`) remain engine-gated and RESERVED.
+- **tests: the emission-claim end-to-end (PR-4c) — the E4 merge gate
+  closes.** `e2e_emission_claim_accepted_and_applied` (`regtest_e2e.rs`)
+  drives the whole reward loop live on a regtest chain: a market
+  (`ShardSetCompact`) bond posted through the production assembly, serve
+  credit injected for the first claimable epoch (onset stagger: membership
+  starts at `join + 1`) under the `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever,
+  the epoch mined closed, the claim built by the production CB-3 path,
+  accepted by the PR-4b daemon battery, and **applied** — the daemon
+  claimed-set row lands, the loud reward vout equals `budget_atomic(E)`
+  **byte-exactly** (the staker-inflow conservation identity over real
+  RPC), and the production P-scan re-discovers the reward as rung-1
+  `EmissionReward` funding. Three pop legs bound the identity under
+  reorgs: depth-1 idempotency, the epoch-straddling pop (the close is
+  undone and **re-closes byte-identically from the pop-surviving credit
+  bits**, floored above the non-pop-symmetric injection), and the deep pop
+  through the claim's reference block (the chain re-converges and the
+  stranded claim stays inert; the replacement-claim half is the named
+  retire/resubmit follow-up). The shared confirmed-bond fixture
+  (`stake_persona_to_confirmed_bond`) now serves both PR-4 e2e legs.
 
+### Fixed
+
+- **daemon: the settlement-epoch lever armed before the genesis add.**
+  On a fresh datadir, `Blockchain::init` added the genesis block — which
+  runs epoch arithmetic and latches the process-wide schedule — before
+  the `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` arm gate, so every levered daemon
+  refused to start (`ArmedTooLate`). The lever had no live consumer until
+  the PR-4c e2e's first spawn caught it; the gate now runs at the top of
+  `init`, before anything touches the DB. The fail-loud `ArmedTooLate`
+  invariant in `shekyl-archival-retention` is unchanged — it did its job.
+
+### Known gaps (named, tracked in FOLLOWUPS)
+
+- **The `first_stake` genesis posture cannot earn an emission**: it posts
+  JoinMarket **CompleteTree** holdings, the daemon's close gather flags
+  every complete-tree bond foundation, and E-2 excludes foundation
+  complete-tree bonds from `market_R`/`Σwork` — so no wallet-postable
+  bond can claim today. Everything below the entry handles market bonds
+  first-class; the missing piece is solely the wallet entry's holdings
+  policy (automatic shard selection — coupled to the gate-6 serving
+  stack). The e2e claims through the composed production steps as the
+  executable pin of what the entry must produce.
 - **daemon: emission-claim Phase-C submit battery (PR-4b completion).**
   The Rust submit engine accepts the second and last transaction kind the
   E4 e2e needs: `SubmitTxKind::Emission` classifies at Phase A (the
