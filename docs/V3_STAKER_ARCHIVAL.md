@@ -1,5 +1,18 @@
 # V3 Design Notes — Staker Archival as Useful Work
 
+> **Ship-timing correction (2026-07-19).** This document's body still carries the
+> earlier scoping in which archival shipped in a **V3.x dot-release** with V3.0
+> "without this mechanism active." That framing is **superseded**: archival
+> pay-for-service is the **genesis (V3.0) staking model**. The confidential
+> claim/tier staking it would have replaced was retired pre-genesis
+> ([`design/LEGACY_CLAIM_ERA_RETIREMENT.md`](design/LEGACY_CLAIM_ERA_RETIREMENT.md)),
+> the reward leg is specified "for genesis"
+> ([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)), and the
+> K_COVER genesis-seal stack treats archival bonds as genesis-live. Read internal
+> "V3.x dot-release" / "V3.0 ships without this mechanism active" statements below
+> as historical. The *design* is unchanged by this correction — only the ship
+> version. Calibration/simulation gates still apply per `STAKER_ARCHIVAL_SIM.md`.
+
 **Status:** V3 ship feature. Originally drafted as V4-scoped; rescoped to
 V3 by the 2026-04-27 actor-architecture decision-log entry, which
 established `ArchivalEngine` as a Stage 5 actor (sibling to

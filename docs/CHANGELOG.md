@@ -4,6 +4,28 @@
 
 ### Added
 
+- **rpc: WI-RPC-1 — receiving, fee, and staking-read wallet-RPC surfaces.**
+  `shekyl-wallet-rpc` gains nine JSON-RPC methods, each a pure projection
+  of an existing Engine surface (contract updated in
+  `docs/api/wallet_rpc.yaml`; no tx/consensus/secret surface):
+  *receiving* — `create_payment_request` (the one mutating method; local
+  bookkeeping persisted via the wallet's normal crash-atomic save path,
+  URI composed from the stored request so `rid` cannot drift),
+  `list_payment_requests`, `make_uri`, `parse_uri`. The merchant
+  reference is the non-zero u48 `rid` on the `shekyl:` URI — no
+  subaddress or account type exists or was added.
+  *Fees* — `estimate_tx_size_and_weight` and `get_default_fee_priority`
+  over new read-only Engine helpers (`estimate_tx_size_and_weight`,
+  `quote_fee_tiers`) that project the single `predict_weight` byte model
+  and the build path's fee-converge fixpoint; a failed daemon snapshot is
+  the same `-29102` the build path uses.
+  *Staking reads* — `get_staked_balance` (three never-conflated fields:
+  `bonded_principal_confirmed`, `bonded_principal_pending`,
+  `rewards_received_unspent`), `get_staked_outputs`, `staking_info`, via
+  a new authoritative `Engine::staking_read_view` aggregating reconcile
+  evidence + sealed pending posts + funding outputs — never the
+  `bonded_slots` hint (hint-divergence KAT pins this). Staking actions
+  (`unstake`, `claim`) remain engine-gated and RESERVED.
 - **tests: the emission-claim end-to-end (PR-4c) — the E4 merge gate
   closes.** `e2e_emission_claim_accepted_and_applied` (`regtest_e2e.rs`)
   drives the whole reward loop live on a regtest chain: a market
@@ -46,7 +68,6 @@
   policy (automatic shard selection — coupled to the gate-6 serving
   stack). The e2e claims through the composed production steps as the
   executable pin of what the entry must produce.
-
 - **daemon: emission-claim Phase-C submit battery (PR-4b completion).**
   The Rust submit engine accepts the second and last transaction kind the
   E4 e2e needs: `SubmitTxKind::Emission` classifies at Phase A (the
@@ -205,6 +226,30 @@
   staker-activation round** (`ARCHIVAL_BOND_SP_R0_PLAN.md` §4 build record).
 
 ### Changed
+
+- **docs: economic-model docs corrected to the live archival pay-for-service
+  staking model.** `DESIGN_CONCEPTS.md` still described the retired passive
+  lock-tier PoS model (`staked_amount × duration_multiplier`, duration tiers,
+  claim/unstake, "Staking is implemented end-to-end") as if live; Components 3–4,
+  the §2 config note, the §5 lifecycle/value-flow, §6 anti-gaming, §9 test
+  coverage, §10 dashboard, §11 simulation params, and the §13 core-parameter
+  table are rewritten archival-native (transfer-shaped admission, on-chain bonds,
+  reward budget divided by capped verified serve-work, no lock/tier/claim wire,
+  no consensus-minimum bond). `STAKER_REWARD_DISBURSEMENT.md` (the claim/lock-tier
+  disbursement spec) gains a **SUPERSEDED — do not implement** banner pointing at
+  the live specs. `V3_STAKER_ARCHIVAL.md` gains a dated ship-timing correction:
+  archival is the **genesis (V3.0)** model, not a V3.x dot-release. User-facing
+  guides are corrected too: `USER_GUIDE.md`'s `## Staking` section is rewritten
+  archival-native and no longer documents the retired `stake <tier>` /
+  `claim_rewards` / `unstake` `shekyl-cli` commands (which do not exist — the CLI
+  staking UX is roadmap; staking today is via the GUI or wallet-RPC `stake` +
+  read methods), the RPC method reference is corrected to the live surface, and
+  the multisig "staking security" use case is de-tiered; `STAKER_OPERATOR_GUIDE.md`
+  and `GENESIS_TRANSPARENCY.md` drop residual lock-tier phrasing. Canonical live
+  references are `design/REWARD_EMISSION_LEG.md` (consensus reward leg) and
+  `V3_STAKER_ARCHIVAL.md` (mechanism); retirement history is in
+  `design/LEGACY_CLAIM_ERA_RETIREMENT.md`. Documentation-only; no code or
+  consensus change.
 
 - **ci: `Rust: audit, test, determinism` split into its own workflow
   (`ci/gh-actions/rust`).** The Rust audit/test/determinism gate moved out of
