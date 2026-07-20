@@ -7592,9 +7592,7 @@ void BlockchainLMDB::gather_archival_emission_window_snapshots(const crypto::has
     // for a claimable E, which the caller has already height-gated.
     snap.close_block_height = shekyl_archival_epoch_close_processing_height(settlement_epoch);
     // The persisted finalized Σwork(E) — the stored denominator, never a
-    // recompute: the M1 K_COVER gate's operand (frozen_shard_count as-of-close)
-    // is a close-only quantity, so the gate's outcome reaches verify only
-    // through this value.
+    // recompute: the close's outcome reaches verify only through this value.
     snap.sigma_work_milli = get_archival_sigma_work_milli(settlement_epoch);
     // The frozen budget(E) close row (ARCHIVAL_BUDGET_SCHEDULE.md §3.3):
     // budget and denominator were frozen in the same close event, so the
@@ -7634,16 +7632,10 @@ void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_heigh
   const std::vector<shekyl_archival_epoch_close_shard> shards = rows.to_ffi_shards();
   const std::vector<shekyl_archival_credit_pair> pairs = rows.to_ffi_credit_pairs();
 
-  // M1 reward-gate operand (ARCHIVAL_REWARD_GATE_M1.md §1.1): the
-  // segment-table count at H_close(E), from the single helper, inside the
-  // same write txn as the close. Structural and participation-independent —
-  // deliberately NOT derived from the credit-bearing `shards` gather above.
-  const uint64_t frozen_shard_count = count_frozen_shards_at_close(block_height);
-
   std::vector<uint64_t> r_market(shards.size(), 0);
   uint64_t sigma_work_milli = 0;
   const uint8_t compute_rc = shekyl_archival_epoch_close_compute(
-    settlement_epoch, block_height, frozen_shard_count,
+    settlement_epoch, block_height,
     bond_ffi.empty() ? nullptr : bond_ffi.data(), bond_ffi.size(),
     shards.empty() ? nullptr : shards.data(), shards.size(),
     pairs.empty() ? nullptr : pairs.data(), pairs.size(),

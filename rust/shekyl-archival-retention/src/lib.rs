@@ -43,7 +43,6 @@ pub mod emission_wire;
 pub mod error;
 pub mod hash;
 pub mod id;
-pub mod k_cover;
 pub mod path;
 pub mod release_cooldown;
 pub mod reward_arithmetic;
@@ -122,7 +121,6 @@ pub use emission_wire::{
 };
 pub use error::VerifyError;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
-pub use k_cover::{KCover, K_COVER, K_COVER_PROVISIONAL};
 pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
 pub use release_cooldown::{release_cooldown_elapsed, whole_record_last_served};
 pub use reward_arithmetic::{

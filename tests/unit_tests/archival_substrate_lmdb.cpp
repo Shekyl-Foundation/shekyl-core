@@ -791,10 +791,10 @@ TEST(archival_substrate_lmdb, frozen_shard_count_requires_active_write_txn)
 // Stored shape of an all-zero close + reorg round-trip (§5 round-2
 // additions). Per §2.1 the store cannot represent gatedness: a gated close
 // and a legitimately-zero close are bitwise-identical to every store reader.
-// Pre-seal the production gate path is unreachable by construction (the §4
-// sentinel is the gate-identity 0, and the FFI threads K_COVER verbatim), so
-// this test drives the zero-output close through a legitimately-zero epoch —
-// the identical stored shape the gate produces post-seal: sigma row PRESENT
+// (Historically this pinned the retired M1 gate's stored shape — the gate
+// only ever ran as the k_cover = 0 identity, ARCHIVAL_REWARD_GATE_M1.md §13.)
+// The test drives the zero-output close through a legitimately-zero epoch —
+// sigma row PRESENT
 // and zero (not NOTFOUND — the §2.1 never-skip-the-close pin), no r_market
 // rows, close-log row written so revert stays symmetric.
 TEST(archival_substrate_lmdb, zero_output_close_stored_shape_and_reorg_roundtrip)

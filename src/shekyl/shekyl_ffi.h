@@ -2425,15 +2425,9 @@ struct shekyl_archival_credit_pair
 /// non-zero return never leaves stale values. Credit pairs must be distinct
 /// (the serve-credit ledger key `(P, shard, E)` guarantees this at gather).
 ///
-/// `frozen_shard_count` is the M1 reward-gate input
-/// (ARCHIVAL_REWARD_GATE_M1.md §1.1): the segment-table count at
-/// `H_close(E)` from the single `count_frozen_shards_at_close` helper,
-/// inside the close's write txn. Epochs below `K_COVER` compute to the
-/// all-zero result (the §2.1 zero-at-top gate, applied inside Rust).
 uint8_t shekyl_archival_epoch_close_compute(
     uint64_t settlement_epoch,
     uint64_t close_block_height,
-    uint64_t frozen_shard_count,
     const struct shekyl_archival_epoch_close_bond* bonds_ptr,
     size_t bonds_len,
     const struct shekyl_archival_epoch_close_shard* shards_ptr,
@@ -2456,10 +2450,8 @@ uint8_t shekyl_archival_epoch_close_compute(
 /// the close's gather exactly
 /// (`BlockchainLMDB::gather_archival_emission_epoch_snapshot` performs it).
 ///
-/// `sigma_work_milli` must be the persisted close output, not a recompute:
-/// the M1 K_COVER gate's operand (`frozen_shard_count` as-of-close) is a
-/// close-only quantity, so the gate's outcome reaches verify only through
-/// the stored denominator.
+/// `sigma_work_milli` must be the persisted close output, not a recompute —
+/// the close's outcome reaches verify only through the stored denominator.
 struct shekyl_archival_emission_epoch_snapshot
 {
   uint64_t settlement_epoch;
@@ -2495,10 +2487,10 @@ struct shekyl_archival_emission_epoch_snapshot
 /// persisted Σwork(E) denominator at close, over the same frozen gather, so
 /// the capped output is P's exact per-P term of that denominator by
 /// construction (WS-1 §5.5). Note this is the numerator only: it does NOT
-/// consult `snapshot->sigma_work_milli` and does NOT re-apply the M1 K_COVER
-/// gate — a gated (or empty) epoch persists Σwork(E) == 0 while this may still
-/// return a positive capped term, so the consumer MUST divide through the
-/// persisted denominator (reward is 0 when Σwork(E) == 0). Both outputs are
+/// consult `snapshot->sigma_work_milli` — an empty epoch persists
+/// Σwork(E) == 0 while this may still return a positive capped term, so the
+/// consumer MUST divide through the persisted denominator (reward is 0 when
+/// Σwork(E) == 0). Both outputs are
 /// zero when P has no credit row in E or is not a market member at E. Errors
 /// reuse the SHEKYL_ARCHIVAL_EPOCH_CLOSE_* codes; outputs are zeroed on entry.
 uint8_t shekyl_archival_emission_epoch_work(

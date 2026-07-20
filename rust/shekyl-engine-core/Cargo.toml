@@ -34,9 +34,8 @@ shekyl-archival-bond-builder = { path = "../shekyl-archival-bond-builder" }
 # it; promoting it to a direct dep makes the type's origin explicit at this
 # crate's boundary. `shekyl-archival-retention` is already a dev-dep here and
 # in the workspace lockfile — no new supply-chain surface.
-# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
 # (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
-shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["provisional-k-cover"] }
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # `SignBond` handler draws the entry-gap via `draw_entry_gap` / `GapRng`
 # (S4/S5 — conformance-correct, float-free). Default build (no `conformance`
 # feature) is dependency-free; `conformance` is dev/test-only.
@@ -309,10 +308,7 @@ shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 # (`verify_join_market_bond_post`, `verify_bond_post_ct_balance`). Both
 # crates are non-optional production `[dependencies]` above (promoted when
 # the `SignBond` handler landed), so tests reach them through the single
-# production edge — no duplicate dev-dep entries here. Keeping one edge per
-# crate is what keeps the `provisional-k-cover` acknowledgment
-# (`shekyl-archival-retention/src/k_cover.rs`) grep-complete: every
-# dependency line on that crate carries the feature.
+# production edge — no duplicate dev-dep entries here.
 multiexp = "0.4"
 ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
 ciphersuite = "0.4"

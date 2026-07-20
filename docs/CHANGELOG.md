@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **the M1 `K_COVER` gate machinery** (the implementation half of the
+  retirement below; `ARCHIVAL_REWARD_GATE_M1.md` §13.3 enumerates the
+  surface). Gone from production code: the `epoch_close_compute` early
+  return and the `frozen_shard_count`/`k_cover` operands, the `k_cover.rs`
+  sentinel module + `KCover` newtype, the `build.rs` generation + JSON
+  keys, the `provisional-k-cover` feature and its seven enablement sites,
+  the FFI/C++ operand pass (`shekyl_archival_epoch_close_compute` loses a
+  parameter; the segment-freeze O(1) frozen-count substrate stays — it is
+  freeze bookkeeping with future consumers), the G-row gate KATs + fixture,
+  and the predicate-sites CI tripwire (consensus-invariants renumbered).
+  **Deliberately retained as reference**: `shekyl-staking-sim` (the
+  partition-adversary and GF-7 instruments), every sim finding and
+  measurement record in the design docs, and the M1 spec itself — the
+  record that this was considered thoroughly and rejected after the
+  surviving-justification audit. No behavior change at any tip (the gate
+  only ever ran as the `k_cover = 0` identity).
+
 ### Changed
 
 - **consensus design: the M1 `K_COVER` reward gate is RETIRED**

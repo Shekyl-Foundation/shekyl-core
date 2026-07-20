@@ -224,8 +224,8 @@ pub struct EmissionEpochSource<'a> {
     /// The frozen gather rows for `E` — the same rows the epoch close
     /// computed from (`inputs.settlement_epoch` must equal the claimed `E`).
     pub inputs: EpochCloseInputs<'a>,
-    /// The **persisted** `Σwork(E)` — never a recompute (the M1 `K_COVER`
-    /// gate's outcome reaches verify only through the stored value, and
+    /// The **persisted** `Σwork(E)` — never a recompute (the close's
+    /// outcome reaches verify only through the stored value, and
     /// `bad_intervals` may have grown since the close).
     pub persisted_sigma_work_milli: u64,
     /// Claimant `P`'s index into `inputs.bonds`, or `None` when `P` has no
@@ -304,10 +304,8 @@ pub struct AuthVerified {
 }
 
 impl AuthVerified {
-    /// KAT-only forge, gated like `KCover::for_kat` (PF-6a): enabled only
-    /// through dev-dependencies; never on a production dependency edge.
-    /// (Named `kat_forge`, not `for_kat`, so the PF-6a CI tripwire's
-    /// call-site grep stays scoped to `KCover` alone.)
+    /// KAT-only forge: enabled only through dev-dependencies; never on a
+    /// production dependency edge.
     #[cfg(feature = "consensus-kat")]
     #[must_use]
     pub const fn kat_forge() -> Self {

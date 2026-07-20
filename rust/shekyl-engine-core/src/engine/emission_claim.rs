@@ -18,10 +18,11 @@
 //! `docs/FOLLOWUPS.md` M1 round-1 record: claimable epochs derive from
 //! **the same positive-share recompute the verifier runs** — literally:
 //! [`claimant_reward_share`], the shared steps-4/5 evaluation head the
-//! verify body calls, never a mirrored copy — and never from `K_COVER`
-//! (this module contains no `K_COVER` read; the gate's outcome reaches the
-//! wallet only through the persisted `Σwork(E)` denominator, same as
-//! verify) and never from row-absence proxies. Claimable ⇔ the recomputed
+//! verify body calls, never a mirrored copy — and never from close-only
+//! operands (the close's outcome reaches the wallet only through the
+//! persisted `Σwork(E)` denominator, same as verify; the retired M1 gate
+//! was the original such operand — `ARCHIVAL_REWARD_GATE_M1.md` §13) and
+//! never from row-absence proxies. Claimable ⇔ the recomputed
 //! share is strictly positive, which is exactly the §2.3 wire positivity
 //! predicate (`reward_amount_plain[i] > 0` — a zero row is unencodable, so
 //! the builder omits the epoch rather than encode it).
@@ -49,12 +50,11 @@
 //! ## Cause-blindness (CB-5)
 //!
 //! A zero-share epoch is skipped as [`EpochSkip::ZeroShare`] — one
-//! verdict for every zero cause (pre-`K_COVER`-gated epoch, no serve
-//! credit, floored-to-zero share). The distinction is not merely withheld;
-//! it is **not derivable here**: `K_COVER` is compared at exactly one
-//! site (`epoch_close_compute`), the claim path never consults it, so the
-//! wallet cannot tell the causes apart and neither can an observer of the
-//! refusal. Do not add a branch that could.
+//! verdict for every zero cause (no serve credit, floored-to-zero share).
+//! The distinction is not merely withheld; it is **not derivable here**:
+//! the claim path consults no close-only operand, so the wallet cannot
+//! tell the causes apart and neither can an observer of the refusal. Do
+//! not add a branch that could.
 //!
 //! ## Steps 2 + 5 — work-claim rows, rewards, sizing
 //!
@@ -1148,7 +1148,7 @@ mod tests {
         as_of_e_served_work, bond_wire::MAX_HOLDINGS_SHARDS, capped_work_milli,
         claimed_epochs_check_and_set, reward_share_floor, settlement_epoch_at_height,
         BandedCurveParams, ClaimedEpochsError, CreditPair, EpochCloseInputs, EpochCloseShard,
-        KCover, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+        ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
         EMISSION_KAT_SHAPE, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
     };
 
@@ -1668,8 +1668,6 @@ mod tests {
                 bonds: &bonds,
                 shards: &shards,
                 credit_pairs: &pairs,
-                frozen_shard_count: 0,
-                k_cover: KCover::consensus(),
             },
             persisted_sigma_work_milli: 1,
             claimant_bond_idx: Some(0),

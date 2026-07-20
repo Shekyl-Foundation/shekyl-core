@@ -2,11 +2,13 @@
 
 **STATUS: RETIRED (2026-07-19) — see §13.** The rule below is preserved
 as designed and implemented, for the record; it is no longer part of the
-consensus design. The machinery removal is the implementation half,
-tracked in `docs/FOLLOWUPS.md` ("K_COVER machinery removal"); until that
-PR lands the code runs as the `k_cover = 0` gate-identity degenerate it
-has always run as (no behavior change at any tip, before or after
-removal).
+consensus design. The production machinery is removed (same PR as this
+record — §13.3 enumerates the surface); the sims and their findings
+(`shekyl-staking-sim`, the §14.4 partition-run records, the WI-4
+measurement rows) are deliberately retained in the tree as the reference
+record of what was considered and rejected. No behavior changed at any
+tip: the gate only ever ran as the `k_cover = 0` gate-identity
+degenerate.
 
 **Status at retirement: design rounds 1–3 closed (§9, §10, §11 records), plus the
 §11.8 round-3 amendment (count-pass discipline, M3-1..M3-3) and the

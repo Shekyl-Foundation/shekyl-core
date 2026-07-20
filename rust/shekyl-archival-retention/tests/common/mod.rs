@@ -5,7 +5,7 @@
 
 //! Shared fixture decoders for the epoch-close KATs (`reward_gate_kat`,
 //! `consensus_state_kat`). The JSON → `EpochClose*` shape lives in one place so
-//! a fixture-schema change (e.g. the M1 `k_cover` / `frozen_shard_count` fields)
+//! a fixture-schema change
 //! edits one decoder, not two that could silently drift apart.
 //!
 //! These are computational-replay fixtures, not byte-pinned crypto vectors, so

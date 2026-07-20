@@ -51,9 +51,7 @@ shekyl-wire = { path = "../shekyl-wire" }
 #                          check_archival_bond_post_input reaches over FFI
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
-# (ARCHIVAL_REWARD_GATE_M1.md §4) — the submit battery never reads K_COVER.
-shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["provisional-k-cover"] }
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
