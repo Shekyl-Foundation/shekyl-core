@@ -1919,7 +1919,10 @@ ship the genesis-frozen value at all (F-D4 §15.8 has the full statement and the
 case — two of `DEFAULT_EXIT_GAP_WINDOW`'s three seal inputs were economics, unmeasurable in
 principle *before* the phantom-`T` finding). **Filter run across the PF-9 / Phase 7.7 queue
 at adoption:** `K_COVER` is the only seal queued behind stressnet entry and passes (the
-§14.4 partition run is mechanism — a pre-registered partition-adversary arm); the remaining
+§14.4 partition run is mechanism — a pre-registered partition-adversary arm). *(As of
+2026-07-19, PR #346, `K_COVER` is RETIRED and no longer queued behind stressnet entry at
+all; the filter's verdict is preserved as the record of the run, and the queue is emptier
+than it describes.)* The remaining
 Phase 7.7 entries (F11-S Windows-midrange bench, historical reference-block/reorg exercise,
 archival multi-staker path, `tests/stressnet/README.md` acceptance criteria) are mechanism
 exercises; the FA-6 wire lock is a sequencing pin, not a measurement. **Filter extended
@@ -3111,7 +3114,8 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   finding. Standing posture adopted: classify every stressnet-seal candidate as mechanism
   (testnet-faithful) or economics (requires real value at risk); economics ⇒ derive
   structurally, design the constant away, or don't ship it. Filter run across the PF-9 /
-  Phase 7.7 queue: `K_COVER` passes (mechanism, §14.4 partition run); remaining Phase 7.7
+  Phase 7.7 queue: `K_COVER` passes (mechanism, §14.4 partition run) — *record of the run;
+  `K_COVER` was retired 2026-07-19 (PR #346) and has left the queue entirely*; remaining Phase 7.7
   entries are mechanism exercises; caveat placed at §12.8 on GF-7's
   effective-vs-nominal-cover residual (observer machinery testnet-dischargeable, cover
   level not). `RELEASE_CHECKLIST.md` stressnet-entry section gains the queueing rule.

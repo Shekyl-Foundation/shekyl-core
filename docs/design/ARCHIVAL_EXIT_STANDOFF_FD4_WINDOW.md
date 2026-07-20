@@ -415,7 +415,9 @@ is measured. The resolution is the project's ratified pattern for exactly this s
 (`ARCHIVAL_REWARD_GATE_M1.md` §9.3; PF-9 pins its finalization as a Phase 7.7 stressnet-entry
 prerequisite).
 
-**Sentinel + refusal (mirrors `k_cover.rs` mechanics, verified at source):**
+**Sentinel + refusal (mirrors the former `k_cover.rs` mechanics; verified at source
+when written — that file was deleted with the M1 gate's retirement, 2026-07-19 PR #346,
+so the pattern is preserved here rather than by reference):**
 
 - `DEFAULT_EXIT_GAP_WINDOW` lands as a **provisional sentinel `0`** with the invariant
   *provisional ⇔ 0, sealed ⇒ ≥ 1* asserted at compile time.
@@ -547,12 +549,13 @@ partition event and takes a design round of its own.**
 2. `draw_exit_gap` in `shekyl-standoff`, **written against the provisional sentinel** (§5.4):
    one-sided `bounded_uniform`, typed `ExitGap`, golden vector on the aarch64 lane,
    F-D6-derived anchor, conformance + §8.3 negative control; compile-refusal wiring per the
-   `k_cover.rs` pattern. Unblocked now — the mechanism does not wait on the value.
+   `k_cover.rs` pattern (that file is gone as of PR #346; the pattern is described in
+   full at §11). Unblocked now — the mechanism does not wait on the value.
    **UPDATE 2026-07-16: landed.** `shekyl-standoff/src/exit.rs` — `ExitGapWindow` capability
    newtype (`wallet_default()` reads the sentinel; `kat_inject()` gated behind the permanent
    dev-only `exit-window-kat` feature — named per the `kat_forge` precedent so the PF-6a
    tripwire's `for_kat` grep stays scoped to `KCover`), typed `ExitGap`, `draw_exit_gap` via the shared
-   unbiased `bounded_uniform`, no order coin. Sentinel mechanics per the `k_cover.rs`
+   unbiased `bounded_uniform`, no order coin. Sentinel mechanics per the former `k_cover.rs`
    pattern: provisional ⇔ 0 (const-asserted), `compile_error!` unless the consumer enables
    the grep-able `provisional-exit-gap-window` acknowledgment feature (deleted at seal).
    Golden vector at a synthetic KAT window (10 007, deliberately not an SEB multiple) with a

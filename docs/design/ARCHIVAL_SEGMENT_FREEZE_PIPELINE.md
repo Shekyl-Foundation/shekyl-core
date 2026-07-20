@@ -245,9 +245,13 @@ expectation is left to the §9 tests, not silently tolerated.
   `LMDB_SCHEMA.md` "curve-tree checkpoint / genesis seed" writer
   annotation was aspirational and is superseded — the writer is the
   boundary-crossing rule, not a checkpoint hook; there is no genesis
-  seed (genesis has zero leaves ⇒ zero segments ⇒
-  `frozen_shard_count = 0` ⇒ early epochs gated once `K_COVER`
-  seals, which is exactly M1's cold-start refusal).
+  seed (genesis has zero leaves ⇒ zero segments ⇒ no shard is frozen
+  ⇒ every shard scores zero `shard_age_milli` ⇒ early epochs earn
+  nothing by the work math). The retired M1 `K_COVER` gate reached
+  the same cold-start outcome by a collective refusal; with the gate
+  gone (2026-07-19, PR #346) the outcome is unchanged because it was
+  never the gate producing it — an unfrozen shard earns nothing
+  because it is doing no work.
 
 ### 4.4 Persisted pop-symmetric counter (the O(1) operand, V8)
 
@@ -426,8 +430,9 @@ dismissable with evidence).
 
 Challenge scheduling/firing, shard distribution and gossip
 (`R_k`-as-content-address), wallet-side freeze/prune
-(`shekyl-curve-tree` store — already landed per CT-1), `K_COVER`
-sealing, and any change to the epoch-close path. Per rule 15, items
+(`shekyl-curve-tree` store — already landed per CT-1), ~~`K_COVER`
+sealing~~ (retired 2026-07-19, PR #346 — no longer a scope item at
+all), and any change to the epoch-close path. Per rule 15, items
 spotted here go to `FOLLOWUPS.md`, not this PR.
 
 ---

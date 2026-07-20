@@ -1911,6 +1911,8 @@ smallest-cohort regime of that separate leak is never entered either.
    machinery), but the constant's finalization gates on the §14.4 run
    with the widened hypothesis class.** The two must not be reviewed
    independently with one silently assuming the other passed.
+   *(Moot as of 2026-07-19, PR #346: there is no constant to finalize.
+   The §14.4 run's findings stand on their own; nothing gates on them.)*
 3. *The cover model is dynamic and carries two named rows* (added at
    review closure, 2026-07-06, §17.2–§17.3). The model that sets
    `K_COVER` may not be a static founder headcount:
@@ -2011,7 +2013,7 @@ smallest-cohort regime of that separate leak is never entered either.
      state**, and `K_COVER` is genesis-frozen, so the
      calibration→open window is the entire pre-gate chain life and an
      involuntary removal inside it cannot trigger a consensus
-     re-check (verified at source, `k_cover.rs` /
+     re-check (verified at source when written; `k_cover.rs` deleted PR #346 /
      `segment_freeze.rs`). The re-run trigger is therefore
      **pre-genesis-actionable only** (adjust `K_COVER` before the
      seal).
@@ -2693,7 +2695,7 @@ the floor is a snapshot by construction.** Verified at source: the M1
 gate reads `frozen_shard_count < K_COVER` at exactly one site
 (`consensus_state.rs` `epoch_close_compute`), `frozen_shard_count` is
 a structural function of curve-tree growth (`segment_freeze.rs`), and
-`K_COVER` is genesis-frozen (`k_cover.rs` sealing mechanics) — the
+`K_COVER` is genesis-frozen (`k_cover.rs` sealing mechanics — file deleted PR #346) — the
 gate **never reads live bond state**, so the floor cannot be derived
 at open and the TOCTOU window is the entire pre-gate chain life. No
 consensus re-check can exist; the derive-don't-cache disposition is

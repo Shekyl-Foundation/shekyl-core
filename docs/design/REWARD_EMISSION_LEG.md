@@ -231,10 +231,12 @@ across the whole market cohort, forcing the per-emission full-ledger re-walk §4
 and the wallet build path import the canonical `reward_arithmetic` integer `Curve`/Form-C — no
 reimplementation (single-source rule).
 
-**M1 cold-start gate (implemented — [`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md)):**
-for settlement epochs where `frozen_shard_count(E) < K_COVER`, the close compute zeroes the
-finalized row (`R_market`, `Σwork`) at the top — so `reward_P(E) = 0` for every `P` falls out of
-the formula above with no verifier-side branch. Non-claimability is carried by two properties
+**M1 cold-start gate — RETIRED 2026-07-19, PR #346 ([`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md)
+§13):** the close compute has **no** zero-at-top gate; nothing zeroes the finalized row
+(`R_market`, `Σwork`) collectively. Cold start needs no gate: `shard_age_milli` is zero for a
+segment not yet frozen past the close height, so at genesis every shard is hot, every
+contribution is zero, and `reward_P(E) = 0` for every `P` falls out of the formula above by the
+work math — still with no verifier-side branch. Non-claimability is carried by two properties
 that already exist at this layer: the **lagged stored-`Σwork` read** (never a primaries
 recompute — that spec pins the read discipline as doubly load-bearing) and the **wire-level
 positivity rule** (`reward_amount_plain[i] == 0` is unencodable, `WireError::RewardAmountZero`),

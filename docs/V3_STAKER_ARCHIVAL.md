@@ -8,7 +8,12 @@
 > ([`design/LEGACY_CLAIM_ERA_RETIREMENT.md`](design/LEGACY_CLAIM_ERA_RETIREMENT.md)),
 > the reward leg is specified "for genesis"
 > ([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)), and the
-> K_COVER genesis-seal stack treats archival bonds as genesis-live. Read internal
+> archival bond/claim stack is built and exercised as genesis-live (the
+> emission-claim regtest e2e drove a real accepted-and-applied claim on
+> 2026-07-19, PR #345). *(This clause originally cited the `K_COVER`
+> genesis-seal stack as the evidence; that gate was retired 2026-07-19,
+> PR #346. The correction it supports is unaffected — the evidence is
+> now the live claim path itself, which is stronger.)* Read internal
 > "V3.x dot-release" / "V3.0 ships without this mechanism active" statements below
 > as historical. The *design* is unchanged by this correction — only the ship
 > version. Calibration/simulation gates still apply per `STAKER_ARCHIVAL_SIM.md`.
