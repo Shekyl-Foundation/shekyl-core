@@ -186,6 +186,30 @@
 
 ### Changed
 
+- **docs: economic-model docs corrected to the live archival pay-for-service
+  staking model.** `DESIGN_CONCEPTS.md` still described the retired passive
+  lock-tier PoS model (`staked_amount × duration_multiplier`, duration tiers,
+  claim/unstake, "Staking is implemented end-to-end") as if live; Components 3–4,
+  the §2 config note, the §5 lifecycle/value-flow, §6 anti-gaming, §9 test
+  coverage, §10 dashboard, §11 simulation params, and the §13 core-parameter
+  table are rewritten archival-native (transfer-shaped admission, on-chain bonds,
+  reward budget divided by capped verified serve-work, no lock/tier/claim wire,
+  no consensus-minimum bond). `STAKER_REWARD_DISBURSEMENT.md` (the claim/lock-tier
+  disbursement spec) gains a **SUPERSEDED — do not implement** banner pointing at
+  the live specs. `V3_STAKER_ARCHIVAL.md` gains a dated ship-timing correction:
+  archival is the **genesis (V3.0)** model, not a V3.x dot-release. User-facing
+  guides are corrected too: `USER_GUIDE.md`'s `## Staking` section is rewritten
+  archival-native and no longer documents the retired `stake <tier>` /
+  `claim_rewards` / `unstake` `shekyl-cli` commands (which do not exist — the CLI
+  staking UX is roadmap; staking today is via the GUI or wallet-RPC `stake` +
+  read methods), the RPC method reference is corrected to the live surface, and
+  the multisig "staking security" use case is de-tiered; `STAKER_OPERATOR_GUIDE.md`
+  and `GENESIS_TRANSPARENCY.md` drop residual lock-tier phrasing. Canonical live
+  references are `design/REWARD_EMISSION_LEG.md` (consensus reward leg) and
+  `V3_STAKER_ARCHIVAL.md` (mechanism); retirement history is in
+  `design/LEGACY_CLAIM_ERA_RETIREMENT.md`. Documentation-only; no code or
+  consensus change.
+
 - **ci: `Rust: audit, test, determinism` split into its own workflow
   (`ci/gh-actions/rust`).** The Rust audit/test/determinism gate moved out of
   `ci/gh-actions/cli` (`build.yml`) into `rust-audit-test.yml` so a flaked
