@@ -4,6 +4,29 @@
 
 ### Added
 
+- **rpc: WI-RPC-1 — receiving, fee, and staking-read wallet-RPC surfaces.**
+  `shekyl-wallet-rpc` gains nine JSON-RPC methods, each a pure projection
+  of an existing Engine surface (contract updated in
+  `docs/api/wallet_rpc.yaml`; no tx/consensus/secret surface):
+  *receiving* — `create_payment_request` (the one mutating method; local
+  bookkeeping persisted via the wallet's normal crash-atomic save path,
+  URI composed from the stored request so `rid` cannot drift),
+  `list_payment_requests`, `make_uri`, `parse_uri`. The merchant
+  reference is the non-zero u48 `rid` on the `shekyl:` URI — no
+  subaddress or account type exists or was added.
+  *Fees* — `estimate_tx_size_and_weight` and `get_default_fee_priority`
+  over new read-only Engine helpers (`estimate_tx_size_and_weight`,
+  `quote_fee_tiers`) that project the single `predict_weight` byte model
+  and the build path's fee-converge fixpoint; a failed daemon snapshot is
+  the same `-29102` the build path uses.
+  *Staking reads* — `get_staked_balance` (three never-conflated fields:
+  `bonded_principal_confirmed`, `bonded_principal_pending`,
+  `rewards_received_unspent`), `get_staked_outputs`, `staking_info`, via
+  a new authoritative `Engine::staking_read_view` aggregating reconcile
+  evidence + sealed pending posts + funding outputs — never the
+  `bonded_slots` hint (hint-divergence KAT pins this). Staking actions
+  (`unstake`, `claim`) remain engine-gated and RESERVED.
+
 - **daemon: emission-claim Phase-C submit battery (PR-4b completion).**
   The Rust submit engine accepts the second and last transaction kind the
   E4 e2e needs: `SubmitTxKind::Emission` classifies at Phase A (the

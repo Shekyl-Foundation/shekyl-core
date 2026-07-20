@@ -383,6 +383,165 @@ pub struct SubmitPendingTxResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DiscardPendingTxResult {}
 
+/// Payment-request lifecycle state (WI-RPC-1 receiving).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PaymentRequestStateView {
+    /// Awaiting a matching incoming payment.
+    Pending,
+    /// Matched to an incoming transfer.
+    Matched,
+    /// Expiry height passed without a match.
+    Expired,
+    /// Cancelled by the user.
+    Cancelled,
+}
+
+/// One payment request (WI-RPC-1 receiving; bookkeeping facts only).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaymentRequestView {
+    /// Opaque request id (`rid`; non-zero u48, decimal string).
+    pub id: String,
+    /// Merchant-local label (may be empty).
+    pub label: String,
+    /// Requested amount.
+    pub amount: AtomicUnitsString,
+    /// Block height at creation (the request clock is block height).
+    pub created_at: i64,
+    /// Absolute expiry height, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expiry: Option<i64>,
+    /// Lifecycle state.
+    pub state: PaymentRequestStateView,
+    /// Matching transaction hash (lowercase hex), when matched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_tx_hash: Option<String>,
+    /// Output index within the matching transaction, when matched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_output_index: Option<i64>,
+}
+
+/// `create_payment_request` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreatePaymentRequestResult {
+    /// Opaque request id (`rid`, decimal string).
+    pub id: String,
+    /// `shekyl:` URI carrying the wallet's primary address and this `rid`
+    /// (composed from the stored request, so the two cannot drift).
+    pub uri: String,
+}
+
+/// `list_payment_requests` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListPaymentRequestsResult {
+    /// Matching requests, in creation order.
+    pub payment_requests: Vec<PaymentRequestView>,
+}
+
+/// `make_uri` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MakeUriResult {
+    /// The composed `shekyl:` payment URI.
+    pub uri: String,
+}
+
+/// `parse_uri` result (the parsed query components; address format is not
+/// validated at parse time, mirroring `shekyl_address::parse_payment_uri`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParseUriResult {
+    /// Address string from the URI path.
+    pub address: String,
+    /// `amount` query parameter, if present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<AtomicUnitsString>,
+    /// `label` query parameter, if present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// `rid` query parameter (decimal string), if present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rid: Option<String>,
+    /// `expiry` query parameter (absolute block height), if present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expiry: Option<i64>,
+}
+
+/// `estimate_tx_size_and_weight` result (WI-RPC-1 fees).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EstimateTxSizeAndWeightResult {
+    /// Serialized transaction size in bytes.
+    pub size: i64,
+    /// Fee weight in bytes (`size` + Bp+ verification clawback; equals
+    /// `Transaction::weight()`).
+    pub weight: i64,
+    /// Curve-tree depth the FCMP++ proof-size term was evaluated at.
+    pub tree_depth: i64,
+}
+
+/// `get_default_fee_priority` result (WI-RPC-1 fees).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetDefaultFeePriorityResult {
+    /// The default tier (`STANDARD`).
+    pub default_priority: String,
+    /// Converged fee at the daemon's economy rate for the given shape.
+    pub economy_fee: AtomicUnitsString,
+    /// Converged fee at the daemon's standard rate (the default tier).
+    pub standard_fee: AtomicUnitsString,
+    /// Converged fee at the daemon's priority rate.
+    pub priority_fee: AtomicUnitsString,
+    /// Curve-tree depth the quotes were evaluated at.
+    pub tree_depth: i64,
+}
+
+/// Staked-balance breakdown (WI-RPC-1 staking; fields never conflated).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetStakedBalanceResult {
+    /// Bond principal locked under confirmed live bonds.
+    pub bonded_principal_confirmed: AtomicUnitsString,
+    /// Bond principal committed by in-flight (sealed, unconfirmed) posts.
+    pub bonded_principal_pending: AtomicUnitsString,
+    /// Emission-reward money received and still unspent in staking-side
+    /// outputs. Not "accrued but unclaimed" — that is a separate surface.
+    pub rewards_received_unspent: AtomicUnitsString,
+}
+
+/// One staked (unspent staking-side) output (WI-RPC-1 staking).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StakedOutputView {
+    /// Global (chain-wide) output index, decimal string.
+    pub gindex: String,
+    /// Recovered cleartext amount.
+    pub amount: AtomicUnitsString,
+    /// Owning persona slot ordinal.
+    pub p_slot: i64,
+    /// Height at which the output becomes spendable.
+    pub unlock_height: i64,
+    /// Whether the output is finality-confirmed (always `true` at V3.0: the
+    /// staking scan records outputs only behind the finality horizon).
+    pub confirmed: bool,
+}
+
+/// `get_staked_outputs` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetStakedOutputsResult {
+    /// Unspent staking-side outputs, in scan order.
+    pub staked_outputs: Vec<StakedOutputView>,
+}
+
+/// `staking_info` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StakingInfoResult {
+    /// Whether staking is enabled for this wallet.
+    pub staking_enabled: bool,
+    /// The staked-balance breakdown.
+    pub balance: GetStakedBalanceResult,
+    /// Count of unspent staking-side outputs.
+    pub staked_output_count: i64,
+    /// The staking scan's sealed frontier height (`null` when the wallet has
+    /// never scanned as a staker).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pscan_synced_height: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
