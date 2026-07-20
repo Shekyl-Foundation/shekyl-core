@@ -252,6 +252,16 @@ impl RegtestDaemon {
             .height
     }
 
+    /// Transactions currently in the daemon's pool — the drain loop's
+    /// condition and the pop legs' return-to-pool observable.
+    pub(super) async fn tx_pool_size(&self) -> u64 {
+        self.rpc
+            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .await
+            .expect("get_info")
+            .tx_pool_size
+    }
+
     /// Cumulative `total_burned` — the §9.5 conservation observable's
     /// pool/burn side. The emission e2e asserts on its delta across a
     /// no-staker close (the `staker_pool_amount` term accrues) and its
@@ -1523,20 +1533,19 @@ async fn mine_until_pool_drains(
     blocks_per_batch: u64,
 ) {
     let mine_deadline = Instant::now() + Duration::from_secs(240);
-    loop {
-        daemon.generate_blocks(blocks_per_batch, principal).await;
-        let info = daemon
-            .rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
-            .await
-            .expect("get_info");
-        if info.tx_pool_size == 0 {
-            break;
-        }
+    // Condition checked BEFORE every batch: an already-drained pool must
+    // not advance the chain. Callers passing `blocks_per_batch = 1` rely on
+    // the tx's block being the tip when this returns (the A5a depth-1 pop
+    // pops exactly it), and an unconditional first batch would bury it
+    // under an empty block.
+    while daemon.tx_pool_size().await > 0 {
         assert!(
             Instant::now() < mine_deadline,
             "{what} never left the pool (embargo/template gap?)"
         );
+        daemon.generate_blocks(blocks_per_batch, principal).await;
+        // The Dandelion++ embargo is wall-clock, not block-height: pause
+        // between attempts rather than spinning the miner.
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
@@ -2090,6 +2099,14 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // the regtest e2es in separate processes (the module docs' one-test
     // invocation) for green runs.
     let daemon = RegtestDaemon::start_with_settlement_epoch_blocks(Some(SEB)).await;
+    // The lever is set and deliberately NOT restored afterwards: it is the
+    // only input `arm` reads, and once armed the schedule latch is
+    // irreversible, so leaving the variable set keeps the process's two
+    // views of the schedule CONSISTENT (env says levered, latch is
+    // levered). Scrubbing it on the way out would leave the more dangerous
+    // state — a levered process that reports no lever. Child processes do
+    // not inherit it by accident: the spawn seam sets it explicitly for
+    // `Some(seb)` and `env_remove`s it for `None`.
     std::env::set_var("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", SEB.to_string());
     let armed = shekyl_archival_retention::arm_settlement_epoch_override_for_regtest()
         .expect("the SEB lever must arm before any epoch arithmetic latches the schedule");
@@ -2418,23 +2435,13 @@ async fn e2e_emission_claim_accepted_and_applied() {
         row_popped.budget_atomic, epoch_row.budget_atomic,
         "the budget row must be untouched by a pop above the close"
     );
-    let pool_after_pop = daemon
-        .rpc
-        .json_rpc_call::<GetInfoResp>("get_info", None)
-        .await
-        .expect("get_info")
-        .tx_pool_size;
+    let pool_after_pop = daemon.tx_pool_size().await;
     assert_eq!(
         pool_after_pop, 1,
         "the popped claim tx must return to the pool"
     );
     daemon.generate_blocks(1, &fixture.principal).await;
-    let pool_after_remine = daemon
-        .rpc
-        .json_rpc_call::<GetInfoResp>("get_info", None)
-        .await
-        .expect("get_info")
-        .tx_pool_size;
+    let pool_after_remine = daemon.tx_pool_size().await;
     assert_eq!(
         pool_after_remine, 0,
         "the re-mined block must re-include the claim"

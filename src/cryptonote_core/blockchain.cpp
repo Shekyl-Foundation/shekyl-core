@@ -449,10 +449,19 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
     // wholesale, so this is the single gate a regtest schedule passes
     // through — and an invalid value refuses loudly here instead of
     // silently running the genesis schedule until the harness times out.
-    if (!shekyl_archival_settlement_epoch_arm_regtest())
+    const uint8_t arm_rc = shekyl_archival_settlement_epoch_arm_regtest();
+    if (arm_rc != 0)
     {
+      // The two refusals have different remedies, so they get different
+      // messages: a bad value is the operator's to fix, while a late arm
+      // means this gate ran after something already latched the schedule —
+      // a daemon-side initialization-order defect the operator cannot fix
+      // by editing the variable.
       const char *raw = getenv("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
-      MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " is not a valid override (expected an integer in 2..=10000, and arming must precede any epoch arithmetic); refusing to start. Fix the value or unset the variable.");
+      if (arm_rc == 2)
+        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " could not be armed: the settlement-epoch schedule had already latched before this gate ran. The value is fine; this is an initialization-order defect in the daemon (arming must precede every epoch-arithmetic call, including the genesis add). Refusing to start — please report it.");
+      else
+        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " is not a valid override: expected an integer between 2 and the genesis settlement-epoch length; refusing to start. Fix the value or unset the variable.");
       return false;
     }
     MWARNING("SHEKYL_SETTLEMENT_EPOCH_BLOCKS override active on fakechain: settlement epochs are " << shekyl_archival_settlement_epoch_blocks() << " blocks instead of the genesis-pinned schedule — epoch closes, serve-credit windows, and emission claims computed under this schedule are valid only among fakechain nodes running the same override");

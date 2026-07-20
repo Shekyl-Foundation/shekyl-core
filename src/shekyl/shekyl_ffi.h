@@ -2329,11 +2329,16 @@ bool shekyl_archival_settlement_epoch_overridden(void);
 bool shekyl_archival_settlement_epoch_override_present(void);
 
 /// Arm the SHEKYL_SETTLEMENT_EPOCH_BLOCKS override (FAKECHAIN startup path
-/// only). Returns true and latches the validated override (or the genesis
-/// pin when unset); returns false — refuse to start — when the value is
-/// invalid or the schedule already latched differently. An unarmed process
-/// ignores the lever entirely.
-bool shekyl_archival_settlement_epoch_arm_regtest(void);
+/// only), latching the validated override (or the genesis pin when unset).
+/// An unarmed process ignores the lever entirely.
+///
+/// Returns a cause code, because the two refusals need different remedies:
+///   0 — armed;
+///   1 — the value is not an integer in the accepted range (operator input
+///       error: fix the value or unset the variable);
+///   2 — the schedule already latched before this call (an
+///       initialization-order defect in the daemon, NOT a bad value).
+uint8_t shekyl_archival_settlement_epoch_arm_regtest(void);
 
 /// Returns 1 and writes the settlement epoch whose close is processed at
 /// `block_height`; 0 (no write) at height 0 or non-boundary heights.
