@@ -37,6 +37,16 @@ use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, Signature
 use shekyl_fcmp::SCALARS_PER_LEAF;
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 
+/// `shekyl_archival_settlement_epoch_arm_regtest`: armed (or the variable
+/// is unset and the genesis pin latched).
+pub const SHEKYL_ARCHIVAL_SEB_ARM_OK: u8 = 0;
+/// The lever is set but is not an integer in the accepted range — an
+/// operator input error; fix the value or unset the variable.
+pub const SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID: u8 = 1;
+/// The schedule had already latched before arming ran — an
+/// initialization-order defect in the arming process, not a bad value.
+pub const SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE: u8 = 2;
+
 /// Success.
 pub const SHEKYL_ARCHIVAL_VERIFY_OK: u8 = 0;
 /// Required pointer was null.
@@ -1872,16 +1882,24 @@ pub extern "C" fn shekyl_archival_settlement_epoch_override_present() -> bool {
 }
 
 /// Arm the `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override for the daemon's
-/// FAKECHAIN startup path. Returns `true` and latches the validated
-/// override (or the genesis pin when the variable is unset); returns
-/// `false` — the daemon refuses to start — when the value is invalid or
-/// the schedule already latched to a different value (an
-/// initialization-order bug). An unarmed process ignores the lever
+/// FAKECHAIN startup path, latching the validated override (or the genesis
+/// pin when the variable is unset). An unarmed process ignores the lever
 /// entirely, so arming is the single gate a regtest schedule passes
 /// through.
+///
+/// Returns a **cause code**, not a bool: the two refusals need different
+/// remedies and sending an operator after the wrong one costs real
+/// debugging time (a levered daemon dying on
+/// [`SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE`] is a daemon-side
+/// initialization-order defect, never a bad value).
 #[no_mangle]
-pub extern "C" fn shekyl_archival_settlement_epoch_arm_regtest() -> bool {
-    shekyl_archival_retention::arm_settlement_epoch_override_for_regtest().is_ok()
+pub extern "C" fn shekyl_archival_settlement_epoch_arm_regtest() -> u8 {
+    use shekyl_archival_retention::SettlementEpochOverrideError as E;
+    match shekyl_archival_retention::arm_settlement_epoch_override_for_regtest() {
+        Ok(_) => SHEKYL_ARCHIVAL_SEB_ARM_OK,
+        Err(E::Invalid { .. }) => SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID,
+        Err(E::ArmedTooLate { .. }) => SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE,
+    }
 }
 
 /// Returns `1` and writes the settlement epoch whose close is processed at

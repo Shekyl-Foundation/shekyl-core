@@ -58,6 +58,19 @@ fn serial_lock() -> Arc<Mutex<()>> {
 
 /// A live `shekyld --regtest` daemon spawned for one test, with an ephemeral
 /// data dir and RPC port. Killed and cleaned on drop.
+/// Last 15 lines of the daemon's captured log, inlined into panics:
+/// `RegtestDaemon::drop` removes the datadir (log included) as a panic
+/// unwinds, so a "see the log file" pointer would name a deleted file.
+fn log_tail(log_path: &std::path::Path) -> String {
+    std::fs::read_to_string(log_path)
+        .map(|s| {
+            let lines: Vec<&str> = s.lines().collect();
+            let start = lines.len().saturating_sub(15);
+            lines[start..].join("\n")
+        })
+        .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"))
+}
+
 pub(super) struct RegtestDaemon {
     child: Child,
     data_dir: PathBuf,
@@ -75,6 +88,14 @@ struct GetInfoResp {
     /// `mine_until_pool_empty`).
     #[serde(default)]
     tx_pool_size: u64,
+    /// Cumulative destroyed atomic units — `compute_fee_burn`'s
+    /// `actually_destroyed` term only (`blockchain.cpp` feeds it
+    /// `block_burn_amount` and rolls it back on pop). The sibling
+    /// `staker_pool_amount` term does *not* land here; it goes to the
+    /// `archival_budget_accrual` row. See the A6 assertion for why the
+    /// destroyed half is nonetheless evidence about the pool half.
+    #[serde(default)]
+    total_burned: u64,
 }
 
 /// `generateblocks` result fields we care about.
@@ -108,6 +129,18 @@ impl RegtestDaemon {
 
     /// Spawn the daemon and wait until its RPC answers `get_info`.
     pub(super) async fn start() -> RegtestDaemon {
+        Self::start_with_settlement_epoch_blocks(None).await
+    }
+
+    /// Spawn the daemon with an optional `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
+    /// override on the child's environment (the fakechain-only regtest
+    /// lever the daemon arms at startup — the SEB gate at the top of
+    /// `Blockchain::init`, before the genesis add). The emission
+    /// e2e passes `Some(seb)` so epoch closes land in minutes; the wallet
+    /// process arms the same value in-process (it does its own epoch
+    /// arithmetic when it assembles a claim, and gates on the lever —
+    /// `lifecycle.rs`). `None` runs the genesis-pinned schedule.
+    pub(super) async fn start_with_settlement_epoch_blocks(seb: Option<u64>) -> RegtestDaemon {
         // Serialize across this test binary so no two in-process daemons race on
         // a port. Each instance uses a unique ephemeral port + temp datadir and
         // kills its own child (+ removes its datadir) on Drop, so no global daemon
@@ -123,26 +156,41 @@ impl RegtestDaemon {
         std::fs::create_dir_all(&data_dir).expect("create data dir");
 
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
-        let child = Command::new(&bin)
-            .args([
-                "--regtest",
-                "--offline",
-                "--non-interactive",
-                "--no-igd",
-                "--fixed-difficulty",
-                "1",
-                "--rpc-bind-ip",
-                "127.0.0.1",
-                "--rpc-bind-port",
-                &rpc_port.to_string(),
-                "--data-dir",
-                data_dir.to_str().expect("utf8 data dir"),
-                "--log-level",
-                "0",
-            ])
-            .stdout(Stdio::from(log.try_clone().expect("clone log")))
-            .stderr(Stdio::from(log))
-            .stdin(Stdio::null())
+        let mut cmd = Command::new(&bin);
+        cmd.args([
+            "--regtest",
+            "--offline",
+            "--non-interactive",
+            "--no-igd",
+            "--fixed-difficulty",
+            "1",
+            "--rpc-bind-ip",
+            "127.0.0.1",
+            "--rpc-bind-port",
+            &rpc_port.to_string(),
+            "--data-dir",
+            data_dir.to_str().expect("utf8 data dir"),
+            "--log-level",
+            "0",
+        ])
+        .stdout(Stdio::from(log.try_clone().expect("clone log")))
+        .stderr(Stdio::from(log))
+        .stdin(Stdio::null());
+        // The SEB lever rides the child env (the daemon reads it at startup,
+        // arms on fakechain, refuses loudly on a bad value). `None` must
+        // scrub the variable, not merely skip setting it: the child inherits
+        // this process's environment, so a lever leaked from the developer's
+        // or CI's shell would silently reschedule a test that intends the
+        // genesis pin.
+        match seb {
+            Some(seb) => {
+                cmd.env("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", seb.to_string());
+            }
+            None => {
+                cmd.env_remove("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
+            }
+        }
+        let child = cmd
             .spawn()
             .unwrap_or_else(|e| panic!("spawn {}: {e}", bin.display()));
 
@@ -178,10 +226,8 @@ impl RegtestDaemon {
             // would only delay an unhelpful timeout. Point at the captured log so
             // the real cause is one `cat` away.
             if let Ok(Some(status)) = self.child.try_wait() {
-                panic!(
-                    "daemon exited early ({status}) before RPC became ready; see {}",
-                    log_path.display()
-                );
+                let tail = log_tail(&log_path);
+                panic!("daemon exited early ({status}) before RPC became ready; log tail:\n{tail}");
             }
             match self
                 .rpc
@@ -193,10 +239,10 @@ impl RegtestDaemon {
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
+        let tail = log_tail(&log_path);
         panic!(
-            "daemon RPC never became ready (port {}) after 60s: {last_err}; see {}",
+            "daemon RPC never became ready (port {}) after 60s: {last_err}; log tail:\n{tail}",
             self.rpc_port,
-            log_path.display()
         );
     }
 
@@ -206,6 +252,52 @@ impl RegtestDaemon {
             .await
             .expect("get_info")
             .height
+    }
+
+    /// Transactions currently in the daemon's pool — the drain loop's
+    /// condition and the pop legs' return-to-pool observable.
+    pub(super) async fn tx_pool_size(&self) -> u64 {
+        self.rpc
+            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .await
+            .expect("get_info")
+            .tx_pool_size
+    }
+
+    /// Cumulative `total_burned` — the destroyed half of the §9.5 fee
+    /// partition. The emission e2e samples it once, at epoch close, and
+    /// pins it to 0 (A6 pool-half disposition).
+    pub(super) async fn total_burned(&self) -> u64 {
+        self.rpc
+            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .await
+            .expect("get_info")
+            .total_burned
+    }
+
+    /// Inject an archival serve-credit bit for `(P, shard, E)` — the
+    /// FAKECHAIN-only regtest lever (`on_inject_archival_serve_credit`,
+    /// bits-only, **not** pop-symmetric: a pop below the injection height
+    /// desyncs the bit, so every reorg leg floors its depth above it). The
+    /// injected bit gives the epoch a non-zero `Σwork` and the persona a
+    /// positive claimant share at close.
+    pub(super) async fn inject_serve_credit(
+        &self,
+        p_canonical_id: &shekyl_types::PCanonicalId,
+        shard_id: u64,
+        settlement_epoch: u64,
+    ) {
+        self.rpc
+            .json_rpc_call::<serde_json::Value>(
+                "inject_archival_serve_credit",
+                Some(json!({
+                    "p_canonical_id": hex::encode(p_canonical_id.to_bytes()),
+                    "shard_id": shard_id,
+                    "settlement_epoch": settlement_epoch,
+                })),
+            )
+            .await
+            .expect("inject_archival_serve_credit");
     }
 
     /// The ephemeral RPC port the daemon bound. Observability harnesses open
@@ -1425,66 +1517,132 @@ async fn pscan_until(
     }
 }
 
-/// PR-4 staker harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4): a staker wallet
-/// funds its persona on-chain (a wallet-built FCMP++ transfer to the persona's
-/// derived receive address — the production rung-1 `ExternalTransfer` funding),
-/// the production P-scan discovers the funding, and the production bond path
-/// ([`Engine::assemble_bond_post`](super::Engine::assemble_bond_post) →
-/// posture→submitter choke point) dispatches the bond post over real RPC.
+/// Mine in `blocks_per_batch` batches until the tx pool drains — the
+/// locally-submitted tx's only route into a block on this offline daemon.
 ///
-/// **Accepted-and-applied (the promoted PR-4a tripwire).** The daemon's
-/// PR-4b bond-post Phase-C battery (`DAEMON_SUBMIT_VERDICT.md` §8.7.1 BP
-/// rows; `shekyl-daemon-rpc/src/submit/verifier.rs::verify_bond_post`)
-/// verifies the wallet-built post over real RPC. The trailing assertions
-/// pin the full loop: submit accepted, bond mined, and the rung-2
-/// bond-post match + `BondPostChange` change funding re-discovered by this
-/// same production scan, with the swept pre-post funding records PRUNED
-/// from the sealed state — the SP-R0 arm-#1 **production fire** (DQ-F):
-/// the stake enters through [`Engine::first_stake`], whose preflight sweep
-/// mints the `arm1_watch_pruning_live` witness, so the whole
-/// persist → assemble → seal → dispatch → confirm → prune loop runs on
-/// production code. The surviving funding set is the `BondPostChange`
-/// change — the substrate the emission-claim e2e (PR-4c) spends from.
-/// (This test was the PR-4a daemon-gap tripwire pinning the old
-/// unimplemented-arm `Malformed` refusal; PR-4b promoted it.)
+/// The submit path inserts at `relay_method::local` under the Dandelion++
+/// embargo, and the miner only includes broadcast-visible txs
+/// (`fill_block_template`'s `matches(relay_category::legacy)` gate); the
+/// stem cannot send here, so inclusion waits for the embargo to expire and
+/// fluff. Mining in batches rather than assuming one batch suffices. Pass
+/// `blocks_per_batch = 1` when the caller needs the tx's block to be the
+/// tip at return (the emission e2e's depth-1 pop leg pops exactly it).
+async fn mine_until_pool_drains(
+    daemon: &RegtestDaemon,
+    principal: &str,
+    what: &str,
+    blocks_per_batch: u64,
+) {
+    let mine_deadline = Instant::now() + Duration::from_secs(240);
+    // Condition checked BEFORE every batch: an already-drained pool must
+    // not advance the chain. Callers passing `blocks_per_batch = 1` rely on
+    // the tx's block being the tip when this returns (the A5a depth-1 pop
+    // pops exactly it), and an unconditional first batch would bury it
+    // under an empty block.
+    while daemon.tx_pool_size().await > 0 {
+        assert!(
+            Instant::now() < mine_deadline,
+            "{what} never left the pool (embargo/template gap?)"
+        );
+        daemon.generate_blocks(blocks_per_batch, principal).await;
+        // The Dandelion++ embargo is wall-clock, not block-height: pause
+        // between attempts rather than spinning the miner.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+/// The confirmed-bond substrate [`stake_persona_to_confirmed_bond`] hands
+/// back: the wallet handles plus the **block geography** the emission-claim
+/// e2e derives its epoch arithmetic from. The geography is returned
+/// explicitly — the helper mines a variable number of blocks (funding
+/// maturity + reference-spendability + embargo drain are all
+/// retry-until-ready), so callers must never re-derive heights from mined
+/// counts.
+struct ConfirmedBondFixture {
+    /// The staker wallet engine (persona bonded and confirmed).
+    arc: Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    /// The wallet's backing tempdir — an RAII guard, never read: hold the
+    /// fixture or the wallet files vanish.
+    _tmp: tempfile::TempDir,
+    /// The principal's mining/funding address.
+    principal: String,
+    /// The bonded persona's canonical id (the bond post's identity).
+    persona_id: shekyl_types::PCanonicalId,
+    /// The sealed P-scan state path (for follow-on `pscan_until` calls).
+    pscan_seal: std::path::PathBuf,
+    /// The sealed scan state at confirmation: carries the bond-post match
+    /// and the persona's surviving funding set (the `BondPostChange`
+    /// change — the emission claim's fee-input substrate).
+    state: shekyl_engine_state::pscan_state::PScanState,
+    /// The pre-post funding gindexes `first_stake` swept (pruned from the
+    /// sealed set by the arm-1 key-image watch).
+    swept_gindexes: Vec<u64>,
+    /// How many pre-post funding records the discovery scan found.
+    pre_post_discovered: usize,
+    /// Tip height when the confirmation scan sealed — the geography anchor
+    /// for the emission e2e's epoch-close/inject/claim layout.
+    confirmed_tip_height: u64,
+}
+
+/// How the confirmed-bond fixture enters the stake.
+enum FixtureStake {
+    /// The production [`Engine::first_stake`] entry (SP-R0 arm-#1
+    /// production discharge) — the SA-R1 genesis posture: JoinMarket
+    /// **CompleteTree** holdings. A complete-tree bond is foundation-shaped
+    /// and market-EXCLUDED (`ARCHIVAL_CONSENSUS_STATE.md` §3.3 E-2;
+    /// `market_member_at_epoch` returns false), so this arm's bond can
+    /// never carry Σwork — it exercises the stake entry, not the reward
+    /// market.
+    FirstStake,
+    /// The composed production steps — `mint_handle` →
+    /// `persist_bond_record` → [`Engine::assemble_bond_post`] (which seals
+    /// the pending post exactly as `first_stake` does) — with
+    /// caller-chosen holdings: the **market** bond shape
+    /// (`ShardSetCompact`) the emission-claim e2e earns from. Named
+    /// deviation (PR-4c finding): no wallet entry posts a market bond
+    /// today — `first_stake` hardcodes the CompleteTree genesis posture —
+    /// so the market-bond wallet entry is a named follow-on, and until it
+    /// lands this composition of the same production functions is the
+    /// claimable-bond path.
+    MarketBond(shekyl_archival_retention::HoldingsDescriptor),
+}
+
+/// Fund → stake → dispatch → confirm: the production staking sequence both
+/// PR-4 e2e legs share (rule 19: one definition — the bond e2e asserts on
+/// the returned fixture, the emission e2e builds its claim on it). The
+/// caller owns the daemon spawn (and with it the SEB lever decision), the
+/// stake entry (see [`FixtureStake`] — the emission e2e needs a market
+/// bond), and the funding cushion: the cushion is (approximately) the
+/// persona's `BondPostChange` change output, so the emission caller sizes
+/// it to fund real ToKey claim-fee inputs where the bond caller only needs
+/// it non-zero.
 ///
-/// Bounded deviations from production, each named:
-/// - The sealed pending post is re-lifted (`PBoundBytes::from_pending`) and
-///   dispatched directly through the audited posture→submitter choke point
-///   rather than by WI-3's block-timed dispatch driver: the driver's
-///   decorrelation offsets span up to ~600 blocks (its timing law has its
-///   own KATs); the harness proves the chain-facing contract.
-/// - A shallow P-scan finality horizon + tight cadence via the injectable
-///   `start_pscan_with` seam (see [`PSCAN_TEST_REORG_DEPTH`]).
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
-async fn e2e_staker_bond_post_accepted_and_applied() {
-    use super::bond_assembly::PBoundBytes;
+/// Every step retries-until-ready (funding maturity, reference
+/// spendability, the Dandelion++ embargo), so the block geography is a
+/// *result*, not an input — read it from the returned fixture.
+async fn stake_persona_to_confirmed_bond(
+    daemon: &RegtestDaemon,
+    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    slot_raw: u32,
+    funding_cushion: u64,
+    stake_entry: FixtureStake,
+) -> ConfirmedBondFixture {
+    use super::bond_assembly::{BondAssemblyError, PBoundBytes, SpentRecordsDurablyPruned};
     use super::bond_orchestrator::FirstStakeError;
+    use super::bond_orchestrator::BOND_SIZE_CEILING_BYTES;
     use super::pscan::start::pending_post_store_for_engine;
-    use super::stake_engine::PSlot;
+    use super::stake_engine::{PSlot, StakeEngineError};
     use super::traits::DaemonEngine;
     use super::transaction_submitter::BroadcastSubmitter;
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
+    use shekyl_engine_state::pscan_state::MintLineageOutput;
     use shekyl_units::AtomicUnits;
 
-    const SLOT: u32 = 0;
     const MINE_BATCH_BLOCKS: u64 = 10;
     const MAX_MINE_BATCHES: usize = 24;
-    // Fee ceiling: the production constant (promoted from this harness to
-    // the stake entry's seam) — one definition, no drift. The
-    // single-funding-input bond post measures ~22.5 KB, so 32 KiB gives the
-    // estimate ~40% headroom over the daemon's per-byte floor.
-    use super::bond_orchestrator::BOND_SIZE_CEILING_BYTES;
-    /// Extra persona funding above `floor + fee`, so the sweep-all bond leaves
-    /// a non-zero change output — the persona's rung-2 `BondPostChange` funding
-    /// for the follow-on emission-claim leg.
-    const FUNDING_CUSHION: u64 = 200_000_000;
 
-    let daemon = RegtestDaemon::start().await;
-    let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
-    let slot = PSlot::from_raw(SLOT);
-    let (arc, _tmp, principal) = staker_wallet(daemon.rpc_port, &seed, slot).await;
+    let slot = PSlot::from_raw(slot_raw);
+    let (arc, tmp, principal) = staker_wallet(daemon.rpc_port, seed, slot).await;
 
     // The bond fee is caller-chosen at this seam (the RPC stake entry's
     // contract), but a hardcoded constant is wrong on regtest: the daemon's
@@ -1510,13 +1668,17 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 
     // Fund the principal past the persona's needs (2×: the transfer's own fee
     // + selection churn), then fund the persona with one ordinary transfer.
-    let holdings = HoldingsDescriptor {
-        kind: HoldingsKind::CompleteTree,
-        shard_ids: ShardSet::empty(),
+    // The floor follows the entry's holdings shape.
+    let floor_holdings = match &stake_entry {
+        FixtureStake::FirstStake => HoldingsDescriptor {
+            kind: HoldingsKind::CompleteTree,
+            shard_ids: ShardSet::empty(),
+        },
+        FixtureStake::MarketBond(h) => h.clone(),
     };
-    let funding = AtomicUnits::from_raw(bond_floor(&holdings) + bond_fee + FUNDING_CUSHION);
+    let funding = AtomicUnits::from_raw(bond_floor(&floor_holdings) + bond_fee + funding_cushion);
     mine_until_unlocked_at_least(
-        &daemon,
+        daemon,
         &arc,
         &principal,
         AtomicUnits::from_raw(funding.to_raw() * 2),
@@ -1524,9 +1686,9 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
         MAX_MINE_BATCHES,
     )
     .await;
-    let p_address = persona_address(&seed, SLOT);
+    let p_address = persona_address(seed, slot_raw);
     transfer_to(
-        &daemon,
+        daemon,
         &arc,
         &principal,
         &p_address,
@@ -1543,62 +1705,139 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
         .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &principal)
         .await;
     refresh(&arc).await;
-    let pscan_seal = shekyl_engine_file::paths::pscan_state_path_from(&_tmp.path().join("wallet"));
+    let pscan_seal = shekyl_engine_file::paths::pscan_state_path_from(&tmp.path().join("wallet"));
     let state = pscan_until(&arc, &pscan_seal, "the persona funding output", |s| {
         s.funding_outputs().iter().any(|r| r.p_slot == slot)
     })
     .await;
-    let discovered = state
+    let pre_post_discovered = state
         .funding_outputs()
         .iter()
         .filter(|r| r.p_slot == slot)
         .count();
-    eprintln!("pscan discovered {discovered} persona funding output(s)");
+    eprintln!("pscan discovered {pre_post_discovered} persona funding output(s)");
 
-    // Production stake entry (SA-R1 `first_stake` — the SP-R0 arm-#1
-    // PRODUCTION-DISCHARGE leg): preflight funding sweep → durable
-    // `persist_bond_record` → sign + assemble → the `.wallet.pending` seal,
-    // driven exactly as the credentialed `stake` RPC drives it. The
-    // `arm1_watch_pruning_live` witness is minted inside the entry, so no
-    // `for_test` deviation remains on this path. The funding must be
-    // spendable at the anchored REFERENCE block (tip − REF_ANCHOR_AGE),
-    // which lags tip maturity — the typed W1-clean `Funding` refusal is the
-    // wait-and-retry arm (the same shape as the spend e2e's
-    // reference-spendability loop; nothing durable is written by a refused
-    // attempt).
-    let mut outcome = None;
-    for _ in 0..MAX_MINE_BATCHES {
-        match super::Engine::first_stake(arc.clone(), SLOT).await {
-            Ok(o) => {
-                outcome = Some(o);
-                break;
+    // The stake entry (both arms end at the same `.wallet.pending` seal —
+    // `assemble_bond_post`'s push_post — so everything downstream is
+    // shared). The funding must be spendable at the anchored REFERENCE
+    // block (tip − REF_ANCHOR_AGE), which lags tip maturity, so each arm
+    // retries its typed not-ready refusals while mining.
+    match &stake_entry {
+        // Production SA-R1 entry (SP-R0 arm-#1 PRODUCTION-DISCHARGE leg):
+        // preflight funding sweep → durable `persist_bond_record` → sign +
+        // assemble → seal, driven exactly as the credentialed `stake` RPC
+        // drives it; the `arm1_watch_pruning_live` witness is minted
+        // inside the entry, so no `for_test` deviation remains here.
+        FixtureStake::FirstStake => {
+            let mut outcome = None;
+            for _ in 0..MAX_MINE_BATCHES {
+                match super::Engine::first_stake(arc.clone(), slot_raw).await {
+                    Ok(o) => {
+                        outcome = Some(o);
+                        break;
+                    }
+                    Err(FirstStakeError::Funding(detail)) => {
+                        eprintln!("first-stake funding not ready ({detail}); mining more");
+                        daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                        refresh(&arc).await;
+                    }
+                    // Post-persist mid-flow failure — the documented W2
+                    // window (e.g. the funding output cleared the preflight
+                    // sweep but is not yet drained into the REFERENCE curve
+                    // tree). The production recovery is re-invoking `stake`
+                    // (`persist_bond_record` is re-entrant; the resume path
+                    // re-mints the ticket), so the retry exercises the W2
+                    // resume exactly as a wallet would.
+                    Err(FirstStakeError::Engine(detail)) => {
+                        eprintln!(
+                            "first-stake W2 mid-flow failure ({detail}); mining and resuming"
+                        );
+                        daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                        refresh(&arc).await;
+                    }
+                    Err(e) => panic!("first_stake: {e}"),
+                }
             }
-            Err(FirstStakeError::Funding(detail)) => {
-                eprintln!("first-stake funding not ready ({detail}); mining more");
-                daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
-                refresh(&arc).await;
+            let outcome =
+                outcome.expect("first_stake must succeed once the funding is reference-spendable");
+            eprintln!(
+                "first_stake sealed the bond post: slot {}, {} swept input(s), resumed={}",
+                outcome.p_slot, outcome.swept_inputs, outcome.resumed
+            );
+        }
+        // Market bond: the same production functions `first_stake`
+        // composes, with the holdings the entry does not yet parameterize
+        // (see [`FixtureStake::MarketBond`]). Assembly authorizes on the
+        // handle alone; `persist_bond_record` is idempotent, so each retry
+        // re-mints a fresh ticket.
+        FixtureStake::MarketBond(holdings) => {
+            let fee = AtomicUnits::from_raw(bond_fee);
+            let mut sealed = false;
+            for _ in 0..MAX_MINE_BATCHES {
+                let (handle, ticket) = {
+                    let g = arc.read().await;
+                    let stake = g.stake_handle().expect("staker wallet has a stake engine");
+                    let handle = stake.mint_handle(slot).await.expect("mint handle");
+                    let ticket = g.persist_bond_record(slot).expect("persist bond record");
+                    (handle, ticket)
+                };
+                match super::Engine::assemble_bond_post(
+                    arc.clone(),
+                    handle,
+                    ticket,
+                    holdings.clone(),
+                    fee,
+                    &SpentRecordsDurablyPruned::for_test(),
+                )
+                .await
+                {
+                    Ok(a) => {
+                        eprintln!(
+                            "assembled market bond post: {} B, {} funding input(s)",
+                            a.bound_tx.bytes().len(),
+                            a.funding_gindexes.len(),
+                        );
+                        sealed = true;
+                        break;
+                    }
+                    // The reference-spendability ladder, one typed arm per
+                    // stage: value shortfall at the reference, empty
+                    // eligible set, and swept-but-not-yet-drained into the
+                    // reference tree.
+                    Err(StakeEngineError::Assembly(BondAssemblyError::InsufficientFunding {
+                        available,
+                        required,
+                    })) => {
+                        eprintln!(
+                            "persona funding not yet reference-spendable \
+                             ({available}/{required}); mining more"
+                        );
+                        daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                        refresh(&arc).await;
+                    }
+                    Err(StakeEngineError::Assembly(BondAssemblyError::NoSpendableFunding)) => {
+                        eprintln!("persona funding set empty at the reference height; mining more");
+                        daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                        refresh(&arc).await;
+                    }
+                    Err(StakeEngineError::Assembly(BondAssemblyError::OutputNotYetDrained {
+                        gindex,
+                    })) => {
+                        eprintln!(
+                            "funding output {gindex} not yet in the reference tree; mining more"
+                        );
+                        daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                        refresh(&arc).await;
+                    }
+                    Err(e) => panic!("assemble market bond post: {e:?}"),
+                }
             }
-            // Post-persist mid-flow failure — the documented W2 window
-            // (e.g. the funding output cleared the preflight sweep but is
-            // not yet drained into the REFERENCE curve tree the membership
-            // path is fetched against). The production recovery is
-            // re-invoking `stake` (`persist_bond_record` is re-entrant;
-            // the resume path re-mints the ticket), so the retry here
-            // exercises the W2 resume exactly as a wallet would.
-            Err(FirstStakeError::Engine(detail)) => {
-                eprintln!("first-stake W2 mid-flow failure ({detail}); mining and resuming");
-                daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
-                refresh(&arc).await;
-            }
-            Err(e) => panic!("first_stake: {e}"),
+            assert!(
+                sealed,
+                "the market bond post must assemble once the funding is reference-spendable"
+            );
         }
     }
-    let outcome =
-        outcome.expect("first_stake must succeed once the funding is reference-spendable");
-    eprintln!(
-        "first_stake sealed the bond post: slot {}, {} swept input(s), resumed={}",
-        outcome.p_slot, outcome.swept_inputs, outcome.resumed
-    );
 
     // Re-lift the sealed pending post (SA-DQ-5: `first_stake` never
     // broadcasts) and dispatch through the audited posture→submitter choke
@@ -1638,30 +1877,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
     // `BondPostChange` change-funding output beyond the pre-post set (the
     // outputs the emission-claim e2e, PR-4c, spends from).
     //
-    // The submit path inserts at `relay_method::local` under the
-    // Dandelion++ embargo, and the miner only includes broadcast-visible
-    // txs (`fill_block_template`'s `matches(relay_category::legacy)`
-    // gate); on this offline daemon the stem cannot send, so inclusion
-    // waits for the embargo to expire and fluff. Mine in batches until the
-    // pool drains rather than assuming one batch suffices.
-    use shekyl_engine_state::pscan_state::MintLineageOutput;
-    let mine_deadline = Instant::now() + Duration::from_secs(240);
-    loop {
-        daemon.generate_blocks(5, &principal).await;
-        let info = daemon
-            .rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
-            .await
-            .expect("get_info");
-        if info.tx_pool_size == 0 {
-            break;
-        }
-        assert!(
-            Instant::now() < mine_deadline,
-            "accepted bond post never left the pool (embargo/template gap?)"
-        );
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
+    mine_until_pool_drains(daemon, &principal, "accepted bond post", 5).await;
     daemon
         .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &principal)
         .await;
@@ -1680,12 +1896,94 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
         },
     )
     .await;
-    let post_change = state
+    let confirmed_tip_height = daemon.height().await;
+
+    ConfirmedBondFixture {
+        arc,
+        _tmp: tmp,
+        principal,
+        persona_id,
+        pscan_seal,
+        state,
+        swept_gindexes,
+        pre_post_discovered,
+        confirmed_tip_height,
+    }
+}
+
+/// PR-4 staker harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4): a staker wallet
+/// funds its persona on-chain (a wallet-built FCMP++ transfer to the persona's
+/// derived receive address — the production rung-1 `ExternalTransfer` funding),
+/// the production P-scan discovers the funding, and the production bond path
+/// ([`Engine::assemble_bond_post`](super::Engine::assemble_bond_post) →
+/// posture→submitter choke point) dispatches the bond post over real RPC.
+///
+/// **Accepted-and-applied (the promoted PR-4a tripwire).** The daemon's
+/// PR-4b bond-post Phase-C battery (`DAEMON_SUBMIT_VERDICT.md` §8.7.1 BP
+/// rows; `shekyl-daemon-rpc/src/submit/verifier.rs::verify_bond_post`)
+/// verifies the wallet-built post over real RPC. The trailing assertions
+/// pin the full loop: submit accepted, bond mined, and the rung-2
+/// bond-post match + `BondPostChange` change funding re-discovered by this
+/// same production scan, with the swept pre-post funding records PRUNED
+/// from the sealed state — the SP-R0 arm-#1 **production fire** (DQ-F):
+/// the stake enters through [`Engine::first_stake`], whose preflight sweep
+/// mints the `arm1_watch_pruning_live` witness, so the whole
+/// persist → assemble → seal → dispatch → confirm → prune loop runs on
+/// production code. The surviving funding set is the `BondPostChange`
+/// change — the substrate the emission-claim e2e (PR-4c) spends from.
+/// (This test was the PR-4a daemon-gap tripwire pinning the old
+/// unimplemented-arm `Malformed` refusal; PR-4b promoted it.)
+///
+/// Bounded deviations from production, each named:
+/// - The sealed pending post is re-lifted (`PBoundBytes::from_pending`) and
+///   dispatched directly through the audited posture→submitter choke point
+///   rather than by WI-3's block-timed dispatch driver: the driver's
+///   decorrelation offsets span up to ~600 blocks (its timing law has its
+///   own KATs); the harness proves the chain-facing contract.
+/// - A shallow P-scan finality horizon + tight cadence via the injectable
+///   `start_pscan_with` seam (see [`PSCAN_TEST_REORG_DEPTH`]).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+async fn e2e_staker_bond_post_accepted_and_applied() {
+    use super::stake_engine::PSlot;
+    use shekyl_engine_state::pscan_state::MintLineageOutput;
+
+    const SLOT: u32 = 0;
+    /// Extra persona funding above `floor + fee`, so the sweep-all bond leaves
+    /// a non-zero change output — the persona's rung-2 `BondPostChange` funding
+    /// (the emission-claim e2e sizes its own, larger cushion).
+    const FUNDING_CUSHION: u64 = 200_000_000;
+
+    let daemon = RegtestDaemon::start().await;
+    // Schedule guard (serial lock now held): this test's wallet epoch
+    // arithmetic must run on the genesis pin. A sibling e2e that armed the
+    // SEB lever in this process would otherwise bleed its schedule in
+    // silently (the `OnceLock` is irreversible) — fail loudly instead.
+    assert_eq!(
+        shekyl_archival_retention::effective_settlement_epoch_blocks(),
+        shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS,
+        "another test latched a levered settlement-epoch schedule in this process; \
+         run the regtest e2es in separate processes"
+    );
+    let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let slot = PSlot::from_raw(SLOT);
+    let fixture = stake_persona_to_confirmed_bond(
+        &daemon,
+        &seed,
+        SLOT,
+        FUNDING_CUSHION,
+        FixtureStake::FirstStake,
+    )
+    .await;
+
+    let post_change = fixture
+        .state
         .funding_outputs()
         .iter()
         .filter(|r| r.p_slot == slot && r.lineage == MintLineageOutput::BondPostChange)
         .count();
-    let total = state
+    let total = fixture
+        .state
         .funding_outputs()
         .iter()
         .filter(|r| r.p_slot == slot)
@@ -1694,18 +1992,646 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
     // arm 1: the key-image watch fires on the bond post's own funding
     // spends), so the persona's surviving funding set is the bond-post
     // change — the rung-2 substrate PR-4c spends from — not a superset of
-    // the {discovered} pre-post record(s).
+    // the pre-post record(s).
     assert!(
-        state
+        fixture
+            .state
             .funding_outputs()
             .iter()
-            .all(|r| !swept_gindexes.contains(&r.gindex.to_raw())),
+            .all(|r| !fixture.swept_gindexes.contains(&r.gindex.to_raw())),
         "the swept funding record must be pruned from the sealed set (SP-R0 arm 1)"
     );
     eprintln!(
         "bond post accepted-and-applied: match re-discovered; {post_change} \
          BondPostChange output(s), {total} persona funding output(s) \
-         ({discovered} pre-post record(s) swept+pruned)"
+         ({} pre-post record(s) swept+pruned)",
+        fixture.pre_post_discovered
+    );
+}
+
+/// PR-4c emission-claim harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4c): the
+/// full staker reward loop over real RPC — serve credit injected under the
+/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever, the epoch closed by mining, the
+/// claim built by the production CB-3 path ([`Engine::submit_emission_claim`]
+/// — no parallel builder), accepted by the daemon's PR-4b emission battery
+/// (`DAEMON_SUBMIT_VERDICT.md` §8.7.2 E-rows), and **applied**: the
+/// claimed-set row lands, the loud reward vout pays exactly the epoch's
+/// accrued budget, and the production P-scan re-discovers the reward as the
+/// persona's rung-1 [`MintLineageOutput::EmissionReward`] funding.
+///
+/// **Block geography (pinned).** One settlement epoch is sized to hold the
+/// whole bond substrate (`SEB = 512` ≫ the ~300 blocks the confirmed-bond
+/// fixture mines), so the bond joins in epoch 0 — and the onset stagger
+/// (`good_through`: a bond is a market member from `join_epoch + 1`, never
+/// in its join epoch) makes **epoch 1 the first claimable epoch**: the
+/// serve credit is injected for epoch 1, epoch 1 is mined closed, and the
+/// claim targets it. Epoch 0 closes zero-work along the way — the
+/// no-staker epoch whose budget is never minted (claims are wallet-timed
+/// mints; an unclaimable epoch's accrual simply never enters supply) —
+/// and the claim builder must EXCLUDE it (`claimed_epochs == [1]`), which
+/// is the no-staker leg's e2e observable. The pinned ordering
+/// `inject < referenceBlock < epoch_close < claim ≤ tip` follows from
+/// claiming within `REF_ANCHOR_AGE` blocks of the close (the close-detect
+/// loop mines in 3-block steps so the overshoot stays inside that
+/// window). Blocks between the close and the claim carry no epoch-2 serve
+/// credit — the zero-staker stretch the A5b pop leg straddles.
+///
+/// **Conservation (A6, `§9.5 item 8`).** The claim's reward vout must equal
+/// `budget_atomic(1)` byte-exactly — the daemon's per-block accrual
+/// `staker_emission + staker_pool_amount` (blockchain.cpp) summed over the
+/// epoch, i.e. the staker-inflow identity over real RPC. At regtest e2e
+/// activity the fee-pool half is **genuinely zero by the law**, and the
+/// test pins that executably: `get_tx_volume_avg` is an integer per-block
+/// mean over `SHEKYL_TX_VOLUME_WINDOW`, a handful of e2e txs floors it to
+/// 0, and a zero volume operand zeroes `burn_pct` — so `compute_burn_split`
+/// legitimately yields `staker_pool_amount = 0` (asserted via
+/// `total_burned == 0`, the tied observable). Driving the pool half
+/// positive needs a sustained ≥ 1 tx/block average — infeasible in an e2e;
+/// the positive-pool split coverage is the B5 unit KAT family. The claim
+/// itself still carries real `ToKey` fee inputs (`fee_gindexes`
+/// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
+/// runs live.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+async fn e2e_emission_claim_accepted_and_applied() {
+    use super::bond_assembly::SpentRecordsDurablyPruned;
+    use super::claim_dispatch::EmissionClaimRequestError;
+    use super::claim_orchestrator::ClaimOrchestrationError;
+    use super::emission_source::fetch_emission_claim_source;
+    use super::prpc::LocalNodeRpc;
+    use super::stake_engine::PSlot;
+    use super::traits::DaemonEngine;
+    use shekyl_curve_tree::reference::REF_ANCHOR_AGE;
+    use shekyl_engine_state::pscan_state::MintLineageOutput;
+    use shekyl_units::AtomicUnits;
+
+    const SLOT: u32 = 0;
+    /// Settlement-epoch size under the lever: large enough that the whole
+    /// confirmed-bond substrate (~300 blocks) fits inside epoch 0 (pinning
+    /// the join epoch), small enough that mining epoch 1 closed is cheap.
+    const SEB: u64 = 512;
+    const SHARD_ID: u64 = 0;
+    /// The claimed epoch. The bond joins in epoch 0 and the onset stagger
+    /// (`good_through`) defers market membership to `join + 1`, so epoch 1
+    /// is the first epoch whose serve credit carries weight.
+    const TARGET_EPOCH: u64 = 1;
+    /// Persona funding above `floor + bond fee`: becomes the sweep-all
+    /// bond's `BondPostChange` change output (and the size of the second,
+    /// post-bond transfer). The claim's fee must be covered by the single
+    /// non-backing record alone (Q11 excludes the designated backing from
+    /// the fee set), and the claim fee rides the ~48 KiB non-claims
+    /// envelope at the young chain's ~69k/byte floor ≈ 3.4e9 — 12e9 gives
+    /// each record standalone headroom.
+    const CLAIM_FUNDING_CUSHION: u64 = 12_000_000_000;
+
+    // (A1) Spawn the daemon FIRST — `start_with_settlement_epoch_blocks`
+    // takes the e2e serial lock, so sibling `--ignored` tests cannot
+    // interleave with the arming below — then arm the settlement-epoch
+    // lever in THIS process before any of ITS epoch arithmetic latches
+    // the genesis schedule (the daemon child is a separate process; its
+    // FAKECHAIN arming reads the env at startup and is not in this race).
+    //
+    // Containment is honest, not perfect: the schedule is a process-wide
+    // irreversible `OnceLock`, so serialization cannot UNDO a latch — if a
+    // sibling ran first and did epoch arithmetic, `arm` refuses loudly
+    // (`ArmedTooLate`), and if THIS test ran first, siblings that need the
+    // genesis pin fail their own schedule guard (see the bond e2e) —
+    // either direction is a loud named failure, never silent bleed. Run
+    // the regtest e2es in separate processes (the module docs' one-test
+    // invocation) for green runs.
+    let daemon = RegtestDaemon::start_with_settlement_epoch_blocks(Some(SEB)).await;
+    // The lever is set and deliberately NOT restored afterwards: it is the
+    // only input `arm` reads, and once armed the schedule latch is
+    // irreversible, so leaving the variable set keeps the process's two
+    // views of the schedule CONSISTENT (env says levered, latch is
+    // levered). Scrubbing it on the way out would leave the more dangerous
+    // state — a levered process that reports no lever. Child processes do
+    // not inherit it by accident: the spawn seam sets it explicitly for
+    // `Some(seb)` and `env_remove`s it for `None`.
+    std::env::set_var("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", SEB.to_string());
+    let armed = shekyl_archival_retention::arm_settlement_epoch_override_for_regtest()
+        .expect("the SEB lever must arm before any epoch arithmetic latches the schedule");
+    assert_eq!(armed, SEB, "armed schedule must be the lever value");
+
+    // The shared confirmed-bond substrate runs entirely inside epoch 0.
+    let seed = [0x55u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let slot = PSlot::from_raw(SLOT);
+    // The claimable bond must be a MARKET bond (`ShardSetCompact`): the
+    // `first_stake` genesis posture (CompleteTree) is foundation-shaped and
+    // market-excluded (E-2), so its Σwork is zero forever — surfaced by
+    // this e2e's first close. The declared shard need not be frozen
+    // (`bond_post.rs`: adding an unfrozen shard is valid), and an unfrozen
+    // credited shard carries age 0 ⇒ `g(0) = WORK_MILLI_SCALE` ⇒ positive
+    // work.
+    let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
+        kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
+        shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
+            .expect("one-shard holdings"),
+    };
+    let fixture = stake_persona_to_confirmed_bond(
+        &daemon,
+        &seed,
+        SLOT,
+        CLAIM_FUNDING_CUSHION,
+        FixtureStake::MarketBond(market_holdings),
+    )
+    .await;
+    assert!(
+        fixture.confirmed_tip_height + 16 < SEB,
+        "the bond substrate (tip {}) must fit inside epoch 0 (close {SEB}) with injection \
+         room; raise SEB",
+        fixture.confirmed_tip_height
+    );
+
+    // The claim spends TWO distinct persona outputs: the designated backing
+    // (the membership proof — Q11 excludes it from the fee set
+    // structurally, `BackingSet::fee_sweep`) and at least one fee input.
+    // The sweep-all bond leaves exactly ONE (the `BondPostChange` change),
+    // so fund the persona once more post-bond — an ordinary rung-1
+    // ExternalTransfer — and re-run the production P-scan so the sealed
+    // state carries both records before the claim reads it.
+    transfer_to(
+        &daemon,
+        &fixture.arc,
+        &fixture.principal,
+        &persona_address(&seed, SLOT),
+        shekyl_units::AtomicUnits::from_raw(CLAIM_FUNDING_CUSHION),
+        10,
+        24,
+    )
+    .await;
+    daemon
+        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &fixture.principal)
+        .await;
+    refresh(&fixture.arc).await;
+    let state = pscan_until(
+        &fixture.arc,
+        &fixture.pscan_seal,
+        "the post-bond fee funding (2 spendable persona records)",
+        |s| {
+            s.funding_outputs()
+                .iter()
+                .filter(|r| r.p_slot == slot)
+                .count()
+                >= 2
+        },
+    )
+    .await;
+    eprintln!(
+        "persona holds {} funding record(s) pre-claim (backing + fee substrate)",
+        state
+            .funding_outputs()
+            .iter()
+            .filter(|r| r.p_slot == slot)
+            .count()
+    );
+
+    // (A2) Inject one serve-credit bit for (persona, shard 0, TARGET_EPOCH).
+    // The bit store is epoch-keyed and injection is height-free, but the
+    // injection HEIGHT is what the pop legs must stay above (the store is
+    // not pop-symmetric), so it is recorded here. Single claimant holding
+    // all Σwork ⇒ its share is the whole epoch budget.
+    let inject_height = daemon.height().await;
+    daemon
+        .inject_serve_credit(&fixture.persona_id, SHARD_ID, TARGET_EPOCH)
+        .await;
+    eprintln!("serve credit injected for epoch {TARGET_EPOCH} at height {inject_height}");
+
+    // (A1 close) Mine until the daemon reports TARGET_EPOCH closed (budget
+    // row written), in 3-block steps so the tip overshoots the close by
+    // less than `REF_ANCHOR_AGE` — the pinned `referenceBlock < epoch_close`
+    // ordering depends on claiming inside that window.
+    let p_id_bytes = fixture.persona_id.to_bytes();
+    let epoch_row = loop {
+        let src = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+            .await
+            .expect("claim-source fetch");
+        if let Some(row) = src
+            .epochs
+            .iter()
+            .find(|e| e.settlement_epoch == TARGET_EPOCH && e.has_budget_row)
+        {
+            break row.clone();
+        }
+        let h = daemon.height().await;
+        assert!(
+            h < (TARGET_EPOCH + 1) * SEB + 64,
+            "epoch {TARGET_EPOCH} never closed with a budget row by height {h} (SEB {SEB})"
+        );
+        daemon.generate_blocks(3, &fixture.principal).await;
+    };
+    let total_burned_at_close = daemon.total_burned().await;
+    eprintln!(
+        "epoch {TARGET_EPOCH} closed at {}: budget {} atomic, sigma-work {} milli, \
+         {} credit pair(s); total_burned {}",
+        epoch_row.close_block_height,
+        epoch_row.budget_atomic,
+        epoch_row.sigma_work_milli,
+        epoch_row.credit_pairs.len(),
+        total_burned_at_close,
+    );
+    assert!(
+        !epoch_row.credit_pairs.is_empty(),
+        "the injected serve credit must surface in the closed epoch's credit pairs"
+    );
+    assert!(
+        epoch_row.sigma_work_milli > 0,
+        "the closed epoch must carry the injected work (membership from join+1)"
+    );
+    assert!(
+        epoch_row.budget_atomic > 0,
+        "the closed epoch must have accrued a positive budget"
+    );
+    assert!(
+        epoch_row.claimant_bond_idx.is_some(),
+        "the fixture's bond must be a claimant in the closed epoch"
+    );
+    // A6 pool-half disposition (module docs): at e2e activity the integer
+    // per-block volume mean floors to 0, a zero volume operand zeroes
+    // `burn_pct`, and `compute_burn_split` then yields a zero pool half AND
+    // a zero destroyed half from the same `burned` product — `total_burned`
+    // is the tied observable, pinned here so an operand-law change
+    // re-surfaces this disposition instead of silently shifting the budget.
+    assert_eq!(
+        total_burned_at_close, 0,
+        "regtest e2e activity must floor the volume mean to 0 ⇒ zero fee burn \
+         (pool-half disposition, §9.5 item 8; positive-pool coverage is the B5 KATs)"
+    );
+    // The no-staker epoch: epoch 0 (the join epoch) closed zero-work — its
+    // budget row exists but Σwork is 0, so nothing of it is claimable and
+    // its accrual never mints (never enters supply).
+    let src_now = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source fetch");
+    let join_epoch_row = src_now
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == 0 && e.has_budget_row)
+        .expect("the join epoch must have closed with a budget row");
+    assert_eq!(
+        join_epoch_row.sigma_work_milli, 0,
+        "the join epoch must close zero-work (onset stagger: no membership in the join epoch)"
+    );
+
+    // (A3) Build and dispatch the claim through the production CB-3 path.
+    // The fee rides swept `ToKey` inputs; derive it from the daemon's live
+    // estimate over the claim's own production envelope — the ~48 KiB
+    // `EMISSION_NON_CLAIMS_RESERVE_BYTES` (two fee-side FCMP++ proofs +
+    // hybrid PQC auths + 16-vout worst case + Bp+ clawback) plus a small
+    // vin allowance for the single claim row. The bond's 32 KiB ceiling is
+    // too small here — a claim carries TWO input proofs where the bond
+    // carries one (live run 4's daemon-side `FeeTooLow`); overpaying is a
+    // miner transfer, never a conservation term.
+    use super::emission_claim::EMISSION_NON_CLAIMS_RESERVE_BYTES;
+    refresh(&fixture.arc).await;
+    let claim_fee = {
+        let estimates = fixture
+            .arc
+            .read()
+            .await
+            .daemon()
+            .get_fee_estimates()
+            .await
+            .expect("daemon fee estimates");
+        estimates
+            .economy
+            .calculate_fee_from_weight(EMISSION_NON_CLAIMS_RESERVE_BYTES + 2048)
+    };
+    let claim_rpc = LocalNodeRpc::new(
+        format!("http://127.0.0.1:{}", daemon.rpc_port),
+        Duration::from_secs(10),
+    )
+    .await
+    .expect("loopback claim transport");
+    let pruning_landed = SpentRecordsDurablyPruned::for_test();
+    let mut receipt = None;
+    let mut tip_before_claim = 0;
+    for attempt in 0..4 {
+        tip_before_claim = daemon.height().await;
+        match super::Engine::submit_emission_claim(
+            fixture.arc.clone(),
+            &claim_rpc,
+            slot,
+            AtomicUnits::from_raw(claim_fee),
+            &pruning_landed,
+        )
+        .await
+        {
+            Ok(r) => {
+                receipt = Some(r);
+                break;
+            }
+            // Resync-and-retry arms (the wallet's own docs): the tree or
+            // header window lags the tip. Mine ONE block per retry — the
+            // pinned ordering needs the successful attempt's reference to
+            // stay below the close.
+            Err(EmissionClaimRequestError::Claim(
+                e @ (ClaimOrchestrationError::ReferenceUnanchorable { .. }
+                | ClaimOrchestrationError::MissingBlockHash { .. }),
+            )) => {
+                eprintln!("claim attempt {attempt}: {e}; resyncing");
+                daemon.generate_blocks(1, &fixture.principal).await;
+                refresh(&fixture.arc).await;
+            }
+            Err(e) => panic!("submit_emission_claim: {e}"),
+        }
+    }
+    let receipt = receipt.expect("claim must assemble and dispatch within the retry budget");
+    eprintln!(
+        "emission claim accepted: epochs {:?}, reward {}, {} fee input(s)",
+        receipt.claim.claimed_epochs,
+        receipt.claim.total_reward,
+        receipt.claim.fee_gindexes.len(),
+    );
+
+    // (A4/A6) The dispatched claim's shape: epoch 0 claimed, real ToKey fee
+    // inputs (not the Q11 zero-fee form), and the loud vout equal to the
+    // epoch's whole budget byte-exactly (single claimant holding all Σwork
+    // ⇒ `floor(budget·capped/Σwork) = budget`) — the staker-inflow
+    // conservation identity `inflow = staker_emission + staker_pool_amount`
+    // over real RPC.
+    assert_eq!(
+        receipt.claim.claimed_epochs,
+        vec![TARGET_EPOCH],
+        "the claim must claim exactly the work-bearing epoch — the zero-work join epoch \
+         is EXCLUDED (the no-staker leg: unclaimable accrual never mints)"
+    );
+    assert!(
+        !receipt.claim.fee_gindexes.is_empty(),
+        "the claim must carry real ToKey fee inputs (A6)"
+    );
+    assert_eq!(
+        receipt.claim.total_reward, epoch_row.budget_atomic,
+        "single-claimant reward must equal the epoch's accrued budget byte-exactly \
+         (conservation, both inflow halves)"
+    );
+    // Pinned geography: inject < referenceBlock < epoch_close < claim tip.
+    // The wallet anchors at `synced_tip − REF_ANCHOR_AGE`; `tip_before_claim`
+    // is the daemon height the successful attempt saw.
+    let reference_est = tip_before_claim - REF_ANCHOR_AGE;
+    assert!(
+        inject_height < reference_est,
+        "inject ({inject_height}) must precede the claim reference (~{reference_est})"
+    );
+    assert!(
+        reference_est < epoch_row.close_block_height,
+        "the claim reference (~{reference_est}) must precede the epoch close ({}) — \
+         the A5c pop-through-reference geometry",
+        epoch_row.close_block_height
+    );
+
+    // Applied: mine the claim in, then past the scan horizon; the daemon's
+    // claimed-set row must land and the production P-scan must re-discover
+    // the reward as the persona's rung-1 EmissionReward funding, amount
+    // equal to the loud vout.
+    mine_until_pool_drains(&daemon, &fixture.principal, "accepted emission claim", 1).await;
+    let claim_mined_by_height = daemon.height().await;
+    assert!(
+        epoch_row.close_block_height < claim_mined_by_height,
+        "claim mined ({claim_mined_by_height}) after the close ({})",
+        epoch_row.close_block_height
+    );
+    let src = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source refetch");
+    let claimed = src
+        .bond
+        .as_ref()
+        .expect("bond context after claim")
+        .claimed_settlement_epochs
+        .clone();
+    assert!(
+        claimed.contains(&TARGET_EPOCH),
+        "the daemon's claimed-set row for epoch {TARGET_EPOCH} must land (got {claimed:?})"
+    );
+
+    // ── (A5a) Depth-1 pop: undo exactly the claim block ──
+    // The batch-1 drain left the claim block as the tip. Popping it must
+    // clear the daemon's claimed-set row and return the claim tx to the
+    // pool (`pop_block_from_blockchain` is tx-conserving), with the budget
+    // row untouched (the pop stays above the close); re-mining must
+    // re-include the identical bytes (popped txs re-enter at
+    // `relay_method::block`, broadcast-visible — no embargo) and re-apply
+    // the claimed-set row, the conservation operands byte-identical.
+    let tip_with_claim = daemon.height().await;
+    daemon.pop_blocks(1).await;
+    let src_popped = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after depth-1 pop");
+    let claimed_after_pop = &src_popped
+        .bond
+        .as_ref()
+        .expect("bond context after depth-1 pop")
+        .claimed_settlement_epochs;
+    assert!(
+        !claimed_after_pop.contains(&TARGET_EPOCH),
+        "depth-1 pop must clear the claimed-set row (got {claimed_after_pop:?})"
+    );
+    let row_popped = src_popped
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == TARGET_EPOCH && e.has_budget_row)
+        .expect("the budget row must survive a pop above the close");
+    assert_eq!(
+        row_popped.budget_atomic, epoch_row.budget_atomic,
+        "the budget row must be untouched by a pop above the close"
+    );
+    let pool_after_pop = daemon.tx_pool_size().await;
+    assert_eq!(
+        pool_after_pop, 1,
+        "the popped claim tx must return to the pool"
+    );
+    daemon.generate_blocks(1, &fixture.principal).await;
+    let pool_after_remine = daemon.tx_pool_size().await;
+    assert_eq!(
+        pool_after_remine, 0,
+        "the re-mined block must re-include the claim"
+    );
+    assert_eq!(daemon.height().await, tip_with_claim);
+    let src_remined = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after depth-1 re-mine");
+    assert!(
+        src_remined
+            .bond
+            .as_ref()
+            .expect("bond context after re-mine")
+            .claimed_settlement_epochs
+            .contains(&TARGET_EPOCH),
+        "re-mining the identical claim must re-apply the claimed-set row"
+    );
+    let row_remined = src_remined
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == TARGET_EPOCH && e.has_budget_row)
+        .expect("budget row after re-mine");
+    assert_eq!(
+        (row_remined.budget_atomic, row_remined.sigma_work_milli),
+        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
+        "conservation operands must hold byte-identically across pop + re-mine (A5a)"
+    );
+    eprintln!("A5a depth-1 pop/re-mine: claimed-set cleared and re-applied byte-identically");
+
+    // ── (A5b) Epoch-straddling pop: undo the close itself ──
+    // Depth reaches the close block; the floor stays strictly above the
+    // injection height — the serve-credit store is NOT pop-symmetric, so a
+    // pop below the inject would desync the bits. The popped range holds
+    // the close and the post-close blocks that carry no epoch-1 serve
+    // credit (the zero-staker stretch). Undoing the close must delete the
+    // budget row and the claimed-set row together; re-mining must re-close
+    // epoch 0 from the pop-surviving credit bits byte-identically, then
+    // re-apply the claim (the drain loop tolerates the claim being
+    // template-skipped until the re-close lands).
+    let tip = daemon.height().await;
+    assert!(
+        inject_height < epoch_row.close_block_height,
+        "pop floor (close {}) must sit strictly above the inject ({inject_height})",
+        epoch_row.close_block_height
+    );
+    // Convention: `close_block_height` is the close OPERAND `(E+1)·SEB`;
+    // the close itself fires while CONNECTING the epoch's last block,
+    // index `close_block_height − 1` (blockchain_db.cpp: the accrual
+    // comment — "the close of epoch E fires while connecting E's last
+    // block (operand prev_height + 1)"), and `height()` is the chain
+    // LENGTH — so undoing the close means popping down to length
+    // `close_block_height − 1`.
+    let straddle_depth = tip - (epoch_row.close_block_height - 1);
+    daemon.pop_blocks(straddle_depth).await;
+    let src_straddle = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after straddling pop");
+    assert!(
+        !src_straddle
+            .epochs
+            .iter()
+            .any(|e| e.settlement_epoch == TARGET_EPOCH && e.has_budget_row),
+        "the straddling pop must undo the close (budget row deleted)"
+    );
+    if let Some(bond) = src_straddle.bond.as_ref() {
+        assert!(
+            !bond.claimed_settlement_epochs.contains(&TARGET_EPOCH),
+            "the straddling pop must clear the claimed-set row"
+        );
+    }
+    mine_until_pool_drains(
+        &daemon,
+        &fixture.principal,
+        "re-applied emission claim (A5b)",
+        1,
+    )
+    .await;
+    let src_reclosed = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after re-close");
+    let row_reclosed = src_reclosed
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == TARGET_EPOCH && e.has_budget_row)
+        .expect("the epoch must re-close from the pop-surviving credit bits");
+    assert_eq!(
+        (row_reclosed.budget_atomic, row_reclosed.sigma_work_milli),
+        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
+        "the re-closed epoch must be byte-identical (accrual blocks below the floor \
+         untouched; credit bits pop-surviving)"
+    );
+    assert!(
+        src_reclosed
+            .bond
+            .as_ref()
+            .expect("bond context after re-close")
+            .claimed_settlement_epochs
+            .contains(&TARGET_EPOCH),
+        "the claim must re-apply after the re-close (A5b)"
+    );
+    eprintln!(
+        "A5b straddling pop (depth {straddle_depth}, floor {}): close undone and \
+         re-closed byte-identically, claim re-applied",
+        epoch_row.close_block_height
+    );
+
+    daemon
+        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &fixture.principal)
+        .await;
+    refresh(&fixture.arc).await;
+    let expected_reward = receipt.claim.total_reward;
+    let state = pscan_until(
+        &fixture.arc,
+        &fixture.pscan_seal,
+        "the EmissionReward funding output",
+        |s| {
+            s.funding_outputs().iter().any(|r| {
+                r.p_slot == slot
+                    && r.lineage == MintLineageOutput::EmissionReward
+                    && r.amount.to_raw() == expected_reward
+            })
+        },
+    )
+    .await;
+    let rewards = state
+        .funding_outputs()
+        .iter()
+        .filter(|r| r.p_slot == slot && r.lineage == MintLineageOutput::EmissionReward)
+        .count();
+    eprintln!(
+        "emission claim accepted-and-applied: claimed-set {claimed:?}; {rewards} \
+         EmissionReward output(s) of {expected_reward} atomic re-discovered by the \
+         production P-scan (inject {inject_height} < ref ~{reference_est} < close {} < \
+         claim ≤ {claim_mined_by_height})",
+        epoch_row.close_block_height,
+    );
+
+    // ── (A5c) Deep pop through the claim's reference block ──
+    // The pop floor sits just below the claim's reference anchor (still far
+    // above the inject), so the pop undoes the claim, both epoch closes,
+    // and the block the claim's FCMP++ membership proof anchors to.
+    // Re-mined blocks carry new hashes, so the popped claim tx is
+    // structurally stranded — its proof binds a reference root that no
+    // longer exists on the rebuilt chain. The correct terminal state: the
+    // chain re-converges to the same height (the stranded tx must never
+    // re-apply or wedge the miner), the claimed epoch re-closes
+    // byte-identically from the pop-surviving credit bits, and the
+    // claimed-set stays EMPTY. Building the replacement claim against the
+    // rebuilt root is the retire/resubmit slice (the named B2 follow-on,
+    // matching the bond precedent): the wallet's one-live-claim-per-persona
+    // rule holds the pending record until that slice retires it.
+    let tip_c = daemon.height().await;
+    let pop_floor_c = reference_est - 1;
+    assert!(
+        inject_height < pop_floor_c,
+        "the A5c floor ({pop_floor_c}) must stay above the inject ({inject_height})"
+    );
+    let depth_c = tip_c - pop_floor_c;
+    daemon.pop_blocks(depth_c).await;
+    daemon.generate_blocks(depth_c, &fixture.principal).await;
+    assert_eq!(
+        daemon.height().await,
+        tip_c,
+        "the chain must re-converge past the stranded claim (no miner wedge)"
+    );
+    let src_c = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after deep-pop re-mine");
+    let row_c = src_c
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == TARGET_EPOCH && e.has_budget_row)
+        .expect("the claimed epoch must re-close on the rebuilt chain");
+    assert_eq!(
+        (row_c.budget_atomic, row_c.sigma_work_milli),
+        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
+        "the rebuilt close must be byte-identical (bits survive; accrual below the floor)"
+    );
+    if let Some(bond) = src_c.bond.as_ref() {
+        assert!(
+            !bond.claimed_settlement_epochs.contains(&TARGET_EPOCH),
+            "the stranded claim must NOT re-apply against the rebuilt root (its proof \
+             binds a popped reference)"
+        );
+    }
+    eprintln!(
+        "A5c deep pop (depth {depth_c}, floor {pop_floor_c} < ref): chain re-converged, \
+         epoch re-closed byte-identically, claimed-set empty (stranded claim inert) — \
+         replacement claim is the B2 retire/resubmit slice"
     );
 }
 
@@ -1730,6 +2656,14 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
 
     const SLOT: u32 = 0;
     let daemon = RegtestDaemon::start().await;
+    // Schedule guard (see the bond e2e): wallet epoch arithmetic here must
+    // run on the genesis pin; a sibling-armed levered schedule fails loudly.
+    assert_eq!(
+        shekyl_archival_retention::effective_settlement_epoch_blocks(),
+        shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS,
+        "another test latched a levered settlement-epoch schedule in this process; \
+         run the regtest e2es in separate processes"
+    );
     let seed = [0x45u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let slot = PSlot::from_raw(SLOT);
     // `staker_wallet` IS the crash fixture: it persists the bond record (the

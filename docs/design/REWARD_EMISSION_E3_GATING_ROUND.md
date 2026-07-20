@@ -401,6 +401,13 @@ implementation, in dependency order:
 5. **E4/E5** — delete `txin_stake_claim`/`C_stake` only after emission is
    accepted-and-applied on a regtest chain through the real C-1 path; constants,
    KATs, audit-scope, docs.
+   **CLOSED 2026-07-19 (PR-4c): the precondition fired and the residue is
+   zero.** Emission is accepted-and-applied live (§9.5 item 8 below);
+   `txin_stake_claim` was already deleted (`2615c0dae`), and a full-source
+   sweep found **no `C_stake` code residue** — the single source hit is a
+   "no `C_stake`" negation comment (`principal_stake.rs`); remaining
+   mentions are design-doc theory (retained deliberately,
+   `CONFIDENTIAL_STAKING.md`). Nothing to delete: item 5 closes docs-only.
 
 ---
 
@@ -1169,6 +1176,23 @@ not silently flipped.
    what item 8 exists to prove. Reopening trigger: claim builder lands →
    e2e rides the Track-2 regtest harness → E4/E5 unblocks per item 5.
    Tracked in `docs/FOLLOWUPS.md` (V3.0 pre-genesis queue).
+   **LANDED 2026-07-19 (PR-4c; the reopening trigger fired on schedule).**
+   `e2e_emission_claim_accepted_and_applied` drives the real path end to
+   end — production CB-3 build, PR-4b battery accept, connect-arm apply —
+   and asserts the conservation identity **byte-exactly over real RPC**:
+   the loud reward vout equals `budget_atomic(E)`, the per-block accrual
+   `staker_emission + staker_pool_amount` summed over the claimed epoch.
+   The claim carries real `ToKey` fee inputs (the fee-subset battery leg
+   runs live; the Q11 zero-fee form is what the fixture deliberately is
+   NOT). The fee-pool half's **positivity** stays out of regtest reach by
+   the law itself — `get_tx_volume_avg` is an integer per-block mean, e2e
+   activity floors it to 0, and a zero volume operand zeroes `burn_pct` —
+   so the e2e pins that disposition executably (`total_burned == 0`) and
+   the positive-pool split coverage remains the unit-level B5 KATs, as
+   this item already carried. Pop legs bound the identity under reorgs
+   (depth-1 idempotency; epoch-straddling re-close byte-identical from
+   pop-surviving credit bits; deep pop through the claim reference —
+   stranded claim inert). E4/E5 closed per item 5 (zero code residue).
 
 **Decision-placement pin (ratified 2026-07-08).** Verified split at this
 head: **computation is uniformly Rust; decisions are mixed.** The
