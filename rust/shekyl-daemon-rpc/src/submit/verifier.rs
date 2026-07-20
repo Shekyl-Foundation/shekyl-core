@@ -76,9 +76,12 @@ use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
 use rand_core::OsRng;
 
 use shekyl_archival_retention::{
+    emission_vin_verify_auth, emission_vin_verify_backing, emission_vin_verify_claims,
     p_canonical_id_from_hybrid_pubkey, verify_bond_post_ct_balance, verify_join_market_bond_post,
     ArchivalBondPostVin, BondPostError, BondPostKind as RetentionBondPostKind, BondTerm,
-    HoldingsDescriptor, HoldingsKind, ShardSet,
+    ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
+    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
+    HoldingsKind, RewardCommit, ShardSet,
 };
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::multisig::verify_multisig;
@@ -132,6 +135,7 @@ impl TxVerifier for DaemonTxVerifier {
         match parsed.kind {
             SubmitTxKind::Spend => verify_spend(parsed, facts),
             SubmitTxKind::BondPost => verify_bond_post(parsed, facts),
+            SubmitTxKind::Emission => verify_emission(parsed, facts),
             // Unreachable today (the engine's Phase-C fee floor rejects the
             // zero-fee consensus shape first) — see the module docs'
             // reachability section for the SP-T4a reopening criterion
@@ -363,6 +367,262 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     // ── K13: PQC hybrid auth over EVERY input, the bond-post slot
     // included — exactly the C++ `verify_transaction_pqc_auth` battery ───
     verify_pqc_auths(parsed, pqc_auths)
+}
+
+/// The §8.7.2 emission battery: EV4's mint-balance + Bp+ legs, the E2/E5
+/// structural bindings, the E6–E10 archival legs (native
+/// `shekyl-archival-retention::emission_verify` minters — the same
+/// functions the C++ oracle reaches through `shekyl_emission_vin_verify`),
+/// then the shared funding-subset K12 and whole-tx K13.
+///
+/// EV1/EV2 are structural in `shekyl-wire`; EV3, E1 (parse+validate) and
+/// the E11 proof-presence coupling are Phase-A statics. The Q11
+/// zero-fee-input form is representable (a prunable with an EMPTY proof
+/// and empty pseudo-outs — the prunable itself must be present, since a
+/// prunable-less ct cannot carry outputs) and consensus-valid; the wallet
+/// never builds it (`ClaimFeeInputsRequired`), but the battery admits it:
+/// the fee-subset K12 leg is skipped when there are no fee inputs, exactly
+/// as the C++ oracle skips it — §8.7.2 row E11's note.
+fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFailure> {
+    let Ct::Fcmp {
+        fee,
+        base,
+        pqc_auths,
+        prunable: Some(prunable),
+        ..
+    } = &parsed.tx.ct
+    else {
+        return Err(VerifyFailure::Malformed);
+    };
+    // Phase A parsed + validated the vin (E1) and stored it.
+    let Some(vin) = parsed.emission_vin.as_deref() else {
+        return Err(VerifyFailure::Malformed);
+    };
+    let Some((emission_index, _)) = parsed
+        .tx
+        .prefix
+        .inputs
+        .iter()
+        .enumerate()
+        .find(|(_, input)| matches!(input, Input::ArchivalRewardEmission { .. }))
+    else {
+        return Err(VerifyFailure::Malformed);
+    };
+
+    // ── O6 over every output commitment (blockchain.cpp:3380 runs the
+    // same check for the emission shape) ────────────────────────────────
+    check_commitment_masks(base)?;
+
+    // ── EV4: the mint-side CT balance ───────────────────────────────────
+    // `Σ pseudoOuts + total_reward = Σ out_masks + fee` — the mint rides
+    // the debit slot of the single-sourced archival balance
+    // (`verRctSemanticsBondPost`'s sibling, rctSigs.cpp:348-370). The loud
+    // vout sum is non-zero by Phase A's EV3 static, so the `BondTerm`
+    // conversion below is total for an admitted submission.
+    let vout_reward_sum: u64 = {
+        let mut sum: u64 = 0;
+        for output in &parsed.tx.prefix.outputs {
+            // Overflow-free by wire validate()'s check_money_overflow
+            // parity; stay non-panicking anyway (§7.6).
+            sum = sum
+                .checked_add(output.amount)
+                .ok_or(VerifyFailure::Malformed)?;
+        }
+        sum
+    };
+    let Some(mint) = NonZeroAtomicUnits::new(AtomicUnits::from_raw(vout_reward_sum)) else {
+        return Err(VerifyFailure::Malformed);
+    };
+    if verify_bond_post_ct_balance(
+        prunable.pseudo_outs.as_flattened(),
+        base.commitments.as_flattened(),
+        *fee,
+        BondTerm::Debit(mint),
+    )
+    .is_err()
+    {
+        return Err(VerifyFailure::Malformed);
+    }
+
+    // ── N8 leg 2: Bp+ over the output commitments ───────────────────────
+    verify_bpplus_leg(base, prunable)?;
+
+    // ── E2: the emission slot's PQC auth key IS the vin's claim key ─────
+    // (blockchain.cpp:3830-3845 compares the derived canonical ids — an
+    // FFI necessity there; byte equality of the keys implies id equality
+    // and is the direct form here.)
+    let Some(emission_auth) = pqc_auths.get(emission_index) else {
+        return Err(VerifyFailure::Malformed);
+    };
+    if emission_auth.hybrid_public_key != vin.p_pubkey {
+        return Err(VerifyFailure::Malformed);
+    }
+
+    // ── E5: the F-C1c signable hash — the prefix hash with the emission
+    // vin removed wholesale (blockchain.cpp:3907-3919) ──────────────────
+    let signable_tx_hash = {
+        let mut pruned = parsed.tx.clone();
+        pruned.prefix.inputs.remove(emission_index);
+        pruned.prefix_hash()
+    };
+
+    // ── E6 + E7 facts → the verify context and per-epoch sources ────────
+    // The engine pre-checked presence (ShimContract); the `None` arm is
+    // the seam's non-panicking refusal for direct callers.
+    let Some(emission_facts) = facts.emission.as_ref() else {
+        tracing::error!(
+            "emission verifier called without the E6/E7 fact bundle \
+             (the engine's ShimContract pre-check makes this unreachable \
+             through the pipeline)"
+        );
+        return Err(VerifyFailure::Malformed);
+    };
+    // E7: every claimed epoch must carry a frozen budget row.
+    if emission_facts.snapshots.iter().any(|s| !s.has_budget_row) {
+        return Err(VerifyFailure::Malformed);
+    }
+    let ctx = EmissionVerifyContext {
+        current_block_height: facts.chain_height.to_raw(),
+        bond: emission_facts.bond.as_ref().map(|b| ClaimantBondRecord {
+            join_settlement_epoch: b.join_settlement_epoch,
+            holdings: &b.holdings,
+            claimed_settlement_epochs: &b.claimed_settlement_epochs,
+        }),
+        vout_reward_sum,
+    };
+    // Borrow-anchored view construction, the archival_ffi shape: owned
+    // rows first, then the borrowing `verify_view` sources (the single
+    // constructor the C++ oracle's shim also uses, so the two paths build
+    // byte-identical views).
+    let bonds_per: Vec<Vec<EpochCloseBond<'_>>> = emission_facts
+        .snapshots
+        .iter()
+        .map(|snap| {
+            snap.bonds
+                .iter()
+                .map(|b| EpochCloseBond {
+                    join_settlement_epoch: b.join_settlement_epoch,
+                    is_foundation_complete_tree: b.is_foundation_complete_tree,
+                    bad_intervals: &b.bad_intervals,
+                })
+                .collect()
+        })
+        .collect();
+    let shards_per: Vec<Vec<EpochCloseShard>> = emission_facts
+        .snapshots
+        .iter()
+        .map(|snap| {
+            snap.shards
+                .iter()
+                .map(|sh| EpochCloseShard {
+                    shard_id: sh.shard_id,
+                    has_segment: sh.has_segment,
+                    freeze_height: sh.freeze_height,
+                })
+                .collect()
+        })
+        .collect();
+    let pairs_per: Vec<Vec<CreditPair>> = emission_facts
+        .snapshots
+        .iter()
+        .map(|snap| {
+            snap.credit_pairs
+                .iter()
+                .map(|cp| CreditPair {
+                    bond_idx: cp.bond_idx,
+                    shard_idx: cp.shard_idx,
+                })
+                .collect()
+        })
+        .collect();
+    let sources: Vec<EmissionEpochSource<'_>> = emission_facts
+        .snapshots
+        .iter()
+        .zip(&bonds_per)
+        .zip(&shards_per)
+        .zip(&pairs_per)
+        .map(|(((snap, bonds), shards), pairs)| EmissionEpochSource {
+            inputs: EpochCloseInputs::verify_view(
+                snap.settlement_epoch,
+                snap.close_block_height,
+                bonds,
+                shards,
+                pairs,
+            ),
+            persisted_sigma_work_milli: snap.sigma_work_milli,
+            claimant_bond_idx: snap.claimant_bond_idx,
+            budget: snap.budget_atomic,
+        })
+        .collect();
+
+    // ── E8: claims battery (§7.1 steps 1–5) ─────────────────────────────
+    let claims = emission_vin_verify_claims(vin, &ctx, &sources).map_err(emission_reject)?;
+
+    // ── E9 + E10: backing membership proof + the dual hybrid auths ──────
+    let reference = facts.reference.ok_or(VerifyFailure::StaleRoot)?;
+    let layers = u8::try_from(prunable.tree_depth)
+        .ok()
+        .and_then(|depth| depth.checked_add(1))
+        .ok_or(VerifyFailure::StaleRoot)?;
+    let backing = emission_vin_verify_backing(vin, &reference.root, layers, signable_tx_hash)
+        .map_err(emission_reject)?;
+    let reward_commits: Vec<RewardCommit> = parsed
+        .tx
+        .prefix
+        .outputs
+        .iter()
+        .enumerate()
+        .filter(|(_, output)| output.amount != 0)
+        .map(|(i, output)| {
+            Some(RewardCommit {
+                commitment: *base.commitments.get(i)?,
+                amount_plain: output.amount,
+                one_time_key: output.key,
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(VerifyFailure::Malformed)?;
+    let auth = emission_vin_verify_auth(vin, &reward_commits, &signable_tx_hash)
+        .map_err(emission_reject)?;
+    // The witness assembly is infallible once the three minters passed —
+    // mirroring the C++ oracle's single `shekyl_emission_vin_verify`
+    // crossing; the outputs (total reward, epochs to commit) are the
+    // connect arm's operands and unused at submit.
+    let _ = shekyl_archival_retention::emission_vin_verify(claims, backing, auth);
+
+    // ── E11: fee-input FCMP++ over the ToKey subset (blockchain.cpp:
+    // 4046-4108 — the bond-arm funding shape; the full prefix hash, not
+    // the vin-less signable). With zero fee inputs the proof is EMPTY by
+    // Phase A's coupling and the leg is skipped exactly as the C++ oracle
+    // skips it (`if (num_spend == 0)`, blockchain.cpp:4050) — the Q11
+    // mint-pays-fee form is consensus-valid even though the wallet never
+    // builds it (`ClaimFeeInputsRequired`).
+    if !parsed.key_images.is_empty() {
+        let fee_auths: Vec<&PqcAuth> = parsed
+            .tx
+            .prefix
+            .inputs
+            .iter()
+            .zip(pqc_auths.iter())
+            .filter_map(|(input, auth)| matches!(input, Input::ToKey { .. }).then_some(auth))
+            .collect();
+        verify_fcmp(parsed, prunable, &fee_auths, &reference.root, layers)?;
+    }
+
+    // ── E12 / K13: PQC hybrid auth over EVERY slot, emission included ───
+    verify_pqc_auths(parsed, pqc_auths)
+}
+
+/// §8.7.2 classification rule: the consumed/moved claim slot — record gone
+/// or epoch already claimed — is the `DoubleSpendConflict` claim-slot leg;
+/// every other violation is a window/shape/proof failure → `Malformed`.
+fn emission_reject(e: EmissionVerifyError) -> VerifyFailure {
+    match e {
+        EmissionVerifyError::BondMissing | EmissionVerifyError::EpochAlreadyClaimed { .. } => {
+            VerifyFailure::DoubleSpendConflict
+        }
+        _ => VerifyFailure::Malformed,
+    }
 }
 
 /// Marshal the wire bond-post vin into the retention crate's verify view.

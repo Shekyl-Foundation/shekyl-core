@@ -393,9 +393,10 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
     }
 
     /// Replace the GF-7 observer (sim wiring only; hooks-spec §4).
-    // In-crate callers are the gate-8 test today; the production-shaped
-    // consumer is WI-4's sealing re-run wiring against the live driver
-    // (design doc §5 reconvergence gate (b)).
+    // In-crate callers: the gate-8 test and the WI-4 §19.8.1 sealing-run
+    // seam (`spawn_pscan`'s injection arm). Both are `cfg(test)`-gated, so
+    // a feature-on **non-test** build still sees no caller — the
+    // `dead_code` allow covers exactly that build shape.
     #[cfg(feature = "gf7-hooks")]
     #[allow(dead_code)]
     pub(crate) fn set_observer(&mut self, observer: Box<dyn BroadcastTimelineObserver>) {

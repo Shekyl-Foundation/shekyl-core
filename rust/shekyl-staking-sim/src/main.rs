@@ -23,7 +23,11 @@
 //! effective-cover sensitivity sweep — `r(N)`/`P(link)` at the gate posture,
 //! the WI-4 §13.5 fifth conditional's measured shape; not a gate, and its
 //! parity line is an arithmetic identity, not a threshold);
-//! `--partition-adversary` (the §14.4
+//! `--gf7-seal <artifact>` (also `--gf7-seal=<artifact>`; the §19.8 leg-(b)
+//! SEALING form — grades the receipts artifact the `shekyl-engine-core`
+//! `gf7_sealing_run` harness wrote from a live-driver run, same circular
+//! statistic and `r < 2` bound; per WI-4 §19.10 a dispersal-regression
+//! tripwire, no longer a K_COVER seal input); `--partition-adversary` (the §14.4
 //! founder-cover partition-adversary arm — gating lemma + witness-typed
 //! controls, per the same doc's §14/§17 launch-posture round).
 
@@ -36,6 +40,7 @@ mod curve;
 mod failure_confirmation;
 mod fingerprint;
 mod gf7_breakeven;
+mod gf7_seal;
 mod gf7_timeline;
 mod metrics;
 mod model;
@@ -629,6 +634,69 @@ fn print_standoff_report() {
     match serde_json::to_string_pretty(&report) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing standoff report: {e}"),
+    }
+}
+
+/// Render the §19.8 sealing-form grade: interpretation + table to stderr,
+/// JSON to stdout (the binary's convention; grading itself is `gf7_seal::run`).
+fn print_gf7_seal_report(report: &gf7_seal::GF7SealReport) {
+    use gf7_seal::{PooledEstimate, POSTS_PER_PERSONA, WALLETS};
+
+    eprintln!(
+        "shekyl-staking-sim — GF-7 leg-(b) SEALING form (ARCHIVAL_BOND_WI4_MEASUREMENT.md §19.8)"
+    );
+    eprintln!(
+        "Receipt-timestamped live-driver re-run: production task+dispatch code path against a"
+    );
+    eprintln!(
+        "  live shekyld --regtest (harness: shekyl-engine-core gf7_sealing_run.rs, gf7-hooks)."
+    );
+    eprintln!(
+        "  Same statistic and bound as §19.4 (circular mean/distance; r = P(link)·(N−1) < {:.1});",
+        report.ratio_bound
+    );
+    eprintln!(
+        "  T = {} ms; N = {WALLETS}; chance 1/(N−1) = {:.3}. Clustered SE is run-level (the 10",
+        report.tick_ms,
+        1.0 / (WALLETS - 1) as f64
+    );
+    eprintln!("  tasks within a run share arrivals); the two-SE escalation band defers, never");
+    eprintln!("  moves the bar (§19.8.4).");
+    eprintln!();
+    eprintln!("Controls (§19.8.3; either failing grades the session INVALID):");
+    for c in &report.controls {
+        eprintln!(
+            "  [{}] {:<42} P(link)={:.3} baseline={:.3}  ({})",
+            if c.passed { "ok" } else { "FAIL" },
+            c.name,
+            c.p_link,
+            c.baseline,
+            c.expectation,
+        );
+    }
+    eprintln!(
+        "  Receipt-noise floor (sibling phase spread at dispersal 0): {:.1} ms of T = {} ms",
+        report.noise_floor_ms, report.tick_ms
+    );
+    eprintln!();
+    eprintln!(
+        "  {:<24} {:>4} {:>5} {:>4} | {:>7} {:>6} {:>6} {:>6}",
+        "row", "runs", "tasks", "m", "P(link)", "seP", "r", "se_r",
+    );
+    let row = |label: &str, m: usize, e: &PooledEstimate| {
+        eprintln!(
+            "  {:<24} {:>4} {:>5} {:>4} | {:>7.3} {:>6.3} {:>6.3} {:>6.3}",
+            label, e.runs, e.tasks, m, e.p_link, e.clustered_se_p, e.ratio, e.clustered_se_ratio,
+        );
+    };
+    row("production (GATE)", POSTS_PER_PERSONA, &report.production);
+    row("production m=1 context", 1, &report.production_m1_context);
+    eprintln!();
+    eprintln!("Sealing verdict: {}", report.verdict);
+
+    match serde_json::to_string_pretty(report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing gf7-seal report: {e}"),
     }
 }
 
@@ -1727,6 +1795,31 @@ fn main() {
 
     if std::env::args().any(|a| a == "--gf7-breakeven") {
         print_gf7_breakeven_report();
+        return;
+    }
+
+    // Both documented forms: `--gf7-seal=<path>` and `--gf7-seal <path>`.
+    // A bare `--gf7-seal` with no path fails loudly — main() otherwise falls
+    // through to the default simulation, and a silently-wrong report on the
+    // K_COVER seal path is exactly what this mode must never produce.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args
+        .iter()
+        .position(|a| a == "--gf7-seal" || a.starts_with("--gf7-seal="))
+    {
+        let artifact = args[i]
+            .strip_prefix("--gf7-seal=")
+            .map(str::to_string)
+            .or_else(|| args.get(i + 1).cloned())
+            .filter(|p| !p.is_empty() && !p.starts_with("--"))
+            .unwrap_or_else(|| {
+                eprintln!(
+                    "--gf7-seal requires an artifact path (--gf7-seal <path> or --gf7-seal=<path>)"
+                );
+                std::process::exit(2);
+            });
+        let report = gf7_seal::run(&artifact);
+        print_gf7_seal_report(&report);
         return;
     }
 

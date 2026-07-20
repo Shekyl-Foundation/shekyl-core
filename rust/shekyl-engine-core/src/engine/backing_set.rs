@@ -89,7 +89,7 @@ impl BackingSet {
     /// `records` may be the wallet's all-slot `funding_outputs` union;
     /// only `p_slot`'s records enter the set. Without this filter the
     /// most-recent-eligible comparator can designate ANOTHER slot's record
-    /// (rotation overlap: the new persona's bond-post change is the newest
+    /// (activation overlap: the new persona's bond-post change is the newest
     /// rung-2 on chain), and the claimant's key re-derivation then fails
     /// the pre-flight leaf gate on every claim attempt — a persona
     /// deterministically unable to claim. The fee sweep applies the same
@@ -765,7 +765,7 @@ mod tests {
     }
 
     /// The slot filter: the set is the **claimant persona's** — a foreign
-    /// slot's newer, otherwise-eligible record (the rotation-overlap window:
+    /// slot's newer, otherwise-eligible record (the activation-overlap window:
     /// the new persona's bond-post change is the newest rung-2 on chain)
     /// must neither enter the set nor win the most-recent-eligible
     /// comparator. Without the filter, the claimant's key re-derivation

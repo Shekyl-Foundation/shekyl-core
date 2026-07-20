@@ -49,6 +49,20 @@ or not the design has it. The fix is to ask *"does the design actually do this?"
 the rigor, not after. The substrate had already answered (sequential rotation) when the
 matcher was built on simultaneous personas; the answer just wasn't applied.
 
+> **Correction (2026-07-19, PR #337):** this document's "sequential rotation" shorthand
+> overstates the enforced substrate. `stake_engine` enforces one active **key bundle** at a
+> time (rotation = a caller-driven operation: activation advances `generation` and
+> atomically wipes retired bundles, `stake_engine.rs:25-66`); it does **not** enforce
+> sequential *bonding* — retired-but-still-bonded personas are explicitly supported for
+> unbond reachability ("rotates while bonded", the derive-forward union), and **no
+> scheduler or trigger drives rotation at all**. The sibling-channel foreclosure therefore
+> rests on (i) single-persona operation being the only behavior any code path produces,
+> (ii) the `1/R` economics making concurrent personas self-defeating, and (iii) the
+> one-line disclosure — not on an enforced rotation mechanism. The conclusion stands; the
+> parenthetical "(`stake_engine`: never two active personas)" was claiming a code property
+> the code does not have. Same correction recorded against
+> `ARCHIVAL_FIREWALL_THREATS.md` §7; surfaced by the WI-4 §19.10 scope review.
+
 ---
 
 ## 1. What TM-1 actually is

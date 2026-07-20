@@ -22,9 +22,11 @@ use crate::core::CoreRpc;
 use crate::ffi;
 use crate::submit::certificate::VerificationCertificate;
 use crate::submit::facts::{
-    CommitOutcome, KeyImageConflict, ReferenceFacts, ShimFault, SubmitFacts, SubmitStateShim,
-    TxMeta,
+    CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
+    EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, KeyImageConflict,
+    ReferenceFacts, ShimFault, SubmitFacts, SubmitStateShim, TxMeta,
 };
+use shekyl_archival_retention::{BadInterval, HoldingsDescriptor, HoldingsKind, ShardSet};
 
 /// Production shim over the `shekyl_submit_*` FFI, sharing the daemon's
 /// [`CoreRpc`] handle. All three calls block on the C++ side (short lock
@@ -75,7 +77,109 @@ fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, (
         // bond_record_exists is valid iff the BP3 probe ran (§8.7.1) —
         // same validity-gate shape as in_chain_height.
         bond_record_exists: (pod.bond_record_probed != 0).then_some(pod.bond_record_exists != 0),
+        // The E6/E7 fact bundle is converted separately by the snapshot
+        // path (it rides a C++-owned handle, not the POD); the fresh-facts
+        // path carries only the E6 re-check bit.
+        emission: None,
+        emission_claim_conflict: (pod.emission_probed != 0)
+            .then_some(pod.emission_claim_conflict != 0),
     })
+}
+
+/// Copy the C++-owned §8.7.2 E6/E7 fact bundle into owned facts.
+///
+/// # Safety
+///
+/// `view` and every pointer reachable from it must be valid for the whole
+/// call (the C++ handle's contract: buffers live until
+/// `shekyl_submit_emission_facts_free`). `Err(())` on a marshal-shape
+/// violation (an invalid holdings kind or shard set) — a contract fault,
+/// never a guessed fact.
+unsafe fn emission_facts_from_ffi(view: &ffi::SubmitEmissionFactsFfi) -> Result<EmissionFacts, ()> {
+    // Null-iff-empty, enforced fail-closed: a non-zero length behind a NULL
+    // pointer is a malformed handle (a C++ marshal defect), rejected as a
+    // contract fault rather than dereferenced (the same guard shape as the
+    // FFI crate's flat_commitment_keys).
+    unsafe fn slice<'a, T>(ptr: *const T, len: usize) -> Result<&'a [T], ()> {
+        if len == 0 {
+            Ok(&[])
+        } else if ptr.is_null() {
+            Err(())
+        } else {
+            Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
+        }
+    }
+    let bond = if view.bond_present == 0 {
+        None
+    } else {
+        let kind = HoldingsKind::from_u8(view.bond.holdings_kind).map_err(|_| ())?;
+        let shard_ids =
+            ShardSet::new(unsafe { slice(view.bond.shard_ids, view.bond.shard_ids_len) }?.to_vec())
+                .map_err(|_| ())?;
+        Some(EmissionBondFacts {
+            join_settlement_epoch: view.bond.join_settlement_epoch,
+            holdings: HoldingsDescriptor { kind, shard_ids },
+            claimed_settlement_epochs: unsafe {
+                slice(view.bond.claimed_epochs, view.bond.claimed_epochs_len)
+            }?
+            .to_vec(),
+        })
+    };
+    let raw_snaps = unsafe { slice(view.snapshots, view.snapshots_len) }?;
+    let mut snapshots = Vec::with_capacity(raw_snaps.len());
+    for snap in raw_snaps {
+        let mut bonds = Vec::with_capacity(snap.bonds_len);
+        for b in unsafe { slice(snap.bonds, snap.bonds_len) }? {
+            bonds.push(EmissionCloseBondFacts {
+                join_settlement_epoch: b.join_settlement_epoch,
+                is_foundation_complete_tree: b.is_foundation_complete_tree != 0,
+                bad_intervals: unsafe {
+                    // Flattened (start, end_exclusive) pairs: 2 × len u64s;
+                    // the pair count is C++-supplied, so the doubling is
+                    // checked — overflow is a malformed handle, rejected
+                    // fail-closed like the null case.
+                    slice(
+                        b.bad_intervals_ptr,
+                        b.bad_intervals_len.checked_mul(2).ok_or(())?,
+                    )
+                }?
+                .chunks_exact(2)
+                .map(|pair| BadInterval {
+                    start_epoch: pair[0],
+                    end_exclusive: pair[1],
+                })
+                .collect(),
+            });
+        }
+        let shards = unsafe { slice(snap.shards, snap.shards_len) }?
+            .iter()
+            .map(|sh| EmissionShardFacts {
+                shard_id: sh.shard_id,
+                has_segment: sh.has_segment != 0,
+                freeze_height: sh.freeze_height,
+            })
+            .collect();
+        let credit_pairs = unsafe { slice(snap.credit_pairs, snap.credit_pairs_len) }?
+            .iter()
+            .map(|cp| EmissionCreditPairFacts {
+                bond_idx: cp.bond_idx,
+                shard_idx: cp.shard_idx,
+            })
+            .collect();
+        snapshots.push(EmissionEpochSnapshotFacts {
+            has_budget_row: snap.has_budget_row != 0,
+            settlement_epoch: snap.settlement_epoch,
+            close_block_height: snap.close_block_height,
+            sigma_work_milli: snap.sigma_work_milli,
+            budget_atomic: snap.budget_atomic,
+            claimant_bond_idx: (snap.claimant_bond_idx != usize::MAX)
+                .then_some(snap.claimant_bond_idx),
+            bonds,
+            shards,
+            credit_pairs,
+        });
+    }
+    Ok(EmissionFacts { bond, snapshots })
 }
 
 /// A slice's data pointer, or NULL when the slice is empty. The C++ submit
@@ -108,9 +212,11 @@ impl SubmitStateShim for FfiSubmitShim {
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
         bond_p_canonical_id: Option<&[u8; 32]>,
+        emission_probe: Option<(&[u8; 32], &[u64])>,
     ) -> Result<SubmitFacts, ShimFault> {
         let mut pod = ffi::SubmitFactsFfi::zeroed();
         let mut ki_conflicts = vec![0u8; key_images.len()];
+        let mut emission_handle: *mut ffi::SubmitEmissionFactsHandle = std::ptr::null_mut();
 
         // SAFETY: txid/reference_block are 32-byte references; key_images is
         // a flat array of n × 32 bytes (contiguous by `[[u8; 32]]` layout);
@@ -127,6 +233,10 @@ impl SubmitStateShim for FfiSubmitShim {
                 key_images.len(),
                 reference_block.as_bytes().as_ptr(),
                 bond_p_canonical_id.map_or(std::ptr::null(), |id| id.as_ptr()),
+                emission_probe.map_or(std::ptr::null(), |(id, _)| id.as_ptr()),
+                emission_probe.map_or(std::ptr::null(), |(_, epochs)| const_ptr_or_null(epochs)),
+                emission_probe.map_or(0, |(_, epochs)| epochs.len()),
+                &mut emission_handle,
                 &mut pod,
                 mut_ptr_or_null(ki_conflicts.as_mut_slice()),
             )
@@ -136,17 +246,49 @@ impl SubmitStateShim for FfiSubmitShim {
             tracing::error!(rc, "submit snapshot shim returned fault");
             return Err(ShimFault);
         }
-        // The BP3 probe contract: requested ⇒ answered. A silently skipped
+        // Copy-then-free posture: the E6/E7 bundle is converted to owned
+        // facts inside this frame (the handle's buffers are valid until the
+        // free below); every early return after this point must free, so
+        // conversion happens first and the free is unconditional.
+        let emission = if let Some((_, epochs)) = emission_probe {
+            let converted = unsafe {
+                ffi::shekyl_submit_emission_facts_view(emission_handle)
+                    .as_ref()
+                    .ok_or(())
+                    .and_then(|view| emission_facts_from_ffi(view))
+            };
+            unsafe { ffi::shekyl_submit_emission_facts_free(emission_handle) };
+            match converted {
+                Ok(facts) if facts.snapshots.len() == epochs.len() => Some(facts),
+                Ok(_) => {
+                    tracing::error!("submit snapshot shim mis-aligned the emission snapshots");
+                    return Err(ShimFault);
+                }
+                Err(()) => {
+                    tracing::error!("submit snapshot shim returned a malformed emission bundle");
+                    return Err(ShimFault);
+                }
+            }
+        } else {
+            None
+        };
+        // The probe contracts: requested ⇒ answered. A silently skipped
         // probe would fault later as an engine ShimContract; catch it at
         // the boundary it broke.
         if bond_p_canonical_id.is_some() && pod.bond_record_probed == 0 {
             tracing::error!("submit snapshot shim skipped the requested bond-record probe");
             return Err(ShimFault);
         }
-        facts_from_ffi(&pod, &ki_conflicts).map_err(|()| {
+        if emission_probe.is_some() && pod.emission_probed == 0 {
+            tracing::error!("submit snapshot shim skipped the requested emission probe");
+            return Err(ShimFault);
+        }
+        let mut facts = facts_from_ffi(&pod, &ki_conflicts).map_err(|()| {
             tracing::error!("submit snapshot shim returned unknown key-image descriptor");
             ShimFault
-        })
+        })?;
+        facts.emission = emission;
+        Ok(facts)
     }
 
     fn commit(
@@ -187,7 +329,7 @@ impl SubmitStateShim for FfiSubmitShim {
             ffi::SHEKYL_SUBMIT_OK => CommitOutcome::Committed,
             ffi::SHEKYL_SUBMIT_PRUNED_ON_INSERT => CommitOutcome::PrunedOnInsert,
             ffi::SHEKYL_SUBMIT_RACED => match facts_from_ffi(&fresh_pod, &fresh_ki) {
-                Ok(fresh) => CommitOutcome::Raced(fresh),
+                Ok(fresh) => CommitOutcome::Raced(Box::new(fresh)),
                 Err(()) => {
                     tracing::error!("submit commit shim returned unknown key-image descriptor");
                     CommitOutcome::InternalFault
@@ -226,7 +368,9 @@ mod tests {
             in_pool_broadcast: 0,
             bond_record_probed: 0,
             bond_record_exists: 0,
-            reserved: [0; 1],
+            emission_probed: 0,
+            emission_claim_conflict: 0,
+            reserved: [0; 7],
             ref_height: 150,
             root: [0xAA; 32],
             fee_per_byte: 7,

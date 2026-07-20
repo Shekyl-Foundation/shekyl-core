@@ -217,15 +217,7 @@ impl RegtestDaemon {
 
     /// Mine `n` blocks to `address` (FAKECHAIN-gated daemon RPC).
     pub(super) async fn generate_blocks(&self, n: u64, address: &str) -> GenerateBlocksResp {
-        self.rpc
-            .json_rpc_call::<GenerateBlocksResp>(
-                "generateblocks",
-                Some(json!({
-                    "amount_of_blocks": n,
-                    "wallet_address": address,
-                    "starting_nonce": 0u32,
-                })),
-            )
+        try_generate_blocks(&self.rpc, n, address)
             .await
             .expect("generateblocks")
     }
@@ -248,6 +240,29 @@ impl Drop for RegtestDaemon {
         drop(self.child.wait());
         drop(std::fs::remove_dir_all(&self.data_dir));
     }
+}
+
+/// Mine `n` blocks to `address` over `rpc` (FAKECHAIN-gated `generateblocks`),
+/// returning the RPC error instead of panicking. Free-standing so a caller
+/// that cannot borrow a [`RegtestDaemon`] into a `'static` task — the GF-7
+/// sealing-run background miner, which owns an independent client and must
+/// tolerate transient failures — shares the one request shape with
+/// [`RegtestDaemon::generate_blocks`] rather than hand-rolling a copy that
+/// drifts.
+pub(super) async fn try_generate_blocks(
+    rpc: &SimpleRequestRpc,
+    n: u64,
+    address: &str,
+) -> Result<GenerateBlocksResp, shekyl_rpc_client::RpcError> {
+    rpc.json_rpc_call::<GenerateBlocksResp>(
+        "generateblocks",
+        Some(json!({
+            "amount_of_blocks": n,
+            "wallet_address": address,
+            "starting_nonce": 0u32,
+        })),
+    )
+    .await
 }
 
 /// Smoke test: the harness spawns a daemon, a fresh wallet's address is mineable,
@@ -1269,7 +1284,7 @@ const PSCAN_TEST_REORG_DEPTH: u64 = 4;
 /// pscan auto-start lifecycle test). Returns the arc'd engine, its tempdir
 /// (caller keeps it alive — it owns the wallet files), and the principal's
 /// encoded primary address.
-async fn staker_wallet(
+pub(super) async fn staker_wallet(
     rpc_port: u16,
     seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
     slot: super::stake_engine::PSlot,
@@ -1311,7 +1326,10 @@ async fn staker_wallet(
 /// bundle at open (`spawn_stake_engine_if_staker` → `derive_archival_p_keys`);
 /// the harness re-derives only the PUBLIC halves so the principal can fund the
 /// persona over an ordinary wallet-built transfer.
-fn persona_address(seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES], slot: u32) -> String {
+pub(super) fn persona_address(
+    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    slot: u32,
+) -> String {
     use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     let keys = derive_archival_p_keys(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
@@ -1689,6 +1707,103 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
          BondPostChange output(s), {total} persona funding output(s) \
          ({discovered} pre-post record(s) swept+pruned)"
     );
+}
+
+/// SP-R0 **arm #3 — PRODUCTION-DISCHARGE leg** (DQ-F): the SA-DQ-3
+/// activation-induced **persist-then-no-broadcast crash**, driven against the
+/// live regtest chain. `persist_bond_record` runs (the activation's durable
+/// point — the W2 crash form: no assemble, no pending post, no broadcast),
+/// the **production P-scan** exhaustively covers the real chain (the persona
+/// posted nothing anywhere in `covered`), and the next **production open**
+/// collects the phantom through the assemble-time sweep: the wallet reverts
+/// to a clean non-staker. The W3 guard is exercised by construction — no
+/// pending post exists, so the pending-record bridge does not veto.
+///
+/// This is the same fixture the in-tree CI lane
+/// (`tests/sp_r0_arm3_fire.rs`) drives over fixture blocks; here the
+/// evidence is the live daemon's chain through the real scan — the
+/// production-discharge form.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "SP-R0 arm-#3 production discharge; needs SHEKYLD_BIN + a built regtest daemon"]
+async fn e2e_arm3_phantom_slot_collected_at_open() {
+    use super::stake_engine::PSlot;
+
+    const SLOT: u32 = 0;
+    let daemon = RegtestDaemon::start().await;
+    let seed = [0x45u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let slot = PSlot::from_raw(SLOT);
+    // `staker_wallet` IS the crash fixture: it persists the bond record (the
+    // durable point) and reopens — no assemble, no pending post, no
+    // broadcast ever happens. The reopened wallet is the W2 phantom staker.
+    let (arc, tmp, principal) = staker_wallet(daemon.rpc_port, &seed, slot).await;
+    {
+        let g = arc.read().await;
+        assert!(g.ledger().staking.staking_enabled);
+        assert!(g.has_stake_engine(), "the phantom staker derives + spawns");
+    }
+
+    // Give the chain a body and let the production scan exhaustively cover
+    // it — the persona posted nothing, so the sealed evidence carries
+    // confirmed absence over `covered`.
+    daemon
+        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 12, &principal)
+        .await;
+    refresh(&arc).await;
+    let pscan_seal = shekyl_engine_file::paths::pscan_state_path_from(&tmp.path().join("wallet"));
+    let state = pscan_until(&arc, &pscan_seal, "a non-trivial covered range", |s| {
+        s.cursor().synced_height().to_raw() >= 8
+    })
+    .await;
+    assert!(
+        state.bond_post_matches().is_empty(),
+        "the phantom persona posted nothing"
+    );
+
+    // Close, reopen: the arm-#3 sweep runs at open, before derive.
+    //
+    // Sole-ownership reclaim is deliberate and deterministic here, not
+    // brittle: `Engine::close(self, ..)` CONSUMES the engine (a lock-guard
+    // close is not type-possible), and every clone-holder has provably
+    // exited by this point — `pscan_until` shut its task down before
+    // returning (the WI-1 shutdown contract releases the task's engine-arc
+    // clone) and `refresh` joins to completion. This is the same fail-loud
+    // posture as `close_wallet`'s production reclaim: if a future edit
+    // leaves a task holding a clone, the panic below names the bug rather
+    // than letting the test proceed against a still-live wallet.
+    let creds = super::lifecycle::Credentials::password_only(b"pr4-staker");
+    let lock = Arc::try_unwrap(arc).unwrap_or_else(|_| {
+        panic!(
+            "engine arc still has co-owners at close: a spawned task \
+             (scan/refresh) was not shut down before the reopen step"
+        )
+    });
+    lock.into_inner()
+        .close(&creds)
+        .expect("close phantom staker");
+    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+        .await
+        .expect("wallet rpc (reopen)");
+    let reopened = super::Engine::<super::SoloSigner>::open_full(
+        &tmp.path().join("wallet"),
+        &creds,
+        shekyl_address::Network::Mainnet,
+        super::DaemonClient::new(rpc),
+        shekyl_engine_file::SafetyOverrides::none(),
+    )
+    .expect("reopen after the scan sealed confirmed absence")
+    .into_wallet();
+    assert!(
+        !reopened.ledger().staking.staking_enabled,
+        "arm #3 (production discharge): the phantom slot is collected and the \
+         wallet reverts to a non-staker"
+    );
+    assert!(reopened.ledger().staking.bonded_slots.is_empty());
+    assert!(
+        !reopened.has_stake_engine(),
+        "no actor spawns for the collected phantom"
+    );
+    eprintln!("arm #3 production discharge: phantom bonded_slots[{SLOT}] collected at open");
+    reopened.close(&creds).expect("close");
 }
 
 /// Capture blocks `0..=tip` as one fixture chain (deterministic projection only).

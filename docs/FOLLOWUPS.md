@@ -4949,6 +4949,23 @@ sustainability is unaffected by the recalibration.
   classification for `Input::ArchivalRewardEmission`, fee/vout statics,
   verifier rows over `emission_vin_verify_*`); PR-4c stays sequenced
   behind it.
+  **UPDATE 2026-07-19 — gap (ii) CLOSED; this item CLOSES.** The emission
+  submit leg landed as the PR-4b completion: §8.7.2 E-rows pinned at
+  source (`DAEMON_SUBMIT_VERDICT.md`), `SubmitTxKind::Emission` with the
+  Phase-A statics (E1 vin decode+validate, EV3 loud-sum, E11 proof
+  coupling), the E6/E7 fact bundle (`SubmitFacts::emission` — bond
+  record + per-epoch frozen snapshots, marshaled through a C++-owned
+  handle under the one Phase-B lock scope), the native battery
+  (`verifier.rs::verify_emission`: mint-balance via
+  `verify_bond_post_ct_balance(Debit)`, E2/E5 bindings, the
+  `emission_vin_verify_claims/backing/auth` minters — the same functions
+  the C++ oracle reaches over FFI — plus the shared funding-subset K12
+  and K13), and the E6 Phase-D re-probe (blob-derived, claim-slot race →
+  `DoubleSpendConflict`). **PR-4c now has no daemon-side gap**: its e2e
+  (mine to an epoch close under the SEB lever, build via the production
+  claim path, submit, accepted-and-applied + pop + conservation legs)
+  is the remaining E4-gate work and provides the emission arm's live
+  acceptance coverage.
 
 - **Single-sig address decode enforces the Bech32m variant**
   (added 2026-07-17, PR #323 Copilot round). `bech32m_decode` in
@@ -6157,6 +6174,19 @@ sustainability is unaffected by the recalibration.
   *Blocker:* cross-cutting (stake_engine + ~10 threat/design docs); a dedicated
   read-per-site pass, not a mechanical sweep. *Target:* naturally alongside the
   MS-5 / E′ `state.rs` rework (same surface); the docs half can lead.
+  **UPDATE 2026-07-19 (PR #337 closure commit) — the code half is EXECUTED,
+  read-per-site:** every persona-"rotation" site in `stake_engine.rs`,
+  `backing_set.rs`, `claim_dispatch.rs`, `lifecycle.rs`, and `regtest_e2e.rs`
+  renamed to activation vocabulary (activation / active-slot move /
+  activation-wipe / activation `generation` / moved-past persona; four test fns
+  renamed; password/KDF, snapshot, and address-rotation sites verified untouched).
+  Cost tally updated: a **third** phantom was reconstructed from the noun before
+  the rename (a "rotation seam" timing channel, PR #337 review thread — retracted;
+  WI-4 §19.10). The docs half: historical/ratified records carry dated correction
+  annotations instead of rewrites (`ARCHIVAL_TM1_CLUSTERING.md` /
+  `ARCHIVAL_FIREWALL_THREATS.md` blocks, landed 2026-07-19); the
+  `PRINCIPAL_STAKE_LIFECYCLE.md:389` co-trigger split remains open with its
+  original target.
 
 - **PQC Multisig: MSW-6 landing residue.** The scheme_id relaxation
   landed subtractively; five items it deliberately did not fold in
@@ -8401,7 +8431,55 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.x — staker archival and visualization ship
 
-- **Principal-side default-on Tor — flip `--proxy` from opt-in to default, opt-out loud.**
+- **P-drain mechanism re-walk — CryptoNote holdover audit (rule 16; method note 5:
+  "carry from X" is a re-walk trigger, not an exemption).** Ratified finding
+  (2026-07-19, maintainer analysis at source): the anti-sweep / decorrelate-the-drains
+  discipline was a CryptoNote-lineage carry, wrong on two independent layers. **Layer 1 —
+  it defended an observable FCMP++ deletes:** the membership proof breaks the
+  input→output link (a drain reveals neither which outputs it consumed nor a
+  consolidation signature; F-W10's output-count phantom), so "one identifiable exit
+  event" does not exist on-chain. **Layer 2 — it was powerless against the one real
+  residual:** the off-chain principal↔user aggregate (§18.12) is slice-invariant — ten
+  decorrelated partial drains deliver the same lifetime total as one sweep. The
+  exit-standoff apparatus is already deleted (F-W7); privacy is correctly re-homed to
+  the **amount** channel: F-D1 lineage-blind selection (structural, built) + F-D2
+  round-number/random-split default (unbuilt, rides the drain-send subsystem). As
+  built, sweep = the `target == spendable` boundary of `plan_drain` (largest-first
+  selection takes every mature output, zero change) — no separate primitive, no
+  structural block. **The re-walk (land before/with the F-D2 drain-send subsystem
+  build, Gate-6 R4's last open item):** (a) fee/change mechanics — the planner is
+  fee-agnostic; decide whether drain-everything is `target = spendable − fee` at the
+  caller or an assembly-side fee carve, and whether a first-class sweep entry should
+  exist rather than each caller computing the boundary; (b) sweep drain docs/comments
+  for remaining shape-era language and assumptions (decorrelation, consolidation
+  visibility, split-the-exit) and re-walk each against the FCMP++ threat model rather
+  than carrying it; (c) confirm F-D2's default is specified against the amount channel
+  only (the surviving channel) and cannot silently re-introduce shape machinery.
+  **Target: V3.0** (with the drain-send subsystem; the audit is cheap, the carve
+  decisions freeze with the wallet's exit UX).
+- **`P`-lane fee uniformity — implementation rider (ratified 2026-07-19,
+  `V3_WALLET_DECISION_LOG.md` "P-lane fees"; rides the `Unbond` wallet
+  constructor, the SP-R0 arm-#2 production-discharge family).** The decision:
+  every `P`-lane tx pays the standard weight-priced floor fee from persona
+  working capital (cover + earnings); no fee-less class. The wire already
+  admits it (balance `fee` term is universal; gate-4 §3.3 envelope allows
+  `txin_to_key` on every `post_kind`). What the implementation lands:
+  (a) the **typed `P`-space pool** selector (cover + claim outputs; principal
+  outputs unrepresentable by type) shared by every `P`-lane constructor;
+  (b) **`EXIT_FEE_RESERVE_ATOMIC`** + the spend-floor invariant in every
+  mid-life constructor, with a pinned dominance assert against
+  `COVER_RUNWAY_FLOOR_ATOMIC`; (c) the **`ClaimFeeInputsRequired`
+  conditional** (`backing_set.rs`) — destitute branch admits the Q11
+  zero-fee-input claim, with a test walking the two-step destitute exit
+  (mint-funded claim → `Unbond` funded from the claimed output);
+  (d) **debit-path fee-input battery rows** — the `Unbond`/`HoldingsUpdate`-drop
+  submit battery (the non-JM PR-4b sibling) exercises fee inputs over the K12
+  shared funding-subset leg, plus a `fee == 0` reject row per kind so
+  fee-presence is enforced by an executed test, not convention (no-theater
+  rule); (e) the **canonical-floor fee derivation** (no estimator multiplier,
+  no user knob) shared with the first-stake fee path. **Target: with the
+  `Unbond` constructor build** — the fee rule is a construction input, so it
+  cannot land later than the constructor without rework.
   Source-verified at the WI-4 arc closure (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §18.13):
   the persona side is Tor-mandatory **by construction** (`shekyl-p-transport` fails the
   build without its SOCKS connector), but the principal side is opt-in — `shekyl-cli`'s
@@ -8446,6 +8524,21 @@ one place to confirm each item's relationship to the wallet stack.
   harness on the production code path (CI observes the GC fire — a real phantom collected);
   **production-firing** gated on the activation round (#332). A bare "discharged" is
   forbidden (DQ-F Guard 2).
+  **UPDATE 2026-07-18 — arm #2 BUILT (`feat/sp-r0-arm2-retire-gc`).** The done-side
+  `RetiredPersonaRecord` ledger in `PScanState` (v6→7 + regenerated snapshot), the atomic
+  retire-time prune (`PScanAccrual::retire_persona` — matches + pending trigger leave with
+  the record, one seal; funding rows are already gone by then — the funded-gate defers
+  retire until the slot is drained, arm #1 having pruned each spend as observed, with a
+  defense-in-depth retain + debug_assert behind the gate), the DQ-D tip-clamp corroboration (a low-claiming source
+  defers the prune, fail-safe), and the open-time records-driven hint clean (retired slots
+  never re-derive; an emptied hint reverts to non-staker). Guard-2: logic-discharged at the
+  task/accrual/lifecycle test level (cfg(test) evidence construction — the claim-window
+  reachability deviation, disclosed in the plan's arm-#2 build record); production-discharge:
+  corrected 2026-07-19 — NOT yet drivable (the prior "drivable" claim was wrong). The
+  retire trigger is a confirmed `Unbond`, whose block-path verifies exist but whose
+  submit-side battery is JoinMarket-only (§8.7.1) with no wallet constructor — named
+  blockers: the non-JM submit battery (the PR-4b sibling) AND the wallet unbond entry;
+  the settlement-epoch override rides whichever lands last.
   **Rule (load-bearing — travels
   with the item):** GC **only** on *confirmed-absence within `covered`* (the range the reconcile set
   can vouch for), **never** on absence-from-one-source — the SP-6 "absence ≠ unscanned" discipline;
@@ -9220,6 +9313,43 @@ one place to confirm each item's relationship to the wallet stack.
   timestamping by the sim-owned observer over the live dispatch driver, consuming the same
   statistic and bound. Leg (b) closes only there; the in-model pass is the
   continue/redesign checkpoint, not the seal.
+  **UPDATE 2026-07-18 — sealing form first-graded PASS, grade WITHDRAWN same day
+  (PR #337 review; record + withdrawal: WI-4 §19.9/§19.9.1).** The §19.8 run design was
+  committed to the doc ahead of the harness (§3.5 ordering), then executed live
+  (`start_pscan_sealing_run` seam, `gf7-hooks` harness in `shekyl-engine-core`, grading
+  single-sourced in `shekyl-staking-sim --gf7-seal`): 24 + 8 runs, 2 560 receipts,
+  4 h 42 m, gate row `r = 1.275` under the bound 2, controls bit. The PR #337 review then
+  found the harness could not detect background-miner death — the §19.8.2
+  chain-advancement geometry is **unverifiable from that artifact** — plus unenforced
+  session geometry in the grader, an untied recording period across the two crates, and a
+  documented CLI form that silently ran the wrong mode. Grade withdrawn; harness/grader
+  hardened in the same PR (fail-loud miner watch, `R`-floor + contiguity + per-row
+  `cadence_ms == TICK_MS` enforcement, `Arm`-typed label/config binding, CI clippy lane
+  compiling the `gf7-hooks` harness).
+  **UPDATE 2026-07-19 — hardened re-run graded: PASS, leg (b) CLOSED (WI-4 §19.9.2, both
+  sessions disclosed).** Session 1 graded INVALID — the §19.8.3 negative control tripped
+  (`P(link) = 0.167` vs ±0.05 around chance; shared-host cross-wallet coupling; grader
+  arithmetic independently recomputed and confirmed) — and counts for nothing; a stopping
+  rule was stated before session 2 (second INVALID ⇒ §19.8 decoupling design round, never
+  re-roll-until-green). Session 2 (4 h 42 m, 24 + 8 runs, 2 560 receipts): gate row
+  `r = 0.412` (clustered SE 0.121, ≈ 13 SEs under the bound), positive control 0.875,
+  negative 0.087 at chance, noise floor 413.9 ms (stable across sessions; §19.1 reopening
+  criterion untripped). Inter-session gate-row dispersion disclosed in §19.9.2.
+  **UPDATE 2026-07-19 (same PR, scope review) — leg-(b) seal-input status WITHDRAWN
+  (WI-4 §19.10); `K_COVER` re-dispositioned (M1 §4).** The form's `K = 2`
+  concurrently-posting-persona premise is design-foreclosed: the persona-lifecycle
+  enumeration (WI-4 §19.10.1) shows `2 + E + H (+R)` wallet-timed `P`-attributed txs per
+  persona *lifetime* (funding + drain unattributable; slash is a consensus mutation), and
+  `stake_engine` has no rotation scheme — nothing creates a second posting persona, and
+  `1/R` economics punish one. The §19.9.2 measurement records stand; the hardened
+  instrument + `gf7-hooks` CI lane are retained as a **dispersal-regression tripwire**
+  (a silently-broken draw would give the few real posts an exact-phase corroborator,
+  ~75–150× background filter). No further sealing re-runs are required by anything.
+  `K_COVER`'s seal predicate is now stated once in M1 §4: partition-proof operand
+  (DISCHARGED, §14.4) + value paired to the measured cover floor (`N ≈ 10` min / `20`
+  with margin) via the §14 founder schedule — evidentiary predicate as discharged as
+  design permits; the remaining act is landing the value + commitment and clearing the
+  sentinel (PF-9 unchanged).
   **Hermeticity pin (rule 21, PR #292 review — trips on the archival CLI-knob work):**
   `run_wallclock_leg()` is deliberately hermetic (fixed seed/trials/N; the a-priori-committed
   §19.4 surface must not float on a harness flag). Inert today — no CLI knob moves the gf7
@@ -9235,6 +9365,18 @@ one place to confirm each item's relationship to the wallet stack.
   [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §13 (result),
   §14 (launch posture), [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
   §4 and [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
+
+- **Wallet UX: thin-cover exposure disclosure at bond/claim time (registered 2026-07-19,
+  PR #337 review thread).** On the user's own acts the design is warn-don't-prohibit —
+  `K_COVER` gates only the system's reward lever (bonding stays legal during gated epochs,
+  unbond is never cover-gated) — but no wallet surface currently *says* so. When the
+  staker UX lands (activation front, #332 lineage), the wallet should disclose at
+  JoinMarket / claim time when the current cover is thin (a rule-82 failure-mode surface;
+  phrased per rule 81 — outcome language, no protocol vocabulary): entering or claiming
+  during a thin-cover window carries elevated linkage exposure (the measured WI-4 §13.2
+  thin-cover regime), and gated epochs earn nothing. Disclosure-shaped, never a block;
+  the enforced invariant stays consensus-side (M1). **Target: with the staker-activation
+  UX; pre-genesis.**
 - **2d-2 2c-2a — submit-outcome handling: the wallet CONSUMES `SubmitVerdict`; the partition is
   no longer a design object (SUPERSEDED 2026-07-04 by
   [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md), D4; absorbed remainders

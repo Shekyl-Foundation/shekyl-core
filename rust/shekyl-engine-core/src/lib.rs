@@ -21,17 +21,23 @@ pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 pub use engine::MultisigSignerV2;
 pub use engine::{
     Capability, CapabilityInput, ChangePasswordError, Credentials, DaemonClient, DaemonOp,
-    DiagnosticSink, Engine, EngineCreateParams, EngineSignerKind, FeePriority, FirstStakeError,
-    FirstStakeOutcome, IoError, KeyError, LocalRefresh, MalformedKind, Network, NoopDiagnosticSink,
-    OpenError, OpenedEngine, PScanHandle, PScanStartError, PendingTx, PendingTxError,
-    PersistenceError, ProtocolErrorKind, RefreshDiagnostic, RefreshError, RefreshHandle,
-    RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
-    ReservationId, ScannableBlock, SendError, SoloSigner, StateWrapKey, SuppressedClass,
+    DiagnosticSink, Engine, EngineCreateParams, EngineSignerKind, FeePriority, FeeTierQuote,
+    FirstStakeError, FirstStakeOutcome, InputCount, IoError, KeyError, LocalRefresh, MalformedKind,
+    Network, NoopDiagnosticSink, OpenError, OpenedEngine, OutputCount, PScanHandle,
+    PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
+    RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
+    RefreshReorgEvent, RefreshSummary, ReservationId, ScannableBlock, SendError, SoloSigner,
+    StakedBalance, StakedOutput, StakingReadError, StakingReadView, StateWrapKey, SuppressedClass,
     TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
-    ViewMaterial,
+    TxShapeEstimate, ViewMaterial,
 };
 pub use outbound_label::label_plaintext_for_payment_uri;
+// Re-exported so the wallet-RPC layer's `make_uri` / `parse_uri` projections
+// can consume the one payment-URI codec without a direct `shekyl-address`
+// dependency — mirroring the `ShekylAddress` re-export in [`engine`].
+// Canonical definition stays in `shekyl-address`; do not wrap or redefine.
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
+pub use shekyl_address::{format_payment_uri, parse_payment_uri, PaymentUri, PaymentUriError};
 
 /// **Not part of the public API.** Re-exports otherwise-`pub(crate)`
 /// types so external Criterion benchmarks (`benches/*.rs`) can measure

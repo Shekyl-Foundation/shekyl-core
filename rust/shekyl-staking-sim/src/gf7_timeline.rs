@@ -62,8 +62,10 @@
 //! same `bounded_uniform` the live driver uses, for distributional parity). It
 //! is the **continue/redesign checkpoint, not the seal**: the report is marked
 //! PROVISIONAL. The sealing re-run against WI-3's *live* `BondPostDispatched`
-//! emission is the WI-3↔WI-4 reconvergence leg (b) (rule 21), tracked in
-//! `docs/FOLLOWUPS.md`.
+//! emission is the WI-3↔WI-4 reconvergence leg (b) (rule 21); its seal
+//! standing lives in the measurement doc (§19.9 record / §19.10 scope;
+//! `gf7_seal.rs` / `--gf7-seal`), asserted there, never in this sim. The
+//! remote-daemon posture residual on the steady-state arms is unchanged.
 
 use serde::Serialize;
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
@@ -1001,8 +1003,13 @@ fn run_measurement(cfg: &RunConfig) -> MeasurementReport {
     } else if !wallclock_leg.observer_strength_ok {
         "INVALID (leg-b modeled observer weaker than the channel — §19.5 tripwire)".to_string()
     } else if steady_pass && wallclock_leg.pass {
+        // The sealing form's standing is deliberately not asserted here:
+        // this sim cannot know it (grades, withdrawals, and §19.1
+        // reopenings happen outside it), so the verdict points at where
+        // that standing lives instead.
         "PROVISIONAL-PASS (local-daemon posture only; remote-daemon posture unmet, \
-         named residual; wall-clock leg b graded in-model — §19.1 sealing form open)"
+         named residual; wall-clock leg b graded in-model — the §19.1 sealing form \
+         is graded separately (`--gf7-seal`, §19.8/§19.9))"
             .to_string()
     } else {
         "PROVISIONAL-FAIL (decorrelation-redesign signal; pre-WI-3-live)".to_string()

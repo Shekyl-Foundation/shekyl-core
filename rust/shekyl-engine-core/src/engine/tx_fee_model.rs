@@ -238,6 +238,28 @@ pub(crate) fn predict_weight(
     .sum()
 }
 
+/// Serialized byte size **and** fee weight for the tx the builder would
+/// produce from these counts, as one `(size, weight)` pair.
+///
+/// The two differ by exactly the Bp+ verification clawback
+/// ([`bp_plus_clawback_weight`], zero for `n_padded <= 2`): `weight` is what
+/// the fee model charges ([`predict_weight`], equal to
+/// `Transaction::weight()`), `size` is the wire bytes
+/// (`Transaction::write`'s length). Derived by subtraction from the one
+/// predictor rather than re-summing the field model, so the byte model stays
+/// single-source (the drift class the weight re-validation fixed).
+#[must_use]
+pub(crate) fn predict_size_and_weight(
+    n_in: InputCount,
+    n_out: OutputCount,
+    tree_depth: u8,
+    fee: u64,
+) -> (usize, usize) {
+    let weight = predict_weight(n_in, n_out, tree_depth, fee);
+    let size = weight - bp_plus_clawback_weight(n_out);
+    (size, weight)
+}
+
 /// Marginal weight of one additional input at `D_ref = MAX_TREE_DEPTH`.
 #[must_use]
 #[allow(dead_code)] // 2a-3 dust-fold consumes; 2a-2 uses `tx_fee::MARGINAL_INPUT_WEIGHT` stub.
@@ -549,6 +571,28 @@ mod tests {
                 predict_weight(InputCount::clamped(n_in), OutputCount::clamped(n_out), depth, fee),
                 tx.weight(),
                 "predict_weight ≠ wire weight for n_in={n_in} n_out={n_out} depth={depth} fee={fee}"
+            );
+            // WI-RPC-1 pin 5 (fee single-source): the `(size, weight)` pair
+            // the RPC `estimate_tx_size_and_weight` projects must equal the
+            // wire tx's own `serialized_len()` / `weight()` — the size is
+            // derived by clawback subtraction, never a second byte model.
+            // This bites against a re-derived / drifted size formula; it does
+            // NOT cover the RPC dispatch plumbing (the HTTP-level test does).
+            let (size, weight) = predict_size_and_weight(
+                InputCount::clamped(n_in),
+                OutputCount::clamped(n_out),
+                depth,
+                fee,
+            );
+            assert_eq!(
+                weight,
+                tx.weight(),
+                "predict_size_and_weight weight ≠ wire weight for n_in={n_in} n_out={n_out}"
+            );
+            assert_eq!(
+                size,
+                tx.serialized_len(),
+                "predict_size_and_weight size ≠ wire serialized_len for n_in={n_in} n_out={n_out}"
             );
         }
     }

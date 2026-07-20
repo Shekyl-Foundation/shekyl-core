@@ -1,0 +1,40 @@
+{
+  "tick_ms": 60000,
+  "ratio_bound": 2.0,
+  "production": {
+    "runs": 24,
+    "tasks": 240,
+    "hits": 11,
+    "p_link": 0.04583333333333333,
+    "ratio": 0.4125,
+    "clustered_se_p": 0.01343147755728984,
+    "clustered_se_ratio": 0.12088329801560856
+  },
+  "production_m1_context": {
+    "runs": 24,
+    "tasks": 240,
+    "hits": 28,
+    "p_link": 0.11666666666666667,
+    "ratio": 1.05,
+    "clustered_se_p": 0.018714741406007183,
+    "clustered_se_ratio": 0.16843267265406464
+  },
+  "controls": [
+    {
+      "name": "positive: dispersal 0 (phase-lock caught)",
+      "p_link": 0.875,
+      "baseline": 0.1111111111111111,
+      "expectation": "P(link) >= 0.8",
+      "passed": true
+    },
+    {
+      "name": "negative: cross-wallet pseudo-siblings",
+      "p_link": 0.0875,
+      "baseline": 0.1111111111111111,
+      "expectation": "|P(link) - 0.111| <= 0.05",
+      "passed": true
+    }
+  ],
+  "noise_floor_ms": 413.8687250032499,
+  "verdict": "PASS"
+}

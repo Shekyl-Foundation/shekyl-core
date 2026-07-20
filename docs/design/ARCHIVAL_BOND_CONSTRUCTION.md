@@ -383,6 +383,35 @@ reuses the existing
 [`shekyl-crypto-pq::output::construct_output`](../../rust/shekyl-crypto-pq/src/output.rs)
 path (as `sign_bridge` does for transfers).
 
+**Fee inputs and their source — RATIFIED (2026-07-19, maintainer;
+`V3_WALLET_DECISION_LOG.md` "P-lane fees").** Debit paths (`Unbond`,
+`HoldingsUpdate` drop) carry fee inputs the same way — every bond post pays
+the standard weight-priced floor fee; there is no fee-less class (gate-4
+§3.2 fee note). Three construction rules, all wallet-side:
+
+1. **Typed `P`-space pool.** Fee/funding-input selection on every `P`-lane
+   constructor draws from a typed source set — the JoinMarket **cover**
+   outputs plus **claim (earnings)** outputs, "cover + earnings, as
+   required". A principal output is unrepresentable in the selector's input
+   type (enforced invariant, not policy). FCMP++ hides the membership either
+   way; the type is origin-edge hygiene at the wallet layer, the coin-pool
+   sibling of `P`'s dedicated Arti client (§9's transport split).
+2. **Exit-fee reserve.** Mid-life constructors (claim fee inputs, both
+   `HoldingsUpdate` directions, `Rebond`) never spend the pool below
+   `EXIT_FEE_RESERVE_ATOMIC` — a pessimistically-margined weight-priced
+   `Unbond` fee — so the terminal post is always fundable. Spend-time
+   invariant only; the cover **draw** is never consulted or narrowed by it
+   (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4 stance). Lands with a pinned dominance
+   assert against `COVER_RUNWAY_FLOOR_ATOMIC`. Destitute corner (pool below
+   reserve): the wallet's `ClaimFeeInputsRequired` refusal relaxes to admit
+   the consensus-admitted Q11 zero-fee-input claim (fee out of the mint),
+   then `Unbond` funds from the claimed output — the exit chain is
+   constructible from zero pool balance whenever anything is claimable.
+3. **No fee knob.** The fee is the canonical per-block floor at construction
+   time — deterministic given (weight, floor params), no estimator
+   multiplier, no user-visible control. A tunable fee on a `P`-attributed
+   transaction is a wallet-fingerprint channel in a cleartext field.
+
 ## 8. Sequenced dependency: real curve-tree (CT-5)
 
 The funding inputs need real membership proofs against the live curve tree. PR

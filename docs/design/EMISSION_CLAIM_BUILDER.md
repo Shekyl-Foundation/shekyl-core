@@ -1052,6 +1052,16 @@ push this PR past the 10-commit ceiling. Split per `06-branching.mdc`:
   `bad_variant_access` on archival-vin blocks; `docs/CHANGELOG.md`).
   The **emission submit leg remains open** on the same FOLLOWUPS item
   and still gates PR-4c.
+  **UPDATE 2026-07-19 — PR-4b COMPLETE: the emission submit leg landed**
+  (§8.7.2 E-rows in `DAEMON_SUBMIT_VERDICT.md`; Phase-A
+  `SubmitTxKind::Emission` + statics; the E6/E7 fact bundle; the native
+  verifier battery over the `emission_vin_verify_*` minters; the E6
+  Phase-D claim-slot re-probe). The daemon submit engine now accepts
+  both transaction kinds the e2e needs — **PR-4c is unblocked** and
+  carries the emission arm's live acceptance coverage (this PR's
+  coverage is the Phase-A/engine/shim batteries + the shared-function
+  argument; a full crypto-valid emission claim requires the epoch-close
+  substrate only the PR-4c harness builds).
 - **PR-4c (after 4b): the e2e proper.** Mine to an epoch close with
   injected served work under the SEB lever, build via PRs 1–3's
   production path through the CB-3 seam, submit over real RPC, assert

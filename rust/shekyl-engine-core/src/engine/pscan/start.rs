@@ -180,6 +180,26 @@ impl Drop for PScanHandle {
     }
 }
 
+/// GF-7 sealing-run injection (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19.8.1):
+/// the recording observer that stamps receipt instants, plus — for the
+/// §19.8.3 **positive control only** — a [`DispatchConfig`] override
+/// (`dispersal_bound = 0`). Every graded row runs with
+/// `dispatch_config: None`, i.e. the untouched production config.
+///
+/// Gated `test` *and* `gf7-hooks` — one layer stronger than the layer-3
+/// requirement (production control flow byte-identical with the feature
+/// off): even a feature-on **non-test** build carries no sealing seam.
+#[cfg(all(test, feature = "gf7-hooks"))]
+pub(crate) struct SealingRunOverrides {
+    /// The harness-local recording observer (§19.8.1: harness-owned
+    /// timestamping, sim-owned judgment).
+    pub(crate) observer: Box<dyn shekyl_standoff::gf7::BroadcastTimelineObserver>,
+    /// §19.8.3 control 1 only: `Some(config with dispersal_bound = 0)`.
+    /// `None` on every graded row — the §19.1 "non-production config does
+    /// not satisfy" clause binds the graded rows.
+    pub(crate) dispatch_config: Option<DispatchConfig>,
+}
+
 /// The production [`PScanStore`]: reaches the **live** `WalletFile` — held by value
 /// inside the `Engine` (no `Arc`, not `Clone`) — through the `Arc<RwLock<Engine>>`
 /// under a brief read lock, and delegates the seal to
@@ -569,6 +589,53 @@ where
         config: PScanConfig,
         cadence: Duration,
     ) -> Result<PScanHandle, PScanStartError> {
+        Self::spawn_pscan(
+            self_arc,
+            config,
+            cadence,
+            #[cfg(all(test, feature = "gf7-hooks"))]
+            None,
+        )
+        .await
+    }
+
+    /// Spawn the P-scan task pinned to the **production posture**
+    /// ([`PScanConfig::production`] + [`DEFAULT_PSCAN_CADENCE`]) with the
+    /// GF-7 sealing-run injection applied — the `ARCHIVAL_BOND_WI4_MEASUREMENT.md`
+    /// §19.8.1 seam. Deliberately takes **no** `config`/`cadence`: the §19.1
+    /// disposition binds the sealing form to the production code path at
+    /// production cadence (a harness that injects ticks or a non-production
+    /// cadence does not satisfy it), so the posture is unmisusable by
+    /// construction here; the only permitted deviation rides
+    /// [`SealingRunOverrides::dispatch_config`] (positive control, §19.8.3).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`start_pscan_with`](Self::start_pscan_with).
+    #[cfg(all(test, feature = "gf7-hooks"))]
+    pub(crate) async fn start_pscan_sealing_run(
+        self_arc: Arc<RwLock<Self>>,
+        overrides: SealingRunOverrides,
+    ) -> Result<PScanHandle, PScanStartError> {
+        Self::spawn_pscan(
+            self_arc,
+            PScanConfig::production(),
+            DEFAULT_PSCAN_CADENCE,
+            Some(overrides),
+        )
+        .await
+    }
+
+    /// The shared spawn body behind [`start_pscan_with`](Self::start_pscan_with)
+    /// and the sealing-run entry: all wiring lives here once, so the sealing
+    /// form exercises byte-for-byte the production construction (the §19.8.1
+    /// requirement) rather than a parallel copy that could drift.
+    async fn spawn_pscan(
+        self_arc: Arc<RwLock<Self>>,
+        config: PScanConfig,
+        cadence: Duration,
+        #[cfg(all(test, feature = "gf7-hooks"))] sealing: Option<SealingRunOverrides>,
+    ) -> Result<PScanHandle, PScanStartError> {
         // Brief read borrow: clone the spawn inputs + claim the single-flight slot.
         // Stake is checked first so a non-staker never claims-then-releases; the
         // slot guard is RAII, so any error below releases it on the early return.
@@ -630,12 +697,31 @@ where
             .await
             .map_err(|e| PScanStartError::LoadFailed(Box::new(e)))?;
 
-        let dispatch = DispatchDriver::new(
-            pending_seal,
-            broadcast,
-            DispatchConfig::production(cadence),
-            pending_write_lock,
-        );
+        let dispatch_config = DispatchConfig::production(cadence);
+        // Sealing-run injection (§19.8.1): split the overrides into the config
+        // (positive control only) and the recording observer. `None` — every
+        // production start and every graded sealing row — leaves both exactly
+        // as constructed above.
+        #[cfg(all(test, feature = "gf7-hooks"))]
+        let (dispatch_config, sealing_observer) = match sealing {
+            Some(o) => (
+                o.dispatch_config.unwrap_or(dispatch_config),
+                Some(o.observer),
+            ),
+            None => (dispatch_config, None),
+        };
+
+        let dispatch =
+            DispatchDriver::new(pending_seal, broadcast, dispatch_config, pending_write_lock);
+        #[cfg(all(test, feature = "gf7-hooks"))]
+        let dispatch = match sealing_observer {
+            Some(observer) => {
+                let mut d = dispatch;
+                d.set_observer(observer);
+                d
+            }
+            None => dispatch,
+        };
 
         let schedule = FixedRateSchedule::new(cadence);
         let cancel_token = CancellationToken::new();
@@ -766,6 +852,7 @@ mod tests {
                 },
             ],
             Vec::new(),
+            Vec::new(),
         );
         store.save(&state_a).await.expect("save A");
         assert!(pscan_path.exists(), ".wallet.pscan written by the seal");
@@ -780,6 +867,7 @@ mod tests {
             PScanCursor::at(BlockHeight::from_raw(9_000), [0x2B; 32]),
             accruals(&[(0, 100), (1, 250), (2, 75)]),
             pending(&[(0xAB, 1)]),
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         );
