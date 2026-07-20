@@ -267,6 +267,27 @@ FROST multisig is handled by native Rust handlers, see below):
 | Fees | `estimate_tx_size_and_weight`, `get_default_fee_priority` |
 | Meta | `get_version`, `get_languages` |
 
+> **Note (2026-07-19, WI-RPC-1).** The table above is the coverage of the
+> **legacy `wallet2_ffi_json_rpc` dispatcher** (this crate,
+> `shekyl-engine-rpc`). The native Rust wallet RPC —
+> `rust/shekyl-wallet-rpc`, contract in
+> [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml) — now serves three of
+> these families natively, projected from the Engine with no wallet2
+> involvement:
+>
+> - **Receiving:** `create_payment_request`, `list_payment_requests`,
+>   `make_uri`, `parse_uri`. Shekyl has no subaddresses or accounts; the
+>   receive-attribution surface is the payment-request `rid` on the
+>   `shekyl:` URI. The dispatcher's `get_accounts` / `create_address` /
+>   subaddress rows above have no Shekyl-native equivalent by design.
+> - **Fees:** `estimate_tx_size_and_weight`, `get_default_fee_priority`
+>   (single-source projection of the engine's `predict_weight` byte model
+>   and fee-converge fixpoint).
+> - **Staking reads:** `get_staked_balance`, `get_staked_outputs`,
+>   `staking_info` (authoritative staking read view; the action surface —
+>   `unstake`, `claim_rewards` — remains engine-gated and RESERVED in the
+>   contract).
+
 ## Scanner Integration (`rust-scanner` feature)
 
 When `shekyl-engine-rpc` is compiled with `--features rust-scanner`, the RPC

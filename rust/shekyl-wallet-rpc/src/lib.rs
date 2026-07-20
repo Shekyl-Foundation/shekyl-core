@@ -20,13 +20,16 @@
 
 pub mod auth;
 pub mod error;
+pub mod fees;
 pub mod handlers;
 pub mod lifecycle;
 pub mod params;
 pub mod project;
 pub mod queries;
+pub mod receiving;
 pub mod send;
 pub mod server;
+pub mod staking;
 pub mod sync;
 pub mod tenant;
 pub mod types;

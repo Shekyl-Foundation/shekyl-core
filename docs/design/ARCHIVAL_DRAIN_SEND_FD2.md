@@ -6,8 +6,8 @@ code.**
 
 Charter: `ARCHIVAL_FIREWALL_GATE6.md` §12.4 names F-D2's remaining half a
 **whole unbuilt `P`-value-out (drain-send) subsystem in
-`shekyl-gui-wallet`**, and Gate-6 §12.8's re-formed R4 close condition is
-down to F-D1 (BUILT) + F-D2. Seal-path note (2026-07-19, PR #337 scope
+`shekyl-gui-wallet`**, and Gate-6 §12.9's re-formed R4 close condition
+(which supersedes the §12.8 line) is down to F-D1 (BUILT) + F-D2. Seal-path note (2026-07-19, PR #337 scope
 review, merged before this round's first review): the GF-4/F-D1+F-D2
 `K_COVER` seal seat was **REMOVED** (`ARCHIVAL_REWARD_GATE_M1.md` §4 —
 the drain is not an on-chain observable per F-W10, and the exit-timing

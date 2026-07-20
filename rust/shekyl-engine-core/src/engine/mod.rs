@@ -271,6 +271,8 @@ pub(crate) mod fault_injecting_pending_tx;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_refresh;
 pub mod fee_estimator;
+// WI-RPC-1: read-only fee/weight query projection for the wallet-RPC surface.
+pub mod fee_query;
 pub(crate) mod fee_snapshot;
 /// GF-7 leg-(b) sealing re-run harness (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`
 /// §19.8): drives the **production** P-scan task + dispatch driver
@@ -329,6 +331,9 @@ pub(crate) mod stake_persist;
 /// (distinct inner types → compile error on cross-apply). Design-now; real checks
 /// wire in cold-start / 2d wiring.
 pub(crate) mod stake_timing;
+// WI-RPC-1: read-only staked-balance/staked-output aggregation over the
+// authoritative sealed pscan/pending records, for the wallet-RPC surface.
+pub mod staking_read;
 /// `docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3: the submit lifecycle
 /// driver — the wallet-side actor that lifts the [`submit_watchdog`]
 /// kernel (projection → escape ladder → resubmit-same-bytes probe →
@@ -374,6 +379,7 @@ pub use error::{
     RefreshError, SendError, SubmitError, TxError,
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
+pub use fee_query::{FeeTierQuote, TxShapeEstimate};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 pub use local_economics::LocalEconomics;
 pub use local_ledger::LocalLedger;
@@ -414,6 +420,7 @@ pub use signer::MultisigSignerV2;
 pub use signer::{
     EngineSignerKind, LocalSigner, SignedTransfer, Signer, SoloSigner, TransferSigningContext,
 };
+pub use staking_read::{StakedBalance, StakedOutput, StakingReadError, StakingReadView};
 pub use view_material::ViewMaterial;
 
 use std::marker::PhantomData;

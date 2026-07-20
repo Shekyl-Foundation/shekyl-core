@@ -11,6 +11,18 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 - **Out of scope**: Command is Monero-inherited dead code or irrelevant to Shekyl. Reason documented.
 - **Planned**: Equivalent exists but needs testing or minor work.
 
+> **Note (2026-07-19, WI-RPC-1).** Rows 1–4's `account` / `--subaddr-index` /
+> `address new` / `--subaddr-indices` language is **wallet2-era** and does not
+> map to the Shekyl-native model: Shekyl has a single `ShekylAddress` with no
+> subaddresses and no accounts. The Shekyl-native receive-attribution surface
+> is the **payment request** — an opaque `rid` on the `shekyl:` URI — served
+> by `shekyl-wallet-rpc` (`create_payment_request`, `list_payment_requests`,
+> `make_uri`, `parse_uri`; contract in
+> [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml)). When the CLI migrates
+> off wallet2 onto `shekyl-wallet-rpc`, these rows collapse to the single
+> address + payment-request commands; the matrix rows stay as-is until that
+> migration lands because they document the current wallet2-backed CLI.
+
 ## Parity matrix (40 covered, 41 out of scope)
 
 | # | simplewallet command | shekyl-cli equivalent | Status | Notes |

@@ -12,9 +12,12 @@ use serde_json::Value;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 
 use crate::error::WalletRpcError;
+use crate::fees;
 use crate::lifecycle;
 use crate::queries;
+use crate::receiving;
 use crate::send;
+use crate::staking;
 use crate::sync;
 use crate::tenant::TenantState;
 use crate::types::{GetVersionResult, API_VERSION};
@@ -48,6 +51,20 @@ pub async fn dispatch(
         "stake" => lifecycle::stake(tenants, params).await,
         "submit_pending_tx" => send::submit_pending_tx(tenants, params).await,
         "discard_pending_tx" => send::discard_pending_tx(tenants, params).await,
+        // WI-RPC-1 receiving (FA-8d projection; `rid` on the URI — no
+        // subaddress/account model exists in Shekyl).
+        "create_payment_request" => receiving::create_payment_request(tenants, params).await,
+        "list_payment_requests" => receiving::list_payment_requests(tenants, params).await,
+        "make_uri" => receiving::make_uri(tenants, params).await,
+        "parse_uri" => receiving::parse_uri(tenants, params).await,
+        // WI-RPC-1 fees (projection of the one Phase-2a byte/fee model).
+        "estimate_tx_size_and_weight" => fees::estimate_tx_size_and_weight(tenants, params).await,
+        "get_default_fee_priority" => fees::get_default_fee_priority(tenants, params).await,
+        // WI-RPC-1 staking reads (authoritative pscan/pending aggregation —
+        // never the `bonded_slots` hint). Staking actions stay `-32601`.
+        "get_staked_balance" => staking::get_staked_balance(tenants, params).await,
+        "get_staked_outputs" => staking::get_staked_outputs(tenants, params).await,
+        "staking_info" => staking::staking_info(tenants, params).await,
         other => Err(WalletRpcError::MethodNotFound(other.to_owned())),
     }
 }

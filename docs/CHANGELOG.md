@@ -5,31 +5,54 @@
 ### Added
 
 - **docs: F-D2 drain-send subsystem design round opened
-  (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, Round 1 DRAFT).** Scopes
-  Gate-6 R4's last open item — the unbuilt `P`-value-out subsystem in
-  `shekyl-gui-wallet` — against the verified substrate: the GUI holds no
-  `Engine`/`P`-scan state (wallet2 FFI only), the core-side planner
-  (`plan_drain`) is fee-agnostic with no data source and no consumer, and
-  the claim pipeline is the assembly analog. Design questions DS-1…DS-7
-  drafted (assembly locus, staker-mode engine adoption, destination pin,
-  assembly-side fee carve + first-class sweep entry, round-number /
-  random-split default with an F-D1-sibling arm, the accepted F-D4 §16.4
-  funding default, shape-era doc sweep) with cross-repo sub-PR slicing
-  (rule 26 cited; pre-flight owed before code). Carries the FOLLOWUPS
+  (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, Round 1 DRAFT, two review
+  rounds applied).** Scopes Gate-6 R4's last open item — the unbuilt
+  `P`-value-out subsystem in `shekyl-gui-wallet` — against the verified
+  substrate: gui-wallet `dev` embeds `engine-core::Engine` in-process
+  (`EngineSession`, engine backend default-on, `start_pscan_if_staker` at
+  every engine open, `activate_staker` → `Engine::first_stake`), the
+  core-side planner (`plan_drain`) is fee-agnostic with no data source and
+  no consumer, and the claim pipeline is the assembly analog. Design
+  questions DS-1…DS-7 drafted (assembly locus, staker-mode engine
+  adoption, destination pin, assembly-side fee carve + first-class sweep
+  entry, round-number / random-split default with an F-D1-sibling arm, the
+  accepted F-D4 §16.4 funding default, shape-era doc sweep) with cross-repo
+  sub-PR slicing (rule 26 cited; pre-flight owed before code). DS-2
+  RATIFIED engine-first (dual-open rejected); the
+  `shekyl-engine-rpc`-is-a-wallet2-FFI-shim crate-role correction is
+  recorded, and DS-PR-3 is re-scoped to its remainder (the aggregate
+  `P`-balance read; doc §2.4/DS-2/round log). Carries the FOLLOWUPS
   "P-drain mechanism re-walk" items (a)/(b)/(c). Rule-94 registrations:
   the `DS-` family + the drain-send current-front row. Closing F-D2
   closes Gate-6 R4; per PR #337's scope review (merged into this round
   before its first review) the former GF-4/F-D1+F-D2 `K_COVER` seal
   seat is REMOVED (M1 §4, F-W10) — F-D2 stays a pre-genesis Gate-6
-  build item, not seal evidence. *Review round 2 (2026-07-19):* the
-  "GUI holds no `Engine`" substrate line above is superseded —
-  gui-wallet `dev` landed GUI-PR0…GUI-PR3 the same day (`EngineSession`
-  embeds `engine-core::Engine` in-process, engine backend default-on,
-  `start_pscan_if_staker` at every engine open, `activate_staker` →
-  `Engine::first_stake`); DS-2 RATIFIED engine-first (dual-open
-  rejected), the `shekyl-engine-rpc`-is-a-wallet2-shim crate-role
-  correction recorded, and DS-PR-3 re-scoped to its remainder (the
-  aggregate `P`-balance read; doc §2.4/DS-2/round log).
+  build item, not seal evidence. (Round 1's initial "GUI holds no
+  `Engine`" substrate assumption was corrected in review round 2; the
+  full correction is in the doc's round log.)
+
+- **rpc: WI-RPC-1 — receiving, fee, and staking-read wallet-RPC surfaces.**
+  `shekyl-wallet-rpc` gains nine JSON-RPC methods, each a pure projection
+  of an existing Engine surface (contract updated in
+  `docs/api/wallet_rpc.yaml`; no tx/consensus/secret surface):
+  *receiving* — `create_payment_request` (the one mutating method; local
+  bookkeeping persisted via the wallet's normal crash-atomic save path,
+  URI composed from the stored request so `rid` cannot drift),
+  `list_payment_requests`, `make_uri`, `parse_uri`. The merchant
+  reference is the non-zero u48 `rid` on the `shekyl:` URI — no
+  subaddress or account type exists or was added.
+  *Fees* — `estimate_tx_size_and_weight` and `get_default_fee_priority`
+  over new read-only Engine helpers (`estimate_tx_size_and_weight`,
+  `quote_fee_tiers`) that project the single `predict_weight` byte model
+  and the build path's fee-converge fixpoint; a failed daemon snapshot is
+  the same `-29102` the build path uses.
+  *Staking reads* — `get_staked_balance` (three never-conflated fields:
+  `bonded_principal_confirmed`, `bonded_principal_pending`,
+  `rewards_received_unspent`), `get_staked_outputs`, `staking_info`, via
+  a new authoritative `Engine::staking_read_view` aggregating reconcile
+  evidence + sealed pending posts + funding outputs — never the
+  `bonded_slots` hint (hint-divergence KAT pins this). Staking actions
+  (`unstake`, `claim`) remain engine-gated and RESERVED.
 
 - **daemon: emission-claim Phase-C submit battery (PR-4b completion).**
   The Rust submit engine accepts the second and last transaction kind the
