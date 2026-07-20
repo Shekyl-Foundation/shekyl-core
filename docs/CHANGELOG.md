@@ -29,7 +29,13 @@
   seat is REMOVED (M1 §4, F-W10) — F-D2 stays a pre-genesis Gate-6
   build item, not seal evidence. (Round 1's initial "GUI holds no
   `Engine`" substrate assumption was corrected in review round 2; the
-  full correction is in the doc's round log.)
+  full correction is in the doc's round log.) DS-4 records the
+  weight-uniformity cross-reference: the `P`-lane fee is
+  `f(weight, daemon-rate)` with no capital/cover term (impl-verified
+  against the landed WI-RPC-1 fee surface — `tx_fee_model` /
+  `fee_query` / wallet-RPC `fees.rs`; contract pin 3d22d1e), so the
+  only fee-adjacent distinguisher left is weight/input-count itself —
+  GF-4b's funding-input-count territory, not the fee's.
 
 - **rpc: WI-RPC-1 — receiving, fee, and staking-read wallet-RPC surfaces.**
   `shekyl-wallet-rpc` gains nine JSON-RPC methods, each a pure projection

@@ -345,6 +345,26 @@ when DS-PR-1 lands the assembly. Carried into the DS-PR-1 scope cell;
 the fee-uniformity rider itself rides the `Unbond` constructor family
 and is not blocked on this round.
 
+**Weight-uniformity cross-reference (2026-07-19).** Consequence (i)'s
+uniformity holds **given weight**: the fee is `f(weight, daemon-rate)` — a
+pure function of tx shape (input/output counts + curve-tree depth) and the
+daemon rate snapshot, with **no** capital/cover/earnings term. The
+"canonical fee from persona working capital" wording names the *funding
+source* (cover outputs first, then earnings), never the *amount* — the fee
+is the standard weight-priced floor, capital-independent. Verified in the
+landed WI-RPC-1 fee surface (`shekyl-engine-core`
+`tx_fee_model::{predict_weight, converge_fee, fee_from_weight}` and
+`fee_query::{estimate_tx_size_and_weight, quote_fee_tiers}`; wallet-RPC
+`fees.rs`): the only client input beyond the tx-shape counts is the fee
+field's own `varint(fee)` width, and the reserved staking wire carries no
+`FeePriority`/amount/cover-amount param (contract pin 3d22d1e), so a
+capital-dependent fee is **unrepresentable**, not merely discouraged.
+Consequence: the fee leaks nothing beyond weight, so the sole fee-adjacent
+distinguisher that remains is weight/input-count itself — that is **GF-4b's
+funding-input-count territory, not the fee's**, and the drain fee rule
+deliberately does not launder it through the fee heading. A later reader
+should not re-litigate weight-uniformity under this fee heading.
+
 ### DS-5 — The default itself (the §12.4 affordance, re-walk item (c))
 
 **Proposal.** The drain-amount field defaults **empty**; the two offered
