@@ -253,6 +253,6 @@ That is the same architecture already halfway in — finished, instead of “sev
 
 | | |
 |--|--|
-| **Location** | `shekyl-dev/docs/ENGINE_COMPOSITION_DECOMPOSITION.md` |
+| **Location** | `shekyl-core/docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md` |
 | **Status** | Design recommendation — not an implementation plan / PR series |
 | **Follow-up** | Optional: concrete `transfer/` module map against `LocalPendingTx` methods (what moves where, API stability on Engine) |
