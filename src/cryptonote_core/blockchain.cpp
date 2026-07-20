@@ -450,7 +450,7 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
     // through — and an invalid value refuses loudly here instead of
     // silently running the genesis schedule until the harness times out.
     const uint8_t arm_rc = shekyl_archival_settlement_epoch_arm_regtest();
-    if (arm_rc != 0)
+    if (arm_rc != SHEKYL_ARCHIVAL_SEB_ARM_OK)
     {
       // The two refusals have different remedies, so they get different
       // messages: a bad value is the operator's to fix, while a late arm
@@ -458,7 +458,7 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
       // a daemon-side initialization-order defect the operator cannot fix
       // by editing the variable.
       const char *raw = getenv("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
-      if (arm_rc == 2)
+      if (arm_rc == SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE)
         MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " could not be armed: the settlement-epoch schedule had already latched before this gate ran. The value is fine; this is an initialization-order defect in the daemon (arming must precede every epoch-arithmetic call, including the genesis add). Refusing to start — please report it.");
       else
         MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " is not a valid override: expected an integer between 2 and the genesis settlement-epoch length; refusing to start. Fix the value or unset the variable.");

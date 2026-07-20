@@ -37,9 +37,6 @@ use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, Signature
 use shekyl_fcmp::SCALARS_PER_LEAF;
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 
-/// Success.
-pub const SHEKYL_ARCHIVAL_VERIFY_OK: u8 = 0;
-/// Required pointer was null.
 /// `shekyl_archival_settlement_epoch_arm_regtest`: armed (or the variable
 /// is unset and the genesis pin latched).
 pub const SHEKYL_ARCHIVAL_SEB_ARM_OK: u8 = 0;
@@ -50,6 +47,9 @@ pub const SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID: u8 = 1;
 /// initialization-order defect in the arming process, not a bad value.
 pub const SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE: u8 = 2;
 
+/// Success.
+pub const SHEKYL_ARCHIVAL_VERIFY_OK: u8 = 0;
+/// Required pointer was null.
 pub const SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR: u8 = 1;
 /// Vin payload failed structural decode.
 pub const SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE: u8 = 2;

@@ -88,10 +88,12 @@ struct GetInfoResp {
     /// `mine_until_pool_empty`).
     #[serde(default)]
     tx_pool_size: u64,
-    /// Cumulative burned atomic units — the §9.5 conservation observable's
-    /// pool/burn side (`archival_budget_accrual`'s `staker_pool_amount`
-    /// term lands here on a no-staker block; `blockchain_db` rolls it back
-    /// on pop). The emission e2e reads its delta across the claim/pop.
+    /// Cumulative destroyed atomic units — `compute_fee_burn`'s
+    /// `actually_destroyed` term only (`blockchain.cpp` feeds it
+    /// `block_burn_amount` and rolls it back on pop). The sibling
+    /// `staker_pool_amount` term does *not* land here; it goes to the
+    /// `archival_budget_accrual` row. See the A6 assertion for why the
+    /// destroyed half is nonetheless evidence about the pool half.
     #[serde(default)]
     total_burned: u64,
 }
@@ -262,10 +264,9 @@ impl RegtestDaemon {
             .tx_pool_size
     }
 
-    /// Cumulative `total_burned` — the §9.5 conservation observable's
-    /// pool/burn side. The emission e2e asserts on its delta across a
-    /// no-staker close (the `staker_pool_amount` term accrues) and its
-    /// reversal on pop.
+    /// Cumulative `total_burned` — the destroyed half of the §9.5 fee
+    /// partition. The emission e2e samples it once, at epoch close, and
+    /// pins it to 0 (A6 pool-half disposition).
     pub(super) async fn total_burned(&self) -> u64 {
         self.rpc
             .json_rpc_call::<GetInfoResp>("get_info", None)

@@ -2332,13 +2332,18 @@ bool shekyl_archival_settlement_epoch_override_present(void);
 /// only), latching the validated override (or the genesis pin when unset).
 /// An unarmed process ignores the lever entirely.
 ///
-/// Returns a cause code, because the two refusals need different remedies:
-///   0 — armed;
-///   1 — the value is not an integer in the accepted range (operator input
-///       error: fix the value or unset the variable);
-///   2 — the schedule already latched before this call (an
-///       initialization-order defect in the daemon, NOT a bad value).
+/// Returns one of SHEKYL_ARCHIVAL_SEB_ARM_* below, because the two refusals
+/// need different remedies.
 uint8_t shekyl_archival_settlement_epoch_arm_regtest(void);
+
+/// Armed (or the variable is unset and the genesis pin latched).
+#define SHEKYL_ARCHIVAL_SEB_ARM_OK                   0
+/// The value is not an integer in the accepted range — an operator input
+/// error: fix the value or unset the variable.
+#define SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID          1
+/// The schedule already latched before the call — an initialization-order
+/// defect in the daemon, NOT a bad value.
+#define SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE         2
 
 /// Returns 1 and writes the settlement epoch whose close is processed at
 /// `block_height`; 0 (no write) at height 0 or non-boundary heights.
