@@ -1,6 +1,14 @@
 # M1 — Reward eligibility gated on shard count (consensus rule)
 
-**Status: design rounds 1–3 closed (§9, §10, §11 records), plus the
+**STATUS: RETIRED (2026-07-19) — see §13.** The rule below is preserved
+as designed and implemented, for the record; it is no longer part of the
+consensus design. The machinery removal is the implementation half,
+tracked in `docs/FOLLOWUPS.md` ("K_COVER machinery removal"); until that
+PR lands the code runs as the `k_cover = 0` gate-identity degenerate it
+has always run as (no behavior change at any tip, before or after
+removal).
+
+**Status at retirement: design rounds 1–3 closed (§9, §10, §11 records), plus the
 §11.8 round-3 amendment (count-pass discipline, M3-1..M3-3) and the
 §11.9 implementation-gates decision. IMPLEMENTED (2026-07-06, §11.10
 record): the §6 pinned sequence executed steps 1–5 on
@@ -1588,3 +1596,118 @@ mechanically:
   before production commits).
 - `07-consensus-atomic-cutovers.mdc` (surface-enumeration evidence
   discipline; exception not invoked at spec time).
+
+---
+
+## 13. Retirement record (2026-07-19)
+
+**Decision: the K_COVER gate — and with it the design's only collective
+reward-withholding mechanism — is retired.** Ruling (project owner,
+2026-07-19): *reward withholding is legitimate only as the consequence
+of an action the individual controls.* The slash/bad-interval mechanism
+is the stick a staker accepts by joining; payment is the carrot that
+makes the stick acceptable. A gate that zeroes every persona's reward
+on a collective, uncontrollable condition takes away the carrot — and
+people won't accept the stick. After retirement, every withholding
+cause in the system is individually caused: slash intervals (your
+failures), membership onset at `join + 1` (your entry timing), holdings
+shape (your declaration — the Design-1 ruling, `FOLLOWUPS.md`
+market-bond item), claim-window expiry (your claim timing), and
+zero-work-zero-reward (serve to earn).
+
+### 13.1 The surviving-justification audit (what killed it)
+
+Run at source, 2026-07-19, triggered by the PR-4c e2e's first live
+close (which surfaced the gate's interaction with the reward path
+end-to-end for the first time):
+
+1. **Anti-farming — structural without the gate.** The serve-credit
+   acceptance gate (`serve_credit_decisions.rs`, the audited D-SC
+   mirror) already makes credit unobtainable for unfrozen shards
+   (step 10, `ShardRegistryUnavailableAtFire`), unfakeable without the
+   data (steps 11–12 leaf-chunk bounds + read; step 14 vin verify),
+   and per-`(P, shard, E)` deduplicated. `r_market` counts other
+   members' credits and cannot be deflated; sybil-splitting raises it
+   and splits the same budget. The cliff added nothing.
+2. **Inflation — bounded by construction.** `sigma_work_milli` sums
+   exactly the per-claimant `capped_work_milli` terms used as claim
+   numerators, so `Σ rewards ≤ budget(E)` identically
+   (`reward_share_floor`, dust unminted), and `budget(E)` is fixed by
+   the accrual law independent of any work configuration.
+3. **The privacy floor — the gate pointed the wrong way.** The
+   protected fact is the principal ↔ `P` edge, and identification is a
+   **lineup property**: an adversary picks the target out of a set of
+   indistinguishable alternatives. Decoupling (entry jitter, FCMP++)
+   only bounds how much better than the lineup's base rate an
+   adversary does; it cannot manufacture lineup members — with one
+   entrant there is no lineup, and existence alone identifies
+   (`r/N` at `N = 1` is certainty at any `r`). Per adversary position
+   the lineup is: ambient transfer traffic (chain-only funding-seam
+   correlation), unmarked contemporaneous joins (targeted adversary
+   with off-chain knowledge), active personas (clustering). **All
+   three denominators are built by paid participation, and the gate
+   unpaid all three**: it confiscated the `g(age)/r_market` pioneer
+   premium that recruits privacy-indifferent early entrants (who are
+   observationally identical to privacy-needing ones — the organic
+   cover bootstrap), and it zeroed the §14 founder personas' market
+   rewards too (they are ordinary market members by design), forcing
+   the cover schedule to run as charity. The population-accounting
+   error found during the audit is recorded for the lineage: the
+   genesis-enumerated **Foundation backstop** (durability-only,
+   market-excluded, "categorically outside the anonymity set") was
+   conflated with the unmarked §14 **founder personas** in an earlier
+   defense of the gate; separated, the founder schedule provides entry
+   cover with or without the gate, and the gate's unique contribution
+   to every lineup is negative.
+4. **The gate-open cohort premise — unmeasured and implausible.** The
+   synchronization defense (demand pools behind the gate and enters as
+   a cohort at the open) requires people to queue for an activity that
+   pays nothing for months; demand does not pool, it dies ("almost no
+   one joins for free"). The operand (cumulative frozen segments = a
+   traffic clock) cannot observe, verify, or produce the entrant
+   cohort the open would need — admitted in-spec (§4: no
+   consensus-computable function maps segments to persona population).
+
+WI-4 §13.2's cold-start fail row (`r = 3.54`, thin cover) **stands as a
+measurement**; its disposition changes from "refuse the regime via a
+consensus cliff" to: (a) the §14 founder-entry schedule, unchanged in
+size and stagger but now **market-funded** by the scarcity premium
+instead of run as charity, and (b) a **wallet-side thin-market entry
+disclosure** — the live window's traffic and recent unmarked-join count
+shown at stake time, override-gated below a threshold (per the
+externality rule: the residual risk is self-regarding, so its locus is
+the wallet, as a loud disclosed-cost). (b) is a named build item
+(`FOLLOWUPS.md`).
+
+### 13.2 Reopening criteria (rule 21)
+
+Reintroducing any collective reward gate requires, at minimum:
+- a measured post-genesis entry-dynamics failure — the bootstrap
+  (paid pioneer entry + founder schedule + wallet disclosure) failing
+  the WI-4 ratio bound in production telemetry; **and**
+- a gate operand that observes the actual lineup quantity it claims to
+  protect (the §4 segment-count proxy is disqualified by its own
+  admission); **and**
+- the individually-controllable-withholding principle above addressed
+  head-on in the reopening round, not waived.
+
+### 13.3 Machinery-removal surface (the implementation half)
+
+Enumerated at retirement (grep-verified); the removal PR deletes, with
+no behavior change (the gate has only ever run as the `k_cover = 0`
+identity):
+`epoch_close_compute`'s early return + the `frozen_shard_count` /
+`k_cover` operands on `EpochCloseInputs` (+ `close_view` params;
+`verify_view` stub args), `k_cover.rs` (sentinel + `KCover` newtype),
+`build.rs` k_cover generation + the `k_cover`/`k_cover_provisional`
+JSON keys, the `provisional-k-cover` feature and its seven enablement
+sites, the FFI/C++ count-pass (`shekyl_ffi.h` / `archival_ffi.rs` /
+`db_lmdb.cpp` `count_frozen_shards_at_close` operand plumb),
+`reward_gate_kat.rs` + `reward_gate_kat_v1.json` (G-rows; fixture
+retained in git history), the `check_reward_gate_predicate_sites.sh`
+tripwire + its CI wiring, sim references
+(`gf7_sealing_run.rs` / `staking-sim`), and the
+`RELEASE_CHECKLIST.md` stressnet-entry seal item. `consensus-kat`
+survives (other consumers). The §14.4 partition-run records, the G-KAT
+fixtures' history, and this spec remain in the tree/history — the
+record is the point.

@@ -712,6 +712,16 @@ bound at posture.
   *refuse to enter* the cold-start regime rather than accept its number.
   The row remains graded as the counterfactual bracket for what the regime
   costs if entered unprotected.
+  **DISPOSITION UPDATED 2026-07-19 (M1 retirement —
+  `ARCHIVAL_REWARD_GATE_M1.md` §13):** the measurement stands; the
+  *refusal-via-consensus-gate* disposition is retired with the K_COVER
+  gate. The row's new disposition: the §14 founder-entry schedule
+  (unchanged, now market-funded — founder personas are ordinary market
+  members and earn the thin-cover scarcity premium instead of running as
+  charity) plus the wallet-side thin-market entry disclosure
+  (`FOLLOWUPS.md` build item). Rationale walked in M1 §13.1 (the lineup
+  argument: every relevant anonymity denominator is built by paid
+  participation, which the gate suppressed).
 - **Conformance-trap draw:** `s3 = 0.211 > 0.143` (real draw) — the trap is
   more linkable, as designed (negative anchor behaves).
 - **Inversion off:** `s3 = 0.251 > 0.237` (on), at window 300 — inversion

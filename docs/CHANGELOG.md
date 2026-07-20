@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **consensus design: the M1 `K_COVER` reward gate is RETIRED**
+  (`ARCHIVAL_REWARD_GATE_M1.md` §13 — the record; spec preserved, code
+  removal tracked in FOLLOWUPS as the implementation half). Ruling:
+  reward withholding is legitimate only as the consequence of an action
+  the individual controls — slash/bad-intervals is the stick a staker
+  accepts, payment is the carrot that makes it acceptable; a collective
+  gate that zeroes every persona's rewards on an uncontrollable
+  condition is retired as a concept. The surviving-justification audit
+  (M1 §13.1): anti-farming is structural in the serve-credit acceptance
+  gate (unfrozen shards uncreditable, data possession proven,
+  per-`(P,shard,E)` dedup), inflation is bounded by construction
+  (`Σ rewards ≤ budget(E)` — the denominator sums the numerators), and
+  the privacy floor inverted on the lineup argument: every relevant
+  anonymity denominator (ambient traffic, unmarked joins, active
+  personas) is built by paid participation, which the gate suppressed —
+  it confiscated the `g(age)/r_market` pioneer premium that funds the
+  organic cover bootstrap and zeroed the §14 founder personas' own
+  market rewards. The WI-4 §13.2 cold-start measurement stands,
+  re-dispositioned to the (now market-funded) founder-entry schedule
+  plus a wallet-side thin-market entry disclosure (new FOLLOWUPS build
+  item). No behavior changes at any tip: the gate has only ever run as
+  the `k_cover = 0` gate-identity degenerate.
+
 ### Added
 
 - **rpc: WI-RPC-1 — receiving, fee, and staking-read wallet-RPC surfaces.**

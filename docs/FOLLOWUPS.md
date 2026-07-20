@@ -47,6 +47,39 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **K_COVER machinery removal — the implementation half of the M1
+  retirement** (added 2026-07-19; `ARCHIVAL_REWARD_GATE_M1.md` §13,
+  RETIRED by ruling: reward withholding is individually-caused only —
+  slash is the stick, payment is the carrot). The gate is retired at the
+  spec level; the code still runs as the `k_cover = 0` gate-identity
+  degenerate it has always run as, so removal changes no behavior at any
+  tip. Delete surface enumerated at §13.3 (gate early-return +
+  `EpochCloseInputs` operands, `k_cover.rs` sentinel machinery,
+  `build.rs` generation + JSON keys, the `provisional-k-cover` feature ×
+  7 enablement sites, the FFI/C++ `count_frozen_shards_at_close` operand
+  plumb, `reward_gate_kat.rs` + fixture, the
+  `check_reward_gate_predicate_sites.sh` tripwire + CI wiring, sim
+  references, the release-checklist row — `consensus-kat` survives).
+  History is retained (spec + fixtures + partition-run records stay in
+  tree/git); the removal is machinery-only, rule 15. **Target: V3.0
+  pre-genesis (the machinery misleads as long as it implies a future
+  seal). Blocked on: explicit go-ahead for the removal PR (the code
+  half is parked; the record landed first by instruction).**
+
+- **Wallet thin-market entry disclosure — the §13.2 re-disposition's
+  build item** (added 2026-07-19; `ARCHIVAL_REWARD_GATE_M1.md` §13.1,
+  `ARCHIVAL_BOND_WI4_MEASUREMENT.md` §13.2 updated disposition). At
+  stake time the wallet computes and shows the live lineup the entrant
+  would join — recent-window transfer traffic (the chain-only
+  funding-seam denominator) and recent unmarked joins (the targeted-T
+  denominator) — and requires an explicit override below a threshold.
+  Loud disclosed-cost at the wallet locus (externality rule: the
+  residual thin-entry risk is self-regarding); replaces the retired
+  consensus gate's deterrence function without suppressing the paid
+  cover bootstrap. Rule 81: rendered as plain risk language, never
+  protocol vocabulary. **Target: V3.0 pre-genesis (belongs with the
+  market-bond wallet entry work — see the `first_stake` holdings item).**
+
 - **Solo address registry: decide (a registration tx type is genesis-only)**
   (added 2026-07-17, solo `ek_bind` PR). A solo address is a ~2,055-char
   three-segment Bech32m string. It cannot be shortened by any encoding — no
