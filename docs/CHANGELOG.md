@@ -49,7 +49,15 @@
   (one B6 errata — §2.3 `"stake"` route `handlers.rs:48` → `:51`, chain
   terminus unaffected) and all 24 core artifacts (F-D1/F-D2 planner +
   weight-only fee + P-scan persistence) green; the GUI-side pre-flight
-  (DS-PR-3/4/5) is carried to each GUI sub-PR's open.
+  (DS-PR-3/4/5) is carried to each GUI sub-PR's open. Composition
+  discipline pinned against `ENGINE_COMPOSITION_DECOMPOSITION.md` (doc §4):
+  DS-PR-1/DS-PR-2 mirror the claim path's already-target shape
+  (free-function orchestrator over an explicit `DrainCtx`, actor-held
+  signing, separate dispatch driver — never `&Engine`, no new `Engine`
+  generic/inherent method), drain code stays in its own `drain_*` module
+  set (not the flagged `stake_engine.rs`/`local_pending_tx.rs` god-files),
+  and DS-PR-4's entry point is a thin façade delegate — armed as an
+  F-D1-sibling self-grep acceptance property.
 
 - **rpc: WI-RPC-1 — receiving, fee, and staking-read wallet-RPC surfaces.**
   `shekyl-wallet-rpc` gains nine JSON-RPC methods, each a pure projection

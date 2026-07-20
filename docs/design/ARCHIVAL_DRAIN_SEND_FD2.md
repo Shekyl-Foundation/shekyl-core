@@ -432,15 +432,59 @@ updates so the new code never cites retired discipline.
 
 | Slice | Repo | Content | Depends on |
 |-------|------|---------|-----------|
-| DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry (fee function = the canonical floor per the 2026-07-19 fee-uniformity ratification; one-sentence exit-reserve disposition for partial drains — see the DS-4 interaction note); **threat-model forward-actions T-DS-4 (map each drain shape to an F-D4 §16 crossing class, confirm none new) + T-DS-5 (input selection inherits the GF-4b funding-input discipline, no drain-specific selector)** per §5 | round closure + pre-flight *(core-side pre-flight run 2026-07-19, AUDIT §Round 0; thin re-confirm at open)* |
-| DS-PR-2 | shekyl-core | Drain dispatch seam (claim-dispatch sibling): choke-point submit on persona transport, retirement wiring; **T-DS-2 arm: self-grep the drain submit routes through `PersonaIsolatedTransport`, never a default `DaemonClient`** (§5) | DS-PR-1 |
+| DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry (fee function = the canonical floor per the 2026-07-19 fee-uniformity ratification; one-sentence exit-reserve disposition for partial drains — see the DS-4 interaction note); **threat-model forward-actions T-DS-4 (map each drain shape to an F-D4 §16 crossing class, confirm none new) + T-DS-5 (input selection inherits the GF-4b funding-input discipline, no drain-specific selector)** per §5; **composition arm: free-function drain orchestrator over a `DrainCtx` (never `&Engine`), no new `Engine` generic/inherent method, drain code in its own `drain_*` module set — §4 Composition discipline** | round closure + pre-flight *(core-side pre-flight run 2026-07-19, AUDIT §Round 0; thin re-confirm at open)* |
+| DS-PR-2 | shekyl-core | Drain dispatch seam (claim-dispatch sibling): choke-point submit on persona transport, retirement wiring; **T-DS-2 arm: self-grep the drain submit routes through `PersonaIsolatedTransport`, never a default `DaemonClient`** (§5); **composition: dispatch is a `claim_dispatch`-sibling driver, not an `Engine` inherent method (§4)** | DS-PR-1 |
 | DS-PR-3 | shekyl-gui-wallet | Aggregate `P`-balance read surface (the DS-2 remainder — the adoption shape itself landed as GUI-PR1/PR3, §2.4: open + `start_pscan_if_staker` + parked handle + `activate_staker`) | DS-PR-1 (aggregate-read API exists). *Former second edge — a `staking_enabled` production path reachable from the GUI — closed 2026-07-19 by GUI-PR3 `activate_staker` → `Engine::first_stake` (§2.3); former "native wallet lifecycle" edge closed by the same landing (GUI-PR1 `EngineSession`, §2.4)* |
-| DS-PR-4 | shekyl-gui-wallet | Drain-send UI: amount entry + DS-5 defaults + confirm; calls the one engine entry point | DS-PR-2, DS-PR-3 |
+| DS-PR-4 | shekyl-gui-wallet | Drain-send UI: amount entry + DS-5 defaults + confirm; calls the one engine entry point — **a thin façade delegate over the drain service, not a fat `Engine` workflow method (§4)** | DS-PR-2, DS-PR-3 |
 | DS-PR-5 | shekyl-gui-wallet | DS-6 funding default (separable) | DS-PR-3 |
 | DS-PR-6 | shekyl-core | DS-7 doc sweep + Gate-6/M1/FOLLOWUPS close-out lines | last |
 
 Cross-repo note (rule 10): every engine-side API lands in `shekyl-core`
 first; the GUI consumes released surface, never the reverse.
+
+### Composition discipline (`ENGINE_COMPOSITION_DECOMPOSITION.md` alignment)
+
+`ENGINE_COMPOSITION_DECOMPOSITION.md` (dev, 2026-07-19) names the one
+remaining monolith as **orchestration ownership on `Engine`** and pins
+the fix: workflow *services* that take an explicit Caps/Ctx — **not**
+more `Engine<…>` generics, **not** new inherent multi-step methods on
+`Engine`; file-split the god-modules first, façades second, Stage-4
+actors last. The drain-send subsystem is a **workflow** (the doc lists
+"bond / claim / **drain**" under `StakeWorkflow`), so the discipline is
+load-bearing here. This subsystem adopts it **by construction**, not by
+a later refactor:
+
+- **DS-PR-1/DS-PR-2 mirror the claim path, which is already the target
+  shape.** `orchestrate_emission_claim<R: PersonaIsolatedTransport>`
+  (`claim_orchestrator.rs:222`) is a **free function** over an explicit
+  `ClaimAssemblyContext<'a>` (`:132` — borrowed `&StakeEngineHandle`,
+  `&CurveTreeHandle`, funding records, reserved set, fee), never
+  `&Engine`; signing stays in the actor; dispatch is the separate
+  `claim_dispatch` driver (`:182`). The drain orchestrator/dispatch copy
+  that shape verbatim: a free-function drain orchestrator over a
+  `DrainCtx` (the drain analog of `ClaimAssemblyContext`), actor-held
+  signing, a `claim_dispatch`-sibling submit seam. **No new `Engine`
+  type parameter; no new inherent multi-step method on `Engine`.**
+- **God-file guardrail.** Drain code stays in its **own** module set —
+  the F-D1 landing already put it there (`drain_orchestrator` /
+  `drain_amount` / `drain_select` as separate files, not inside
+  `stake_engine.rs`); DS-PR-1/DS-PR-2 extend that set (assembly +
+  dispatch modules, e.g. an `engine/drain/` tree). It must **not** swell
+  the two god-files the doc flags — `stake_engine.rs` (4.7k) or
+  `local_pending_tx.rs` (5.4k). "Split by workflow, not by noun;
+  file-split first."
+- **DS-PR-4's "one engine entry point" is a thin façade delegate**, not
+  a fat workflow method — the GUI calls a small stable surface that
+  delegates to the drain service (the doc's §3 façade shape, a drain
+  view over shared Caps), keeping workflow logic off the `Engine`
+  inherent impl.
+
+**Armed as an acceptance property (F-D1-sibling, pre-code).** DS-PR-1's
+tests self-grep that the drain orchestrator/assembly names a
+`DrainCtx` / handle set and **never `Engine`**, and that the change adds
+no `Engine` generic — the same make-bad-states-unrepresentable
+discipline the `fd1_arm_*` guards and the fee-contract pin already use,
+so a monolith regression is caught mechanically, not by review vigilance.
 
 ## 5. Threat-model addenda (Round 3 — rule 26 A3)
 
@@ -567,3 +611,18 @@ the target sub-PR lands.
   (A5):** GUI-side pre-flight (DS-PR-3/4/5, separate repo, gated on the
   native-wallet buildout) carried to each GUI sub-PR's open. Thin
   re-confirmation at DS-PR-1 open post-#342-merge remains standing.
+- **2026-07-19 — Composition-discipline pass (`ENGINE_COMPOSITION_DECOMPOSITION.md`
+  alignment).** Maintainer flagged the risk of the drain subsystem
+  re-growing the `Engine` monolith. Verified at source that the claim
+  path this subsystem mirrors is already the doc's target shape
+  (free-function `orchestrate_emission_claim` over `ClaimAssemblyContext`,
+  actor-held signing, separate `claim_dispatch` driver — never `&Engine`)
+  and that the F-D1 drain code already lives in its own `drain_*` module
+  set, not in the flagged god-files (`stake_engine.rs` 4.7k /
+  `local_pending_tx.rs` 5.4k). Added §4 "Composition discipline"
+  pinning DS-PR-1/DS-PR-2 to a free-function drain orchestrator over a
+  `DrainCtx` with no new `Engine` generic/inherent method, the god-file
+  guardrail, and DS-PR-4's entry point as a thin façade delegate; armed
+  as an F-D1-sibling self-grep acceptance property (drain orchestrator
+  never names `Engine`). No design decision reopened — the subsystem was
+  already aligned by construction; this records and locks it pre-code.
