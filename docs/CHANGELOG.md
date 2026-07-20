@@ -71,7 +71,18 @@
   builder-zeroed *not* removed, `tx_extra` structural) forward-actioned to
   DS-PR-1; plus a GF-7 disposition line (drain is the F-W7/F-W10 phantom,
   not a GF-7 event) and a local-adversary scope-boundary paragraph
-  (rule-36 jurisdiction). No prior disposition reopened.
+  (rule-36 jurisdiction). **Round 4 closed maintainer-accepted:** T-DS-6
+  and T-DS-7 fold into a single **composite wire-shape arm** (the
+  distinguisher can live in the join, since the drain is claim-plumbed but
+  transfer-shaped) — the drain's full wire serialization must be
+  byte-identical to a modal 2-out confidential transfer modulo
+  hidden/committed values, enforced by routing through the shared
+  `sign_bridge` path and verified by diffing a real drain tx against a
+  real transfer tx (not separate count/`tx_extra`/`unlock_time` checks);
+  the flagged `0x07` PQC leaf-hash is confirmed appended unconditionally by
+  that shared path (`sign_bridge.rs:283`), uniform across transfer and
+  drain. Threat-model axis closes clean; the three impl-time arms gate
+  DS-PR-1, not the round. No prior disposition reopened.
 
 - **rpc: WI-RPC-1 — receiving, fee, and staking-read wallet-RPC surfaces.**
   `shekyl-wallet-rpc` gains nine JSON-RPC methods, each a pure projection

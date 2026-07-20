@@ -432,7 +432,7 @@ updates so the new code never cites retired discipline.
 
 | Slice | Repo | Content | Depends on |
 |-------|------|---------|-----------|
-| DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry (fee function = the canonical floor per the 2026-07-19 fee-uniformity ratification; one-sentence exit-reserve disposition for partial drains — see the DS-4 interaction note); **threat-model forward-actions T-DS-4 (map each drain shape to an F-D4 §16 crossing class, confirm none new) + T-DS-5 (input selection inherits the GF-4b funding-input discipline, no drain-specific selector) + T-DS-3 change-output arm (change → persona `P`-space pool, change-to-principal unrepresentable) + T-DS-6 shape pin (standard 2-out confidential payment+change) + T-DS-7 Monero-era field re-walk (byte-identical `unlock_time`=0 / `tx_extra` / `ct_type` vs an ordinary send)** per §5; **composition arm: free-function drain orchestrator over a `DrainCtx` (never `&Engine`), no new `Engine` generic/inherent method, drain code in its own `drain_*` module set — §4 Composition discipline** | round closure + pre-flight *(core-side pre-flight run 2026-07-19, AUDIT §Round 0; thin re-confirm at open)* |
+| DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry (fee function = the canonical floor per the 2026-07-19 fee-uniformity ratification; one-sentence exit-reserve disposition for partial drains — see the DS-4 interaction note); **threat-model forward-actions T-DS-4 (map each drain shape to an F-D4 §16 crossing class, confirm none new) + T-DS-5 (input selection inherits the GF-4b funding-input discipline, no drain-specific selector) + T-DS-3 change-output arm (change → persona `P`-space pool, change-to-principal unrepresentable) + the T-DS-6 ∧ T-DS-7 composite wire-shape arm (drain's full wire serialization byte-identical to a modal 2-out confidential transfer modulo hidden/committed values — routed through the shared `sign_bridge` path, verified by diffing a real drain tx against a real transfer tx, not by separate count/`tx_extra`/`unlock_time` checks; `0x07` leaf-hash confirmed unconditional at `sign_bridge.rs:283`)** per §5; **composition arm: free-function drain orchestrator over a `DrainCtx` (never `&Engine`), no new `Engine` generic/inherent method, drain code in its own `drain_*` module set — §4 Composition discipline** | round closure + pre-flight *(core-side pre-flight run 2026-07-19, AUDIT §Round 0; thin re-confirm at open)* |
 | DS-PR-2 | shekyl-core | Drain dispatch seam (claim-dispatch sibling): choke-point submit on persona transport, retirement wiring; **T-DS-2 arm: self-grep the drain submit routes through `PersonaIsolatedTransport`, never a default `DaemonClient`** (§5); **composition: dispatch is a `claim_dispatch`-sibling driver, not an `Engine` inherent method (§4)** | DS-PR-1 |
 | DS-PR-3 | shekyl-gui-wallet | Aggregate `P`-balance read surface (the DS-2 remainder — the adoption shape itself landed as GUI-PR1/PR3, §2.4: open + `start_pscan_if_staker` + parked handle + `activate_staker`) | DS-PR-1 (aggregate-read API exists). *Former second edge — a `staking_enabled` production path reachable from the GUI — closed 2026-07-19 by GUI-PR3 `activate_staker` → `Engine::first_stake` (§2.3); former "native wallet lifecycle" edge closed by the same landing (GUI-PR1 `EngineSession`, §2.4)* |
 | DS-PR-4 | shekyl-gui-wallet | Drain-send UI: amount entry + DS-5 defaults + confirm; calls the one engine entry point — **a thin façade delegate over the drain service, not a fat `Engine` workflow method (§4)** | DS-PR-2, DS-PR-3 |
@@ -521,8 +521,38 @@ this subsystem's.
 | T-DS-3 | **Mis-send / destination substitution** — cause drain funds to land at an attacker-chosen or externally-linkable output (wrong-destination bug, or a re-map binding a linkable principal output) | DS-1 record re-map at the trust boundary, DS-3 destination pin, DS-PR-4 confirm | Destination is pinned engine-side to the wallet's **own principal address** (DS-3), never caller-supplied; DS-1 re-map sits at the trust boundary under the F-D2 core-side contract (only the aggregate crosses to the GUI); DS-PR-4 surfaces the destination at confirm | **(a) in-scope**. **Discipline note:** the drain entry point MUST NOT accept a destination-address argument — a caller-supplied destination is unrepresentable on the surface (same make-bad-states-unrepresentable shape as the fee contract pin), and is the named reopening trigger. **Change-output arm (→ DS-PR-1):** the drain's *change* output (`DrainPlan.change`) is a **second** output whose destination DS-3 does not cover — DS-3 pins the *payment* to the principal. The transfer assembly's default (`signing_assembly.rs:126`: `Change { subaddress_index: 0 }`) directs change to the **principal** change address; a drain inheriting it would land change at the principal — a second principal-linked output *and* a mis-typed pool. The drain assembly MUST direct change back into the persona **`P`-space** pool and make change-to-principal unrepresentable |
 | T-DS-4 | **Crossing-class inflation** — use the drain to create a new observable `P`→principal crossing class beyond Gate-6 F-D4 §16's enumeration, yielding a fresh linking key | The drain is a `P`→principal value crossing; partial-drain-from-live-persona vs post-retirement sweep | F-D4 §16 already enumerates the mandatory/optional crossings; the drain must **map onto an existing class**, not add one. The DS-4 exit-reserve disposition (partial drain = mid-life constructor and so reserves `EXIT_FEE_RESERVE_ATOMIC`; post-retirement sweep = reserve moot) is the one-sentence disposition already owed at DS-PR-1 | **(c) forward-action → DS-PR-1** — DS-PR-1 states which F-D4 §16 crossing class each drain shape maps to and confirms none is new; closes with the exit-reserve sentence already in the DS-PR-1 scope cell. Cross-link: Gate-6 F-D4 §16, DS-4 interaction note |
 | T-DS-5 | **Funding-input-count leak** — infer the persona's UTXO granularity / capital structure from the drain's input count / weight | Drain input selection (`n_in`) → weight → fee, publicly visible | This is **GF-4b's funding-input-count territory** (cross-referenced this round under the fee heading); the drain fee rule deliberately does not launder it. The drain's input selection inherits the GF-4b funding-input discipline rather than defining a drain-specific selector | **(c) forward-action → DS-PR-1 / GF-4b** — DS-PR-1's input selection follows the GF-4b funding-input discipline. **Named reopening:** a drain-specific input-count policy distinct from GF-4b is a Gate-6 change, not a DS decision |
-| T-DS-6 | **Structural distinguishability of the drain *tx*** (Round 4) — fingerprint the drain by output *count/shape*, which is public under CT/FCMP++ even when amounts are hidden, splitting the anonymity set by shape before amount or destination matter (e.g. a change-free drain-all as a rare 1-output tx against a 2-output norm) | Output count (`vout`) — public even when amounts are CT-hidden | A spend with `n_out < 2` is **consensus-invalid** (`shekyl-wire/src/transaction.rs:1868` — "spend has N output(s), needs >= 2"), so a change-free 1-output drain-all is *unrepresentable on the wire*. DS-4's "change-free" is an **economic** property (no value returns), not a wire 1-output property: on the wire the drain is 2-out (principal payment + change; drain-all's change carries zero value but is a real committed output), identical in output count to the modal single-recipient confidential send. The drain's output shape mirrors the **transfer** path (2-out, all-confidential), not the claim path's loud reward vout | **(a) in-scope** — absorbed by the consensus 2-output floor + the standard payment+change assembly (settled at source this round). **Shape pin (→ DS-PR-1):** the drain assembles as a standard 2-out confidential payment+change. **Named reopening:** any drain assembly that could emit an output count/shape distinct from an ordinary confidential send |
-| T-DS-7 | **Monero-era field distinguisher** (Round 4) — a legacy prefix/extra field survives as a *variable* the drain sets and ordinary sends don't (or set differently), tagging the drain by wire vocabulary | `TransactionPrefix.unlock_time`, `tx_extra`, `ct_type`/version, `payment_id` | Substrate re-walk this round: `payment_id` is **absent** from the wire (no `TransactionPrefix` field; none in `shekyl-tx-builder`) — closed by absence. `ct_type` has a **single** accepted spend type at genesis (rule 60) — version/proof-variant trivially uniform. `unlock_time` is a **live** wire field (`transaction.rs:1202`) but the tx-builder emits `0` (`shekyl-tx-builder/src/wire.rs`) and the timestamp form is consensus-rejected — it is **builder-zeroed, not removed** (corrects "already rejected from genesis"). `tx_extra` is present but **structural** (tx pubkey + per-output KEM blobs + `0x07` PQC leaf-hash, `sign_bridge.rs`; opaque round-trip), with no payment-id sub-field | **(c) forward-action → DS-PR-1 (home: DS-7 shape-era re-walk)** — DS-PR-1 confirms the drain emits **byte-identical** `unlock_time` (0), `tx_extra` structure, and `ct_type`/version to an ordinary confidential send, no Monero-era field surviving as a variable distinguisher. Closed sub-surfaces: `payment_id` absent, single `ct_type`; confirm-at-build: `unlock_time`/`tx_extra` |
+| T-DS-6 | **Structural distinguishability of the drain *tx*** (Round 4) — fingerprint the drain by output *count/shape*, which is public under CT/FCMP++ even when amounts are hidden, splitting the anonymity set by shape before amount or destination matter (e.g. a change-free drain-all as a rare 1-output tx against a 2-output norm) | Output count (`vout`) — public even when amounts are CT-hidden | A spend with `n_out < 2` is **consensus-invalid** (`shekyl-wire/src/transaction.rs:1868` — "spend has N output(s), needs >= 2"), so a change-free 1-output drain-all is *unrepresentable on the wire*. DS-4's "change-free" is an **economic** property (no value returns), not a wire 1-output property: on the wire the drain is 2-out (principal payment + change; drain-all's change carries zero value but is a real committed output), identical in output count to the modal single-recipient confidential send. The drain's output shape mirrors the **transfer** path (2-out, all-confidential), not the claim path's loud reward vout | **(a) in-scope** — absorbed by the consensus 2-output floor + the standard payment+change assembly (settled at source this round). **Arm:** folded into the composite wire-shape arm below (→ DS-PR-1). **Named reopening:** any drain assembly that could emit an output count/shape distinct from an ordinary confidential send |
+| T-DS-7 | **Monero-era field distinguisher** (Round 4) — a legacy prefix/extra field survives as a *variable* the drain sets and ordinary sends don't (or set differently), tagging the drain by wire vocabulary | `TransactionPrefix.unlock_time`, `tx_extra`, `ct_type`/version, `payment_id` | Substrate re-walk this round: `payment_id` is **absent** from the wire (no `TransactionPrefix` field; none in `shekyl-tx-builder`) — closed by absence. `ct_type` has a **single** accepted spend type at genesis (rule 60) — version/proof-variant trivially uniform. `unlock_time` is a **live** wire field (`transaction.rs:1202`) but the tx-builder emits `0` (`shekyl-tx-builder/src/wire.rs`) and the timestamp form is consensus-rejected — it is **builder-zeroed, not removed** (corrects "already rejected from genesis"). `tx_extra` is present but **structural** (tx pubkey + per-output KEM blobs + `0x07` PQC leaf-hash, `sign_bridge.rs`; opaque round-trip), with no payment-id sub-field | **(c) forward-action → DS-PR-1 (home: DS-7 shape-era re-walk)** — DS-PR-1 confirms the drain emits **byte-identical** `unlock_time` (0), `tx_extra` structure, and `ct_type`/version to an ordinary confidential send, no Monero-era field surviving as a variable distinguisher. Closed sub-surfaces: `payment_id` absent, single `ct_type`; confirm-at-build (**folded into the composite wire-shape arm below**): `unlock_time`/`tx_extra`/`0x07` leaf-hash |
+
+**Composite wire-shape arm (T-DS-6 ∧ T-DS-7 — the distinguisher can live
+in the join; → DS-PR-1).** T-DS-6 and T-DS-7 are not independent guards.
+The drain is claim-*plumbed* but must be transfer-*shaped*, so a
+distinguisher can survive both sub-checks and live in their **join**: the
+claim plumbing setting one `tx_extra` field a transfer doesn't, or
+ordering/encoding the KEM blobs differently, while `n_out >= 2` (T-DS-6)
+and each individual `unlock_time`/`tx_extra` field (T-DS-7) still pass in
+isolation. Green-checking each sub-surface separately is exactly the
+"true condition exists only in the join" failure the project names
+elsewhere. So DS-PR-1's shape arm is a **single**
+make-the-distinguisher-unrepresentable check: the drain's **full wire
+serialization is byte-identical to a modal 2-out confidential transfer,
+modulo the hidden/committed values** (encrypted amounts, commitments,
+one-time keys, KEM payloads, proof scalars) — enforced by routing the
+drain through the **shared `sign_bridge` transfer-signing path** (not a
+bespoke drain serializer) and **verified by diffing an actual drain tx
+against an actual transfer tx** at the same arity, not by separately
+green-checking output count, `tx_extra` fields, and `unlock_time`.
+*Preliminary substrate (this round)* for the sub-surface flagged
+most-likely-to-diverge — the `0x07` PQC leaf-hash: it is appended
+**unconditionally** by the shared path (`sign_bridge.rs:283`,
+`push_pqc_leaf_hashes`, per output in vout order — a curve-tree-leaf
+requirement, not a reward marker; a prior transfer-path gap was closed in
+PR-4b, `sign_bridge.rs:278-280`), so it is **uniform** across transfer
+and drain rather than a reward-only tag. The byte-diff remains the guard:
+it fires at DS-PR-1 (a real drain tx must exist to diff), and any
+drain-specific divergence — including a regression that re-opens the
+leaf-hash gap or a bespoke serializer that bypasses the shared path —
+fails it.
 
 **GF-7 disposition (drain vs the entry seam).** GF-7 grades the *entry*
 seam (bond-post dispatch timing; persona↔principal unlinkability). The
@@ -551,17 +581,23 @@ T-DS-3 change-output arm closes the change destination DS-3 didn't cover.
 All three were settled **at source** this round (consensus 2-out floor
 `transaction.rs:1868`; `payment_id` absent / `unlock_time` builder-zeroed
 / `tx_extra` structural; `signing_assembly.rs:126` change default) —
-T-DS-6 absorbed, T-DS-7 + the change-arm forward-actioned to DS-PR-1. The
-GF-7 disposition line above records the drain as disposed by the
+T-DS-6 absorbed, T-DS-7 + the change-arm forward-actioned to DS-PR-1. On
+Round-4 close, T-DS-6 and T-DS-7 were **folded into one composite
+wire-shape arm** (see the composite-arm paragraph above) — the join, not
+the isolated sub-surfaces, is what DS-PR-1's byte-diff makes
+unrepresentable. The GF-7 disposition line above records the drain as
+disposed by the
 exit-timing phantom finding, not a live GF-7 event; the scope-boundary
 paragraph excludes the local/wallet-file adversary by design.
 
 **Forward-actions (A5).** T-DS-2 arms DS-PR-2 (persona-transport
-self-grep); T-DS-4, T-DS-5, T-DS-7, and the T-DS-3 change-output arm
-carry into the DS-PR-1 scope cell (crossing-class mapping, GF-4b
-funding-input discipline, Monero-era field re-walk, change-to-`P` pin)
-alongside the exit-reserve disposition already recorded there; T-DS-6's
-2-out shape pin rides the same cell. Close each carry when the target
+self-grep); T-DS-4, T-DS-5, the **T-DS-6 ∧ T-DS-7 composite wire-shape
+arm** (single byte-diff of a real drain tx against a modal transfer, via
+the shared `sign_bridge` path — replaces the two separate sub-surface
+arms), and the T-DS-3 change-output arm carry into the DS-PR-1 scope cell
+(crossing-class mapping, GF-4b funding-input discipline, composite
+wire-shape byte-diff, change-to-`P` pin) alongside the exit-reserve
+disposition already recorded there. Close each carry when the target
 sub-PR lands.
 
 ## 6. What this round does not decide
@@ -573,11 +609,14 @@ sub-PR lands.
 - UI visual design (page placement, staking-page integration) — product
   surface, not firewall surface; falls out at DS-PR-4.
 - ~~Threat-model addenda (rule 26 A3) — owed as a late-round pass~~ —
-  **discharged in §5** (Round 3, extended Round 4, 2026-07-19): seven
-  attacker objectives (T-DS-1…T-DS-7) graded and routed — amount channel,
-  transport isolation, mis-send (+ change-destination arm), crossing-class,
+  **discharged in §5** (Round 3, extended Round 4, **Round 4 closed
+  maintainer-accepted 2026-07-19**): seven attacker objectives
+  (T-DS-1…T-DS-7) graded and routed — amount channel, transport
+  isolation, mis-send (+ change-destination arm), crossing-class,
   funding-input, output-shape, and Monero-era field distinguisher — plus
-  the GF-7 disposition and the local-adversary scope boundary.
+  the GF-7 disposition and the local-adversary scope boundary. T-DS-6 ∧
+  T-DS-7 fold into a single composite wire-shape arm (byte-diff vs a modal
+  transfer, via the shared `sign_bridge` path) at DS-PR-1.
 
 ## 7. Round log
 
@@ -690,3 +729,28 @@ sub-PR lands.
   T-DS-6/T-DS-7/change-arm folded into the DS-PR-1 scope cell; §5 table +
   coverage/forward-action notes + §6 discharge line updated. No prior
   disposition reopened.
+- **2026-07-19 — Round 4 close (maintainer-accepted; composite fold).**
+  Grades and source refinements accepted (incl. the `unlock_time`
+  live-field / builder-zeroed correction and the claim-plumbed /
+  transfer-shaped distinction). Per maintainer direction, T-DS-6 and
+  T-DS-7 are **folded into a single composite wire-shape arm** rather than
+  two isolated sub-surface guards — because the drain is claim-plumbed
+  with transfer output shape, a distinguisher can live in the *join*
+  (each sub-check passing while the composite still differs), the
+  project's "true condition exists only in the join" failure. The arm is
+  a single make-unrepresentable check: the drain's full wire serialization
+  is byte-identical to a modal 2-out confidential transfer modulo
+  hidden/committed values, enforced by routing through the shared
+  `sign_bridge` path and verified by diffing a real drain tx against a
+  real transfer tx (§5 composite-arm paragraph). Cheap source check on the
+  flagged-most-likely-to-diverge sub-surface: the `0x07` PQC leaf-hash is
+  appended **unconditionally** by the shared path (`sign_bridge.rs:283`;
+  a prior transfer-path gap closed in PR-4b) — uniform across transfer and
+  drain, not a reward-only tag. #4 accepted with the closure rationale
+  (the principal-receipt output is stealth-hidden, so the F-W7 T-class
+  stays empty even for a real drain tx). **Threat-model axis (T-DS-1…
+  T-DS-7 + GF-7 disposition + scope boundary) closes clean;** the three
+  impl-time arms (composite wire-shape, change→`P`-space, `unlock_time`/
+  `tx_extra` re-walk) are forward-actions that gate DS-PR-1, not this
+  round. Standing rule-26 thin re-confirm at DS-PR-1 open remains the only
+  threat-adjacent item outstanding — which is where those arms fire.
