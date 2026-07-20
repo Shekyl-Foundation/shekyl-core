@@ -43,7 +43,13 @@
   in-scope (defended by construction), T-DS-4/5 forward-actioned into
   DS-PR-1 (F-D4 §16 crossing-class mapping + GF-4b funding-input
   discipline), T-DS-2 arms DS-PR-2 (persona-transport self-grep). The
-  impl-time pre-flight (rule 26 Part B) remains owed at DS-PR-1 open.
+  core-side impl-time pre-flight (rule 26 Part B) was run early
+  2026-07-19 (`ARCHIVAL_DRAIN_SEND_FD2_AUDIT.md`, Round 0): every
+  DS-PR-1/DS-PR-2 `shekyl-core` substrate cite re-verified at pin
+  (one B6 errata — §2.3 `"stake"` route `handlers.rs:48` → `:51`, chain
+  terminus unaffected) and all 24 core artifacts (F-D1/F-D2 planner +
+  weight-only fee + P-scan persistence) green; the GUI-side pre-flight
+  (DS-PR-3/4/5) is carried to each GUI sub-PR's open.
 
 - **rpc: WI-RPC-1 — receiving, fee, and staking-read wallet-RPC surfaces.**
   `shekyl-wallet-rpc` gains nine JSON-RPC methods, each a pure projection

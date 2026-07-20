@@ -20,7 +20,12 @@ Process: this round cites **`26-sub-pr-design-discipline.mdc`**
 explicitly — the work is a multi-sub-PR subsystem crossing an FFI-adjacent
 boundary (Tauri GUI ↔ engine crates) with firewall-class (priority-2)
 properties. A pre-flight pass (rule 26 §"Pre-flight pass") is owed between
-this round's closure and the first production commit. Design questions
+this round's closure and the first production commit; the **core-side
+half (DS-PR-1/DS-PR-2) was run early 2026-07-19** — substrate re-check +
+artifact execution at `28870bd61`, one errata (R0-D1), all 24 core
+artifacts green — recorded in `ARCHIVAL_DRAIN_SEND_FD2_AUDIT.md`. The
+GUI-side half (DS-PR-3/4/5) is carried to each GUI sub-PR's open
+(R0-D3-B). Design questions
 mint the **DS-N** family (registered at birth in
 `IMPLEMENTATION_INDEX.md` §2 per rule 94; prefix `DS-` passes the
 uniqueness check — no registered family's tokens parse as `DS<digits>`).
@@ -113,7 +118,8 @@ seal input (seat removed 2026-07-19; see the charter note above).
   2026-07-19; supersedes the SP-R0 §0 F-1 "zero production callers"
   state): the stake-activation entry (2026-07-18,
   `feat/stake-activation-entry`) wired wallet-rpc `"stake"`
-  (`handlers.rs:48`) → `Engine::first_stake` (`bond_orchestrator.rs:537`)
+  (`handlers.rs:51`, via `lifecycle::stake`) → `Engine::first_stake`
+  (`bond_orchestrator.rs:537`)
   / `open_full_with_first_stake_intent` → `persist_bond_record`, which
   flips `staking_enabled = true` (`stake_persist.rs:150`).
 - **GUI-side activation surface — landed on gui-wallet `dev`**
@@ -426,7 +432,7 @@ updates so the new code never cites retired discipline.
 
 | Slice | Repo | Content | Depends on |
 |-------|------|---------|-----------|
-| DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry (fee function = the canonical floor per the 2026-07-19 fee-uniformity ratification; one-sentence exit-reserve disposition for partial drains — see the DS-4 interaction note); **threat-model forward-actions T-DS-4 (map each drain shape to an F-D4 §16 crossing class, confirm none new) + T-DS-5 (input selection inherits the GF-4b funding-input discipline, no drain-specific selector)** per §5 | round closure + pre-flight |
+| DS-PR-1 | shekyl-core | Drain assembly: record re-map at the trust boundary, membership paths, actor signing, sealed pending record + `reserved_gindexes`; DS-4 fee carve + sweep entry (fee function = the canonical floor per the 2026-07-19 fee-uniformity ratification; one-sentence exit-reserve disposition for partial drains — see the DS-4 interaction note); **threat-model forward-actions T-DS-4 (map each drain shape to an F-D4 §16 crossing class, confirm none new) + T-DS-5 (input selection inherits the GF-4b funding-input discipline, no drain-specific selector)** per §5 | round closure + pre-flight *(core-side pre-flight run 2026-07-19, AUDIT §Round 0; thin re-confirm at open)* |
 | DS-PR-2 | shekyl-core | Drain dispatch seam (claim-dispatch sibling): choke-point submit on persona transport, retirement wiring; **T-DS-2 arm: self-grep the drain submit routes through `PersonaIsolatedTransport`, never a default `DaemonClient`** (§5) | DS-PR-1 |
 | DS-PR-3 | shekyl-gui-wallet | Aggregate `P`-balance read surface (the DS-2 remainder — the adoption shape itself landed as GUI-PR1/PR3, §2.4: open + `start_pscan_if_staker` + parked handle + `activate_staker`) | DS-PR-1 (aggregate-read API exists). *Former second edge — a `staking_enabled` production path reachable from the GUI — closed 2026-07-19 by GUI-PR3 `activate_staker` → `Engine::first_stake` (§2.3); former "native wallet lifecycle" edge closed by the same landing (GUI-PR1 `EngineSession`, §2.4)* |
 | DS-PR-4 | shekyl-gui-wallet | Drain-send UI: amount entry + DS-5 defaults + confirm; calls the one engine entry point | DS-PR-2, DS-PR-3 |
@@ -445,8 +451,10 @@ DS-1…DS-7 dispositions; no new substrate read is required. Each
 objective is graded and routed per A3 to **(a)** in-scope absorption,
 **(b)** discipline note, or **(c)** named forward-action. This is a
 design-round pass — the impl-time **pre-flight** (Part B: substrate
-re-check + artifact execution) remains owed at DS-PR-1 open and is not
-discharged here.
+re-check + artifact execution) is not discharged in this section. *(The
+core-side pre-flight subsequently ran 2026-07-19 — Round 0, §7 round log
+and `ARCHIVAL_DRAIN_SEND_FD2_AUDIT.md`; the GUI-side half is carried to
+each GUI sub-PR's open.)*
 
 The firewall the drain-send subsystem defends is the `P`-lane privacy
 boundary: an on-chain or network observer must not recover the
@@ -544,3 +552,18 @@ the target sub-PR lands.
   transport self-grep arm (T-DS-2). The impl-time **pre-flight** (Part B)
   remains owed at DS-PR-1 open — A3 is a design-round pass, not the
   pre-flight.
+- **2026-07-19 — Round 0 pre-flight, core-side (Part B; run early at
+  maintainer direction).** Substrate re-check + artifact execution for
+  the DS-PR-1/DS-PR-2 `shekyl-core` surface at pin `28870bd61`, recorded
+  in `ARCHIVAL_DRAIN_SEND_FD2_AUDIT.md`. **R0-D1 (B6):** §2.3 `"stake"`
+  route cite `handlers.rs:48` → actual `:51` (dev-merge line-shift);
+  errata applied, chain terminus (`first_stake:537` → `stake_persist:150`)
+  verified exact so the disposition stands. **R0-D2 (A2):** every core
+  disposition holds at its cited line — fee-agnostic planner, `fd1_arm_*`
+  guards, claim-path transport/assemble/actor/persist pins, P-scan
+  persistence + staker-gate lifecycle. **R0-D3 (B9 frame):** no
+  measurement-gated budget in this subsystem; 24 behavioral artifacts
+  (18 engine-core + 5 engine-file + 1 doctest) all green. **R0-D3-B
+  (A5):** GUI-side pre-flight (DS-PR-3/4/5, separate repo, gated on the
+  native-wallet buildout) carried to each GUI sub-PR's open. Thin
+  re-confirmation at DS-PR-1 open post-#342-merge remains standing.
