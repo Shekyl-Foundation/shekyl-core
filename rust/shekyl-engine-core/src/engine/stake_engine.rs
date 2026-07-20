@@ -172,6 +172,7 @@ use super::backing_set::ClaimOperands;
 use super::bond_assembly::{
     finalize_bond_tx, wire_bond_post_input, BondAssemblyError, FundingInputContext, PBoundBytes,
 };
+use super::drain_assembly::{assemble_drain_tx, AssembleDrain, AssembledDrain};
 use super::emission_claim::{
     assemble_claims, derive_claimable_epochs, self_check_claims, EmissionClaimError,
     EMISSION_CLAIMS_SIZE_BUDGET,
@@ -653,6 +654,22 @@ pub(crate) enum StakeEngineError {
     /// funding was reserved.
     #[error("emission claim: {0}")]
     EmissionClaim(#[from] EmissionClaimError),
+
+    /// A drain-all (`change == 0`) whose net payment (`available - fee`) is too
+    /// small to split into two nonzero principal outputs — i.e. `< 2` atomic
+    /// units. Every valid tx must carry two nonzero outputs (consensus
+    /// `vout >= 2` + the prover's zero-output rejection), so a 1-atomic net
+    /// drain cannot be shaped as a modal 2-out transfer. Pathological: the fee
+    /// dwarfs a single atomic unit, so a sane selection never reaches it —
+    /// refused loudly rather than shaped into a distinguishable 1-out tx (T-DS-6).
+    #[error(
+        "drain net payment {net} is too small to split into two nonzero outputs; \
+         a drain-all must leave at least 2 atomic units after the fee"
+    )]
+    DrainPaymentUnsplittable {
+        /// The net (`available - fee`) that could not be split.
+        net: u64,
+    },
 }
 
 /// The bonded union's transient scan inputs (SP-3 dual extractor): one
@@ -1939,17 +1956,54 @@ impl Message<AssembleBond> for StakeEngine {
 }
 
 // ---------------------------------------------------------------------------
+// F-D2 DS-PR-1 — AssembleDrain: the P→principal value-out message
+// ---------------------------------------------------------------------------
+
+impl Message<AssembleDrain> for StakeEngine {
+    type Reply = Result<AssembledDrain, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: AssembleDrain,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // Thin validate-and-delegate shell (composition discipline): the same
+        // handle-validation preamble as `AssembleEmissionClaim` (no ticket, no
+        // entry-seam draw), then the held bundle is borrowed and the crypto
+        // assembly runs in `drain_assembly::assemble_drain_tx`. `keys` never
+        // crosses the actor boundary (rule 36); `&mut self` is held across the
+        // proving await so the mailbox cannot interleave.
+        self.validate_handle(&msg.handle)?;
+        let handle_slot = msg.handle.p_slot();
+        let keys = self
+            .held
+            .get(&handle_slot)
+            .expect("validate_handle confirmed slot is held")
+            .keys();
+        assemble_drain_tx(
+            keys,
+            &msg.dest,
+            msg.funding,
+            msg.tree_ctx,
+            msg.payment_amount,
+            msg.fee,
+        )
+        .await
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shared funding-input preparation (AssembleBond + AssembleEmissionClaim)
 // ---------------------------------------------------------------------------
 
 /// One prepared spend input: the tx-builder [`SpendInput`] (owned secrets)
 /// plus the public companions the wire needs (key image, PQC slot pubkey,
 /// reservation gindex).
-struct PreparedInput {
-    spend: SpendInput,
-    key_image: [u8; 32],
-    pqc_pubkey: Vec<u8>,
-    gindex: GlobalOutputIndex,
+pub(super) struct PreparedInput {
+    pub(super) spend: SpendInput,
+    pub(super) key_image: [u8; 32],
+    pub(super) pqc_pubkey: Vec<u8>,
+    pub(super) gindex: GlobalOutputIndex,
 }
 
 /// One constructed vout batch to `P`'s base address — the shared
@@ -2125,7 +2179,12 @@ impl DerivedSpendParts {
 /// strictly DESCENDING by key image — the consensus order shared by the
 /// proof, the wire key-image list, and the pqc_auths slots (same rule as the
 /// transfer path).
-fn prepare_funding_inputs(
+// `pub(super)`: the F-D2 drain assembly (`drain_assembly.rs`) reuses this exact
+// persona-keyed spend-side leg — the drain spends `P`-funding inputs identically
+// to a bond/claim fee sweep (same key-image derivation, same descending order),
+// so there is one definition of "turn selected P-funding records into signed
+// spend inputs," never a drain-specific fork (rule 36 + composition discipline).
+pub(super) fn prepare_funding_inputs(
     keys: &ArchivalPKeys,
     funding: Vec<FundingInputContext>,
 ) -> Result<Vec<PreparedInput>, BondAssemblyError> {
@@ -3201,6 +3260,22 @@ impl StakeEngineHandle {
         &self,
         msg: AssembleEmissionClaim,
     ) -> Result<AssembledEmissionClaim, StakeEngineError> {
+        self.actor.ask(msg).await.map_err(collapse_send_error)
+    }
+
+    /// Assemble the full, broadcast-ready `P`→principal drain transaction
+    /// ([`AssembleDrain`], F-D2 DS-PR-1) — the value-out sibling of the bond
+    /// and emission assembly paths. Return-bytes-only: broadcast timing and
+    /// the pending-drain record are the orchestrator's (DS-PR-2), outside this
+    /// builder.
+    ///
+    /// Dead_code allow: the assembly is wired; the Engine orchestrator entry
+    /// (DS-PR-2) and the RPC drain entry are the remaining consumers (rule-21).
+    #[allow(dead_code)]
+    pub(crate) async fn assemble_drain(
+        &self,
+        msg: AssembleDrain,
+    ) -> Result<AssembledDrain, StakeEngineError> {
         self.actor.ask(msg).await.map_err(collapse_send_error)
     }
 
@@ -4744,6 +4819,241 @@ mod tests {
                 .expect("both auth legs verify against the erase-rule hash");
             self_check_claims(&source, &vin, vout_reward_sum)
                 .expect("claims leg verifies against the paired source");
+        }
+    }
+
+    /// F-D2 DS-PR-1 — the drain's **composite wire-shape arm** (T-DS-6 ∧
+    /// T-DS-7), checked from the produced BYTES: a `P`→principal drain
+    /// serializes as a modal 2-out confidential transfer. Every property below
+    /// that a bond/claim carries and a transfer does not — an archival prefix
+    /// input, a loud (plaintext-amount) vout, an identity auth slot — is
+    /// asserted ABSENT, and every property a modal transfer has — exactly two
+    /// confidential outputs, spend-only `pqc_auths` — asserted present.
+    ///
+    /// The full byte-diff against a live principal-keyed transfer and the
+    /// scan-claim confirmation of the change output (T-DS-3) land with the
+    /// DS-PR-2 regtest e2e (mirroring the emission daemon-side differential's
+    /// own e2e placement); these in-crate arms fix the structural shape the
+    /// e2e then confirms empirically.
+    mod drain_assembly_shape {
+        use super::*;
+
+        use shekyl_engine_state::pscan_state::MintLineageOutput;
+        use shekyl_wire::{Ct, Transaction};
+
+        use crate::engine::drain_assembly::{AssembleDrain, DrainDestination};
+        use crate::engine::synthetic_tree::consistent_synthetic_path;
+
+        /// Two REAL P-paid funding inputs (`600_000 + 400_000`) in one
+        /// depth-consistent synthetic leaf chunk, plus a valid principal
+        /// destination (a distinct persona's public triple — the drain does not
+        /// care whose principal it is, only that the keys are well-formed).
+        fn drain_fixture() -> (Vec<FundingInputContext>, TreeContext, DrainDestination, u64) {
+            let keys = derive_bundle(0);
+            let (rec0, leaf0) = constructed_record(
+                &keys,
+                11,
+                5,
+                600_000,
+                0,
+                MintLineageOutput::ExternalTransfer,
+            );
+            let (rec1, leaf1) = constructed_record(
+                &keys,
+                22,
+                6,
+                400_000,
+                1,
+                MintLineageOutput::ExternalTransfer,
+            );
+            let leaf_chunk = vec![leaf0, leaf1];
+            let depth = 2u8;
+            let (c1_layers, c2_layers, tree_root) = consistent_synthetic_path(&leaf_chunk, depth);
+            let tree_ctx = TreeContext {
+                reference_block: [7u8; 32],
+                tree_root,
+                tree_depth: depth,
+            };
+            let funding = vec![
+                FundingInputContext {
+                    record: rec0,
+                    leaf_chunk: leaf_chunk.clone(),
+                    c1_layers: c1_layers.clone(),
+                    c2_layers: c2_layers.clone(),
+                },
+                FundingInputContext {
+                    record: rec1,
+                    leaf_chunk,
+                    c1_layers,
+                    c2_layers,
+                },
+            ];
+            // Principal = a different persona's public keys (valid points/encap
+            // key), so the payment vout is genuinely NOT a P-space output.
+            let principal = derive_bundle(9);
+            let dest = DrainDestination {
+                spend_pk: *principal.spend_pk.as_canonical_bytes(),
+                x25519_pk: principal.x25519_pk,
+                ml_kem_ek: principal.ml_kem_ek.to_vec(),
+            };
+            (funding, tree_ctx, dest, 1_000_000)
+        }
+
+        /// A partial drain (`payment < available - fee`, change > 0) is a modal
+        /// 2-out confidential transfer on the wire.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn drain_is_transfer_shaped() {
+            let handle = spawn_over(&[0], &[], None);
+            let h = handle
+                .mint_handle(PSlot::from_raw(0))
+                .await
+                .expect("slot 0 held");
+            let (funding, tree_ctx, dest, _available) = drain_fixture();
+
+            let fee = 10_000u64;
+            let reply = handle
+                .assemble_drain(AssembleDrain {
+                    handle: h,
+                    funding,
+                    tree_ctx,
+                    dest,
+                    payment_amount: 600_000, // change = 1_000_000 - 600_000 - 10_000 > 0
+                    fee,
+                })
+                .await
+                .expect("drain assembly completes end-to-end");
+
+            assert_eq!(
+                reply.funding_gindexes.len(),
+                2,
+                "both funding inputs reserved"
+            );
+
+            // ── Everything below recomputes from the wire BYTES. ──────────
+            let mut cursor: &[u8] = reply.bound_tx.bytes();
+            let tx = Transaction::read(&mut cursor).expect("assembled bytes parse whole");
+            assert!(cursor.is_empty(), "no trailing bytes after the tx");
+
+            // Transfer-shaped prefix inputs: every input is a plain ToKey
+            // key-image spend — NO `ArchivalRewardEmission`, NO `BondPost`.
+            assert_eq!(tx.prefix.inputs.len(), 2, "two funding spends");
+            assert!(
+                tx.prefix
+                    .inputs
+                    .iter()
+                    .all(|i| matches!(i, Input::ToKey { .. })),
+                "a drain carries only key-image spends — no archival prefix input"
+            );
+
+            // Modal 2-out (T-DS-6): exactly two outputs, both CONFIDENTIAL
+            // (wire amount 0) — no loud reward vout, unlike an emission claim.
+            assert_eq!(tx.prefix.outputs.len(), 2, "principal payment + P change");
+            assert!(
+                tx.prefix.outputs.iter().all(|o| o.amount == 0),
+                "both vouts are confidential (no plaintext amount on the wire)"
+            );
+
+            let Ct::Fcmp {
+                pqc_auths,
+                fee: wire_fee,
+                ..
+            } = &tx.ct
+            else {
+                panic!("a drain is an Fcmp ct");
+            };
+            assert_eq!(*wire_fee, fee, "wire fee matches the assembled fee");
+
+            // Spend-only `pqc_auths`: one slot per input, NO identity auth slot
+            // (the byte-shape difference between a drain and a bond is exactly
+            // the absence of the P-identity auth the bond appends).
+            assert_eq!(
+                pqc_auths.len(),
+                tx.prefix.inputs.len(),
+                "one auth per spend — no extra identity slot"
+            );
+            let p_identity = derive_bundle(0)
+                .hybrid_sign_pk
+                .to_canonical_bytes()
+                .expect("identity encodes");
+            assert!(
+                pqc_auths.iter().all(|a| a.hybrid_public_key != p_identity),
+                "no auth slot carries P's identity key — a drain does not sign as a persona"
+            );
+        }
+
+        /// A drain-**all** (`payment == available - fee`, change == 0) STILL
+        /// emits two nonzero outputs: with no residual `P` value to return, the
+        /// principal payment is SPLIT into two nonzero principal outputs (a sweep
+        /// to self), so the vout count is the modal `2` (T-DS-6) and the daemon
+        /// prunable-tx floor holds — a 1-out drain (the distinguishable shape) is
+        /// never produced.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn drain_all_still_emits_two_outputs() {
+            let handle = spawn_over(&[0], &[], None);
+            let h = handle
+                .mint_handle(PSlot::from_raw(0))
+                .await
+                .expect("slot 0 held");
+            let (funding, tree_ctx, dest, available) = drain_fixture();
+
+            let fee = 10_000u64;
+            let reply = handle
+                .assemble_drain(AssembleDrain {
+                    handle: h,
+                    funding,
+                    tree_ctx,
+                    dest,
+                    payment_amount: available - fee, // change == 0
+                    fee,
+                })
+                .await
+                .expect("drain-all assembly completes end-to-end");
+
+            let mut cursor: &[u8] = reply.bound_tx.bytes();
+            let tx = Transaction::read(&mut cursor).expect("assembled bytes parse whole");
+            assert!(cursor.is_empty());
+            assert_eq!(
+                tx.prefix.outputs.len(),
+                2,
+                "drain-all splits the payment into two principal outputs — modal 2-out, never 1-out"
+            );
+            assert!(
+                tx.prefix.outputs.iter().all(|o| o.amount == 0),
+                "both vouts confidential (no plaintext amount on the wire)"
+            );
+        }
+
+        /// A drain-all whose net payment (`available - fee`) is a single atomic
+        /// unit cannot form two nonzero outputs, so it is refused **loudly** with
+        /// [`StakeEngineError::DrainPaymentUnsplittable`] rather than shaped into
+        /// the distinguishable 1-out (T-DS-6). Pathological — the fee dwarfs one
+        /// atomic unit — but the refusal is structural, not best-effort.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn drain_all_net_below_two_is_refused() {
+            let handle = spawn_over(&[0], &[], None);
+            let h = handle
+                .mint_handle(PSlot::from_raw(0))
+                .await
+                .expect("slot 0 held");
+            let (funding, tree_ctx, dest, available) = drain_fixture();
+
+            // fee = available - 1 ⇒ net payment == 1, change == 0 ⇒ unsplittable.
+            let fee = available - 1;
+            let err = handle
+                .assemble_drain(AssembleDrain {
+                    handle: h,
+                    funding,
+                    tree_ctx,
+                    dest,
+                    payment_amount: 1,
+                    fee,
+                })
+                .await
+                .expect_err("a 1-atomic net drain-all cannot be a modal 2-out");
+            assert!(
+                matches!(err, StakeEngineError::DrainPaymentUnsplittable { net: 1 }),
+                "expected DrainPaymentUnsplittable {{ net: 1 }}, got {err:?}"
+            );
         }
     }
 }

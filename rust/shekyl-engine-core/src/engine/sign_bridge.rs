@@ -57,21 +57,25 @@ impl DerivedScalars {
     }
 }
 
-struct BuiltOutput {
-    info: OutputInfo,
-    output_key: [u8; 32],
-    view_tag: Option<u8>,
-    kem_blob: Vec<u8>,
+// `pub(super)`: the F-D2 drain assembly (`drain_assembly.rs`) constructs its
+// two outputs through this exact primitive so a drain vout is byte-identical to
+// an ordinary transfer vout (T-DS-6/T-DS-7 composite wire-shape arm — the
+// output-construction leg has one definition, shared with the transfer path).
+pub(super) struct BuiltOutput {
+    pub(super) info: OutputInfo,
+    pub(super) output_key: [u8; 32],
+    pub(super) view_tag: Option<u8>,
+    pub(super) kem_blob: Vec<u8>,
     /// The output's `H(pqc_pk)` curve-tree leaf component, for the tx_extra
     /// `0x07` leaf-hash blob (vout order). An output whose transaction omits
     /// the field ingests with a **zero** `h_pqc` leaf and is unspendable —
     /// no FCMP++ spend of it can satisfy the verifier's
     /// `pqc_auths`-derived leaf hash (the PR-4b bond e2e surfaced this
     /// live: the persona funding transfer's outputs could not fund a bond).
-    h_pqc: [u8; 32],
+    pub(super) h_pqc: [u8; 32],
 }
 
-fn build_output(
+pub(super) fn build_output(
     tx_key_secret: &[u8; 32],
     recipient_spend_pk: &[u8; 32],
     recipient_x25519: &[u8; 32],

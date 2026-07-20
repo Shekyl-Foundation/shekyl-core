@@ -52,6 +52,42 @@
 
 ### Added
 
+- **wallet (engine): F-D2 drain assembly landed — DS-PR-1
+  (`ARCHIVAL_DRAIN_SEND_FD2.md` §DS-PR-1).** The actor-side
+  `P`→principal drain-send assembly, mirroring the emission-claim shape:
+  `AssembleDrain`/`AssembledDrain` messages + a thin validate-and-delegate
+  handler on the `StakeEngine` actor (`stake_engine.rs`) over the new
+  free-function `assemble_drain_tx` (`engine/drain_assembly.rs`); a durable
+  `PendingDrain` record with its `reserved_gindexes` fold in
+  `engine-state::pending_post_block` (schema `PENDING_POST_VERSION` v4 → v5,
+  snapshot updated, `v4_seal_fails_closed_under_v5_binary` fails-closed).
+  The drain is **transfer-shaped by construction** — outputs via the
+  transfer path's `build_output`, inputs via `prepare_funding_inputs`,
+  prefix/proving/PQC-auth via the plain `sign_transaction` calls with empty
+  `extra_inputs` + spend-only `pqc_auths` — realizing the T-DS-6 ∧ T-DS-7
+  composite wire-shape arm (full serialization byte-identical to a modal
+  2-out confidential transfer modulo hidden values). **Drain-all splits the
+  payment into two nonzero principal outputs** (a sweep to self) rather than
+  emitting a zero-value change output: the shared prover rejects
+  `ZeroOutputAmount`, so the ratified zero-value-change mechanism was
+  unrealizable — the split preserves the same two-nonzero-output wire shape
+  and *strengthens* T-DS-6 (uniform across partial drain / drain-all /
+  ordinary transfer). Partial-drain change returns to `P`'s own base spend
+  key (T-DS-3, change-to-principal unrepresentable — no destination arg on
+  the surface); a net-payment `< 2` drain-all is refused loudly
+  (`StakeEngineError::DrainPaymentUnsplittable`). Threat-arm dispositions
+  (T-DS-4 crossing-class maps onto an existing F-D4 §16 class — F-W10: the
+  drain is not an identifiable transaction on-chain; DS-4 exit-reserve:
+  partial drain is a mid-life constructor reserving `EXIT_FEE_RESERVE_ATOMIC`,
+  post-retirement sweep moot — enforcement rides DS-PR-2 selection) recorded
+  in the design doc round log (2026-07-20). Composition-discipline clean
+  (`assemble_drain_tx` never names `Engine`; god-files gain only the thin
+  handler). Gates: fmt + clippy `-D warnings` clean; 33 `stake_engine` tests
+  (incl. `drain_assembly_shape::{drain_is_transfer_shaped,
+  drain_all_still_emits_two_outputs, drain_all_net_below_two_is_refused}`) +
+  the `engine-state` schema snapshot green. Remaining carries (drain
+  orchestrator/dispatch over `DrainCtx`, persona-transport self-grep, real-tx
+  byte-diff e2e) ride DS-PR-2.
 - **docs: F-D2 drain-send subsystem design round opened
   (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, scoping — review rounds 1–4
   applied: rounds 1–2 review + Round 3 threat-model addenda + Round 4
