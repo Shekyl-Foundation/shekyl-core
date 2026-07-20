@@ -1945,6 +1945,16 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
     const FUNDING_CUSHION: u64 = 200_000_000;
 
     let daemon = RegtestDaemon::start().await;
+    // Schedule guard (serial lock now held): this test's wallet epoch
+    // arithmetic must run on the genesis pin. A sibling e2e that armed the
+    // SEB lever in this process would otherwise bleed its schedule in
+    // silently (the `OnceLock` is irreversible) — fail loudly instead.
+    assert_eq!(
+        shekyl_archival_retention::effective_settlement_epoch_blocks(),
+        shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS,
+        "another test latched a levered settlement-epoch schedule in this process; \
+         run the regtest e2es in separate processes"
+    );
     let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let slot = PSlot::from_raw(SLOT);
     let fixture = stake_persona_to_confirmed_bond(
@@ -2064,20 +2074,28 @@ async fn e2e_emission_claim_accepted_and_applied() {
     /// each record standalone headroom.
     const CLAIM_FUNDING_CUSHION: u64 = 12_000_000_000;
 
-    // (A1) Arm the settlement-epoch lever in THIS process before any epoch
-    // arithmetic latches the genesis schedule (the schedule is a
-    // process-wide `OnceLock`; arming after a latch is `ArmedTooLate`).
-    // This test is `#[ignore]`d and run alone, so no sibling test races
-    // the latch.
+    // (A1) Spawn the daemon FIRST — `start_with_settlement_epoch_blocks`
+    // takes the e2e serial lock, so sibling `--ignored` tests cannot
+    // interleave with the arming below — then arm the settlement-epoch
+    // lever in THIS process before any of ITS epoch arithmetic latches
+    // the genesis schedule (the daemon child is a separate process; its
+    // FAKECHAIN arming reads the env at startup and is not in this race).
+    //
+    // Containment is honest, not perfect: the schedule is a process-wide
+    // irreversible `OnceLock`, so serialization cannot UNDO a latch — if a
+    // sibling ran first and did epoch arithmetic, `arm` refuses loudly
+    // (`ArmedTooLate`), and if THIS test ran first, siblings that need the
+    // genesis pin fail their own schedule guard (see the bond e2e) —
+    // either direction is a loud named failure, never silent bleed. Run
+    // the regtest e2es in separate processes (the module docs' one-test
+    // invocation) for green runs.
+    let daemon = RegtestDaemon::start_with_settlement_epoch_blocks(Some(SEB)).await;
     std::env::set_var("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", SEB.to_string());
     let armed = shekyl_archival_retention::arm_settlement_epoch_override_for_regtest()
         .expect("the SEB lever must arm before any epoch arithmetic latches the schedule");
     assert_eq!(armed, SEB, "armed schedule must be the lever value");
 
-    // The daemon child gets the same lever (its FAKECHAIN arming reads the
-    // env at startup), then the shared confirmed-bond substrate runs
-    // entirely inside epoch 0.
-    let daemon = RegtestDaemon::start_with_settlement_epoch_blocks(Some(SEB)).await;
+    // The shared confirmed-bond substrate runs entirely inside epoch 0.
     let seed = [0x55u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let slot = PSlot::from_raw(SLOT);
     // The claimable bond must be a MARKET bond (`ShardSetCompact`): the
@@ -2630,6 +2648,14 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
 
     const SLOT: u32 = 0;
     let daemon = RegtestDaemon::start().await;
+    // Schedule guard (see the bond e2e): wallet epoch arithmetic here must
+    // run on the genesis pin; a sibling-armed levered schedule fails loudly.
+    assert_eq!(
+        shekyl_archival_retention::effective_settlement_epoch_blocks(),
+        shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS,
+        "another test latched a levered settlement-epoch schedule in this process; \
+         run the regtest e2es in separate processes"
+    );
     let seed = [0x45u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let slot = PSlot::from_raw(SLOT);
     // `staker_wallet` IS the crash fixture: it persists the bond record (the
