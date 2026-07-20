@@ -8771,8 +8771,21 @@ one place to confirm each item's relationship to the wallet stack.
   intra-doc link in the `randomx-v2-sys`/`shekyl-pow-randomx` docs, `generic_array::as_slice`
   deprecations in vendored crypto). **Reopen as** a standalone doc-hygiene sweep: fix those warnings,
   then swap the shekyl-tor-scoped step for `cargo doc --workspace --no-deps` under `-D warnings`.
-- **M1 reward gate — design rounds 1–3 CLOSED (`ARCHIVAL_REWARD_GATE_M1.md` §9/§10/§11, 2026-07-06;
-  consensus rule, genesis-frozen, builds first per the WI-4 ranked path).** The launch
+- ~~**M1 reward gate — design rounds 1–3 CLOSED**~~ **RETIRED 2026-07-19 (PR #346) — NOT OPEN WORK.**
+  The M1 `K_COVER` gate is retired and its machinery is deleted from production code
+  (`ARCHIVAL_REWARD_GATE_M1.md` §13). Reward withholding is legitimate only as the consequence of an
+  action the individual controls; a collective gate zeroing every persona's reward on an
+  uncontrollable condition is retired as a concept. Nothing below is owed: the `K_COVER`
+  finalization, the §14.4-gated constant, the G-1..G-5 activation KAT, and the deferred gated-path
+  C++ close test are all void (the KAT fixture and gate KATs were removed with the machinery; the
+  deferred C++ test is unbuildable). No behavior change at any tip — the gate only ever ran as the
+  `k_cover = 0` identity. The genesis "nobody earns" window it addressed is handled structurally
+  instead: an unfrozen segment scores zero `shard_age_milli`, so a hot-at-genesis shard contributes
+  no work by the work math. WI-4 §13.2's `r = 3.54` cold-start measurement STANDS, re-dispositioned
+  to a market-funded founder schedule plus the wallet thin-market entry disclosure (build item at
+  the top of this file). Any future collective-gate proposal must clear M1 §13.2's reopening
+  criteria. **Historical record follows.** (`ARCHIVAL_REWARD_GATE_M1.md` §9/§10/§11, 2026-07-06;
+  consensus rule, genesis-frozen, builds first per the WI-4 ranked path). The launch
   posture's cold-start refusal in structural form: zero accrual to every `(P, s, E)` for
   epochs where `shard_count < K_COVER` — uniform, global, blind (no founder marking),
   keyed on the monotone-in-height shard count so it is non-gameable and sensorless. Spec
@@ -8955,9 +8968,11 @@ one place to confirm each item's relationship to the wallet stack.
   no code action.** Companion pre-flight dispositions recorded at their homes:
   PF-2 compile-refusal accepted-residual (out-of-band hand-built artifact; scoped out
   by Guix-reproducible builds + signed-tag release path — `ARCHIVAL_REWARD_GATE_M1.md`
-  §4) and PF-9 seal-before-stressnet ordering pin (`K_COVER` finalization is a
+  §4) and PF-9 seal-before-stressnet ordering pin (~~`K_COVER` finalization is a
   prerequisite of Phase 7.7 stressnet entry — M1 §4 rule-21 entry +
-  `RELEASE_CHECKLIST.md` stressnet-entry prerequisite).
+  `RELEASE_CHECKLIST.md` stressnet-entry prerequisite~~ — **DISSOLVED 2026-07-19,
+  PR #346: the gate is retired, so nothing is queued behind stressnet entry on this
+  account; the `RELEASE_CHECKLIST.md` row is struck**).
 - **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
   `P(link | T_obs)` before launch).** SP-T4a *draws* the narrow funding-seam entry-gap jitter
   (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) but does **not** wire it into any broadcast — the
@@ -9324,7 +9339,10 @@ one place to confirm each item's relationship to the wallet stack.
   backstop) — never expected churn; no founder obligation; no live sensor; M2 intact.
   Q3-B re-seated on the same basis (guaranteed floor dissolves; population statistics
   all the way down; premises 1–2 survive as one-shot plans).
-  **Final Gate-7 gates (superseding R6's formulation): `K_COVER` does not discharge
+  **Final Gate-7 gates (superseding R6's formulation) — RETIRED 2026-07-19 (PR #346);
+  NOT OWED, recorded only.** There is no `K_COVER` to discharge; the margin and
+  reachability analyses retain standing as cover-model findings but gate nothing.
+  Historical text: **`K_COVER` does not discharge
   until (a) the margin is derived against adversarial max net attrition over the full
   pre-gate window and carried in the calibration record, and (b) the reachability
   check has run against the union of per-channel floors including the descriptor
@@ -9459,11 +9477,15 @@ one place to confirm each item's relationship to the wallet stack.
   instrument + `gf7-hooks` CI lane are retained as a **dispersal-regression tripwire**
   (a silently-broken draw would give the few real posts an exact-phase corroborator,
   ~75–150× background filter). No further sealing re-runs are required by anything.
-  `K_COVER`'s seal predicate is now stated once in M1 §4: partition-proof operand
+  ~~`K_COVER`'s seal predicate is now stated once in M1 §4: partition-proof operand
   (DISCHARGED, §14.4) + value paired to the measured cover floor (`N ≈ 10` min / `20`
   with margin) via the §14 founder schedule — evidentiary predicate as discharged as
   design permits; the remaining act is landing the value + commitment and clearing the
-  sentinel (PF-9 unchanged).
+  sentinel (PF-9 unchanged).~~ **SUPERSEDED 2026-07-19 (PR #346): the gate is RETIRED
+  and there is no remaining act — no value to land, no commitment to make, no sentinel
+  to clear (the sentinel was deleted with the machinery). Do not action this paragraph.**
+  The measured cover floor (`N ≈ 10` min / `20` with margin) STANDS and is carried by
+  the market-funded §14 founder schedule plus the wallet thin-market entry disclosure.
   **Hermeticity pin (rule 21, PR #292 review — trips on the archival CLI-knob work):**
   `run_wallclock_leg()` is deliberately hermetic (fixed seed/trials/N; the a-priori-committed
   §19.4 surface must not float on a harness flag). Inert today — no CLI knob moves the gf7

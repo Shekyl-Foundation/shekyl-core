@@ -1,5 +1,48 @@
 # WI-4 — GF-7 measurement round: the graded genesis gate
 
+> ## ⚠️ `K_COVER` RETIREMENT NOTICE (2026-07-19, PR #346) — read before acting on anything below
+>
+> **The M1 `K_COVER` reward gate is RETIRED and its machinery is deleted
+> from production code** ([`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md)
+> §13). Reward withholding is legitimate only as the consequence of an
+> action the individual controls (slash, membership onset, holdings shape,
+> claim expiry, zero work); a collective gate that zeroes every persona's
+> reward on an uncontrollable condition is retired as a concept.
+>
+> This document predates that retirement and was written when `K_COVER` was
+> a live constant awaiting calibration and sealing. Consequently:
+>
+> - **No `K_COVER` calibration, seal, discharge, or Gate-7 gate in this
+>   document is open work.** Every "does not discharge until…", "must be
+>   finalized", "gates on the §14.4 run", and "re-check before Gate 7"
+>   is a RECORD of a superseded obligation, not a task. §17.9's "Final
+>   Gate-7 gates" — the arc's terminal statement — is explicitly voided.
+> - **Source pointers into `k_cover.rs` and the `frozen_shard_count <
+>   K_COVER` comparison site are DEAD.** Those files and that site no
+>   longer exist; a reader running the "verified at source" checks in
+>   §16/§17 will find nothing.
+> - **The measurement findings themselves STAND.** §13.2's `r = 3.54`
+>   cold-start thin-cover result is retained and re-dispositioned to a
+>   market-funded founder schedule plus the wallet thin-market entry
+>   disclosure (FOLLOWUPS build item). The cover model, the channel
+>   taxonomy, and the §17 adversarial rounds keep their evidentiary value.
+> - **The genesis "nobody earns" window is handled structurally, not by a
+>   gate:** an unfrozen segment scores zero `shard_age_milli`, so a shard
+>   that is hot at genesis contributes no work by the work math
+>   (`consensus_state.rs` `shard_age_milli`; `bond_duration.rs` — "adding
+>   an unfrozen shard earns nothing — self-harm, not an attack"). §16's
+>   "earns nothing by construction" conclusion therefore survives on a
+>   structural, individually-caused mechanism.
+>
+> Two dispositions this retirement leaves genuinely open are tracked as
+> design questions, not as `K_COVER` work: whether the wallet thin-cover
+> disclosure is now the sole mitigation for the measured exposure, and how
+> a future sound-but-thin §14.4 result should be dispositioned now that the
+> "`K_COVER` calibrates higher" consumer no longer exists (§14.4's
+> two-consumer pin).
+
+---
+
 > **Status: design spec / acceptance doc (WI-4 design round 1, 2026-07-05,
 > `feat/wi4-gf7-measurement`, stacked on `feat/wi3-dispatch-driver`).**
 > Spec-first per rule `05-system-thinking`; process shape per
@@ -2693,7 +2736,9 @@ note (mechanism correction + channel promotion), §14.4
 witness-typing (compile-time co-first-deliverable), §14.2 premise 2
 (OR struck), §16.2 obligation 3 (per-channel strip floor;
 snapshot-by-construction sharpening + thinning margin). **Gate-7
-gates:** `K_COVER` does not discharge into the frozen constant until
+gates (RETIRED 2026-07-19, PR #346 — superseded twice below and then
+voided with the gate; recorded, not owed):** `K_COVER` does not
+discharge into the frozen constant until
 (a) the tier-channel strip floor and its satisfiability pin are in
 the calibration, and (b) the thinning margin is derived a-priori and
 carried. Findings 3 and 4 are premise tightening and a first-slice
@@ -2781,7 +2826,9 @@ i.i.d. production draw; the interlock is recorded per the
 Q2-C/Q2-B silent-revert discipline.
 
 **Disposition and closure.** No bound moves; nothing closed
-reopens. **Final Gate-7 gates (superseding §17.7's):** `K_COVER`
+reopens. **Final Gate-7 gates (superseding §17.7's; RETIRED 2026-07-19,
+PR #346 — superseded by §17.9's and then voided with the gate;
+recorded, not owed):** `K_COVER`
 does not discharge into the frozen constant until (a) the margin is
 re-derived against the maintenance window with the breach residual
 named in the calibration record, and (b) the reachability check has
@@ -2895,8 +2942,17 @@ completion-before-gate} plan creates no reactive coupling.
 containing the maintenance commitment — closed-on-a-fiction, which
 is worse than open — so R6's landing specifically reopened, and
 **§17 re-closes on this round, load-bearing rather than by
-exhaustion.** **Final Gate-7 gates (superseding §17.8's):**
-`K_COVER` does not discharge into the frozen constant until (a)
+exhaustion.** **Final Gate-7 gates (superseding §17.8's) — RETIRED 2026-07-19
+(PR #346). These were the authoritative open pre-genesis gates
+until the M1 `K_COVER` gate was retired; there is no constant to
+discharge, and NOTHING IN THIS BLOCK IS OWED.** Recorded as the
+terminal state of the §17 arc, not as work. The margin and
+reachability analyses below retain standing as cover-model
+findings — WI-4 §13.2's `r = 3.54` cold-start measurement in
+particular STANDS and was re-dispositioned to a market-funded
+founder schedule plus the wallet thin-market entry disclosure
+(FOLLOWUPS build item). Historical text: `K_COVER` does not
+discharge into the frozen constant until (a)
 the margin is derived against adversarial max net attrition over
 the full pre-gate window and carried in the calibration record,
 and (b) the reachability check has run against the union of
