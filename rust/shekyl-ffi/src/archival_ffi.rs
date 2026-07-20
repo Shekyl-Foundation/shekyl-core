@@ -28,7 +28,7 @@ use shekyl_archival_retention::{
     BondPostError, BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
     EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
     EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
-    HoldingsUpdateConnectError, HoldingsUpdatePopError, KCover, RebondConnectError, RebondPopError,
+    HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError, RebondPopError,
     RewardCommit, ShardSet, ShardSetError, UnbondConnectError, UnbondPopError, WireError,
     CHALLENGE_RESOLUTION_BLOCKS, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
     MAX_CLAIM_AGE_W,
@@ -2125,16 +2125,6 @@ unsafe fn gather_bad_intervals(ptr: *const u64, pair_len: usize) -> Option<Vec<B
 /// `shekyl-archival-retention` against pinned `consensus_constants.json` values;
 /// C++ performs storage orchestration only (`40-ffi-discipline.mdc` coarse-call rule).
 ///
-/// `frozen_shard_count` is the M1 reward-gate input
-/// (`ARCHIVAL_REWARD_GATE_M1.md` §1.1): the segment-table count at
-/// `H_close(E)`, produced by the C++ gather's single
-/// `count_frozen_shards_at_close` helper (`freeze_height ≤ H_close(E)`,
-/// equality counts, decode failure aborts loudly) inside the close's write
-/// transaction. The `K_COVER` threshold itself is threaded here through the
-/// PF-6a `KCover::consensus()` capability constructor — the only production
-/// path to a threshold value — and the comparison lives only in
-/// `epoch_close_compute`.
-///
 /// `out_r_market_ptr` must address `shards_len` writable `u64`s; outputs are
 /// zeroed before computation so a failure never leaves stale values.
 ///
@@ -2148,7 +2138,6 @@ unsafe fn gather_bad_intervals(ptr: *const u64, pair_len: usize) -> Option<Vec<B
 pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
     settlement_epoch: u64,
     close_block_height: u64,
-    frozen_shard_count: u64,
     bonds_ptr: *const ShekylArchivalEpochCloseBond,
     bonds_len: usize,
     shards_ptr: *const ShekylArchivalEpochCloseShard,
@@ -2191,16 +2180,12 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
     let bonds = rows.bonds();
     // Pinned params via the single-sourced close-view constructor (a struct
     // literal here would be a second param source that edits in lockstep).
-    // PF-6a: the consensus() constructor is the only production path to a
-    // threshold value; a divergent threshold is a type error here.
     let inputs = EpochCloseInputs::close_view(
         settlement_epoch,
         close_block_height,
         &bonds,
         &rows.shards,
         &rows.pairs,
-        frozen_shard_count,
-        KCover::consensus(),
     );
     let result = match epoch_close_compute(&inputs) {
         Ok(r) => r,
@@ -2234,10 +2219,8 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
 /// pops revert close and credits symmetrically), so a re-gather at any height
 /// in the claim window reproduces the close's gather exactly.
 ///
-/// `sigma_work_milli` must be the persisted close output, not a recompute:
-/// the M1 `K_COVER` gate's operand (`frozen_shard_count` as-of-close) is a
-/// close-only quantity, so the gate's outcome reaches verify only through the
-/// stored denominator.
+/// `sigma_work_milli` must be the persisted close output, not a recompute —
+/// the close's outcome reaches verify only through the stored denominator.
 #[repr(C)]
 pub struct ShekylArchivalEmissionEpochSnapshot {
     pub settlement_epoch: u64,
@@ -2274,8 +2257,8 @@ pub struct ShekylArchivalEmissionEpochSnapshot {
 /// same frozen gather — so `out_capped_work_milli` is `P`'s exact per-P term
 /// of that denominator by construction (WS-1 §5.5: sourcing divergence, the
 /// M-2 silent over/under-mint, is unrepresentable rather than tested-against).
-/// This is the numerator only — it does not read `snapshot.sigma_work_milli`
-/// or re-apply the M1 `K_COVER` gate, so a gated/empty epoch persists
+/// This is the numerator only — it does not read `snapshot.sigma_work_milli`,
+/// so an empty epoch persists
 /// `Σwork(E) == 0` while this may return a positive capped term; the consumer
 /// divides through the persisted denominator (reward is 0 at `Σwork(E) == 0`,
 /// enforced by `reward_share_floor`).
@@ -3923,7 +3906,6 @@ mod tests {
             shekyl_archival_epoch_close_compute(
                 5,
                 5 * SETTLEMENT_EPOCH_BLOCKS,
-                1,
                 bonds.as_ptr(),
                 bonds.len(),
                 shards.as_ptr(),
@@ -3987,8 +3969,6 @@ mod tests {
             bonds: &rust_bonds,
             shards: &rust_shards,
             credit_pairs: &rust_pairs,
-            frozen_shard_count: 1,
-            k_cover: KCover::consensus(),
         })
         .unwrap();
         assert_eq!(sigma, expected.sigma_work_milli);
@@ -4078,7 +4058,6 @@ mod tests {
             shekyl_archival_epoch_close_compute(
                 5,
                 6 * SETTLEMENT_EPOCH_BLOCKS,
-                2,
                 bonds.as_ptr(),
                 bonds.len(),
                 shards.as_ptr(),
@@ -4215,7 +4194,6 @@ mod tests {
             shekyl_archival_epoch_close_compute(
                 5,
                 5 * SETTLEMENT_EPOCH_BLOCKS,
-                1,
                 ptr::null(),
                 0,
                 shards.as_ptr(),
@@ -4234,7 +4212,6 @@ mod tests {
             shekyl_archival_epoch_close_compute(
                 5,
                 5 * SETTLEMENT_EPOCH_BLOCKS,
-                1,
                 ptr::null(),
                 0,
                 shards.as_ptr(),
@@ -4347,7 +4324,7 @@ mod tests {
     // C-1 emission-vin FFI (`shekyl_archival_emission_vin_extract`,
     // `shekyl_emission_vin_verify`). The honest fixture mirrors the crate KAT
     // (`emission_verify_kat.rs`) but is recomputed with the FFI's own pinned
-    // consensus constants (plateau curve, `KCover::consensus()`), so the test
+    // consensus constants (plateau curve), so the test
     // exercises the exact operand plumbing the C++ dispatch will use.
     // -----------------------------------------------------------------------
 
@@ -4437,8 +4414,6 @@ mod tests {
                 bonds: &bonds,
                 shards: &shards,
                 credit_pairs: &pairs,
-                frozen_shard_count: 2,
-                k_cover: KCover::consensus(),
             };
             let served = as_of_e_served_work(&inputs).expect("well-formed fixture");
             let work = served.work_by_bond[0];

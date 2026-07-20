@@ -2583,9 +2583,10 @@ namespace cryptonote
   /// Deliberately NOT carried (§7.3, each exclusion load-bearing):
   /// consensus constants (`settlement_epoch_blocks` / `age_weight_milli` /
   /// curve params — the wallet builds `EpochCloseInputs` from its own
-  /// compiled constants, no second source), `k_cover` /
-  /// `frozen_shard_count` (CB-5-structural: carrying the gate operands
-  /// would make the cause-distinguishing wallet branch representable),
+  /// compiled constants, no second source), close-only operands
+  /// (CB-5-structural: carrying them would make a cause-distinguishing
+  /// wallet branch representable; the retired M1 gate's operands were the
+  /// original entry in this class),
   /// per-epoch holdings (WS-1: the work channel carries no holdings), and
   /// tree/membership paths (existing spend-path machinery's concern).
   struct COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE

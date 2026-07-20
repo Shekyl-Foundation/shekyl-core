@@ -7,7 +7,7 @@
 
 use shekyl_archival_retention::{
     curve_milli, epoch_close_compute, r_market_count, sigma_work_milli, BadInterval,
-    BandedCurveParams, EpochCloseInputs, KCover, ServeCreditRow, WORK_MILLI_SCALE,
+    BandedCurveParams, EpochCloseInputs, ServeCreditRow, WORK_MILLI_SCALE,
 };
 
 mod common;
@@ -100,13 +100,6 @@ fn consensus_state_kat_v1() {
         bonds: &bonds,
         shards: &shards,
         credit_pairs: &pairs,
-        // M1 gate inputs (ARCHIVAL_REWARD_GATE_M1.md §2.1). The fixture
-        // carries them explicitly — parameterized, never baked from the
-        // provisional constant — so the KAT survives the §4 seal unchanged.
-        frozen_shard_count: ec["frozen_shard_count"]
-            .as_u64()
-            .expect("frozen_shard_count"),
-        k_cover: KCover::for_kat(ec["k_cover"].as_u64().expect("k_cover")),
     })
     .expect("well-formed fixture indices");
 

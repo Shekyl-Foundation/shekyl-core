@@ -24,7 +24,7 @@ use shekyl_archival_retention::CreditPair as Pair;
 use shekyl_archival_retention::{
     as_of_e_served_work, curve_milli, epoch_close_height, reward_share_floor, sigma_work_milli,
     ArchivalRewardEmissionVin, BandedCurveParams, EpochCloseBond, EpochCloseInputs,
-    EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover, MembershipOnlyBacking, ShardSet,
+    EpochCloseShard, HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardSet,
     ShardWorkEntry, WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W,
     SETTLEMENT_EPOCH_BLOCKS,
 };
@@ -107,8 +107,6 @@ impl Fixture {
             bonds: &self.bonds,
             shards: &self.shards,
             credit_pairs: &self.pairs,
-            frozen_shard_count: self.shards.len() as u64,
-            k_cover: KCover::for_kat(0),
         }
     }
 

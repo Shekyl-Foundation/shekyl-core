@@ -4,46 +4,21 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# M1 reward-gate predicate + operand tripwire — ARCHIVAL_REWARD_GATE_M1.md
-# §6 (tripwire row), §10 M1-1, §11.8 M3-1. Invoked from
+# Segment-freeze one-site tripwires — ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md
+# (§4.4 counter lockstep, §8 cursor accounting). Invoked from
 # check_consensus_invariants.sh and CI.
 #
-# Two one-site guarantees, both consensus-load-bearing at exactly the
-# activation boundary the runtime exercises once (§7 dead-rule acceptance):
-#
-#   1. PREDICATE: `K_COVER` / `k_cover` is *compared* at exactly one code
-#      site — the gate factor in `epoch_close_compute`
-#      (rust/shekyl-archival-retention/src/consensus_state.rs). The
-#      constants surface (k_cover.rs sentinel assert, build.rs value
-#      validation) is the only other legitimate comparison home. A second
-#      comparison site is the off-by-one-at-K_COVER±1 consensus-fork
-#      adversary M1-1 names.
-#
-#   2. OPERAND: the gate input `frozen_shard_count` is produced by exactly
-#      one counting read over `m_archival_shard_segment` —
-#      `count_frozen_shards_at_close` (db_lmdb.cpp), one production call
-#      site (the epoch-close gather). §11.1's pattern: the operand's
-#      production site gets the same one-site guarantee as the predicate
-#      site. Named drift adversaries (§11.8 M3-1): an RPC "corpus size"
-#      surface, a verification-path recount, or a cached counter lacking
-#      O-3 pop-symmetry. The landed operand IS a persisted counter — but
-#      one WITH O-3 pop-symmetry (±1 in lockstep with the one-site row
-#      writer and the revert walk, ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md
-#      §4.4, differential-tested against the walk), which is exactly what
-#      M3-1's adversary lacked. Its mutation surface is pinned by
-#      invariant 6 below. `mdb_stat` over the segment table remains
-#      refused outright — it counts rows with no decode and no frontier
-#      boundary check.
-#
-# The boundary operator is also pinned: `freeze_height <= h_close`
-# (equality counts, §1.1) must exist exactly once, and no strict-`<`
-# freeze-height comparison may exist anywhere in src/ — an off-by-one
-# edit here is a consensus fork at exactly the boundary class the Rust
-# KAT cannot reach (G-10 injects the count).
+# Provenance: this file is the substrate half of the former
+# check_reward_gate_predicate_sites.sh. The M1 K_COVER gate is RETIRED
+# (ARCHIVAL_REWARD_GATE_M1.md §13) and its predicate invariant (single
+# K_COVER comparison site) is gone with the machinery; the five invariants
+# below guard the segment-freeze substrate, which survives the retirement —
+# the frozen-count is freeze bookkeeping (and the wallet thin-market
+# disclosure's natural operand), not gate machinery.
 #
 # Escape hatch: a line carrying the marker `reward-gate-site-allow` is
-# exempt (genuinely-benign, reviewed use). The marker forces the exemption
-# to be explicit and grep-able, per the reward-arith precedent.
+# exempt (genuinely-benign, reviewed use; marker name retained from the
+# predecessor so any historical allows keep working).
 
 set -euo pipefail
 
@@ -83,107 +58,32 @@ scan() {
 # marker; this only spares prose from the magic-number tripwires.
 drop_comment_hits() { scan -v '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)'; }
 
-GATE_RS="rust/shekyl-archival-retention/src/consensus_state.rs"
-KCOVER_RS="rust/shekyl-archival-retention/src/k_cover.rs"
-BUILD_RS="rust/shekyl-archival-retention/build.rs"
-FFI_RS="rust/shekyl-ffi/src/archival_ffi.rs"
 LMDB_CPP="src/blockchain_db/lmdb/db_lmdb.cpp"
 LMDB_H="src/blockchain_db/lmdb/db_lmdb.h"
 
 # Path-exact exemption regexes (escape `.` so only the pinned files match;
 # check_pending_post_write_path.sh precedent).
-GATE_RE="${GATE_RS//./\\.}"
-KCOVER_RE="${KCOVER_RS//./\\.}"
-BUILD_RE="${BUILD_RS//./\\.}"
 LMDB_CPP_RE="${LMDB_CPP//./\\.}"
 
 # Guardrail: if a pinned choke file moved or was renamed, fail loudly rather
 # than let the invariants below pass vacuously on zero hits.
-for f in "$GATE_RS" "$KCOVER_RS" "$BUILD_RS" "$FFI_RS" "$LMDB_CPP" "$LMDB_H"; do
+for f in "$LMDB_CPP" "$LMDB_H"; do
   if [[ ! -f "$f" ]]; then
     echo "FAIL: $f not found — a pinned choke moved; update this gate, do not let it pass silently" >&2
     exit 1
   fi
 done
 
-# -- Invariant 1: single K_COVER comparison site ------------------------------
-#
-# A comparison is the token adjacent to a relational/equality operator, in
-# either order. Scope is production code (rust/*/src, rust/*/build.rs,
-# src/) — tests inject k_cover as a parameter per §5's parameterization pin
-# and may compare their local copies freely; a test comparison cannot fork
-# consensus. Doc-comment prose mentions without an operator do not match.
-CMP_PATTERN='(\b(K_COVER|k_cover)\b\s*(==|!=|<=|>=|<|>))|((==|!=|<=|>=|<|>)\s*[A-Za-z_.:]*\b(K_COVER|k_cover)\b)'
-CMP_STRAYS="$(scan -n "$CMP_PATTERN" rust/ src/ \
-  --glob '*.rs' --glob '*.cpp' --glob '*.h' --glob '*.hpp' \
-  --glob '!rust/*/tests/**' --glob '!rust/target/**' \
-  | scan -v 'reward-gate-site-allow' \
-  | scan -v "^(${GATE_RE}|${KCOVER_RE}|${BUILD_RE}):")"
-if [[ -n "$CMP_STRAYS" ]]; then
-  echo "FAIL: K_COVER / k_cover comparison outside the canonical gate site" >&2
-  echo "  (sole predicate site: epoch_close_compute in $GATE_RS;" >&2
-  echo "   constants surface: $KCOVER_RS + $BUILD_RS)" >&2
-  echo "$CMP_STRAYS" >&2
-  FAIL=1
-fi
-
-# Positive control (guards the guard): the canonical gate compare must still
-# exist under this exact spelling — a rename must fail here, not silently
-# de-arm invariant 1.
-if ! rg -q 'frozen_shard_count\s*<\s*inputs\.k_cover' "$GATE_RS"; then
-  echo "FAIL: positive control — no 'frozen_shard_count < inputs.k_cover' gate compare in $GATE_RS" >&2
-  echo "  (if epoch_close_compute's gate factor moved or was respelled, update this gate)" >&2
-  FAIL=1
-fi
-
-# Positive control: the production FFI threads the constant through the
-# PF-6a capability constructor (`k_cover: KCover::consensus()`) — the only
-# production path to a threshold value. The sentinel's compile-refusal story
-# (§4) assumes the constant reaches the gate unmodified through this one
-# assignment.
-if ! rg -q 'k_cover:\s*KCover::consensus\(\)' "$FFI_RS"; then
-  echo "FAIL: positive control — no 'k_cover: KCover::consensus()' threading in $FFI_RS" >&2
-  echo "  (if the FFI shim stopped threading the constant through the capability constructor, update this gate)" >&2
-  FAIL=1
-fi
-
-# PF-6a companion: `KCover::for_kat` is the KAT-injection constructor, gated
-# behind the dev-only `consensus-kat` feature. Its legitimate homes are the
-# definition (k_cover.rs), integration tests (rust/*/tests/ — excluded from
-# scope below), and the single in-crate #[cfg(test)] helper in
-# consensus_state.rs. Any other production-source hit is the arbitrary-
-# threshold adversary the newtype exists to refuse.
-# A *call* (`for_kat(`) is the adversary; doc-comment prose mentions cannot
-# construct a value and are ignored (invariant 1's operator-adjacency logic).
-FOR_KAT_STRAYS="$(scan -n 'for_kat\(' rust/ --glob '*.rs' \
-  --glob '!rust/*/tests/**' --glob '!rust/target/**' \
-  | scan -v 'reward-gate-site-allow' \
-  | scan -v "^(${KCOVER_RE}|${GATE_RE}):")"
-if [[ -n "$FOR_KAT_STRAYS" ]]; then
-  echo "FAIL: KCover::for_kat referenced outside its definition, the consensus_state.rs test module, and rust/*/tests/" >&2
-  echo "  (production code constructs the threshold only via KCover::consensus() — PF-6a)" >&2
-  echo "$FOR_KAT_STRAYS" >&2
-  FAIL=1
-fi
-# Guard the guard: the gate-file exemption above admits consensus_state.rs
-# wholesale, so pin that its only for_kat use stays in the test module —
-# exactly one hit, and the file still has a #[cfg(test)] module.
-GATE_FOR_KAT_COUNT="$(scan -c 'for_kat\(' "$GATE_RS")"
-if [[ "${GATE_FOR_KAT_COUNT:-0}" -ne 1 ]] || ! rg -q '#\[cfg\(test\)\]' "$GATE_RS"; then
-  echo "FAIL: expected exactly one for_kat use in $GATE_RS (the #[cfg(test)] helper), found ${GATE_FOR_KAT_COUNT:-0}" >&2
-  FAIL=1
-fi
-
-# -- Invariant 2: single counting read over m_archival_shard_segment ---------
+# -- Invariant 1: single counting read over m_archival_shard_segment ---------
 #
 # Iteration capability = counting capability: a cursor open over the segment
 # table outside the pinned sites is the second-count-site adversary. Pinned
 # sites (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §8 cursor accounting, 5 total):
-#   1. count_frozen_shards_at_close — the O(1) operand reader's one-row
-#      frontier probe (MDB_LAST decode + boundary check);
-#   2. process_archival_slash_for_epoch — pre-existing slash-scan shard
-#      enumeration (enumeration read predating the gate, not a count
-#      feeding a consensus predicate);
+#   1. count_frozen_shards_at_close — the O(1) frozen-count reader's one-row
+#      frontier probe (MDB_LAST decode + boundary check; no production
+#      caller since the M1 retirement — see the call-site invariant below);
+#   2. process_archival_slash_for_epoch — slash-scan shard enumeration
+#      (an enumeration read, not a count feeding a consensus predicate);
 #   3. process_archival_segment_freezes_at_height — the freeze processor's
 #      one-row resume peek (the writer deriving its own frontier from its
 #      own rows, not a second count pass);
@@ -230,24 +130,24 @@ if [[ "${DEF_COUNT:-0}" -ne 1 ]]; then
   FAIL=1
 fi
 
-# The real invariant: exactly one production *call site* (the epoch-close
-# gather). Count invocations that are neither the definition (BlockchainLMDB::
-# qualifier) nor a comment/doc line — so a log line, an assert message, or an
-# explanatory comment naming the helper does not turn the gate red, while a
-# genuine second consumer of the count (the gate input must come from the
-# close's own write-txn snapshot, §1.1) still does.
+# The real invariant: the helper is the ONLY sanctioned counting read, and
+# since the M1 gate's retirement removed its epoch-close consumer it has
+# exactly ZERO production call sites (tests still drive it; the wallet
+# thin-market disclosure is its named future consumer — adding that consumer
+# updates this expectation to 1 deliberately). Count invocations that are
+# neither the definition (BlockchainLMDB:: qualifier) nor a comment/doc line.
 CALL_HITS="$(scan -n 'count_frozen_shards_at_close\(' "$LMDB_CPP" \
   | scan -v 'BlockchainLMDB::count_frozen_shards_at_close' \
   | drop_comment_hits \
   | scan -v 'reward-gate-site-allow')"
 CALL_COUNT="$(printf '%s' "$CALL_HITS" | scan -c '.')"
-if [[ "${CALL_COUNT:-0}" -ne 1 ]]; then
-  echo "FAIL: expected exactly one count_frozen_shards_at_close call site in $LMDB_CPP (the epoch-close gather), found ${CALL_COUNT:-0}" >&2
+if [[ "${CALL_COUNT:-0}" -ne 0 ]]; then
+  echo "FAIL: expected zero count_frozen_shards_at_close production call sites in $LMDB_CPP (the M1 gate consumer is retired; a new consumer updates this gate deliberately), found ${CALL_COUNT:-0}" >&2
   printf '%s\n' "$CALL_HITS" >&2
   FAIL=1
 fi
 
-# -- Invariant 3: boundary operator pinned (freeze_height <= h_close) --------
+# -- Invariant 2: boundary operator pinned (freeze_height <= h_close) --------
 #
 # Exactly one `freeze_height <= h_close` in the helper; zero strict-`<`
 # freeze-height comparisons anywhere in src/. Equality counts (§1.1); the
@@ -265,7 +165,7 @@ if [[ -n "$LT_HITS" ]]; then
   FAIL=1
 fi
 
-# -- Invariant 4: segment-table writer one-site --------------------------------
+# -- Invariant 3: segment-table writer one-site --------------------------------
 #
 # ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §8 writer one-site. The segment table
 # has exactly one production writer (put_archival_shard_segment) and one
@@ -311,7 +211,7 @@ if [[ "${PUT_CALL_COUNT:-0}" -ne 1 ]]; then
   FAIL=1
 fi
 
-# -- Invariant 5: SEGMENT_LEAF_COUNT division one-site --------------------------
+# -- Invariant 4: SEGMENT_LEAF_COUNT division one-site --------------------------
 #
 # §8 division one-site: floor(leaf_count / E) is computed ONLY by the Rust
 # entry point shekyl_archival_frozen_segment_count. Any C++ '/' or '%'
@@ -350,7 +250,7 @@ if [[ "${FSC_HELPER_COUNT:-0}" -ne 2 ]]; then
   FAIL=1
 fi
 
-# -- Invariant 6: pop-symmetric counter mutation surface ------------------------
+# -- Invariant 5: pop-symmetric counter mutation surface ------------------------
 #
 # The persisted frozen-shard counter (properties `archival_frozen_shard_count`,
 # ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4) is the M1 gate operand's O(1)

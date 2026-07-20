@@ -23,9 +23,8 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
 # (ARCHIVAL_REWARD_GATE_M1.md §4) — a fuzz harness is not a genesis artifact.
-shekyl-archival-retention = { path = "..", features = ["provisional-k-cover"] }
+shekyl-archival-retention = { path = ".." }
 
 [[bin]]
 name = "fuzz_serve_credit_gate"

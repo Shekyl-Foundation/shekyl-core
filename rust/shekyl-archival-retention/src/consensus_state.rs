@@ -11,7 +11,6 @@ use crate::bond_floor::{
     ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
 };
 use crate::constants::{effective_settlement_epoch_blocks, SETTLEMENT_EPOCH_BLOCKS};
-use crate::k_cover::KCover;
 use crate::reward_arithmetic::{
     curve_milli, mul_div_floor, scarcity_milli, BandedCurveParams, WORK_MILLI_SCALE,
 };
@@ -300,23 +299,6 @@ pub struct EpochCloseInputs<'a> {
     pub bonds: &'a [EpochCloseBond<'a>],
     pub shards: &'a [EpochCloseShard],
     pub credit_pairs: &'a [CreditPair],
-    /// M1 reward-gate input (`ARCHIVAL_REWARD_GATE_M1.md` §1.1): the
-    /// segment-table count at `H_close(E)` — rows in
-    /// `m_archival_shard_segment` with `freeze_height ≤ H_close(E)`, counted
-    /// by the C++ gather's single `count_frozen_shards_at_close` helper
-    /// inside the close's write transaction. **Not** derivable from
-    /// [`Self::shards`]: the gather enumerates credit-bearing shards (a
-    /// participation measurement — exactly the sensor class the gate
-    /// refuses, §11 M2-1); the segment-table count is structural and
-    /// monotone per branch.
-    pub frozen_shard_count: u64,
-    /// The M1 cover threshold, as the PF-6a capability newtype. Production
-    /// callers (the FFI shim) thread [`KCover::consensus`]; the KATs inject
-    /// per-case values via `KCover::for_kat` (dev-only `consensus-kat`
-    /// feature) so the fixtures survive the §4 constant finalization without
-    /// rewrite. The *comparison* lives only in [`epoch_close_compute`]
-    /// (§6 tripwire) — threading the value is not a second predicate site.
-    pub k_cover: KCover,
 }
 
 impl<'a> EpochCloseInputs<'a> {
@@ -327,9 +309,7 @@ impl<'a> EpochCloseInputs<'a> {
     /// verify views cannot drift on a param (the
     /// `SETTLEMENT_EPOCH_BLOCKS → effective_settlement_epoch_blocks()`
     /// swap previously had to edit the FFI's struct literal and this
-    /// constructor in lockstep; now the params exist once) — plus the
-    /// close-only M1 operands (`frozen_shard_count`, `k_cover`) the caller
-    /// threads for real.
+    /// constructor in lockstep; now the params exist once).
     #[must_use]
     pub fn close_view(
         settlement_epoch: u64,
@@ -337,8 +317,6 @@ impl<'a> EpochCloseInputs<'a> {
         bonds: &'a [EpochCloseBond<'a>],
         shards: &'a [EpochCloseShard],
         credit_pairs: &'a [CreditPair],
-        frozen_shard_count: u64,
-        k_cover: KCover,
     ) -> Self {
         Self {
             settlement_epoch,
@@ -352,19 +330,16 @@ impl<'a> EpochCloseInputs<'a> {
             bonds,
             shards,
             credit_pairs,
-            frozen_shard_count,
-            k_cover,
         }
     }
 
     /// The verify-view construction (`EMISSION_CLAIM_BUILDER.md` §7.3):
     /// [`Self::close_view`]'s pinned params — deliberately never a wire
-    /// copy, which would be a second source that can drift — with the
-    /// close-only M1 operands stubbed (`frozen_shard_count: 0`,
-    /// [`KCover::consensus`]), which the verify path never reads (the
-    /// gate's outcome arrives via the persisted `Σwork` denominator).
-    /// Single-sourced here so the verify FFI shims and the wallet's §2
-    /// step-7 self-check construct byte-identical views and cannot drift.
+    /// copy, which would be a second source that can drift. Single-sourced
+    /// here so the verify FFI shims and the wallet's §2 step-7 self-check
+    /// construct byte-identical views and cannot drift. (Identical to the
+    /// close view since the M1 gate's retirement removed the close-only
+    /// operands; the alias is kept as the verify-side name.)
     #[must_use]
     pub fn verify_view(
         settlement_epoch: u64,
@@ -379,8 +354,6 @@ impl<'a> EpochCloseInputs<'a> {
             bonds,
             shards,
             credit_pairs,
-            0,
-            KCover::consensus(),
         )
     }
 }
@@ -544,16 +517,6 @@ pub fn shard_contribution_milli(
 ///
 /// Composes the pinned semantics in one deterministic pass:
 ///
-/// 0. **M1 reward gate** (`ARCHIVAL_REWARD_GATE_M1.md` §2.1) — for epochs
-///    whose `frozen_shard_count` is below `k_cover` (threaded from
-///    [`K_COVER`](crate::k_cover::K_COVER) by the production FFI caller),
-///    the result is the zero output (`r_market_by_shard: [0; n]`,
-///    `sigma_work_milli: 0`) **without computing the internal derivation** —
-///    zero-at-top, so no consensus quantity derived from a gated epoch is
-///    ever non-zero. This is the **only** `K_COVER` comparison site in the
-///    codebase (§6 tripwire); the claimability rule inherits through the
-///    zeroed stored `Σwork` + wire positivity, never through a second
-///    predicate.
 /// 1. **Market membership** per bond — [`market_member_at_epoch`].
 /// 2. **`R_market(shard, E)`** — count of serve-credit rows whose `P` is a
 ///    market member (§3.3 pinned measure).
@@ -564,25 +527,17 @@ pub fn shard_contribution_milli(
 /// 4. **`Σwork(E)`** — [`sigma_work_milli`] over per-bond `Curve(work_P)`.
 ///
 /// Errors (rather than panics) on malformed gather indices so the FFI shim
-/// can map the failure to a loud daemon-side abort. The gather-index check
-/// runs **before** the gate so a malformed gather aborts loudly on gated
-/// epochs too (the gate zeroes outputs, never accountability — §3.1).
+/// can map the failure to a loud daemon-side abort.
+///
+/// The retired M1 `K_COVER` gate ran here as a zero-at-top early return
+/// (`ARCHIVAL_REWARD_GATE_M1.md`, RETIRED — see its retirement record):
+/// reward withholding is individually-caused only (slash/bad-intervals,
+/// membership onset, holdings shape, claim expiry); no collective gate
+/// precedes the derivation.
 pub fn epoch_close_compute(
     inputs: &EpochCloseInputs<'_>,
 ) -> Result<EpochCloseResult, CreditIndexOutOfRange> {
-    let shards = inputs.shards;
-
-    if inputs.frozen_shard_count < inputs.k_cover.get() {
-        // Gated: `as_of_e_served_work` is never reached, so validate the gather
-        // here too — a malformed one is rejected, not silently zeroed.
-        validate_credit_pair_indices(inputs)?;
-        return Ok(EpochCloseResult {
-            r_market_by_shard: vec![0u64; shards.len()],
-            sigma_work_milli: 0,
-        });
-    }
-
-    // Non-gated: `as_of_e_served_work` validates the same indices internally.
+    // `as_of_e_served_work` validates the gather indices internally.
     let served = as_of_e_served_work(inputs)?;
     let sigma = sigma_work_milli(&served.work_by_bond, &inputs.curve, &served.member);
 
@@ -654,10 +609,6 @@ mod tests {
             bonds,
             shards,
             credit_pairs: pairs,
-            // Ungated by data (1 ≥ 1), not by the k_cover = 0 degenerate:
-            // these tests pin the pre-gate computation through a live gate.
-            frozen_shard_count: 1,
-            k_cover: KCover::for_kat(1),
         }
     }
 

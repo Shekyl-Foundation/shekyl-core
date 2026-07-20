@@ -47,6 +47,20 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Wallet thin-market entry disclosure — the §13.2 re-disposition's
+  build item** (added 2026-07-19; `ARCHIVAL_REWARD_GATE_M1.md` §13.1,
+  `ARCHIVAL_BOND_WI4_MEASUREMENT.md` §13.2 updated disposition). At
+  stake time the wallet computes and shows the live lineup the entrant
+  would join — recent-window transfer traffic (the chain-only
+  funding-seam denominator) and recent unmarked joins (the targeted-T
+  denominator) — and requires an explicit override below a threshold.
+  Loud disclosed-cost at the wallet locus (externality rule: the
+  residual thin-entry risk is self-regarding); replaces the retired
+  consensus gate's deterrence function without suppressing the paid
+  cover bootstrap. Rule 81: rendered as plain risk language, never
+  protocol vocabulary. **Target: V3.0 pre-genesis (belongs with the
+  market-bond wallet entry work — see the `first_stake` holdings item).**
+
 - **Solo address registry: decide (a registration tx type is genesis-only)**
   (added 2026-07-17, solo `ek_bind` PR). A solo address is a ~2,055-char
   three-segment Bech32m string. It cannot be shortened by any encoding — no
