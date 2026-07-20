@@ -40,15 +40,28 @@
 >   that is hot at genesis contributes no work by the work math
 >   (`consensus_state.rs` `shard_age_milli`; `bond_duration.rs` — "adding
 >   an unfrozen shard earns nothing — self-harm, not an attack").
-> - **But §16's "earns nothing by construction" conclusion survives only
->   PARTIALLY** — see the partial-voiding note at the §16 conversion.
->   The structural property covers the genesis window (no segment frozen
->   yet); it does **not** cover the thin-but-nonzero window, which the
->   gate did cover and which is what §13.2's `r = 3.54` result measured.
->   Once the first segment freezes, a bond serving it earns however thin
->   the cover. The §16 "verified synergy" with the claim-cohort hazard is
->   voided the same way. **The residual thin-window exposure is an OPEN
->   DESIGN QUESTION, not something this retirement resolved.**
+> - **§16's "earns nothing by construction" conclusion survives only
+>   PARTIALLY as an ECONOMIC statement** — see the note at the §16
+>   conversion. The structural property covers the genesis window (no
+>   segment frozen yet); it does not cover the thin-but-nonzero window,
+>   which is therefore now an *earning* window where it was not before.
+>   That is an economics change and nothing more.
+> - **⚠️ CORRECTION 2026-07-20 — there is NO privacy consequence, and an
+>   earlier revision of this banner wrongly asserted one.** The claim that
+>   the thin window is a newly-uncovered *privacy* exposure was wrong on
+>   this document's own evidence. §13.5's sensitivity sweep establishes
+>   that **`r` is structurally blind to cover**: `P(link)` scales ≈`1.8/N`,
+>   so the scorer's hit rate and the `1/N` blind baseline shrink together
+>   and "the ratio renormalizes thin-cover harm away by construction —
+>   cover was never gated, not 'gated on an optimistic assumption,' never
+>   gated at all." More stakers do not move `r`; fewer do not worsen it.
+>   `K_COVER` therefore never mitigated the GF-7 seam, and retiring it
+>   exposes nothing. §13.2's `r = 3.54` is a **behavioural-sparsity**
+>   result (the `LowActivity` regime: a principal who funds one bond and
+>   rarely spends has few of their own dispatches to hide the seam among),
+>   graded at the same `N = 10` as the steady-state row — not a thin-herd
+>   result. Naming it "thin cover" is the misnomer that propagated the
+>   error; see the §3.3 correction.
 >
 > Two dispositions this retirement leaves genuinely open are tracked as
 > design questions, not as `K_COVER` work: whether the wallet thin-cover
@@ -257,6 +270,28 @@ evaluated against the *strongest* modeled observer (§3.4) — that
 combination is what makes it conservative, not the constant `2`.
 
 ### 3.3 The low-activity / cold-start regime is graded separately
+
+> **⚠️ PROSE/INSTRUMENT MISMATCH — corrected 2026-07-20. Read this before
+> §3.3's "`N` is small (thin cover)" framing.** This section describes the
+> low-activity regime as a *small-`N` / thin-herd* condition. **The
+> instrument does not implement it that way.** `gf7_timeline.rs` grades
+> BOTH regimes at the same `N = 10` from the same `RunConfig`; what
+> `Regime::LowActivity` changes is the principal's own cadence and horizon
+> (`(8_000, (1_500, 3_000))` vs steady state's `(4_000, (40, 400))`) —
+> "sparse cadence gives the blind arm little to hide the seam among."
+>
+> §13.5's later sensitivity sweep (`N ∈ {2..16}`) settles it in the
+> instrument's favour and retracts the herd reading outright: `r` is
+> **structurally blind to cover**, because `P(link)` and the `1/N` blind
+> baseline shrink together. So "thin cover" in this section is a
+> **misnomer for behavioural sparsity**, and every number below —
+> including §13.2's `r = 3.54` — came from the cadence instrument, not
+> from a thin herd.
+>
+> This mismatch has real cost: it is the source of the mistaken belief
+> that a collective cover-thickening mechanism (the retired M1 `K_COVER`
+> gate) mitigated the GF-7 seam. It never did. Where this section says
+> "`N` is small", read "the principal's own activity is sparse".
 
 The standoff already found the worst case is a **low-activity principal**
 (funds one bond, rarely spends): `N` is small (thin cover), and the
@@ -1868,12 +1903,17 @@ function of chain state, applied identically to every bond, marking none.
 >
 > So §16's "incentive facts are game-able, therefore convert to
 > structure" reasoning retains its force for genesis and loses it for
-> the thin window — which is the interval §13.2's `r = 3.54` cold-start
-> result actually measured. Whether that residual exposure is now
-> carried by the wallet thin-market entry disclosure alone, or needs a
-> different structural answer, is an **open design question** and is
-> deliberately NOT resolved by this note. It must not be closed by
-> assuming the sorter still runs.
+> the thin window. **That is the whole of it: an ECONOMIC change.**
+>
+> **⚠️ CORRECTION 2026-07-20.** An earlier revision of this note went on
+> to call the thin window a newly-uncovered *privacy* exposure and cited
+> §13.2's `r = 3.54` as what sits in the gap. That was wrong, on this
+> document's own §13.5 finding: **`r` is structurally blind to cover**,
+> so no herd-size change — in either direction — moves it. `K_COVER`
+> never mitigated the GF-7 seam and its retirement does not expose it.
+> `r = 3.54` is the low-activity **behavioural-sparsity** row, graded at
+> the same `N = 10` as steady state. Nothing privacy-shaped sits in the
+> economic gap this note describes; do not re-derive one from it.
 
 **Substrate, verified at source (2026-07-06).** Shards are frozen chain
 segments — `archival_shard_segment.freeze_height`, age =
@@ -1911,12 +1951,30 @@ The cold-start claim-cohort hazard
 cohort approaches one) was refused by the same rule in the same window —
 zero accrual ⇒ zero claims exist during the thin window, so the
 smallest-cohort regime of that separate leak was never entered either.
-*With the gate retired this synergy holds only until the first segment
-freezes, not until `K_COVER` do. Once accrual begins, claims can exist
-while cover is still thin, so the smallest-cohort regime of that
-separate leak IS reachable. This is a second exposure the retirement
-re-opens, and it is part of the same open design question flagged at
-the §16 conversion above — it must not be treated as still foreclosed.*
+*⚠️ CORRECTION 2026-07-20 — an earlier revision of this note said the
+smallest-cohort regime "IS reachable" again once accrual begins, i.e.
+treated the synergy as merely TIMING-voided. That inherited the error
+rather than catching it. The synergy is voided on the OBJECT, and was
+almost certainly a category error when first asserted:*
+
+- *The hazard is over `tier × creation_height`, cleartext fields of the
+  **Tier-A confidential-staking claim** (`CONFIDENTIAL_STAKING.md`
+  §6.4.8). That era is RETIRED (`LEGACY_CLAIM_ERA_RETIREMENT.md`); the
+  live claim object, `ArchivalRewardEmissionVin` (`emission_wire.rs`),
+  carries **neither field** — verified at source.*
+- *The M1 gate governed archival emission claims. Suppressing those says
+  nothing about the cohort partition of a structurally isolated, already
+  retired claim type. The two eras are, in that doc's words, "structurally
+  isolated".*
+- *Scope, independently: the hazard is `claim↔claim` linkage — a
+  P-action↔P-action link, with the harm named as targeted-cascade across
+  one persona's own claim history. `P` is a public pseudonym; the
+  protected object is the `P`→principal edge "and nothing else"
+  (§19.x). This was never the defended edge.*
+
+*So there is no re-opened exposure here. If a cohort-partition hazard is
+ever wanted for the archival era it must be re-derived against the live
+vin's actual fields, not inherited from this synergy.*
 
 **Named residuals and shape notes.**
 - *Dead-rule note (rule 15 shape):* `shard_count` monotone ⇒ the gate is

@@ -9539,6 +9539,41 @@ one place to confirm each item's relationship to the wallet stack.
   §14 (launch posture), [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
   §4 and [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
 
+- **GF-7 entry-seam inversion: the ENTRY half is persisted but nothing schedules it
+  (opened 2026-07-20, traced at source).** The bond-post half of the entry-seam standoff is
+  wired end-to-end and works: `stake_engine.rs` draws via `draw_entry_gap_guarded` and
+  consumes BOTH values through `plan_entry_seam` (the `bond_first` order-coin is taken with
+  the `spread` by construction, so it cannot be silently dropped); the plan rides the reply;
+  `bond_orchestrator.rs` persists both offsets into `PendingPostBlock`; and WI-3's dispatch
+  driver honours `due = anchor_t0 + bond_post_offset_blocks` (`pscan/dispatch.rs`). **But
+  `entry_offset_blocks` has no scheduler consumer** — it is written to the record and, as
+  far as a workspace-wide trace shows, read by nothing outside tests and the `gf7-hooks`
+  observer. The entry event is the principal's funding send (`Engine::stake_in`), a
+  separate user-initiated act the wallet does not currently time.
+  **Why it matters:** the inversion is the measured load-bearing mitigation for exactly the
+  case that grades worst — GATE6 §10.12: "the **inversion carries the low-activity worst
+  case** (link `0.52→0.32`, thin-cover `56%→20%` where width alone can't help)". It works by
+  removing the observer's ordering prior ("the bond-post follows a recent principal spend"),
+  and the correlator is order-agnostic by construction (`abs_diff`, two-sided seam box). A
+  half-honoured plan — bond post timed, funding send untimed — cannot deliver the coin's
+  effect, because the coin only means something if BOTH events are placed relative to the
+  private intent anchor `t0`.
+  **Named blocker (must close first): WHICH event is inverted.** GATE6 §10.12 says the
+  inverted second event is the **announce** — "membership-only backing over *principal
+  outputs* that exist pre-bond — `P` proves it *could* back before it *does*" — which can
+  legitimately precede the bond. But `plan.rs` calls it "`P`'s observable funding/entry
+  event", and a literal funding **spend** cannot precede the bond post: `bond_assembly.rs`
+  sweeps the persona's own already-mature, tree-drained funding outputs
+  (`OutputNotYetDrained`, `InsufficientFunding` — "there is **no** reach-across to principal
+  outputs"). GATE6's own pass-4 asks for precisely this enumeration — "prep-spend vs.
+  announce vs. the bond-post tx carrying collateral-in" — and does not answer it. Until that
+  is settled, it is not decidable whether the entry half is schedulable at all or whether
+  the inversion must ride the announce.
+  **Target: V3.0 pre-genesis** (privacy floor, wallet-only and consensus-unenforceable per
+  GATE6 §10.12, so it is a conformance requirement with a published test vector, not a
+  default). Do not confuse this with cover thickness — see the corrected thin-cover entry
+  below and WI-4 §3.3.
+
 - **Wallet UX: thin-cover exposure disclosure at bond/claim time (registered 2026-07-19,
   PR #337 review thread).** On the user's own acts the design is warn-don't-prohibit —
   ~~`K_COVER` gates only the system's reward lever (bonding stays legal during gated epochs,
@@ -9550,17 +9585,25 @@ one place to confirm each item's relationship to the wallet stack.
   during a thin-cover window carries elevated linkage exposure (the measured WI-4 §13.2
   thin-cover regime). ~~and gated epochs earn nothing~~ (no epochs are gated now).
   ~~Disclosure-shaped, never a block; the enforced invariant stays consensus-side (M1).~~
-  **⚠️ RE-SCOPE REQUIRED (2026-07-20, open design question — do NOT build to the old
-  scoping).** This item was deliberately scoped as advisory-only *because* the enforcement
-  lived consensus-side in M1. M1 enforces nothing now. The structural replacement (unfrozen
-  shards score zero `shard_age_milli`) covers only the window before the FIRST segment
-  freezes — the thin-but-nonzero window that §13.2's `r = 3.54` actually measured is now an
-  earning window, and WI-4 §16's "verified synergy" foreclosing the claim-cohort leak is
-  voided with it. So this disclosure may now be the SOLE mitigation for a measured exposure,
-  which promotes it from nice-to-have to load-bearing — and a mitigation that depends on a
-  user reading a warning is a weak one to carry alone. Whether the answer is disclosure,
-  a different structural mechanism, or accepting the exposure is a maintainer ruling that
-  must be made before this is built. **Target: with the staker-activation UX; pre-genesis.**
+  **⚠️ RE-SCOPED 2026-07-20 — the premise was wrong; this is NOT a cover disclosure.**
+  An earlier revision of this entry claimed the retirement made this disclosure the sole
+  mitigation for a measured exposure. That was wrong, and is withdrawn. Grounded at source:
+  **`r` is structurally blind to cover** (WI-4 §13.5's `N ∈ {2..16}` sweep — `P(link)` and
+  the `1/N` baseline shrink together; "cover was never gated … never gated at all"), so
+  herd thickness never mitigated the GF-7 seam and `K_COVER`'s retirement exposes nothing.
+  §13.2's `r = 3.54` is a **behavioural-sparsity** result (a principal who funds one bond
+  and rarely spends), graded at the same `N = 10` as steady state; WI-4 §3.3's "thin cover"
+  wording is a misnomer its own instrument contradicts (see the §3.3 correction). The
+  claim-cohort clause is withdrawn separately: that hazard is over `tier × creation_height`,
+  fields of the RETIRED Tier-A confidential claim, absent from the live
+  `ArchivalRewardEmissionVin` — and it is `claim↔claim` linkage, not the protected
+  `P`→principal edge.
+  **What survives, if anything:** a disclosure about the user's own **activity sparsity and
+  daemon posture** — not about how many others are staking. Note the enforced-invariant
+  answers already exist and are stronger: the entry-seam standoff draw (below) and the
+  own-node default. Per the silent-compliance lens, "your history is sparse, be careful" is
+  a weak thing to hand a user when the wallet can simply place the seam correctly. Scope
+  this as at most a supplement to those, and do NOT build it as a cover warning. **Target: with the staker-activation UX; pre-genesis.**
 - **2d-2 2c-2a — submit-outcome handling: the wallet CONSUMES `SubmitVerdict`; the partition is
   no longer a design object (SUPERSEDED 2026-07-04 by
   [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md), D4; absorbed remainders
