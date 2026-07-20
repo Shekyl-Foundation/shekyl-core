@@ -2097,6 +2097,49 @@ async fn e2e_emission_claim_accepted_and_applied() {
         fixture.confirmed_tip_height
     );
 
+    // The claim spends TWO distinct persona outputs: the designated backing
+    // (the membership proof — Q11 excludes it from the fee set
+    // structurally, `BackingSet::fee_sweep`) and at least one fee input.
+    // The sweep-all bond leaves exactly ONE (the `BondPostChange` change),
+    // so fund the persona once more post-bond — an ordinary rung-1
+    // ExternalTransfer — and re-run the production P-scan so the sealed
+    // state carries both records before the claim reads it.
+    transfer_to(
+        &daemon,
+        &fixture.arc,
+        &fixture.principal,
+        &persona_address(&seed, SLOT),
+        shekyl_units::AtomicUnits::from_raw(CLAIM_FUNDING_CUSHION),
+        10,
+        24,
+    )
+    .await;
+    daemon
+        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &fixture.principal)
+        .await;
+    refresh(&fixture.arc).await;
+    let state = pscan_until(
+        &fixture.arc,
+        &fixture.pscan_seal,
+        "the post-bond fee funding (2 spendable persona records)",
+        |s| {
+            s.funding_outputs()
+                .iter()
+                .filter(|r| r.p_slot == slot)
+                .count()
+                >= 2
+        },
+    )
+    .await;
+    eprintln!(
+        "persona holds {} funding record(s) pre-claim (backing + fee substrate)",
+        state
+            .funding_outputs()
+            .iter()
+            .filter(|r| r.p_slot == slot)
+            .count()
+    );
+
     // (A2) Inject one serve-credit bit for (persona, shard 0, TARGET_EPOCH).
     // The bit store is epoch-keyed and injection is height-free, but the
     // injection HEIGHT is what the pop legs must stay above (the store is
