@@ -1069,6 +1069,35 @@ push this PR past the 10-commit ceiling. Split per `06-branching.mdc`:
   leg (bounded above the injection height), and the conservation KAT's
   fee-leg residue (#281). Rides the PR-4a harness; the E4 merge gate
   closes here.
+  **LANDED 2026-07-19** (`e2e_emission_claim_accepted_and_applied`,
+  `regtest_e2e.rs`; the E4 merge gate closes — FOLLOWUPS "Emission
+  regtest end-to-end" item CLOSED, §4 item 5's E4/E5 precondition
+  fired with zero `C_stake` code residue). Geometry: `SEB = 512`, the
+  whole confirmed-bond substrate inside epoch 0 ⇒ **epoch 1 is the
+  first claimable epoch** (onset stagger, `good_through`), inject <
+  reference < close < claim within `REF_ANCHOR_AGE` of the close;
+  single claimant holding all Σwork ⇒ loud vout `== budget_atomic(1)`
+  **byte-exact** (the conservation identity live; fee-pool-half
+  positivity is regtest-infeasible by the integer volume-mean law —
+  pinned executably as `total_burned == 0`, positive-pool coverage
+  stays with the B5 KATs). Pop legs: A5a depth-1 idempotency (claimed
+  row clears, claim re-mines, operands byte-identical), A5b
+  epoch-straddling (close undone + re-closed **byte-identically from
+  the pop-surviving credit bits**, floor above the non-pop-symmetric
+  inject), A5c deep pop through the claim's reference (chain
+  re-converges, stranded claim inert; the replacement-claim half is
+  the retire/resubmit FOLLOWUPS item). Composition findings, both
+  fixed or pinned in-PR: the daemon **arm-order bug** (fresh-datadir
+  genesis add latched the schedule before the `Blockchain::init` SEB
+  arm ⇒ every levered spawn died `ArmedTooLate`; gate moved above the
+  genesis add) and the **market-bond wallet entry gap**
+  (`first_stake`'s CompleteTree genesis posture is foundation-flagged
+  and market-excluded (E-2) ⇒ no wallet-postable bond can earn; the
+  e2e claims through the composed production steps
+  (`FixtureStake::MarketBond`), and the entry is a FOLLOWUPS item
+  gated on gate-6 serving / SA-R2). The `staker_emission_decay` leg
+  stays unit-pinned (year-scale horizon; 14 KATs,
+  `shekyl-economics/src/emission_share.rs`).
 
 **PR-4a review round (2026-07-12, high-effort workflow review — 29
 verified findings, all addressed in one round; the dominant theme was

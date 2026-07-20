@@ -4843,6 +4843,83 @@ sustainability is unaffected by the recalibration.
   two production bug fixes); PR-4b lands the daemon submit legs (see
   the "daemon Rust submit engine" item below); PR-4c is the e2e
   proper and closes the E4 gate.
+  **UPDATE 2026-07-19 — CLOSED (PR-4c landed).** The composition e2e
+  (`e2e_emission_claim_accepted_and_applied`, `regtest_e2e.rs`) drives
+  the full loop live: serve credit injected for epoch 1 under the SEB
+  lever (onset stagger: a bond is a market member from `join + 1`,
+  never in its join epoch), the epoch mined closed, the claim built by
+  the production CB-3 path and accepted by the PR-4b battery, then
+  **applied** — daemon claimed-set row, loud vout `==
+  budget_atomic(E)` byte-exact (the §9.5 item-8 conservation identity
+  over real RPC), the production P-scan re-discovering the reward as
+  rung-1 `EmissionReward` funding — plus three pop legs (depth-1
+  idempotency; epoch-straddling re-close byte-identical from the
+  pop-surviving credit bits; deep pop through the claim's reference
+  asserting the stranded claim stays inert). Being a composition
+  proof, it caught what unit KATs could not: (1) a daemon
+  **arm-order bug** — on a fresh datadir the genesis add latched the
+  epoch schedule before `Blockchain::init`'s SEB arm, so every levered
+  daemon died `ArmedTooLate` (fixed: the gate moved above the genesis
+  add); (2) **the `first_stake` genesis posture cannot earn** — see
+  the "market-bond wallet entry" item below. Named deferrals out of
+  regtest reach: the `staker_emission_decay` leg (0.90/yr; a year-scale
+  horizon — the law is pinned by 14 unit KATs in
+  `shekyl-economics/src/emission_share.rs`) and fee-pool-half
+  **positivity** (the integer per-block volume mean floors to 0 at e2e
+  activity ⇒ `burn_pct` 0 ⇒ the pool half is genuinely zero by the
+  law; the e2e pins that disposition executably via `total_burned == 0`
+  and the positive-pool split coverage stays with the B5 unit KATs).
+  E4/E5 precondition (§4 item 5) fired: `txin_stake_claim` was already
+  deleted (`2615c0dae`) and `C_stake` has **zero code residue** (the
+  one source hit is a "no C_stake" negation comment) — item 5 closes
+  as docs-only with this entry.
+
+- **Market-bond wallet entry — `first_stake`'s genesis posture cannot
+  earn an emission** (surfaced 2026-07-19, PR-4c's first live close;
+  `EMISSION_CLAIM_BUILDER.md` §8 PR-4c findings). The consensus close
+  excludes foundation complete-tree bonds from `market_R`/`Σwork`
+  (E-2, `ARCHIVAL_CONSENSUS_STATE.md` §3.3), and the daemon's gather
+  flags **every** `CompleteTree` bond foundation
+  (`db_lmdb.cpp`, `bond.is_complete_tree()`) — while the SA-R1
+  production stake entry (`Engine::first_stake`,
+  `bond_orchestrator.rs` "Genesis posture") hardcodes JoinMarket
+  **CompleteTree** holdings. Composed: every wallet-postable bond
+  today is market-excluded the moment it lands and its Σwork is zero
+  forever; the entire claim stack has no wallet-reachable claimant.
+  Everything below the entry already handles market bonds first-class
+  (wire, floor, PR-4b battery, `assemble_bond_post(holdings)`,
+  positive work for a credited unfrozen shard) — the gap is solely the
+  entry: nothing passes `ShardSetCompact` into that parameter. The
+  PR-4c e2e claims through the composed production steps
+  (`FixtureStake::MarketBond`: `mint_handle` → `persist_bond_record` →
+  `assemble_bond_post`) as the executable pin of what the entry must
+  produce. **Blocked on real design inputs, not on code**: shard
+  selection must be automatic (rule 81 — derived from what the node
+  stores/serves), which couples the entry to the gate-6 serving stack
+  (SP-T3/GATE6 R2, unbuilt) and to segment-freeze growth; and if
+  non-foundation complete-tree market participants are ever wanted,
+  the `is_complete_tree()` conflation needs foundation identity to be
+  a bond fact, not a holdings shape — reject that knowingly in the
+  entry's design round. **Reopening trigger: the gate-6 serving round
+  lands (shard-holding becomes observable), or the staker-activation
+  RPC round (SA-R2) opens the entry's holdings policy.**
+
+- **Emission-claim retire/resubmit driver legs** (surfaced 2026-07-12
+  at the CB-3 seam, PR-4a review round #8 "retirement/resubmit = the
+  named claim-driver slice"; sharpened 2026-07-19 by the PR-4c A5c pop
+  leg). `PendingEmissionClaim` seals persist-before-dispatch with a
+  one-live-claim-per-persona rule; `remove_claim` ("confirmation
+  retire, or terminal-reject prune", `pending_post_block.rs`) exists
+  with **zero engine callers** — nothing retires a confirmed claim and
+  nothing resubmits a stranded one. The A5c leg pins the daemon-side
+  half live (deep pop through the claim's reference: the chain
+  re-converges, the epoch re-closes byte-identically, the stranded
+  claim never re-applies) and ends where the wallet-side gap begins:
+  building the replacement claim refuses `ClaimPending` until retire
+  lands. Matches the bond precedent (WI-3's driver owns bond-post
+  retirement). **Reopening trigger: the claim dispatch driver slice
+  (WI-3 sibling) — it must land before any real staker claims on a
+  reorging network.**
 
 - **Q11 balance-exclusion KAT — blob-boundary invariant arm**
   (surfaced 2026-07-09, CB-4 source pass —
