@@ -2027,7 +2027,6 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 #[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
 async fn e2e_emission_claim_accepted_and_applied() {
     use super::bond_assembly::SpentRecordsDurablyPruned;
-    use super::bond_orchestrator::BOND_SIZE_CEILING_BYTES;
     use super::claim_dispatch::EmissionClaimRequestError;
     use super::claim_orchestrator::ClaimOrchestrationError;
     use super::emission_source::fetch_emission_claim_source;
@@ -2049,10 +2048,13 @@ async fn e2e_emission_claim_accepted_and_applied() {
     /// is the first epoch whose serve credit carries weight.
     const TARGET_EPOCH: u64 = 1;
     /// Persona funding above `floor + bond fee`: becomes the sweep-all
-    /// bond's `BondPostChange` change output — the claim's fee-input
-    /// substrate. Sized ≳ 2.5× the young-chain fee scale (~1.5e9) so the
-    /// claim's own daemon-estimated fee is comfortably fundable.
-    const CLAIM_FUNDING_CUSHION: u64 = 4_000_000_000;
+    /// bond's `BondPostChange` change output (and the size of the second,
+    /// post-bond transfer). The claim's fee must be covered by the single
+    /// non-backing record alone (Q11 excludes the designated backing from
+    /// the fee set), and the claim fee rides the ~48 KiB non-claims
+    /// envelope at the young chain's ~69k/byte floor ≈ 3.4e9 — 12e9 gives
+    /// each record standalone headroom.
+    const CLAIM_FUNDING_CUSHION: u64 = 12_000_000_000;
 
     // (A1) Arm the settlement-epoch lever in THIS process before any epoch
     // arithmetic latches the genesis schedule (the schedule is a
@@ -2228,8 +2230,15 @@ async fn e2e_emission_claim_accepted_and_applied() {
     );
 
     // (A3) Build and dispatch the claim through the production CB-3 path.
-    // The fee rides swept `ToKey` inputs from the bond-post change; derive
-    // it from the daemon's live estimate exactly as the bond leg does.
+    // The fee rides swept `ToKey` inputs; derive it from the daemon's live
+    // estimate over the claim's own production envelope — the ~48 KiB
+    // `EMISSION_NON_CLAIMS_RESERVE_BYTES` (two fee-side FCMP++ proofs +
+    // hybrid PQC auths + 16-vout worst case + Bp+ clawback) plus a small
+    // vin allowance for the single claim row. The bond's 32 KiB ceiling is
+    // too small here — a claim carries TWO input proofs where the bond
+    // carries one (live run 4's daemon-side `FeeTooLow`); overpaying is a
+    // miner transfer, never a conservation term.
+    use super::emission_claim::EMISSION_NON_CLAIMS_RESERVE_BYTES;
     refresh(&fixture.arc).await;
     let claim_fee = {
         let estimates = fixture
@@ -2242,7 +2251,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
             .expect("daemon fee estimates");
         estimates
             .economy
-            .calculate_fee_from_weight(BOND_SIZE_CEILING_BYTES)
+            .calculate_fee_from_weight(EMISSION_NON_CLAIMS_RESERVE_BYTES + 2048)
     };
     let claim_rpc = LocalNodeRpc::new(
         format!("http://127.0.0.1:{}", daemon.rpc_port),
