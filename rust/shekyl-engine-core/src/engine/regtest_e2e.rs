@@ -58,6 +58,19 @@ fn serial_lock() -> Arc<Mutex<()>> {
 
 /// A live `shekyld --regtest` daemon spawned for one test, with an ephemeral
 /// data dir and RPC port. Killed and cleaned on drop.
+/// Last 15 lines of the daemon's captured log, inlined into panics:
+/// `RegtestDaemon::drop` removes the datadir (log included) as a panic
+/// unwinds, so a "see the log file" pointer would name a deleted file.
+fn log_tail(log_path: &std::path::Path) -> String {
+    std::fs::read_to_string(log_path)
+        .map(|s| {
+            let lines: Vec<&str> = s.lines().collect();
+            let start = lines.len().saturating_sub(15);
+            lines[start..].join("\n")
+        })
+        .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"))
+}
+
 pub(super) struct RegtestDaemon {
     child: Child,
     data_dir: PathBuf,
@@ -119,7 +132,8 @@ impl RegtestDaemon {
 
     /// Spawn the daemon with an optional `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
     /// override on the child's environment (the fakechain-only regtest
-    /// lever the daemon arms at startup, `blockchain.cpp:619`). The emission
+    /// lever the daemon arms at startup — the SEB gate at the top of
+    /// `Blockchain::init`, before the genesis add). The emission
     /// e2e passes `Some(seb)` so epoch closes land in minutes; the wallet
     /// process arms the same value in-process (it does its own epoch
     /// arithmetic when it assembles a claim, and gates on the lever —
@@ -161,10 +175,18 @@ impl RegtestDaemon {
         .stderr(Stdio::from(log))
         .stdin(Stdio::null());
         // The SEB lever rides the child env (the daemon reads it at startup,
-        // arms on fakechain, refuses loudly on a bad value). Absent ⇒ the
-        // daemon never reads it and runs the genesis schedule.
-        if let Some(seb) = seb {
-            cmd.env("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", seb.to_string());
+        // arms on fakechain, refuses loudly on a bad value). `None` must
+        // scrub the variable, not merely skip setting it: the child inherits
+        // this process's environment, so a lever leaked from the developer's
+        // or CI's shell would silently reschedule a test that intends the
+        // genesis pin.
+        match seb {
+            Some(seb) => {
+                cmd.env("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", seb.to_string());
+            }
+            None => {
+                cmd.env_remove("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
+            }
         }
         let child = cmd
             .spawn()
@@ -202,21 +224,7 @@ impl RegtestDaemon {
             // would only delay an unhelpful timeout. Point at the captured log so
             // the real cause is one `cat` away.
             if let Ok(Some(status)) = self.child.try_wait() {
-                // Inline the log tail: Drop removes the datadir (log
-                // included) as this panic unwinds, so "see the log file"
-                // would point at nothing.
-                let tail: String = std::fs::read_to_string(&log_path)
-                    .map(|s| {
-                        s.lines()
-                            .rev()
-                            .take(15)
-                            .collect::<Vec<_>>()
-                            .into_iter()
-                            .rev()
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-                    .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"));
+                let tail = log_tail(&log_path);
                 panic!("daemon exited early ({status}) before RPC became ready; log tail:\n{tail}");
             }
             match self
@@ -229,10 +237,10 @@ impl RegtestDaemon {
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
+        let tail = log_tail(&log_path);
         panic!(
-            "daemon RPC never became ready (port {}) after 60s: {last_err}; see {}",
+            "daemon RPC never became ready (port {}) after 60s: {last_err}; log tail:\n{tail}",
             self.rpc_port,
-            log_path.display()
         );
     }
 
