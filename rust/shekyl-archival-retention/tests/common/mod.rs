@@ -3,10 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Shared fixture decoders for the epoch-close KATs (`reward_gate_kat`,
-//! `consensus_state_kat`). The JSON → `EpochClose*` shape lives in one place so
-//! a fixture-schema change
-//! edits one decoder, not two that could silently drift apart.
+//! Shared fixture decoders for the epoch-close KATs (`consensus_state_kat`;
+//! `reward_gate_kat` was deleted with the M1 gate's retirement,
+//! `ARCHIVAL_REWARD_GATE_M1.md` §13). The JSON → `EpochClose*` shape lives in
+//! one place so a fixture-schema change edits one decoder, not several that
+//! could silently drift apart.
 //!
 //! These are computational-replay fixtures, not byte-pinned crypto vectors, so
 //! centralizing the decode carries none of the `30-cryptography.mdc`
