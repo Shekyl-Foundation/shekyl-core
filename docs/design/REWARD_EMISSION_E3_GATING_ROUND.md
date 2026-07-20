@@ -312,9 +312,14 @@ implementation, in dependency order:
    sentinel). **Finding — the snapshot carries the *persisted* `Σwork(E)`,
    never a recompute:** `bad_intervals` grow after E's close (an E-slash
    applies `[E, ∞)` post-close), so a live re-derivation of the denominator
-   at verify time could diverge from the close's; and the M1 `K_COVER`
-   gate's operand (`frozen_shard_count` as-of-close) is close-only, so the
-   gate's outcome reaches verify only through the stored value. Per-P work
+   at verify time could diverge from the close's. *(A second reason was
+   given when this was written — that the M1 `K_COVER` gate's operand,
+   `frozen_shard_count` as-of-close, is close-only, so the gate's outcome
+   reached verify only through the stored value. The gate was retired
+   2026-07-19, PR #346; that leg is void. The `bad_intervals` reason
+   stands alone and is sufficient, so the finding is unchanged. Note the
+   same close-only property still holds for `shard_age_milli`'s
+   `freeze_height` operand, which is marshaled by value below.)* Per-P work
    recomputes from the frozen credit rows; a claimant slashed after close
    under-mints itself (policy-acceptable direction), never over-mints
    another. Marshaled by value, each field from the

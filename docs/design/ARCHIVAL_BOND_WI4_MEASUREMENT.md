@@ -30,9 +30,16 @@
 >   gate:** an unfrozen segment scores zero `shard_age_milli`, so a shard
 >   that is hot at genesis contributes no work by the work math
 >   (`consensus_state.rs` `shard_age_milli`; `bond_duration.rs` — "adding
->   an unfrozen shard earns nothing — self-harm, not an attack"). §16's
->   "earns nothing by construction" conclusion therefore survives on a
->   structural, individually-caused mechanism.
+>   an unfrozen shard earns nothing — self-harm, not an attack").
+> - **But §16's "earns nothing by construction" conclusion survives only
+>   PARTIALLY** — see the partial-voiding note at the §16 conversion.
+>   The structural property covers the genesis window (no segment frozen
+>   yet); it does **not** cover the thin-but-nonzero window, which the
+>   gate did cover and which is what §13.2's `r = 3.54` result measured.
+>   Once the first segment freezes, a bond serving it earns however thin
+>   the cover. The §16 "verified synergy" with the claim-cohort hazard is
+>   voided the same way. **The residual thin-window exposure is an OPEN
+>   DESIGN QUESTION, not something this retirement resolved.**
 >
 > Two dispositions this retirement leaves genuinely open are tracked as
 > design questions, not as `K_COVER` work: whether the wallet thin-cover
@@ -1834,6 +1841,31 @@ thin window earns nothing *by construction*. Posting stays legal
 becomes the mechanical sorter, and it is non-partitioning: a uniform
 function of chain state, applied identically to every bond, marking none.
 
+> **⚠️ PARTIALLY VOIDED by the `K_COVER` retirement (2026-07-19, PR #346).
+> Do not cite this conversion as still holding in full.** The mechanical
+> sorter described above no longer exists, and the surviving structural
+> property covers a *strictly shorter* window:
+>
+> - **Genesis window — still covered.** With zero frozen segments,
+>   `shard_age_milli` is zero for every shard, so every contribution and
+>   hence every reward is zero. A bond posted before the first freeze
+>   earns nothing by construction, exactly as claimed.
+> - **Thin-but-nonzero window — NO LONGER covered.** Once the first
+>   segment freezes, a bond serving it earns, however thin the cover.
+>   The gate suppressed earning until `K_COVER` segments had frozen;
+>   the shard-age math suppresses it only until the *first* one has.
+>   The interval between those two points was non-earning under the
+>   gate and is earning now.
+>
+> So §16's "incentive facts are game-able, therefore convert to
+> structure" reasoning retains its force for genesis and loses it for
+> the thin window — which is the interval §13.2's `r = 3.54` cold-start
+> result actually measured. Whether that residual exposure is now
+> carried by the wallet thin-market entry disclosure alone, or needs a
+> different structural answer, is an **open design question** and is
+> deliberately NOT resolved by this note. It must not be closed by
+> assuming the sorter still runs.
+
 **Substrate, verified at source (2026-07-06).** Shards are frozen chain
 segments — `archival_shard_segment.freeze_height`, age =
 `close_height − freeze_height` (`ARCHIVAL_REWARD_ARITHMETIC.md` §Shard
@@ -1856,13 +1888,26 @@ for deferred reward and the thin window repopulates with exactly the
 personas the posture refuses. The invariant to carry into the spec:
 **no consensus quantity may accrue from pre-`K_COVER` epochs**, and the
 no-first-mover-advantage property (gate opening confers no seniority)
-is checked at spec time, not assumed.
+is checked at spec time, not assumed. *(VOIDED 2026-07-19, PR #346 —
+there are no pre-`K_COVER` epochs. The surviving invariant is narrower:
+no consensus quantity accrues from an epoch in which no segment has
+frozen, because every shard scores zero `shard_age_milli`. There is no
+gate opening, so the no-first-mover-advantage check has no gate to
+check; seniority is instead conferred continuously by shard age, which
+is the `g(age)/r_market` pioneer premium and is intended.)*
 
-**Verified synergy.** The cold-start claim-cohort hazard
+**Verified synergy — ⚠️ ALSO PARTIALLY VOIDED (2026-07-19, PR #346).**
+The cold-start claim-cohort hazard
 (`docs/FOLLOWUPS.md`: at launch a claim's `tier × creation_height`
-cohort approaches one) is refused by the same rule in the same window —
+cohort approaches one) was refused by the same rule in the same window —
 zero accrual ⇒ zero claims exist during the thin window, so the
-smallest-cohort regime of that separate leak is never entered either.
+smallest-cohort regime of that separate leak was never entered either.
+*With the gate retired this synergy holds only until the first segment
+freezes, not until `K_COVER` do. Once accrual begins, claims can exist
+while cover is still thin, so the smallest-cohort regime of that
+separate leak IS reachable. This is a second exposure the retirement
+re-opens, and it is part of the same open design question flagged at
+the §16 conversion above — it must not be treated as still foreclosed.*
 
 **Named residuals and shape notes.**
 - *Dead-rule note (rule 15 shape):* `shard_count` monotone ⇒ the gate is

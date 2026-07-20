@@ -4924,9 +4924,20 @@ sustainability is unaffected by the recalibration.
   or not), and genesis identity enumeration is consulted **only** for
   full-tree `durability_count` credit — the market gate never reads
   identity. The genesis "nobody earns" window is already handled
-  correctly by `K_COVER` (sealed ≥ 1 zeroes every persona's market
-  until `K_COVER` shards freeze), so CompleteTree-holding need not be
-  an earning posture to bridge it. The fix therefore stays exactly
+  correctly by the shard-age math — an unfrozen segment scores zero
+  `shard_age_milli`, and at genesis every shard is hot, so every
+  contribution is zero and nobody earns regardless of holdings shape
+  (`consensus_state.rs` `shard_age_milli`; `bond_duration.rs`: "adding
+  an unfrozen shard earns nothing — self-harm, not an attack") — so
+  CompleteTree-holding need not be an earning posture to bridge it.
+  *(Amended 2026-07-20: this ruling originally cited `K_COVER` as what
+  bridged the window — "sealed ≥ 1 zeroes every persona's market until
+  `K_COVER` shards freeze". That gate was retired the next day, PR #346,
+  so the cited mechanism no longer exists. The CONCLUSION is unaffected,
+  and the replacement bridge is structural and individually-caused
+  rather than collective — the retirement ruling's own principle.
+  Verified at source before substituting: the bridge was never actually
+  the gate.)* The fix therefore stays exactly
   this item: `first_stake` must post `ShardSetCompact` of what the
   node serves (the current CompleteTree hardcode wrongly declares the
   floor posture for every wallet participant), and the genesis
@@ -9053,7 +9064,11 @@ one place to confirm each item's relationship to the wallet stack.
   structure, never identity — an observable founder marker *is* the partition that destroys
   cover). Seven items, M1 first: **M1 reward-eligibility-by-shard-count is a genesis-frozen
   CONSENSUS rule** — no reward accrues to any `(P,s,E)` for epochs with
-  `shard_count < K_COVER`; substrate verified at source (shards are frozen chain segments,
+  `shard_count < K_COVER` *(RETIRED 2026-07-19, PR #346; the surviving structural
+  property is narrower — no accrual while NO segment has frozen, rather than while
+  fewer than `K_COVER` have. See WI-4 §16's partial-voiding note: the thin-but-nonzero
+  window is now an earning window, and the residual exposure is an open design
+  question)*; substrate verified at source (shards are frozen chain segments,
   `shard_count` a deterministic monotone function of height ⇒ non-manipulable,
   non-stallable; cumulative-bond-count rejected as sybil-inflatable); sharp pin: **zero
   accrual, not deferred payout** (defer-payout preserves the early-staking yield and

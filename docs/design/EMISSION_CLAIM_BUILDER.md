@@ -4,8 +4,11 @@
 ratified and §8 endorsed, with two record-sharpenings applied at
 ratification: the §7.1 single-gather pin is recorded as CB-1(b) itself
 (one invariant, two faces — wallet doesn't re-derive, RPC doesn't
-re-gather), and the §7.3 `k_cover`/`frozen_shard_count` exclusion is
-recorded as CB-5-structural, not payload-minimization. The one open
+re-gather), and the §7.3 `frozen_shard_count` exclusion (formerly
+`k_cover`/`frozen_shard_count`) is recorded as CB-5-structural, not
+payload-minimization — re-anchored 2026-07-20 after the `K_COVER`
+retirement, and still armed: `frozen_shard_count` now separates a live
+zero-cause on its own. The one open
 verification (the §2 low-boundary anchor) resolved clean-for-a-structural-reason:
 the low end anchors to `epoch_is_claim_expired`, which is single-sourced
 through `claim_window_floor` (§7.2 bottom-boundary record), and the
@@ -123,7 +126,11 @@ names the landed function it must reuse:
    trace above, and corrected in place in the module doc. For each in-range `E` not
    already in the bond record's claimed set: recompute the share via
    `as_of_e_served_work` → `capped_work_milli` → `reward_share_floor`;
-   claimable ⇔ share `> 0`. No `K_COVER` consultation (the vin never
+   claimable ⇔ share `> 0`. No gate consultation of any kind — the
+   predicate reads the recomputed share's sign and no cause operand
+   (as written: "no `K_COVER` consultation"; that gate was retired
+   2026-07-19, PR #346, so the condition is now trivially met and the
+   predicate is unchanged) (the vin never
    consults it — M1 wire-positivity resiting), no row-absence proxies.
    Batch up to `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15`, strictly
    increasing.
@@ -419,18 +426,29 @@ from `InsufficientFunding` for fees), `WindowExpired` (per epoch),
 computable ex ante but the share recompute doesn't distinguish the causes
 (M1: the vin never consults `K_COVER`), and the builder must not either.
 
-**Disposition: RATIFIED (2026-07-09), verified at source.** The named-error
-set exists (`EpochAlreadyClaimed` at `emission_verify.rs:107,416`; the rest
-per §3), and the load-bearing property — the cause-blind zero-share — is
-structural: `K_COVER` is compared at **exactly one site**,
-`epoch_close_compute` (`k_cover.rs:11`, `consensus_state.rs:470`, "the
-**only** `K_COVER` comparison site"). The vin/claim path never consults
-`K_COVER`, so a zero-reward epoch is indistinguishable at the claim layer
-from any other zero — the wallet cannot tell "zero because pre-`K_COVER`
-gate" from "zero because no serve credit," and *neither can an observer of
-the refusal*. If the claim path branched on `K_COVER`, the refusal would
-leak whether the epoch was gated — a launch-window observable. The
-single-comparison-site pin makes the cause-blindness structural (the same
+**Disposition: RATIFIED (2026-07-09), verified at source. Strengthened by
+the `K_COVER` retirement (2026-07-19, PR #346) — see the amendment below.**
+The named-error set exists (`EpochAlreadyClaimed` at
+`emission_verify.rs:107,416`; the rest per §3), and the load-bearing
+property — the cause-blind zero-share — is structural.
+
+*Amendment (2026-07-20).* As ratified, this disposition rested on
+`K_COVER` being compared at exactly one site, `epoch_close_compute`
+(`k_cover.rs:11`, `consensus_state.rs:470`, "the **only** `K_COVER`
+comparison site"): the vin/claim path never consulted it, so the wallet
+could not tell "zero because pre-`K_COVER` gate" from "zero because no
+serve credit," and neither could an observer of the refusal. Branching on
+`K_COVER` would have leaked whether the epoch was gated — a launch-window
+observable. **Both cited source locations are now dead**, and there is no
+gatedness left to leak. The requirement does **not** become vacuous,
+because gatedness was never the only cause of a zero share: the builder
+must still not distinguish "zero because no serve credit" from "zero
+because the shards were unfrozen and scored no age" from "zero because
+membership had not onset". Cause-blindness across the *surviving* zero
+causes is what CB-5 now requires, and it holds for the same structural
+reason — the claim path recomputes a share and reads its sign, consulting
+no cause operand at all. That is a stronger position than the ratified
+one, which depended on a single comparison site staying single (the same
 one-evaluator discipline as CB-1's `capped_work_milli`). **Builder-PR pin:**
 `SelfCheckFailed` (step-7 self-check) must **also** refuse cause-blind — it
 must not emit *which* operand the assembled vin failed verify on in any
@@ -677,7 +695,7 @@ field the landed struct lacks and drops none):
 | Excluded | Why |
 | --- | --- |
 | `settlement_epoch_blocks`, `age_weight_milli`, `curve` (`BandedCurveParams`) | Consensus constants, already single-sourced in the shared constants pipeline (`archival_ffi.rs:820-822` builds them crate-locally). Carrying them over RPC would mint a second source that can drift from the wallet's compiled constants — the wallet must construct `EpochCloseInputs` from its own pipeline, byte-identical to the verify shim's construction |
-| `frozen_shard_count`, `k_cover` | **CB-5-structural, not payload-minimization** (re-recorded per round-2 ratification). A wallet holding `k_cover` + `frozen_shard_count` can trivially reconstruct the gate decision no matter what the refusal taxonomy says — sending these fields would make **representable** the cause-distinguishing wallet branch that CB-5 makes **unrepresentable** (the vin never consults `K_COVER`; the single comparison site is `epoch_close_compute`; the gate's outcome reaches the claim path only through the stored `sigma_work_milli`). This exclusion is therefore load-bearing for CB-5's cause-blindness: a future "include `shard_count` for diagnostics" PR reopens the cause-distinguishing branch and **trips this pin** — it is a CB-5 reopen, not a payload question |
+| `frozen_shard_count` (and formerly `k_cover`) | **CB-5-structural, not payload-minimization** (re-recorded per round-2 ratification; re-anchored 2026-07-20 after the `K_COVER` retirement, PR #346). **The exclusion stands and its justification is now more direct.** As written, the argument was that a wallet holding `k_cover` + `frozen_shard_count` could reconstruct the gate decision; `k_cover` no longer exists, but `frozen_shard_count` does, and it now distinguishes a *live* zero-cause on its own. Under the amended CB-5 the builder must not distinguish "zero because no serve credit" from "zero because the shards were unfrozen and scored no `shard_age_milli`" — and `frozen_shard_count` is precisely the operand that separates them. Sending it would make **representable** the cause-distinguishing wallet branch that CB-5 makes **unrepresentable**. The pin therefore remains armed and can still fire correctly: a future "include `shard_count` for diagnostics" PR reopens the cause-distinguishing branch and **trips this pin** — it is a CB-5 reopen, not a payload question |
 | per-epoch holdings descriptor | WS-1 §5: the work channel carries no holdings; the held-and-served set is the credit rows. The vin's holdings field comes from the bond record (part A), the only place verify reads it |
 | tree root / membership path for the backing output | Not this RPC's concern: sourced through the existing spend-path machinery (`curve_tree_decode.rs` / `signing_assembly.rs` family), same as every FCMP++ spend the wallet builds |
 
