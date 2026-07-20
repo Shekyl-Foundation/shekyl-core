@@ -13,7 +13,11 @@
   the FFI/C++ operand pass (`shekyl_archival_epoch_close_compute` loses a
   parameter; the segment-freeze O(1) frozen-count substrate stays — it is
   freeze bookkeeping with future consumers), the G-row gate KATs + fixture,
-  and the predicate-sites CI tripwire (consensus-invariants renumbered).
+  and the predicate-sites tripwire's gate invariant — its five
+  segment-freeze substrate invariants survive as
+  `check_segment_freeze_sites.sh`, still wired as consensus-invariants
+  \[5/5\] (cursor accounting, boundary operator, writer/division/
+  counter-mutation one-site).
   **Deliberately retained as reference**: `shekyl-staking-sim` (the
   partition-adversary and GF-7 instruments), every sim finding and
   measurement record in the design docs, and the M1 spec itself — the

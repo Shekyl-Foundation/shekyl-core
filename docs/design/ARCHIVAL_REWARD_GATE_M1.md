@@ -1707,9 +1707,13 @@ sites, the FFI/C++ count-pass (`shekyl_ffi.h` / `archival_ffi.rs` /
 `db_lmdb.cpp` `count_frozen_shards_at_close` operand plumb),
 `reward_gate_kat.rs` + `reward_gate_kat_v1.json` (G-rows; fixture
 retained in git history), the `check_reward_gate_predicate_sites.sh`
-tripwire + its CI wiring, sim references
-(`gf7_sealing_run.rs` / `staking-sim`), and the
-`RELEASE_CHECKLIST.md` stressnet-entry seal item. `consensus-kat`
+tripwire's **gate-predicate invariant** (the script's five substrate
+invariants — cursor accounting, boundary operator, writer/division/
+counter-mutation one-site — survive as
+`check_segment_freeze_sites.sh`, still CI-wired: they guard the
+segment-freeze substrate, not the gate), and the
+`RELEASE_CHECKLIST.md` stressnet-entry seal item. Sim references
+(`gf7_sealing_run.rs` / `staking-sim`) are retained as reference. `consensus-kat`
 survives (other consumers). The §14.4 partition-run records, the G-KAT
 fixtures' history, and this spec remain in the tree/history — the
 record is the point.
