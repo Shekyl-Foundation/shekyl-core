@@ -157,11 +157,12 @@ genesis allocation:
   participate in the same emission, staking, and fee mechanisms as all other
   participants. There is no ongoing preferential treatment.
 
-- **Lock commitments.** Founding allocations are subject to the same staking
-  lock tiers available to all participants. Founders are expected to
-  demonstrate conviction through the long lock tier (150,000 blocks, ~208
-  days) for the majority of their genesis allocation, making the commitment
-  public and verifiable on-chain.
+- **Bond commitments.** Founding allocations participate in the same
+  archival staking market as everyone else, on the same terms — on-chain
+  bonds backing archival service, with no preferential treatment. Founders
+  are expected to demonstrate conviction by bonding the majority of their
+  genesis allocation into archival staking, making the commitment public and
+  verifiable on-chain.
 
 - **Transparency over time.** The founding team commits to publishing their
   genesis addresses publicly so that any participant can verify lock status,

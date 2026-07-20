@@ -1,6 +1,22 @@
 # Shekyl Design Concepts
 
-> **Last updated:** 2026-05-28
+> **Last updated:** 2026-07-19
+
+> **Staking-model correction (2026-07-19).** Earlier revisions of this document
+> described a **passive lock-tier PoS** staking model ("lock SHEKYL for a duration
+> tier, earn by `staked_amount × duration_multiplier`") that was **retired before
+> genesis** with the confidential-staking sweep
+> (`docs/design/LEGACY_CLAIM_ERA_RETIREMENT.md`;
+> `rust/shekyl-economics/src/lib.rs`). Genesis staking is **archival
+> pay-for-service**: stakers post on-chain bonds, join the archival market, and
+> earn reward emission recomputed from **public serve-work** — there is no
+> duration tier, no `staked_amount × duration_multiplier` weighting, and no
+> claim/unstake wire. Component 3 and the participant lifecycle below have been
+> rewritten to the live model. The canonical archival specs are
+> [`docs/V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) (mechanism) and
+> [`docs/design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)
+> (consensus reward leg). Components 1, 2, and 4 (release multiplier, adaptive
+> burn + staker fee pool, decaying staker emission share) are unchanged and live.
 
 ## CALIBRATION gate (pre-genesis)
 
@@ -103,7 +119,13 @@ Given the mismatch above, the original chain effectively entered minimum-subsidy
 
 For Shekyl NG, constants are generated from `config/economics_params.json` and included via generated headers referenced by `src/cryptonote_config.h`.
 
-Staking tier lock durations, yield multipliers, and `shekyl_stake_max_claim_range` are read from the same JSON by `rust/shekyl-staking/build.rs` into generated Rust constants (`TIERS`, `MAX_CLAIM_RANGE`), keeping wallet and node FFI (`shekyl_stake_*`) aligned with the economics file.
+Archival economic parameters (staker emission share and its yearly decay, staker
+fee-pool share, and the archival reward-budget curve inputs) are read from the same
+JSON so wallet and node stay aligned with the economics file. The retired lock-tier
+constants (`TIERS`, `MAX_CLAIM_RANGE`, `shekyl_stake_max_claim_range`) belong to the
+superseded claim-era staking model and are being removed
+(`docs/design/LEGACY_CLAIM_ERA_RETIREMENT.md`); genesis staking is archival bonds,
+which carry no duration tier.
 
 ### Technical limit with `uint64_t`
 
@@ -228,93 +250,124 @@ miner_fee_income = total_fees - burned_amount
 
 The burn automatically transitions the economy from inflationary growth (gentle early burns) to deflationary maturity (aggressive late burns) without any governance intervention.
 
-### Component 3: Implicit Staker Governance
+### Component 3: Archival Staking (Pay-for-Service) and Implicit Governance
 
-Staking is the sole governance action. There are no votes, proposals, or governance forums. The protocol reads aggregate staking behavior as a confidence signal and adjusts the burn rate algorithmically.
+Staking is **pay-for-service archival**, and it is also the sole governance
+action. A staker posts an on-chain bond, joins the archival market, and serves
+chain data the network needs for FCMP++ proof construction; in return the staker
+earns reward emission. There are no votes, proposals, or governance forums — the
+protocol reads aggregate staking participation as a confidence signal and adjusts
+the burn rate algorithmically. Staking is **not** a passive lock: there is no
+duration tier, no `staked_amount × duration_multiplier` weighting, and no
+claim/unstake transaction. The mechanism is specified in
+[`docs/V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) (design home) and
+[`docs/design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) (consensus
+reward leg).
 
-#### Mechanism
+#### Why archival is the "useful work"
+
+FCMP++ transaction construction needs the curve-tree state at historical heights,
+which requires long-term archival of chain data. Rather than leaving this to
+foundation-operated archival nodes (a centralization concern), Shekyl pays stakers
+to perform distributed archival. Miners optimize for the current block; transactors
+are transient; **stakers are the only actor class with a long-horizon economic stake
+in the chain's health**, which is exactly what archival demands. Consensus-securing
+work (capital at risk) and useful work (archival service) are decoupled and paid
+from related-but-distinct reward streams.
+
+#### Governance signal
 
 ```
 stake_ratio = total_staked / circulating_supply
 ```
 
-This ratio feeds directly into the burn formula via the `(1 + stake_ratio)` term. Higher aggregate staking → higher burn rate → stronger deflationary pressure → value preservation for holders.
+This ratio feeds directly into the burn formula via the `(1 + stake_ratio)` term.
+Higher aggregate archival participation → higher burn rate → stronger deflationary
+pressure → value preservation for holders. "Staking behavior implicitly governs
+the deflationary parameters" remains true; the underlying action is now archival
+market participation rather than a duration lock.
 
 #### Staking mechanics
 
-- **Action:** Lock SHEKYL for a chosen duration tier.
-- **Unlocking:** Coins become available after the lock period expires. Early withdrawal is not permitted (the lock is enforced at the protocol level).
-- **Compensation:** Stakers earn from two sources: (1) a share of the fee burn pool, and (2) a decaying share of block emission (see Component 4). Both are proportional to stake size and lock duration.
+- **Admission:** An ordinary transfer moves principal to a firewalled pseudonym
+  `P`; joining the market posts an on-chain bond record (`txin_archival_bond_post`)
+  with the staker's holdings and bond posture. There is **no consensus minimum and
+  no separate stake-output type** — admission is transfer-shaped.
+- **Service:** The staker archives assigned chain data and answers retention
+  challenges under `P`. Bonded reputation plus retention proofs establish that the
+  service was actually performed.
+- **Liquidity:** Funds at `P` may be spent freely between settlement epochs — the
+  bond, not a protocol lock, is the honesty anchor. A misbehaving staker is
+  slashable against the bond (gate 4). There is no unstake lock to wait out.
+- **Compensation:** Two streams — (1) a share of the fee burn pool (Component 2),
+  and (2) a decaying share of block emission (Component 4) — flow into a staker
+  reward pool distributed by **verified serve-work** (below).
 
-#### Duration tiers
+#### Staker reward distribution (loud, recomputed from public work)
 
-| Tier | Lock period | Yield multiplier | Identity |
-|---|---|---|---|
-| Short | ~1,000 blocks (~33 hours) | 1.0x | Casual commitment |
-| Medium | ~25,000 blocks (~35 days) | 1.5x | Meaningful commitment |
-| Long | ~150,000 blocks (~208 days) | 2.0x | Deep conviction |
+Reward emission is **loud**: the emission transaction carries **public** work and
+**public** mint amounts, and every verifier **recomputes** the payout from
+consensus archival state plus the reward budget. The prover does not author a
+confidential entitlement. Double-claim prevention is per-bond
+claimed-settlement-epoch state, not a spend-tree nullifier or stake-keyed tag.
 
-#### Staker reward distribution
-
-Each block, staker income comes from two sources combined into a single reward pool:
+The pool is divided by **capped** serve-work (the anti-concentration "form C"
+servo), not by stake size or lock duration:
 
 ```
-// Fee-based income (Component 2)
-fee_staker_pool = burned_amount * STAKER_POOL_SHARE
+// Combined reward budget for the settlement epoch
+budget = fee_staker_pool (Component 2) + emission_staker_pool (Component 4)
 
-// Emission-based income (Component 4)
-emission_staker_pool = block_emission * STAKER_EMISSION_SHARE * STAKER_EMISSION_DECAY^year
-
-// Combined pool distributed by weight
-total_staker_pool = fee_staker_pool + emission_staker_pool
-staker_weight = staked_amount * duration_multiplier
-staker_reward = total_staker_pool * (staker_weight / total_weighted_stake)
+// Each staker's work is capped by an anti-whale curve before division,
+// so a single large actor's marginal work redistributes via the rate.
+capped[a]  = Curve(work_a)          // plateau-capped serve-work
+price      = budget / Σ_a capped[a]
+reward_a   = price * capped[a]      // = budget · capped_a / Σ capped
 ```
 
-#### No minimum stake
+Capping at the budget layer is deliberately anti-concentration: it widens the
+reward spread across many small servers rather than paying a whale linearly for
+raw volume. See `REWARD_EMISSION_LEG.md` §4 (form C) and `STAKER_ARCHIVAL_SIM.md`
+for the calibration.
 
-Any amount can be staked. The yield on 1 SHEKYL will be negligible, but participation should have no gate. The gesture of staking matters as much as the amount.
+#### No consensus minimum
 
-#### Implementation reference
+There is no minimum bond enforced at consensus. The yield for a tiny archival
+footprint will be negligible, but participation has no protocol gate — the market,
+not a threshold, decides viability.
 
-Staking is implemented end-to-end. See `docs/STAKER_REWARD_DISBURSEMENT.md` for
-the full technical specification including transaction types (`txout_to_staked_key`,
-`txin_stake_claim`), on-chain LMDB storage schema, consensus validation rules,
-wallet commands, and RPC endpoints.
+#### Reward reception and privacy
 
-#### Multisig staking (operational security)
+A staker's reward is received as an ordinary transfer back to their principal
+address; the emission *amounts* are public (loud), but the link between the
+archival pseudonym `P` and the principal is protected by the gate-6 firewall
+(HKDF-derived `P`, announce-before-anchor, multi-`P` hygiene). Once a reward output
+matures into the curve tree, spending it is indistinguishable from spending any
+other output.
 
-Long-duration staked positions (especially the 150,000-block tier at ~208 days)
-represent significant value locked under a single key for months. Multisig
-authorization (`scheme_id = 2`) is the recommended configuration for staked
-outputs with meaningful value. A 2-of-3 multisig ensures that no single
-compromised key can claim accumulated rewards or control the output at unlock.
+#### Multisig for bonded value (operational security)
 
-Multisig staked outputs and claim transactions use the same `pqc_auth`
-framework as regular transactions, with the extended signature-list format.
-See `docs/PQC_MULTISIG.md` for the full specification.
-
-#### Claim reward output indistinguishability
-
-Claim reward outputs MUST be regular `txout_to_tagged_key` outputs with
-confidential amounts (Bulletproofs+ range proofs), standard KEM derivation
-for per-output PQC keys, and a dummy change output to match the 2-output
-structure of regular transactions. Once a reward output matures into the
-curve tree, spending it must be indistinguishable from spending any other
-output. The claim *action* (`txin_stake_claim`) is visible, but the
-resulting reward output must blend into the anonymity set. See
-`docs/FCMP_PLUS_PLUS.md` § 15 for the full specification.
+Long-lived bonded positions represent meaningful value held under a single key
+over long horizons. Multisig authorization (`scheme_id = 2`) is the recommended
+configuration for archival positions with significant value: a 2-of-3 multisig
+ensures no single compromised key can control the bonded output or its rewards.
+Multisig outputs use the same `pqc_auth` framework as regular transactions with
+the extended signature-list format. See `docs/PQC_MULTISIG.md`.
 
 #### Self-balancing dynamics
 
-- If too many people stake: yields per staker decrease (same pool, more participants). Some unstake, restoring equilibrium.
-- If too few people stake: yields per staker increase, attracting more participants.
-- High stake ratio pushes burn rate higher, increasing deflationary pressure — rewarding staker conviction.
-- Low stake ratio reduces burn, preserving miner fee income during downturns — protecting chain security when it's most vulnerable.
+- If too many stakers join: reward per staker falls (fixed epoch budget divided
+  across more capped-work), and marginal servers exit — restoring equilibrium.
+- If too few stakers serve: reward per staker rises, attracting participants and
+  restoring archival coverage.
+- High stake ratio pushes the burn rate higher, increasing deflationary pressure —
+  rewarding participation.
+- Low stake ratio reduces burn, preserving miner fee income during downturns —
+  protecting chain security when it is most vulnerable.
 
 ### Component 4: Staker Emission Share (Bootstrap Subsidy)
 
-Fee-based staker yields are structurally insufficient during the early chain when transaction volume is low. To bootstrap meaningful staker participation, a decaying fraction of block emission is redirected from miners to the staker reward pool.
+Fee-based staker yields are structurally insufficient during the early chain when transaction volume is low. To bootstrap meaningful staker participation, a decaying fraction of block emission is redirected from miners to the staker reward pool. (The pool is then divided among stakers by verified serve-work per Component 3, not by stake size or lock duration.)
 
 #### The problem
 
@@ -367,18 +420,18 @@ The economic system creates a natural progression for participants:
 
 ### Phase 2: Transition
 
-- Mining hardware ages or participant wants to move to other projects.
-- Accumulated holdings are moved from liquid to staked.
+- Mining hardware ages or the participant wants to move to other projects.
+- Accumulated holdings back an archival bond, and the participant stands up an archival node.
 - Staking yields become increasingly competitive as the chain matures and the burn pool grows.
 
-### Phase 3: Keeper (Staker)
+### Phase 3: Keeper (Staker / Archival Server)
 
-- Coins are locked, earning yield from two sources: emission share (dominant early) and fee burn pool (dominant late).
+- The staker posts a bond, serves chain data under a firewalled pseudonym, and earns yield from two sources: emission share (dominant early) and fee burn pool (dominant late).
 - The emission share provides attractive yields from day one, rewarding early believers.
 - As the chain matures, yield composition shifts from emission-funded to fee-funded — no action required.
-- Lock duration reflects conviction depth: longer locks earn higher yield.
+- Yield scales with **verified serve-work** (anti-whale capped), not with a duration lock; more useful archival service earns more, up to the concentration cap.
 - The act of staking implicitly governs the burn rate — no active decision-making required.
-- Occasionally unlocking yield to spend feeds the very system that generates the yield.
+- Principal at the pseudonym stays liquid between settlement epochs; the bond, not a lock, keeps the staker honest. Spending rewards feeds the very system that generates the yield.
 
 ### Value flow between participants
 
@@ -391,8 +444,8 @@ Transactors pay fees
     → Burn split: destroyed (deflation) + staker fee pool (yield)
 
 Combined staker income (emission share + fee pool)
-  → Stakers lock supply (scarcity)
-    → Scarcity supports value
+  → Stakers bond holdings and archive the chain (useful work + scarcity)
+    → Distributed archival + scarcity support value
       → Value makes mining worthwhile
         → Mining secures transactions
           → Security attracts transactors
@@ -428,9 +481,10 @@ Under this design, stuffing (creating fake transactions to inflate the volume me
 
 A large pool that also accumulates a staking position could attempt to extract maximum value from both roles. Mitigations:
 
-- Lock duration requirements reduce miner liquidity (miners need liquid funds for operational costs).
+- Archival rewards are paid for **verified serve-work capped by an anti-concentration curve** (Component 3, form C): a whale's marginal work redistributes to smaller servers via the price rather than paying out linearly, so buying a dominant reward share is structurally throttled.
+- Posting a bond and running archival infrastructure is real capital and operational commitment, not a costless side-position; a slashable bond puts that capital at risk against misbehavior.
 - Stake ratio governance is proportional — no outsized influence from single large stakers.
-- The system is transparent: stake concentration is publicly visible and can be monitored as a chain health metric.
+- The system is transparent: stake concentration and archival coverage are publicly visible and monitored as chain health metrics (`gini`/whale gauges in the sim calibration).
 
 ### Empty-chain manipulation
 
@@ -521,7 +575,7 @@ If this design is adopted:
    - Integration tests for rebooted-chain transaction validation and node/wallet interoperability.
    - Simulation tests for stuffing profitability under various hash power distributions.
    - Unit tests for multisig `pqc_auth` (`scheme_id = 2`) serialization, verification, and rejection of malformed inputs.
-   - Integration tests for multisig staking: create multisig staked output, claim rewards with M-of-N authorization, verify lock enforcement.
+   - Integration tests for multisig-backed archival positions: post a bond from a multisig-controlled output, spend/receive rewards with M-of-N authorization, and verify slashing authorization.
    - Size regression tests for multisig transactions across 2-of-3 through 5-of-5 configurations (target `MAX_MULTISIG_PARTICIPANTS = 5`; MSW-1 enforces).
 
 ---
@@ -540,7 +594,7 @@ The economic system should be visible and comprehensible to participants through
 | Burn rate | Current effective burn percentage |
 | Stake ratio gauge | Percentage of circulating supply staked, displayed as a health indicator |
 | Total burned counter | Cumulative SHEKYL destroyed, ticking in real-time |
-| Staker yield | Annualized yield for each lock duration tier, with composition (emission vs fees) |
+| Staker yield | Annualized yield for archival serve-work, with composition (emission vs fees) |
 | Emission share gauge | Current effective staker emission share %, showing decay progress |
 | Emission forecast | "At current pace, Maturity Era begins in ~X years" |
 
@@ -549,7 +603,7 @@ The economic system should be visible and comprehensible to participants through
 | Role | Description | Wallet indicator |
 |---|---|---|
 | Builder (Miner) | Active PoW participant, earning emission rewards | Hash rate contribution, blocks found |
-| Keeper (Staker) | Locked holdings, earning emission share + burn-pool yield | Staked amount, lock tier, yield earned, yield composition |
+| Keeper (Staker) | Bonded holdings serving archival, earning emission share + burn-pool yield | Bonded amount, archival coverage/serve-work, yield earned, yield composition |
 | Trader (Transactor) | Active user of the chain for payments | Transaction history, contribution to chain activity |
 
 Users may hold multiple roles simultaneously. The wallet should reflect all active roles without forcing a single identity.
@@ -571,8 +625,7 @@ The following parameters were tuned via simulation sweeps and are now resolved (
 | `BURN_CAP` | **Resolved: 90%** | High ceiling for mature chain, rarely reached in practice |
 | `tx_baseline` | **Provisional: 50** | Validated by 8-scenario simulation sweep; locked pending testnet confirmation |
 | `FINAL_SUBSIDY_PER_MINUTE` | **Provisional: 300,000,000** | 0.3 SHEKYL/min floor; validated by late-tail simulation; locked pending testnet confirmation |
-| Lock tier durations | **Resolved** | 1,000 / 25,000 / 150,000 blocks |
-| Lock tier multipliers | **Resolved** | 1.0x / 1.5x / 2.0x |
+| Archival reward-budget curve (`g` band, form C) | **Sealed: band `[1.5, 2.5]`, target ≈ 2** | Anti-concentration serve-work servo; see `REWARD_EMISSION_LEG.md` §1.2 / `STAKER_ARCHIVAL_SIM.md` |
 
 ### Simulation scenarios required
 
@@ -580,8 +633,8 @@ The following parameters were tuned via simulation sweeps and are now resolved (
 2. **Boom-bust cycle:** 3x volume for 1 year, then 0.3x for 1 year, repeating.
 3. **Sustained growth:** Volume increasing 20% per year for 20 years.
 4. **Stuffing attack:** 20% hash power miner generating 5x fake volume for 30 days.
-5. **Stake concentration:** Single entity staking 30% of supply.
-6. **Mass unstaking event:** 80% of stakers unlocking within one epoch.
+5. **Stake concentration:** Single entity bonding 30% of supply and capturing archival serve-work.
+6. **Mass exit event:** 80% of stakers leaving the archival market within one epoch.
 7. **Chain bootstrap:** First 2 years from genesis with very low organic transaction volume.
 8. **Late-chain tail state:** 95%+ supply emitted, high burn, fee-market-dominated economy.
 
@@ -653,11 +706,11 @@ burn_pct = min(BURN_CAP, BURN_BASE_RATE × √(tx_volume / baseline) × (circula
 
 | Parameter | Value | Notes |
 |---|---|---|
-| Minimum stake | None | Any amount eligible |
-| Short lock | 1,000 blocks (~33 hours) | 1.0x yield multiplier |
-| Medium lock | 25,000 blocks (~35 days) | 1.5x yield multiplier |
-| Long lock | 150,000 blocks (~208 days) | 2.0x yield multiplier |
-| Early withdrawal | Not permitted | Lock enforced at protocol level |
+| Consensus minimum bond | None | Any amount eligible; the market decides viability |
+| Reward basis | Verified serve-work | Recomputed from public archival state; no duration tier |
+| Reward division | Anti-concentration curve (form C), `g` band `[1.5, 2.5]`, target ≈ 2 | Caps whale share; see `REWARD_EMISSION_LEG.md` |
+| Principal liquidity | Spendable between settlement epochs | Bond (not a lock) is the honesty anchor; slashable on misbehavior |
+| Admission | Transfer-shaped (`txin_archival_bond_post`) | No separate stake-output type, no claim/unstake wire |
 
 ### Staker emission share (Component 4)
 
@@ -726,7 +779,7 @@ RELEASE_MIN/MAX ◄── tx volume ──────┤
                             │
                             ▼
                     Distributed by:
-                    stake_amount × duration_multiplier
+                    Curve(serve_work)  (form C, capped)
 ```
 
 ---
@@ -787,10 +840,11 @@ practical.
 
 #### B. Staker Claim Batching and Route Obfuscation
 
-Staker rewards are currently claimed via `txin_stake_claim`. If the protocol
-encouraged (or mandated) batch claiming at coarser intervals — e.g., once
-per epoch rather than per block — the claim transactions become less frequent
-and less attributable to specific staking events.
+Staker rewards are received via the loud reward-emission leg
+(`REWARD_EMISSION_LEG.md`), which carries public amounts and is P-attributed.
+If the protocol encouraged (or mandated) reward reception at coarser
+settlement-epoch intervals rather than per block, the reception events become
+less frequent and less attributable to specific serve periods.
 
 **Privacy gain:** Reduces the number of on-chain events that link a staker
 identity to a specific accrual period.

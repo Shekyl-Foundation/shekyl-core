@@ -52,6 +52,86 @@
 
 ### Added
 
+- **docs: F-D2 drain-send subsystem design round opened
+  (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, scoping — review rounds 1–4
+  applied: rounds 1–2 review + Round 3 threat-model addenda + Round 4
+  structural-distinguishability pass, threat-model axis closed).** Scopes
+  Gate-6 R4's last open item — the unbuilt
+  `P`-value-out subsystem in `shekyl-gui-wallet` — against the verified
+  substrate: gui-wallet `dev` embeds `engine-core::Engine` in-process
+  (`EngineSession`, engine backend default-on, `start_pscan_if_staker` at
+  every engine open, `activate_staker` → `Engine::first_stake`), the
+  core-side planner (`plan_drain`) is fee-agnostic with no data source and
+  no consumer, and the claim pipeline is the assembly analog. Design
+  questions DS-1…DS-7 drafted (assembly locus, staker-mode engine
+  adoption, destination pin, assembly-side fee carve + first-class sweep
+  entry, round-number / random-split default with an F-D1-sibling arm, the
+  accepted F-D4 §16.4 funding default, shape-era doc sweep) with cross-repo
+  sub-PR slicing (rule 26 cited; pre-flight owed before code). DS-2
+  RATIFIED engine-first (dual-open rejected); the
+  `shekyl-engine-rpc`-is-a-wallet2-FFI-shim crate-role correction is
+  recorded, and DS-PR-3 is re-scoped to its remainder (the aggregate
+  `P`-balance read; doc §2.4/DS-2/round log). Carries the FOLLOWUPS
+  "P-drain mechanism re-walk" items (a)/(b)/(c). Rule-94 registrations:
+  the `DS-` family + the drain-send current-front row. Closing F-D2
+  closes Gate-6 R4; per PR #337's scope review (merged into this round
+  before its first review) the former GF-4/F-D1+F-D2 `K_COVER` seal
+  seat is REMOVED (M1 §4, F-W10) — F-D2 stays a pre-genesis Gate-6
+  build item, not seal evidence. (Round 1's initial "GUI holds no
+  `Engine`" substrate assumption was corrected in review round 2; the
+  full correction is in the doc's round log.) DS-4 records the
+  weight-uniformity cross-reference: the `P`-lane fee is
+  `f(weight, daemon-rate)` with no capital/cover term (impl-verified
+  against the landed WI-RPC-1 fee surface — `tx_fee_model` /
+  `fee_query` / wallet-RPC `fees.rs`; contract pin 3d22d1e), so the
+  only fee-adjacent distinguisher left is weight/input-count itself —
+  GF-4b's funding-input-count territory, not the fee's. Round 3 runs
+  the rule-26 A3 threat-model addenda (§5): five attacker objectives
+  (T-DS-1…T-DS-5 — amount-channel, transport linkage, mis-send,
+  crossing-class inflation, funding-input leak) graded; T-DS-1/2/3
+  in-scope (defended by construction), T-DS-4/5 forward-actioned into
+  DS-PR-1 (F-D4 §16 crossing-class mapping + GF-4b funding-input
+  discipline), T-DS-2 arms DS-PR-2 (persona-transport self-grep). The
+  core-side impl-time pre-flight (rule 26 Part B) was run early
+  2026-07-19 (`ARCHIVAL_DRAIN_SEND_FD2_AUDIT.md`, Round 0): every
+  DS-PR-1/DS-PR-2 `shekyl-core` substrate cite re-verified at pin
+  (one B6 errata — §2.3 `"stake"` route `handlers.rs:48` → `:51`, chain
+  terminus unaffected) and all 24 core artifacts (F-D1/F-D2 planner +
+  weight-only fee + P-scan persistence) green; the GUI-side pre-flight
+  (DS-PR-3/4/5) is carried to each GUI sub-PR's open. Composition
+  discipline pinned against `ENGINE_COMPOSITION_DECOMPOSITION.md` (doc §4):
+  DS-PR-1/DS-PR-2 mirror the claim path's already-target shape
+  (free-function orchestrator over an explicit `DrainCtx`, actor-held
+  signing, separate dispatch driver — never `&Engine`, no new `Engine`
+  generic/inherent method), drain code stays in its own `drain_*` module
+  set (not the flagged `stake_engine.rs`/`local_pending_tx.rs` god-files),
+  and DS-PR-4's entry point is a thin façade delegate — armed as an
+  F-D1-sibling self-grep acceptance property. Round 4 (maintainer
+  adversarial pass) adds the structural-distinguishability axis, settled
+  at source: **T-DS-6** (drain-*tx* output shape) — **absorbed**, a spend
+  with `n_out < 2` is consensus-invalid (`shekyl-wire/transaction.rs:1868`)
+  so a change-free drain-all is not a 1-out tx but 2-out like the modal
+  confidential send (DS-4 "change-free" is economic, not a wire property);
+  **T-DS-3 change-output arm** (change → persona `P`-space, not the
+  transfer assembly's default principal `subaddress_index: 0` at
+  `signing_assembly.rs:126`) and **T-DS-7** (Monero-era field re-walk —
+  `payment_id` absent + single `ct_type` closed, `unlock_time`
+  builder-zeroed *not* removed, `tx_extra` structural) forward-actioned to
+  DS-PR-1; plus a GF-7 disposition line (drain is the F-W7/F-W10 phantom,
+  not a GF-7 event) and a local-adversary scope-boundary paragraph
+  (rule-36 jurisdiction). **Round 4 closed maintainer-accepted:** T-DS-6
+  and T-DS-7 fold into a single **composite wire-shape arm** (the
+  distinguisher can live in the join, since the drain is claim-plumbed but
+  transfer-shaped) — the drain's full wire serialization must be
+  byte-identical to a modal 2-out confidential transfer modulo
+  hidden/committed values, enforced by routing through the shared
+  `sign_bridge` path and verified by diffing a real drain tx against a
+  real transfer tx (not separate count/`tx_extra`/`unlock_time` checks);
+  the flagged `0x07` PQC leaf-hash is confirmed appended unconditionally by
+  that shared path (`sign_bridge.rs:283`), uniform across transfer and
+  drain. Threat-model axis closes clean; the three impl-time arms gate
+  DS-PR-1, not the round. No prior disposition reopened.
+
 - **rpc: WI-RPC-1 — receiving, fee, and staking-read wallet-RPC surfaces.**
   `shekyl-wallet-rpc` gains nine JSON-RPC methods, each a pure projection
   of an existing Engine surface (contract updated in
@@ -233,6 +313,30 @@
   staker-activation round** (`ARCHIVAL_BOND_SP_R0_PLAN.md` §4 build record).
 
 ### Changed
+
+- **docs: economic-model docs corrected to the live archival pay-for-service
+  staking model.** `DESIGN_CONCEPTS.md` still described the retired passive
+  lock-tier PoS model (`staked_amount × duration_multiplier`, duration tiers,
+  claim/unstake, "Staking is implemented end-to-end") as if live; Components 3–4,
+  the §2 config note, the §5 lifecycle/value-flow, §6 anti-gaming, §9 test
+  coverage, §10 dashboard, §11 simulation params, and the §13 core-parameter
+  table are rewritten archival-native (transfer-shaped admission, on-chain bonds,
+  reward budget divided by capped verified serve-work, no lock/tier/claim wire,
+  no consensus-minimum bond). `STAKER_REWARD_DISBURSEMENT.md` (the claim/lock-tier
+  disbursement spec) gains a **SUPERSEDED — do not implement** banner pointing at
+  the live specs. `V3_STAKER_ARCHIVAL.md` gains a dated ship-timing correction:
+  archival is the **genesis (V3.0)** model, not a V3.x dot-release. User-facing
+  guides are corrected too: `USER_GUIDE.md`'s `## Staking` section is rewritten
+  archival-native and no longer documents the retired `stake <tier>` /
+  `claim_rewards` / `unstake` `shekyl-cli` commands (which do not exist — the CLI
+  staking UX is roadmap; staking today is via the GUI or wallet-RPC `stake` +
+  read methods), the RPC method reference is corrected to the live surface, and
+  the multisig "staking security" use case is de-tiered; `STAKER_OPERATOR_GUIDE.md`
+  and `GENESIS_TRANSPARENCY.md` drop residual lock-tier phrasing. Canonical live
+  references are `design/REWARD_EMISSION_LEG.md` (consensus reward leg) and
+  `V3_STAKER_ARCHIVAL.md` (mechanism); retirement history is in
+  `design/LEGACY_CLAIM_ERA_RETIREMENT.md`. Documentation-only; no code or
+  consensus change.
 
 - **ci: `Rust: audit, test, determinism` split into its own workflow
   (`ci/gh-actions/rust`).** The Rust audit/test/determinism gate moved out of

@@ -8471,6 +8471,12 @@ one place to confirm each item's relationship to the wallet stack.
   only (the surviving channel) and cannot silently re-introduce shape machinery.
   **Target: V3.0** (with the drain-send subsystem; the audit is cheap, the carve
   decisions freeze with the wallet's exit UX).
+  **UPDATE 2026-07-19:** the drain-send subsystem design round opened —
+  `docs/design/ARCHIVAL_DRAIN_SEND_FD2.md` (scoping — rounds 1–4 applied). Items (a)/(b)/(c)
+  are carried there explicitly: (a) is DS-4 (assembly-side fee carve +
+  first-class sweep entry proposed), (b) is DS-7, (c) is DS-5's
+  specified-against-the-amount-channel-only construction + arm. This entry
+  closes when the round's sub-PRs land the three items.
 - **`P`-lane fee uniformity — implementation rider (ratified 2026-07-19,
   `V3_WALLET_DECISION_LOG.md` "P-lane fees"; rides the `Unbond` wallet
   constructor, the SP-R0 arm-#2 production-discharge family).** The decision:
@@ -8494,6 +8500,7 @@ one place to confirm each item's relationship to the wallet stack.
   no user knob) shared with the first-stake fee path. **Target: with the
   `Unbond` constructor build** — the fee rule is a construction input, so it
   cannot land later than the constructor without rework.
+- **Principal-side default-on Tor — flip `--proxy` from opt-in to default, opt-out loud.**
   Source-verified at the WI-4 arc closure (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §18.13):
   the persona side is Tor-mandatory **by construction** (`shekyl-p-transport` fails the
   build without its SOCKS connector), but the principal side is opt-in — `shekyl-cli`'s
