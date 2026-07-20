@@ -1,5 +1,28 @@
 # F-D4 — the a-priori exit-window derivation (Gate-6 §12.6)
 
+> **⚠️ `K_COVER` RETIREMENT NOTICE (2026-07-19, PR #346).** This document
+> uses `K_COVER` throughout as its reference exemplar — the "ratified
+> pattern" for a genesis constant gated on an unrun measurement (provisional
+> sentinel + compile-time refusal + a seal event queued behind stressnet
+> entry). **That gate is retired and its machinery is deleted**
+> ([`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md) §13).
+>
+> - **The *pattern* survives and remains the right shape** for
+>   `DEFAULT_EXIT_GAP_WINDOW` — sentinel, compile-refusal, decision rule
+>   frozen ahead of the value. §15.7's "the `K_COVER` pattern, vindicated"
+>   stands as a lesson.
+> - **The *exemplar* does not.** `K_COVER` is no longer a live constant,
+>   no longer queued behind stressnet entry, and has no seal act. Every
+>   present-tense statement below of the form "the only seal queued behind
+>   stressnet entry is `K_COVER`", "rides the same stressnet-entry gate as
+>   `K_COVER`", "PF-9 pins its finalization", or "`K_COVER` **is** the
+>   ratified pattern" describes the state of the world **before
+>   2026-07-19** and must not be read as current.
+> - **`DEFAULT_EXIT_GAP_WINDOW`'s own sealing is unaffected in substance**
+>   but no longer shares a queue with anything: it is now the item behind
+>   the Phase 7.7 stressnet read, not one of two. Source pointers to
+>   `k_cover.rs` are dead; the pattern is described in full at §11.
+
 **Status: committed a-priori 2026-07-15 — before any `draw_exit_gap` code exists and before any
 exit sweep runs. Review rounds 1–3 run same day (§10–§12): F-W2 reclassified `σ_L` as a design
 lever; F-W3 converted the genesis value to a `K_COVER`-pattern provisional sentinel with the
@@ -475,6 +498,8 @@ stressnet read, through this rule.
 
 **Seal event:** the Phase 7.7 stressnet is where `ρ_x`, `N_x`, and `σ_L` get read.
 `DEFAULT_EXIT_GAP_WINDOW` finalization rides the same stressnet-entry gate as `K_COVER`
+*(as written 2026-07-15; `K_COVER` retired 2026-07-19, PR #346 — nothing rides with it now,
+though the gate itself is unchanged for this constant)*
 (PF-9 shape; `RELEASE_CHECKLIST.md` entry added beside it). Sealing after stressnet entry
 would leave mainnet genesis as the window's first live execution — same argument, same pin.
 
@@ -636,7 +661,9 @@ corrected a point *within* the same mistake. Three findings, resolved by the §5
   the rate is measured, and no re-argued candidate changes that.** Resolution: stop picking.
   The project's ratified pattern for a genesis constant gated on an unrun measurement is
   `K_COVER` (M1 §9.3 provisional sentinel + compile-time refusal; PF-9 seal-before-stressnet
-  pin). `DEFAULT_EXIT_GAP_WINDOW` is the same shape gated on the same event and rides the
+  pin) — *the PATTERN stands; the EXEMPLAR does not: `K_COVER` was retired 2026-07-19,
+  PR #346, so `DEFAULT_EXIT_GAP_WINDOW` is now the pattern's only live instance and §11
+  carries the mechanics directly rather than by reference*. `DEFAULT_EXIT_GAP_WINDOW` is the same shape gated on the same event and rides the
   same Phase 7.7 gate — §5.4 now freezes the **decision rule** and ships the **sentinel**;
   the value arrives from the stressnet rate read. That the constant is a wallet default, not
   consensus, *strengthens* the treatment: changing it post-ship splits the population into
@@ -1189,7 +1216,10 @@ note 3):** before queuing any constant for a stressnet seal, classify the measur
 - **Mechanism** — does the partition fire, is the draw unbiased, does the determinism KAT
   hold on aarch64, does timing behave under load. A testnet reproduces these faithfully,
   because the software doesn't know the money is fake. `K_COVER`'s §14.4 partition run is
-  this class — which is why it is gradeable and why PF-9 is a sound gate.
+  this class — which is why it is gradeable and why PF-9 is a sound gate. *(The
+  mechanism-vs-economics filter stands as a standing method posture; its lead exemplar
+  `K_COVER` was retired 2026-07-19, PR #346, which neither validates nor invalidates the
+  filter — the gate was retired on incentive grounds, not for failing this test.)*
 - **Economics** — exit rate, churn, profit-taking cadence, panic cohort size, mobility.
   A testnet cannot produce these; every one is a function of real value at risk.
 
@@ -1200,7 +1230,10 @@ or **ship it knowingly under-determined with a post-genesis reopen** — which f
 genesis-frozen value means *not shipping it at all*.
 
 The filter was run across the PF-9 / Phase 7.7 queue at adoption (grep-anchored,
-2026-07-16): the only seal queued behind stressnet entry is `K_COVER` (mechanism — passes);
+2026-07-16): the only seal queued behind stressnet entry is `K_COVER` (mechanism — passes)
+*(record of the 2026-07-16 run; `K_COVER` was RETIRED 2026-07-19, PR #346 and has left the
+queue entirely — `DEFAULT_EXIT_GAP_WINDOW` is now the item behind the stressnet read, not
+one of two)*;
 the other Phase 7.7 entries (F11-S Windows-midrange bench re-measurement, historical
 reference-block/reorg exercise, archival multi-staker path, the `tests/stressnet/README.md`
 acceptance criteria) are all mechanism exercises, and the FA-6 wire lock is a sequencing

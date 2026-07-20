@@ -1,5 +1,24 @@
 # Segment-freeze pipeline — the production writer for `m_archival_shard_segment`
 
+> **⚠️ `K_COVER` RETIREMENT NOTICE (2026-07-19, PR #346).** This document
+> was opened as an obligation of the M1 reward-gate design round and
+> describes the freeze writer as feeding "the M1 gate". **That gate is
+> retired and its machinery deleted** ([`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md)
+> §13); the M1 gate PR referenced in the status line below will never merge.
+>
+> **The pipeline itself is unaffected and remains load-bearing.** Freeze
+> bookkeeping survives the retirement on its own merits: it is what makes
+> `shard_age_milli` zero for an unfrozen segment (so an unfrozen shard
+> earns nothing by the work math), it feeds the gate-2 challenge registry,
+> and it is the wallet thin-market disclosure's natural operand. O-1..O-3
+> and the first-crossing rule are unchanged.
+>
+> Two stale pointers to read past: the M1 gate is no longer a consumer of
+> this writer, and the tripwire named in §2 fact 6,
+> `check_reward_gate_predicate_sites.sh`, **no longer exists** — it was
+> split at the retirement, and the surviving substrate invariants live in
+> `scripts/ci/check_segment_freeze_sites.sh`.
+
 **Status: round 1 draft (2026-07-06) — open for adversarial review.
 This document is the design round `ARCHIVAL_REWARD_GATE_M1.md` §1.3
 requires to open before the M1 gate PR merges; it must discharge the
@@ -135,7 +154,9 @@ properties.
    `get_archival_shard_segment_at_height` gates reads on
    `at_height ≥ freeze_height` — inclusive, consistent with M1's
    `freeze_height ≤ h_close`. The M1 count pass and its tripwire
-   (`check_reward_gate_predicate_sites.sh`) bind to this schema.
+   (`check_reward_gate_predicate_sites.sh` — replaced by
+   `check_segment_freeze_sites.sh` at the M1 retirement, PR #346) bind to
+   this schema.
 
 ---
 
@@ -323,7 +344,9 @@ count pass).
 
 ### 5.2 `SEGMENT_LEAF_COUNT` joins the constants pipeline
 
-Same shape as `K_COVER` minus the sentinel (the value is *not*
+Same shape as the former `K_COVER` constant minus the sentinel (that entry and its
+`build.rs` emission were removed with the gate, 2026-07-19 PR #346 — the shape is
+described here rather than by reference) (the value is *not*
 provisional — it is derived from pinned production widths):
 `config/consensus_constants.json` entry, `build.rs` emission,
 `SEGMENT_LEAF_COUNT: u64 = 25_992` with a compile-time assert tying
@@ -467,8 +490,10 @@ not needed — no provisional constants):
 
 ## 8. Tripwire extensions (M1 script, invariant discipline)
 
-Extend `scripts/ci/check_reward_gate_predicate_sites.sh` (or a
-sibling under the same consensus-invariants umbrella):
+Extend `scripts/ci/check_segment_freeze_sites.sh` (the substrate half of the
+former `check_reward_gate_predicate_sites.sh`, split out when the M1 gate was
+retired in PR #346 — it already carries these invariants), or a
+sibling under the same consensus-invariants umbrella:
 
 - **Writer one-site:** `mdb_put` against `m_archival_shard_segment`
   appears exactly once in production (`put_archival_shard_segment`);

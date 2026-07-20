@@ -1219,7 +1219,8 @@ C++ as the mechanical applier/marshaler:
 
 Rationale (not aesthetic): the arc's enforcement mechanism —
 make-bad-states-unrepresentable via the type system (`K_COVER`
-const-assert, wire positivity, sealed witnesses, the WS-2 single-writer
+const-assert *(exemplar retired 2026-07-19, PR #346 — the remaining three carry the
+argument unchanged)*, wire positivity, sealed witnesses, the WS-2 single-writer
 framing) — is a Rust capability. A consensus decision in C++ can be
 protected only by convention + KAT + review, the armed-gate-with-no-trigger
 pattern that produced the tip-vs-as-of and dedup findings this round

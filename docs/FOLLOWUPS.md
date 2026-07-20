@@ -1377,7 +1377,8 @@ sustainability is unaffected by the recalibration.
     either commits (a decorrelation redesign, never a moved bar, per
     GF7_HOOKS §5.1). Per review round 2 (F-W3, doc §11) **no window value is
     committed pre-measurement**: `DEFAULT_EXIT_GAP_WINDOW` ships as a
-    `K_COVER`-pattern provisional sentinel with the decision rule frozen
+    `K_COVER`-pattern provisional sentinel (the PATTERN; `K_COVER` itself retired
+    2026-07-19, PR #346 — see `ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`'s banner) with the decision rule frozen
     (doc §5.4), sealed by the Phase 7.7 stressnet read of `(ρ_x, N_x, σ_L)`
     (`RELEASE_CHECKLIST.md` entry beside `K_COVER`/PF-9). The wargame round
     itself remains open — it graduates the lemma from a-priori to empirical
@@ -9096,7 +9097,11 @@ one place to confirm each item's relationship to the wallet stack.
   after" weight. Do not schedule it as deferrable measurement. Its output feeds **two
   consumers with opposite dispositions** (§14.4 "Two consumers" pin): a
   distinguishability fail ⇒ posture redesign, never a bar move; a sound-but-thin cover
-  result ⇒ `K_COVER` calibrates higher, not a posture failure. **Seal-time wording pin
+  result ⇒ `K_COVER` calibrates higher, not a posture failure. **⚠️ AMENDED 2026-07-19
+  (PR #346): `K_COVER` is retired, so this round gates no constant and the SECOND consumer
+  no longer exists. A sound-but-thin result now has NO defined disposition — an open design
+  question, and precisely the mis-read this pin was written to prevent. The first consumer
+  (distinguishability fail ⇒ posture redesign) is unaffected.** **Seal-time wording pin
   (§13.5):** the sealed claim stays conditional by construction — isolation conditioning
   is transport-layer and never discharges; two-of-three-measured must not read as
   three-of-three-cleared. **Review-closure bar (§16.10):** the §§14–16 closure is the
@@ -9293,7 +9298,9 @@ one place to confirm each item's relationship to the wallet stack.
   holdings" wording corrected), per-channel strip-row zero-cover floor at gate-open,
   gating-lemma citation. Finding 2: the monotone floor is a **snapshot by
   construction** — the M1 gate reads `frozen_shard_count < K_COVER` only (one site,
-  never live bond state; `K_COVER` genesis-frozen), so the TOCTOU window is the entire
+  never live bond state; `K_COVER` genesis-frozen) *(gate retired 2026-07-19, PR #346;
+  that read and its single site no longer exist — the finding is recorded, and its
+  calibration obligation below is void with the constant)*, so the TOCTOU window is the entire
   pre-gate chain life; challenges are honest-server-unfailable beacon replays but
   **off-chain DoS around challenge windows induces forfeiture** ⇒ the calibration must
   carry an **a-priori thinning margin** above the induced-forfeiture adversary
@@ -9434,7 +9441,8 @@ one place to confirm each item's relationship to the wallet stack.
   control `0.985` bites), §18.4 lifetime-accumulation sweep (per-post `p = 0.176`
   compounding to ≈`1.0` at the 52-event founder anchor). **Open on this arm:**
   ~~the §14.4 bound-2 disposition decision~~ (RESOLVED 2026-07-11 per the UPDATE
-  above — the arm now grades PARTITION-PASS, which `K_COVER` sealing consumes);
+  above — the arm now grades PARTITION-PASS, which `K_COVER` sealing consumes *(consumer
+  gone: gate retired 2026-07-19, PR #346; the PARTITION-PASS grade stands on its own)*);
   leg-(b) wall-clock emission (separate item below).
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
@@ -9519,15 +9527,26 @@ one place to confirm each item's relationship to the wallet stack.
 
 - **Wallet UX: thin-cover exposure disclosure at bond/claim time (registered 2026-07-19,
   PR #337 review thread).** On the user's own acts the design is warn-don't-prohibit —
-  `K_COVER` gates only the system's reward lever (bonding stays legal during gated epochs,
-  unbond is never cover-gated) — but no wallet surface currently *says* so. When the
+  ~~`K_COVER` gates only the system's reward lever (bonding stays legal during gated epochs,
+  unbond is never cover-gated)~~ — **the gate was RETIRED 2026-07-19, PR #346, so there is
+  no reward lever gating cover at all** — but no wallet surface currently *says* so. When the
   staker UX lands (activation front, #332 lineage), the wallet should disclose at
   JoinMarket / claim time when the current cover is thin (a rule-82 failure-mode surface;
   phrased per rule 81 — outcome language, no protocol vocabulary): entering or claiming
   during a thin-cover window carries elevated linkage exposure (the measured WI-4 §13.2
-  thin-cover regime), and gated epochs earn nothing. Disclosure-shaped, never a block;
-  the enforced invariant stays consensus-side (M1). **Target: with the staker-activation
-  UX; pre-genesis.**
+  thin-cover regime). ~~and gated epochs earn nothing~~ (no epochs are gated now).
+  ~~Disclosure-shaped, never a block; the enforced invariant stays consensus-side (M1).~~
+  **⚠️ RE-SCOPE REQUIRED (2026-07-20, open design question — do NOT build to the old
+  scoping).** This item was deliberately scoped as advisory-only *because* the enforcement
+  lived consensus-side in M1. M1 enforces nothing now. The structural replacement (unfrozen
+  shards score zero `shard_age_milli`) covers only the window before the FIRST segment
+  freezes — the thin-but-nonzero window that §13.2's `r = 3.54` actually measured is now an
+  earning window, and WI-4 §16's "verified synergy" foreclosing the claim-cohort leak is
+  voided with it. So this disclosure may now be the SOLE mitigation for a measured exposure,
+  which promotes it from nice-to-have to load-bearing — and a mitigation that depends on a
+  user reading a warning is a weak one to carry alone. Whether the answer is disclosure,
+  a different structural mechanism, or accepting the exposure is a maintainer ruling that
+  must be made before this is built. **Target: with the staker-activation UX; pre-genesis.**
 - **2d-2 2c-2a — submit-outcome handling: the wallet CONSUMES `SubmitVerdict`; the partition is
   no longer a design object (SUPERSEDED 2026-07-04 by
   [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md), D4; absorbed remainders

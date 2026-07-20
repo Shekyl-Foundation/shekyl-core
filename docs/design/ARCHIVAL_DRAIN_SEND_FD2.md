@@ -15,7 +15,9 @@ review, merged before this round's first review): the GF-4/F-D1+F-D2
 `K_COVER` seal seat was **REMOVED** (`ARCHIVAL_REWARD_GATE_M1.md` §4 —
 the drain is not an on-chain observable per F-W10, and the exit-timing
 observable is a ratified phantom per F-W7/F-W8), so this subsystem is
-**not** seal evidence and does not gate the `K_COVER` seal act. It
+**not** seal evidence and does not gate the `K_COVER` seal act *(moot as of 2026-07-19,
+PR #346: there is no seal act — the gate is retired; this subsystem's scoping is unaffected,
+it was never seal evidence either way)*. It
 remains pre-genesis work on its own Gate-6 track: R4 is open on F-D2
 alone, and the FOLLOWUPS "P-drain mechanism re-walk" riders are V3.0.
 

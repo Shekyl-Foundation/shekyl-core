@@ -17,10 +17,19 @@
 >   finalized", "gates on the §14.4 run", and "re-check before Gate 7"
 >   is a RECORD of a superseded obligation, not a task. §17.9's "Final
 >   Gate-7 gates" — the arc's terminal statement — is explicitly voided.
+>   The same applies to the seal-machinery vocabulary: "seal input",
+>   "seal act", "remaining act", "clear the sentinel", "queued behind
+>   stressnet entry". There is no seal, so none of these name work.
+>   (§19.10's local marker withdraws only leg (b)'s seal-input status;
+>   read it as one instance of a list that is void in its entirety.)
 > - **Source pointers into `k_cover.rs` and the `frozen_shard_count <
 >   K_COVER` comparison site are DEAD.** Those files and that site no
 >   longer exist; a reader running the "verified at source" checks in
 >   §16/§17 will find nothing.
+> - **`shekyl-staking-sim` deliberately RETAINS live-looking `K_COVER`
+>   code** as the historical reference that this was built and then
+>   rejected on the merits. §14.4/§17 readers sent into that crate are
+>   reading a retained artifact, not live machinery.
 > - **The measurement findings themselves STAND.** §13.2's `r = 3.54`
 >   cold-start thin-cover result is retained and re-dispositioned to a
 >   market-funded founder schedule plus the wallet thin-market entry
