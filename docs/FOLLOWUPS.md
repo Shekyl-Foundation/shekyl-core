@@ -4903,6 +4903,22 @@ sustainability is unaffected by the recalibration.
   entry's design round. **Reopening trigger: the gate-6 serving round
   lands (shard-holding becomes observable), or the staker-activation
   RPC round (SA-R2) opens the entry's holdings policy.**
+  **RULING 2026-07-19 (Design 1 — shape-based market exclusion stands
+  as designed).** `FOUNDATION_GENESIS_IDENTITY_SET.md` §2's factored
+  rule is the binding spec: market absence is a SHAPE rule
+  (CompleteTree = a declared non-earning durability floor, foundation
+  or not), and genesis identity enumeration is consulted **only** for
+  full-tree `durability_count` credit — the market gate never reads
+  identity. The genesis "nobody earns" window is already handled
+  correctly by `K_COVER` (sealed ≥ 1 zeroes every persona's market
+  until `K_COVER` shards freeze), so CompleteTree-holding need not be
+  an earning posture to bridge it. The fix therefore stays exactly
+  this item: `first_stake` must post `ShardSetCompact` of what the
+  node serves (the current CompleteTree hardcode wrongly declares the
+  floor posture for every wallet participant), and the genesis
+  identity set gets built for durability credit only — the
+  `is_foundation_complete_tree`-populated-from-shape flag at the
+  gather is then correct as a market operand and misnamed at worst.
 
 - **Emission-claim retire/resubmit driver legs** (surfaced 2026-07-12
   at the CB-3 seam, PR-4a review round #8 "retirement/resubmit = the
