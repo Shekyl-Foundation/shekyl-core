@@ -7,7 +7,9 @@ code.**
 Charter: `ARCHIVAL_FIREWALL_GATE6.md` §12.4 names F-D2's remaining half a
 **whole unbuilt `P`-value-out (drain-send) subsystem in
 `shekyl-gui-wallet`**, and Gate-6 §12.9's re-formed R4 close condition
-(which supersedes the §12.8 line) is down to F-D1 (BUILT) + F-D2. Seal-path note (2026-07-19, PR #337 scope
+(which supersedes the §12.8 line) is down to F-D1 (BUILT) + F-D2.
+
+**Seal-path note** (2026-07-19, PR #337 scope
 review, merged before this round's first review): the GF-4/F-D1+F-D2
 `K_COVER` seal seat was **REMOVED** (`ARCHIVAL_REWARD_GATE_M1.md` §4 —
 the drain is not an on-chain observable per F-W10, and the exit-timing
@@ -143,7 +145,7 @@ crate** — its `create_wallet`/`open_wallet`/
 names over `ffi::wallet2_ffi_*` C++ calls (`:104`/`:205`/`:288`); it is
 not a native wallet. The **native wallet lifecycle lives in
 `shekyl-engine-core::Engine`** (create via `EngineCreateParams`,
-`open_full`, restore, `primary_address` at `engine/mod.rs:974`, ledger
+`open_full`, restore, `primary_address` at `engine/mod.rs:981`, ledger
 balance, pending-tx send, refresh), wallet2-free (zero `wallet2`/FFI
 references outside comments), operating on its own `.wallet`/
 `.wallet.keys` envelope (`shekyl-engine-file`), production-consumed by

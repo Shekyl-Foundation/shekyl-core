@@ -2244,9 +2244,13 @@ The build lands only the piece that lives in `shekyl-core`:
   **UPDATE 2026-07-19: the drain-send subsystem design round OPENED** —
   [`ARCHIVAL_DRAIN_SEND_FD2.md`](ARCHIVAL_DRAIN_SEND_FD2.md) (Round 1 DRAFT,
   DS-1…DS-7; rule 26 cited). The round scopes the three layers above against
-  the verified substrate (the GUI holds no `Engine` and no `P`-scan state;
-  the claim pipeline is the assembly analog; the §7.4 persona-transport pin
-  applies to drain fetch/broadcast), proposes the sub-PR slicing, and
+  the verified substrate (gui-wallet `dev` is engine-first — `EngineSession`
+  embeds `engine-core::Engine` and starts `start_pscan_if_staker` on open,
+  so the `P`-scan handle path exists; Round 1's initial "holds no `Engine`"
+  assumption was corrected in review round 2, see
+  [`ARCHIVAL_DRAIN_SEND_FD2.md`](ARCHIVAL_DRAIN_SEND_FD2.md) §2.4; the claim
+  pipeline is the assembly analog; the §7.4 persona-transport pin applies to
+  drain fetch/broadcast), proposes the sub-PR slicing, and
   carries the FOLLOWUPS "P-drain mechanism re-walk" riders (fee/change
   mechanics, shape-era sweep, amount-channel-only confirmation) and the
   accepted §16.4 funding default. F-D2's status is unchanged (open on the
