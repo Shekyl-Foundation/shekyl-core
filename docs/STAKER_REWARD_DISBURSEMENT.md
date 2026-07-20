@@ -1,6 +1,23 @@
 # Staker Reward Disbursement Model
 
-> **Last updated:** 2026-05-28
+> **Status: SUPERSEDED — do not implement (2026-07-19).** This document specifies
+> the **claim-based, lock-tier** staker reward model (`txout_to_staked_key` /
+> `txin_stake_claim`, principal lock until `creation_height + tier_lock_blocks`,
+> `staked_amount × duration_multiplier` weighting). That model was **retired before
+> genesis** with the confidential-staking sweep
+> ([`docs/design/LEGACY_CLAIM_ERA_RETIREMENT.md`](design/LEGACY_CLAIM_ERA_RETIREMENT.md)
+> Tier-A; `rust/shekyl-economics/src/lib.rs`). Genesis staking is **archival
+> pay-for-service**: transfer-shaped admission, on-chain bonds, and reward emission
+> recomputed from public serve-work — no duration tier, no lock, no claim/unstake
+> wire. The live specs are
+> [`docs/V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) (mechanism) and
+> [`docs/design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) (consensus
+> reward leg), which **supersede** the claim wire for genesis. This document is
+> retained for **audit-trail history only**; nothing below is genesis-live. See also
+> [`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md), the
+> intermediate confidential-claim design that also superseded this one.
+
+> **Last updated:** 2026-05-28 (superseded 2026-07-19)
 
 ## CALIBRATION gate (pre-genesis)
 
