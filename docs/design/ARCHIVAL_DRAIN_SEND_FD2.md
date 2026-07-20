@@ -1,7 +1,8 @@
 # F-D2 drain-send subsystem — design round (Gate-6 R4's last open item)
 
-**Status: Round 1 DRAFT (scoping) — opened 2026-07-19. No implementation
-has begun; this document is the scoping artifact rule 26 requires before
+**Status: SCOPING — review rounds 1–4 applied (threat-model axis closed,
+maintainer-accepted 2026-07-19); opened 2026-07-19. No implementation has
+begun; this document is the scoping artifact rule 26 requires before
 code.**
 
 Charter: `ARCHIVAL_FIREWALL_GATE6.md` §12.4 names F-D2's remaining half a

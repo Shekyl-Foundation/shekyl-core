@@ -2242,8 +2242,9 @@ The build lands only the piece that lives in `shekyl-core`:
   R4 close keeps the user-eye residual visibly open, not quietly absorbed.
 
   **UPDATE 2026-07-19: the drain-send subsystem design round OPENED** —
-  [`ARCHIVAL_DRAIN_SEND_FD2.md`](ARCHIVAL_DRAIN_SEND_FD2.md) (Round 1 DRAFT,
-  DS-1…DS-7; rule 26 cited). The round scopes the three layers above against
+  [`ARCHIVAL_DRAIN_SEND_FD2.md`](ARCHIVAL_DRAIN_SEND_FD2.md) (scoping —
+  review rounds 1–4 applied, DS-1…DS-7; rule 26 cited). The round scopes the
+  three layers above against
   the verified substrate (gui-wallet `dev` is engine-first — `EngineSession`
   embeds `engine-core::Engine` and starts `start_pscan_if_staker` on open,
   so the `P`-scan handle path exists; Round 1's initial "holds no `Engine`"

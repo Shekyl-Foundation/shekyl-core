@@ -5,9 +5,9 @@
 ### Added
 
 - **docs: F-D2 drain-send subsystem design round opened
-  (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, Round 1 DRAFT, four rounds
+  (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, scoping — review rounds 1–4
   applied: rounds 1–2 review + Round 3 threat-model addenda + Round 4
-  structural-distinguishability pass).** Scopes
+  structural-distinguishability pass, threat-model axis closed).** Scopes
   Gate-6 R4's last open item — the unbuilt
   `P`-value-out subsystem in `shekyl-gui-wallet` — against the verified
   substrate: gui-wallet `dev` embeds `engine-core::Engine` in-process

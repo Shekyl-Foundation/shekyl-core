@@ -8458,7 +8458,7 @@ one place to confirm each item's relationship to the wallet stack.
   **Target: V3.0** (with the drain-send subsystem; the audit is cheap, the carve
   decisions freeze with the wallet's exit UX).
   **UPDATE 2026-07-19:** the drain-send subsystem design round opened —
-  `docs/design/ARCHIVAL_DRAIN_SEND_FD2.md` (Round 1 DRAFT). Items (a)/(b)/(c)
+  `docs/design/ARCHIVAL_DRAIN_SEND_FD2.md` (scoping — rounds 1–4 applied). Items (a)/(b)/(c)
   are carried there explicitly: (a) is DS-4 (assembly-side fee carve +
   first-class sweep entry proposed), (b) is DS-7, (c) is DS-5's
   specified-against-the-amount-channel-only construction + arm. This entry
