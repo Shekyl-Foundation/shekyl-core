@@ -903,6 +903,31 @@ fn sweep_specs() -> Vec<(&'static str, SynthParams)> {
     for regime in [Regime::SteadyState, Regime::LowActivity] {
         specs.push(("regime", SynthParams { regime, ..base }));
     }
+    // Group "causal": the arm PRODUCTION ACTUALLY RUNS (2026-07-20).
+    //
+    // Every other row here grades `inversion: true`, but the wallet now forces
+    // causal order at the plan seam (`FORCED_CAUSAL_ORDER`, `stake_engine.rs`):
+    // the inverted branch is unexecutable, because `entry_offset_blocks` has no
+    // scheduler consumer and, at a join, the principal's funding transfer must
+    // precede the post it funds (a fresh `P` has no earnings; `bond_assembly`
+    // sweeps only the persona's own mature, tree-drained outputs). A coin whose
+    // outcomes are decided by physics is not drawn.
+    //
+    // Without these rows the report grades an inversion the chain never
+    // performs — the `inversion` group's only inversion-off row sits at the
+    // non-operational 300 window and steady state, so neither the operational
+    // window nor the cold-start regime had an honest un-inverted grade.
+    // These two rows are that grade: full window, causal order, both regimes.
+    for regime in [Regime::SteadyState, Regime::LowActivity] {
+        specs.push((
+            "causal",
+            SynthParams {
+                regime,
+                inversion: false,
+                ..base
+            },
+        ));
+    }
     // Group "resume": the D-B3 resume channel — an unconfirmed post's
     // resubmit at wallet reopen lands a chain-visible `BondPostDispatched`
     // on the session lattice. Context row (conditional path), graded so the
