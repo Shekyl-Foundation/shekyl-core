@@ -8,198 +8,179 @@
 //!
 //! Where [`crate::draw::draw_entry_gap`] decorrelates *when* `P` funds and
 //! enters, this draws *how much* the principal sends on top of the public
-//! `bond_floor`: `cover ~ U[C_min, C_min + span(C)]`, where `span(C)` is the
-//! genesis-frozen response curve over the live-bond count `C`
-//! (`ARCHIVAL_COVER_DRAW.md` §8). Same float-free discipline as the entry-gap
-//! draw: pure integer arithmetic, bit-identical across architectures, golden-
-//! vector-pinnable — because two wallets computing a different cover from the
-//! same `C` would draw from *different distributions*, and that divergence **is**
-//! the cross-wallet uniformity break the whole mechanism exists to close.
+//! `bond_floor`: `cover ~ U[COVER_MIN_ATOMIC, COVER_RUNG_ATOMIC)` —
+//! one full rung wide, so funded amounts **tile** the line and no value
+//! identifies a bond. See [`draw_cover_amount`] for why that is the property
+//! and entropy quantity is not.
 //!
-//! ## The form, and why the sim's copy can't drift from it (C4)
+//! **Not the primary defense.** Amounts are CT-hidden; attribution is already
+//! denied on chain. This is defense in depth against the value acting as a
+//! *filter* that narrows the candidate set before a timing attack.
 //!
-//! [`cover_dial_span_atomic`] is the production implementation of the §8.8 curve:
-//! the wallet draws with it and the golden vector below freezes it. The
-//! `shekyl-staking-sim` keeps its own copy (the sim depends on this crate only as
-//! a dev-dependency, so it cannot import production code at runtime), but a sim
-//! test cross-checks that copy against this one over a sweep — so the two cannot
-//! diverge even between the sampled golden points.
+//! The count-dependent `span(C)` response curve that used to live here is
+//! **RETIRED** (`ARCHIVAL_COVER_DRAW.md`, ratified 2026-07-21): it keyed the
+//! draw to public chain state, which made the cover interval publicly
+//! computable, and it required a canonical standing-bond-count aggregate that
+//! was never built and is explicitly not to be built. The bound here is a
+//! pinned consensus constant instead — no population read, no manipulation
+//! surface, no draw-vs-post desync.
+//!
+//! Same float-free discipline as the entry-gap draw: pure integer arithmetic,
+//! bit-identical across architectures, golden-vector-pinnable — because two
+//! wallets computing a different cover from the same inputs would draw from
+//! *different distributions*, and that divergence **is** the cross-wallet
+//! uniformity break the whole mechanism exists to close.
 
 use crate::draw::{bounded_uniform, GapRng};
 
-/// `K_sat → 0` tail boundary (`ARCHIVAL_COVER_DRAW.md` §8.7): at/below this count
-/// the span is `0`, so `cover == C_min` exactly — the bootstrap tail (§8.5, the
-/// dissolved `C_boot`), openly conceded to the network-isolation + funder-scope
-/// seams.
-pub const COVER_TAIL_COUNT: u64 = 13;
-/// Count at which the smoothstep ramp reaches the cap (the §8.7 knee plateau).
-pub const COVER_RAMP_END_COUNT: u64 = 79;
-/// Cover-span cap `C_max − C_min`: `k = 10 rungs × 0.75 SKL = 7.5 SKL` — the
-/// joint-corner saturation knee (§8.7).
-pub const COVER_SPAN_CAP_ATOMIC: u64 = 7_500_000_000;
-
-/// Working-capital **runway floor** `C_min` in atomic units — the lower edge of
-/// every draw (§8.3). **Pinned: `C_min = 1 rung = 0.75 SKL`** (`= ARCHIVAL_BOND_FLOOR`;
-/// the rung is gate-4-pinned and fixed). The pre-sim "provisional pending the 2d-1
-/// earnings-ramp sizing (may raise it)" framing is **retired** — the sim
-/// (`STAKER_ARCHIVAL_SIM.md`) is the authority and does not raise it; the `--cover`
-/// harness shows even `k = 0` (the `cover == 0` opt-out) still gets same-rung cover
-/// (≈ 1.9). Single-sourced here so the wallet always reads the one canonical value,
-/// never a baked placeholder; the golden vector below is frozen against it.
-pub const COVER_RUNWAY_FLOOR_ATOMIC: u64 = 750_000_000;
-
-/// `span(C) = C_max − C_min` in atomic units — the §8.8 float-free response form.
+/// One bond rung in atomic units — the width of the cover draw's support.
 ///
-/// Cubic **smoothstep** `s(t) = t²(3 − 2t)` with `t = (C − tail)/(end − tail)`,
-/// scaled to the cap: it decays into the low tail with **zero slope** (the value
-/// *and* its rate reach `0` — a decay, not a clamp-kink) and joins the cap with
-/// zero slope (no kink at the top). Pure `u64` arithmetic, so identical on every
-/// architecture and golden-vector-pinnable.
+/// Mirrors `shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC`. Kept local
+/// because this crate deliberately has no retention dependency (it is the
+/// leaf-most draw crate); the equality is asserted by
+/// `shekyl-engine-core`, which depends on both, so the mirror cannot drift
+/// silently.
+pub const COVER_RUNG_ATOMIC: u64 = 750_000_000;
+
+/// Lower edge of the cover draw, in atomic units — the **postability floor**.
 ///
-/// `num²·(3·den − 2·num) ≤ den³`, so `span ≤ CAP` and the result is monotone in
-/// `num`; and `CAP · num²·(…) ≤ CAP · den³ ≈ 2.16e15 < u64::MAX`, so the
-/// intermediate never overflows.
+/// A bond post costs `bond_floor + fee`, and the persona's only money at its
+/// first post is what the funding transfer gave it, so a cover below the fee
+/// yields a funded persona that structurally cannot bond
+/// (`bond_assembly::InsufficientFunding`). Drawing from `(0, RUNG)` would make
+/// that reachable by chance, so the draw's support starts here instead:
+/// **postability is an enforced invariant, not a user responsibility.**
+///
+/// **Pinned, never derived from a live fee estimate.** Fee rates come from a
+/// daemon snapshot ([`FeeRate`](shekyl_rpc_client::FeeRate)); deriving the
+/// bound from one would give wallets *different draw supports*, which is the
+/// cross-wallet uniformity break the whole mechanism exists to close — two
+/// wallets drawing from different distributions is itself the leak. Every
+/// wallet must pin the same number.
+///
+/// Sized at `RUNG / 100` — generous for a single-input / two-output FCMP++
+/// bond post, while the excluded region stays 1 % of the band, far too thin to
+/// serve as a filter. **Reopening criterion:** a review against real fee rates
+/// before genesis, or any change to the bond post's structural weight. If
+/// real fees ever exceed it the failure is loud, not silent — assembly refuses
+/// with `InsufficientFunding` and the user tops up — but the constant should
+/// be raised rather than relied on to degrade.
+pub const COVER_MIN_ATOMIC: u64 = COVER_RUNG_ATOMIC / 100;
+
+/// Draw the funding-seam cover: uniform over `[COVER_MIN_ATOMIC,
+/// COVER_RUNG_ATOMIC)` — one full rung wide, upper-exclusive.
+///
+/// # What this defends, and what it does not
+///
+/// Amounts are CT-hidden, so this is **not** the primary defense — attribution
+/// is already denied on chain (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §18.9:
+/// "the funding/change legs are CT-hidden"). This is **defense in depth**: it
+/// removes any tell *in the transaction value* that a bond was executed at all.
+///
+/// Why that matters even against an observer who cannot read amounts: a value
+/// tell is a **filter that feeds the timing attack**. If an amount announced
+/// "this is a bond funding", an adversary would pre-narrow the candidate set
+/// before doing any timing work, collapsing `N` from *every transaction in the
+/// window* to *transactions with a bond-shaped amount*. The ambient cover is
+/// not something we provision — only something we can forfeit — and a
+/// recognizable amount forfeits it.
+///
+/// # Why one rung, upper-exclusive
+///
+/// A `k`-shard bond is funded with `RUNG·k + cover`, so the funded amount lands
+/// uniformly in `[RUNG·k + MIN, RUNG·(k+1))`. Consecutive `k` **tile** the line:
+/// every amount above the postability floor is a plausible funding for *some*
+/// `k`. There is no value an observer can point at and say "that is not a
+/// bond", which is the same statement as "no value says it is". A wider draw
+/// would overlap bands without buying anything; a narrower one would leave gaps
+/// that are exactly the filter this exists to remove.
+///
+/// The entropy *quantity* is not the property — **non-identifiability** is.
+/// Enough randomness to defeat exact-match is the whole requirement; calibrating
+/// how much was the retired `span(C)` curve's error
+/// (`ARCHIVAL_COVER_DRAW.md`, retired 2026-07-21).
+///
+/// Excluding `cover == 0` is deliberate and is *not* the "never shrink the
+/// set" mistake: `0` reconstructs `funded == bond_floor` exactly, which is the
+/// tell itself. Contrast the entry-gap spread, where `0` is kept because the
+/// anchor `t0` is private and a zero spread produces no observable at all.
 #[must_use]
-pub fn cover_dial_span_atomic(count: u64) -> u64 {
-    if count <= COVER_TAIL_COUNT {
-        return 0;
-    }
-    if count >= COVER_RAMP_END_COUNT {
-        return COVER_SPAN_CAP_ATOMIC;
-    }
-    let num = count - COVER_TAIL_COUNT;
-    let den = COVER_RAMP_END_COUNT - COVER_TAIL_COUNT;
-    let s_num = num * num * (3 * den - 2 * num);
-    let s_den = den * den * den;
-    COVER_SPAN_CAP_ATOMIC * s_num / s_den
-}
-
-/// Draw the cover amount (atomic units): `cover = c_min + U[0, span(count)]`.
-///
-/// Uniform over `[c_min, c_min + span(count)]`. The uniformity holds for **every**
-/// span the curve produces — [`bounded_uniform`] is exact rejection sampling for
-/// any bound (it rejects the incomplete top bucket of `2^64`), so the realized
-/// distribution is exactly uniform whether `span` is tiny (`count = 14 → ~5.1M
-/// atomic`) or the cap (`7.5e9`); there is no `span`-dependent residual bias that
-/// would drift the distribution shape with the population. At the bootstrap tail
-/// (`count ≤ 13`, `span = 0`) the draw is `c_min` exactly — the continuous
-/// `span → 0` limit of the uniform (`bounded_uniform(rng, 0) == 0`), so there is
-/// no draw-layer discontinuity between the conceded tail and the first ramp step.
-///
-/// `c_min` is taken as an explicit single-sourced input (the wallet passes
-/// [`COVER_RUNWAY_FLOOR_ATOMIC`]) rather than baked, so `C_min` flows from one
-/// canonical constant.
-///
-/// # Panics
-///
-/// Asserts `c_min ≤ u64::MAX − COVER_SPAN_CAP_ATOMIC` (deterministically, in
-/// release too) so `c_min + cover` can never silently wrap into an out-of-range
-/// amount — a wrapped cover would be a *wrong* amount, i.e. a privacy/correctness
-/// failure, which must fail loudly rather than ship. Trivially holds for any
-/// realistic runway floor.
-#[must_use]
-pub fn draw_cover_amount<R: GapRng + ?Sized>(count: u64, c_min: u64, rng: &mut R) -> u64 {
-    assert!(
-        c_min <= u64::MAX - COVER_SPAN_CAP_ATOMIC,
-        "c_min {c_min} too large: c_min + cover span would overflow u64"
-    );
-    let span = cover_dial_span_atomic(count);
-    c_min + bounded_uniform(rng, span)
+pub fn draw_cover_amount<R: GapRng + ?Sized>(rng: &mut R) -> u64 {
+    // `bounded_uniform` is inclusive of `max`, so pass `RUNG - MIN - 1` to make
+    // the upper edge exclusive: the draw spans `[MIN, RUNG)`.
+    const SPAN_MAX: u64 = COVER_RUNG_ATOMIC - COVER_MIN_ATOMIC - 1;
+    COVER_MIN_ATOMIC + bounded_uniform(rng, SPAN_MAX)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::draw::GapRng;
 
-    struct SplitMix64(u64);
-    impl GapRng for SplitMix64 {
+    struct Seq(Vec<u64>, usize);
+    impl GapRng for Seq {
         fn next_u64(&mut self) -> u64 {
-            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = self.0;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
+            let v = self.0[self.1 % self.0.len()];
+            self.1 += 1;
+            v
         }
     }
 
     #[test]
-    fn span_golden_vector() {
-        // Pinned (C, span) — the simulator and any wallet must reproduce these
-        // bit-for-bit (§8.8). These are arch-independent (pure integer).
-        assert_eq!(cover_dial_span_atomic(0), 0);
-        assert_eq!(cover_dial_span_atomic(13), 0); // tail boundary
-        assert_eq!(cover_dial_span_atomic(14), 5_113_114); // smallest nonzero span
-        assert_eq!(cover_dial_span_atomic(46), 3_750_000_000); // midpoint t=0.5 → cap/2
-        assert_eq!(cover_dial_span_atomic(79), 7_500_000_000); // ramp end → cap
-        assert_eq!(cover_dial_span_atomic(154), 7_500_000_000); // flat above
-    }
-
-    #[test]
-    fn span_is_monotone_and_capped() {
-        let mut prev = 0u64;
-        for c in 0..=200u64 {
-            let s = cover_dial_span_atomic(c);
-            assert!(s >= prev, "monotone at C={c}");
-            assert!(s <= COVER_SPAN_CAP_ATOMIC, "capped at C={c}");
-            prev = s;
+    fn draw_is_within_the_half_open_rung() {
+        // Sweep a wide spread of raw RNG words; every draw must land in
+        // [MIN, RUNG) — the postability floor at the bottom, upper-exclusive
+        // at the top so consecutive shard-count bands tile without overlap.
+        let mut rng = Seq(
+            vec![0, 1, u64::MAX, u64::MAX / 2, 12_345, 999_999_999_999, 7],
+            0,
+        );
+        for _ in 0..64 {
+            let cover = draw_cover_amount(&mut rng);
+            assert!(
+                cover >= COVER_MIN_ATOMIC,
+                "cover {cover} below postability floor"
+            );
+            assert!(
+                cover < COVER_RUNG_ATOMIC,
+                "cover {cover} reached or passed the rung"
+            );
         }
     }
 
     #[test]
-    fn span_decays_into_the_tail_no_clamp_kink() {
-        // §8.4: convex into the low tail (slope rising from 0 ⇒ decay, not clamp),
-        // concave into the cap (slope falling to 0 ⇒ no kink at the join).
-        let d = |c: u64| {
-            i128::from(cover_dial_span_atomic(c + 1)) - i128::from(cover_dial_span_atomic(c))
-        };
-        assert!(d(14) > d(13), "convex into the tail");
-        assert!(d(76) < d(75), "concave into the cap");
+    fn zero_cover_is_unreachable() {
+        // `cover == 0` reconstructs `funded == bond_floor` exactly — the tell
+        // the draw exists to remove. Unlike the entry-gap spread (where 0 is
+        // kept, because `t0` is private and a zero spread is unobservable),
+        // excluding it here removes an identifying value rather than shrinking
+        // a cover set.
+        let mut rng = Seq(vec![0], 0);
+        assert!(draw_cover_amount(&mut rng) >= COVER_MIN_ATOMIC);
     }
 
     #[test]
-    fn smallest_nonzero_span_is_not_near_constant() {
-        // Check 2(a): the first nonzero span is a genuine wide draw (~5.1M atomic
-        // values), not a dust-collapsed near-constant — the integer count step
-        // 13→14 jumps span 0 → 5.1M, so there is no tiny-span regime to collapse.
-        assert!(cover_dial_span_atomic(14) > 1_000_000);
+    fn postability_floor_covers_a_plausible_bond_post_fee() {
+        // The invariant that makes postability structural: the smallest
+        // possible cover still leaves the persona able to pay for its own
+        // bond post. Pinned as a ratio of the rung, not an absolute literal.
+        assert_eq!(COVER_MIN_ATOMIC, COVER_RUNG_ATOMIC / 100);
+        assert!(
+            COVER_MIN_ATOMIC > 0,
+            "a zero floor makes bricked personas reachable"
+        );
     }
 
     #[test]
-    fn bootstrap_tail_draws_exactly_c_min() {
-        // Check 2(b): at the conceded tail (span = 0) the draw is c_min exactly —
-        // the continuous span→0 limit, consuming one rng word like every draw.
-        let c_min = COVER_RUNWAY_FLOOR_ATOMIC;
-        for c in [0u64, 5, 13] {
-            let mut rng = SplitMix64(0xABCD_0000 ^ c);
-            for _ in 0..32 {
-                assert_eq!(draw_cover_amount(c, c_min, &mut rng), c_min);
-            }
-        }
-    }
-
-    #[test]
-    fn cover_draw_golden_vector_multiple_spans() {
-        // Check 1: pin the realized draw at SEVERAL spans (tail / mid / cap), since
-        // uniformity-of-the-draw is now a property of the span, not a fixed window.
-        // C_min pinned = 1 rung (uses COVER_RUNWAY_FLOOR_ATOMIC).
-        let c_min = COVER_RUNWAY_FLOOR_ATOMIC;
-        let draw1 = |count: u64, seed: u64| {
-            let mut rng = SplitMix64(seed);
-            draw_cover_amount(count, c_min, &mut rng)
-        };
-        // tail (span 5.1M), mid (span 3.75e9), cap (span 7.5e9). Bit-identical
-        // across architectures (pure-integer draw); drift = the draw changed.
-        assert_eq!(draw1(14, 0xC0FFEE01), 754_676_825);
-        assert_eq!(draw1(46, 0xC0FFEE02), 4_300_942_604);
-        assert_eq!(draw1(79, 0xC0FFEE03), 7_112_999_756);
-        // Every draw lands in [c_min, c_min + span].
-        for (count, seed) in [(14u64, 1u64), (46, 2), (79, 3), (200, 4)] {
-            let span = cover_dial_span_atomic(count);
-            let mut rng = SplitMix64(seed);
-            for _ in 0..256 {
-                let cover = draw_cover_amount(count, c_min, &mut rng);
-                assert!(cover >= c_min && cover <= c_min + span);
-            }
+    fn bands_tile_across_shard_counts() {
+        // funded(k) = RUNG*k + cover lands in [RUNG*k + MIN, RUNG*(k+1)).
+        // Consecutive k therefore tile: every amount above the floor is a
+        // plausible funding for some k, so no value identifies a bond.
+        let mut rng = Seq(vec![u64::MAX, 0, 42], 0);
+        for k in 1u64..8 {
+            let funded = COVER_RUNG_ATOMIC * k + draw_cover_amount(&mut rng);
+            assert!(funded >= COVER_RUNG_ATOMIC * k + COVER_MIN_ATOMIC);
+            assert!(funded < COVER_RUNG_ATOMIC * (k + 1));
         }
     }
 }

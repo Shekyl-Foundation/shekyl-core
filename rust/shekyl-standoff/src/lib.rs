@@ -64,10 +64,7 @@ pub mod cover;
 pub mod draw;
 pub mod plan;
 
-pub use cover::{
-    cover_dial_span_atomic, draw_cover_amount, COVER_RAMP_END_COUNT, COVER_RUNWAY_FLOOR_ATOMIC,
-    COVER_SPAN_CAP_ATOMIC, COVER_TAIL_COUNT,
-};
+pub use cover::{draw_cover_amount, COVER_MIN_ATOMIC, COVER_RUNG_ATOMIC};
 pub use draw::{bounded_uniform, draw_entry_gap, GapRng, DEFAULT_ENTRY_GAP_WINDOW};
 pub use plan::{plan_entry_seam, EntrySeamPlan};
 

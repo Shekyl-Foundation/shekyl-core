@@ -67,9 +67,16 @@
 //!   tax — heaviest on the smallest stakers, the very cold-start funders the
 //!   cover protects — is what bounds err-large from running to the ceiling.
 //!
-//! The production draw is float-free and single-sourced in `shekyl-standoff`
-//! (the `draw_cover_amount` sibling of `draw_entry_gap`, C4); this module is a
-//! sim/analysis harness and uses `f64` freely, exactly like `standoff.rs`.
+//! **⚠️ HISTORICAL — analyses the RETIRED `span(C)` cover curve.** The
+//! count-dependent curve this harness sized (cost = permanent locked capital;
+//! benefit = amount anonymity) was deleted 2026-07-21 (`ARCHIVAL_COVER_DRAW.md`
+//! retirement; PR #349) because keying the draw to public chain state made the
+//! cover interval publicly computable and required a standing-bond-count
+//! aggregate that is not to be built. The production draw is now a pinned
+//! `U[COVER_MIN_ATOMIC, COVER_RUNG_ATOMIC)` in `shekyl-standoff`, count-free.
+//! This module is retained as the record of the model that was considered and
+//! rejected — it is not a live sizing input. It uses `f64` freely, like
+//! `standoff.rs`.
 
 use serde::Serialize;
 
@@ -1622,17 +1629,12 @@ mod tests {
 
     #[test]
     fn cover_dial_matches_standoff_reference() {
-        // The sim's copy must equal the production form (`shekyl-standoff`, a
-        // dev-dependency) at EVERY count — so drift between the two is
-        // unrepresentable, not merely caught at the sampled golden points. If
-        // either changes without the other, this fails.
-        for c in 0..=200u64 {
-            assert_eq!(
-                cover_dial_span_atomic(c),
-                shekyl_standoff::cover_dial_span_atomic(c),
-                "sim k(C) diverged from shekyl-standoff at C={c}"
-            );
-        }
+        // (Historical.) This once cross-checked the sim `k(C)` against the
+        // production `shekyl_standoff::cover_dial_span_atomic` at every count.
+        // That production form is RETIRED (the span(C) curve was deleted,
+        // 2026-07-21) so there is nothing to cross-check against; the sim copy
+        // is kept self-contained as the record of the sized model. Its shape is
+        // still asserted by `cover_dial_span_is_monotone_and_capped` below.
     }
 
     #[test]
