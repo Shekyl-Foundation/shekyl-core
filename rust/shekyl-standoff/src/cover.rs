@@ -67,12 +67,17 @@ pub const COVER_RUNG_ATOMIC: u64 = 750_000_000;
 /// be raised rather than relied on to degrade.
 pub const COVER_MIN_ATOMIC: u64 = COVER_RUNG_ATOMIC / 100;
 
-// Postability is structural: a zero floor would make a funded-but-unbondable
-// persona reachable by an unlucky draw. Asserted at compile time — a relation
-// between constants belongs in the build, not a runtime test.
+// Two structural preconditions, asserted at compile time so a future constant
+// change fails the build with a clear message rather than a subtle defect:
+//   - `> 0`: a zero postability floor makes a funded-but-unbondable persona
+//     reachable by an unlucky draw.
+//   - `< RUNG`: the draw computes `RUNG - MIN - 1` as the exclusive-upper span;
+//     `MIN >= RUNG` would underflow during const-eval (and would also mean the
+//     support `[MIN, RUNG)` is empty). Guards the subtraction at its source.
 const _: () = assert!(
-    COVER_MIN_ATOMIC > 0,
-    "COVER_MIN_ATOMIC must be positive or bricked personas become reachable"
+    COVER_MIN_ATOMIC > 0 && COVER_MIN_ATOMIC < COVER_RUNG_ATOMIC,
+    "COVER_MIN_ATOMIC must satisfy 0 < MIN < COVER_RUNG_ATOMIC \
+     (positive postability floor; non-empty half-open draw support)"
 );
 
 /// Draw the funding-seam cover: uniform over `[COVER_MIN_ATOMIC,

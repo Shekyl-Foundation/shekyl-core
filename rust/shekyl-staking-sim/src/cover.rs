@@ -1627,16 +1627,13 @@ mod tests {
         assert_eq!(cover_dial_span_atomic(154), 7_500_000_000); // flat above
     }
 
-    #[test]
-    fn cover_dial_matches_standoff_reference() {
-        // (Historical.) This once cross-checked the sim `k(C)` against the
-        // production `shekyl_standoff::cover_dial_span_atomic` at every count.
-        // That production form is RETIRED (the span(C) curve was deleted,
-        // 2026-07-21) so there is nothing to cross-check against; the sim copy
-        // is kept self-contained as the record of the sized model. Its shape is
-        // still asserted by `cover_dial_span_is_monotone_and_capped` below.
-    }
-
+    // (Historical.) A test here once cross-checked the sim `k(C)` against the
+    // production `shekyl_standoff::cover_dial_span_atomic` at every count. That
+    // production form is RETIRED (the span(C) curve was deleted 2026-07-21), so
+    // there is nothing to cross-check against and the empty test was removed —
+    // an empty `#[test]` passes vacuously and reads as real coverage. The sim
+    // copy is kept self-contained as the record of the sized model; its shape
+    // is still asserted by `cover_dial_span_is_monotone_and_capped` below.
     #[test]
     fn cover_dial_span_is_monotone_and_capped() {
         let mut prev = 0u64;
