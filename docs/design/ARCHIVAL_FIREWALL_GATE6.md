@@ -1495,6 +1495,29 @@ and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.
   boundary clusters) — the knob to sweep. (d) **enumerate the separable events first** (prep-spend vs.
   announce vs. the bond-post tx carrying collateral-in) — a standoff only buys cover for events an
   observer sees as distinct (ties to the S-2 ledger). Sim the inversion as its own arm.
+
+  > **(d) CLOSED 2026-07-21 — the enumeration is ONE event, and the inversion was a
+  > category error.** This item's own criterion is the answer: *events an observer
+  > sees as distinct*. At entry exactly one event is distinct to any observer the
+  > posture admits — the **bond post**, which names `P` in cleartext. The funding
+  > transfer is on chain, but it is an ordinary FCMP++ transfer that does not name
+  > `P` with a CT-hidden source: **not attributable, therefore not an anchor.**
+  > Ordering an unidentifiable event against an identifiable one changes nothing
+  > observable.
+  >
+  > "Prep-spend", "announce" and "funding/entry event" are **pipeline stages of the
+  > single post** — wallet mints → sends to daemon → daemon propagates. The pipeline
+  > has two stages; the chain has one attributable event. A second observable exists
+  > only for someone watching the wallet→daemon hop — the adversarial daemon — which
+  > the certified own-node posture excludes by construction, where that hop is
+  > loopback. **The second event is the observer's artifact, never a chain fact.**
+  >
+  > Consequences: an inversion needs two orderable events, so there was never
+  > anything to invert; the §10.12 "announce" never needed building; and the single
+  > `U[0, window]` jitter on the bond post **is the mechanism in full** — one event
+  > against a *private* anchor `t0`, not one arm of a two-arm scheme. Production
+  > forces causal order and `entry_offset_blocks` is deleted from persisted state
+  > (`PENDING_POST_VERSION` 5). See method note 8.
   **BUILT + RUN (2026-06-13)** — `shekyl-staking-sim --standoff`
   (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*). Findings: anonymity is **rate-driven,
   not width-driven** (the background funding-spend rate is the load-bearing, *unmeasured* input —
@@ -2072,6 +2095,40 @@ on-chain value, not a derived one.**
 
 This note would have killed `span(C)` on sight, the way note 3 would have killed
 `DEFAULT_EXIT_GAP_WINDOW`.
+
+*Corollary instance (2026-07-21), recorded here rather than as its own note because
+it is the same error a third time:* the entry-gap draw is `U[0, window]`, **inclusive
+of `0`**, and a spread of `0` was briefly flagged as a defect worth excluding.
+Excluding it would (a) shrink the cover set from `window + 1` outcomes to `window`,
+and (b) hand the observer a structural fact — "never exactly at `t0`" — that they did
+not have. It is also moot: `t0` is the principal's **private** intent moment and never
+appears on chain, so there is no observable "landed at the anchor" to avoid. The
+instinct came from asking *did the jitter do its job?* — the developer's question —
+instead of *what can the adversary distinguish?* Avoiding the median, avoiding zero:
+same error, three surfaces.
+
+**Method note 8 (adopted 2026-07-21, from the entry-seam order-coin retirement —
+the reason the "second entry event" question kept regenerating): count the events on
+the CHAIN, not in the PIPELINE.** A wallet-side or network-side stage is not a
+consensus fact. The pipeline that produces a transaction has several stages — mint,
+send to daemon, propagate — and every re-reading of a doc written in pipeline terms
+re-derives a "second event" that consensus never sees. The correlator only sees chain
+events; a standoff can only permute chain events; so the unit of analysis is **what
+lands on chain**, and the pipeline that produced it is invisible to every observer the
+posture admits.
+
+The sharper test, and the one §10.12 pass-4 (d) already stated without applying:
+**an event counts only if an observer can see it as distinct.** Distinctness needs
+*attribution*, not mere presence. A transaction that exists on chain but carries no
+identifying mark — an ordinary FCMP++ transfer with a CT-hidden source — is on the
+chain and is **not an event** for correlation purposes. Presence is not the test;
+attributability is.
+
+Failure shape to watch for: a mechanism typed against `n` events when the chain
+supplies fewer. The order-coin tried to permute a two-element set that had one
+element; you cannot order an event relative to itself. When a mechanism's arity
+exceeds the chain's, the excess arity is always an observer's artifact — and asking
+*which observer* names the excluded posture immediately.
 
 ---
 
