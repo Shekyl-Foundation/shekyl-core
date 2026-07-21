@@ -55,12 +55,21 @@
 //! lands in `shekyl-gui-wallet`; it is **not** part of this PR. F-D2 is not
 //! recorded as landed until that flow is built.
 
+use std::collections::BTreeSet;
+
+use shekyl_curve_tree::{AssembleInput, Gindex};
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
+use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_types::{BlockHeight, GlobalOutputIndex};
 use shekyl_units::AtomicUnits;
 
+use super::bond_assembly::FundingInputContext;
+use super::bond_orchestrator::anchored_reference_block;
+use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::drain_amount::{choose_drain_amount, DrainAmountError, DrainRequest};
+use super::drain_assembly::{AssembleDrain, AssembledDrain, DrainDestination};
 use super::drain_select::{select_for_drain, DrainCandidate, DrainSelectError};
+use super::stake_engine::{PersonaHandle, StakeEngineError, StakeEngineHandle};
 
 /// The drain-path `P`-balance surface: a single aggregate spendable scalar
 /// (F-D2 core-side). Carries no per-output/per-epoch breakdown by
@@ -260,6 +269,281 @@ pub fn plan_drain(
     })
 }
 
+/// Why the drain orchestration pipeline refused before (or at) the actor
+/// hand-off (`ARCHIVAL_DRAIN_SEND_FD2.md` §4, DS-PR-2). Every arm is
+/// caller-recoverable state, not a defect: resync, lower the payment, or
+/// retry per the arm's docs.
+///
+/// Amount- and gindex-free by construction (the firewall's error-text
+/// discipline, `bond_orchestrator::funding_refusal_detail`): the drain
+/// amount is the §12.3 taint the firewall keeps dark, so no arm renders a
+/// payment figure or a funding output's global index. [`Plan`]'s inner
+/// [`DrainError`] arms are already scalar-free; the reference and tree arms
+/// carry only public chain/tree facts.
+///
+/// [`Plan`]: DrainOrchestrationError::Plan
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum DrainOrchestrationError {
+    /// No submittable curve-tree reference can be anchored right now (chain
+    /// too short, tree not yet ingesting, tree too far behind the tip, or the
+    /// reference-height block hash is outside the wallet's header window).
+    /// Resync and retry; assembling against a stale reference would produce a
+    /// proof the daemon rejects. Rendered from the shared send-path anchoring
+    /// helper ([`anchored_reference_block`]) — its detail strings are
+    /// amount-free.
+    #[error("no submittable reference can be anchored: {detail}")]
+    ReferenceUnanchorable {
+        /// The anchoring helper's own (scalar-free) reason.
+        detail: String,
+    },
+    /// The F-D1 drain planner refused: the requested payment was zero,
+    /// exceeded the spendable `P` balance, could not be covered by the
+    /// spendable outputs, or the aggregate arithmetic overflowed. Lower the
+    /// payment or wait for further `P` accrual (see [`DrainError`]'s arms).
+    #[error(transparent)]
+    Plan(#[from] DrainError),
+    /// A curve-tree handle call failed while assembling membership paths (a
+    /// client refusal or a stopped actor) — terminal until the engine
+    /// respawns the actor, or a resync for a lagging-ingest refusal.
+    #[error("curve tree unavailable or refused: {0:?}")]
+    Tree(CurveTreeHandleError),
+    /// The path assembly returned a set that does not match the selection
+    /// (a count mismatch, or no paths for a non-empty selection) —
+    /// structurally unreachable (`assemble_tx` returns exactly one path per
+    /// input, and a covered plan selects ≥1 input), so it signals a defect or
+    /// corrupt tree state rather than a caller-recoverable refusal. `detail`
+    /// carries only public counts, never a gindex or amount.
+    #[error("drain path assembly invariant broken: {detail}")]
+    PathAssembly {
+        /// The (scalar-free) invariant that failed.
+        detail: String,
+    },
+    /// The stake actor refused or failed the drain assembly itself (the
+    /// [`DrainAssemblyError`](super::drain_assembly::DrainAssemblyError) it
+    /// wraps names the drain-specific reason).
+    #[error(transparent)]
+    Stake(#[from] StakeEngineError),
+}
+
+/// The read-side operands of one drain assembly, borrowed from their owners
+/// (the engine's actors, the persisted P-scan state, the live reservation
+/// set) plus the engine-resolved principal destination. Bundled so the
+/// pipeline's signature names the flow's inputs once — the
+/// [`ClaimAssemblyContext`](super::claim_orchestrator::ClaimAssemblyContext)
+/// sibling for the value-out path.
+///
+/// The drain is a **self-initiated** `P`-spend (like a bond post, unlike a
+/// claim there is no daemon-side source to fetch): the reference is anchored
+/// off the wallet's own `chain_tip` ([`crate::engine::traits::LedgerEngine::synced_height`]),
+/// not a fetched `chain_height`.
+///
+/// Dead_code allow: constructed by the dispatch seam (DS-PR-2 commit 3,
+/// `drain_dispatch.rs`) — the same rule-21 staging the [`AssembleDrain`]
+/// message carries; reopened when that seam builds the ctx.
+#[allow(dead_code)]
+pub(crate) struct DrainCtx<'a> {
+    /// The stake actor — assembly and signing stay inside it (rule 36).
+    pub stake: &'a StakeEngineHandle,
+    /// The curve-tree actor — reference root and membership paths.
+    pub tree: &'a CurveTreeHandle,
+    /// The persona's persisted funding records
+    /// (`PScanState::funding_outputs`). Scoped to the handle's slot and
+    /// filtered against [`reserved`](Self::reserved) inside the pipeline
+    /// before the F-D1 projection.
+    pub funding_records: &'a [PFundingOutputRecord],
+    /// Live gindex reservations (outputs already committed to in-flight txs —
+    /// bond posts, claims, or other drains). Excluded from selection so a
+    /// drain can never double-spend an in-flight funding input.
+    pub reserved: &'a BTreeSet<GlobalOutputIndex>,
+    /// The wallet's own principal destination (vout 0), resolved engine-side
+    /// from the primary address (T-DS-3: never caller-supplied).
+    pub dest: DrainDestination,
+    /// Value to pay to the principal. The selection covers `payment + fee`;
+    /// the `P`-space change (`input_total − payment − fee`) is computed by the
+    /// assembly, and returns to `P` on a partial drain (T-DS-3).
+    pub payment: u64,
+    /// The fee the drain tx must fund from its swept `P` inputs.
+    pub fee: u64,
+    /// The wallet's synced chain tip — the send-path anchor input.
+    pub chain_tip: u64,
+}
+
+/// Scope `records` to `slot`'s own funding outputs, dropping any whose gindex
+/// is already [`reserved`](DrainCtx::reserved) for an in-flight tx.
+///
+/// `p_slot` and `gindex` are **public** identities (a slot ordinal and a
+/// chain-wide output index), not mint-lineage coordinates, so this filter
+/// runs *before* the F-D1 projection ([`plan_drain`]) without breaching the
+/// §12.3 carve — the same shape the claim/bond sweeps apply their `reserved`
+/// exclusion in.
+fn scoped_records(
+    records: &[PFundingOutputRecord],
+    slot: shekyl_types::PSlot,
+    reserved: &BTreeSet<GlobalOutputIndex>,
+) -> Vec<PFundingOutputRecord> {
+    records
+        .iter()
+        .filter(|r| r.p_slot == slot && !reserved.contains(&r.gindex))
+        .cloned()
+        .collect()
+}
+
+/// Run the full drain pipeline and return the actor's reply — the signed,
+/// wire-encoded, transfer-shaped drain plus its spent-gindex reservation set
+/// — **unbroadcast** (`ARCHIVAL_DRAIN_SEND_FD2.md` §4; the CB-3 discipline
+/// the claim path also follows: the builder never self-schedules, dispatch is
+/// the DS-PR-2 seam's).
+///
+/// A **free function over [`DrainCtx`]**, deliberately not an `Engine` method
+/// (the composition-decomposition discipline, `ENGINE_COMPOSITION_DECOMPOSITION.md`):
+/// the engine-side entry is a thin façade that resolves the destination,
+/// loads the operands, and delegates here — this pipeline never names
+/// `Engine`. Steps, in order:
+///
+/// 1. **Anchor** — one [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock)
+///    via the shared send-path helper ([`anchored_reference_block`], WI-2
+///    F-6): reorg-safe ∧ not-too-stale ∧ ingest-available ∧ ledger-present.
+///    A drain anchors identically to a bond, so it reuses the exported helper
+///    rather than re-deriving `tip − REF_ANCHOR_AGE`.
+/// 2. **Scope + plan** — restrict to the handle slot's unreserved records
+///    ([`scoped_records`]) and run the F-D1 planner ([`plan_drain`]: project →
+///    amount → select, the lineage-blind taint-carve) for `payment + fee`.
+/// 3. **Re-map** — the planner returns leaf positions (gindexes); this trust
+///    boundary re-maps them to the full records the path assembly needs
+///    (`output_key`, `commitment`), preserving the planner's selection order.
+/// 4. **Assemble paths** — every membership path against ONE reference
+///    snapshot ([`CurveTreeHandle::assemble_tx`]), zipped into
+///    [`FundingInputContext`]s + a shared [`TreeContext`] (the exact
+///    `assemble_bond_post` shape).
+/// 5. **Hand off** — [`StakeEngineHandle::assemble_drain`]; derivation,
+///    proving, and signing stay inside the actor, and the reply returns
+///    unbroadcast.
+///
+/// `block_hash_at` resolves the reference-height block hash from the caller's
+/// ledger (this pipeline has no ledger access of its own; the engine owns the
+/// header window). `handle` is the operation-scoped slot capability; its slot
+/// names the record filter.
+///
+/// Dead_code allow: the dispatch seam (DS-PR-2 commit 3, `drain_dispatch.rs`)
+/// and the RPC drain entry are the remaining consumers (rule-21 — reopened
+/// when the dispatch seam calls this).
+#[allow(dead_code)]
+pub(crate) async fn orchestrate_drain(
+    handle: PersonaHandle,
+    ctx: DrainCtx<'_>,
+    block_hash_at: impl FnOnce(u64) -> Option<[u8; 32]>,
+) -> Result<AssembledDrain, DrainOrchestrationError> {
+    // 1. Anchor one ReferenceBlock via the ordinary send-path procedure
+    //    (shared with the bond path — never a hand-rolled `tip − age`, WI-2
+    //    F-6). Its refusals are scalar-free; render them into the drain arm.
+    let reference = anchored_reference_block(ctx.tree, ctx.chain_tip, block_hash_at)
+        .await
+        .map_err(|e| DrainOrchestrationError::ReferenceUnanchorable {
+            detail: e.to_string(),
+        })?;
+    let reference_height = BlockHeight::from_raw(reference.height.0);
+
+    // 2. Scope to the persona's own unreserved records, then run the F-D1
+    //    planner (project → amount → select). The selection target is
+    //    `payment + fee`: both leave `P`, so the swept inputs must cover the
+    //    fee as well as the payment (the residual is the change the assembly
+    //    returns to `P`). `payment + fee` overflow is a corrupt-state signal,
+    //    folded into the planner's own overflow arm.
+    let scoped = scoped_records(ctx.funding_records, handle.p_slot(), ctx.reserved);
+    let target = ctx
+        .payment
+        .checked_add(ctx.fee)
+        .ok_or(DrainError::AmountOverflow)?;
+    let plan = plan_drain(&scoped, reference_height, AtomicUnits::from_raw(target))?;
+
+    // 3. Re-map the selected leaf positions to the full records the path
+    //    assembly consumes, preserving the planner's (largest-first) order.
+    //    Sound `expect`: `plan.inputs` is a subset of `scoped`'s gindexes by
+    //    construction — the planner selects only from the candidates this
+    //    same scoped set projects.
+    let selected: Vec<PFundingOutputRecord> = plan
+        .inputs
+        .iter()
+        .map(|g| {
+            scoped
+                .iter()
+                .find(|r| r.gindex == *g)
+                .cloned()
+                .expect("plan_drain selects only from the scoped candidate set")
+        })
+        .collect();
+
+    // 4. Assemble every membership path against ONE reference snapshot, then
+    //    zip records↔paths into the funding contexts (the exact
+    //    `assemble_bond_post` shape — one shared TreeContext, per-input
+    //    leaf chunk + layers).
+    let assemble_inputs: Vec<AssembleInput> = selected
+        .iter()
+        .map(|r| AssembleInput {
+            gindex: Gindex(r.gindex.to_raw()),
+            output_key: r.output_key,
+            commitment: r.commitment,
+        })
+        .collect();
+    let paths = ctx
+        .tree
+        .assemble_tx(reference, assemble_inputs)
+        .await
+        .map_err(DrainOrchestrationError::Tree)?;
+    if paths.len() != selected.len() {
+        return Err(DrainOrchestrationError::PathAssembly {
+            detail: format!(
+                "expected {} membership paths, got {}",
+                selected.len(),
+                paths.len()
+            ),
+        });
+    }
+    let first = paths
+        .first()
+        .ok_or_else(|| DrainOrchestrationError::PathAssembly {
+            detail: "assemble_tx returned no paths for a non-empty selection".to_owned(),
+        })?;
+    let tree_ctx = TreeContext {
+        reference_block: first.tree.reference_block,
+        tree_root: first.tree.tree_root,
+        tree_depth: first.tree.tree_depth,
+    };
+    let funding: Vec<FundingInputContext> = selected
+        .into_iter()
+        .zip(paths)
+        .map(|(record, path)| FundingInputContext {
+            record,
+            leaf_chunk: path
+                .leaf_chunk
+                .iter()
+                .map(|cl| LeafEntry {
+                    output_key: cl.output_key,
+                    key_image_gen: cl.key_image_gen,
+                    commitment: cl.commitment,
+                    h_pqc: cl.h_pqc,
+                })
+                .collect(),
+            c1_layers: path.c1_layers,
+            c2_layers: path.c2_layers,
+        })
+        .collect();
+
+    // 5. Hand the operands to the actor (derivation, proving, signing stay
+    //    inside it) and return the reply unbroadcast (CB-3).
+    Ok(ctx
+        .stake
+        .assemble_drain(AssembleDrain {
+            handle,
+            funding,
+            tree_ctx,
+            dest: ctx.dest,
+            payment_amount: ctx.payment,
+            fee: ctx.fee,
+        })
+        .await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +613,67 @@ mod tests {
             AtomicUnits::from_raw(101),
         );
         assert_eq!(err, Err(DrainError::Unaffordable));
+    }
+
+    #[test]
+    fn scoped_records_keeps_own_slot_and_drops_reserved() {
+        use shekyl_types::PSlot;
+
+        let s =
+            |slot: u32, g: u64| funding_record(slot, g, 90, 100, MintLineageOutput::BondPostChange);
+        // slot 0: g1 (keep), g2 (reserved → drop), g4 (keep); slot 1: g3 (foreign → drop).
+        let records = [s(0, 1), s(0, 2), s(1, 3), s(0, 4)];
+        let reserved: BTreeSet<GlobalOutputIndex> =
+            [GlobalOutputIndex::from_raw(2)].into_iter().collect();
+
+        let kept = scoped_records(&records, PSlot::from_raw(0), &reserved);
+        let gindexes: Vec<u64> = kept.iter().map(|r| r.gindex.to_raw()).collect();
+        assert_eq!(
+            gindexes,
+            vec![1, 4],
+            "keep slot-0 unreserved records; drop the reserved g2 and the foreign-slot g3"
+        );
+    }
+
+    /// Composition + firewall pins (`wire.rs`-tripwire style; the test module
+    /// is split off so the needles cannot self-match):
+    ///
+    /// 1. the drain pipeline is a **free function** over [`DrainCtx`], not an
+    ///    `Engine` method — no `self_arc`, no `Arc<RwLock<Self>>` (the
+    ///    `ENGINE_COMPOSITION_DECOMPOSITION.md` discipline the engine-side
+    ///    entry delegates through);
+    /// 2. selection routes ONLY through the F-D1 planner ([`plan_drain`]) —
+    ///    never the bond sweep (`sweep_funding_outputs`), which would bypass
+    ///    the §12.3 drain-amount taint-carve.
+    #[test]
+    fn orchestrate_drain_is_a_free_function_over_the_fd1_carve() {
+        let (src, _tests) = include_str!("drain_orchestrator.rs")
+            .split_once("\n#[cfg(test)]")
+            .expect("drain_orchestrator.rs has a #[cfg(test)] section to exclude from the scan");
+
+        let free_fn = concat!("pub(crate) async fn orchestrate", "_drain(");
+        assert!(
+            src.contains(free_fn),
+            "the drain pipeline must be a free function over DrainCtx"
+        );
+        assert!(
+            !src.contains("self_arc"),
+            "orchestrate_drain must not be an Engine method (no self_arc)"
+        );
+        assert!(
+            !src.contains("Arc<RwLock"),
+            "orchestrate_drain must not hold the Engine lock"
+        );
+
+        let carve_call = concat!("plan", "_drain(");
+        assert!(
+            src.contains(carve_call),
+            "selection must route through the F-D1 planner (plan_drain)"
+        );
+        let bond_sweep = concat!("sweep", "_funding_outputs(");
+        assert!(
+            !src.contains(bond_sweep),
+            "the drain must not select via the bond sweep (it bypasses the §12.3 carve)"
+        );
     }
 }
