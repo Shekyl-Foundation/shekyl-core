@@ -52,7 +52,7 @@ pub const COVER_RUNG_ATOMIC: u64 = 750_000_000;
 /// **postability is an enforced invariant, not a user responsibility.**
 ///
 /// **Pinned, never derived from a live fee estimate.** Fee rates come from a
-/// daemon snapshot ([`FeeRate`](shekyl_rpc_client::FeeRate)); deriving the
+/// daemon snapshot (`shekyl_rpc_client::FeeRate`); deriving the
 /// bound from one would give wallets *different draw supports*, which is the
 /// cross-wallet uniformity break the whole mechanism exists to close — two
 /// wallets drawing from different distributions is itself the leak. Every
@@ -66,6 +66,14 @@ pub const COVER_RUNG_ATOMIC: u64 = 750_000_000;
 /// with `InsufficientFunding` and the user tops up — but the constant should
 /// be raised rather than relied on to degrade.
 pub const COVER_MIN_ATOMIC: u64 = COVER_RUNG_ATOMIC / 100;
+
+// Postability is structural: a zero floor would make a funded-but-unbondable
+// persona reachable by an unlucky draw. Asserted at compile time — a relation
+// between constants belongs in the build, not a runtime test.
+const _: () = assert!(
+    COVER_MIN_ATOMIC > 0,
+    "COVER_MIN_ATOMIC must be positive or bricked personas become reachable"
+);
 
 /// Draw the funding-seam cover: uniform over `[COVER_MIN_ATOMIC,
 /// COVER_RUNG_ATOMIC)` — one full rung wide, upper-exclusive.
@@ -157,18 +165,6 @@ mod tests {
         // a cover set.
         let mut rng = Seq(vec![0], 0);
         assert!(draw_cover_amount(&mut rng) >= COVER_MIN_ATOMIC);
-    }
-
-    #[test]
-    fn postability_floor_covers_a_plausible_bond_post_fee() {
-        // The invariant that makes postability structural: the smallest
-        // possible cover still leaves the persona able to pay for its own
-        // bond post. Pinned as a ratio of the rung, not an absolute literal.
-        assert_eq!(COVER_MIN_ATOMIC, COVER_RUNG_ATOMIC / 100);
-        assert!(
-            COVER_MIN_ATOMIC > 0,
-            "a zero floor makes bricked personas reachable"
-        );
     }
 
     #[test]
