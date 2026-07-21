@@ -581,10 +581,17 @@ to the same two-confidential-output wire shape, so T-DS-6's absorption is
 drain-all, and an ordinary 2-out transfer. A net-payment `< 2` drain-all
 (a single atomic unit after fee — pathological, the fee dwarfs it) cannot
 form two nonzero outputs and is refused **loudly**
-(`StakeEngineError::DrainPaymentUnsplittable`) rather than shaped into a
-1-out tx. Impl: `drain_assembly.rs` §"the composite wire-shape arm";
+(`DrainAssemblyError::PaymentUnsplittable`) rather than shaped into a
+1-out tx; a zero payment is refused up front
+(`DrainAssemblyError::PaymentZero`) before any output construction, rather
+than deferred to the shared prover's opaque `ZeroOutputAmount`. The drain
+owns a dedicated `DrainAssemblyError` taxonomy wrapped by
+`StakeEngineError::DrainAssembly`, so a value-out failure never mis-reports
+as "bond assembly" (the borrowed `BondAssemblyError` is retired from the
+drain path). Impl: `drain_assembly.rs` §"the composite wire-shape arm";
 covered by `stake_engine.rs` `drain_assembly_shape::{drain_is_transfer_shaped,
-drain_all_still_emits_two_outputs, drain_all_net_below_two_is_refused}`.
+drain_all_still_emits_two_outputs, drain_all_net_below_two_is_refused,
+drain_zero_payment_is_refused}`.
 The byte-diff arm (a real drain vs a real transfer) is unchanged and
 still carried to the DS-PR-2 regtest e2e.
 

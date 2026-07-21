@@ -91,9 +91,93 @@ use shekyl_types::GlobalOutputIndex;
 use shekyl_units::AtomicUnits;
 use zeroize::Zeroizing;
 
-use super::bond_assembly::{finalize_bond_tx, BondAssemblyError, FundingInputContext, PBoundBytes};
+use super::bond_assembly::{finalize_bond_tx, FundingInputContext, PBoundBytes};
 use super::sign_bridge::{assemble_transfer_wire, build_output};
 use super::stake_engine::{prepare_funding_inputs, PersonaHandle, StakeEngineError};
+
+/// Why an [`assemble_drain_tx`] pipeline step refused or failed.
+///
+/// The value-out sibling of
+/// [`BondAssemblyError`](super::bond_assembly::BondAssemblyError) and
+/// [`EmissionClaimError`](super::emission_claim::EmissionClaimError): each
+/// assembly subsystem owns its own taxonomy so a failure names the *operation*
+/// that failed — a drain, never "bond assembly" — at both the outer
+/// [`StakeEngineError::DrainAssembly`] prefix and the inner message. In every
+/// arm nothing was persisted and no funding was reserved (§3.6).
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum DrainAssemblyError {
+    /// The caller asked to pay **zero** to the principal. A drain's whole
+    /// purpose is to move value out of `P`-space to the principal address; a
+    /// zero payment moves nothing and cannot form the mandatory nonzero
+    /// principal output (vout 0). Refused as an invalid parameter **before**
+    /// any output construction or proving, rather than surfacing later as the
+    /// shared prover's opaque `ZeroOutputAmount` on a zero-value vout — a
+    /// caller-input error, diagnosed at its source. Non-terminal: re-request
+    /// with a nonzero payment.
+    #[error("drain payment amount is zero; a drain must pay a nonzero amount to the principal")]
+    PaymentZero,
+
+    /// A drain-all (`change == 0`) whose net payment (`available - fee`) is too
+    /// small to split into two nonzero principal outputs — i.e. `< 2` atomic
+    /// units. Every valid tx must carry two nonzero outputs (consensus
+    /// `vout >= 2` + the prover's zero-output rejection), so a 1-atomic net
+    /// drain cannot be shaped as a modal 2-out transfer. Pathological: the fee
+    /// dwarfs a single atomic unit, so a sane selection never reaches it —
+    /// refused loudly rather than shaped into a distinguishable 1-out (T-DS-6).
+    #[error(
+        "net payment {net} is too small to split into two nonzero outputs; \
+         a drain-all must leave at least 2 atomic units after the fee"
+    )]
+    PaymentUnsplittable {
+        /// The net (`available - fee`) that could not be split.
+        net: u64,
+    },
+
+    /// The selected funding set sums below `payment + fee`. Unlike a bond
+    /// (which funds a protocol floor from accrued earnings), a drain is a
+    /// user-initiated value-out, so the remedy is to lower the requested
+    /// payment or wait for further `P` accrual — never a reach-across to
+    /// principal outputs (the funding-seam linkage the firewall forbids).
+    #[error(
+        "insufficient P-side funding: {available} available < {required} required; \
+         lower the drain payment or wait for further P accrual"
+    )]
+    InsufficientFunding {
+        /// Sum of the selected funding records.
+        available: u64,
+        /// `payment + fee`.
+        required: u64,
+    },
+
+    /// The funding arithmetic (`payment + fee`, or the available sum)
+    /// overflowed `u64` — unreachable with consensus-bounded amounts; fail
+    /// closed rather than wrap.
+    #[error("funding amount arithmetic overflowed")]
+    AmountOverflow,
+
+    /// A cryptographic step of the assemble pipeline failed (output
+    /// construction, proving, PQC auth signing, wire assembly, or identity
+    /// encoding). `stage` names the pipeline step; `detail` is the wrapped
+    /// error's rendering (public error text — never key material). Nothing was
+    /// persisted (§3.6: no partial state, funding never reserved).
+    #[error("failed at {stage}: {detail}")]
+    Build {
+        /// Pipeline step that failed.
+        stage: &'static str,
+        /// Rendered cause.
+        detail: String,
+    },
+}
+
+impl DrainAssemblyError {
+    /// Shorthand for the pipeline-step failure arm.
+    pub(crate) fn build(stage: &'static str, err: impl std::fmt::Display) -> Self {
+        Self::Build {
+            stage,
+            detail: err.to_string(),
+        }
+    }
+}
 
 /// The principal destination a drain pays to (vout 0).
 ///
@@ -177,6 +261,15 @@ pub(super) async fn assemble_drain_tx(
     payment_amount: u64,
     fee: u64,
 ) -> Result<AssembledDrain, StakeEngineError> {
+    // ── Step 0: parameter precondition. A drain moves value OUT of `P` to the
+    // principal, so it must pay a nonzero amount there; a zero payment forms no
+    // valid principal output. Refuse here as a caller-input error rather than
+    // deferring to the shared prover's opaque `ZeroOutputAmount` on a
+    // zero-value vout 0. ──
+    if payment_amount == 0 {
+        return Err(DrainAssemblyError::PaymentZero.into());
+    }
+
     // ── Step 1: funding arithmetic (checked). `available == payment + fee +
     // change` exactly; `change` is the residual returned to `P` (T-DS-3), zero
     // on a drain-all. ──
@@ -184,13 +277,13 @@ pub(super) async fn assemble_drain_tx(
     for ctx in &funding {
         available = available
             .checked_add(ctx.record.amount.to_raw())
-            .ok_or(BondAssemblyError::AmountOverflow)?;
+            .ok_or(DrainAssemblyError::AmountOverflow)?;
     }
     let required = payment_amount
         .checked_add(fee)
-        .ok_or(BondAssemblyError::AmountOverflow)?;
+        .ok_or(DrainAssemblyError::AmountOverflow)?;
     if available < required {
-        return Err(BondAssemblyError::InsufficientFunding {
+        return Err(DrainAssemblyError::InsufficientFunding {
             available,
             required,
         }
@@ -240,9 +333,10 @@ pub(super) async fn assemble_drain_tx(
         // principal. Requires `payment_amount >= 2`; a 1-atomic net drain cannot
         // form two nonzero outputs (refused loudly — T-DS-6 never yields a 1-out).
         if payment_amount < 2 {
-            return Err(StakeEngineError::DrainPaymentUnsplittable {
+            return Err(DrainAssemblyError::PaymentUnsplittable {
                 net: payment_amount,
-            });
+            }
+            .into());
         }
         let second = payment_amount / 2; // >= 1 for payment_amount >= 2
         let first = payment_amount - second; // >= 1
@@ -276,7 +370,7 @@ pub(super) async fn assemble_drain_tx(
         spec0.amount,
         0,
     )
-    .map_err(|e| BondAssemblyError::build("drain vout0 construction", e))?;
+    .map_err(|e| DrainAssemblyError::build("drain vout0 construction", e))?;
     let vout1 = build_output(
         &tx_key_secret,
         spec1.spend_pk,
@@ -285,7 +379,7 @@ pub(super) async fn assemble_drain_tx(
         spec1.amount,
         1,
     )
-    .map_err(|e| BondAssemblyError::build("drain vout1 construction", e))?;
+    .map_err(|e| DrainAssemblyError::build("drain vout1 construction", e))?;
 
     let built_outputs = [vout0, vout1];
     let output_infos: Vec<OutputInfo> = built_outputs.iter().map(|b| b.info.clone()).collect();
@@ -339,8 +433,8 @@ pub(super) async fn assemble_drain_tx(
         .map(|signed| (signed, spend_inputs))
     })
     .await
-    .map_err(|e| BondAssemblyError::build("drain proving offload join", e))?
-    .map_err(|e| BondAssemblyError::build("drain proving", e))?;
+    .map_err(|e| DrainAssemblyError::build("drain proving offload join", e))?
+    .map_err(|e| DrainAssemblyError::build("drain proving", e))?;
 
     // ── Step 7: assemble the wire input through the SHARED transfer-wire
     // constructor (`sign_bridge::assemble_transfer_wire`) — the exact same
@@ -359,15 +453,15 @@ pub(super) async fn assemble_drain_tx(
         &signed,
         &pqc_pubkeys,
     )
-    .map_err(|e| BondAssemblyError::build("drain wire assembly", e))?;
+    .map_err(|e| DrainAssemblyError::build("drain wire assembly", e))?;
 
     // ── Step 8: PQC auth completion (fast; inline). One payload hash per spend
     // slot — no `+1` bond slot (the byte-shape difference between a drain and a
     // bond is exactly this: a drain has no identity auth). ──
     let payload_hashes = phase1_payload_hashes(&wire)
-        .map_err(|e| BondAssemblyError::build("phase1 payload hash", e))?;
+        .map_err(|e| DrainAssemblyError::build("phase1 payload hash", e))?;
     if payload_hashes.len() != spend_inputs.len() {
-        return Err(BondAssemblyError::build(
+        return Err(DrainAssemblyError::build(
             "phase1 payload hash",
             format!(
                 "expected {} payload hashes, got {}",
@@ -378,7 +472,7 @@ pub(super) async fn assemble_drain_tx(
         .into());
     }
     wire.pqc_auths = sign_pqc_auths(&payload_hashes, &spend_inputs)
-        .map_err(|e| BondAssemblyError::build("pqc auth signing", e))?;
+        .map_err(|e| DrainAssemblyError::build("pqc auth signing", e))?;
     drop(spend_inputs); // secrets end here; nothing below needs them
 
     // ── Step 9: encode + mint at the P-1 site. The drain is a P-spend, so its
@@ -386,7 +480,7 @@ pub(super) async fn assemble_drain_tx(
     let hybrid_pk_bytes = keys
         .hybrid_sign_pk
         .to_canonical_bytes()
-        .map_err(|e| BondAssemblyError::build("identity encoding", e))?;
+        .map_err(|e| DrainAssemblyError::build("identity encoding", e))?;
     let persona = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
     let bound_tx = finalize_bond_tx(persona, &wire)?;
 

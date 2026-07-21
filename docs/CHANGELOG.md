@@ -79,7 +79,11 @@
   ordinary transfer). Partial-drain change returns to `P`'s own base spend
   key (T-DS-3, change-to-principal unrepresentable — no destination arg on
   the surface); a net-payment `< 2` drain-all is refused loudly
-  (`StakeEngineError::DrainPaymentUnsplittable`). Threat-arm dispositions
+  (`DrainAssemblyError::PaymentUnsplittable`), and a zero payment is refused
+  up front (`DrainAssemblyError::PaymentZero`) before any output construction.
+  The drain owns a dedicated `DrainAssemblyError` taxonomy wrapped by
+  `StakeEngineError::DrainAssembly` (a value-out failure never mis-reports as
+  "bond assembly"). Threat-arm dispositions
   (T-DS-4 crossing-class maps onto an existing F-D4 §16 class — F-W10: the
   drain is not an identifiable transaction on-chain; DS-4 exit-reserve:
   partial drain is a mid-life constructor reserving `EXIT_FEE_RESERVE_ATOMIC`,

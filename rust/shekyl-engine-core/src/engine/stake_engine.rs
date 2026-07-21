@@ -172,7 +172,7 @@ use super::backing_set::ClaimOperands;
 use super::bond_assembly::{
     finalize_bond_tx, wire_bond_post_input, BondAssemblyError, FundingInputContext, PBoundBytes,
 };
-use super::drain_assembly::{assemble_drain_tx, AssembleDrain, AssembledDrain};
+use super::drain_assembly::{assemble_drain_tx, AssembleDrain, AssembledDrain, DrainAssemblyError};
 use super::emission_claim::{
     assemble_claims, derive_claimable_epochs, self_check_claims, EmissionClaimError,
     EMISSION_CLAIMS_SIZE_BUDGET,
@@ -655,21 +655,14 @@ pub(crate) enum StakeEngineError {
     #[error("emission claim: {0}")]
     EmissionClaim(#[from] EmissionClaimError),
 
-    /// A drain-all (`change == 0`) whose net payment (`available - fee`) is too
-    /// small to split into two nonzero principal outputs — i.e. `< 2` atomic
-    /// units. Every valid tx must carry two nonzero outputs (consensus
-    /// `vout >= 2` + the prover's zero-output rejection), so a 1-atomic net
-    /// drain cannot be shaped as a modal 2-out transfer. Pathological: the fee
-    /// dwarfs a single atomic unit, so a sane selection never reaches it —
-    /// refused loudly rather than shaped into a distinguishable 1-out tx (T-DS-6).
-    #[error(
-        "drain net payment {net} is too small to split into two nonzero outputs; \
-         a drain-all must leave at least 2 atomic units after the fee"
-    )]
-    DrainPaymentUnsplittable {
-        /// The net (`available - fee`) that could not be split.
-        net: u64,
-    },
+    /// An [`AssembleDrain`] (F-D2 DS-PR-1) pipeline step refused or failed —
+    /// payment-parameter validation, funding arithmetic, output construction,
+    /// proving, PQC auth signing, or wire encoding. The wrapped
+    /// [`DrainAssemblyError`] names the failure; the drain path owns its own
+    /// taxonomy (not the bond's) so a value-out failure never mis-reports as
+    /// "bond assembly". Nothing was persisted and no funding was reserved.
+    #[error("drain assembly: {0}")]
+    DrainAssembly(#[from] DrainAssemblyError),
 }
 
 /// The bonded union's transient scan inputs (SP-3 dual extractor): one
@@ -4841,7 +4834,7 @@ mod tests {
         use shekyl_engine_state::pscan_state::MintLineageOutput;
         use shekyl_wire::{Ct, Transaction};
 
-        use crate::engine::drain_assembly::{AssembleDrain, DrainDestination};
+        use crate::engine::drain_assembly::{AssembleDrain, DrainAssemblyError, DrainDestination};
         use crate::engine::synthetic_tree::consistent_synthetic_path;
 
         /// Two REAL P-paid funding inputs (`600_000 + 400_000`) in one
@@ -5025,7 +5018,7 @@ mod tests {
 
         /// A drain-all whose net payment (`available - fee`) is a single atomic
         /// unit cannot form two nonzero outputs, so it is refused **loudly** with
-        /// [`StakeEngineError::DrainPaymentUnsplittable`] rather than shaped into
+        /// [`DrainAssemblyError::PaymentUnsplittable`] rather than shaped into
         /// the distinguishable 1-out (T-DS-6). Pathological — the fee dwarfs one
         /// atomic unit — but the refusal is structural, not best-effort.
         #[tokio::test(flavor = "multi_thread")]
@@ -5051,8 +5044,51 @@ mod tests {
                 .await
                 .expect_err("a 1-atomic net drain-all cannot be a modal 2-out");
             assert!(
-                matches!(err, StakeEngineError::DrainPaymentUnsplittable { net: 1 }),
-                "expected DrainPaymentUnsplittable {{ net: 1 }}, got {err:?}"
+                matches!(
+                    err,
+                    StakeEngineError::DrainAssembly(DrainAssemblyError::PaymentUnsplittable {
+                        net: 1
+                    })
+                ),
+                "expected DrainAssembly(PaymentUnsplittable {{ net: 1 }}), got {err:?}"
+            );
+        }
+
+        /// A drain that pays **zero** to the principal is not a drain: it is
+        /// refused up front with [`DrainAssemblyError::PaymentZero`] before any
+        /// output construction, rather than surfacing later as the shared
+        /// prover's opaque `ZeroOutputAmount` on a zero-value vout 0 — a
+        /// caller-input error, diagnosed at its source.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn drain_zero_payment_is_refused() {
+            let handle = spawn_over(&[0], &[], None);
+            let h = handle
+                .mint_handle(PSlot::from_raw(0))
+                .await
+                .expect("slot 0 held");
+            let (funding, tree_ctx, dest, available) = drain_fixture();
+
+            // Ample funding, small fee ⇒ change > 0; the zero payment (not the
+            // funding) is what is rejected, before any output is built.
+            let fee = 10_000u64;
+            assert!(available > fee, "fixture funds exceed the fee (change > 0)");
+            let err = handle
+                .assemble_drain(AssembleDrain {
+                    handle: h,
+                    funding,
+                    tree_ctx,
+                    dest,
+                    payment_amount: 0,
+                    fee,
+                })
+                .await
+                .expect_err("a zero-payment drain pays nothing to principal");
+            assert!(
+                matches!(
+                    err,
+                    StakeEngineError::DrainAssembly(DrainAssemblyError::PaymentZero)
+                ),
+                "expected DrainAssembly(PaymentZero), got {err:?}"
             );
         }
 
