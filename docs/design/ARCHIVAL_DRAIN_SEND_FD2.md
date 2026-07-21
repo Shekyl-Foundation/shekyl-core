@@ -795,18 +795,28 @@ sub-PR lands.
   record + `reserved_gindexes` fold + schema bump (v4 → v5) in
   `engine-state`. Forward-action arms discharged at source:
   - **T-DS-6 ∧ T-DS-7 composite wire-shape arm** — realized *by
-    construction*: every output built by the transfer path's `build_output`,
-    inputs by `prepare_funding_inputs`, prefix/proving/PQC-auth by the plain
-    transfer calls with empty `extra_inputs` + spend-only `pqc_auths`. **The
-    ratified zero-value-change mechanism was found unrealizable through the
-    shared prover** (rejects `ZeroOutputAmount`) — recorded as the §5
-    post-closure substrate pin (2026-07-20): drain-all now **splits the
-    payment into two nonzero principal outputs**, so the two-nonzero-output
-    wire shape is uniform across partial drain / drain-all / ordinary
-    transfer (T-DS-6 absorption *strengthened*). The real-tx byte-diff arm
-    itself rides the DS-PR-2 regtest e2e (a real drain tx must exist to
-    diff). Covered by `drain_assembly_shape::{drain_is_transfer_shaped,
-    drain_all_still_emits_two_outputs, drain_all_net_below_two_is_refused}`.
+    construction*, now compile-time-enforced: the drain's whole `WireEncodeInput`
+    is built by the **single shared constructor** `sign_bridge::
+    assemble_transfer_wire`, the exact one `sign_bridge::sign_tx` calls, so
+    transfer-parity is one-constructor-two-callers rather than a property a test
+    re-establishes (outputs still via `build_output`, inputs via
+    `prepare_funding_inputs`, prefix/proving/PQC-auth by the plain transfer calls
+    with empty `extra_inputs` + spend-only `pqc_auths`). **The ratified
+    zero-value-change mechanism was found unrealizable through the shared prover**
+    (rejects `ZeroOutputAmount`) — recorded as the §5 post-closure substrate pin
+    (2026-07-20): drain-all now **splits the payment into two nonzero principal
+    outputs**, so the two-nonzero-output wire shape is uniform across partial
+    drain / drain-all / ordinary transfer (T-DS-6 absorption *strengthened*).
+    The one degree of freedom the shared constructor does not pin —
+    split-on-drain-all reshaping the amounts without perturbing the skeleton — is
+    guarded **in-slice** by a whole-tx normalized byte-diff
+    (`drain_partial_and_drain_all_are_wire_identical`: partial and drain-all
+    serialize identically modulo hidden/committed leaves; a non-vacuous diff, the
+    raw bytes are asserted to differ). The **full transfer-vs-drain** byte-diff
+    still rides the DS-PR-2 regtest e2e (a real end-to-end transfer tx must exist
+    to diff against). Covered by `drain_assembly_shape::{drain_is_transfer_shaped,
+    drain_all_still_emits_two_outputs, drain_all_net_below_two_is_refused,
+    drain_partial_and_drain_all_are_wire_identical}`.
   - **T-DS-3 change→`P`** — partial-drain change pays `P`'s own base spend
     key (`keys.spend_pk`); the entry point carries **no** destination-address
     arg (principal is engine-resolved), so change-to-principal is

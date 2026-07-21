@@ -22,7 +22,8 @@ use shekyl_crypto_pq::output::construct_output;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
-    tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth, SpendInput, WireEncodeInput,
+    tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput,
+    WireEncodeInput,
 };
 use shekyl_units::AtomicUnits;
 use zeroize::Zeroizing;
@@ -122,6 +123,66 @@ pub(super) fn build_output(
         view_tag: Some(constructed.view_tag_prefilter),
         kem_blob,
         h_pqc: constructed.h_pqc,
+    })
+}
+
+/// Assemble the transfer-shaped [`WireEncodeInput`] shared by the ordinary
+/// transfer path ([`sign_tx`]) and the F-D2 drain
+/// ([`assemble_drain_tx`](super::drain_assembly::assemble_drain_tx)).
+///
+/// This is the **single definition** of a confidential FCMP++ spend's wire
+/// shape: empty `extra_inputs` (no bond/emission prefix input), all-zero
+/// `output_amounts` (every vout confidential), and exactly one *placeholder*
+/// `pqc_auth` per spend — public key only; the signature is filled by the
+/// caller's [`phase1_payload_hashes`] + [`sign_pqc_auths`] pass. Because both
+/// paths route through here, a drain's full wire serialization is
+/// transfer-identical **by construction** rather than by a hand-copied literal
+/// that could silently drift — this is the enforcement mechanism for the
+/// T-DS-6 ∧ T-DS-7 composite wire-shape arm (`ARCHIVAL_DRAIN_SEND_FD2.md` §5),
+/// not a test that green-checks each sub-surface separately.
+///
+/// `pqc_pubkeys` is one serialized hybrid public key per spend input, in the
+/// same (strict-descending key-image) order as `key_images`.
+pub(super) fn assemble_transfer_wire(
+    key_images: Vec<[u8; 32]>,
+    output_keys: Vec<[u8; 32]>,
+    view_tags: Vec<Option<u8>>,
+    tx_extra: Vec<u8>,
+    fee: u64,
+    signed: &SignedProofs,
+    pqc_pubkeys: &[Vec<u8>],
+) -> Result<WireEncodeInput, KeyEngineError> {
+    let bulletproof =
+        Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice()).map_err(|_| {
+            KeyEngineError::Primitive {
+                detail: "bulletproof parse failed",
+            }
+        })?;
+    let output_amounts = vec![0u64; output_keys.len()];
+    Ok(WireEncodeInput {
+        key_images,
+        extra_inputs: Vec::new(),
+        output_amounts,
+        output_keys,
+        view_tags,
+        tx_extra,
+        fee,
+        enc_amounts: signed.enc_amounts.clone(),
+        enc_labels: signed.enc_labels.clone(),
+        out_commitments: signed.commitments.clone(),
+        pseudo_outs: signed.pseudo_outs.clone(),
+        bulletproof,
+        reference_block: signed.reference_block,
+        fcmp_proof: signed.fcmp_proof.clone(),
+        pqc_auths: pqc_pubkeys
+            .iter()
+            .map(|pk| PqcAuth {
+                auth_version: 1,
+                signature: Vec::new(),
+                public_key: pk.clone(),
+            })
+            .collect(),
+        fcmp_layers: signed.tree_depth,
     })
 }
 
@@ -386,40 +447,21 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         },
     })?;
 
-    let bulletproof =
-        Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice()).map_err(|_| {
-            KeyEngineError::Primitive {
-                detail: "bulletproof parse failed",
-            }
-        })?;
-
-    let mut wire_with_proofs = WireEncodeInput {
-        key_images: key_images.clone(),
-        extra_inputs: Vec::new(),
-        output_amounts: vec![0; output_keys.len()],
-        output_keys: output_keys.clone(),
-        view_tags: view_tags.clone(),
-        tx_extra: tx_extra.clone(),
+    // The wire shape is assembled by the single shared constructor both this
+    // path and the F-D2 drain route through, so the two serialize identically
+    // by construction (T-DS-6 ∧ T-DS-7 — `ARCHIVAL_DRAIN_SEND_FD2.md` §5).
+    // `key_images`/`output_keys`/`view_tags`/`tx_extra` are cloned in because
+    // this path still needs them below (the returned `TxSignatures` echoes
+    // them and `per_input` re-walks the key images).
+    let mut wire_with_proofs = assemble_transfer_wire(
+        key_images.clone(),
+        output_keys.clone(),
+        view_tags.clone(),
+        tx_extra.clone(),
         fee,
-        enc_amounts: signed.enc_amounts.clone(),
-        enc_labels: signed.enc_labels.clone(),
-        out_commitments: signed.commitments.clone(),
-        pseudo_outs: signed.pseudo_outs.clone(),
-        bulletproof: bulletproof.clone(),
-        reference_block: signed.reference_block,
-        fcmp_proof: signed.fcmp_proof.clone(),
-        pqc_auths: pqc_pubkeys
-            .iter()
-            .map(|pk| PqcAuth {
-                auth_version: 1,
-                signature: Vec::new(),
-                public_key: pk.clone(),
-            })
-            .collect(),
-        // `signed.tree_depth` is the FCMP++ layer count `L`; the wire encoder
-        // serializes the consensus `curve_trees_tree_depth = L - 1`.
-        fcmp_layers: signed.tree_depth,
-    };
+        &signed,
+        &pqc_pubkeys,
+    )?;
 
     let payload_hashes =
         phase1_payload_hashes(&wire_with_proofs).map_err(|_| KeyEngineError::Primitive {

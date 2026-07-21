@@ -17,13 +17,19 @@
 //! The gate-6 firewall's value-out leg must not be a fingerprint: a drain's
 //! **full wire serialization** is byte-identical to a modal 2-out confidential
 //! transfer (modulo the hidden amounts). This module holds that property *by
-//! construction* rather than by test, by refusing to own a single wire-shaping
-//! decision of its own — every leg is the **same primitive the transfer path
-//! uses**:
+//! construction* — it owns no wire-shaping decision of its own. Every leg is the
+//! **same primitive the transfer path uses**, and the whole wire record is built
+//! by the **single shared constructor**
+//! [`assemble_transfer_wire`](super::sign_bridge::assemble_transfer_wire) that
+//! [`sign_bridge::sign_tx`](super::sign_bridge) itself calls: transfer-parity is
+//! then a compile-time fact (one constructor, two callers), not a property a test
+//! has to re-establish.
 //!
-//! - **Outputs** are built by [`build_output`] (the exact
-//!   [`sign_bridge::sign_tx`](super::sign_bridge) output primitive), so a drain
-//!   vout is bit-for-bit an ordinary transfer vout.
+//! - **Wire record** is assembled by `assemble_transfer_wire` from the shared
+//!   [`SignedProofs`](shekyl_tx_builder::SignedProofs), so the `WireEncodeInput`
+//!   shape cannot drift from the transfer path.
+//! - **Outputs** are built by [`build_output`] (the exact `sign_tx` output
+//!   primitive), so a drain vout is bit-for-bit an ordinary transfer vout.
 //! - **Spend inputs** come from [`prepare_funding_inputs`] (the exact bond/claim
 //!   fee-sweep leg): persona-keyed derivation, key images, strict-descending
 //!   order.
@@ -33,6 +39,12 @@
 //!   `extra_inputs`** and **spend-only `pqc_auths`** — no bond `Input`, no
 //!   identity auth slot, nothing that a bond/claim carries and a transfer does
 //!   not.
+//!
+//! The one degree of freedom the shared constructor does *not* pin — that
+//! split-on-drain-all reshapes the amounts without perturbing the skeleton — is
+//! guarded by a **whole-tx normalized byte-diff** (`drain_assembly_shape::
+//! drain_partial_and_drain_all_are_wire_identical`): partial and drain-all
+//! serialize identically modulo the hidden/committed leaves.
 //! - **Two nonzero outputs, always** (T-DS-6): every valid tx already carries
 //!   `vout.size() >= 2` (consensus, `blockchain.cpp`) with **no zero-value**
 //!   output (the shared transfer prover rejects `ZeroOutputAmount`), so the modal
@@ -69,19 +81,18 @@ use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::Scalar;
 use rand_core::{OsRng, RngCore as _};
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
-use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, OutputInfo,
-    PqcAuth, TreeContext, WireEncodeInput,
+    TreeContext,
 };
 use shekyl_types::GlobalOutputIndex;
 use shekyl_units::AtomicUnits;
 use zeroize::Zeroizing;
 
 use super::bond_assembly::{finalize_bond_tx, BondAssemblyError, FundingInputContext, PBoundBytes};
-use super::sign_bridge::build_output;
+use super::sign_bridge::{assemble_transfer_wire, build_output};
 use super::stake_engine::{prepare_funding_inputs, PersonaHandle, StakeEngineError};
 
 /// The principal destination a drain pays to (vout 0).
@@ -331,37 +342,24 @@ pub(super) async fn assemble_drain_tx(
     .map_err(|e| BondAssemblyError::build("drain proving offload join", e))?
     .map_err(|e| BondAssemblyError::build("drain proving", e))?;
 
-    let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
-        .map_err(|e| BondAssemblyError::build("bulletproof parse", e))?;
-
-    // ── Step 7: assemble the wire input — transfer-shaped: empty
-    // `extra_inputs`, `pqc_auths` carries one slot per spend input (NO bond
-    // identity slot). Owned proof fields MOVE in (`signed` is dropped here). ──
-    let mut wire = WireEncodeInput {
+    // ── Step 7: assemble the wire input through the SHARED transfer-wire
+    // constructor (`sign_bridge::assemble_transfer_wire`) — the exact same
+    // constructor `sign_bridge::sign_tx` uses. Empty `extra_inputs`, all-zero
+    // (confidential) `output_amounts`, one placeholder `pqc_auth` per spend (no
+    // bond identity slot). Routing both paths through one constructor is what
+    // makes a drain byte-shape-identical to a modal transfer *by construction*
+    // (T-DS-6 ∧ T-DS-7), rather than by a hand-copied literal that could drift.
+    // ──
+    let mut wire = assemble_transfer_wire(
         key_images,
-        extra_inputs: Vec::new(),
-        output_amounts: vec![0; output_keys.len()],
         output_keys,
         view_tags,
         tx_extra,
         fee,
-        enc_amounts: signed.enc_amounts,
-        enc_labels: signed.enc_labels,
-        out_commitments: signed.commitments,
-        pseudo_outs: signed.pseudo_outs,
-        bulletproof,
-        reference_block: signed.reference_block,
-        fcmp_proof: signed.fcmp_proof,
-        pqc_auths: pqc_pubkeys
-            .into_iter()
-            .map(|pk| PqcAuth {
-                auth_version: 1,
-                signature: Vec::new(),
-                public_key: pk,
-            })
-            .collect(),
-        fcmp_layers: signed.tree_depth,
-    };
+        &signed,
+        &pqc_pubkeys,
+    )
+    .map_err(|e| BondAssemblyError::build("drain wire assembly", e))?;
 
     // ── Step 8: PQC auth completion (fast; inline). One payload hash per spend
     // slot — no `+1` bond slot (the byte-shape difference between a drain and a

@@ -61,12 +61,16 @@
   `PendingDrain` record with its `reserved_gindexes` fold in
   `engine-state::pending_post_block` (schema `PENDING_POST_VERSION` v4 → v5,
   snapshot updated, `v4_seal_fails_closed_under_v5_binary` fails-closed).
-  The drain is **transfer-shaped by construction** — outputs via the
-  transfer path's `build_output`, inputs via `prepare_funding_inputs`,
-  prefix/proving/PQC-auth via the plain `sign_transaction` calls with empty
-  `extra_inputs` + spend-only `pqc_auths` — realizing the T-DS-6 ∧ T-DS-7
-  composite wire-shape arm (full serialization byte-identical to a modal
-  2-out confidential transfer modulo hidden values). **Drain-all splits the
+  The drain is **transfer-shaped by construction**, now compile-time-enforced:
+  the whole `WireEncodeInput` is built by a **single shared constructor**
+  (`sign_bridge::assemble_transfer_wire`, extracted in this slice) that
+  `sign_bridge::sign_tx` also calls, so transfer-parity is one-constructor-two-
+  callers rather than a property re-established per test (outputs still via
+  `build_output`, inputs via `prepare_funding_inputs`, prefix/proving/PQC-auth
+  via the plain `sign_transaction` calls with empty `extra_inputs` + spend-only
+  `pqc_auths`) — realizing the T-DS-6 ∧ T-DS-7 composite wire-shape arm (full
+  serialization byte-identical to a modal 2-out confidential transfer modulo
+  hidden values). **Drain-all splits the
   payment into two nonzero principal outputs** (a sweep to self) rather than
   emitting a zero-value change output: the shared prover rejects
   `ZeroOutputAmount`, so the ratified zero-value-change mechanism was
@@ -82,12 +86,18 @@
   post-retirement sweep moot — enforcement rides DS-PR-2 selection) recorded
   in the design doc round log (2026-07-20). Composition-discipline clean
   (`assemble_drain_tx` never names `Engine`; god-files gain only the thin
-  handler). Gates: fmt + clippy `-D warnings` clean; 33 `stake_engine` tests
-  (incl. `drain_assembly_shape::{drain_is_transfer_shaped,
-  drain_all_still_emits_two_outputs, drain_all_net_below_two_is_refused}`) +
-  the `engine-state` schema snapshot green. Remaining carries (drain
-  orchestrator/dispatch over `DrainCtx`, persona-transport self-grep, real-tx
-  byte-diff e2e) ride DS-PR-2.
+  handler). A whole-tx **normalized byte-diff** lands in-slice
+  (`drain_partial_and_drain_all_are_wire_identical`: partial and drain-all
+  serialize identically modulo hidden/committed leaves — a non-vacuous diff,
+  raw bytes asserted to differ), guarding the one freedom the shared
+  constructor does not pin (split-on-drain-all reshaping amounts without
+  perturbing the skeleton). Gates: fmt + clippy `-D warnings` clean;
+  `drain_assembly_shape::{drain_is_transfer_shaped,
+  drain_all_still_emits_two_outputs, drain_all_net_below_two_is_refused,
+  drain_partial_and_drain_all_are_wire_identical}` + `sign_bridge` + the
+  `engine-state` schema snapshot green. Remaining carries (drain
+  orchestrator/dispatch over `DrainCtx`, persona-transport self-grep, the
+  **full transfer-vs-drain** end-to-end byte-diff) ride DS-PR-2.
 - **docs: F-D2 drain-send subsystem design round opened
   (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, scoping — review rounds 1–4
   applied: rounds 1–2 review + Round 3 threat-model addenda + Round 4
