@@ -346,10 +346,8 @@ pub(crate) enum DrainOrchestrationError {
 /// off the wallet's own `chain_tip` ([`crate::engine::traits::LedgerEngine::synced_height`]),
 /// not a fetched `chain_height`.
 ///
-/// Dead_code allow: constructed by the dispatch seam (DS-PR-2 commit 3,
-/// `drain_dispatch.rs`) — the same rule-21 staging the [`AssembleDrain`]
-/// message carries; reopened when that seam builds the ctx.
-#[allow(dead_code)]
+/// Constructed by the dispatch seam ([`crate::engine::drain_dispatch`]) — the
+/// `claim_dispatch`/`ClaimAssemblyContext` sibling.
 pub(crate) struct DrainCtx<'a> {
     /// The stake actor — assembly and signing stay inside it (rule 36).
     pub stake: &'a StakeEngineHandle,
@@ -486,10 +484,8 @@ fn scoped_records(
 /// header window). `handle` is the operation-scoped slot capability; its slot
 /// names the record filter.
 ///
-/// Dead_code allow: the dispatch seam (DS-PR-2 commit 3, `drain_dispatch.rs`)
-/// and the RPC drain entry are the remaining consumers (rule-21 — reopened
-/// when the dispatch seam calls this).
-#[allow(dead_code)]
+/// Called by the dispatch seam ([`crate::engine::drain_dispatch`], the
+/// `claim_dispatch` sibling); the RPC drain entry drives that seam.
 pub(crate) async fn orchestrate_drain(
     handle: PersonaHandle,
     ctx: DrainCtx<'_>,
