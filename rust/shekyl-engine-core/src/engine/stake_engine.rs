@@ -864,68 +864,14 @@ impl StakeEngine {
         //    fires `RngDegeneracy` if they are equal (double-jitter-trap detection).
         //    The actual timing draw result is returned on success.
         let mut rng = OsRngGapAdapter;
-        let (spread, bond_first) = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
+        let (spread, _coin) = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
             .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
         // S6: the session-level `certify_draw` self-cert (over `OsRngGapAdapter`,
         // gated, at session start) is wired in `on_start` — see
         // `run_session_self_cert` and the `conformance` feature.
 
-        // 5. Consume BOTH draw values into the block-timed placement plan (2c-2b
-        //    scheduler wiring). `plan_entry_seam` is the single-sourced consumer
-        //    (`shekyl_standoff::plan`): it takes the draw tuple whole, so the
-        //    `bond_first` ORDER-COIN (the fair bond-before-vs-after-funding
-        //    inversion) is consumed with the `spread` DELAY by construction. The
-        //    plan rides the reply; the caller anchors it at its private intent
-        //    time `t0`.
-        //
-        //    FORCED CAUSAL (`bond_first = false`) — deliberate, and NOT the
-        //    "dropped order-coin" failure the plan module names. The inverted
-        //    branch is currently UNEXECUTABLE, so honouring the coin produces
-        //    strictly *less* decorrelation than ignoring it:
-        //
-        //      * `bond_first = true` plans `bond_post_offset = 0`, so WI-3 fires
-        //        the post at `t0` immediately, while `entry_offset = spread` has
-        //        no scheduler consumer at all — the entry event is not placed.
-        //        The result is not an inverted seam; it is NO drawn standoff,
-        //        on a fair coin, i.e. silently ~half of all posts.
-        //      * At a JOIN the inversion is impossible even with that wiring:
-        //        a fresh `P` has no earnings, `bond_assembly` sweeps only the
-        //        persona's own mature, tree-drained outputs ("no reach-across to
-        //        principal outputs"), so the principal's funding transfer must
-        //        precede the post it funds. A coin whose outcomes are decided by
-        //        physics is not drawn, it is biased.
-        //
-        //    RESOLVED 2026-07-21 — the coin was a CATEGORY ERROR, and the
-        //    forcing is permanent, not a holding position. An inversion needs
-        //    two events an observer can ORDER, and at entry there is only one
-        //    such event: the bond post, which names `P` in cleartext. The
-        //    funding transfer is on chain too, but it is an ordinary FCMP++
-        //    transfer that does not name `P` with a CT-hidden source — it is
-        //    not attributable, so it cannot serve as an anchor for anyone the
-        //    posture admits. Ordering an unidentifiable event against an
-        //    identifiable one changes nothing observable.
-        //
-        //    §10.12's "announce" and `plan.rs`'s "funding/entry event" were
-        //    both naming a PIPELINE stage (wallet mints → sends to daemon →
-        //    daemon propagates) as though it were a chain event. The pipeline
-        //    has two stages; the chain has one attributable event. A second
-        //    observable appears only to someone watching the wallet→daemon
-        //    hop — the adversarial daemon — which the certified own-node
-        //    posture excludes by construction, where that hop is loopback.
-        //    The second event is the observer's artifact, never a chain fact.
-        //
-        //    So there is nothing to restore and no announce to build. The
-        //    single `U[0, window]` jitter on the bond post IS the mechanism in
-        //    full — one event, jittered against a PRIVATE anchor `t0` — not one
-        //    arm of a two-arm scheme. `entry_offset_blocks` is deleted from
-        //    persisted state (`PENDING_POST_VERSION` 5); the measurement-seam
-        //    field and the coin itself retire with the standoff crate's
-        //    published golden vector, in its own slice.
-        //
-        //    Grading consequence: the GF-7 numbers measured with the inversion
-        //    arm ON do not describe this world. The honest grade for the join
-        //    seam is the inversion-OFF arm, re-measured after this change.
-        let _ = bond_first;
+        // 5. Forced causal: only the post is attributable, so there is no second
+        //    event to order (`ARCHIVAL_FIREWALL_GATE6.md` pass-4 (d) + note 8).
         let plan = plan_entry_seam((spread, FORCED_CAUSAL_ORDER));
 
         // GF-7 hooks-spec §3: emit the draw-consumption and schedule events to
@@ -936,12 +882,6 @@ impl StakeEngine {
         #[cfg(feature = "gf7-hooks")]
         {
             let persona = u64::from(handle_slot.to_raw());
-            // Reports what was CONSUMED into the plan, not what the coin
-            // returned — the two differ while the order is forced causal. The
-            // measurement seam exists so the sim grades the world production
-            // actually produces; emitting the raw coin here would have the sim
-            // measure an inversion the chain never performs, which is precisely
-            // how a mitigation gets credited for work it does not do.
             self.observer.record(TimelineEvent::EntryGapDrawConsumed {
                 persona,
                 window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
@@ -2989,11 +2929,8 @@ pub(crate) struct DegenerateDraw;
 /// builds rather than silently mislabelling it as `RngDegeneracy`. (More
 /// generally the guard is only well-behaved for windows large enough that
 /// `1/(window+1)` is an acceptable false-positive rate — 600 gives ≈ 0.17 %.)
-/// The order-coin value forced at the plan seam while the inverted branch is
-/// unexecutable (see `validate_and_plan_entry_seam`). `false` = entry event at
-/// the anchor, bond post at `anchor + spread` — the causal order the chain
-/// actually produces, and the only one whose plan both halves of the current
-/// wiring can honour.
+/// Forced order-coin — the inverted branch orders a chain event that does not
+/// exist (`ARCHIVAL_FIREWALL_GATE6.md` method note 8).
 pub(crate) const FORCED_CAUSAL_ORDER: bool = false;
 
 pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
@@ -4187,23 +4124,8 @@ mod tests {
                     plan_entry_seam((spread, bond_first)),
                     "schedule event must be the planner over the emitted draw"
                 );
-                // The emitted coin is the CONSUMED one, so this also pins that
-                // production plans causally: entry at the anchor, bond post at
-                // `anchor + spread`. If the inverted branch is ever made
-                // executable, this assertion is the tripwire that the sim's
-                // world and production's world moved apart.
-                assert!(
-                    !bond_first && !emitted.is_inverted(),
-                    "order is forced causal while the inverted branch is unexecutable"
-                );
-                assert_eq!(
-                    emitted.entry_offset_blocks, 0,
-                    "causal plan anchors the entry event (nothing to schedule)"
-                );
-                assert_eq!(
-                    emitted.bond_post_offset_blocks, spread,
-                    "the full drawn spread applies to every post, not half of them"
-                );
+                // Tripwire if sim and production diverge (offsets pinned above).
+                assert!(!bond_first && !emitted.is_inverted(), "forced causal");
                 assert_eq!(
                     emitted, post.plan,
                     "schedule event must match the plan riding the reply"
