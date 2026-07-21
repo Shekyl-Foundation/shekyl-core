@@ -73,8 +73,14 @@
 > provisioning cover in proportion to population, when cover is ambient and the only job
 > is not forfeiting it. See `ARCHIVAL_REWARD_GATE_M1.md` §13.
 
-**Status:** SCOPING (2026-06-20, review-revised). Design-questions enumerated;
-not yet decided.
+**Status:** ⛔ **RETIRED (2026-07-21)** — the `span(C)` count-dependent cover curve
+is deleted as an unconsumed primitive; see the retirement notice at the head of this
+document for the ratification and its source-verified basis. **Everything below is
+preserved as pre-retirement scoping context and is not a live design agenda** — in
+particular the enumerated design questions are moot, and the canonical
+standing-bond-count aggregate they lead to is explicitly **not to be built**.
+*(Was: SCOPING (2026-06-20, review-revised) — design-questions enumerated, not yet
+decided.)*
 
 > **Correction (2026-07-01) — `C_min` pinned post-sim; the "pending the 2d-1 ramp" language
 > below is superseded.** `C_min` was scoped here (pre-sim) as a runway floor whose *final value

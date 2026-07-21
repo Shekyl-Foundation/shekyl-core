@@ -1518,8 +1518,13 @@ and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.
   > anything to invert; the §10.12 "announce" never needed building; and the single
   > `U[0, window]` jitter on the bond post **is the mechanism in full** — one event
   > against a *private* anchor `t0`, not one arm of a two-arm scheme. Production
-  > forces causal order and `entry_offset_blocks` is deleted from persisted state
-  > (`PENDING_POST_VERSION` 5). See method note 8.
+  > forces causal order, and `entry_offset_blocks` is deleted from persisted state
+  > by the **companion code PR** — which also carries the `PendingPostBlock` version
+  > bump and snapshot regeneration. The version constant is deliberately not
+  > reproduced here: it lives in `pending_post_block.rs`, it is not this document's
+  > to pin, and a number copied across a PR boundary is stale the moment either side
+  > moves (same discipline as deriving the shard-freeze floor from the width
+  > constants rather than quoting a literal). See method note 8.
   **BUILT + RUN (2026-06-13)** — `shekyl-staking-sim --standoff`
   (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*). Findings: anonymity is **rate-driven,
   not width-driven** (the background funding-spend rate is the load-bearing, *unmeasured* input —
