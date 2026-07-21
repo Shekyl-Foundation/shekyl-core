@@ -25,6 +25,7 @@
 //! the exact fingerprint the mechanism exists to remove. It is this transfer's
 //! mechanics, because this is the transaction whose amount is observed.
 
+use rand_core::RngCore as _;
 use shekyl_address::AddressError;
 use shekyl_standoff::{draw_cover_amount, COVER_RUNWAY_FLOOR_ATOMIC};
 use shekyl_units::AtomicUnits;
@@ -70,6 +71,14 @@ pub(crate) enum StakeInError {
     /// The underlying transfer build failed (funding, fee, reservation, …).
     #[error(transparent)]
     Send(#[from] SendError),
+    /// The OS entropy source failed the pre-draw probe. Typed rather than left
+    /// to the draw's panic backstop: `stake_in` is a user-initiated operation,
+    /// so a dead entropy source should refuse the call, not fell the process
+    /// (rule 82). The panic in `OsRngGapAdapter` remains the backstop for a
+    /// source that dies *between* probe and draw — never a silent low-entropy
+    /// cover, which would be the actual privacy failure.
+    #[error("OS entropy source unavailable for the cover draw: {0}")]
+    RngSourceFailed(#[source] rand_core::Error),
     /// `stake + cover` overflowed `AtomicUnits`. Unreachable for any real
     /// amount (the cover is one rung); loud rather than wrapping, because a
     /// wrapped total would silently send the *wrong* amount — a privacy and
@@ -101,11 +110,15 @@ where
     /// no `P` secret is touched (rule 36 — the address is projected public-only
     /// from `StakeEngine`).
     ///
-    /// The `amount` is transferred **verbatim** — no floor / minimum / band
-    /// check (DQ1; `ARCHIVAL_BOND_FLOOR_ATOMIC` is a *bond-post* precondition, not
-    /// a `stake_in` gate). Its `bond_floor + cover` structuring (and the
-    /// `shekyl-standoff` cover draw) belongs to the funding flow, not this leg
-    /// (`PRINCIPAL_STAKE_LIFECYCLE.md` §5.2).
+    /// The transfer carries **`amount + cover`**, never `amount` verbatim: the
+    /// funding-seam cover is applied here (`ARCHIVAL_COVER_DRAW.md`), because
+    /// this is the transaction whose amount is observed. `amount` itself takes
+    /// no floor / minimum / band check (DQ1; `ARCHIVAL_BOND_FLOOR_ATOMIC` is a
+    /// *bond-post* precondition, not a `stake_in` gate).
+    ///
+    /// The cover is **system-determined, never a caller parameter** — a
+    /// caller-chosen cover is a cross-wallet uniformity break, which is itself
+    /// the leak. See `stake_in_request` for the draw and its open limitation.
     ///
     /// **Carried-over open concern (GF-7, not resolved here):** `build_pending_tx`
     /// appends the principal's own change output (subaddress 0), co-present with
@@ -177,6 +190,13 @@ where
         // ZERO entropy. The call shape is correct — entropy flows the instant a
         // canonical `C` crosses `COVER_TAIL_COUNT` — but the amount
         // distinguisher is NOT closed at genesis. Tracked as a genesis blocker.
+        // Entropy preflight, mirroring `stake_engine`'s S4/S5 pattern: probe the
+        // source so the predictable failure returns a typed error instead of
+        // reaching the draw's panic backstop.
+        let mut probe = [0u8; 8];
+        rand_core::OsRng
+            .try_fill_bytes(&mut probe)
+            .map_err(StakeInError::RngSourceFailed)?;
         let mut rng = OsRngGapAdapter;
         let cover = AtomicUnits::from_raw(draw_cover_amount(
             CANONICAL_STANDING_BOND_COUNT_UNAVAILABLE,
@@ -345,14 +365,19 @@ mod tests {
             .expect("stake_in_request resolves the active persona");
 
         assert_eq!(request.recipients.len(), 1, "single-output funding (GF-4b)");
-        assert_eq!(
-            request.recipients[0].amount_atomic_units,
-            AtomicUnits::from_raw(50_000 + COVER_RUNWAY_FLOOR_ATOMIC),
-            "stake + system-determined cover, never a bare bond_floor-shaped amount \
-             (ARCHIVAL_COVER_DRAW.md §8 amount axis)"
+        // Assert the INVARIANT, not the current degenerate evaluation: the draw
+        // is `C_min + U[0, span]`, so `funded >= stake + C_min` always, and
+        // `span == 0` only while no canonical standing-bond count exists. An
+        // exact-equality assert would pass today and go flaky the moment cover
+        // becomes genuinely random — pinning an evaluation, not a property.
+        let funded = request.recipients[0].amount_atomic_units;
+        assert!(
+            funded >= AtomicUnits::from_raw(50_000 + COVER_RUNWAY_FLOOR_ATOMIC),
+            "funded {funded:?} < stake + runway floor: cover must be at least C_min \
+             (ARCHIVAL_COVER_DRAW.md amount axis)"
         );
         assert_ne!(
-            request.recipients[0].amount_atomic_units, amount,
+            funded, amount,
             "a verbatim stake amount is the amount fingerprint the cover exists to remove"
         );
 

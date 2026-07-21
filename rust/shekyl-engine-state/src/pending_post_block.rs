@@ -37,7 +37,13 @@ use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the durable pending-post block. **v4** adds the
+/// Schema version of the durable pending-post block. **v5** REMOVES
+/// `PendingBondPost::entry_offset_blocks` — the offset for a second entry-seam
+/// event that does not exist: at entry only the bond post is attributable, so
+/// there was never an entry event to schedule against it
+/// (`ARCHIVAL_FIREWALL_GATE6.md` §10.12 pass-4 (d) + method note 8). A v4 seal
+/// under a v5 binary fails closed and the operator re-assembles; the field
+/// carried no dispatch decision, so nothing is lost with it. **v4** adds the
 /// [`PendingEmissionClaim`] record set — the emission-claim sibling of the
 /// bond post's persist-before-dispatch discipline (CB-3 dispatch seam): the
 /// claim's fee-gindex reservation and claimed-epoch dedup facts must exist
