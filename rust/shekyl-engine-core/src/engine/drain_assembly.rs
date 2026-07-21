@@ -447,6 +447,9 @@ pub(super) async fn assemble_drain_tx(
     // bond identity slot). Routing both paths through one constructor is what
     // makes a drain byte-shape-identical to a modal transfer *by construction*
     // (T-DS-6 ∧ T-DS-7), rather than by a hand-copied literal that could drift.
+    // `signed` is MOVED in (not cloned): nothing below this point reads it, so
+    // its proof buffers migrate straight into the wire — the drain never pays
+    // the copy `sign_tx` must (that path retains `signed` for its signatures).
     // ──
     let mut wire = assemble_transfer_wire(
         key_images,
@@ -454,7 +457,7 @@ pub(super) async fn assemble_drain_tx(
         view_tags,
         tx_extra,
         fee,
-        &signed,
+        signed,
         &pqc_pubkeys,
     )
     .map_err(|e| DrainAssemblyError::build("drain wire assembly", e))?;

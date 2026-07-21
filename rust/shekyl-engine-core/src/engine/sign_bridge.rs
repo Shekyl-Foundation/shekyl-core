@@ -143,15 +143,41 @@ pub(super) fn build_output(
 ///
 /// `pqc_pubkeys` is one serialized hybrid public key per spend input, in the
 /// same (strict-descending key-image) order as `key_images`.
+///
+/// `signed` is taken **by value**: the constructor moves its large proof buffers
+/// (`enc_amounts`, `enc_labels`, `commitments`, `pseudo_outs`, `fcmp_proof`)
+/// straight into the [`WireEncodeInput`] rather than cloning them. The drain
+/// path — which discards `signed` after this call — passes it by move for free;
+/// [`sign_tx`], which still needs the proofs to build its [`TxSignatures`],
+/// hands in a `signed.clone()`. Keeping this one owning constructor (rather than
+/// a borrowed + owned pair) is what preserves the "one constructor, two callers"
+/// compile-time transfer-parity guarantee for T-DS-6 ∧ T-DS-7.
+///
+/// Returns [`KeyEngineError::Primitive`] if the documented length invariants are
+/// violated — `view_tags` must be per-output (align with `output_keys`) and
+/// `pqc_pubkeys` must be one-per-spend (align with `key_images`) — so a caller
+/// mismatch fails here with a precise message instead of surfacing later as an
+/// opaque `phase1_payload_hashes`/wire-encode error.
 pub(super) fn assemble_transfer_wire(
     key_images: Vec<[u8; 32]>,
     output_keys: Vec<[u8; 32]>,
     view_tags: Vec<Option<u8>>,
     tx_extra: Vec<u8>,
     fee: u64,
-    signed: &SignedProofs,
+    signed: SignedProofs,
     pqc_pubkeys: &[Vec<u8>],
 ) -> Result<WireEncodeInput, KeyEngineError> {
+    if view_tags.len() != output_keys.len() {
+        return Err(KeyEngineError::Primitive {
+            detail: "assemble_transfer_wire: view_tags length must equal output_keys length",
+        });
+    }
+    if pqc_pubkeys.len() != key_images.len() {
+        return Err(KeyEngineError::Primitive {
+            detail: "assemble_transfer_wire: pqc_pubkeys length must equal key_images length",
+        });
+    }
+
     let bulletproof =
         Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice()).map_err(|_| {
             KeyEngineError::Primitive {
@@ -167,13 +193,13 @@ pub(super) fn assemble_transfer_wire(
         view_tags,
         tx_extra,
         fee,
-        enc_amounts: signed.enc_amounts.clone(),
-        enc_labels: signed.enc_labels.clone(),
-        out_commitments: signed.commitments.clone(),
-        pseudo_outs: signed.pseudo_outs.clone(),
+        enc_amounts: signed.enc_amounts,
+        enc_labels: signed.enc_labels,
+        out_commitments: signed.commitments,
+        pseudo_outs: signed.pseudo_outs,
         bulletproof,
         reference_block: signed.reference_block,
-        fcmp_proof: signed.fcmp_proof.clone(),
+        fcmp_proof: signed.fcmp_proof,
         pqc_auths: pqc_pubkeys
             .iter()
             .map(|pk| PqcAuth {
@@ -450,16 +476,18 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
     // The wire shape is assembled by the single shared constructor both this
     // path and the F-D2 drain route through, so the two serialize identically
     // by construction (T-DS-6 ∧ T-DS-7 — `ARCHIVAL_DRAIN_SEND_FD2.md` §5).
-    // `key_images`/`output_keys`/`view_tags`/`tx_extra` are cloned in because
-    // this path still needs them below (the returned `TxSignatures` echoes
-    // them and `per_input` re-walks the key images).
+    // `key_images`/`output_keys`/`view_tags`/`tx_extra` and `signed` are cloned
+    // in because this path still needs them below: the returned `TxSignatures`
+    // echoes the buffers, moves `signed`'s proof fields, and `per_input`
+    // re-walks the key images and `signed.pseudo_outs`. The drain path, which
+    // discards these afterward, moves them in at zero clones.
     let mut wire_with_proofs = assemble_transfer_wire(
         key_images.clone(),
         output_keys.clone(),
         view_tags.clone(),
         tx_extra.clone(),
         fee,
-        &signed,
+        signed.clone(),
         &pqc_pubkeys,
     )?;
 
