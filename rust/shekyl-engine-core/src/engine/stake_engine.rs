@@ -874,21 +874,15 @@ impl StakeEngine {
         //    fires `RngDegeneracy` if they are equal (double-jitter-trap detection).
         //    The actual timing draw result is returned on success.
         let mut rng = OsRngGapAdapter;
-        let (spread, bond_first) = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
+        let (spread, _coin) = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
             .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
         // S6: the session-level `certify_draw` self-cert (over `OsRngGapAdapter`,
         // gated, at session start) is wired in `on_start` — see
         // `run_session_self_cert` and the `conformance` feature.
 
-        // 5. Consume BOTH draw values into the block-timed placement plan (2c-2b
-        //    scheduler wiring). `plan_entry_seam` is the single-sourced consumer
-        //    (`shekyl_standoff::plan`): it takes the draw tuple whole, so the
-        //    `bond_first` ORDER-COIN (the fair bond-before-vs-after-funding
-        //    inversion; dropping it collapses the observer's ordering prior from
-        //    0.5 to certainty, half the golden-vector-certified decorrelation) is
-        //    consumed with the `spread` DELAY by construction. The plan rides the
-        //    reply; the caller anchors it at its private intent time `t0`.
-        let plan = plan_entry_seam((spread, bond_first));
+        // 5. Forced causal: only the post is attributable, so there is no second
+        //    event to order (`ARCHIVAL_FIREWALL_GATE6.md` pass-4 (d) + note 8).
+        let plan = plan_entry_seam((spread, FORCED_CAUSAL_ORDER));
 
         // GF-7 hooks-spec §3: emit the draw-consumption and schedule events to
         // the injected observer. Sim-facing only — this block is compiled out
@@ -902,7 +896,7 @@ impl StakeEngine {
                 persona,
                 window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
                 spread_blocks: spread,
-                bond_first,
+                bond_first: FORCED_CAUSAL_ORDER,
             });
             self.observer.record(TimelineEvent::BondPostScheduled {
                 persona,
@@ -2987,6 +2981,10 @@ pub(crate) struct DegenerateDraw;
 /// builds rather than silently mislabelling it as `RngDegeneracy`. (More
 /// generally the guard is only well-behaved for windows large enough that
 /// `1/(window+1)` is an acceptable false-positive rate — 600 gives ≈ 0.17 %.)
+/// Forced order-coin — the inverted branch orders a chain event that does not
+/// exist (`ARCHIVAL_FIREWALL_GATE6.md` method note 8).
+pub(crate) const FORCED_CAUSAL_ORDER: bool = false;
+
 pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
     window: u64,
     rng: &mut R,
@@ -4194,6 +4192,8 @@ mod tests {
                     plan_entry_seam((spread, bond_first)),
                     "schedule event must be the planner over the emitted draw"
                 );
+                // Tripwire if sim and production diverge (offsets pinned above).
+                assert!(!bond_first && !emitted.is_inverted(), "forced causal");
                 assert_eq!(
                     emitted, post.plan,
                     "schedule event must match the plan riding the reply"

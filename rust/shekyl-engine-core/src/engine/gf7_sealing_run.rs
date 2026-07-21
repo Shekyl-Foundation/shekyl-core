@@ -291,7 +291,6 @@ fn synthetic_post(persona: PCanonicalId, slot: usize, round: usize) -> PendingBo
         p_slot: PSlot::from_raw(u32::try_from(slot).expect("slot fits u32")),
         persona,
         tx_bytes: format!("gf7-sealing-run synthetic post slot={slot} round={round}").into_bytes(),
-        entry_offset_blocks: 0,
         bond_post_offset_blocks: 0,
         anchor_t0: BlockHeight::from_raw(0),
         funding_gindexes: Vec::new(),

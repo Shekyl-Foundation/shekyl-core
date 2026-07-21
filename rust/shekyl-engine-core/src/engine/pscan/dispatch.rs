@@ -765,7 +765,6 @@ mod tests {
             p_slot: PSlot::from_raw(u32::from(persona_byte)),
             persona: persona(persona_byte),
             tx_bytes: vec![persona_byte, 0xBE, 0xEF],
-            entry_offset_blocks: 3,
             bond_post_offset_blocks: offset,
             anchor_t0: BlockHeight::from_raw(anchor),
             funding_gindexes: gindexes

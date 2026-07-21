@@ -37,11 +37,18 @@ use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the durable pending-post block. **v5** adds the
-/// [`PendingDrain`] record set — the F-D2 drain's persist-before-dispatch
-/// sibling (DS-PR-1): a drain spends `P`-funding inputs, so all of its input
-/// gindexes must be reserved durably **before** the bytes reach any submitter,
-/// exactly as a bond post reserves its funding. **v4** adds the
+/// Schema version of the durable pending-post block. **v6** REMOVES
+/// `PendingBondPost::entry_offset_blocks` — the offset for a second entry-seam
+/// event that does not exist: at entry only the bond post is attributable, so
+/// there was never an entry event to schedule against it
+/// (`ARCHIVAL_FIREWALL_GATE6.md` §10.12 pass-4 (d) + method note 8). The field
+/// carried no dispatch decision — `due` was always
+/// `anchor_t0 + bond_post_offset_blocks` — so nothing is lost with it. **v5**
+/// adds the [`PendingDrain`] record set — the F-D2 drain's
+/// persist-before-dispatch sibling (DS-PR-1): a drain spends `P`-funding
+/// inputs, so all of its input gindexes must be reserved durably **before** the
+/// bytes reach any submitter, exactly as a bond post reserves its funding.
+/// **v4** adds the
 /// [`PendingEmissionClaim`] record set — the emission-claim sibling of the
 /// bond post's persist-before-dispatch discipline (CB-3 dispatch seam): the
 /// claim's fee-gindex reservation and claimed-epoch dedup facts must exist
@@ -54,7 +61,7 @@ use crate::error::WalletLedgerError;
 /// a different version **refuse rather than migrate** — pre-genesis, a v4
 /// seal under a v5 binary fails closed and the operator re-assembles
 /// (rule 15).
-pub const PENDING_POST_VERSION: u32 = 5;
+pub const PENDING_POST_VERSION: u32 = 6;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -107,9 +114,6 @@ pub struct PendingBondPost {
     /// The fully-assembled, signed, wire-encoded transaction bytes — the
     /// value itself, per pin P-2: retries re-send these stored bytes.
     pub tx_bytes: Vec<u8>,
-    /// Blocks from `anchor_t0` to `P`'s observable funding/entry event
-    /// (state-shaped twin of `shekyl_standoff::EntrySeamPlan`).
-    pub entry_offset_blocks: u64,
     /// Blocks from `anchor_t0` to the bond-post broadcast.
     pub bond_post_offset_blocks: u64,
     /// Tip height at assemble time — the private intent anchor `t0` the
@@ -585,7 +589,6 @@ mod tests {
             p_slot: PSlot::from_raw(0),
             persona: PCanonicalId::from_bytes([persona_byte; 32]),
             tx_bytes: vec![0xAB; 16],
-            entry_offset_blocks: 3,
             bond_post_offset_blocks: 12,
             anchor_t0: BlockHeight::from_raw(1_000),
             funding_gindexes: gindexes

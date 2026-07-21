@@ -9560,41 +9560,54 @@ one place to confirm each item's relationship to the wallet stack.
   §14 (launch posture), [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
   §4 and [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
 
-- **GF-7 entry-seam inversion: the ENTRY half is persisted but nothing schedules it
-  (opened 2026-07-20, traced at source).** The bond-post half of the entry-seam standoff is
-  wired end-to-end and works: `stake_engine.rs` draws via `draw_entry_gap_guarded` and
-  consumes BOTH values through `plan_entry_seam` (the `bond_first` order-coin is taken with
-  the `spread` by construction, so it cannot be silently dropped); the plan rides the reply;
-  `bond_orchestrator.rs` persists both offsets into `PendingPostBlock`; and WI-3's dispatch
-  driver honours `due = anchor_t0 + bond_post_offset_blocks` (`pscan/dispatch.rs`). **But
-  `entry_offset_blocks` has no scheduler consumer** — it is written to the record and, as
-  far as a workspace-wide trace shows, read by nothing outside tests and the `gf7-hooks`
-  observer. The entry event is the principal's funding send (`Engine::stake_in`), a
-  separate user-initiated act the wallet does not currently time.
-  **Why it matters:** the inversion is the measured load-bearing mitigation for exactly the
-  case that grades worst — GATE6 §10.12: "the **inversion carries the low-activity worst
-  case** (link `0.52→0.32`, thin-cover `56%→20%` where width alone can't help)". It works by
-  removing the observer's ordering prior ("the bond-post follows a recent principal spend"),
-  and the correlator is order-agnostic by construction (`abs_diff`, two-sided seam box). A
-  half-honoured plan — bond post timed, funding send untimed — cannot deliver the coin's
-  effect, because the coin only means something if BOTH events are placed relative to the
-  private intent anchor `t0`.
-  **Named blocker (must close first): WHICH event is inverted.** GATE6 §10.12 says the
-  inverted second event is the **announce** — "membership-only backing over *principal
-  outputs* that exist pre-bond — `P` proves it *could* back before it *does*" — which can
-  legitimately precede the bond. But `plan.rs` calls it "`P`'s observable funding/entry
-  event", and a literal funding **spend** cannot precede the bond post: `bond_assembly.rs`
-  sweeps the persona's own already-mature, tree-drained funding outputs
-  (`OutputNotYetDrained`, `InsufficientFunding` — "there is **no** reach-across to principal
-  outputs"). GATE6's own pass-4 asks for precisely this enumeration — "prep-spend vs.
-  announce vs. the bond-post tx carrying collateral-in" — and does not answer it. Until that
-  is settled, it is not decidable whether the entry half is schedulable at all or whether
-  the inversion must ride the announce.
-  **Target: V3.0 pre-genesis** (privacy floor, wallet-only and consensus-unenforceable per
-  GATE6 §10.12, so it is a conformance requirement with a published test vector, not a
-  default). Do not confuse this with cover thickness — see the corrected thin-cover entry
-  below and WI-4 §3.3.
-
+- ~~**GF-7 amount-axis cover: light up the `C`-dependent span**~~ **RETIRED 2026-07-21 —
+  the curve has no consumer and is deleted** (`ARCHIVAL_COVER_DRAW.md` retirement notice,
+  ratified; rule-15 deletion of an armed primitive with no trigger). Verified at source:
+  `CoverDiscovery::classify` is **amount-blind** — heights and ranges only, `CoverFound`
+  carries a single `BlockHeight` — so TM-3 needs a recoverable output to `P` in the window
+  at *any* magnitude; the only other constraint is sufficiency (`bond_floor + fee`, since
+  `bond_assembly` funds from `P`'s own outputs). Both are floors, not distributions.
+  **The canonical standing-bond-count aggregate is NOT to be built** — that blocker was
+  downstream of the curve being real. **Do not action the historical text below.**
+- **⛔ GENESIS BLOCKER (restated 2026-07-21) — the funding-transfer amount is still a
+  distinguisher, and the fix is no longer "build the span".** `stake_in` sends
+  `stake + C_min` with `C` pinned at `CANONICAL_STANDING_BOND_COUNT_UNAVAILABLE`, so the
+  amount is a **fixed offset** — self-tagging exactly as a bare `bond_floor` was. Nothing
+  about that is closed: the earlier "the leak it closes (amount fingerprint) is closed"
+  clause was written under the retired framing and is **withdrawn**. What the current code
+  buys is narrower and worth stating exactly: the amount no longer *equals* a public
+  consensus constant. It is still computable, and computable is the tag.
+  **The security property:** the transfer is protected iff it is INDISTINGUISHABLE from an
+  ordinary transfer, after which it inherits the whole ambient transaction graph for free.
+  Cover is not provisioned, only forfeited.
+  **Resolution direction (post-retirement, needs a design round):** a **user-chosen**
+  amount, with a GUI/CLI recommended default that **samples the empirical transaction
+  distribution** rather than computing a statistic of it — copy a real observed on-chain
+  amount, never fit-and-draw, since a fitted draw puts every wallet in the same region and
+  rebuilds `span(C)` with extra steps. The test is **typicality, not unpredictability**
+  (`ARCHIVAL_FIREWALL_GATE6.md` method note 7). Assert mechanically that the emitted amount
+  equals some real on-chain amount, not a derived one.
+  **Audited distinguishers:** address structure (closed — ordinary `ShekylAddress`, no
+  tag); cover output form (closed by design — no special field, an ordinary confidential
+  `tagged_key` output, the same anti-fingerprint reason DQ1 rejects `C_stake`);
+  input/output shape (closed — single structured output, the GF4b-2 criterion); timing
+  (the `U[0,600]` jitter now applies to every post); **amount (OPEN — this item)**.
+  Per `00-mission` priority-2, privacy is not tradeable for launch schedule.
+  *Target: V3.0 pre-genesis, blocking.*
+- ~~**GF-7 entry-seam inversion: the ENTRY half is persisted but nothing schedules it**~~
+  **CLOSED 2026-07-21 — there was never a second event to schedule.** An inversion needs
+  two events an observer can ORDER; at entry exactly one is attributable — the bond post,
+  which names `P` in cleartext. The funding transfer is on chain but is an ordinary FCMP++
+  transfer that does not name `P` with a CT-hidden source, so it cannot anchor anything for
+  an observer the posture admits. "Announce" / "funding-entry event" were **pipeline
+  stages of the single post**; a second observable exists only for a watcher of the
+  wallet→daemon hop, which the own-node posture excludes by construction.
+  `entry_offset_blocks` is deleted from persisted state (`PENDING_POST_VERSION` 5) and
+  §10.12 pass-4 (d)'s enumeration is closed at "one event". The single `U[0,600]` jitter on
+  the bond post is the mechanism in full. **Residual, its own slice:** `draw_entry_gap`
+  still returns `bond_first`, inert in production (`FORCED_CAUSAL_ORDER`) but bound to a
+  **published golden vector** + conformance grader — retiring it re-freezes a
+  cross-implementation artifact and is a decision, not a cleanup. See method note 8.
 - **Wallet UX: thin-cover exposure disclosure at bond/claim time (registered 2026-07-19,
   PR #337 review thread).** On the user's own acts the design is warn-don't-prohibit —
   ~~`K_COVER` gates only the system's reward lever (bonding stays legal during gated epochs,

@@ -826,7 +826,6 @@ mod tests {
             p_slot: PSlot::from_raw(0),
             persona,
             tx_bytes: bytes.clone(),
-            entry_offset_blocks: 3,
             bond_post_offset_blocks: 7,
             anchor_t0: BlockHeight::from_raw(100),
             funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(1)],

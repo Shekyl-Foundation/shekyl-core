@@ -206,6 +206,32 @@ pub struct SynthParams {
     /// own group; the normal path (confirmed first dispatch, no resubmit) is
     /// the posture.
     pub resume_redispatch: bool,
+    /// Whether the observer can attribute PRINCIPAL-side events to a specific
+    /// candidate principal (2026-07-20).
+    ///
+    /// Every other knob here varies what the wallet does. This one varies what
+    /// the observer can *obtain*, and it is the only knob that decides whether
+    /// the correlator's inputs have an acquisition path at all.
+    ///
+    /// `true` (all pre-existing rows): each candidate carries its own funding
+    /// and drain timestamps. **This is the remote / hostile-daemon posture.**
+    /// Both principal-side events are ordinary FCMP++ transactions that do not
+    /// name `P` and whose sources are CT-hidden (WI-4 persona-lifecycle table),
+    /// so per-candidate attribution requires seeing every candidate's submit
+    /// boundary — which only the daemon they all use, or a global network
+    /// observer with per-user broadcast attribution, can do. §4.1 itself says
+    /// the S-3 observer does **not** see CT-hidden funding sources.
+    ///
+    /// `false`: the **certified own-node posture**. The observer keeps `P`'s
+    /// public chain timeline (bond posts name `P` in cleartext) and has no
+    /// principal-attributed anchor of any kind. Anchor sets are empty, so the
+    /// correlator has nothing to link *to* and must sit at `1/N`. That is not a
+    /// low score — it is the absence of a channel, measured rather than argued.
+    ///
+    /// Grading an adversary the architecture denies and reporting the result as
+    /// exposure is a crash test with the restraints removed: it measures the
+    /// cost of not having the control, not the risk of the shipped system.
+    pub principal_observable: bool,
 }
 
 impl SynthParams {
@@ -231,6 +257,9 @@ impl SynthParams {
             independent_bond: false,
             regime: Regime::SteadyState,
             resume_redispatch: false,
+            // The pre-existing rows grade the remote/hostile-daemon posture;
+            // the `own-node` group flips this to model the certified one.
+            principal_observable: true,
         }
     }
 
@@ -658,8 +687,17 @@ pub(crate) fn grade(
         let candidates: Vec<Candidate> = streams
             .iter()
             .map(|ev| {
-                let lifecycle = lifecycle_times(ev);
-                let funding = funding_times(ev);
+                // Under the certified own-node posture the observer has no
+                // per-candidate principal attribution: funding and drain are
+                // unnamed FCMP++ transactions with CT-hidden sources, so there
+                // is no way to say *which* principal any of them belongs to.
+                // Empty anchors ⇒ `kernel_sum` returns 0 for every candidate,
+                // the argmax ties, and the correlator lands at `1/N`.
+                let (lifecycle, funding) = if p.principal_observable {
+                    (lifecycle_times(ev), funding_times(ev))
+                } else {
+                    (Vec::new(), Vec::new())
+                };
                 let mut s3 = funding.clone();
                 s3.extend_from_slice(&lifecycle);
                 Candidate {
@@ -827,6 +865,9 @@ fn run_controls(cfg: &RunConfig, rng: &mut SplitMix64) -> (Vec<ControlResult>, b
         independent_bond: false,
         regime: Regime::SteadyState,
         resume_redispatch: false,
+        // The controls must keep the anchors: the positive control exists to
+        // prove the correlator bites when a channel IS present.
+        principal_observable: true,
     };
     let (_, pos_s3, _) = grade(&pos, cfg.n, cfg.trials, rng);
     let pos_ok = pos_s3 >= POSITIVE_CONTROL_MIN;
@@ -902,6 +943,66 @@ fn sweep_specs() -> Vec<(&'static str, SynthParams)> {
     // Group "regime": steady-state vs low-activity/cold-start.
     for regime in [Regime::SteadyState, Regime::LowActivity] {
         specs.push(("regime", SynthParams { regime, ..base }));
+    }
+    // Group "causal": the arm PRODUCTION ACTUALLY RUNS (2026-07-20).
+    //
+    // Every other row here grades `inversion: true`, but the wallet now forces
+    // causal order at the plan seam (`FORCED_CAUSAL_ORDER`, `stake_engine.rs`):
+    // the inverted branch is unexecutable, because `entry_offset_blocks` has no
+    // scheduler consumer and, at a join, the principal's funding transfer must
+    // precede the post it funds (a fresh `P` has no earnings; `bond_assembly`
+    // sweeps only the persona's own mature, tree-drained outputs). A coin whose
+    // outcomes are decided by physics is not drawn.
+    //
+    // Without these rows the report grades an inversion the chain never
+    // performs — the `inversion` group's only inversion-off row sits at the
+    // non-operational 300 window and steady state, so neither the operational
+    // window nor the cold-start regime had an honest un-inverted grade.
+    // These two rows are that grade: full window, causal order, both regimes.
+    for regime in [Regime::SteadyState, Regime::LowActivity] {
+        specs.push((
+            "causal",
+            SynthParams {
+                regime,
+                inversion: false,
+                ..base
+            },
+        ));
+    }
+    // Group "own-node": the CERTIFIED posture — the observer has no
+    // principal-attributed anchor, because there is no acquisition path for
+    // one. Same wallet behaviour as the `causal` rows; the only change is
+    // removing an observer capability the architecture denies.
+    //
+    // Read `r` together with `N`, never alone. `r = P(link) * N` is
+    // N-INVARIANT by construction (§13.5), so it says how far above chance the
+    // correlator lands and NOTHING about the absolute odds of being
+    // identified. Those are `P(link) = r / N`, and `N` here is a fixed 10 —
+    // which silently assumes the observer has ALREADY narrowed the field to
+    // ten candidate principals. There is no acquisition path for that
+    // narrowing either: nothing on chain partitions principals into a
+    // shortlist, so the honest candidate set is every principal on the
+    // network. At `N = 10` an `r` of 2.48 is a 24.8% identification; at a
+    // realistic population it is the same 2.48 and a vanishing absolute risk.
+    // §3.3 makes the point in one direction ("doubling a large chance is still
+    // a large probability"); the converse holds just as hard, and only the
+    // pessimistic half was ever written down.
+    //
+    // Expected at `1/N` by construction, and that is the point: it is the
+    // control that shows every failing row above requires the remote /
+    // hostile-daemon posture, which is separately graded a fail and is NOT the
+    // posture this gate certifies. Without this row the table reports the
+    // unrestrained crash test and nothing else.
+    for regime in [Regime::SteadyState, Regime::LowActivity] {
+        specs.push((
+            "own-node",
+            SynthParams {
+                regime,
+                inversion: false,
+                principal_observable: false,
+                ..base
+            },
+        ));
     }
     // Group "resume": the D-B3 resume channel — an unconfirmed post's
     // resubmit at wallet reopen lands a chain-visible `BondPostDispatched`

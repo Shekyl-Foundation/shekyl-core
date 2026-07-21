@@ -411,7 +411,6 @@ mod tests {
             p_slot: PSlot::from_raw(0),
             persona: persona(id),
             tx_bytes: vec![0xAB; 4],
-            entry_offset_blocks: 0,
             bond_post_offset_blocks: 0,
             anchor_t0: BlockHeight::from_raw(1),
             funding_gindexes: Vec::new(),
