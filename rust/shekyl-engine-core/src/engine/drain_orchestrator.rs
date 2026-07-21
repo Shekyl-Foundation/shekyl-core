@@ -64,7 +64,7 @@ use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_types::{BlockHeight, GlobalOutputIndex};
 use shekyl_units::AtomicUnits;
 
-use super::bond_assembly::FundingInputContext;
+use super::bond_assembly::{FundingInputContext, SpentRecordsDurablyPruned};
 use super::bond_orchestrator::anchored_reference_block;
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::drain_amount::{choose_drain_amount, DrainAmountError, DrainRequest};
@@ -256,6 +256,19 @@ pub fn plan_drain(
     target: AtomicUnits,
 ) -> Result<DrainPlan, DrainError> {
     let operands = project_drain_operands(records, reference_height)?;
+    plan_from_operands(&operands, reference_height, target)
+}
+
+/// Run the amount + select stages over already-projected [`DrainOperands`] —
+/// the half of [`plan_drain`] that follows the projection. Split out so a
+/// caller that already holds the operands (the orchestrator, which projects
+/// once to feed both the reserve gate and the planner) does not re-project the
+/// same records a second time.
+fn plan_from_operands(
+    operands: &DrainOperands,
+    reference_height: BlockHeight,
+    target: AtomicUnits,
+) -> Result<DrainPlan, DrainError> {
     let amount = choose_drain_amount(DrainRequest { target }, operands.balance.spendable)?;
     let selection = select_for_drain(&operands.candidates, amount, reference_height)?;
     let change = selection
@@ -353,6 +366,11 @@ pub(crate) struct DrainCtx<'a> {
     pub stake: &'a StakeEngineHandle,
     /// The curve-tree actor — reference root and membership paths.
     pub tree: &'a CurveTreeHandle,
+    /// Witness that durable pruning of spent funding outputs has landed
+    /// (SP-R0). Held to the funding-output selection site ([`scoped_records`])
+    /// exactly as the bond/claim spenders hold it, so the drain's production
+    /// go-live is compile-blocked on the same production mint.
+    pub pruning_landed: &'a SpentRecordsDurablyPruned,
     /// The persona's persisted funding records
     /// (`PScanState::funding_outputs`). Scoped to the handle's slot and
     /// filtered against [`reserved`](Self::reserved) inside the pipeline
@@ -409,8 +427,12 @@ fn exit_reserve_atomic(retired: bool) -> u64 {
 /// A reserve breach is distinct from plain unaffordability: a live drain whose
 /// `payment + fee` fits the balance but eats into the reserve is refused here
 /// with [`ReserveBreached`](DrainOrchestrationError::ReserveBreached), before
-/// the planner sees a target it would otherwise accept. Scalar-free by return
-/// type (`Ok(())` / the unit-carrying arm).
+/// the planner sees a target it would otherwise accept. A target that exceeds
+/// the *whole* pool is plain unaffordability, **not** a reserve breach: this
+/// gate defers it so the planner surfaces
+/// [`Unaffordable`](DrainError::Unaffordable) — the actionable "too large" error
+/// — rather than the misleading reserve arm (Copilot r3626008352). Scalar-free
+/// by return type (`Ok(())` / the unit-carrying arm).
 fn enforce_exit_reserve(
     scoped_spendable: u64,
     target: u64,
@@ -418,6 +440,14 @@ fn enforce_exit_reserve(
 ) -> Result<(), DrainOrchestrationError> {
     let reserve = exit_reserve_atomic(retired);
     if reserve == 0 {
+        return Ok(());
+    }
+    // Plain unaffordability (`target` exceeds the entire pool) is the planner's
+    // `Unaffordable` to name, not a reserve breach — defer it so the caller gets
+    // the actionable "too-large payment/fee" error instead of a misleading
+    // reserve refusal. Only a target that FITS the pool yet would eat into the
+    // reserve is a breach here.
+    if target > scoped_spendable {
         return Ok(());
     }
     // `spendable − reserve` is the most a drain may move (payment + fee); a
@@ -436,7 +466,17 @@ fn enforce_exit_reserve(
 /// runs *before* the F-D1 projection ([`plan_drain`]) without breaching the
 /// §12.3 carve — the same shape the claim/bond sweeps apply their `reserved`
 /// exclusion in.
+///
+/// Takes the [`SpentRecordsDurablyPruned`] witness for the identical reason the
+/// bond sweep ([`sweep_funding_outputs`](super::bond_assembly::sweep_funding_outputs))
+/// does: `reserved` covers only *live* pending posts, so a funding output spent
+/// by a drain/bond/claim that has since **confirmed** is un-reserved yet still
+/// present in `records` until durable pruning lands (SP-R0). Selecting it would
+/// assemble a double-spend. The witness makes that sequencing compile-enforced —
+/// the drain path's go-live is blocked on the same production mint the sibling
+/// spenders wait for.
 fn scoped_records(
+    _pruning_landed: &SpentRecordsDurablyPruned,
     records: &[PFundingOutputRecord],
     slot: shekyl_types::PSlot,
     reserved: &BTreeSet<GlobalOutputIndex>,
@@ -507,23 +547,34 @@ pub(crate) async fn orchestrate_drain(
     //    fee as well as the payment (the residual is the change the assembly
     //    returns to `P`). `payment + fee` overflow is a corrupt-state signal,
     //    folded into the planner's own overflow arm.
-    let scoped = scoped_records(ctx.funding_records, handle.p_slot(), ctx.reserved);
+    let scoped = scoped_records(
+        ctx.pruning_landed,
+        ctx.funding_records,
+        handle.p_slot(),
+        ctx.reserved,
+    );
     let target = ctx
         .payment
         .checked_add(ctx.fee)
         .ok_or(DrainError::AmountOverflow)?;
+
+    // Project the scoped records **once**: the same mature-filter pass yields
+    // both the aggregate scalar (the reserve gate's input, also the F-D2 balance
+    // surface) and the stripped candidate vector the planner selects over —
+    // rather than summing in `drain_balance` and then re-summing inside
+    // `plan_drain`'s own projection.
+    let operands = project_drain_operands(&scoped, reference_height)?;
+    let scoped_spendable = operands.balance.spendable.to_raw();
 
     // DS-4 exit-reserve enforcement (before selection): a **live** persona must
     // leave `EXIT_FEE_RESERVE_ATOMIC` in the pool so its terminal `Unbond` stays
     // fundable; a **retired** persona reserves nothing and may sweep to zero. A
     // reserve breach (the payment would eat into the reserve) is distinct from
     // plain unaffordability (`plan_drain`'s `Unaffordable`), so it surfaces its
-    // own arm. The projection reuses the same `drain_balance` scalar the planner
-    // derives, against the same reference height.
-    let scoped_spendable = drain_balance(&scoped, reference_height)?.spendable.to_raw();
+    // own arm.
     enforce_exit_reserve(scoped_spendable, target, ctx.retired)?;
 
-    let plan = plan_drain(&scoped, reference_height, AtomicUnits::from_raw(target))?;
+    let plan = plan_from_operands(&operands, reference_height, AtomicUnits::from_raw(target))?;
 
     // 3. Re-map the selected leaf positions to the full records the path
     //    assembly consumes, preserving the planner's (largest-first) order.
@@ -695,7 +746,12 @@ mod tests {
         let reserved: BTreeSet<GlobalOutputIndex> =
             [GlobalOutputIndex::from_raw(2)].into_iter().collect();
 
-        let kept = scoped_records(&records, PSlot::from_raw(0), &reserved);
+        let kept = scoped_records(
+            &SpentRecordsDurablyPruned::for_test(),
+            &records,
+            PSlot::from_raw(0),
+            &reserved,
+        );
         let gindexes: Vec<u64> = kept.iter().map(|r| r.gindex.to_raw()).collect();
         assert_eq!(
             gindexes,
@@ -738,6 +794,27 @@ mod tests {
             enforce_exit_reserve(EXIT_FEE_RESERVE_ATOMIC - 1, 1, false),
             Err(DrainOrchestrationError::ReserveBreached)
         ));
+    }
+
+    #[test]
+    fn live_unaffordable_target_defers_to_the_planner_not_the_reserve() {
+        // A live target that exceeds the WHOLE pool is plain unaffordability,
+        // not a reserve breach: the reserve gate must pass it through so the
+        // planner surfaces `Unaffordable` (the actionable "too large" error),
+        // rather than masking it as `ReserveBreached` (Copilot r3626008352).
+        let pool = 2 * EXIT_FEE_RESERVE_ATOMIC;
+        assert!(
+            enforce_exit_reserve(pool, pool + 1, false).is_ok(),
+            "a target over the whole pool defers to the planner's Unaffordable"
+        );
+        // The planner is then the arm that actually rejects it.
+        let r = mature(1, pool);
+        let err = plan_drain(
+            std::slice::from_ref(&r),
+            BlockHeight::from_raw(REF),
+            AtomicUnits::from_raw(pool + 1),
+        );
+        assert_eq!(err, Err(DrainError::Unaffordable));
     }
 
     #[test]

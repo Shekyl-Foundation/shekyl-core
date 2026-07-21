@@ -74,6 +74,7 @@ use shekyl_engine_state::pscan_state::{PFundingOutputRecord, PScanState};
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
+use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::drain_assembly::{AssembledDrain, DrainDestination};
 use super::drain_orchestrator::{orchestrate_drain, DrainCtx, DrainOrchestrationError};
 use super::pscan::block_source::daemon_claimed_tip;
@@ -144,6 +145,15 @@ pub(crate) enum DrainRequestError {
     /// drain to confirm or fail before re-draining.
     #[error("a pending drain already exists for this persona; one live drain per persona")]
     DrainPending,
+    /// A concurrent same-persona post (a bond or an emission claim) reserved one
+    /// of this drain's swept inputs between the pre-assembly reservation read
+    /// and the seal. The optimistic `reserved` snapshot is stale under
+    /// concurrency; the authoritative re-check under the write lock caught the
+    /// collision and refused **before** sealing, so no doomed record is left
+    /// behind. Retry — the next assembly reads the now-current reservation set
+    /// and selects around the reserved input.
+    #[error("a concurrent post reserved one of this drain's inputs; retry")]
+    InputRaced,
     /// The drain pipeline refused (reference anchor, exit-reserve, planning,
     /// path assembly, or the actor's assembly itself).
     #[error(transparent)]
@@ -165,6 +175,21 @@ impl DrainRequestError {
     }
 }
 
+/// The verdict of the persist-before-dispatch seal mutation, resolved under the
+/// pending-post write lock. Distinguishes the two atomic refusals — a live
+/// same-persona drain vs. a cross-kind input collision — so the caller renders
+/// the correct [`DrainRequestError`] rather than collapsing both into
+/// `DrainPending`.
+enum DrainSealOutcome {
+    /// The drain record was sealed and transitioned to `Dispatched`.
+    Sealed,
+    /// A live drain already exists for this persona (persona dedup).
+    PersonaLive,
+    /// A concurrent post reserved one of this drain's inputs since the
+    /// pre-assembly snapshot; nothing was sealed.
+    InputRaced,
+}
+
 #[allow(private_bounds)] // same Engine-trait privacy posture as submit_emission_claim
 impl<S, D, L, E, R, P> Engine<S, D, L, E, R, P, WalletFile>
 where
@@ -183,9 +208,16 @@ where
     /// the tx from the swept `P` inputs; the residual (`swept − payment − fee`)
     /// returns to `P` as change on a partial drain. The reserve gate
     /// ([`orchestrate_drain`]) refuses a live-persona drain that would spend
-    /// the pool below the exit-fee reserve (DS-4); a retired persona may sweep
-    /// to zero. The principal destination is resolved engine-side (T-DS-3), not
-    /// caller-supplied.
+    /// the pool below the exit-fee reserve (DS-4); a retired (terminally
+    /// unbonded) persona may sweep to zero. The principal destination is
+    /// resolved engine-side (T-DS-3), not caller-supplied.
+    ///
+    /// `pruning_landed` is the [`SpentRecordsDurablyPruned`] witness the drain
+    /// shares with every other funding-output spender (bond post, emission
+    /// claim): go-live stays compile-blocked on its production mint (SP-R0)
+    /// until durable pruning of spent funding outputs lands, so a confirmed-but-
+    /// unpruned output can never be re-swept into a double-spend; tests pass
+    /// [`SpentRecordsDurablyPruned::for_test`].
     // Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the
     // production caller is the RPC drain entry — the same rule-21 retirement
     // condition `submit_emission_claim` carries; the PR regtest e2e is the test
@@ -196,6 +228,7 @@ where
         p_slot: PSlot,
         payment: AtomicUnits,
         fee: AtomicUnits,
+        pruning_landed: &SpentRecordsDurablyPruned,
     ) -> Result<DrainReceipt, DrainRequestError> {
         // Brief read: clone the actor handles + the ledger snapshot the pipeline
         // needs, and capture the wallet's own primary address (the drain
@@ -250,9 +283,9 @@ where
             .map_err(DrainRequestError::Identity)?;
         let p_canonical_id = p_canonical_id_from_hybrid_pubkey(&bond_id_bytes);
 
-        // Sealed funding records + this persona's retirement status, borrowed
-        // from the loaded seal. No P-scan seal ⇒ no funding to drain (the
-        // pipeline refuses loudly downstream) and "not retired" (the safe
+        // Sealed funding records + this persona's exit-reserve exemption,
+        // borrowed from the loaded seal. No P-scan seal ⇒ no funding to drain
+        // (the pipeline refuses loudly downstream) and "not exempt" (the safe
         // default: a live persona keeps its exit reserve).
         let pscan_state =
             pscan_state.map_err(|e| DrainRequestError::state("pscan state load", e))?;
@@ -260,9 +293,19 @@ where
             .as_ref()
             .map(PScanState::funding_outputs)
             .unwrap_or(&[]);
+        // Exempt from the exit-fee reserve once the persona's terminal `Unbond`
+        // has confirmed — i.e. it lives in `pending_unbonds`, the authoritative
+        // "no future Unbond is owed" signal. `retired_records()` is the WRONG
+        // source here: retirement is funded-gated (`retire_persona` only writes
+        // a retired record once the slot holds no funding), so a just-unbonded
+        // persona is absent from it throughout the very drain-all that would
+        // empty the slot. Reading it would keep the reserve pinned on an
+        // unbonded persona, refusing the sweep to zero (`ReserveBreached`) and
+        // deadlocking the funded-gated retirement — the pool can never fully
+        // drain, so the persona can never retire (DS-4 post-retirement sweep).
         let retired = pscan_state
             .as_ref()
-            .is_some_and(|s| s.retired_records().iter().any(|r| r.p_slot == p_slot));
+            .is_some_and(|s| s.pending_unbonds().contains_key(&p_canonical_id));
         let reserved = reserved.map_err(|e| DrainRequestError::state("reserved gindexes", e))?;
 
         // Optimistic fast-fail on a live drain (one live drain per persona —
@@ -287,6 +330,7 @@ where
             DrainCtx {
                 stake: &stake,
                 tree: &curve_tree,
+                pruning_landed,
                 funding_records,
                 reserved: &reserved,
                 dest,
@@ -316,18 +360,43 @@ where
             funding_gindexes: assembled.funding_gindexes.clone(),
             state: PendingPostState::Pending,
         };
-        let pushed = store
+        let outcome = store
             .mutate(move |block| {
+                // Seal-time reservation re-check under the write lock. The
+                // `reserved` snapshot read before proof assembly is stale: a
+                // same-persona bond post or emission claim assembled
+                // concurrently may have reserved one of these swept inputs
+                // since. `push_drain`'s persona dedup does not see a cross-kind
+                // gindex collision, so re-check the live union here and refuse
+                // atomically — *before* sealing — rather than persist a doomed
+                // record whose double-spend the daemon rejects while the sealed
+                // reservation bricks the persona's one-live-drain lane.
+                let raced = {
+                    let reserved = block.reserved_gindexes();
+                    sealed.funding_gindexes.iter().any(|g| reserved.contains(g))
+                };
+                if raced {
+                    return (false, DrainSealOutcome::InputRaced);
+                }
                 let ok = block.push_drain(sealed)
                     && block
                         .mark_drain_dispatched(&persona, dispatch_tip)
                         .is_some();
-                (ok, ok)
+                (
+                    ok,
+                    if ok {
+                        DrainSealOutcome::Sealed
+                    } else {
+                        DrainSealOutcome::PersonaLive
+                    },
+                )
             })
             .await
             .map_err(|e| DrainRequestError::state("pending-drain seal", e))?;
-        if !pushed {
-            return Err(DrainRequestError::DrainPending);
+        match outcome {
+            DrainSealOutcome::Sealed => {}
+            DrainSealOutcome::PersonaLive => return Err(DrainRequestError::DrainPending),
+            DrainSealOutcome::InputRaced => return Err(DrainRequestError::InputRaced),
         }
 
         // Dispatch through the pre-bound ① `Local` posture (the audited

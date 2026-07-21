@@ -2635,86 +2635,6 @@ async fn e2e_emission_claim_accepted_and_applied() {
     );
 }
 
-/// Serialize a whole tx to its wire bytes — the DS-PR-2 e2e byte-diff helper
-/// (the `stake_engine` in-slice [`normalize_shape`] sibling).
-///
-/// [`normalize_shape`]: super::stake_engine
-fn whole_tx_wire_bytes(tx: &shekyl_wire::Transaction) -> Vec<u8> {
-    let mut buf = Vec::new();
-    tx.write(&mut buf).expect("serialize whole tx");
-    buf
-}
-
-/// Zero every value-bearing / randomized / independently-priced leaf while
-/// preserving all counts, lengths, and structural tags, so two txs compare
-/// equal iff their wire SKELETON — the shape an observer classifies on — is
-/// identical. A genuine structural divergence (an extra output, a different
-/// proof arity, a surviving Monero-era field) survives as a length/count delta
-/// and still fails the diff; only the hidden/committed/priced interior is
-/// flattened.
-///
-/// This is the `stake_engine` in-slice `normalize_shape` PLUS the public `fee`
-/// varint: the in-slice drain-vs-drain diff shares one fee, but a real
-/// transfer is weight-priced and a real drain is caller-priced, so the fee is
-/// an expected difference that the skeleton comparison must flatten (both go to
-/// `0`, a 1-byte varint, so the length stays equal too).
-fn flatten_tx_shape(tx: &mut shekyl_wire::Transaction) {
-    use shekyl_wire::{Ct, Input};
-    for input in &mut tx.prefix.inputs {
-        if let Input::ToKey { key_image, .. } = input {
-            *key_image = [0u8; 32];
-        }
-    }
-    for out in &mut tx.prefix.outputs {
-        out.key = [0u8; 32];
-        out.view_tag = 0;
-    }
-    for b in &mut tx.prefix.extra {
-        *b = 0;
-    }
-    if let Ct::Fcmp {
-        fee,
-        reference_block,
-        base,
-        pqc_auths,
-        prunable,
-        ..
-    } = &mut tx.ct
-    {
-        *fee = 0;
-        *reference_block = [0u8; 32];
-        for c in &mut base.commitments {
-            *c = [0u8; 32];
-        }
-        for e in &mut base.enc_amounts {
-            *e = [0u8; 9];
-        }
-        for e in &mut base.enc_labels {
-            *e = [0u8; 9];
-        }
-        for auth in pqc_auths.iter_mut() {
-            auth.hybrid_public_key.iter_mut().for_each(|b| *b = 0);
-            auth.hybrid_signature.iter_mut().for_each(|b| *b = 0);
-        }
-        if let Some(p) = prunable {
-            for bp in &mut p.bulletproofs {
-                bp.a = [0u8; 32];
-                bp.a1 = [0u8; 32];
-                bp.b = [0u8; 32];
-                bp.r1 = [0u8; 32];
-                bp.s1 = [0u8; 32];
-                bp.d1 = [0u8; 32];
-                bp.l.iter_mut().for_each(|x| *x = [0u8; 32]);
-                bp.r.iter_mut().for_each(|x| *x = [0u8; 32]);
-            }
-            p.fcmp_proof.iter_mut().for_each(|b| *b = 0);
-            for po in &mut p.pseudo_outs {
-                *po = [0u8; 32];
-            }
-        }
-    }
-}
-
 /// DS-PR-2 **T-DS-6 ∧ T-DS-7 composite wire-shape arm — the full
 /// transfer-vs-drain byte-diff over real end-to-end txs**
 /// (`ARCHIVAL_DRAIN_SEND_FD2.md` §5 composite arm; the in-slice
@@ -2739,9 +2659,11 @@ fn flatten_tx_shape(tx: &mut shekyl_wire::Transaction) {
 /// the persona's single `BondPostChange` funding record (one input, principal
 /// payment + `P`-space change), sized so change ≥ [`EXIT_FEE_RESERVE_ATOMIC`]
 /// — a live persona keeps its exit-fee reserve (DS-4). Fees differ (transfer
-/// weight-priced, drain caller-priced), so [`flatten_tx_shape`] flattens the
-/// public `fee` alongside the hidden leaves; the raw bytes are asserted
-/// distinct first, so the normalized equality is not vacuous.
+/// weight-priced, drain caller-priced), so [`normalize_fcmp_wire_shape`]
+/// flattens the public `fee` alongside the hidden leaves; the raw bytes are
+/// asserted distinct first, so the normalized equality is not vacuous.
+///
+/// [`normalize_fcmp_wire_shape`]: super::test_support::normalize_fcmp_wire_shape
 ///
 /// [`EXIT_FEE_RESERVE_ATOMIC`]: shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC
 #[tokio::test(flavor = "multi_thread")]
@@ -2872,6 +2794,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
             slot,
             drain_payment,
             AtomicUnits::from_raw(drain_fee),
+            &super::bond_assembly::SpentRecordsDurablyPruned::for_test(),
         )
         .await
         {
@@ -2937,18 +2860,18 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     // Non-vacuous: the raw bytes genuinely differ (distinct hidden amounts,
     // fees, keys) — otherwise the normalized equality below proves nothing.
     assert_ne!(
-        whole_tx_wire_bytes(&transfer_tx),
-        whole_tx_wire_bytes(&drain_tx),
+        super::test_support::whole_tx_wire_bytes(&transfer_tx),
+        super::test_support::whole_tx_wire_bytes(&drain_tx),
         "raw transfer/drain bytes must differ"
     );
 
     let mut transfer_norm = transfer_tx;
     let mut drain_norm = drain_tx;
-    flatten_tx_shape(&mut transfer_norm);
-    flatten_tx_shape(&mut drain_norm);
+    super::test_support::normalize_fcmp_wire_shape(&mut transfer_norm);
+    super::test_support::normalize_fcmp_wire_shape(&mut drain_norm);
     assert_eq!(
-        whole_tx_wire_bytes(&transfer_norm),
-        whole_tx_wire_bytes(&drain_norm),
+        super::test_support::whole_tx_wire_bytes(&transfer_norm),
+        super::test_support::whole_tx_wire_bytes(&drain_norm),
         "a real drain is wire-identical to a real modal 2-out transfer modulo \
          hidden/committed/priced leaves — no output-count (T-DS-6), tx_extra / \
          unlock_time / ct_type (T-DS-7), or proof-arity distinguisher"
