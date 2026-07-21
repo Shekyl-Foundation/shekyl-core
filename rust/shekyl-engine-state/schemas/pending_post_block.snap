@@ -186,13 +186,6 @@
                     }
                   },
                   {
-                    "name": "entry_offset_blocks",
-                    "ty": {
-                      "name": "u64",
-                      "ty": "U64"
-                    }
-                  },
-                  {
                     "name": "bond_post_offset_blocks",
                     "ty": {
                       "name": "u64",

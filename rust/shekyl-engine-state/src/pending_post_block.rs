@@ -50,7 +50,7 @@ use crate::error::WalletLedgerError;
 /// a different version **refuse rather than migrate** — pre-genesis, a v3
 /// seal under a v4 binary fails closed and the operator re-assembles
 /// (rule 15).
-pub const PENDING_POST_VERSION: u32 = 4;
+pub const PENDING_POST_VERSION: u32 = 5;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -103,9 +103,6 @@ pub struct PendingBondPost {
     /// The fully-assembled, signed, wire-encoded transaction bytes — the
     /// value itself, per pin P-2: retries re-send these stored bytes.
     pub tx_bytes: Vec<u8>,
-    /// Blocks from `anchor_t0` to `P`'s observable funding/entry event
-    /// (state-shaped twin of `shekyl_standoff::EntrySeamPlan`).
-    pub entry_offset_blocks: u64,
     /// Blocks from `anchor_t0` to the bond-post broadcast.
     pub bond_post_offset_blocks: u64,
     /// Tip height at assemble time — the private intent anchor `t0` the
@@ -449,7 +446,6 @@ mod tests {
             p_slot: PSlot::from_raw(0),
             persona: PCanonicalId::from_bytes([persona_byte; 32]),
             tx_bytes: vec![0xAB; 16],
-            entry_offset_blocks: 3,
             bond_post_offset_blocks: 12,
             anchor_t0: BlockHeight::from_raw(1_000),
             funding_gindexes: gindexes

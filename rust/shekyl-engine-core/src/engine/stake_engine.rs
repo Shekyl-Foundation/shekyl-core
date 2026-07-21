@@ -895,13 +895,32 @@ impl StakeEngine {
         //        precede the post it funds. A coin whose outcomes are decided by
         //        physics is not drawn, it is biased.
         //
-        //    Forcing causal makes the `U[0, window]` spread apply to EVERY post
-        //    rather than half of them. The draw itself is kept intact (both
-        //    values, the degeneracy guard, the certified RNG path) so the coin
-        //    can be restored the moment the inverted branch is executable —
-        //    which needs `entry_offset_blocks` scheduled AND an entry event with
-        //    the freedom to follow the post (the unbuilt §10.12 announce, or a
-        //    post-earnings top-up on `HoldingsUpdate`/`Rebond`). See FOLLOWUPS.
+        //    RESOLVED 2026-07-21 — the coin was a CATEGORY ERROR, and the
+        //    forcing is permanent, not a holding position. An inversion needs
+        //    two events an observer can ORDER, and at entry there is only one
+        //    such event: the bond post, which names `P` in cleartext. The
+        //    funding transfer is on chain too, but it is an ordinary FCMP++
+        //    transfer that does not name `P` with a CT-hidden source — it is
+        //    not attributable, so it cannot serve as an anchor for anyone the
+        //    posture admits. Ordering an unidentifiable event against an
+        //    identifiable one changes nothing observable.
+        //
+        //    §10.12's "announce" and `plan.rs`'s "funding/entry event" were
+        //    both naming a PIPELINE stage (wallet mints → sends to daemon →
+        //    daemon propagates) as though it were a chain event. The pipeline
+        //    has two stages; the chain has one attributable event. A second
+        //    observable appears only to someone watching the wallet→daemon
+        //    hop — the adversarial daemon — which the certified own-node
+        //    posture excludes by construction, where that hop is loopback.
+        //    The second event is the observer's artifact, never a chain fact.
+        //
+        //    So there is nothing to restore and no announce to build. The
+        //    single `U[0, window]` jitter on the bond post IS the mechanism in
+        //    full — one event, jittered against a PRIVATE anchor `t0` — not one
+        //    arm of a two-arm scheme. `entry_offset_blocks` is deleted from
+        //    persisted state (`PENDING_POST_VERSION` 5); the measurement-seam
+        //    field and the coin itself retire with the standoff crate's
+        //    published golden vector, in its own slice.
         //
         //    Grading consequence: the GF-7 numbers measured with the inversion
         //    arm ON do not describe this world. The honest grade for the join
