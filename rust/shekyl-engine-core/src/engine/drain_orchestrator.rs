@@ -59,6 +59,7 @@ use std::collections::BTreeSet;
 
 use shekyl_curve_tree::{AssembleInput, Gindex};
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
+use shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_types::{BlockHeight, GlobalOutputIndex};
 use shekyl_units::AtomicUnits;
@@ -296,6 +297,14 @@ pub(crate) enum DrainOrchestrationError {
         /// The anchoring helper's own (scalar-free) reason.
         detail: String,
     },
+    /// The drain would spend a **live** persona's pool below the exit-fee
+    /// reserve ([`EXIT_FEE_RESERVE_ATOMIC`]) — draining it there strands the
+    /// future terminal `Unbond` (`ARCHIVAL_DRAIN_SEND_FD2.md` DS-4,
+    /// `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2). Lower the payment, or retire the
+    /// persona first (a post-retirement sweep has no reserve). Scalar-free: it
+    /// names neither the payment nor the pool magnitude.
+    #[error("drain would spend the live persona pool below the exit-fee reserve")]
+    ReserveBreached,
     /// The F-D1 drain planner refused: the requested payment was zero,
     /// exceeded the spendable `P` balance, could not be covered by the
     /// spendable outputs, or the aggregate arithmetic overflowed. Lower the
@@ -364,8 +373,61 @@ pub(crate) struct DrainCtx<'a> {
     pub payment: u64,
     /// The fee the drain tx must fund from its swept `P` inputs.
     pub fee: u64,
+    /// Whether the persona is **retired** (its bond has terminally unbonded).
+    /// A live persona is a mid-life constructor and must retain the exit-fee
+    /// reserve ([`EXIT_FEE_RESERVE_ATOMIC`], DS-4); a retired persona has no
+    /// future `Unbond`, so the reserve is moot and a drain-all may sweep the
+    /// pool to zero. Resolved engine-side from
+    /// [`PScanState::retired_records`](shekyl_engine_state::pscan_state::PScanState::retired_records)
+    /// by the dispatch seam.
+    pub retired: bool,
     /// The wallet's synced chain tip — the send-path anchor input.
     pub chain_tip: u64,
+}
+
+/// The exit-fee reserve a drain of a persona in this liveness state must leave
+/// in `P`'s pool (`ARCHIVAL_DRAIN_SEND_FD2.md` DS-4).
+///
+/// A **live** persona is a mid-life constructor: it retains one
+/// pessimistically-priced `Unbond` fee ([`EXIT_FEE_RESERVE_ATOMIC`]) so the
+/// terminal `Unbond` stays fundable. A **retired** persona has no future
+/// `Unbond`, so the reserve is `0` and a drain-all may take the pool to zero.
+fn exit_reserve_atomic(retired: bool) -> u64 {
+    if retired {
+        0
+    } else {
+        EXIT_FEE_RESERVE_ATOMIC
+    }
+}
+
+/// DS-4 exit-reserve gate: does a drain of `target` (`payment + fee`) leave the
+/// liveness-appropriate reserve in a pool of `scoped_spendable`?
+///
+/// The invariant is `target + reserve <= scoped_spendable` for a **live**
+/// persona (reserve = [`EXIT_FEE_RESERVE_ATOMIC`]) and `target <=
+/// scoped_spendable` for a **retired** one (reserve = 0 — the planner's own
+/// affordability check subsumes it, so this is a no-op for a retired sweep).
+///
+/// A reserve breach is distinct from plain unaffordability: a live drain whose
+/// `payment + fee` fits the balance but eats into the reserve is refused here
+/// with [`ReserveBreached`](DrainOrchestrationError::ReserveBreached), before
+/// the planner sees a target it would otherwise accept. Scalar-free by return
+/// type (`Ok(())` / the unit-carrying arm).
+fn enforce_exit_reserve(
+    scoped_spendable: u64,
+    target: u64,
+    retired: bool,
+) -> Result<(), DrainOrchestrationError> {
+    let reserve = exit_reserve_atomic(retired);
+    if reserve == 0 {
+        return Ok(());
+    }
+    // `spendable − reserve` is the most a drain may move (payment + fee); a
+    // spendable below the reserve leaves nothing drainable at all.
+    match scoped_spendable.checked_sub(reserve) {
+        Some(max_drainable) if target <= max_drainable => Ok(()),
+        _ => Err(DrainOrchestrationError::ReserveBreached),
+    }
 }
 
 /// Scope `records` to `slot`'s own funding outputs, dropping any whose gindex
@@ -454,6 +516,17 @@ pub(crate) async fn orchestrate_drain(
         .payment
         .checked_add(ctx.fee)
         .ok_or(DrainError::AmountOverflow)?;
+
+    // DS-4 exit-reserve enforcement (before selection): a **live** persona must
+    // leave `EXIT_FEE_RESERVE_ATOMIC` in the pool so its terminal `Unbond` stays
+    // fundable; a **retired** persona reserves nothing and may sweep to zero. A
+    // reserve breach (the payment would eat into the reserve) is distinct from
+    // plain unaffordability (`plan_drain`'s `Unaffordable`), so it surfaces its
+    // own arm. The projection reuses the same `drain_balance` scalar the planner
+    // derives, against the same reference height.
+    let scoped_spendable = drain_balance(&scoped, reference_height)?.spendable.to_raw();
+    enforce_exit_reserve(scoped_spendable, target, ctx.retired)?;
+
     let plan = plan_drain(&scoped, reference_height, AtomicUnits::from_raw(target))?;
 
     // 3. Re-map the selected leaf positions to the full records the path
@@ -633,6 +706,56 @@ mod tests {
             vec![1, 4],
             "keep slot-0 unreserved records; drop the reserved g2 and the foreign-slot g3"
         );
+    }
+
+    #[test]
+    fn exit_reserve_maps_liveness_to_the_floor() {
+        // A live persona holds the pinned reserve; a retired one holds nothing.
+        assert_eq!(exit_reserve_atomic(false), EXIT_FEE_RESERVE_ATOMIC);
+        assert_eq!(exit_reserve_atomic(true), 0);
+    }
+
+    #[test]
+    fn live_drain_must_leave_the_reserve() {
+        let r = EXIT_FEE_RESERVE_ATOMIC;
+        // Pool exactly one payment above the reserve: `payment + fee == r`
+        // clears (leaves the reserve on the nose); one atomic more breaches.
+        let pool = 2 * r;
+        assert!(
+            enforce_exit_reserve(pool, r, false).is_ok(),
+            "target that leaves exactly the reserve is allowed"
+        );
+        assert!(
+            matches!(
+                enforce_exit_reserve(pool, r + 1, false),
+                Err(DrainOrchestrationError::ReserveBreached)
+            ),
+            "one atomic into the reserve is refused"
+        );
+    }
+
+    #[test]
+    fn live_drain_below_reserve_pool_is_wholly_undrainable() {
+        // A pool that cannot even cover the reserve leaves nothing drainable:
+        // every positive target breaches (the `checked_sub` underflow arm).
+        assert!(matches!(
+            enforce_exit_reserve(EXIT_FEE_RESERVE_ATOMIC - 1, 1, false),
+            Err(DrainOrchestrationError::ReserveBreached)
+        ));
+    }
+
+    #[test]
+    fn retired_sweep_ignores_the_reserve() {
+        // A retired persona reserves nothing: a drain-all to the last atomic is
+        // allowed, and the guard defers unaffordability entirely to the planner.
+        let pool = EXIT_FEE_RESERVE_ATOMIC; // below the live floor, irrelevant here
+        assert!(
+            enforce_exit_reserve(pool, pool, true).is_ok(),
+            "retired sweep of the whole pool clears the reserve gate"
+        );
+        // Even an over-balance target passes *this* gate (retired ⇒ no-op); the
+        // planner's `Unaffordable` is the arm that catches it downstream.
+        assert!(enforce_exit_reserve(pool, pool + 1, true).is_ok());
     }
 
     /// Composition + firewall pins (`wire.rs`-tripwire style; the test module
