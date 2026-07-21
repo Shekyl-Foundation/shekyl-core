@@ -2038,6 +2038,41 @@ verifies against the source document's own words before anything is dispositione
 against it — and a summary that joins two source claims into one is a **new claim**,
 carrying a new claim's burden of proof.
 
+**Method note 7 (adopted 2026-07-20, from the `span(C)` cover-curve retirement — the
+amount-axis arrival of the same lesson as notes 2 and 3): sample the ambient
+distribution; never compute a statistic of it. The test is TYPICALITY, not
+unpredictability.** `span(C)` failed for the identical reason a phantom `T` fails: **a
+computed value carries information precisely because it is computable.** Every wallet
+lands on it and every observer recomputes it, so it is a tag no matter how hard the value
+inside it is jittered. The cover interval `[C_min, C_min + span(C)]` was public — `C` is
+public chain state — so an observer tests `A − bond_floor(k)` for membership in a
+computable set. Entropy *within* an envelope hides which value was drawn; it does nothing
+about the amount belonging to the envelope, and the envelope is the fingerprint.
+
+The two properties come apart, and the naive instinct reaches for the wrong one.
+**Unpredictability was never the requirement — it is a proxy that usually correlates with
+typicality and here does not.** Quadrants: a disjoint envelope is predictable *and*
+distinguishing (worst); an ambient sample is predictable *and* non-distinguishing (best).
+The goal is not a value the adversary cannot predict, it is a value that **tells them
+nothing when they do**. An ambient sample is computable by the adversary and useless to
+them, because what it computes to is where everyone else already is.
+
+Corollary, and the reason this is not merely restating notes 2/3: **do not avoid the
+distribution's centre.** The mass *is* the cover — sit in it. Dodging the median to look
+less typical is re-tagging the transaction to evade a tag, the same error with the sign
+flipped.
+
+**Implementation trap, named because this is exactly where "sample ambient" quietly
+becomes "compute a statistic" again:** copy an **actual observed** value, never fit a
+model and draw from the fit. A fitted draw puts every wallet in the same fitted region
+and rebuilds `span(C)` with extra steps — "distinguishable as a draw from our model of
+real transactions" is not "indistinguishable from a real transaction". The test is
+mechanical and should be asserted, not assumed: **the emitted value must equal some real
+on-chain value, not a derived one.**
+
+This note would have killed `span(C)` on sight, the way note 3 would have killed
+`DEFAULT_EXIT_GAP_WINDOW`.
+
 ---
 
 ## 12. Round 4 — output + bond-funding hygiene: the drain-event firewall (OPEN — drafted 2026-07-11)
