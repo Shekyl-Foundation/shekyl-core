@@ -398,8 +398,12 @@ pub(super) async fn assemble_drain_tx(
 
     // ── Step 4: persona-keyed spend inputs — the shared bond/claim fee-sweep
     // leg (rule 36: secrets re-derived inside; strict-descending key-image
-    // order). ──
-    let prepared = prepare_funding_inputs(keys, funding)?;
+    // order). This helper is shared with the bond/claim paths, so it returns
+    // `BondAssemblyError`; remap into the drain taxonomy so a drain-path failure
+    // never mis-reports as "bond assembly" (bare `?` would coerce via
+    // `StakeEngineError::Assembly(#[from] BondAssemblyError)`). ──
+    let prepared = prepare_funding_inputs(keys, funding)
+        .map_err(|e| DrainAssemblyError::build("drain funding input preparation", e))?;
     let key_images: Vec<[u8; 32]> = prepared.iter().map(|p| p.key_image).collect();
     let funding_gindexes: Vec<GlobalOutputIndex> = prepared.iter().map(|p| p.gindex).collect();
 
@@ -482,7 +486,11 @@ pub(super) async fn assemble_drain_tx(
         .to_canonical_bytes()
         .map_err(|e| DrainAssemblyError::build("identity encoding", e))?;
     let persona = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
-    let bound_tx = finalize_bond_tx(persona, &wire)?;
+    // `finalize_bond_tx` is the shared P-1 mint site (bond/claim/drain), so it
+    // too returns `BondAssemblyError`; remap into the drain taxonomy for the
+    // same reason as Step 4.
+    let bound_tx = finalize_bond_tx(persona, &wire)
+        .map_err(|e| DrainAssemblyError::build("drain finalize", e))?;
 
     Ok(AssembledDrain {
         bound_tx,

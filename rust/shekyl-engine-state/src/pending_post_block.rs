@@ -538,18 +538,37 @@ impl PendingPostBlock {
 
     /// Deserialize from [`Self::to_postcard_bytes`] output. **Refuses a
     /// version mismatch.**
+    ///
+    /// The version is gated on the leading `version` prefix **before** the rest
+    /// of the struct is decoded. `version` is this struct's first field and
+    /// postcard serializes fields in declaration order with no framing, so the
+    /// prefix is the first varint of the blob. Gating on it first means a blob
+    /// written by *any* other schema version is refused with a clean
+    /// [`WalletLedgerError::UnsupportedBlockVersion`] (refuse-not-migrate, rules
+    /// 15/60) rather than surfacing as an opaque postcard EOF/layout error when
+    /// the field layout differs across versions (e.g. a v4 blob has no `drains`
+    /// field, so a full v5 decode would EOF instead of naming the version).
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
+        let (version, _rest) = postcard::take_from_bytes::<u32>(bytes)?;
+        Self::ensure_supported_version(version)?;
         let block: Self = postcard::from_bytes(bytes)?;
-        block.check_version()?;
         Ok(block)
     }
 
-    /// Version gate. Called automatically by [`Self::from_postcard_bytes`].
+    /// Version gate for an already-decoded block.
     pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        if self.version != PENDING_POST_VERSION {
+        Self::ensure_supported_version(self.version)
+    }
+
+    /// The single version-comparison site, shared by the pre-decode prefix gate
+    /// ([`Self::from_postcard_bytes`]) and the post-decode
+    /// [`Self::check_version`], so the two cannot disagree on what "supported"
+    /// means.
+    fn ensure_supported_version(version: u32) -> Result<(), WalletLedgerError> {
+        if version != PENDING_POST_VERSION {
             return Err(WalletLedgerError::UnsupportedBlockVersion {
                 block: "pending_post_block",
-                file: self.version,
+                file: version,
                 binary: PENDING_POST_VERSION,
             });
         }
@@ -935,14 +954,19 @@ mod tests {
     /// version gate — refuse-not-migrate (rule 15, pre-genesis).
     #[test]
     fn v4_seal_fails_closed_under_v5_binary() {
-        let v4 = PendingPostBlock {
-            version: 4,
-            posts: Vec::new(),
-            claims: Vec::new(),
-            drains: Vec::new(),
-        };
-        let bytes = postcard::to_allocvec(&v4).expect("encode");
-        let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("v4 must refuse");
+        // Model REAL v4 bytes, not a v5 struct with an empty `drains` vec: a v4
+        // binary never wrote a `drains` field at all. postcard encodes a struct
+        // as its fields concatenated with no framing, so a `(version, posts,
+        // claims)` tuple is byte-identical to what the v4 layout produced. The
+        // version prefix gate must refuse this on the leading `4` before it ever
+        // tries (and fails at EOF) to read the absent `drains` field.
+        let v4_bytes = postcard::to_allocvec(&(
+            4u32,
+            Vec::<PendingBondPost>::new(),
+            Vec::<PendingEmissionClaim>::new(),
+        ))
+        .expect("encode v4-shaped bytes");
+        let err = PendingPostBlock::from_postcard_bytes(&v4_bytes).expect_err("v4 must refuse");
         assert!(matches!(
             err,
             WalletLedgerError::UnsupportedBlockVersion {
