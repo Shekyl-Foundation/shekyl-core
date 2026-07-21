@@ -68,6 +68,21 @@ sustainability is unaffected by the recalibration.
   (bounded, mechanical for the test-extraction floor; the god-file only
   shrinks from here).**
 
+- **Drain dispatch driver — confirmation-observe / terminal-reject prune /
+  byte-identical resubmit** (added 2026-07-21; DS-PR-2 / F-D2 drain-send).
+  DS-PR-2 landed the `submit_drain` dispatch seam with persist-`PendingDrain`-
+  before-dispatch and one-live-drain-per-persona semantics
+  (`engine/drain_dispatch.rs`), but the **driver** that later observes the
+  broadcast's network verdict — confirm and retire the `PendingDrain`, or prune
+  a terminal-reject and resubmit byte-identically — is not built. The record
+  shape this seam seals already serves it (mirrors `submit_emission_claim`'s
+  retirement condition), so this is wiring, not new design. **Named blocker:**
+  it is the WI-3 sibling slice (same lifecycle-driver shape as the emission-
+  claim and bond-post drivers WI-3 lands); folding it into DS-PR-2 would
+  duplicate the driver design WI-3 owns. **Reopen when** WI-3's dispatch-driver
+  slice is scoped, or an RPC drain entry needs a live confirmation path before
+  then. **Target: V3.0 pre-genesis.**
+
 - **Wallet thin-market entry disclosure — the §13.2 re-disposition's
   build item** (added 2026-07-19; `ARCHIVAL_REWARD_GATE_M1.md` §13.1,
   `ARCHIVAL_BOND_WI4_MEASUREMENT.md` §13.2 updated disposition). At

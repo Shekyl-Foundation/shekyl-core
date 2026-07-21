@@ -52,6 +52,49 @@
 
 ### Added
 
+- **wallet (engine): F-D2 drain orchestration + dispatch landed — DS-PR-2
+  (`ARCHIVAL_DRAIN_SEND_FD2.md` §DS-PR-2, the core-side dispatch half).**
+  The `P`→principal drain **request path**, the emission-claim sibling:
+  - **Orchestrator.** `orchestrate_drain` — a free function over an explicit
+    `DrainCtx` (borrowed handles/records/reserved-set/destination/amounts/
+    `chain_tip`, **never `&Engine`**; the `orchestrate_emission_claim` shape):
+    anchor the reference → scope + plan the persona's records → assemble
+    membership paths → delegate to the actor's `assemble_drain`
+    (`engine/drain_orchestrator.rs`). No new `Engine` generic or inherent
+    multi-step method (composition discipline §4).
+  - **Exit-fee reserve (DS-4 / T-DS-4).** `EXIT_FEE_RESERVE_ATOMIC` lands as a
+    real constant (`shekyl-standoff::reserve`, `50_000_000` atomic = 0.05 SKL,
+    `0 < reserve < COVER_RUNWAY_FLOOR_ATOMIC` compile-time asserted) and is
+    **enforced** in the orchestrator: a **partial** drain from a **live**
+    persona may not spend the pool below the reserve
+    (`DrainOrchestrationError::ReserveBreached`); a **retired** persona sweeps
+    to zero (reserve-moot). The `retired` flag is resolved engine-side from
+    `PScanState::retired_records`.
+  - **Dispatch seam (T-DS-2).** `Engine::submit_drain` (`engine/drain_dispatch.rs`,
+    the `claim_dispatch` sibling): resolve the wallet's own principal
+    destination engine-side (T-DS-3, never caller-supplied), assemble through
+    the pipeline, **seal the `PendingDrain` before any send**
+    (persist-before-dispatch; the `reserved_gindexes` fold dedups against
+    bond/claim/second-drain), one live drain per persona, and dispatch
+    **only** through the audited persona-transport choke point
+    (`BroadcastSubmitter::local` → `submit_bound`), never a bare submitter or
+    default `DaemonClient`. A comment-stripped self-grep tripwire pins the
+    three invariants (pipeline entry, choke-point, seal-before-send order).
+  - **Composite wire-shape arm — final leg (T-DS-6 ∧ T-DS-7).**
+    `regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer` builds a
+    **real** 1-in/2-out transfer (`sign_tx`) and a **real** 1-in/2-out drain
+    (`submit_drain`), both daemon-accepted (consensus verify), and asserts
+    their normalized wire skeletons byte-identical while raw bytes differ
+    (non-vacuous); `flatten_tx_shape` = the in-slice `normalize_shape` plus
+    the public `fee` varint (transfer weight-priced, drain caller-priced).
+    This discharges the "a real drain must exist to diff against a real
+    transfer" condition DS-PR-1 could only stage.
+  - **No new schema** — `dev`'s `PENDING_POST_VERSION` (v6, post-
+    `entry_offset_blocks` removal) already carries `PendingDrain` from DS-PR-1.
+  - **Deferred (named, WI-3 sibling slice):** drain retirement wiring
+    (confirmation-observe / terminal-reject prune, byte-identical resubmit) —
+    the sealed `PendingDrain` shape already serves it. Gates: fmt + clippy
+    `-D warnings` clean.
 - **wallet (engine): F-D2 drain assembly landed — DS-PR-1
   (`ARCHIVAL_DRAIN_SEND_FD2.md` §DS-PR-1).** The actor-side
   `P`→principal drain-send assembly, mirroring the emission-claim shape:
