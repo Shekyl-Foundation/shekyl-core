@@ -26,16 +26,28 @@
 //! mechanics, because this is the transaction whose amount is observed.
 
 use shekyl_address::AddressError;
-use shekyl_standoff::COVER_RUNWAY_FLOOR_ATOMIC;
+use shekyl_standoff::{draw_cover_amount, COVER_RUNWAY_FLOOR_ATOMIC};
 use shekyl_units::AtomicUnits;
 
 use super::fee_estimator::FeePriority;
 use super::pending::{PendingTx, TxRecipient, TxRequest};
 use super::stake_engine::StakeEngineError;
+use super::stake_timing::OsRngGapAdapter;
 use super::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
 };
 use super::{EngineSignerKind, SendError};
+
+/// The `count` fed to `draw_cover_amount` until a canonical global
+/// standing-bond-count read exists (`ARCHIVAL_COVER_DRAW.md` §8).
+///
+/// Named rather than inlined so the gap is greppable and can never be mistaken
+/// for a real population read. `span(0) == 0`, so the draw is degenerate today
+/// and the amount axis carries no entropy — the open genesis distinguisher.
+/// Every wallet must pin the SAME value: a per-wallet `C` breaks the
+/// cross-wallet uniformity the draw depends on, which is a worse leak than the
+/// degenerate span.
+const CANONICAL_STANDING_BOND_COUNT_UNAVAILABLE: u64 = 0;
 
 /// Why [`Engine::stake_in`](super::Engine::stake_in) could not build the funding
 /// transfer.
@@ -139,21 +151,43 @@ where
         // opt-out (`cover == 0`, the disclosed stake-only path) belongs behind
         // an advanced setting with its privacy warning, never on this seam.
         //
-        // **Tail regime only, and exactly correct there.** `span(C) == 0` at or
-        // below `COVER_TAIL_COUNT` (13 live bonds), so `cover == C_min`
-        // identically — no `C` read is needed, and none is available: the curve
-        // requires a *slow, reorg-final, long-window* network aggregate (§8, the
-        // dip-the-count manipulation surface), which no daemon RPC exposes yet.
-        // `span >= 0` always, so `C_min` also stays a sound lower bound above
-        // the tail. Lighting up the `C`-dependent span is the follow-on
-        // (FOLLOWUPS); it cannot be faked from this wallet's own bond count,
-        // which is not the network's.
-        let cover = AtomicUnits::from_raw(COVER_RUNWAY_FLOOR_ATOMIC);
+        // **The draw IS the defense.** GENESIS §2.0 / `PRINCIPAL_STAKE_LIFECYCLE.md`
+        // §3.1: "the cover defense reduces entirely to the entropy of the cover
+        // draw". So this calls `draw_cover_amount` — never a hardcoded amount.
+        // A constant offset is exactly as self-tagging as a bare `bond_floor`:
+        // it leaves the funding transfer distinguishable from ordinary traffic,
+        // which is the only property that matters. The transfer is protected
+        // iff it is INDISTINGUISHABLE from a normal transfer; it then borrows
+        // the entire ambient transaction graph as its anonymity set for free,
+        // but only for as long as it carries nothing that tags it out.
+        //
+        // **`count = 0` is a deliberate uniform pin, and it is the open gap.**
+        // `count` is the GLOBAL standing-bond count and there is no source for
+        // it: `ARCHIVAL_COVER_DRAW.md` §8 records that no live-maintained
+        // standing-bond-count exists ("the earlier 'the source already exists
+        // in `EpochCloseInputs.bonds`' claim was wrong") and that a canonical
+        // epoch-boundary read must be specified first. Substituting this
+        // wallet's own bond count would be WORSE than pinning: §8's
+        // load-bearing constraint is cross-wallet uniformity — two wallets
+        // drawing over different `C` draw from different distributions, and
+        // that divergence *is* the leak the mechanism exists to close.
+        //
+        // Consequence, stated plainly rather than buried: `span(0) == 0`, so
+        // the draw currently yields `C_min` exactly and the amount axis carries
+        // ZERO entropy. The call shape is correct — entropy flows the instant a
+        // canonical `C` crosses `COVER_TAIL_COUNT` — but the amount
+        // distinguisher is NOT closed at genesis. Tracked as a genesis blocker.
+        let mut rng = OsRngGapAdapter;
+        let cover = AtomicUnits::from_raw(draw_cover_amount(
+            CANONICAL_STANDING_BOND_COUNT_UNAVAILABLE,
+            COVER_RUNWAY_FLOOR_ATOMIC,
+            &mut rng,
+        ));
         let funded = amount
             .checked_add(cover)
             .ok_or(StakeInError::CoverOverflow {
                 stake: amount.to_raw(),
-                cover: COVER_RUNWAY_FLOOR_ATOMIC,
+                cover: cover.to_raw(),
             })?;
         // The actor projects P's address (public-only `ShekylAddress`, built
         // in-actor from the live bundle — never re-derived, no P secret crosses;

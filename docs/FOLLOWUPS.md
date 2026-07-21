@@ -9539,6 +9539,37 @@ one place to confirm each item's relationship to the wallet stack.
   §14 (launch posture), [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
   §4 and [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
 
+- **⛔ GENESIS BLOCKER — the funding-transfer amount is still a distinguisher: the cover
+  draw is degenerate (opened 2026-07-20).** `stake_in` now calls `draw_cover_amount`
+  (`principal_stake.rs`) rather than sending a bare amount, so the call shape is correct.
+  **But the draw has no entropy**, and entropy is the entire defense: GENESIS §2.0 /
+  `PRINCIPAL_STAKE_LIFECYCLE.md` §3.1 — "the cover defense reduces entirely to the entropy
+  of the cover draw". `span(C) == 0` below `COVER_TAIL_COUNT`, and `C` is pinned at
+  `CANONICAL_STANDING_BOND_COUNT_UNAVAILABLE = 0`, so every funding transfer carries
+  `stake + C_min` exactly — a FIXED OFFSET, which self-tags as surely as a bare
+  `bond_floor` did.
+  **The security property, stated once:** the funding transfer is protected iff it is
+  INDISTINGUISHABLE from an ordinary transfer. It then inherits the whole ambient
+  transaction graph as its anonymity set at no cost — cover is not something we
+  provision, it is something we can only forfeit. Every leak on this seam is a
+  self-tagging property and every fix is the removal of one. Audited distinguishers:
+  address structure (closed — ordinary `ShekylAddress`, no tag), cover output form
+  (closed by design — no special field, an ordinary confidential `tagged_key` output, the
+  same anti-fingerprint reason DQ1 rejects `C_stake`), input/output shape (closed — single
+  structured output, the GF4b-2 criterion), timing (window applies to every post since the
+  order-coin fix; maturity floor beneath it), **amount (OPEN — this item)**.
+  **Named blocker:** `ARCHIVAL_COVER_DRAW.md` §8 records that no live-maintained global
+  standing-bond-count exists ("the earlier 'the source already exists in
+  `EpochCloseInputs.bonds`' claim was wrong") and that a canonical epoch-boundary `Σ_P`
+  gather or maintained aggregate must be specified first — with manipulation-resistance,
+  since an adversary can withhold or withdraw bonds to dip a naive count. A wallet-local
+  count must NOT be substituted: §8's load-bearing constraint is cross-wallet uniformity,
+  and two wallets drawing over different `C` draw from different distributions, which is
+  itself the leak.
+  **Why this gates genesis:** the curve is genesis-frozen and the distinguisher is live
+  from the first funding transfer. Per `00-mission` priority-2, privacy is not tradeable
+  for launch schedule — the same disposition GF4b-2 took for the input-count leak.
+  *Target: V3.0 pre-genesis, blocking.*
 - **GF-7 amount-axis cover: light up the `C`-dependent span (opened 2026-07-20).** The
   funding-seam cover is now applied at `stake_in` (`principal_stake.rs`): the transfer
   carries `stake + C_min`, never a bare `bond_floor`-shaped amount. That is **exactly**
