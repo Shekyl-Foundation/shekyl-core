@@ -37,7 +37,11 @@ use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the durable pending-post block. **v4** adds the
+/// Schema version of the durable pending-post block. **v5** adds the
+/// [`PendingDrain`] record set — the F-D2 drain's persist-before-dispatch
+/// sibling (DS-PR-1): a drain spends `P`-funding inputs, so all of its input
+/// gindexes must be reserved durably **before** the bytes reach any submitter,
+/// exactly as a bond post reserves its funding. **v4** adds the
 /// [`PendingEmissionClaim`] record set — the emission-claim sibling of the
 /// bond post's persist-before-dispatch discipline (CB-3 dispatch seam): the
 /// claim's fee-gindex reservation and claimed-epoch dedup facts must exist
@@ -47,10 +51,10 @@ use crate::error::WalletLedgerError;
 /// dispatch shape: v1's JoinMarket-only record plus the
 /// [`PendingPostState::Dispatched`] arm (`ARCHIVAL_BOND_WI3_DISPATCH.md`
 /// §3.3). Any field addition / removal / renaming bumps this; loads that see
-/// a different version **refuse rather than migrate** — pre-genesis, a v3
-/// seal under a v4 binary fails closed and the operator re-assembles
+/// a different version **refuse rather than migrate** — pre-genesis, a v4
+/// seal under a v5 binary fails closed and the operator re-assembles
 /// (rule 15).
-pub const PENDING_POST_VERSION: u32 = 4;
+pub const PENDING_POST_VERSION: u32 = 5;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -175,6 +179,48 @@ impl std::fmt::Debug for PendingEmissionClaim {
     }
 }
 
+/// One durable pending **`P`→principal drain** (F-D2 / DS-PR-1): the
+/// assembled, signed, wire-encoded drain bytes bound to their persona and the
+/// funding reservation they hold — sealed **before** dispatch (the DS-PR-2
+/// drain-dispatch seam's persist-before-dispatch, the claim/bond sibling: a
+/// retry re-sends these stored bytes, and the reservation exists durably
+/// before any network send).
+///
+/// Unlike [`PendingEmissionClaim`] (whose backing gindex is *proven, not
+/// spent*, so only the swept fee inputs reserve), a drain **spends every one
+/// of its funding inputs** — so `funding_gindexes` is the whole input set and
+/// the whole reservation. It carries no `claimed_epochs`: a drain is a
+/// value-out crossing, not an epoch claim, so there is no epoch-dedup fact.
+/// A live drain record means those gindexes are reserved (they feed
+/// [`PendingPostBlock::reserved_gindexes`], so neither a bond sweep, a claim
+/// sweep, nor a second drain can double-spend an in-flight input).
+///
+/// Same redacted-`Debug` class as [`PendingBondPost`]: persona, funding
+/// placement, and drain timing are `P`-side behavioral history.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+pub struct PendingDrain {
+    /// The owning persona's slot ordinal.
+    pub p_slot: PSlot,
+    /// The persona the drain bytes are bound to.
+    pub persona: PCanonicalId,
+    /// The fully-assembled, signed, wire-encoded drain bytes — the value
+    /// itself: retries re-send these stored bytes, never a re-encode.
+    pub tx_bytes: Vec<u8>,
+    /// Global output indexes of the funding outputs this drain spends — the
+    /// reservation this drain holds while live. A drain spends *all* its
+    /// inputs (no proven-not-spent backing), so this is the full input set.
+    pub funding_gindexes: Vec<GlobalOutputIndex>,
+    /// Dispatch state — same lifecycle as the bond post's / claim's.
+    pub state: PendingPostState,
+}
+
+impl std::fmt::Debug for PendingDrain {
+    /// Redacted for the same reason as [`PendingBondPost`].
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PendingDrain(<redacted pending-drain>)")
+    }
+}
+
 /// The durable pending-post block: every live pending bond post, sealed as
 /// one atomic unit to the `P`-isolated `.wallet.pending` sibling file.
 ///
@@ -193,6 +239,10 @@ pub struct PendingPostBlock {
     /// claim seam refuses a second — a live claim is the in-flight
     /// epoch-dedup fact).
     claims: Vec<PendingEmissionClaim>,
+    /// The live pending `P`→principal drains. At most one per persona (the
+    /// drain seam refuses a second — a live drain reserves the inputs a
+    /// second would race for).
+    drains: Vec<PendingDrain>,
 }
 
 impl std::fmt::Debug for PendingPostBlock {
@@ -201,6 +251,7 @@ impl std::fmt::Debug for PendingPostBlock {
             .field("version", &self.version)
             .field("posts", &"<redacted pending-posts>")
             .field("claims", &"<redacted pending-claims>")
+            .field("drains", &"<redacted pending-drains>")
             .finish()
     }
 }
@@ -212,23 +263,25 @@ impl Default for PendingPostBlock {
 }
 
 impl PendingPostBlock {
-    /// A fresh block with no pending posts or claims.
+    /// A fresh block with no pending posts, claims, or drains.
     pub fn empty() -> Self {
         Self {
             version: PENDING_POST_VERSION,
             posts: Vec::new(),
             claims: Vec::new(),
+            drains: Vec::new(),
         }
     }
 
-    /// A block carrying `posts` (no claims), stamped with the current
-    /// version. The caller (the assemble path) owns the
+    /// A block carrying `posts` (no claims, no drains), stamped with the
+    /// current version. The caller (the assemble path) owns the
     /// one-live-post-per-persona invariant.
     pub fn new(posts: Vec<PendingBondPost>) -> Self {
         Self {
             version: PENDING_POST_VERSION,
             posts,
             claims: Vec::new(),
+            drains: Vec::new(),
         }
     }
 
@@ -261,10 +314,22 @@ impl PendingPostBlock {
         self.claims.iter().any(|c| &c.persona == persona)
     }
 
-    /// Every funding gindex reserved by a live post **or a live claim's fee
-    /// sweep** — the exclusion set for funding selection
-    /// (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2 rule 1): neither a bond sweep
-    /// nor a claim fee sweep may select an output an in-flight tx already
+    /// The live pending drains.
+    pub fn drains(&self) -> &[PendingDrain] {
+        &self.drains
+    }
+
+    /// Whether `persona` already has a live pending drain — the drain seam's
+    /// one-live-drain-per-persona refusal predicate (a live drain reserves
+    /// the inputs a second would race for).
+    pub fn has_live_drain_for(&self, persona: &PCanonicalId) -> bool {
+        self.drains.iter().any(|d| &d.persona == persona)
+    }
+
+    /// Every funding gindex reserved by a live post, a live claim's fee
+    /// sweep, **or a live drain's input set** — the exclusion set for funding
+    /// selection (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2 rule 1): no bond sweep,
+    /// claim fee sweep, or drain may select an output an in-flight tx already
     /// spends.
     pub fn reserved_gindexes(&self) -> std::collections::BTreeSet<GlobalOutputIndex> {
         self.posts
@@ -274,6 +339,11 @@ impl PendingPostBlock {
                 self.claims
                     .iter()
                     .flat_map(|c| c.fee_gindexes.iter().copied()),
+            )
+            .chain(
+                self.drains
+                    .iter()
+                    .flat_map(|d| d.funding_gindexes.iter().copied()),
             )
             .collect()
     }
@@ -336,6 +406,53 @@ impl PendingPostBlock {
     pub fn remove_claim(&mut self, persona: &PCanonicalId) -> Option<PendingEmissionClaim> {
         let idx = self.claims.iter().position(|c| &c.persona == persona)?;
         Some(self.claims.remove(idx))
+    }
+
+    /// Append a pending drain. Refuses (returns `false`, block unchanged) if
+    /// the persona already has a live drain — the caller surfaces this as its
+    /// typed drain-pending error.
+    #[must_use]
+    pub fn push_drain(&mut self, drain: PendingDrain) -> bool {
+        if self.has_live_drain_for(&drain.persona) {
+            return false;
+        }
+        self.drains.push(drain);
+        true
+    }
+
+    /// Transition `persona`'s live drain into [`PendingPostState::Dispatched`]
+    /// (or bump its attempt counter on a byte-identical resubmit) — the drain
+    /// twin of [`Self::mark_dispatched`], same seal-before-send discipline.
+    /// Returns the post-transition attempt count and the transitioned drain,
+    /// or `None` when the persona has no live drain.
+    #[must_use]
+    pub fn mark_drain_dispatched(
+        &mut self,
+        persona: &PCanonicalId,
+        at: BlockHeight,
+    ) -> Option<(u32, &PendingDrain)> {
+        let drain = self.drains.iter_mut().find(|d| &d.persona == persona)?;
+        let attempts = match &mut drain.state {
+            PendingPostState::Pending => {
+                drain.state = PendingPostState::Dispatched { at, attempts: 1 };
+                1
+            }
+            PendingPostState::Dispatched { attempts, .. } => {
+                *attempts = attempts.saturating_add(1);
+                *attempts
+            }
+        };
+        Some((attempts, &*drain))
+    }
+
+    /// Remove `persona`'s live drain (confirmation retire, or terminal-reject
+    /// prune). As with [`Self::remove_post`], removal *is* the byte-prune and
+    /// the reservation release in one seal; idempotent under crash-replay
+    /// (`None` when absent).
+    #[must_use]
+    pub fn remove_drain(&mut self, persona: &PCanonicalId) -> Option<PendingDrain> {
+        let idx = self.drains.iter().position(|d| &d.persona == persona)?;
+        Some(self.drains.remove(idx))
     }
 
     /// WI-3 §3.3 step 2 — transition `persona`'s post into
@@ -421,18 +538,37 @@ impl PendingPostBlock {
 
     /// Deserialize from [`Self::to_postcard_bytes`] output. **Refuses a
     /// version mismatch.**
+    ///
+    /// The version is gated on the leading `version` prefix **before** the rest
+    /// of the struct is decoded. `version` is this struct's first field and
+    /// postcard serializes fields in declaration order with no framing, so the
+    /// prefix is the first varint of the blob. Gating on it first means a blob
+    /// written by *any* other schema version is refused with a clean
+    /// [`WalletLedgerError::UnsupportedBlockVersion`] (refuse-not-migrate, rules
+    /// 15/60) rather than surfacing as an opaque postcard EOF/layout error when
+    /// the field layout differs across versions (e.g. a v4 blob has no `drains`
+    /// field, so a full v5 decode would EOF instead of naming the version).
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
+        let (version, _rest) = postcard::take_from_bytes::<u32>(bytes)?;
+        Self::ensure_supported_version(version)?;
         let block: Self = postcard::from_bytes(bytes)?;
-        block.check_version()?;
         Ok(block)
     }
 
-    /// Version gate. Called automatically by [`Self::from_postcard_bytes`].
+    /// Version gate for an already-decoded block.
     pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        if self.version != PENDING_POST_VERSION {
+        Self::ensure_supported_version(self.version)
+    }
+
+    /// The single version-comparison site, shared by the pre-decode prefix gate
+    /// ([`Self::from_postcard_bytes`]) and the post-decode
+    /// [`Self::check_version`], so the two cannot disagree on what "supported"
+    /// means.
+    fn ensure_supported_version(version: u32) -> Result<(), WalletLedgerError> {
+        if version != PENDING_POST_VERSION {
             return Err(WalletLedgerError::UnsupportedBlockVersion {
                 block: "pending_post_block",
-                file: self.version,
+                file: version,
                 binary: PENDING_POST_VERSION,
             });
         }
@@ -504,6 +640,7 @@ mod tests {
             version: PENDING_POST_VERSION + 1,
             posts: Vec::new(),
             claims: Vec::new(),
+            drains: Vec::new(),
         };
         let bytes = postcard::to_allocvec(&wrong).expect("encode");
         let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("must refuse");
@@ -525,6 +662,7 @@ mod tests {
             version: 1,
             posts: Vec::new(),
             claims: Vec::new(),
+            drains: Vec::new(),
         };
         let bytes = postcard::to_allocvec(&v1).expect("encode");
         let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("v1 must refuse");
@@ -740,22 +878,100 @@ mod tests {
         assert!(block.remove_claim(&persona).is_none());
     }
 
-    /// A v3 seal (no claim set) under this v4 binary fails closed on the
+    fn drain(persona_byte: u8, funding_gindexes: &[u64]) -> PendingDrain {
+        PendingDrain {
+            p_slot: PSlot::from_raw(0),
+            persona: PCanonicalId::from_bytes([persona_byte; 32]),
+            tx_bytes: vec![0xDE; 16],
+            funding_gindexes: funding_gindexes
+                .iter()
+                .copied()
+                .map(GlobalOutputIndex::from_raw)
+                .collect(),
+            state: PendingPostState::Pending,
+        }
+    }
+
+    /// The drain record's persist-before-dispatch surface (DS-PR-1): one live
+    /// drain per persona, its **full input set** joins the shared reservation
+    /// union (a drain spends every input, unlike a claim's fee-only reserve),
+    /// the seal round-trips, and removal releases the reservation in one
+    /// mutation (idempotent under crash-replay).
+    #[test]
+    fn drain_records_reserve_and_round_trip() {
+        let persona = PCanonicalId::from_bytes([0xAA; 32]);
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_post(post(0xBB, &[1])));
+        assert!(block.push_drain(drain(0xAA, &[7, 9])));
+
+        // One live drain per persona.
+        assert!(block.has_live_drain_for(&persona));
+        assert!(!block.push_drain(drain(0xAA, &[11])));
+
+        // The reservation union spans posts AND drains — and a drain reserves
+        // every input, not a fee subset.
+        assert_eq!(
+            block.reserved_gindexes().into_iter().collect::<Vec<_>>(),
+            [1, 7, 9]
+                .into_iter()
+                .map(GlobalOutputIndex::from_raw)
+                .collect::<Vec<_>>(),
+        );
+
+        // Seal-before-send transition + round-trip through postcard.
+        assert_eq!(
+            block
+                .mark_drain_dispatched(&persona, BlockHeight::from_raw(500))
+                .map(|(attempts, _)| attempts),
+            Some(1)
+        );
+        let bytes = block.to_postcard_bytes().expect("encode");
+        let back = PendingPostBlock::from_postcard_bytes(&bytes).expect("decode");
+        assert_eq!(back, block);
+        assert_eq!(back.drains().len(), 1);
+        assert_eq!(
+            back.drains()[0].state,
+            PendingPostState::Dispatched {
+                at: BlockHeight::from_raw(500),
+                attempts: 1
+            }
+        );
+
+        // Removal releases the reservation in the same mutation; re-removal
+        // is idempotent.
+        let removed = block.remove_drain(&persona).expect("live drain removes");
+        assert_eq!(removed.persona, persona);
+        assert!(!block.has_live_drain_for(&persona));
+        assert_eq!(
+            block.reserved_gindexes().into_iter().collect::<Vec<_>>(),
+            vec![GlobalOutputIndex::from_raw(1)],
+            "only the bond post's reservation remains"
+        );
+        assert!(block.remove_drain(&persona).is_none());
+    }
+
+    /// A v4 seal (no drain set) under this v5 binary fails closed on the
     /// version gate — refuse-not-migrate (rule 15, pre-genesis).
     #[test]
-    fn v3_seal_fails_closed_under_v4_binary() {
-        let v3 = PendingPostBlock {
-            version: 3,
-            posts: Vec::new(),
-            claims: Vec::new(),
-        };
-        let bytes = postcard::to_allocvec(&v3).expect("encode");
-        let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("v3 must refuse");
+    fn v4_seal_fails_closed_under_v5_binary() {
+        // Model REAL v4 bytes, not a v5 struct with an empty `drains` vec: a v4
+        // binary never wrote a `drains` field at all. postcard encodes a struct
+        // as its fields concatenated with no framing, so a `(version, posts,
+        // claims)` tuple is byte-identical to what the v4 layout produced. The
+        // version prefix gate must refuse this on the leading `4` before it ever
+        // tries (and fails at EOF) to read the absent `drains` field.
+        let v4_bytes = postcard::to_allocvec(&(
+            4u32,
+            Vec::<PendingBondPost>::new(),
+            Vec::<PendingEmissionClaim>::new(),
+        ))
+        .expect("encode v4-shaped bytes");
+        let err = PendingPostBlock::from_postcard_bytes(&v4_bytes).expect_err("v4 must refuse");
         assert!(matches!(
             err,
             WalletLedgerError::UnsupportedBlockVersion {
                 block: "pending_post_block",
-                file: 3,
+                file: 4,
                 binary: PENDING_POST_VERSION,
             }
         ));

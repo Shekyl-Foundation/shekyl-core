@@ -559,6 +559,42 @@ drain-specific divergence — including a regression that re-opens the
 leaf-hash gap or a bespoke serializer that bypasses the shared path —
 fails it.
 
+**UPDATE 2026-07-20 (DS-PR-1 impl — post-closure substrate pin, not a
+round reopen).** The T-DS-6 row's mechanism ("drain-all's change carries
+zero value but is a real committed output") is **not realizable through
+the shared prover**: `shekyl-tx-builder`'s `validate.rs:63`
+(`ZeroOutputAmount`) rejects a zero-value output, and both
+`sign_transaction` and `sign_transaction_with_terms` run that check — so
+a zero-value change output cannot be built through the shared transfer
+path at all. The **wire property is unchanged** (two nonzero confidential
+outputs, byte-identical in count/shape to a modal 2-out send); only the
+*mechanism* differs. DS-PR-1 realizes it by regime:
+- **partial** (`change > 0`): `[principal payment, P-space change]` — both
+  nonzero, change to `P` (T-DS-3);
+- **drain-all** (`change == 0`): the principal payment is **split into two
+  nonzero principal outputs** `[principal a, principal b]` (a sweep to
+  self) — there is no residual `P` value to return, and the distinguishable
+  1-out shape the row worried about is prover-rejected anyway.
+Because Pedersen commitments are perfectly hiding, both regimes serialize
+to the same two-confidential-output wire shape, so T-DS-6's absorption is
+*strengthened*, not weakened: the shape is uniform across partial drain,
+drain-all, and an ordinary 2-out transfer. A net-payment `< 2` drain-all
+(a single atomic unit after fee — pathological, the fee dwarfs it) cannot
+form two nonzero outputs and is refused **loudly**
+(`DrainAssemblyError::PaymentUnsplittable`) rather than shaped into a
+1-out tx; a zero payment is refused up front
+(`DrainAssemblyError::PaymentZero`) before any output construction, rather
+than deferred to the shared prover's opaque `ZeroOutputAmount`. The drain
+owns a dedicated `DrainAssemblyError` taxonomy wrapped by
+`StakeEngineError::DrainAssembly`, so a value-out failure never mis-reports
+as "bond assembly" (the borrowed `BondAssemblyError` is retired from the
+drain path). Impl: `drain_assembly.rs` §"the composite wire-shape arm";
+covered by `stake_engine.rs` `drain_assembly_shape::{drain_is_transfer_shaped,
+drain_all_still_emits_two_outputs, drain_all_net_below_two_is_refused,
+drain_zero_payment_is_refused}`.
+The byte-diff arm (a real drain vs a real transfer) is unchanged and
+still carried to the DS-PR-2 regtest e2e.
+
 **GF-7 disposition (drain vs the entry seam).** GF-7 grades the *entry*
 seam (bond-post dispatch timing; persona↔principal unlinkability). The
 drain is the *value-out* crossing, **not a GF-7 event**: its
@@ -759,3 +795,60 @@ sub-PR lands.
   `tx_extra` re-walk) are forward-actions that gate DS-PR-1, not this
   round. Standing rule-26 thin re-confirm at DS-PR-1 open remains the only
   threat-adjacent item outstanding — which is where those arms fire.
+- **2026-07-20 — DS-PR-1 landed (drain assembly, `shekyl-core`).** The
+  actor-side assembly slice: `AssembleDrain` handler in `stake_engine.rs`
+  (thin validate-and-delegate shell) over the free-function
+  `assemble_drain_tx` in the new `drain_assembly.rs`; `PendingDrain` durable
+  record + `reserved_gindexes` fold + schema bump (v4 → v5) in
+  `engine-state`. Forward-action arms discharged at source:
+  - **T-DS-6 ∧ T-DS-7 composite wire-shape arm** — realized *by
+    construction*, now compile-time-enforced: the drain's whole `WireEncodeInput`
+    is built by the **single shared constructor** `sign_bridge::
+    assemble_transfer_wire`, the exact one `sign_bridge::sign_tx` calls, so
+    transfer-parity is one-constructor-two-callers rather than a property a test
+    re-establishes (outputs still via `build_output`, inputs via
+    `prepare_funding_inputs`, prefix/proving/PQC-auth by the plain transfer calls
+    with empty `extra_inputs` + spend-only `pqc_auths`). **The ratified
+    zero-value-change mechanism was found unrealizable through the shared prover**
+    (rejects `ZeroOutputAmount`) — recorded as the §5 post-closure substrate pin
+    (2026-07-20): drain-all now **splits the payment into two nonzero principal
+    outputs**, so the two-nonzero-output wire shape is uniform across partial
+    drain / drain-all / ordinary transfer (T-DS-6 absorption *strengthened*).
+    The one degree of freedom the shared constructor does not pin —
+    split-on-drain-all reshaping the amounts without perturbing the skeleton — is
+    guarded **in-slice** by a whole-tx normalized byte-diff
+    (`drain_partial_and_drain_all_are_wire_identical`: partial and drain-all
+    serialize identically modulo hidden/committed leaves; a non-vacuous diff, the
+    raw bytes are asserted to differ). The **full transfer-vs-drain** byte-diff
+    still rides the DS-PR-2 regtest e2e (a real end-to-end transfer tx must exist
+    to diff against). Covered by `drain_assembly_shape::{drain_is_transfer_shaped,
+    drain_all_still_emits_two_outputs, drain_all_net_below_two_is_refused,
+    drain_partial_and_drain_all_are_wire_identical}`.
+  - **T-DS-3 change→`P`** — partial-drain change pays `P`'s own base spend
+    key (`keys.spend_pk`); the entry point carries **no** destination-address
+    arg (principal is engine-resolved), so change-to-principal is
+    unrepresentable. Drain-all leaves no residual `P` value to return.
+  - **T-DS-4 crossing-class mapping (confirm none new)** — both drain shapes
+    map onto an **existing** F-D4 §16 class, adding none. Under F-W10 the
+    drain is **not an identifiable transaction** on-chain (spend set
+    unenumerable; no `P`-typing on the wire — FD4 §16.1), so its output
+    count/shape is not an observable; the value-out leg re-homes to the
+    principal↔user crossing (WI-4 §18.13), not a fresh `P`→principal
+    observable. Partial-drain-from-live-persona and post-retirement sweep
+    differ only in the (hidden) amount, not in class.
+  - **DS-4 exit-reserve disposition (the one sentence owed)** — a **partial
+    drain from a live persona IS a mid-life constructor**: it MUST leave
+    `EXIT_FEE_RESERVE_ATOMIC` in the `P` pool (draining below it would strand
+    the future `Unbond`); a **post-retirement sweep** has no future `Unbond`,
+    so the reserve is **moot** and drain-all may take the pool to zero. The
+    reserve is a **funding-selection** constraint (Engine-side, DS-PR-2:
+    `assemble_drain_tx` consumes an already-selected `payment_amount`/`fee`),
+    so DS-PR-1 records the disposition and DS-PR-2's selector enforces it.
+  - **T-DS-5 funding-input discipline** and the **composition self-grep**
+    (§4): `assemble_drain_tx` is a free function that never names `Engine`
+    and reuses the GF-4b funding-input leg (`prepare_funding_inputs`), no
+    drain-specific selector; the god-files (`stake_engine.rs`,
+    `local_pending_tx.rs`) gain only a thin handler, not the assembly body.
+  Remaining DS-PR-1-adjacent carries: the persona-transport self-grep
+  (T-DS-2) and the real-tx byte-diff both ride **DS-PR-2**; GUI-side arms
+  ride their sub-PRs.
