@@ -224,6 +224,14 @@ pub(crate) mod diagnostics;
 /// affordability check only — a guarded module the M1 import-check arm keeps
 /// blind to the per-output reward vector.
 pub(crate) mod drain_amount;
+/// F-D2 drain assembly (`ARCHIVAL_P_DRAIN.md` §DS-PR-1): the `P`→principal
+/// value-out transaction builder. Produces a **transfer-shaped** tx (two
+/// confidential outputs — principal payment + `P`-space change) byte-identical
+/// to a modal 2-out transfer (T-DS-6 ∧ T-DS-7), by reusing the transfer path's
+/// output primitive (`sign_bridge::build_output`), the bond/claim fee-sweep
+/// spend leg (`stake_engine::prepare_funding_inputs`), and the plain-transfer
+/// prefix/prove/PQC-auth calls with empty `extra_inputs` and spend-only auths.
+pub(crate) mod drain_assembly;
 /// F-D1 projection / drain trust boundary (`ARCHIVAL_FIREWALL_GATE6.md`
 /// §12.3): the sole drain-path site holding the funding records, projecting
 /// them into the aggregate scalar + stripped candidate operands the guarded

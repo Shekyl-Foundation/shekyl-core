@@ -52,6 +52,61 @@
 
 ### Added
 
+- **wallet (engine): F-D2 drain assembly landed — DS-PR-1
+  (`ARCHIVAL_DRAIN_SEND_FD2.md` §DS-PR-1).** The actor-side
+  `P`→principal drain-send assembly, mirroring the emission-claim shape:
+  `AssembleDrain`/`AssembledDrain` messages + a thin validate-and-delegate
+  handler on the `StakeEngine` actor (`stake_engine.rs`) over the new
+  free-function `assemble_drain_tx` (`engine/drain_assembly.rs`); a durable
+  `PendingDrain` record with its `reserved_gindexes` fold in
+  `engine-state::pending_post_block` (schema `PENDING_POST_VERSION` v4 → v5,
+  snapshot updated, `v4_seal_fails_closed_under_v5_binary` fails-closed).
+  The drain is **transfer-shaped by construction**, now compile-time-enforced:
+  the whole `WireEncodeInput` is built by a **single shared constructor**
+  (`sign_bridge::assemble_transfer_wire`, extracted in this slice) that
+  `sign_bridge::sign_tx` also calls, so transfer-parity is one-constructor-two-
+  callers rather than a property re-established per test (outputs still via
+  `build_output`, inputs via `prepare_funding_inputs`, prefix/proving/PQC-auth
+  via the plain `sign_transaction` calls with empty `extra_inputs` + spend-only
+  `pqc_auths`) — realizing the T-DS-6 ∧ T-DS-7 composite wire-shape arm (full
+  serialization byte-identical to a modal 2-out confidential transfer modulo
+  hidden values). **Drain-all splits the
+  payment into two nonzero principal outputs** (a sweep to self) rather than
+  emitting a zero-value change output: the shared prover rejects
+  `ZeroOutputAmount`, so the ratified zero-value-change mechanism was
+  unrealizable — the split preserves the same two-nonzero-output wire shape
+  and *strengthens* T-DS-6 (uniform across partial drain / drain-all /
+  ordinary transfer). Partial-drain change returns to `P`'s own base spend
+  key (T-DS-3, change-to-principal unrepresentable — no destination arg on
+  the surface); a net-payment `< 2` drain-all is refused loudly
+  (`DrainAssemblyError::PaymentUnsplittable`), and a zero payment is refused
+  up front (`DrainAssemblyError::PaymentZero`) before any output construction.
+  The drain owns a dedicated `DrainAssemblyError` taxonomy wrapped by
+  `StakeEngineError::DrainAssembly` (a value-out failure never mis-reports as
+  "bond assembly"). Threat-arm dispositions
+  (T-DS-4 crossing-class maps onto an existing F-D4 §16 class — F-W10: the
+  drain is not an identifiable transaction on-chain; DS-4 exit-reserve:
+  partial drain is a mid-life constructor reserving `EXIT_FEE_RESERVE_ATOMIC`,
+  post-retirement sweep moot — enforcement rides DS-PR-2 selection) recorded
+  in the design doc round log (2026-07-20). Composition-discipline clean
+  (`assemble_drain_tx` never names `Engine`; god-files gain only the thin
+  handler). A whole-tx **normalized byte-diff** lands in-slice
+  (`drain_partial_and_drain_all_are_wire_identical`: partial and drain-all
+  serialize identically modulo hidden/committed leaves — a non-vacuous diff,
+  raw bytes asserted to differ), guarding the one freedom the shared
+  constructor does not pin (split-on-drain-all reshaping amounts without
+  perturbing the skeleton). Gates: fmt + clippy `-D warnings` clean;
+  `drain_assembly_shape::{drain_is_transfer_shaped,
+  drain_all_still_emits_two_outputs, drain_all_net_below_two_is_refused,
+  drain_partial_and_drain_all_are_wire_identical}` + `sign_bridge` + the
+  `engine-state` schema snapshot green. Remaining carries (drain
+  orchestrator/dispatch over `DrainCtx`, persona-transport self-grep, the
+  **full transfer-vs-drain** end-to-end byte-diff) ride DS-PR-2. The engine
+  decomposition ratchet ceiling for `stake_engine.rs` is raised `4749 → 5253`
+  under the conf's reviewed-raise clause (~82 lines genuine in-actor handler
+  growth per rule 36; ~422 lines inline `drain_assembly_shape` tests pending
+  extraction); the coherent decomposition that ratchets it back down is
+  carried by the `stake_engine.rs decomposition` item in `docs/FOLLOWUPS.md`.
 - **docs: F-D2 drain-send subsystem design round opened
   (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, scoping — review rounds 1–4
   applied: rounds 1–2 review + Round 3 threat-model addenda + Round 4

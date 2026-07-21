@@ -1,7 +1,86 @@
 # Archival Cover-Amount Draw — entropy scoping (genesis-adjacent)
 
-**Status:** SCOPING (2026-06-20, review-revised). Design-questions enumerated;
-not yet decided.
+> ## ⛔ RETIRED — the `span(C)` curve (RATIFIED 2026-07-20)
+>
+> **The count-dependent cover curve is retired: deleted, not built.** Ratified by the
+> maintainer 2026-07-20. This is a **rule-15 deletion of an unconsumed primitive**, not a
+> genesis-constant change — the genesis-freeze weight looked like the obstacle, but a
+> frozen constant that nothing reads is still a constant that nothing reads. The
+> armed-primitive-with-no-trigger pattern, one more time.
+>
+> **Consequence, ratified with it: the canonical standing-bond-count aggregate is NOT to
+> be built.** The blocker filed against the degenerate draw was downstream of the curve
+> being real. No consumer ⇒ no `C` ⇒ no manipulation-resistant statistic, no
+> epoch-boundary `Σ_P` gather, no maintained standing-count. Do not start that work; if a
+> future proposal needs a population read, it re-derives the requirement from scratch
+> against a live consumer.
+>
+> **Scope note:** this concerns the *amount* axis only. The entry-seam window (the
+> *timing* axis) is a separate mechanism on a separate axis and is unaffected.
+>
+> **The security property, stated once.** The funding transfer is protected iff it is
+> **indistinguishable from an ordinary transfer**. It then inherits the entire ambient
+> transaction graph as its anonymity set at no cost. Cover is not something we
+> provision — it is something we can only forfeit. Every leak on this seam is a
+> self-tagging property; every fix removes one.
+>
+> **Why the curve forfeits it.** `C` is public chain state, so `span(C)` is publicly
+> computable, so the cover interval `[C_min, C_min + span(C)]` is known to every
+> observer. Given an observed amount `A`, an adversary tests whether
+> `A − bond_floor(k) ∈ [C_min, C_min + span(C)]` for plausible shard counts `k` — a
+> membership test over a fully computable set, run on public data. The entropy inside
+> the interval hides *which* cover was drawn; it does nothing about *that the amount
+> belongs to the envelope*, and the envelope is the tag. **Randomising within a
+> protocol-specified distribution is still self-tagging, because ordinary transfers do
+> not follow that distribution.** §7.8 brushes this ("an off-distribution cover is a
+> distinguishable cover") but reads it as *stay on our distribution*, when *having* a
+> distribution is the defect.
+>
+> **The threat class §7.8 defends is self-inflicted.** Grinding, draw-vs-post desync and
+> reorg desync all exist *only because* the amount was made a function of chain state.
+> §7.8 records the alternative in its own words — "a constant is inert and
+> un-manipulable" — then adopts the function anyway. Delete the count read and the whole
+> class evaporates, along with the canonical-aggregate blocker it created.
+>
+> **What actually constrains the amount — verified at source, 2026-07-20.**
+> 1. *Presence.* SP-7's `CoverDiscovery::classify(cover_window, Option<BlockHeight>,
+>    VerifiedRange)` is **amount-blind** — heights and ranges only; `CoverFound` carries
+>    a single `BlockHeight`. TM-3 re-link needs a recoverable output to `P` in the
+>    window, at **any** magnitude.
+> 2. *Sufficiency.* `P` must receive at least `bond_floor + fee` (+ working capital) —
+>    `bond_assembly.rs` funds bonds from `P`'s own outputs with no reach-across.
+>
+> Both are floors. Neither is a distribution, and neither needs `C`.
+>
+> **Proposed disposition.** `stake_in` sends a user-chosen amount, like any transfer;
+> `P` stakes the floor and holds the residue as working capital — the same shape as any
+> wallet's change. Retire `cover_dial_span_atomic`, `COVER_TAIL_COUNT`,
+> `COVER_RAMP_END_COUNT`, `COVER_SPAN_CAP_ATOMIC` and the canonical standing-bond-count
+> requirement. `COVER_RUNWAY_FLOOR_ATOMIC` survives as the *sufficiency floor*, not as a
+> draw parameter.
+>
+> **Open, for the same ruling — the wallet's recommended default.** A user-chosen amount
+> needs a recommendation in GUI/CLI, and the recommendation must not re-introduce the
+> tag. The right shape is to **sample the empirical distribution** (a value drawn from
+> recent real transaction amounts) rather than compute a **statistic of** it: a statistic
+> is a single point that every wallet lands on and every observer can recompute, whereas
+> a sample is typical *by construction* and carries the ambient spread. Note the test is
+> not unpredictability but typicality — a computable recommendation is fine if the values
+> it produces are where ordinary transactions already sit, which is exactly what the
+> `span(C)` envelope failed.
+>
+> **Lineage.** Same conceptual error as the retired M1 `K_COVER` gate, one layer down:
+> provisioning cover in proportion to population, when cover is ambient and the only job
+> is not forfeiting it. See `ARCHIVAL_REWARD_GATE_M1.md` §13.
+
+**Status:** ⛔ **RETIRED (2026-07-21)** — the `span(C)` count-dependent cover curve
+is deleted as an unconsumed primitive; see the retirement notice at the head of this
+document for the ratification and its source-verified basis. **Everything below is
+preserved as pre-retirement scoping context and is not a live design agenda** — in
+particular the enumerated design questions are moot, and the canonical
+standing-bond-count aggregate they lead to is explicitly **not to be built**.
+*(Was: SCOPING (2026-06-20, review-revised) — design-questions enumerated, not yet
+decided.)*
 
 > **Correction (2026-07-01) — `C_min` pinned post-sim; the "pending the 2d-1 ramp" language
 > below is superseded.** `C_min` was scoped here (pre-sim) as a runway floor whose *final value

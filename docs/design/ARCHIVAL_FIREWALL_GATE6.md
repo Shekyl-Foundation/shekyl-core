@@ -1495,6 +1495,36 @@ and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.
   boundary clusters) — the knob to sweep. (d) **enumerate the separable events first** (prep-spend vs.
   announce vs. the bond-post tx carrying collateral-in) — a standoff only buys cover for events an
   observer sees as distinct (ties to the S-2 ledger). Sim the inversion as its own arm.
+
+  > **(d) CLOSED 2026-07-21 — the enumeration is ONE event, and the inversion was a
+  > category error.** This item's own criterion is the answer: *events an observer
+  > sees as distinct*. At entry exactly one event is distinct to any observer the
+  > posture admits — the **bond post**, which names `P` in cleartext. The funding
+  > transfer is on chain, but it is an ordinary FCMP++ transfer that does not name
+  > `P` with a CT-hidden source: **not attributable, therefore not an anchor.**
+  > Ordering an unidentifiable event against an identifiable one changes nothing
+  > observable.
+  >
+  > "Prep-spend", "announce" and "funding/entry event" are **pipeline stages of the
+  > single post** — wallet mints → sends to daemon → daemon propagates. The pipeline
+  > has **several** stages; the chain has **one** attributable event, and the exact
+  > pipeline count is beside the point — what matters is that it exceeds one while
+  > the chain does not. A second observable exists
+  > only for someone watching the wallet→daemon hop — the adversarial daemon — which
+  > the certified own-node posture excludes by construction, where that hop is
+  > loopback. **The second event is the observer's artifact, never a chain fact.**
+  >
+  > Consequences: an inversion needs two orderable events, so there was never
+  > anything to invert; the §10.12 "announce" never needed building; and the single
+  > `U[0, window]` jitter on the bond post **is the mechanism in full** — one event
+  > against a *private* anchor `t0`, not one arm of a two-arm scheme. Production
+  > forces causal order, and `entry_offset_blocks` is deleted from persisted state
+  > by the **companion code PR** — which also carries the `PendingPostBlock` version
+  > bump and snapshot regeneration. The version constant is deliberately not
+  > reproduced here: it lives in `pending_post_block.rs`, it is not this document's
+  > to pin, and a number copied across a PR boundary is stale the moment either side
+  > moves (same discipline as deriving the shard-freeze floor from the width
+  > constants rather than quoting a literal). See method note 8.
   **BUILT + RUN (2026-06-13)** — `shekyl-staking-sim --standoff`
   (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*). Findings: anonymity is **rate-driven,
   not width-driven** (the background funding-spend rate is the load-bearing, *unmeasured* input —
@@ -2037,6 +2067,75 @@ surface (an index row, a status cell, a close-condition clause, a §-header dige
 verifies against the source document's own words before anything is dispositioned
 against it — and a summary that joins two source claims into one is a **new claim**,
 carrying a new claim's burden of proof.
+
+**Method note 7 (adopted 2026-07-20, from the `span(C)` cover-curve retirement — the
+amount-axis arrival of the same lesson as notes 2 and 3): sample the ambient
+distribution; never compute a statistic of it. The test is TYPICALITY, not
+unpredictability.** `span(C)` failed for the identical reason a phantom `T` fails: **a
+computed value carries information precisely because it is computable.** Every wallet
+lands on it and every observer recomputes it, so it is a tag no matter how hard the value
+inside it is jittered. The cover interval `[C_min, C_min + span(C)]` was public — `C` is
+public chain state — so an observer tests `A − bond_floor(k)` for membership in a
+computable set. Entropy *within* an envelope hides which value was drawn; it does nothing
+about the amount belonging to the envelope, and the envelope is the fingerprint.
+
+The two properties come apart, and the naive instinct reaches for the wrong one.
+**Unpredictability was never the requirement — it is a proxy that usually correlates with
+typicality and here does not.** Quadrants: a disjoint envelope is predictable *and*
+distinguishing (worst); an ambient sample is predictable *and* non-distinguishing (best).
+The goal is not a value the adversary cannot predict, it is a value that **tells them
+nothing when they do**. An ambient sample is computable by the adversary and useless to
+them, because what it computes to is where everyone else already is.
+
+Corollary, and the reason this is not merely restating notes 2/3: **do not avoid the
+distribution's centre.** The mass *is* the cover — sit in it. Dodging the median to look
+less typical is re-tagging the transaction to evade a tag, the same error with the sign
+flipped.
+
+**Implementation trap, named because this is exactly where "sample ambient" quietly
+becomes "compute a statistic" again:** copy an **actual observed** value, never fit a
+model and draw from the fit. A fitted draw puts every wallet in the same fitted region
+and rebuilds `span(C)` with extra steps — "distinguishable as a draw from our model of
+real transactions" is not "indistinguishable from a real transaction". The test is
+mechanical and should be asserted, not assumed: **the emitted value must equal some real
+on-chain value, not a derived one.**
+
+This note would have killed `span(C)` on sight, the way note 3 would have killed
+`DEFAULT_EXIT_GAP_WINDOW`.
+
+*Corollary instance (2026-07-21), recorded here rather than as its own note because
+it is the same error a third time:* the entry-gap draw is `U[0, window]`, **inclusive
+of `0`**, and a spread of `0` was briefly flagged as a defect worth excluding.
+Excluding it would (a) shrink the cover set from `window + 1` outcomes to `window`,
+and (b) hand the observer a structural fact — "never exactly at `t0`" — that they did
+not have. It is also moot: `t0` is the principal's **private** intent moment and never
+appears on chain, so there is no observable "landed at the anchor" to avoid. The
+instinct came from asking *did the jitter do its job?* — the developer's question —
+instead of *what can the adversary distinguish?* Avoiding the median, avoiding zero:
+same error, three surfaces.
+
+**Method note 8 (adopted 2026-07-21, from the entry-seam order-coin retirement —
+the reason the "second entry event" question kept regenerating): count the events on
+the CHAIN, not in the PIPELINE.** A wallet-side or network-side stage is not a
+consensus fact. The pipeline that produces a transaction has several stages — mint,
+send to daemon, propagate — and every re-reading of a doc written in pipeline terms
+re-derives a "second event" that consensus never sees. The correlator only sees chain
+events; a standoff can only permute chain events; so the unit of analysis is **what
+lands on chain**, and the pipeline that produced it is invisible to every observer the
+posture admits.
+
+The sharper test, and the one §10.12 pass-4 (d) already stated without applying:
+**an event counts only if an observer can see it as distinct.** Distinctness needs
+*attribution*, not mere presence. A transaction that exists on chain but carries no
+identifying mark — an ordinary FCMP++ transfer with a CT-hidden source — is on the
+chain and is **not an event** for correlation purposes. Presence is not the test;
+attributability is.
+
+Failure shape to watch for: a mechanism typed against `n` events when the chain
+supplies fewer. The order-coin tried to permute a two-element set that had one
+element; you cannot order an event relative to itself. When a mechanism's arity
+exceeds the chain's, the excess arity is always an observer's artifact — and asking
+*which observer* names the excluded posture immediately.
 
 ---
 

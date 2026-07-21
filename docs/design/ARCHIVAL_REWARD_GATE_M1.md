@@ -1670,8 +1670,115 @@ end-to-end for the first time):
    cohort the open would need — admitted in-spec (§4: no
    consensus-computable function maps segments to persona population).
 
+> **⛔ SUPERSEDED 2026-07-20 — the `r = 3.54` JUSTIFICATION IS RETIRED.
+> Read this before acting on the paragraph below.** The cold-start row is
+> retired as a *basis for any posture*, on two independent grounds, each
+> sufficient:
+>
+> 1. **The adversary is unreachable.** `r = 3.54` requires per-candidate
+>    attribution of principal-side funding and drain events. Both are
+>    ordinary FCMP++ transactions that do not name `P` with CT-hidden
+>    sources, and §4.1 states the S-3 observer does **not** see them. The
+>    row therefore grades the remote / hostile-daemon posture — separately
+>    graded a fail, and *not* the posture this gate certifies. Under the
+>    certified own-node posture the correlator sits at **exactly baseline**
+>    (`own-node` arm, `r = 1.00`, both regimes): no channel, measured.
+>    Grading an adversary the architecture denies and reporting the result
+>    as exposure is a crash test with the restraints removed.
+> 2. **The cover model was wrong.** "Thin cover" named a thin *staker*
+>    population. The anonymity set for the funding transfer is **every
+>    transaction in the window** — the funding transfer is protected iff it
+>    is indistinguishable from an ordinary transfer, after which it
+>    inherits the whole ambient transaction graph for free. Cover is not
+>    provisioned; it is only forfeited. `r` is additionally **blind to
+>    cover** by construction (§13.5), and `r = 3.54` is a *behavioural
+>    sparsity* row graded at the same `N = 10` as steady state — a thin
+>    personal transaction history, not a thin herd.
+>
+> **What this retires:** "refuse the genesis regime" as a launch posture.
+> It was ratified against a number that needed an adversary we deny and a
+> cover model we have since corrected. Un-ratified deliberately and
+> recorded here rather than dropped, so a future reader who finds
+> `r = 3.54` in the history sees why it stopped being load-bearing.
+>
+> **And there is no replacement, because there is no question.** With `N`
+> understood as ambient transactions, staking-ability and transaction
+> volume are not independent variables that could arrive mismatched at
+> launch — **they are the same variable.** Shards are minted from
+> transactions, and a bond only earns over a *frozen* shard, so the
+> earliest moment staking pays anything already implies the traffic that
+> paid for it. Verified at source:
+>
+> - **The invariant is "gated behind shard-0 freeze"**, not a literal.
+>   Shard `k` freezes iff `leaf_count ≥ (k+1) × SEGMENT_LEAF_COUNT`
+>   (`segment_freeze.rs`), so the earliest rational staking moment is
+>   gated behind the first shard's freeze — whatever that costs. **Current
+>   evaluation: `SEGMENT_LEAF_COUNT = SELENE_CHUNK_WIDTH ×
+>   HELIOS_CHUNK_WIDTH × SELENE_CHUNK_WIDTH = 38 × 18 × 38 = 25 992`**, so
+>   today the floor is ~26 000 outputs matured into the curve tree. The
+>   floor is *derived from* the tree geometry, not pinned independently of
+>   it: **if the curve-tree widths move (a V4 tree migration, a CT sizing
+>   re-review), the floor moves with them and this evaluation must be
+>   recomputed — the invariant survives, the number does not.** Do not cite
+>   25 992 as a standalone constant.
+> - Staking earlier is *representable but unrewarded*: `bond_post.rs`
+>   permits bonding an unfrozen shard because it "locks `FLOOR` and earns
+>   nothing — self-harm, not an attack". An unfrozen shard scores zero
+>   `shard_age_milli`, so the reward is zero however few competitors exist.
+>
+> **The one incentive that could have pulled the other way does not
+> reach.** `scarcity_milli(r_market, …)` puts `r_market` in the
+> denominator, so fewer competing stakers means a larger share — a genuine
+> pioneer premium. But it pulls toward *"as soon as shard 0 freezes"*, not
+> toward genesis, because before that the numerator is zero. **The
+> incentive cannot pull anyone below the ~26 000-output floor.**
+>
+> So "must fund into thin cover" fails twice: there is no *must* (waiting
+> is free and early staking pays nothing), and no structural *thin* (cover
+> exists whenever staking does). The scenario §14 was built for is a
+> proof-of-stake picture — stake at genesis into a bootstrapping validator
+> set — and this is not that chain. Here the first staker necessarily
+> arrives after the first transactions.
+>
+> **The true statement, which is a property to document and not a threat to
+> defend against.** Window-cover scales with transaction volume, so privacy
+> is lowest when the network is smallest and improves **monotonically** as
+> it grows. This is not a cohort property (it is the state of the whole
+> chain at a given time, identical for everyone transacting then), not a
+> cliff (`N` grows continuously; there is no threshold event), not forced
+> (anyone wanting more cover waits, at no cost), and self-closing (the
+> condition is "the network is new", and it stops being new).
+>
+> **State it precisely, because it is not a Shekyl-specific concession.**
+> It is the ambient condition **every window-cover system lives in** —
+> true of every privacy coin ever built, and not a weakness of this design.
+> This design's specific contribution is the interlock above: **its reward
+> structure will not lure anyone below the point where that ambient cover
+> is adequate.** Early staking pays nothing until shard-0 freeze, and the
+> `r_market` pioneer premium cannot reach past it. So retiring §14 is a
+> **strengthening**, not a dropped defense — the posture was compensating
+> for a pull the geometry had already foreclosed, and the compensation was
+> never load-bearing.
+>
+> **§14 is therefore RETIRED OUTRIGHT** — not weakened, not pending a
+> volume read. It answered a question that does not exist under the
+> design's own no-shards-at-genesis premise. No transaction-volume read is
+> required; the ~26 000-output floor above is the read.
+>
+> **What survives, and it is not privacy:** if founders stake at launch it
+> would be for network liveness — shards need serving — which is an
+> availability requirement judged on separate criteria. And §14's P1
+> constraint stands independently of any justification: **if** founders
+> stake, they use the production path with no founder-specific code path,
+> cadence or configuration. That is a rule about *how*, and it outlives the
+> argument about *whether*.
+>
+> Method note: `ARCHIVAL_FIREWALL_GATE6.md` method note 7.
+
 WI-4 §13.2's cold-start fail row (`r = 3.54`, thin cover) **stands as a
-measurement**; its disposition changes from "refuse the regime via a
+measurement** *(as a measurement of the hostile-daemon posture only — see
+the superseding block above; it is not a basis for a launch posture)*; its
+disposition changes from "refuse the regime via a
 consensus cliff" to: (a) the §14 founder-entry schedule, unchanged in
 size and stagger but now **market-funded** by the scarcity premium
 instead of run as charity, and (b) a **wallet-side thin-market entry
