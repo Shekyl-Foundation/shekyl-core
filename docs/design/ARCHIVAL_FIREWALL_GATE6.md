@@ -1507,7 +1507,9 @@ and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.
   >
   > "Prep-spend", "announce" and "funding/entry event" are **pipeline stages of the
   > single post** — wallet mints → sends to daemon → daemon propagates. The pipeline
-  > has two stages; the chain has one attributable event. A second observable exists
+  > has **several** stages; the chain has **one** attributable event, and the exact
+  > pipeline count is beside the point — what matters is that it exceeds one while
+  > the chain does not. A second observable exists
   > only for someone watching the wallet→daemon hop — the adversarial daemon — which
   > the certified own-node posture excludes by construction, where that hop is
   > loopback. **The second event is the observer's artifact, never a chain fact.**
