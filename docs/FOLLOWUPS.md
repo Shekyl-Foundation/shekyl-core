@@ -9539,8 +9539,26 @@ one place to confirm each item's relationship to the wallet stack.
   §14 (launch posture), [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
   §4 and [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
 
+- **GF-7 amount-axis cover: light up the `C`-dependent span (opened 2026-07-20).** The
+  funding-seam cover is now applied at `stake_in` (`principal_stake.rs`): the transfer
+  carries `stake + C_min`, never a bare `bond_floor`-shaped amount. That is **exactly**
+  the specified value in the bootstrap tail — `span(C) == 0` at or below
+  `COVER_TAIL_COUNT = 13` live bonds, so `cover == C_min` identically — and a sound lower
+  bound above it, since `span >= 0` always. **What remains: the `C`-dependent span.**
+  `cover_dial_span_atomic(C)` needs the network-wide live-bond count, and no daemon RPC
+  exposes one; `staking_read`'s `live.len()` is this wallet's own personas and must NOT be
+  substituted. **Named blocker:** `ARCHIVAL_COVER_DRAW.md` §8 pins `C` as a *slow,
+  reorg-final, long-window* population aggregate precisely because the naive instantaneous
+  count is manipulable — an adversary withholds or withdraws their own bonds to dip it,
+  targeted. So this needs a new manipulation-resistant chain statistic on a genesis-frozen
+  curve, i.e. a design round, not a wiring task. Until then the tail value is correct and
+  the leak it closes (amount fingerprint) is closed. *Target: V3.0 pre-genesis if the
+  aggregate lands; the tail behaviour is already genesis-correct without it.*
 - **GF-7 entry-seam inversion: the ENTRY half is persisted but nothing schedules it
-  (opened 2026-07-20, traced at source).** The bond-post half of the entry-seam standoff is
+  (opened 2026-07-20, traced at source).** *(UPDATED 2026-07-20: production now forces
+  causal order at the plan seam — see `FORCED_CAUSAL_ORDER` in `stake_engine.rs` — so the
+  drawn spread applies to EVERY post instead of ~half. The item below stands as the
+  condition for restoring the coin.)* The bond-post half of the entry-seam standoff is
   wired end-to-end and works: `stake_engine.rs` draws via `draw_entry_gap_guarded` and
   consumes BOTH values through `plan_entry_seam` (the `bond_first` order-coin is taken with
   the `spread` by construction, so it cannot be silently dropped); the plan rides the reply;

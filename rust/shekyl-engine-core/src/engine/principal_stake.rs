@@ -15,11 +15,18 @@
 //!
 //! The leg's worth is the **GF-2 boundary** it proves: an output addressed the
 //! way `stake_in` addresses `P` is recovered by `P`'s own dual-scan (the
-//! `#[cfg(test)]` end-test below). The cover-amount structuring
-//! (`bond_floor + cover`, drawn via `shekyl-standoff`) is the funding flow's
-//! concern, not this transfer's mechanics (§5.2).
+//! `#[cfg(test)]` end-test below).
+//!
+//! **Amount-axis cover is applied here** (`ARCHIVAL_COVER_DRAW.md` §8): the
+//! transfer carries `stake + cover`, never a bare `bond_floor`. An earlier
+//! revision of this note called the cover structuring "the funding flow's
+//! concern, not this transfer's mechanics" and no funding-flow layer ever
+//! applied it — so every `stake_in` shipped a clean `bond_floor`-shaped amount,
+//! the exact fingerprint the mechanism exists to remove. It is this transfer's
+//! mechanics, because this is the transaction whose amount is observed.
 
 use shekyl_address::AddressError;
+use shekyl_standoff::COVER_RUNWAY_FLOOR_ATOMIC;
 use shekyl_units::AtomicUnits;
 
 use super::fee_estimator::FeePriority;
@@ -51,6 +58,12 @@ pub(crate) enum StakeInError {
     /// The underlying transfer build failed (funding, fee, reservation, …).
     #[error(transparent)]
     Send(#[from] SendError),
+    /// `stake + cover` overflowed `AtomicUnits`. Unreachable for any real
+    /// amount (the cover is one rung); loud rather than wrapping, because a
+    /// wrapped total would silently send the *wrong* amount — a privacy and
+    /// correctness failure, not a rounding one.
+    #[error("stake amount {stake} + cover {cover} overflows the money type")]
+    CoverOverflow { stake: u64, cover: u64 },
 }
 
 // `dead_code`: `stake_in` is the built PR-P2 method; its production caller is the
@@ -110,6 +123,38 @@ where
     /// resolution without an on-chain build (which is daemon-gated).
     async fn stake_in_request(&self, amount: AtomicUnits) -> Result<TxRequest, StakeInError> {
         let stake = self.stake_handle().ok_or(StakeInError::NotStaking)?;
+        // Amount-axis funding-seam cover (`ARCHIVAL_COVER_DRAW.md` §8): the
+        // principal sends `stake + cover`; `P` stakes the floor and holds the
+        // cover as working capital, flowing out as a `P`-change output (so
+        // `verify_credit_funding`'s `output_total` already accounts for it).
+        // Without this the transfer carries a clean `bond_floor`-shaped amount
+        // — a direct amount fingerprint tying the principal's send to the
+        // public bond, and the one funding-seam axis that is closable purely
+        // wallet-side.
+        //
+        // **System-determined, not a caller parameter.** The cover is the
+        // protocol's to choose, not the funder's: a caller-supplied cover is a
+        // cross-wallet uniformity break (§8 — two wallets drawing differently
+        // draw from different distributions, which is itself the leak). The
+        // opt-out (`cover == 0`, the disclosed stake-only path) belongs behind
+        // an advanced setting with its privacy warning, never on this seam.
+        //
+        // **Tail regime only, and exactly correct there.** `span(C) == 0` at or
+        // below `COVER_TAIL_COUNT` (13 live bonds), so `cover == C_min`
+        // identically — no `C` read is needed, and none is available: the curve
+        // requires a *slow, reorg-final, long-window* network aggregate (§8, the
+        // dip-the-count manipulation surface), which no daemon RPC exposes yet.
+        // `span >= 0` always, so `C_min` also stays a sound lower bound above
+        // the tail. Lighting up the `C`-dependent span is the follow-on
+        // (FOLLOWUPS); it cannot be faked from this wallet's own bond count,
+        // which is not the network's.
+        let cover = AtomicUnits::from_raw(COVER_RUNWAY_FLOOR_ATOMIC);
+        let funded = amount
+            .checked_add(cover)
+            .ok_or(StakeInError::CoverOverflow {
+                stake: amount.to_raw(),
+                cover: COVER_RUNWAY_FLOOR_ATOMIC,
+            })?;
         // The actor projects P's address (public-only `ShekylAddress`, built
         // in-actor from the live bundle — never re-derived, no P secret crosses;
         // rule 36). The principal's own network is the address's network.
@@ -123,7 +168,7 @@ where
         Ok(TxRequest {
             recipients: vec![TxRecipient {
                 address,
-                amount_atomic_units: amount,
+                amount_atomic_units: funded,
             }],
             // Funding a persona is a routine wallet-local transfer; standard fee.
             priority: FeePriority::Standard,
@@ -140,6 +185,7 @@ mod tests {
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_engine_file::SafetyOverrides;
     use shekyl_rpc_transport::SimpleRequestRpc;
+    use shekyl_standoff::COVER_RUNWAY_FLOOR_ATOMIC;
     use shekyl_types::PSlot;
     use shekyl_units::AtomicUnits;
     use tempfile::TempDir;
@@ -266,8 +312,14 @@ mod tests {
 
         assert_eq!(request.recipients.len(), 1, "single-output funding (GF-4b)");
         assert_eq!(
+            request.recipients[0].amount_atomic_units,
+            AtomicUnits::from_raw(50_000 + COVER_RUNWAY_FLOOR_ATOMIC),
+            "stake + system-determined cover, never a bare bond_floor-shaped amount \
+             (ARCHIVAL_COVER_DRAW.md §8 amount axis)"
+        );
+        assert_ne!(
             request.recipients[0].amount_atomic_units, amount,
-            "amount verbatim"
+            "a verbatim stake amount is the amount fingerprint the cover exists to remove"
         );
 
         let projected = engine

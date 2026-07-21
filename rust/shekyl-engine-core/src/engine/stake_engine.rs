@@ -874,11 +874,40 @@ impl StakeEngine {
         //    scheduler wiring). `plan_entry_seam` is the single-sourced consumer
         //    (`shekyl_standoff::plan`): it takes the draw tuple whole, so the
         //    `bond_first` ORDER-COIN (the fair bond-before-vs-after-funding
-        //    inversion; dropping it collapses the observer's ordering prior from
-        //    0.5 to certainty, half the golden-vector-certified decorrelation) is
-        //    consumed with the `spread` DELAY by construction. The plan rides the
-        //    reply; the caller anchors it at its private intent time `t0`.
-        let plan = plan_entry_seam((spread, bond_first));
+        //    inversion) is consumed with the `spread` DELAY by construction. The
+        //    plan rides the reply; the caller anchors it at its private intent
+        //    time `t0`.
+        //
+        //    FORCED CAUSAL (`bond_first = false`) — deliberate, and NOT the
+        //    "dropped order-coin" failure the plan module names. The inverted
+        //    branch is currently UNEXECUTABLE, so honouring the coin produces
+        //    strictly *less* decorrelation than ignoring it:
+        //
+        //      * `bond_first = true` plans `bond_post_offset = 0`, so WI-3 fires
+        //        the post at `t0` immediately, while `entry_offset = spread` has
+        //        no scheduler consumer at all — the entry event is not placed.
+        //        The result is not an inverted seam; it is NO drawn standoff,
+        //        on a fair coin, i.e. silently ~half of all posts.
+        //      * At a JOIN the inversion is impossible even with that wiring:
+        //        a fresh `P` has no earnings, `bond_assembly` sweeps only the
+        //        persona's own mature, tree-drained outputs ("no reach-across to
+        //        principal outputs"), so the principal's funding transfer must
+        //        precede the post it funds. A coin whose outcomes are decided by
+        //        physics is not drawn, it is biased.
+        //
+        //    Forcing causal makes the `U[0, window]` spread apply to EVERY post
+        //    rather than half of them. The draw itself is kept intact (both
+        //    values, the degeneracy guard, the certified RNG path) so the coin
+        //    can be restored the moment the inverted branch is executable —
+        //    which needs `entry_offset_blocks` scheduled AND an entry event with
+        //    the freedom to follow the post (the unbuilt §10.12 announce, or a
+        //    post-earnings top-up on `HoldingsUpdate`/`Rebond`). See FOLLOWUPS.
+        //
+        //    Grading consequence: the GF-7 numbers measured with the inversion
+        //    arm ON do not describe this world. The honest grade for the join
+        //    seam is the inversion-OFF arm, re-measured after this change.
+        let _ = bond_first;
+        let plan = plan_entry_seam((spread, FORCED_CAUSAL_ORDER));
 
         // GF-7 hooks-spec §3: emit the draw-consumption and schedule events to
         // the injected observer. Sim-facing only — this block is compiled out
@@ -888,11 +917,17 @@ impl StakeEngine {
         #[cfg(feature = "gf7-hooks")]
         {
             let persona = u64::from(handle_slot.to_raw());
+            // Reports what was CONSUMED into the plan, not what the coin
+            // returned — the two differ while the order is forced causal. The
+            // measurement seam exists so the sim grades the world production
+            // actually produces; emitting the raw coin here would have the sim
+            // measure an inversion the chain never performs, which is precisely
+            // how a mitigation gets credited for work it does not do.
             self.observer.record(TimelineEvent::EntryGapDrawConsumed {
                 persona,
                 window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
                 spread_blocks: spread,
-                bond_first,
+                bond_first: FORCED_CAUSAL_ORDER,
             });
             self.observer.record(TimelineEvent::BondPostScheduled {
                 persona,
@@ -2935,6 +2970,13 @@ pub(crate) struct DegenerateDraw;
 /// builds rather than silently mislabelling it as `RngDegeneracy`. (More
 /// generally the guard is only well-behaved for windows large enough that
 /// `1/(window+1)` is an acceptable false-positive rate — 600 gives ≈ 0.17 %.)
+/// The order-coin value forced at the plan seam while the inverted branch is
+/// unexecutable (see `validate_and_plan_entry_seam`). `false` = entry event at
+/// the anchor, bond post at `anchor + spread` — the causal order the chain
+/// actually produces, and the only one whose plan both halves of the current
+/// wiring can honour.
+pub(crate) const FORCED_CAUSAL_ORDER: bool = false;
+
 pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
     window: u64,
     rng: &mut R,
@@ -4125,6 +4167,23 @@ mod tests {
                     emitted,
                     plan_entry_seam((spread, bond_first)),
                     "schedule event must be the planner over the emitted draw"
+                );
+                // The emitted coin is the CONSUMED one, so this also pins that
+                // production plans causally: entry at the anchor, bond post at
+                // `anchor + spread`. If the inverted branch is ever made
+                // executable, this assertion is the tripwire that the sim's
+                // world and production's world moved apart.
+                assert!(
+                    !bond_first && !emitted.is_inverted(),
+                    "order is forced causal while the inverted branch is unexecutable"
+                );
+                assert_eq!(
+                    emitted.entry_offset_blocks, 0,
+                    "causal plan anchors the entry event (nothing to schedule)"
+                );
+                assert_eq!(
+                    emitted.bond_post_offset_blocks, spread,
+                    "the full drawn spread applies to every post, not half of them"
                 );
                 assert_eq!(
                     emitted, post.plan,
