@@ -101,7 +101,12 @@
   drain_partial_and_drain_all_are_wire_identical}` + `sign_bridge` + the
   `engine-state` schema snapshot green. Remaining carries (drain
   orchestrator/dispatch over `DrainCtx`, persona-transport self-grep, the
-  **full transfer-vs-drain** end-to-end byte-diff) ride DS-PR-2.
+  **full transfer-vs-drain** end-to-end byte-diff) ride DS-PR-2. The engine
+  decomposition ratchet ceiling for `stake_engine.rs` is raised `4749 → 5253`
+  under the conf's reviewed-raise clause (~82 lines genuine in-actor handler
+  growth per rule 36; ~422 lines inline `drain_assembly_shape` tests pending
+  extraction); the coherent decomposition that ratchets it back down is
+  carried by the `stake_engine.rs decomposition` item in `docs/FOLLOWUPS.md`.
 - **docs: F-D2 drain-send subsystem design round opened
   (`docs/design/ARCHIVAL_DRAIN_SEND_FD2.md`, scoping — review rounds 1–4
   applied: rounds 1–2 review + Round 3 threat-model addenda + Round 4
