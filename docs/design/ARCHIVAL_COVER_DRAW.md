@@ -1,9 +1,22 @@
 # Archival Cover-Amount Draw — entropy scoping (genesis-adjacent)
 
-> ## ⚠️ PROPOSED RETRACTION — the `span(C)` curve (drafted 2026-07-20, NOT ratified)
+> ## ⛔ RETIRED — the `span(C)` curve (RATIFIED 2026-07-20)
 >
-> **Claim: the count-dependent cover curve should be deleted, not built.** Drafted for
-> maintainer ruling; nothing here is executed.
+> **The count-dependent cover curve is retired: deleted, not built.** Ratified by the
+> maintainer 2026-07-20. This is a **rule-15 deletion of an unconsumed primitive**, not a
+> genesis-constant change — the genesis-freeze weight looked like the obstacle, but a
+> frozen constant that nothing reads is still a constant that nothing reads. The
+> armed-primitive-with-no-trigger pattern, one more time.
+>
+> **Consequence, ratified with it: the canonical standing-bond-count aggregate is NOT to
+> be built.** The blocker filed against the degenerate draw was downstream of the curve
+> being real. No consumer ⇒ no `C` ⇒ no manipulation-resistant statistic, no
+> epoch-boundary `Σ_P` gather, no maintained standing-count. Do not start that work; if a
+> future proposal needs a population read, it re-derives the requirement from scratch
+> against a live consumer.
+>
+> **Scope note:** this concerns the *amount* axis only. The entry-seam window (the
+> *timing* axis) is a separate mechanism on a separate axis and is unaffected.
 >
 > **The security property, stated once.** The funding transfer is protected iff it is
 > **indistinguishable from an ordinary transfer**. It then inherits the entire ambient
