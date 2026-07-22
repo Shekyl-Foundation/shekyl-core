@@ -354,7 +354,12 @@ the pool below the exit reserve strands the `Unbond`) vs. a
 post-retirement sweep (reserve moot) needs one sentence of disposition
 when DS-PR-1 lands the assembly. Carried into the DS-PR-1 scope cell;
 the fee-uniformity rider itself rides the `Unbond` constructor family
-and is not blocked on this round.
+and is not blocked on this round. *(UPDATE 2026-07-21, DS-PR-2 impl:
+disposition landed — a partial live-persona drain reserves
+`EXIT_FEE_RESERVE_ATOMIC` (`shekyl-standoff`, `50_000_000` atomic),
+enforced in `orchestrate_drain` (`DrainOrchestrationError::ReserveBreached`);
+a retired persona's sweep is reserve-moot. See the §5 composite-arm
+"UPDATE 2026-07-21 (DS-PR-2 impl)" note.)*
 
 **Weight-uniformity cross-reference (2026-07-19).** Consequence (i)'s
 uniformity holds **given weight**: the fee is `f(weight, daemon-rate)` — a
@@ -594,6 +599,61 @@ drain_all_still_emits_two_outputs, drain_all_net_below_two_is_refused,
 drain_zero_payment_is_refused}`.
 The byte-diff arm (a real drain vs a real transfer) is unchanged and
 still carried to the DS-PR-2 regtest e2e.
+
+**UPDATE 2026-07-21 (DS-PR-2 impl — the core-side dispatch half; not a
+round reopen).** DS-PR-2 lands the orchestrator + dispatch seam + the
+composite arm's final leg, all on `shekyl-core`:
+- **Orchestration (composition §4).** `orchestrate_drain` is a
+  free function over an explicit `DrainCtx` (borrowed handles + records +
+  reserved set + destination + amounts + `chain_tip`; **never `&Engine`**),
+  the `orchestrate_emission_claim` sibling — anchor → scope/plan →
+  path-assemble → delegate to the actor's `assemble_drain`. No new `Engine`
+  generic or inherent multi-step method (`drain_orchestrator.rs`).
+- **T-DS-4 exit-reserve disposition (the one sentence owed at DS-4).**
+  `EXIT_FEE_RESERVE_ATOMIC` lands as a **real constant**
+  (`shekyl-standoff/src/reserve.rs`, `50_000_000` atomic = 0.05 SKL,
+  `0 < reserve < COVER_RUNG_ATOMIC` asserted at compile time — re-grounded
+  post-#350 as a corner-fraction bound vs the tiling cover draw,
+  `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2) and
+  is **enforced in the orchestrator**: a **partial** drain from a **live**
+  persona is a mid-life constructor and may not spend the pool below the
+  reserve (refused with `DrainOrchestrationError::ReserveBreached`); a
+  **retired** persona's sweep is reserve-moot (the `Unbond` already fired),
+  so it may drain to zero. The `retired` flag rides `DrainCtx`, resolved
+  engine-side from `PScanState::pending_unbonds` (the authoritative "no future
+  `Unbond` owed" signal) — deliberately not `retired_records`, which is
+  funded-gated and omits a persona throughout the drain-all that empties its
+  slot, deadlocking the reserve gate against the sweep.
+- **T-DS-2 transport arm (self-grep, now live).** `submit_drain`
+  (`drain_dispatch.rs`, the `claim_dispatch` sibling) dispatches **only**
+  through the audited persona-transport choke point
+  (`BroadcastSubmitter::local` → `submit_bound`), never a bare submitter and
+  never a default `DaemonClient`; a comment-stripped self-grep test
+  (`seam_routes_through_the_pipeline_and_the_submit_choke_point`) enforces it
+  mechanically, plus a persist-before-dispatch ordering pin (the
+  `PendingDrain` seal textually precedes the send).
+- **T-DS-6 ∧ T-DS-7 composite arm — final leg (the byte-diff owed here).**
+  `regtest_e2e.rs::e2e_drain_wire_shape_matches_a_real_transfer` builds a
+  **real** 1-in/2-out confidential transfer (the `sign_tx` path) and a
+  **real** 1-in/2-out `P`→principal drain (`submit_drain`), both
+  daemon-accepted (consensus verify at submit), and asserts their normalized
+  wire skeletons are **byte-identical** while their raw bytes differ
+  (non-vacuous). `flatten_tx_shape` is the `stake_engine` in-slice
+  `normalize_shape` plus the public `fee` varint (a weight-priced transfer
+  and a caller-priced drain price the fee independently). This discharges
+  the arm's "a real drain tx must exist to diff against a real transfer"
+  condition that DS-PR-1 could only stage.
+- **Deferred (named, WI-3 sibling slice).** Retirement wiring — the drain
+  dispatch driver (confirmation-observe / terminal-reject prune,
+  byte-identical resubmit) — is **not** in DS-PR-2; the `PendingDrain`
+  record shape this seam seals already serves it, and it lands with the
+  bond/claim retirement driver family.
+- **Schema.** No new schema in DS-PR-2 — the `dev` `PENDING_POST_VERSION`
+  (v6, post-`entry_offset_blocks` removal) already carries `PendingDrain`
+  from DS-PR-1.
+
+The DS-PR-2 slice row above (§4) is thus **LANDED** for its core-side
+scope; the GUI-side halves (DS-PR-3/4/5) remain per the slice table.
 
 **GF-7 disposition (drain vs the entry seam).** GF-7 grades the *entry*
 seam (bond-post dispatch timing; persona↔principal unlinkability). The

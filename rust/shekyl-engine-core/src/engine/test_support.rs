@@ -141,6 +141,92 @@ pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
     output
 }
 
+/// Serialize a whole transaction to its wire bytes — the shared helper the
+/// wire-shape byte-diff tests compare over.
+pub(crate) fn whole_tx_wire_bytes(tx: &shekyl_wire::Transaction) -> Vec<u8> {
+    let mut buf = Vec::new();
+    tx.write(&mut buf).expect("serialize whole tx");
+    buf
+}
+
+/// Zero every value-bearing / randomized / independently-priced leaf while
+/// preserving all counts, lengths, and structural tags, so two txs compare
+/// equal iff their wire SKELETON — the shape an observer classifies on — is
+/// identical. A genuine structural divergence (an extra output, a different
+/// proof arity, a surviving Monero-era field) survives as a length/count delta
+/// and still fails the diff; only the hidden/committed/priced interior is
+/// flattened.
+///
+/// The single source of truth for the FCMP wire-leaf enumeration — shared by
+/// the `stake_engine` drain-vs-drain diff (partial vs drain-all) and the
+/// `regtest_e2e` transfer-vs-drain diff (T-DS-6 ∧ T-DS-7). The **public `fee`
+/// varint** is flattened too: a real transfer is weight-priced and a real drain
+/// is caller-priced, so the fee is an expected difference the transfer-vs-drain
+/// skeleton comparison must absorb (both go to `0`, a 1-byte varint, so the
+/// length stays equal); the drain-vs-drain diff shares one fee, so zeroing it
+/// there is a no-op on an already-equal field. One enumeration means a future
+/// wire-format change updates exactly one place, never a lockstep pair.
+pub(crate) fn normalize_fcmp_wire_shape(tx: &mut shekyl_wire::Transaction) {
+    use shekyl_wire::{Ct, Input};
+    for input in &mut tx.prefix.inputs {
+        if let Input::ToKey { key_image, .. } = input {
+            *key_image = [0u8; 32];
+        }
+    }
+    for out in &mut tx.prefix.outputs {
+        out.key = [0u8; 32];
+        out.view_tag = 0;
+    }
+    // tx_extra: tx pubkey(s) + KEM blobs + pqc leaf hashes — random / value
+    // interior at a fixed length for a given output arity. Zeroing the content
+    // in place keeps the length, so a field that appears in one regime but not
+    // the other still diverges.
+    for b in &mut tx.prefix.extra {
+        *b = 0;
+    }
+    if let Ct::Fcmp {
+        fee,
+        reference_block,
+        base,
+        pqc_auths,
+        prunable,
+        ..
+    } = &mut tx.ct
+    {
+        *fee = 0;
+        *reference_block = [0u8; 32];
+        for c in &mut base.commitments {
+            *c = [0u8; 32];
+        }
+        for e in &mut base.enc_amounts {
+            *e = [0u8; 9];
+        }
+        for e in &mut base.enc_labels {
+            *e = [0u8; 9];
+        }
+        for auth in pqc_auths.iter_mut() {
+            auth.hybrid_public_key.iter_mut().for_each(|b| *b = 0);
+            auth.hybrid_signature.iter_mut().for_each(|b| *b = 0);
+        }
+        if let Some(p) = prunable {
+            for bp in &mut p.bulletproofs {
+                bp.a = [0u8; 32];
+                bp.a1 = [0u8; 32];
+                bp.b = [0u8; 32];
+                bp.r1 = [0u8; 32];
+                bp.s1 = [0u8; 32];
+                bp.d1 = [0u8; 32];
+                bp.l.iter_mut().for_each(|x| *x = [0u8; 32]);
+                bp.r.iter_mut().for_each(|x| *x = [0u8; 32]);
+            }
+            p.fcmp_proof.iter_mut().for_each(|b| *b = 0);
+            for po in &mut p.pseudo_outs {
+                *po = [0u8; 32];
+            }
+        }
+    }
+}
+
 /// In-memory implementor of [`shekyl_rpc_client::Rpc`] **and** the
 /// crate-internal `DaemonEngine` trait for refresh / scan-loop /
 /// hybrid tests.

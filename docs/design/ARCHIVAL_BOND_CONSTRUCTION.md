@@ -401,19 +401,26 @@ the standard weight-priced floor fee; there is no fee-less class (gate-4
    `EXIT_FEE_RESERVE_ATOMIC` — a pessimistically-margined weight-priced
    `Unbond` fee — so the terminal post is always fundable. Spend-time
    invariant only; the cover **draw** is never consulted or narrowed by it
-   (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4 stance). ⚠️ **Dominance-assert premise
-   VOIDED, needs re-derivation (2026-07-21):** this was to "land with a pinned
-   dominance assert against `COVER_RUNWAY_FLOOR_ATOMIC`" (1 rung = 750M), whose
-   whole point was that a *guaranteed 1-rung* cover floor dominates any fee by
-   orders of magnitude. **That floor no longer exists.** The cover draw is now
-   `U(0, bond_floor)` (`ARCHIVAL_COVER_DRAW.md`): its minimum is 1 atomic, and
-   working capital is **supplied by the user on top**, not guaranteed by the
-   draw. So the cover provides no reserve to dominate a fee with — the reserve
-   must come from the user-supplied working capital, and the exit-fee
-   guarantee has to be re-derived on that basis (a spend-time floor the wallet
-   enforces on the user's funding, not a property of the cover draw). Do not
-   rename the constant to `COVER_RUNG_ATOMIC` — the upper bound is not a floor.
-   Destitute corner (pool below
+   (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4 stance). ✅ **Dominance assert
+   RE-GROUNDED (2026-07-22, DS-PR-2; maintainer-corrects the 2026-07-21 ⚠️
+   note):** the original premise — a *guaranteed 1-rung* cover floor
+   dominating any fee — was retired with the runway floor
+   (`ARCHIVAL_COVER_DRAW.md`: the draw is now uniform over `(0, bond_floor)`,
+   no floor). The 2026-07-21 note's "working capital is supplied by the user,
+   the cover provides no reserve" framing was a **misunderstanding**
+   (maintainer-corrected): the cover draw is **always protocol-added** to a
+   derived bond amount — spreading every funded bond across a rung, so no tx
+   is identifiable as a bond by amount and the adversary's N is *all*
+   transactions, not those within a deterministic range of `bond_floor` — and
+   a user top-up at funding time is an *optional* addition, not the reserve's
+   source. Re-derived grounding, landed in `shekyl-standoff::reserve`:
+   `0 < EXIT_FEE_RESERVE_ATOMIC < COVER_RUNG_ATOMIC` is a **corner-fraction
+   bound** — the protocol-drawn cover alone clears the reserve with
+   probability `1 − reserve/RUNG ≈ 93.3%` (a top-up shrinks the corner
+   further); the assert refuses the inverted sizing (reserve ≥ rung: every
+   fresh draw-only pool starts blocked); the residual corner is non-fatal
+   (earnings accrue; the reserve releases at retirement; the destitute
+   corner below). Destitute corner (pool below
    reserve): the wallet's `ClaimFeeInputsRequired` refusal relaxes to admit
    the consensus-admitted Q11 zero-fee-input claim (fee out of the mint),
    then `Unbond` funds from the claimed output — the exit chain is

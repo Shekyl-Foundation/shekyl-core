@@ -2635,6 +2635,254 @@ async fn e2e_emission_claim_accepted_and_applied() {
     );
 }
 
+/// DS-PR-2 **T-DS-6 ∧ T-DS-7 composite wire-shape arm — the full
+/// transfer-vs-drain byte-diff over real end-to-end txs**
+/// (`ARCHIVAL_DRAIN_SEND_FD2.md` §5 composite arm; the in-slice
+/// drain-vs-drain normalized diff rode DS-PR-1, and the design pins the
+/// "against a real transfer" byte-diff to this DS-PR-2 regtest e2e — "a real
+/// end-to-end transfer tx must exist to diff against").
+///
+/// A real 1-in/2-out confidential **transfer** (the ordinary `sign_tx` send
+/// path) and a real 1-in/2-out `P`→principal **drain** ([`Engine::submit_drain`])
+/// must serialize byte-identically once their hidden/committed/priced leaves
+/// are flattened: the drain wears the modal transfer's wire skeleton — no
+/// output-count (T-DS-6), no `tx_extra` / `unlock_time` / `ct_type`
+/// distinguisher (T-DS-7), no proof-arity tell. Parity is already
+/// compile-time by construction (both build their `WireEncodeInput` through
+/// the single shared [`assemble_transfer_wire`](super::sign_bridge) constructor);
+/// this e2e is the final confirmation over the live boundary, and both txs are
+/// **daemon-accepted** (consensus verify at submit), so the arm is proven on
+/// real, on-chain-valid bytes rather than a builder artifact.
+///
+/// The transfer is a small principal self-send (one large coinbase input, two
+/// confidential outputs: recipient + change). The drain is a PARTIAL sweep of
+/// the persona's single `BondPostChange` funding record (one input, principal
+/// payment + `P`-space change), sized so change ≥ [`EXIT_FEE_RESERVE_ATOMIC`]
+/// — a live persona keeps its exit-fee reserve (DS-4). Fees differ (transfer
+/// weight-priced, drain caller-priced), so [`normalize_fcmp_wire_shape`]
+/// flattens the public `fee` alongside the hidden leaves; the raw bytes are
+/// asserted distinct first, so the normalized equality is not vacuous.
+///
+/// [`normalize_fcmp_wire_shape`]: super::test_support::normalize_fcmp_wire_shape
+///
+/// [`EXIT_FEE_RESERVE_ATOMIC`]: shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+async fn e2e_drain_wire_shape_matches_a_real_transfer() {
+    use super::drain_dispatch::DrainRequestError;
+    use super::drain_orchestrator::DrainOrchestrationError;
+    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::stake_engine::PSlot;
+    use super::traits::DaemonEngine;
+    use shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC;
+    use shekyl_units::AtomicUnits;
+    use shekyl_wire::{Ct, Input, Transaction};
+
+    const SLOT: u32 = 0;
+    /// The persona's `BondPostChange` record ≈ this cushion; sized well above
+    /// `payment + fee + reserve` so a PARTIAL drain selects the single record
+    /// and leaves change ≥ the exit-fee reserve (both txs stay 1-in/2-out).
+    const FUNDING_CUSHION: u64 = 12_000_000_000;
+
+    let daemon = RegtestDaemon::start().await;
+    // Schedule guard (serial lock now held): a sibling e2e that armed the SEB
+    // lever in this process would bleed its schedule in silently (the
+    // `OnceLock` is irreversible) — fail loudly instead.
+    assert_eq!(
+        shekyl_archival_retention::effective_settlement_epoch_blocks(),
+        shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS,
+        "another test latched a levered settlement-epoch schedule in this process; \
+         run the regtest e2es in separate processes"
+    );
+    let seed = [0x66u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let slot = PSlot::from_raw(SLOT);
+    let fixture = stake_persona_to_confirmed_bond(
+        &daemon,
+        &seed,
+        SLOT,
+        FUNDING_CUSHION,
+        FixtureStake::FirstStake,
+    )
+    .await;
+    let principal = fixture.principal.clone();
+
+    // The confirmed sweep-all bond leaves exactly one persona funding record
+    // (the `BondPostChange` change) — the drain's single input.
+    let persona_records = fixture
+        .state
+        .funding_outputs()
+        .iter()
+        .filter(|r| r.p_slot == slot)
+        .count();
+    assert_eq!(
+        persona_records, 1,
+        "the confirmed sweep-all bond must leave exactly one persona funding record to drain"
+    );
+
+    // ── A real 1-in/2-out transfer: capture its build-time wire bytes ──
+    // A small principal self-send covered by a single coinbase output. Retry
+    // past the C2 reference-spendability gate exactly as `transfer_to` does;
+    // `PendingTx::tx_bytes` carries the signed bytes (build-time reference; the
+    // skeleton diff zeroes `reference_block`, so a submit-time re-anchor is
+    // irrelevant to the shape).
+    refresh(&fixture.arc).await;
+    let request = TxRequest {
+        recipients: vec![TxRecipient {
+            address: principal.clone(),
+            amount_atomic_units: AtomicUnits::from_raw(100_000_000),
+        }],
+        priority: FeePriority::Standard,
+    };
+    let mut built = None;
+    for _ in 0..24 {
+        let attempt = {
+            let mut g = fixture.arc.write().await;
+            g.build_pending_tx_async(&request).await
+        };
+        match attempt {
+            Ok(p) => {
+                built = Some(p);
+                break;
+            }
+            Err(super::error::SendError::OutputNotYetSpendable { .. }) => {
+                daemon.generate_blocks(10, &principal).await;
+                refresh(&fixture.arc).await;
+            }
+            Err(e) => panic!("build transfer: {e:?}"),
+        }
+    }
+    let built = built.expect("transfer must build once reference-spendable");
+    let transfer_bytes = built.tx_bytes.clone();
+    {
+        let mut g = fixture.arc.write().await;
+        g.submit_pending_tx_async(built.id, built.content_gen)
+            .await
+            .expect("daemon must accept the transfer (consensus verify)");
+    }
+    mine_until_pool_drains(&daemon, &principal, "accepted transfer", 1).await;
+    refresh(&fixture.arc).await;
+
+    // ── A real 1-in/2-out drain: assemble + dispatch through submit_drain ──
+    // Caller-priced fee over a generous envelope (overpay is a miner transfer,
+    // never a conservation term); the daemon's acceptance at submit is the
+    // real-bytes proof. Payment + fee + reserve < record ⇒ change > 0 and ≥
+    // the exit-fee reserve (live persona), so the drain stays a partial
+    // 1-in/2-out sweep.
+    let drain_fee = {
+        let estimates = fixture
+            .arc
+            .read()
+            .await
+            .daemon()
+            .get_fee_estimates()
+            .await
+            .expect("daemon fee estimates");
+        estimates.economy.calculate_fee_from_weight(32_768)
+    };
+    let drain_payment = AtomicUnits::from_raw(2_000_000_000);
+    assert!(
+        FUNDING_CUSHION > drain_payment.to_raw() + drain_fee + EXIT_FEE_RESERVE_ATOMIC,
+        "fixture must keep the partial drain's change ≥ the exit-fee reserve \
+         (payment {} + fee {drain_fee} + reserve {EXIT_FEE_RESERVE_ATOMIC} < cushion \
+         {FUNDING_CUSHION})",
+        drain_payment.to_raw(),
+    );
+    let mut receipt = None;
+    for attempt in 0..4 {
+        match super::Engine::submit_drain(
+            fixture.arc.clone(),
+            slot,
+            drain_payment,
+            AtomicUnits::from_raw(drain_fee),
+            &super::bond_assembly::SpentRecordsDurablyPruned::for_test(),
+        )
+        .await
+        {
+            Ok(r) => {
+                receipt = Some(r);
+                break;
+            }
+            // Resync-and-retry: the tree or header window lags the tip.
+            Err(DrainRequestError::Drain(
+                e @ DrainOrchestrationError::ReferenceUnanchorable { .. },
+            )) => {
+                eprintln!("drain attempt {attempt}: {e}; resyncing");
+                daemon.generate_blocks(1, &principal).await;
+                refresh(&fixture.arc).await;
+            }
+            Err(e) => panic!("submit_drain: {e}"),
+        }
+    }
+    let receipt = receipt.expect("drain must assemble and dispatch within the retry budget");
+    let drain_bytes = receipt.drain.bound_tx.bytes().to_vec();
+    eprintln!(
+        "drain accepted by daemon: {} swept input(s), payment {}",
+        receipt.drain.funding_gindexes.len(),
+        drain_payment.to_raw(),
+    );
+    mine_until_pool_drains(&daemon, &principal, "accepted drain", 1).await;
+
+    // ── The byte-diff: normalized skeletons identical, raw bytes distinct ──
+    let mut cursor: &[u8] = &transfer_bytes;
+    let transfer_tx = Transaction::read(&mut cursor).expect("transfer parses whole");
+    assert!(cursor.is_empty(), "transfer bytes fully consumed");
+    let mut cursor: &[u8] = &drain_bytes;
+    let drain_tx = Transaction::read(&mut cursor).expect("drain parses whole");
+    assert!(cursor.is_empty(), "drain bytes fully consumed");
+
+    // Structural variables the normalizer does NOT flatten — a count delta
+    // would survive the normalized diff, but pin them explicitly so a harness
+    // change (a 2-in coinbase spend, a builder dummy output) fails loudly here
+    // rather than as an opaque byte mismatch below.
+    for (label, tx) in [("transfer", &transfer_tx), ("drain", &drain_tx)] {
+        assert_eq!(
+            tx.prefix.outputs.len(),
+            2,
+            "{label} must be the modal 2-out shape"
+        );
+        let tokey = tx
+            .prefix
+            .inputs
+            .iter()
+            .filter(|i| matches!(i, Input::ToKey { .. }))
+            .count();
+        assert_eq!(tokey, 1, "{label} must spend exactly one ToKey input");
+        assert_eq!(
+            tx.prefix.unlock_time, 0,
+            "{label} unlock_time must be builder-zeroed"
+        );
+        assert!(
+            matches!(tx.ct, Ct::Fcmp { .. }),
+            "{label} must be an FCMP++ spend"
+        );
+    }
+
+    // Non-vacuous: the raw bytes genuinely differ (distinct hidden amounts,
+    // fees, keys) — otherwise the normalized equality below proves nothing.
+    assert_ne!(
+        super::test_support::whole_tx_wire_bytes(&transfer_tx),
+        super::test_support::whole_tx_wire_bytes(&drain_tx),
+        "raw transfer/drain bytes must differ"
+    );
+
+    let mut transfer_norm = transfer_tx;
+    let mut drain_norm = drain_tx;
+    super::test_support::normalize_fcmp_wire_shape(&mut transfer_norm);
+    super::test_support::normalize_fcmp_wire_shape(&mut drain_norm);
+    assert_eq!(
+        super::test_support::whole_tx_wire_bytes(&transfer_norm),
+        super::test_support::whole_tx_wire_bytes(&drain_norm),
+        "a real drain is wire-identical to a real modal 2-out transfer modulo \
+         hidden/committed/priced leaves — no output-count (T-DS-6), tx_extra / \
+         unlock_time / ct_type (T-DS-7), or proof-arity distinguisher"
+    );
+
+    eprintln!(
+        "T-DS-6 ∧ T-DS-7 e2e: a real drain is byte-identical to a real transfer \
+         (normalized skeleton), both daemon-accepted"
+    );
+}
+
 /// SP-R0 **arm #3 — PRODUCTION-DISCHARGE leg** (DQ-F): the SA-DQ-3
 /// activation-induced **persist-then-no-broadcast crash**, driven against the
 /// live regtest chain. `persist_bond_record` runs (the activation's durable

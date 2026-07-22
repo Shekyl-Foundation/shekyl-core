@@ -63,10 +63,12 @@
 pub mod cover;
 pub mod draw;
 pub mod plan;
+pub mod reserve;
 
 pub use cover::{draw_cover_amount, COVER_RUNG_ATOMIC};
 pub use draw::{bounded_uniform, draw_entry_gap, GapRng, DEFAULT_ENTRY_GAP_WINDOW};
 pub use plan::{plan_entry_seam, EntrySeamPlan};
+pub use reserve::EXIT_FEE_RESERVE_ATOMIC;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
