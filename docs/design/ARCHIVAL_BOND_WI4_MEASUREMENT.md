@@ -1387,10 +1387,12 @@ the constant is allowed to price in.
 >    and `r` is *blind* to herd size (§13.5). "Founder cover" is the retired
 >    herd-cover model; there is no founder cover obligation, so the mechanism the
 >    arm validates does not exist.
-> 2. **Retired posture.** §14 — the founder-cover launch posture ("refuse the
->    genesis regime") this arm was built to validate — is itself **RETIRED**
->    (`ARCHIVAL_REWARD_GATE_M1.md` §14 retirement). The arm measures a posture
->    that no longer exists.
+> 2. **Retired posture.** §14 (of *this* doc) — the founder-cover launch posture
+>    ("refuse the genesis regime") this arm was built to validate — is itself
+>    **RETIRED**: un-ratified by commit `830a850a0` ("retire 'refuse the genesis
+>    regime' outright — the question does not exist"), recorded in
+>    `ARCHIVAL_REWARD_GATE_M1.md` **§13** (the retirement record). The arm
+>    measures a posture that no longer exists.
 > 3. **The feature dictionary is a strawman — 70% of it is non-observable.** The
 >    ten-feature dictionary (`PairRaw::features` in `partition_adversary.rs`)
 >    declares itself "chain-visible observables only," but is built over
