@@ -401,8 +401,26 @@ the standard weight-priced floor fee; there is no fee-less class (gate-4
    `EXIT_FEE_RESERVE_ATOMIC` — a pessimistically-margined weight-priced
    `Unbond` fee — so the terminal post is always fundable. Spend-time
    invariant only; the cover **draw** is never consulted or narrowed by it
-   (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4 stance). Lands with a pinned dominance
-   assert against `COVER_RUNWAY_FLOOR_ATOMIC`. Destitute corner (pool below
+   (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4 stance). ✅ **Dominance assert
+   RE-GROUNDED (2026-07-22, DS-PR-2; maintainer-corrects the 2026-07-21 ⚠️
+   note):** the original premise — a *guaranteed 1-rung* cover floor
+   dominating any fee — was retired with the runway floor
+   (`ARCHIVAL_COVER_DRAW.md`: the draw is now uniform over `(0, bond_floor)`,
+   no floor). The 2026-07-21 note's "working capital is supplied by the user,
+   the cover provides no reserve" framing was a **misunderstanding**
+   (maintainer-corrected): the cover draw is **always protocol-added** to a
+   derived bond amount — spreading every funded bond across a rung, so no tx
+   is identifiable as a bond by amount and the adversary's N is *all*
+   transactions, not those within a deterministic range of `bond_floor` — and
+   a user top-up at funding time is an *optional* addition, not the reserve's
+   source. Re-derived grounding, landed in `shekyl-standoff::reserve`:
+   `0 < EXIT_FEE_RESERVE_ATOMIC < COVER_RUNG_ATOMIC` is a **corner-fraction
+   bound** — the protocol-drawn cover alone clears the reserve with
+   probability `1 − reserve/RUNG ≈ 93.3%` (a top-up shrinks the corner
+   further); the assert refuses the inverted sizing (reserve ≥ rung: every
+   fresh draw-only pool starts blocked); the residual corner is non-fatal
+   (earnings accrue; the reserve releases at retirement; the destitute
+   corner below). Destitute corner (pool below
    reserve): the wallet's `ClaimFeeInputsRequired` refusal relaxes to admit
    the consensus-admitted Q11 zero-fee-input claim (fee out of the mint),
    then `Unbond` funds from the claimed output — the exit chain is

@@ -232,6 +232,12 @@ pub(crate) mod drain_amount;
 /// spend leg (`stake_engine::prepare_funding_inputs`), and the plain-transfer
 /// prefix/prove/PQC-auth calls with empty `extra_inputs` and spend-only auths.
 pub(crate) mod drain_assembly;
+/// DS-PR-2's CB-3 dispatch seam (`ARCHIVAL_DRAIN_SEND_FD2.md` §6, the
+/// `claim_dispatch` sibling): the Engine-side drain **request path** — resolve
+/// the principal destination, assemble via `drain_orchestrator`, persist the
+/// `PendingDrain` before any send, dispatch through the persona-transport
+/// choke point (T-DS-2). Scheduling stays external.
+pub(crate) mod drain_dispatch;
 /// F-D1 projection / drain trust boundary (`ARCHIVAL_FIREWALL_GATE6.md`
 /// §12.3): the sole drain-path site holding the funding records, projecting
 /// them into the aggregate scalar + stripped candidate operands the guarded

@@ -4544,6 +4544,19 @@ transaction class exists on the `P` lane. The fee is funded from the
    750,000,000 atomic dominates any realistic fee by orders of magnitude, so
    `C_min` needs no re-derivation — the assert makes that arithmetic loud
    instead of assumed).
+
+   **Update (2026-07-21) — the dominance premise is voided.** The cover draw
+   no longer has a guaranteed runway floor: `COVER_RUNWAY_FLOOR_ATOMIC` (and
+   the whole `span(C)` curve) is retired, and the production draw is
+   `cover ~ U(0, bond_floor)` (`ARCHIVAL_COVER_DRAW.md`), whose minimum is 1
+   atomic. Working capital is **supplied by the user on top** of the drawn
+   cover, not guaranteed by it. So there is no cover-side reserve to dominate a
+   fee with; the exit-fee guarantee must be re-derived against user-supplied
+   working capital (a wallet-enforced spend-time floor), and must **not** be
+   re-pinned against the cover draw's upper bound `COVER_RUNG_ATOMIC` — that is
+   a ceiling, not a floor. The original decision text above is preserved per
+   the append-only discipline; this note supersedes its `C_min`/dominance
+   arithmetic.
 3. **Destitute escape hatch = the already-admitted Q11 form.** Consensus
    already admits the zero-fee-input emission claim (fee paid out of the
    mint; the balance closes through the debit slot —
