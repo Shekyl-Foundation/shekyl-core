@@ -308,6 +308,9 @@ pub(crate) mod local_economics;
 pub(crate) mod local_keys;
 pub(crate) mod local_ledger;
 pub mod local_pending_tx;
+/// Transfer / pending-tx workflow (extracted from the former monofile
+/// `local_pending_tx.rs` — see `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`).
+pub mod transfer;
 pub(crate) mod local_persistence;
 pub(crate) mod local_refresh;
 pub mod merge;

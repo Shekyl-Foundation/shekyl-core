@@ -210,6 +210,7 @@ Do **not** invent a second framework. Do invent **stable trait methods + service
 1. **Type alias the production engine** so most of the tree never writes the 7-param form.
 2. **Group Engine fields** into `identity` / `caps` / `runtime` (structural, low risk).
 3. **Extract `transfer/` from `local_pending_tx`**; `Engine` methods become delegates. No behavior change.
+   **Done** (`chore/transfer-from-local-pending-tx`): monofile → `engine/transfer/{types,support,engine,trait_impl}.rs` + `transfer_pending_tx_tests.rs`; thin `local_pending_tx` re-export shim; decomposition ratchet drops the 5420-line baseline and scans `engine/transfer/`.
 4. **Introduce `TransferCtx`** and stop any new send-path code from taking `&Engine`.
 5. **Façade methods** (`engine.transfer()`, `engine.scan()`) for RPC/CLI.
 6. **`StakeWorkflow` / StakeEngine** as a real subsystem (optional field), not more inherent methods on Engine.

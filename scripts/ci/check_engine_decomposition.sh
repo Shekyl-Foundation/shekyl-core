@@ -119,7 +119,14 @@ while IFS= read -r path; do
     note "Carve it, or add a reviewed FILE baseline in engine_decomposition_ratchet.conf."
     fail=1
   fi
-done < <(find "${ENGINE_DIR}" -maxdepth 1 -name '*.rs' | sort)
+# Top-level engine/*.rs plus workflow extraction dirs (transfer/). Do NOT
+# recurse into traits/ or pscan/: those reuse basenames (e.g. traits/refresh.rs
+# vs refresh.rs) and are not the monofile-orchestration concern this ratchet
+# polices. Basename FILE/EXCLUDE keys stay unique within the scanned set.
+done < <({
+  find "${ENGINE_DIR}" -maxdepth 1 -name '*.rs'
+  find "${ENGINE_DIR}/transfer" -name '*.rs' 2>/dev/null
+} | sort)
 
 # --- 4. stale baseline entries -----------------------------------------------
 for base in "${!FILE_CEIL[@]}"; do
