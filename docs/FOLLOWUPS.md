@@ -9572,25 +9572,30 @@ one place to confirm each item's relationship to the wallet stack.
 - ~~**⛔ GENESIS BLOCKER — the funding-transfer amount is still a distinguisher**~~
   **RESOLVED 2026-07-21 (feat/funding-cover-draw) — not deferred.** The fix needed no
   design round and no population aggregate. `stake_in` now draws
-  `cover ~ U[COVER_MIN_ATOMIC, COVER_RUNG_ATOMIC)` — one bond rung wide, upper-exclusive —
-  so funded amounts **tile** across shard counts (`funded(k) ∈ [RUNG·k + MIN, RUNG·(k+1))`,
-  consecutive `k` covering the line) and no value identifies a bond. The parameter is the
-  bond rung, a pinned consensus constant; there is no `C`, no curve, no aggregate.
-  **What the defense actually is (corrected understanding):** amounts are CT-hidden, so
-  this is **not** the primary defense — attribution is already denied on chain
-  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §18.9). It is **defense in depth**: it removes any
-  tell in the transaction VALUE that a bond happened, which otherwise acts as a **filter
-  feeding the timing attack** — collapsing `N` from every transaction in the window to
-  those with a bond-shaped amount. The requirement is **non-identifiability, not
-  unpredictability**; entropy quantity was the retired `span(C)` curve's error.
-  **Postability is an enforced invariant, not a user responsibility:** `COVER_MIN_ATOMIC`
-  (= `RUNG / 100`, pinned not fee-derived, since a live fee estimate would fork the draw
-  support across wallets) keeps the smallest cover above a plausible bond-post fee, so the
-  network's own draw guarantees the persona can bond. **User-adjustable:** the user may add
-  extra on top for working capital or more spread; extra can only widen, never narrow.
-  Reopening criterion: a fee-rate review before genesis, or a change to the bond post's
-  structural weight — the failure would be loud (`InsufficientFunding`), never a silent
-  low-cover brick.
+  `cover ~ U(0, bond_floor)` = `U[1, COVER_RUNG_ATOMIC)` — strictly between 0 and one rung,
+  **pure entropy, no on-chain input**. A bond's staked floor is always an exact rung
+  multiple `k·RUNG`; adding a sub-rung cover puts the funded amount strictly *between*
+  multiples (`funded(k) ∈ (k·RUNG, (k+1)·RUNG)`), so it is never a clean bond floor and a
+  bond post — already unlinkable — can never be *proven* to be one. The only parameter is
+  the bond rung, a pinned consensus constant; no `C`, no curve, no aggregate.
+  **What the cover is for (grounded at source, `ARCHIVAL_COVER_DRAW.md` §2.2/§8.3 — I had
+  this wrong twice):** two roles. (1) *Unprovability* — the above; the role the draw exists
+  for, and defense in depth on top of CT-hidden amounts. (2) *Anti-re-link runway* — `P`
+  pays fees from cover, and if it depletes it must re-fund from the principal, a **second**
+  principal→`P` link (the one edge the firewall protects). But (2) does **not** bind the
+  draw: working capital is **supplied by the user on top**, so even a near-zero cover
+  survives. That is why the draw needs no runway floor and `0 < cover` is the only lower
+  bound (0 is the reserved DQ6 opt-out).
+  **No on-chain input, hard invariant:** anything an observer could read on chain (a
+  live-bond count, a fee snapshot, a balance) is the same predictor the wallet would use —
+  handing it to the attacker. This is why the count-keyed `span(C)` was retired, and it is
+  method note 7.
+  **Correction to an earlier resolution of this item:** a prior revision pinned
+  `COVER_MIN_ATOMIC = RUNG/100` as a "postability floor." That was wrong — it cut the
+  working-capital runway 100× on a tiling argument, blind to what `C_min` did (see the
+  `dont-change-what-you-dont-understand` lesson). There is no floor constant now; the
+  draw is `U(0, bond_floor)` and postability is the user's funding responsibility, surfaced
+  loud (`InsufficientFunding`) if underfunded.
 - **Wallet UX: thin-cover exposure disclosure at bond/claim time (registered 2026-07-19,
   PR #337 review thread).** On the user's own acts the design is warn-don't-prohibit —
   ~~`K_COVER` gates only the system's reward lever (bonding stays legal during gated epochs,

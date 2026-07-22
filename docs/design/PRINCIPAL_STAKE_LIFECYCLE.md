@@ -669,8 +669,10 @@ The two §5.1-item-1 substrate reads were run at source. **Result: the entry que
 toward "already structural, use it," not "unify two call sites."**
 
 - **The cover-amount entropy draw already exists as a single shared derivation.**
-  `shekyl-standoff::draw_cover_amount` / `cover_dial_span_atomic`
-  ([`cover.rs`](../../rust/shekyl-standoff/src/cover.rs)) is the single source, and the crate's
+  `shekyl-standoff::draw_cover_amount`
+  ([`cover.rs`](../../rust/shekyl-standoff/src/cover.rs)) is the single source (the count-keyed
+  `cover_dial_span_atomic` it once paired with is retired — see the SUPERSEDED note below), and
+  the crate's
   own contract **is** the structural form: "the simulator, the published conformance vector, and
   (when the V3.0 funding flow is built) the wallet all import the **same** draw, so 'what we
   validated is what ships' holds **by construction rather than by vigilance**"
@@ -682,10 +684,11 @@ toward "already structural, use it," not "unify two call sites."**
   ([`output.rs`](../../rust/shekyl-crypto-pq/src/output.rs) L193 / L811), round-trip
   byte-identity KAT'd (`scan_output_kat.rs`). The cover rides it like any output — confirming
   §3.1's no-special-field at the code layer.
-- **The obligation is therefore *wiring*, not derivation-unification.** `draw_cover_amount` has
-  **no production consumer yet** (only `shekyl-staking-sim`, a dev-dep + cross-checked copy; the
-  V3.0 wallet funding flow is unbuilt). When it lands, `stake_in`'s cold-start cover **must
-  import `shekyl-standoff`, never an ad-hoc draw** — a discipline 2c-2b already encodes
+- **The obligation *was* wiring, and it is done (2026-07-21, PR #350).** `draw_cover_amount`
+  now has its production consumer: `Engine::stake_in` (`principal_stake.rs`) imports
+  `shekyl_standoff::draw_cover_amount` and sends `stake + cover`. The earlier "no production
+  consumer yet" note is superseded. The discipline it named still holds — `stake_in`'s cover
+  **must import `shekyl-standoff`, never an ad-hoc draw** — a discipline 2c-2b already encodes
   ([`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md): "`shekyl-standoff`,
   never an ad-hoc draw; the check forbids any inherited jitter", plus an RNG-degeneracy guard
   and `!Clone` unrepresentability tokens).
@@ -701,13 +704,24 @@ direction and does **not track a runway `C_min` at all**. What is actually deter
 - **The rung is pinned and fixed** — `ARCHIVAL_BOND_FLOOR = 750_000_000 = 0.75 SKL`, gate-4
   (`consensus_constants.rs:17`; ARCHIVAL_COVER_DRAW §2.3: "the rung size is **fixed**"). *This
   was the real determination — and it is done.*
-- **The cover is a sliding window, not a scalar** — `span(C)` is a cubic smoothstep over the
-  live-bond count (`cover_dial_span_atomic`: 0 rungs at the tail → cap at the §8.7 saturation
-  knee, `k ≈ 10`), sim-characterized by the `--cover` harness (ARCHIVAL_COVER_DRAW §7).
-- **`C_min = 1 rung (0.75 SKL)`** — sim-supported: the harness shows even `k = 0` (the
-  `cover == 0` opt-out) still gets same-rung cover (≈ 1.9, not 1). The "PROVISIONAL pending the
-  2d-1 earnings-ramp" comment in `cover.rs:42` / ARCHIVAL_COVER_DRAW §7.4 is **stale pre-sim
-  planning text**; the definitive sim has moved past it.
+- **The cover is `U(0, bond_floor)`, not a count-keyed window** — ⚠️ SUPERSEDED
+  2026-07-21. The sliding-window `span(C)` cubic-smoothstep over the live-bond count
+  (`cover_dial_span_atomic`) is **RETIRED** (`ARCHIVAL_COVER_DRAW.md` retirement notice;
+  PR #349/#350): keying the draw to public chain state handed an on-chain observer the exact
+  predictor the wallet used, and required a standing-bond-count aggregate that is not to be
+  built. The production draw is now `cover ~ U(0, bond_floor)` = `U[1, COVER_RUNG_ATOMIC)` —
+  strictly between 0 and one rung, **pure entropy, no on-chain input**
+  (`shekyl_standoff::draw_cover_amount(rng)`). That puts the funded amount strictly between
+  rung multiples, so a bond post can never be *proven* to be one.
+- **There is no `C_min` floor constant.** ⚠️ SUPERSEDED 2026-07-21. The retired curve had
+  `C_min = 1 rung` as a working-capital *runway* floor (the capital below which `P` re-links
+  by re-funding from the principal, §2.2). That role does not bind the draw, because working
+  capital is **supplied by the user on top** of the drawn cover — so the draw is only bounded
+  by its unprovability role (`0 < cover < bond_floor`) and needs no runway floor of its own.
+  **Downstream note:** any decision that relied on a *guaranteed 1-rung* working-capital
+  floor from the cover (e.g. the P-lane exit-fee dominance assert) must re-derive — the cover
+  now guarantees no runway; the runway is user-supplied. See the
+  `ARCHIVAL_BOND_CONSTRUCTION.md` exit-fee-reserve marker.
 
 So there is **no open `C_min` gate** on this thread. The cover-and-funding contract's only live
 obligations are the **wiring** (`stake_in` imports `shekyl-standoff` + `construct_output` when

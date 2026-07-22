@@ -73,7 +73,7 @@
 //! retirement; PR #349) because keying the draw to public chain state made the
 //! cover interval publicly computable and required a standing-bond-count
 //! aggregate that is not to be built. The production draw is now a pinned
-//! `U[COVER_MIN_ATOMIC, COVER_RUNG_ATOMIC)` in `shekyl-standoff`, count-free.
+//! `U(0, COVER_RUNG_ATOMIC)` in `shekyl-standoff`, count-free (pure entropy).
 //! This module is retained as the record of the model that was considered and
 //! rejected — it is not a live sizing input. It uses `f64` freely, like
 //! `standoff.rs`.

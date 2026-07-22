@@ -401,8 +401,19 @@ the standard weight-priced floor fee; there is no fee-less class (gate-4
    `EXIT_FEE_RESERVE_ATOMIC` — a pessimistically-margined weight-priced
    `Unbond` fee — so the terminal post is always fundable. Spend-time
    invariant only; the cover **draw** is never consulted or narrowed by it
-   (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4 stance). Lands with a pinned dominance
-   assert against `COVER_RUNWAY_FLOOR_ATOMIC`. Destitute corner (pool below
+   (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4 stance). ⚠️ **Dominance-assert premise
+   VOIDED, needs re-derivation (2026-07-21):** this was to "land with a pinned
+   dominance assert against `COVER_RUNWAY_FLOOR_ATOMIC`" (1 rung = 750M), whose
+   whole point was that a *guaranteed 1-rung* cover floor dominates any fee by
+   orders of magnitude. **That floor no longer exists.** The cover draw is now
+   `U(0, bond_floor)` (`ARCHIVAL_COVER_DRAW.md`): its minimum is 1 atomic, and
+   working capital is **supplied by the user on top**, not guaranteed by the
+   draw. So the cover provides no reserve to dominate a fee with — the reserve
+   must come from the user-supplied working capital, and the exit-fee
+   guarantee has to be re-derived on that basis (a spend-time floor the wallet
+   enforces on the user's funding, not a property of the cover draw). Do not
+   rename the constant to `COVER_RUNG_ATOMIC` — the upper bound is not a floor.
+   Destitute corner (pool below
    reserve): the wallet's `ClaimFeeInputsRequired` refusal relaxes to admit
    the consensus-admitted Q11 zero-fee-input claim (fee out of the mint),
    then `Unbond` funds from the claimed output — the exit chain is

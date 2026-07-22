@@ -17,13 +17,14 @@
 //! way `stake_in` addresses `P` is recovered by `P`'s own dual-scan (the
 //! `#[cfg(test)]` end-test below).
 //!
-//! **Amount-axis cover is applied here** (`ARCHIVAL_COVER_DRAW.md` §8): the
-//! transfer carries `stake + cover`, never a bare `bond_floor`. An earlier
-//! revision of this note called the cover structuring "the funding flow's
-//! concern, not this transfer's mechanics" and no funding-flow layer ever
-//! applied it — so every `stake_in` shipped a clean `bond_floor`-shaped amount,
-//! the exact fingerprint the mechanism exists to remove. It is this transfer's
-//! mechanics, because this is the transaction whose amount is observed.
+//! **Amount-axis cover is applied here** (`ARCHIVAL_COVER_DRAW.md`): the
+//! transfer carries `stake + cover` with `cover ~ U(0, bond_floor)`, so the
+//! funded amount lands strictly between rung multiples and a bond post can
+//! never be *proven* to be one. An earlier revision of this note called the
+//! cover structuring "the funding flow's concern, not this transfer's
+//! mechanics" and no funding-flow layer ever applied it — so every `stake_in`
+//! shipped a clean `bond_floor`-shaped amount. It is this transfer's mechanics,
+//! because this is the transaction whose amount is observed.
 
 use rand_core::RngCore as _;
 use shekyl_address::AddressError;
@@ -42,7 +43,8 @@ use super::{EngineSignerKind, SendError};
 // `shekyl-standoff` mirrors the bond rung locally (it has no retention
 // dependency, being the leaf draw crate). This crate depends on both, so it is
 // the one place that can assert the mirror has not drifted — a divergence would
-// silently move the cover distribution off the rung the tiling argument needs.
+// silently move the cover's upper bound off `bond_floor`, so the funded amount
+// could land on a rung boundary and the unprovability property would break.
 const _: () = assert!(
     COVER_RUNG_ATOMIC == shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC,
     "cover rung mirror drifted from ARCHIVAL_BOND_FLOOR_ATOMIC"
@@ -116,7 +118,8 @@ where
     ///
     /// The cover is **system-determined, never a caller parameter** — a
     /// caller-chosen cover is a cross-wallet uniformity break, which is itself
-    /// the leak. See `stake_in_request` for the draw and its open limitation.
+    /// the leak. The user may add working capital *on top* of `amount`; the
+    /// cover draw itself takes no on-chain input. See `stake_in_request`.
     ///
     /// **Carried-over open concern (GF-7, not resolved here):** `build_pending_tx`
     /// appends the principal's own change output (subaddress 0), co-present with
@@ -163,23 +166,22 @@ where
         // an advanced setting with its privacy warning, never on this seam.
         //
         // Amount-axis cover (`ARCHIVAL_COVER_DRAW.md`): the principal sends
-        // `stake + cover`; `P` stakes the floor and holds the cover as working
-        // capital, flowing out as a `P`-change output.
+        // `stake + cover`; `P` holds the cover as working capital, flowing out
+        // as a `P`-change output.
         //
         // NOT the primary defense — amounts are CT-hidden, so attribution is
-        // already denied on chain (WI-4 §18.9). This is defense in depth: it
-        // removes any tell in the transaction VALUE that a bond happened at
-        // all. A value tell would act as a FILTER feeding the timing attack,
-        // collapsing the candidate set from every transaction in the window to
-        // those with a bond-shaped amount — ambient cover is only ever
-        // forfeited, never provisioned.
+        // already denied on chain (WI-4 §18.9). This is defense in depth: with
+        // `cover ~ U(0, bond_floor)` the funded amount lands STRICTLY between
+        // rung multiples, so it is never a clean bond floor and a bond post can
+        // never be *proven* to be one (`shekyl_standoff::draw_cover_amount`).
         //
-        // The draw is `U[COVER_MIN_ATOMIC, COVER_RUNG_ATOMIC)`: one rung wide,
-        // so funded amounts tile across shard counts and no value identifies a
-        // bond. System-determined, never a caller parameter — a caller-chosen
-        // cover forks the distribution across wallets, which is itself the
-        // leak. The user may add extra ON TOP (working capital, more spread);
-        // extra can only widen, never narrow.
+        // System-determined, never a caller parameter — a caller-chosen cover
+        // forks the distribution across wallets, which is itself the leak. The
+        // draw takes NO on-chain input (pure entropy against a fixed constant):
+        // anything an observer could read would be the same predictor the
+        // wallet uses. The user may add working capital ON TOP; that is a
+        // separate addition and is why the draw needs no runway floor of its
+        // own (see `draw_cover_amount`'s two-role doc).
         //
         // Entropy preflight, mirroring `stake_engine`'s Round-3 pattern: probe
         // the source so a dead RNG returns a typed error instead of reaching the
@@ -228,7 +230,7 @@ mod tests {
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_engine_file::SafetyOverrides;
     use shekyl_rpc_transport::SimpleRequestRpc;
-    use shekyl_standoff::{COVER_MIN_ATOMIC, COVER_RUNG_ATOMIC};
+    use shekyl_standoff::COVER_RUNG_ATOMIC;
     use shekyl_types::PSlot;
     use shekyl_units::AtomicUnits;
     use tempfile::TempDir;
@@ -354,22 +356,18 @@ mod tests {
             .expect("stake_in_request resolves the active persona");
 
         assert_eq!(request.recipients.len(), 1, "single-output funding (GF-4b)");
-        // Assert the tiling INVARIANT the draw guarantees, never an exact
-        // value: `funded = stake + cover` with `cover ~ U[MIN, RUNG)`, so
-        // `stake + MIN <= funded < stake + RUNG` always. An exact assert would
-        // be flaky against a genuinely random cover for correct behaviour.
+        // Assert the INVARIANT the draw guarantees, never an exact value:
+        // `funded = stake + cover` with `cover ~ U(0, RUNG)`, so
+        // `stake < funded < stake + RUNG` always. An exact assert would be
+        // flaky against a genuinely random cover for correct behaviour.
         let funded = request.recipients[0].amount_atomic_units;
         assert!(
-            funded >= AtomicUnits::from_raw(50_000 + COVER_MIN_ATOMIC),
-            "funded {funded:?} below stake + postability floor"
+            funded > amount,
+            "funded {funded:?} did not exceed the stake — cover must be strictly positive"
         );
         assert!(
             funded < AtomicUnits::from_raw(50_000 + COVER_RUNG_ATOMIC),
-            "funded {funded:?} reached the next rung — cover must be sub-rung so bands tile"
-        );
-        assert_ne!(
-            funded, amount,
-            "a verbatim stake amount is the fingerprint the cover exists to remove"
+            "funded {funded:?} reached stake + a full rung — cover must be sub-rung"
         );
 
         let projected = engine
