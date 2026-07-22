@@ -47,7 +47,7 @@ use shekyl_units::AtomicUnits;
 use super::bond_assembly::BondAssemblyError;
 use super::bond_orchestrator::anchored_reference_block;
 use super::drain_orchestrator::drain_balance;
-use super::pscan::start::load_pscan_state_for_engine;
+use super::pscan::start::{load_pending_posts_for_engine, load_pscan_state_for_engine};
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 use super::Engine;
@@ -95,19 +95,34 @@ pub enum DrainBalanceReadError {
 /// Map an [`anchored_reference_block`] failure onto the read surface's
 /// two-armed taxonomy.
 ///
-/// Only the genuinely-transient [`BondAssemblyError::ReferenceResyncing`] arm
-/// becomes [`DrainBalanceReadError::Unanchorable`] ("syncing"); every other arm
-/// — today only [`BondAssemblyError::Build`], and defensively any arm added
-/// later — is a non-transient [`DrainBalanceReadError::State`]. Pulled out as a
-/// named seam so the DS-PR-3 locked "keep the two-way distinction alive"
-/// decision is unit-tested directly rather than buried in the accessor body.
+/// [`anchored_reference_block`] raises exactly two arms: the genuinely-transient
+/// [`BondAssemblyError::ReferenceResyncing`] (→
+/// [`DrainBalanceReadError::Unanchorable`], "syncing") and the non-transient
+/// [`BondAssemblyError::Build`] (→ [`DrainBalanceReadError::State`]; its
+/// `stage`/`detail` are operational text — the anchor never holds a record, so
+/// never an amount or a gindex). Any *other* arm is unreachable here today, but
+/// several `BondAssemblyError` variants (`InsufficientFunding`,
+/// `OutputNotYetDrained`, …) render amounts/gindexes in their `Display` — so the
+/// catch-all maps to [`DrainBalanceReadError::State`] with a **static** message
+/// rather than the variant's `Display`, upholding the taxonomy's "no amount or
+/// gindex crosses the read surface" promise ([`DrainBalanceReadError`])
+/// structurally, not by relying on the leaking arms staying unreachable. Pulled
+/// out as a named seam so the DS-PR-3 locked "keep the two-way distinction
+/// alive" decision is unit-tested directly rather than buried in the accessor.
 fn anchor_err_to_read_err(err: BondAssemblyError) -> DrainBalanceReadError {
     match err {
         BondAssemblyError::ReferenceResyncing { detail } => {
             DrainBalanceReadError::Unanchorable { detail }
         }
-        other => DrainBalanceReadError::State {
-            detail: other.to_string(),
+        BondAssemblyError::Build { stage, detail } => DrainBalanceReadError::State {
+            detail: format!("reference anchor build failed at {stage}: {detail}"),
+        },
+        // Defence in depth: no other arm reaches here from
+        // `anchored_reference_block`, and the leaking variants above must never
+        // surface their `Display` on the read path — fail closed with a static
+        // message so no amount or gindex can cross the surface.
+        _ => DrainBalanceReadError::State {
+            detail: "reference anchoring failed unexpectedly".to_string(),
         },
     }
 }
@@ -129,10 +144,15 @@ where
     ///
     /// Returns the aggregate scalar only — [`drain_balance`] drops every
     /// reward-sequence coordinate (the F-D1 trust boundary), so no
-    /// decomposition crosses this surface. No seal (non-staker, or nothing
-    /// scanned yet) is an honest `0`, never a fabricated one over a failed read;
-    /// the pscan load runs first so a fresh wallet reports `0 drainable` rather
-    /// than a spurious "syncing" against an empty tree.
+    /// decomposition crosses this surface. "Spendable" is mature ∧
+    /// **unreserved**: a funding output a live bond post / claim / drain already
+    /// commits (the sealed `reserved_gindexes` union) is not drainable, so it is
+    /// netted out — the same "spendable = unreserved mature" definition the bond
+    /// sweep uses, and the set a real drain's selection excludes. No seal
+    /// (non-staker, or nothing scanned yet) is an honest `0`, never a fabricated
+    /// one over a failed read; the pscan load runs first so a fresh wallet
+    /// reports `0 drainable` rather than a spurious "syncing" against an empty
+    /// tree.
     ///
     /// # Errors
     ///
@@ -159,14 +179,28 @@ where
         // zero, short-circuited before anchoring (a fresh wallet has no tree to
         // anchor and no balance to report — a syncing placeholder here would be
         // a lie).
-        let Some(pscan_state) = load_pscan_state_for_engine(self_arc).await.map_err(|e| {
-            DrainBalanceReadError::State {
+        let Some(pscan_state) = load_pscan_state_for_engine(self_arc.clone())
+            .await
+            .map_err(|e| DrainBalanceReadError::State {
                 detail: e.to_string(),
-            }
-        })?
+            })?
         else {
             return Ok(AtomicUnits::from_raw(0));
         };
+
+        // In-flight reservations: a funding output a live bond post / claim /
+        // drain already commits (its gindex in the sealed persist-before-dispatch
+        // `reserved_gindexes` union) is not drainable. Netting it out keeps this
+        // read consistent with the bond sweep's "spendable = unreserved mature"
+        // definition and with the drain selection that excludes the same set. No
+        // pending seal ⇒ nothing reserved.
+        let reserved = load_pending_posts_for_engine(self_arc)
+            .await
+            .map_err(|e| DrainBalanceReadError::State {
+                detail: e.to_string(),
+            })?
+            .map(|block| block.reserved_gindexes())
+            .unwrap_or_default();
 
         // Anchor the canonical send-path reference (reorg-safe, resync-loud);
         // only the transient arm becomes "syncing".
@@ -175,13 +209,11 @@ where
             .map_err(anchor_err_to_read_err)?;
         let reference_height = BlockHeight::from_raw(reference.height.0);
 
-        // Aggregate spendable scalar at the reference — lineage-blind by
-        // construction.
-        let balance =
-            drain_balance(pscan_state.funding_outputs(), reference_height).map_err(|e| {
-                DrainBalanceReadError::State {
-                    detail: e.to_string(),
-                }
+        // Aggregate the mature, unreserved scalar at the reference —
+        // lineage-blind by construction.
+        let balance = drain_balance(pscan_state.funding_outputs(), reference_height, &reserved)
+            .map_err(|e| DrainBalanceReadError::State {
+                detail: e.to_string(),
             })?;
         Ok(balance.spendable)
     }
@@ -224,6 +256,36 @@ mod tests {
         assert!(
             matches!(mapped, DrainBalanceReadError::State { .. }),
             "Build must map to State, got {mapped:?}"
+        );
+    }
+
+    #[test]
+    fn unexpected_anchor_error_never_leaks_an_amount_or_gindex() {
+        // These arms are unreachable from `anchored_reference_block` today, but
+        // if one ever reaches the mapper its `Display` (which renders amounts /
+        // gindexes) must NOT surface on the read path — the taxonomy promises no
+        // amount or gindex crosses it. Structural firewall, not reachability
+        // luck: assert a State arm with a static, value-free detail.
+        let mapped = anchor_err_to_read_err(BondAssemblyError::InsufficientFunding {
+            available: 4_242_424,
+            required: 9_999_999,
+        });
+        let DrainBalanceReadError::State { detail } = mapped else {
+            panic!("an amount-bearing arm must map to State, got {mapped:?}");
+        };
+        assert!(
+            !detail.contains("4242424") && !detail.contains("9999999"),
+            "amount leaked onto the read surface: {detail}"
+        );
+
+        let mapped =
+            anchor_err_to_read_err(BondAssemblyError::OutputNotYetDrained { gindex: 8_675_309 });
+        let DrainBalanceReadError::State { detail } = mapped else {
+            panic!("a gindex-bearing arm must map to State, got {mapped:?}");
+        };
+        assert!(
+            !detail.contains("8675309"),
+            "gindex leaked onto the read surface: {detail}"
         );
     }
 

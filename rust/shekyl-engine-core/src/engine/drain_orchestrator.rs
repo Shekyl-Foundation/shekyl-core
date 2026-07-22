@@ -55,6 +55,8 @@
 //! lands in `shekyl-gui-wallet`; it is **not** part of this PR. F-D2 is not
 //! recorded as landed until that flow is built.
 
+use std::collections::BTreeSet;
+
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_types::{BlockHeight, GlobalOutputIndex};
 use shekyl_units::AtomicUnits;
@@ -209,20 +211,29 @@ fn project_drain_operands(
 /// F-D2 core-side surface: the aggregate spendable `P` balance at a reference
 /// height. Exposes only the scalar — no decomposition reaches the caller.
 ///
-/// A balance read needs only the aggregate, so it sums the mature amounts
+/// "Spendable" is **mature ∧ unreserved** — the codebase's standing definition
+/// of a persona's usable `P` funding (`bond_assembly`'s sweep sums the
+/// *unreserved* mature records, and `InsufficientFunding.available` is their
+/// sum). `reserved` is the union of gindexes already committed to in-flight
+/// bond posts / claims / drains (`PendingPostBlock::reserved_gindexes`); an
+/// output a live tx holds cannot also be drained, so counting it would
+/// over-report "drainable". A gindex is a public curve-tree leaf position, so
+/// the filter stays lineage-blind — never a reward-sequence coordinate.
+///
+/// A balance read needs only the aggregate, so it sums the eligible amounts
 /// directly rather than routing through [`project_drain_operands`], which
 /// materialises the stripped candidate vector the *select* stage consumes — a
 /// heap allocation a poll-frequency query has no use for. It observes the same
-/// carve: only `amount`, gated by the shared [`is_mature`] predicate, never a
-/// reward-sequence coordinate.
+/// carve: only `amount`, gated by the shared [`is_mature`] predicate.
 pub fn drain_balance(
     records: &[PFundingOutputRecord],
     reference_height: BlockHeight,
+    reserved: &BTreeSet<GlobalOutputIndex>,
 ) -> Result<DrainBalance, DrainError> {
     let spendable = AtomicUnits::checked_sum(
         records
             .iter()
-            .filter(|r| is_mature(r, reference_height))
+            .filter(|r| is_mature(r, reference_height) && !reserved.contains(&r.gindex))
             .map(|r| r.amount),
     )
     .ok_or(DrainError::AmountOverflow)?;
@@ -281,10 +292,26 @@ mod tests {
         immature.spendable_height = BlockHeight::from_raw(REF + 1);
         let records = [mature(1, 40), mature(2, 60), immature];
 
-        let balance = drain_balance(&records, BlockHeight::from_raw(REF)).expect("projects");
+        let balance = drain_balance(&records, BlockHeight::from_raw(REF), &BTreeSet::new())
+            .expect("projects");
 
         // 40 + 60; the immature million is excluded from the spendable scalar.
         assert_eq!(balance.spendable, AtomicUnits::from_raw(100));
+    }
+
+    #[test]
+    fn drain_balance_excludes_reserved_outputs() {
+        // gindex 2 is committed to an in-flight bond post / claim / drain, so it
+        // is not drainable — it must not count toward the spendable scalar even
+        // though it is mature ("spendable = unreserved mature").
+        let records = [mature(1, 40), mature(2, 60), mature(3, 5)];
+        let reserved = BTreeSet::from([GlobalOutputIndex::from_raw(2)]);
+
+        let balance =
+            drain_balance(&records, BlockHeight::from_raw(REF), &reserved).expect("projects");
+
+        // 40 + 5; the reserved 60 is excluded.
+        assert_eq!(balance.spendable, AtomicUnits::from_raw(45));
     }
 
     #[test]

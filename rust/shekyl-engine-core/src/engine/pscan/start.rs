@@ -450,6 +450,29 @@ where
     }
 }
 
+/// Load the sealed [`PendingPostBlock`] off the engine arc under a brief read
+/// lock — the read-only analog of [`load_pscan_state_for_engine`] for the
+/// `.wallet.pending` seal, reusing the same file-backed store
+/// ([`WalletFilePendingSealStore`]) and guard discipline. `None` when no
+/// pending seal exists (a wallet with no in-flight posts); the caller reads
+/// that as "nothing reserved". Fail-closed on corrupt / version mismatch — a
+/// balance read must not invent an empty reservation set over a bad seal.
+#[allow(clippy::type_complexity)]
+pub(crate) async fn load_pending_posts_for_engine<S, D, L, E, R, P>(
+    engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
+) -> Result<Option<PendingPostBlock>, WalletFilePendingStoreError>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
+{
+    WalletFilePendingSealStore { engine }.load().await
+}
+
 /// The production [`BondBroadcast`]: routes every dispatch through the
 /// [`BroadcastSubmitter::local`] pre-bound ① construction (which is itself
 /// the `for_posture` posture→submitter choke point) and its

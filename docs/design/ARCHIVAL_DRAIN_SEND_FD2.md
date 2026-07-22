@@ -54,7 +54,8 @@ hold** (Gate-6 §12.4 build notes, verified at source 2026-07-19):
    `PScanState`, anchors the canonical send-path reference via
    `bond_orchestrator::anchored_reference_block` (the same helper the
    drain path anchors through), and returns `drain_balance`'s aggregate
-   scalar. `Ok(0)` on no seal (non-staker). Its `DrainBalanceReadError`
+   scalar (mature ∧ unreserved — reserved gindexes netted out). `Ok(0)`
+   on no seal (non-staker). Its `DrainBalanceReadError`
    is two-armed — `Unanchorable` (transient; render "syncing", never a
    zero) vs. `State` (non-transient fault) — so the read never renders a
    misleading zero (rule 82; DS-PR-3 locked decision). The layer's
@@ -88,8 +89,10 @@ seal input (seat removed 2026-07-19; see the charter note above).
 ### 2.1 Core-side landed surface (the planner with no data source and no consumer)
 
 - `shekyl-engine-core/src/engine/drain_orchestrator.rs` — the F-D1 trust
-  boundary. `drain_balance(records, reference_height) -> DrainBalance`
-  (aggregate scalar only, `:218`); `plan_drain(request, records,
+  boundary. `drain_balance(records, reference_height, reserved) -> DrainBalance`
+  (aggregate scalar only, `:218`; "spendable" = mature ∧ **unreserved** — the
+  `reserved` gindex union is netted out, matching the bond sweep's spendable
+  definition); `plan_drain(request, records,
   reference_height) -> DrainPlan` (`:243`); `DrainPlan { amount, inputs:
   Vec<GlobalOutputIndex>, input_total, change }` (`:80`, Debug redacts
   `inputs`). Maturity = `spendable_height <= reference_height` (`:177`).

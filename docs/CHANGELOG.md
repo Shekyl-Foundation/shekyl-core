@@ -60,13 +60,19 @@
   `bond_orchestrator::anchored_reference_block` (the same helper the drain
   path anchors through — so the displayed drainable figure is measured at
   the block a spend proves against, never raw tip), and returns
-  `drain_balance`'s aggregate scalar. Non-stakers / unscanned wallets report
-  an honest `Ok(0)` (short-circuited before anchoring). The new
-  `DrainBalanceReadError` is two-armed by design (rule 82; DS-PR-3 locked
-  decision) — `Unanchorable` (transient; the UI renders "syncing", never a
-  zero) vs. `State` (non-transient fault) — so a balance read never renders
-  a misleading zero and never conflates "still syncing" with a real fault.
-  Aggregate-only by construction: no reward decomposition crosses the
+  `drain_balance`'s aggregate scalar. "Spendable" is **mature ∧ unreserved**:
+  a funding output a live bond post / claim / drain already commits (the
+  sealed `reserved_gindexes` union, read via `load_pending_posts_for_engine`)
+  is netted out — the same "spendable = unreserved mature" definition the bond
+  sweep uses, and the set a real drain's selection excludes. Non-stakers /
+  unscanned wallets report an honest `Ok(0)` (short-circuited before
+  anchoring). The new `DrainBalanceReadError` is two-armed by design (rule 82;
+  DS-PR-3 locked decision) — `Unanchorable` (transient; the UI renders
+  "syncing", never a zero) vs. `State` (non-transient fault) — so a balance
+  read never renders a misleading zero and never conflates "still syncing"
+  with a real fault; the anchor-error mapping fails closed with a static
+  message on any unexpected arm, so no amount or gindex crosses the read
+  surface. Aggregate-only by construction: no reward decomposition crosses the
   surface (F-D1 trust boundary). The GUI wiring (`EngineSession`/command/
   render) follows in DS-PR-3 PR-B (`shekyl-gui-wallet`).
 - **wallet (engine): F-D2 drain assembly landed — DS-PR-1
