@@ -22,7 +22,8 @@ OPENED 2026-07-06
 round 1 draft carrying the O-1..O-3 discharge arguments in its §3).
 `K_COVER` sealing was gated on the §14.4 partition run; that run is
 RATIFIED — PARTITION-PASS, no pins (2026-07-11, PR #291, WI-4 §14.4
-RATIFIED block) — and its verdict is one seal input of four, so
+RATIFIED block) *(⛔ that ratification is WITHDRAWN 2026-07-22 — WI-4
+§14.4 header banner; doubly moot here, since `K_COVER` is itself retired)* — and its verdict is one seal input of four, so
 sealing now gates on the three remaining inputs named in the §4
 UPDATE (2026-07-18).** Per
 `05-system-thinking.mdc` (specification first) and
