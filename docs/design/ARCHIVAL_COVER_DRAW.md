@@ -56,8 +56,12 @@
 > `P` stakes the floor and holds the residue as working capital — the same shape as any
 > wallet's change. Retire `cover_dial_span_atomic`, `COVER_TAIL_COUNT`,
 > `COVER_RAMP_END_COUNT`, `COVER_SPAN_CAP_ATOMIC` and the canonical standing-bond-count
-> requirement. `COVER_RUNWAY_FLOOR_ATOMIC` survives as the *sufficiency floor*, not as a
-> draw parameter.
+> requirement. ~~`COVER_RUNWAY_FLOOR_ATOMIC` survives as the *sufficiency floor*, not as a
+> draw parameter.~~ **Refined 2026-07-21 (feat/funding-cover-draw): no floor constant
+> survives.** The implemented draw is `cover ~ U(0, bond_floor)` = `U[1, COVER_RUNG_ATOMIC)`
+> — the rung is the *upper* bound (unprovability: funded lands strictly between rung
+> multiples), and there is no lower floor because working capital is user-supplied, not
+> guaranteed by the draw.
 >
 > **Open, for the same ruling — the wallet's recommended default.** A user-chosen amount
 > needs a recommendation in GUI/CLI, and the recommendation must not re-introduce the
@@ -238,7 +242,11 @@ draw overlaps it — DQ6).
 > pinned `C_min = 1 rung (750,000,000 atomic)` needs **no re-derivation** — it
 > dominates any realistic fee by orders of magnitude; the reserve constant lands
 > with a pinned dominance assert against `COVER_RUNWAY_FLOOR_ATOMIC` so the
-> dominance is checked, not assumed. Construction rules (typed `P`-space pool,
+> dominance is checked, not assumed. *(⚠️ Superseded 2026-07-21: there is no
+> guaranteed `C_min` floor now — the draw is `U(0, bond_floor)` and working
+> capital is user-supplied, so this dominance premise is voided; re-derive the
+> exit-fee reserve against user-supplied working capital. See the
+> `ARCHIVAL_BOND_CONSTRUCTION.md` exit-fee-reserve marker.)* Construction rules (typed `P`-space pool,
 > destitute escape via the Q11 claim form, no fee knob):
 > `ARCHIVAL_BOND_CONSTRUCTION.md` §7.3.
 
@@ -960,6 +968,11 @@ deferred with the scalar; if it doesn't clear cheaply, drop it and stay count-on
 
 ## 8. The `D(count)` response curve — spec
 
+> **⚠️ RETIRED (2026-07-21) — this entire section specs the deleted `span(C)` curve.** Read
+> it as pre-retirement history (see the head banner). Production draws
+> `cover ~ U(0, bond_floor)` = `U[1, COVER_RUNG_ATOMIC)`, pure entropy — no `count` read,
+> no `cover_dial_span_atomic`, no tail/ramp/cap constants, no on-chain input.
+
 The four frozen constraints (§7.9) pinned in **dependency order**, so each constrains the
 next rather than being implied by the curve's math: the **count read** is bedrock; the
 **saturation-knee cap** and the **`C_min` floor** define the envelope; the **smooth
@@ -1116,13 +1129,19 @@ span(C) = 0                                   for C ≤ 13
 (`--cover-dial`): `C=14 → 0.005 SKL` (gentle decay, no jump), `25 → 0.65`, `46 → 3.75`,
 `60 → 5.99`, `79 → 7.50` (cap). Golden vector pinned (`cover_dial_span_golden_vector`); tests
 assert monotone-and-capped and the second-difference sign (convex into the tail = decay, concave
-into the cap = no kink). **C4 landed:** `draw_cover_amount(count, c_min, rng)` +
+into the cap = no kink). ~~**C4 landed:** `draw_cover_amount(count, c_min, rng)` +
 `cover_dial_span_atomic` in `shekyl-standoff::cover` (`cover ~ U[C_min, C_min + span(C)]`
-via the shared `bounded_uniform`). The three implementation checks are its acceptance tests,
-not open decisions: **variable-span uniformity** (`bounded_uniform` is exact rejection for
+via the shared `bounded_uniform`)~~ — **⚠️ RETIRED 2026-07-21 (per the head banner): this
+signature and `cover_dial_span_atomic` no longer exist. The production draw is
+`draw_cover_amount(rng)`, uniform over `(0, bond_floor)` = `[1, COVER_RUNG_ATOMIC)` — pure
+entropy, no on-chain input, so the funded amount is strictly between rung multiples and a
+bond post can never be *proven* to be one.** The historical acceptance-test text below
+described the retired curve:
+**variable-span uniformity** (`bounded_uniform` is exact rejection for
 any bound, golden-vectored at tail/mid/cap spans), **tail smoothness** (`span = 0 ⇒
 cover = C_min` exactly, the continuous `span→0` limit; the first non-zero span ~5.1M atomic
-is no near-constant), and **`C_min` single-sourced** (`COVER_RUNWAY_FLOOR_ATOMIC`, provisional
-`C_min = 1 rung`, pinned; the cover golden vector is frozen against it). The
+is no near-constant), and **`C_min` single-sourced** (~~`COVER_RUNWAY_FLOOR_ATOMIC`, provisional
+`C_min = 1 rung`~~ — **there is no `C_min` floor now: the draw is `U(0, bond_floor)` and
+working capital is user-supplied; only the upper bound, one rung, is load-bearing**). The
 `shekyl-staking-sim` copy is independently golden-vectored to the same values, so the two
 can't silently diverge.

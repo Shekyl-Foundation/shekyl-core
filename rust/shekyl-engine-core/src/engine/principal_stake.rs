@@ -17,17 +17,18 @@
 //! way `stake_in` addresses `P` is recovered by `P`'s own dual-scan (the
 //! `#[cfg(test)]` end-test below).
 //!
-//! **Amount-axis cover is applied here** (`ARCHIVAL_COVER_DRAW.md` §8): the
-//! transfer carries `stake + cover`, never a bare `bond_floor`. An earlier
-//! revision of this note called the cover structuring "the funding flow's
-//! concern, not this transfer's mechanics" and no funding-flow layer ever
-//! applied it — so every `stake_in` shipped a clean `bond_floor`-shaped amount,
-//! the exact fingerprint the mechanism exists to remove. It is this transfer's
-//! mechanics, because this is the transaction whose amount is observed.
+//! **Amount-axis cover is applied here** (`ARCHIVAL_COVER_DRAW.md`): the
+//! transfer carries `stake + cover` with `cover ~ U(0, bond_floor)`, so the
+//! funded amount lands strictly between rung multiples and a bond post can
+//! never be *proven* to be one. An earlier revision of this note called the
+//! cover structuring "the funding flow's concern, not this transfer's
+//! mechanics" and no funding-flow layer ever applied it — so every `stake_in`
+//! shipped a clean `bond_floor`-shaped amount. It is this transfer's mechanics,
+//! because this is the transaction whose amount is observed.
 
 use rand_core::RngCore as _;
 use shekyl_address::AddressError;
-use shekyl_standoff::{draw_cover_amount, COVER_RUNWAY_FLOOR_ATOMIC};
+use shekyl_standoff::{draw_cover_amount, COVER_RUNG_ATOMIC};
 use shekyl_units::AtomicUnits;
 
 use super::fee_estimator::FeePriority;
@@ -39,16 +40,15 @@ use super::traits::{
 };
 use super::{EngineSignerKind, SendError};
 
-/// The `count` fed to `draw_cover_amount` until a canonical global
-/// standing-bond-count read exists (`ARCHIVAL_COVER_DRAW.md` §8).
-///
-/// Named rather than inlined so the gap is greppable and can never be mistaken
-/// for a real population read. `span(0) == 0`, so the draw is degenerate today
-/// and the amount axis carries no entropy — the open genesis distinguisher.
-/// Every wallet must pin the SAME value: a per-wallet `C` breaks the
-/// cross-wallet uniformity the draw depends on, which is a worse leak than the
-/// degenerate span.
-const CANONICAL_STANDING_BOND_COUNT_UNAVAILABLE: u64 = 0;
+// `shekyl-standoff` mirrors the bond rung locally (it has no retention
+// dependency, being the leaf draw crate). This crate depends on both, so it is
+// the one place that can assert the mirror has not drifted — a divergence would
+// silently move the cover's upper bound off `bond_floor`, so the funded amount
+// could land on a rung boundary and the unprovability property would break.
+const _: () = assert!(
+    COVER_RUNG_ATOMIC == shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC,
+    "cover rung mirror drifted from ARCHIVAL_BOND_FLOOR_ATOMIC"
+);
 
 /// Why [`Engine::stake_in`](super::Engine::stake_in) could not build the funding
 /// transfer.
@@ -118,7 +118,8 @@ where
     ///
     /// The cover is **system-determined, never a caller parameter** — a
     /// caller-chosen cover is a cross-wallet uniformity break, which is itself
-    /// the leak. See `stake_in_request` for the draw and its open limitation.
+    /// the leak. The user may add working capital *on top* of `amount`; the
+    /// cover draw itself takes no on-chain input. See `stake_in_request`.
     ///
     /// **Carried-over open concern (GF-7, not resolved here):** `build_pending_tx`
     /// appends the principal's own change output (subaddress 0), co-present with
@@ -164,45 +165,35 @@ where
         // opt-out (`cover == 0`, the disclosed stake-only path) belongs behind
         // an advanced setting with its privacy warning, never on this seam.
         //
-        // **The draw IS the defense.** GENESIS §2.0 / `PRINCIPAL_STAKE_LIFECYCLE.md`
-        // §3.1: "the cover defense reduces entirely to the entropy of the cover
-        // draw". So this calls `draw_cover_amount` — never a hardcoded amount.
-        // A constant offset is exactly as self-tagging as a bare `bond_floor`:
-        // it leaves the funding transfer distinguishable from ordinary traffic,
-        // which is the only property that matters. The transfer is protected
-        // iff it is INDISTINGUISHABLE from a normal transfer; it then borrows
-        // the entire ambient transaction graph as its anonymity set for free,
-        // but only for as long as it carries nothing that tags it out.
+        // Amount-axis cover (`ARCHIVAL_COVER_DRAW.md`): the principal sends
+        // `stake + cover`; `P` holds the cover as working capital, flowing out
+        // as a `P`-change output.
         //
-        // **`count = 0` is a deliberate uniform pin, and it is the open gap.**
-        // `count` is the GLOBAL standing-bond count and there is no source for
-        // it: `ARCHIVAL_COVER_DRAW.md` §8 records that no live-maintained
-        // standing-bond-count exists ("the earlier 'the source already exists
-        // in `EpochCloseInputs.bonds`' claim was wrong") and that a canonical
-        // epoch-boundary read must be specified first. Substituting this
-        // wallet's own bond count would be WORSE than pinning: §8's
-        // load-bearing constraint is cross-wallet uniformity — two wallets
-        // drawing over different `C` draw from different distributions, and
-        // that divergence *is* the leak the mechanism exists to close.
+        // NOT the primary defense — amounts are CT-hidden, so attribution is
+        // already denied on chain (WI-4 §18.9). This is defense in depth: with
+        // `cover ~ U(0, bond_floor)` the funded amount lands STRICTLY between
+        // rung multiples, so it is never a clean bond floor and a bond post can
+        // never be *proven* to be one (`shekyl_standoff::draw_cover_amount`).
         //
-        // Consequence, stated plainly rather than buried: `span(0) == 0`, so
-        // the draw currently yields `C_min` exactly and the amount axis carries
-        // ZERO entropy. The call shape is correct — entropy flows the instant a
-        // canonical `C` crosses `COVER_TAIL_COUNT` — but the amount
-        // distinguisher is NOT closed at genesis. Tracked as a genesis blocker.
-        // Entropy preflight, mirroring `stake_engine`'s S4/S5 pattern: probe the
-        // source so the predictable failure returns a typed error instead of
-        // reaching the draw's panic backstop.
+        // System-determined, never a caller parameter — a caller-chosen cover
+        // forks the distribution across wallets, which is itself the leak. The
+        // draw takes NO on-chain input (pure entropy against a fixed constant):
+        // anything an observer could read would be the same predictor the
+        // wallet uses. The user may add working capital ON TOP; that is a
+        // separate addition and is why the draw needs no runway floor of its
+        // own (see `draw_cover_amount`'s two-role doc).
+        //
+        // Entropy preflight, mirroring `stake_engine`'s Round-3 pattern: probe
+        // the source so a dead RNG returns a typed error instead of reaching the
+        // draw's panic backstop. `stake_in` is user-initiated (rule 82); the
+        // panic stays the backstop for a source dying between probe and draw,
+        // which must never yield a silent low-entropy cover.
         let mut probe = [0u8; 8];
         rand_core::OsRng
             .try_fill_bytes(&mut probe)
             .map_err(StakeInError::RngSourceFailed)?;
         let mut rng = OsRngGapAdapter;
-        let cover = AtomicUnits::from_raw(draw_cover_amount(
-            CANONICAL_STANDING_BOND_COUNT_UNAVAILABLE,
-            COVER_RUNWAY_FLOOR_ATOMIC,
-            &mut rng,
-        ));
+        let cover = AtomicUnits::from_raw(draw_cover_amount(&mut rng));
         let funded = amount
             .checked_add(cover)
             .ok_or(StakeInError::CoverOverflow {
@@ -239,7 +230,7 @@ mod tests {
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_engine_file::SafetyOverrides;
     use shekyl_rpc_transport::SimpleRequestRpc;
-    use shekyl_standoff::COVER_RUNWAY_FLOOR_ATOMIC;
+    use shekyl_standoff::COVER_RUNG_ATOMIC;
     use shekyl_types::PSlot;
     use shekyl_units::AtomicUnits;
     use tempfile::TempDir;
@@ -365,20 +356,18 @@ mod tests {
             .expect("stake_in_request resolves the active persona");
 
         assert_eq!(request.recipients.len(), 1, "single-output funding (GF-4b)");
-        // Assert the INVARIANT, not the current degenerate evaluation: the draw
-        // is `C_min + U[0, span]`, so `funded >= stake + C_min` always, and
-        // `span == 0` only while no canonical standing-bond count exists. An
-        // exact-equality assert would pass today and go flaky the moment cover
-        // becomes genuinely random — pinning an evaluation, not a property.
+        // Assert the INVARIANT the draw guarantees, never an exact value:
+        // `funded = stake + cover` with `cover ~ U(0, RUNG)`, so
+        // `stake < funded < stake + RUNG` always. An exact assert would be
+        // flaky against a genuinely random cover for correct behaviour.
         let funded = request.recipients[0].amount_atomic_units;
         assert!(
-            funded >= AtomicUnits::from_raw(50_000 + COVER_RUNWAY_FLOOR_ATOMIC),
-            "funded {funded:?} < stake + runway floor: cover must be at least C_min \
-             (ARCHIVAL_COVER_DRAW.md amount axis)"
+            funded > amount,
+            "funded {funded:?} did not exceed the stake — cover must be strictly positive"
         );
-        assert_ne!(
-            funded, amount,
-            "a verbatim stake amount is the amount fingerprint the cover exists to remove"
+        assert!(
+            funded < AtomicUnits::from_raw(50_000 + COVER_RUNG_ATOMIC),
+            "funded {funded:?} reached stake + a full rung — cover must be sub-rung"
         );
 
         let projected = engine

@@ -9569,45 +9569,33 @@ one place to confirm each item's relationship to the wallet stack.
   `bond_assembly` funds from `P`'s own outputs). Both are floors, not distributions.
   **The canonical standing-bond-count aggregate is NOT to be built** — that blocker was
   downstream of the curve being real. **Do not action the historical text below.**
-- **⛔ GENESIS BLOCKER (restated 2026-07-21) — the funding-transfer amount is still a
-  distinguisher, and the fix is no longer "build the span".** `stake_in` sends
-  `stake + C_min` with `C` pinned at `CANONICAL_STANDING_BOND_COUNT_UNAVAILABLE`, so the
-  amount is a **fixed offset** — self-tagging exactly as a bare `bond_floor` was. Nothing
-  about that is closed: the earlier "the leak it closes (amount fingerprint) is closed"
-  clause was written under the retired framing and is **withdrawn**. What the current code
-  buys is narrower and worth stating exactly: the amount no longer *equals* a public
-  consensus constant. It is still computable, and computable is the tag.
-  **The security property:** the transfer is protected iff it is INDISTINGUISHABLE from an
-  ordinary transfer, after which it inherits the whole ambient transaction graph for free.
-  Cover is not provisioned, only forfeited.
-  **Resolution direction (post-retirement, needs a design round):** a **user-chosen**
-  amount, with a GUI/CLI recommended default that **samples the empirical transaction
-  distribution** rather than computing a statistic of it — copy a real observed on-chain
-  amount, never fit-and-draw, since a fitted draw puts every wallet in the same region and
-  rebuilds `span(C)` with extra steps. The test is **typicality, not unpredictability**
-  (`ARCHIVAL_FIREWALL_GATE6.md` method note 7). Assert mechanically that the emitted amount
-  equals some real on-chain amount, not a derived one.
-  **Audited distinguishers:** address structure (closed — ordinary `ShekylAddress`, no
-  tag); cover output form (closed by design — no special field, an ordinary confidential
-  `tagged_key` output, the same anti-fingerprint reason DQ1 rejects `C_stake`);
-  input/output shape (closed — single structured output, the GF4b-2 criterion); timing
-  (the `U[0,600]` jitter now applies to every post); **amount (OPEN — this item)**.
-  Per `00-mission` priority-2, privacy is not tradeable for launch schedule.
-  *Target: V3.0 pre-genesis, blocking.*
-- ~~**GF-7 entry-seam inversion: the ENTRY half is persisted but nothing schedules it**~~
-  **CLOSED 2026-07-21 — there was never a second event to schedule.** An inversion needs
-  two events an observer can ORDER; at entry exactly one is attributable — the bond post,
-  which names `P` in cleartext. The funding transfer is on chain but is an ordinary FCMP++
-  transfer that does not name `P` with a CT-hidden source, so it cannot anchor anything for
-  an observer the posture admits. "Announce" / "funding-entry event" were **pipeline
-  stages of the single post**; a second observable exists only for a watcher of the
-  wallet→daemon hop, which the own-node posture excludes by construction.
-  `entry_offset_blocks` is deleted from persisted state (`PENDING_POST_VERSION` 5) and
-  §10.12 pass-4 (d)'s enumeration is closed at "one event". The single `U[0,600]` jitter on
-  the bond post is the mechanism in full. **Residual, its own slice:** `draw_entry_gap`
-  still returns `bond_first`, inert in production (`FORCED_CAUSAL_ORDER`) but bound to a
-  **published golden vector** + conformance grader — retiring it re-freezes a
-  cross-implementation artifact and is a decision, not a cleanup. See method note 8.
+- ~~**⛔ GENESIS BLOCKER — the funding-transfer amount is still a distinguisher**~~
+  **RESOLVED 2026-07-21 (feat/funding-cover-draw) — not deferred.** The fix needed no
+  design round and no population aggregate. `stake_in` now draws
+  `cover ~ U(0, bond_floor)` = `U[1, COVER_RUNG_ATOMIC)` — strictly between 0 and one rung,
+  **pure entropy, no on-chain input**. A bond's staked floor is always an exact rung
+  multiple `k·RUNG`; adding a sub-rung cover puts the funded amount strictly *between*
+  multiples (`funded(k) ∈ (k·RUNG, (k+1)·RUNG)`), so it is never a clean bond floor and a
+  bond post — already unlinkable — can never be *proven* to be one. The only parameter is
+  the bond rung, a pinned consensus constant; no `C`, no curve, no aggregate.
+  **What the cover is for (grounded at source, `ARCHIVAL_COVER_DRAW.md` §2.2/§8.3 — I had
+  this wrong twice):** two roles. (1) *Unprovability* — the above; the role the draw exists
+  for, and defense in depth on top of CT-hidden amounts. (2) *Anti-re-link runway* — `P`
+  pays fees from cover, and if it depletes it must re-fund from the principal, a **second**
+  principal→`P` link (the one edge the firewall protects). But (2) does **not** bind the
+  draw: working capital is **supplied by the user on top**, so even a near-zero cover
+  survives. That is why the draw needs no runway floor and `0 < cover` is the only lower
+  bound (0 is the reserved DQ6 opt-out).
+  **No on-chain input, hard invariant:** anything an observer could read on chain (a
+  live-bond count, a fee snapshot, a balance) is the same predictor the wallet would use —
+  handing it to the attacker. This is why the count-keyed `span(C)` was retired, and it is
+  method note 7.
+  **Correction to an earlier resolution of this item:** a prior revision pinned
+  `COVER_MIN_ATOMIC = RUNG/100` as a "postability floor." That was wrong — it cut the
+  working-capital runway 100× on a tiling argument, blind to what `C_min` did (see the
+  `dont-change-what-you-dont-understand` lesson). There is no floor constant now; the
+  draw is `U(0, bond_floor)` and postability is the user's funding responsibility, surfaced
+  loud (`InsufficientFunding`) if underfunded.
 - **Wallet UX: thin-cover exposure disclosure at bond/claim time (registered 2026-07-19,
   PR #337 review thread).** On the user's own acts the design is warn-don't-prohibit —
   ~~`K_COVER` gates only the system's reward lever (bonding stays legal during gated epochs,
