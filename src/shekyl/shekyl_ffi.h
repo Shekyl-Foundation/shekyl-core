@@ -1813,6 +1813,38 @@ uint8_t shekyl_verify_ct_balance(
     size_t num_out_masks,
     uint64_t txn_fee);
 
+// Output-point validity (GENESIS_TX_WIRE_FORMAT.md §2.3, output-point rule):
+// admission gates for output public keys and outPk commitment masks. Every
+// point must be a canonical, prime-order (torsion-free) encoding — the same
+// strictness the FCMP++ leaf builder applies, so nothing admitted here is
+// silently skipped from the curve tree. Replaces crypto::check_key and the
+// native check_commitment_mask_valid fingerprint block on the admission path.
+#define SHEKYL_OUTPUT_POINTS_OK                0
+#define SHEKYL_OUTPUT_POINTS_ERR_NULL_PTR      1
+/// Output key non-canonical / torsioned / identity, or count*32 overflow.
+#define SHEKYL_OUTPUT_POINTS_ERR_INVALID_KEY   2
+/// Mask non-canonical / torsioned, or count*32 overflow.
+#define SHEKYL_OUTPUT_POINTS_ERR_INVALID_MASK  3
+/// Mask in a trivial amount-leaking form: identity, G, or coinbase
+/// zeroCommit(amount).
+#define SHEKYL_OUTPUT_POINTS_ERR_TRIVIAL_MASK  4
+
+/// Flattened `num_keys x 32` output public keys; `keys_ptr` may be null when
+/// `num_keys` is zero.
+uint8_t shekyl_check_output_keys(
+    const uint8_t* keys_ptr,
+    size_t num_keys);
+
+/// Flattened `num_masks x 32` outPk masks. For a coinbase tx pass the
+/// cleartext vout amounts (mask i is checked against zeroCommit(amounts[i])
+/// for i < num_coinbase_amounts); for non-coinbase pass (NULL, 0). Either
+/// pointer may be null when its count is zero.
+uint8_t shekyl_check_commitment_masks(
+    const uint8_t* masks_ptr,
+    size_t num_masks,
+    const uint64_t* coinbase_amounts_ptr,
+    size_t num_coinbase_amounts);
+
 // JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++).
 // Codes 1 (NULL_PTR), 19 (LEN_OVERFLOW), and 23 (BOND_SPEND_PK_COUPLING) are shared
 // vin-marshaling guards from the common vin marshaler, so BOTH bond-post entry points
