@@ -16,9 +16,9 @@
 //!
 //! Spend-time invariant only: the cover **draw** ([`crate::cover`]) is never
 //! consulted or narrowed by it (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4). Kept in
-//! this crate — the single source for `P`-lane wallet-side amount floors,
-//! beside [`COVER_RUNG_ATOMIC`] — so the dominance relation between
-//! the two floors is asserted at the one site that sees both.
+//! this crate — the single source for `P`-lane wallet-side amount constants,
+//! beside [`COVER_RUNG_ATOMIC`] — so the sizing relation between the reserve
+//! and the cover draw's bound is asserted at the one site that sees both.
 
 use crate::cover::COVER_RUNG_ATOMIC;
 
@@ -41,20 +41,33 @@ use crate::cover::COVER_RUNG_ATOMIC;
 ///   floor.
 ///
 /// **Bounds for safe adjustment** (rule 75). Must satisfy
-/// `0 < EXIT_FEE_RESERVE_ATOMIC < COVER_RUNG_ATOMIC` (asserted below):
-/// the smallest cover draw is `C_min = 0.75 SKL`, so a freshly-funded persona's
-/// pool always clears the reserve with margin — the reserve never pathologically
-/// blocks a first drain. **Raising** it strands more value on live personas
-/// (recoverable: it releases at retirement). **Lowering** it risks an
-/// underfunded terminal `Unbond` under a fee spike — mitigated, not fatal, by
-/// the §7.2 destitute-corner escape (a zero-fee-input claim funds the `Unbond`
-/// from the claimed output when the pool is below the reserve).
+/// `0 < EXIT_FEE_RESERVE_ATOMIC < COVER_RUNG_ATOMIC` (asserted below).
+/// Re-grounded against the tiling cover model (`ARCHIVAL_COVER_DRAW.md`,
+/// 2026-07-21, which retired the runway floor): the protocol **always** adds a
+/// cover draw to a derived bond amount — uniform over `[1, COVER_RUNG_ATOMIC)`,
+/// spreading every funded bond across a rung so no tx is identifiable as a
+/// bond by amount — but the draw has an exclusive upper bound and **no floor**,
+/// so the old absolute "a fresh pool always clears the reserve" guarantee is
+/// gone. The bound is now a **corner-fraction bound**: the reserve is a small
+/// fraction (`1/15`) of the draw's range, so the protocol-drawn cover alone
+/// clears the reserve with probability `1 − reserve/RUNG ≈ 93.3%` (an optional
+/// user top-up at funding time shrinks the corner further), and the
+/// below-reserve corner (until earnings accrue or a top-up) strands nothing —
+/// a cover-only pool has no earnings worth draining, the reserve releases at
+/// retirement, and a terminal `Unbond` over a destitute pool is funded by the
+/// §7.2 zero-fee-input claim escape. **Raising** it strands more value on live
+/// personas (recoverable: it releases at retirement) and grows the
+/// blocked-fresh-drain fraction proportionally (`reserve/RUNG`). **Lowering**
+/// it risks an underfunded terminal `Unbond` under a fee spike — mitigated,
+/// not fatal, by the same §7.2 destitute-corner escape.
 pub const EXIT_FEE_RESERVE_ATOMIC: u64 = 50_000_000;
 
-/// Pinned dominance assert (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.2: "Lands with a
-/// pinned dominance assert against `COVER_RUNG_ATOMIC`"): the reserve is
-/// a small carve-out of the runway floor, never the other way round. If a future
-/// re-sizing inverts the relation this fails to compile.
+/// Pinned sizing assert (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.2's dominance
+/// assert, re-grounded after `ARCHIVAL_COVER_DRAW.md` retired the runway
+/// floor): the reserve stays strictly below one cover rung — the tiling draw's
+/// exclusive upper bound — so a fresh cover draw clears the reserve with high
+/// probability, and the fully-inverted sizing (reserve ≥ rung: **every** fresh
+/// pool below the reserve, every fresh live drain blocked) cannot compile.
 const _: () = assert!(EXIT_FEE_RESERVE_ATOMIC < COVER_RUNG_ATOMIC);
 
 /// The reserve is nonzero (a zero reserve would silently disable the spend-time

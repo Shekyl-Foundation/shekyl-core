@@ -612,7 +612,9 @@ composite arm's final leg, all on `shekyl-core`:
 - **T-DS-4 exit-reserve disposition (the one sentence owed at DS-4).**
   `EXIT_FEE_RESERVE_ATOMIC` lands as a **real constant**
   (`shekyl-standoff/src/reserve.rs`, `50_000_000` atomic = 0.05 SKL,
-  `0 < reserve < COVER_RUNWAY_FLOOR_ATOMIC` asserted at compile time) and
+  `0 < reserve < COVER_RUNG_ATOMIC` asserted at compile time — re-grounded
+  post-#350 as a corner-fraction bound vs the tiling cover draw,
+  `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2) and
   is **enforced in the orchestrator**: a **partial** drain from a **live**
   persona is a mid-life constructor and may not spend the pool below the
   reserve (refused with `DrainOrchestrationError::ReserveBreached`); a

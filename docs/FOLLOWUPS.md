@@ -8628,8 +8628,10 @@ one place to confirm each item's relationship to the wallet stack.
   (a) the **typed `P`-space pool** selector (cover + claim outputs; principal
   outputs unrepresentable by type) shared by every `P`-lane constructor;
   (b) **`EXIT_FEE_RESERVE_ATOMIC`** + the spend-floor invariant in every
-  mid-life constructor, with a pinned dominance assert against
-  `COVER_RUNWAY_FLOOR_ATOMIC`; (c) the **`ClaimFeeInputsRequired`
+  mid-life constructor, with a pinned sizing assert against
+  `COVER_RUNG_ATOMIC` (corner-fraction bound; the runway floor is retired —
+  `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2, re-grounded 2026-07-22); (c) the
+  **`ClaimFeeInputsRequired`
   conditional** (`backing_set.rs`) — destitute branch admits the Q11
   zero-fee-input claim, with a test walking the two-step destitute exit
   (mint-funded claim → `Unbond` funded from the claimed output);

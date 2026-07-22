@@ -64,7 +64,8 @@
     multi-step method (composition discipline §4).
   - **Exit-fee reserve (DS-4 / T-DS-4).** `EXIT_FEE_RESERVE_ATOMIC` lands as a
     real constant (`shekyl-standoff::reserve`, `50_000_000` atomic = 0.05 SKL,
-    `0 < reserve < COVER_RUNWAY_FLOOR_ATOMIC` compile-time asserted) and is
+    `0 < reserve < COVER_RUNG_ATOMIC` compile-time asserted — re-grounded
+    post-#350 as a corner-fraction bound vs the tiling cover draw) and is
     **enforced** in the orchestrator: a **partial** drain from a **live**
     persona may not spend the pool below the reserve
     (`DrainOrchestrationError::ReserveBreached`); a **retired** persona sweeps
