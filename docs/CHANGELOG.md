@@ -64,7 +64,11 @@
   a funding output a live bond post / claim / drain already commits (the
   sealed `reserved_gindexes` union, read via `load_pending_posts_for_engine`)
   is netted out — the same "spendable = unreserved mature" definition the bond
-  sweep uses, and the set a real drain's selection excludes. Non-stakers /
+  sweep uses. The F-D1 planner (`plan_drain` / `project_drain_operands`) applies
+  the identical `reserved` carve, so the read total, the drain plan's
+  affordability check, and the selectable candidate set are one consistent net
+  set: the numbers reconcile, and the selector can never pick an output an
+  in-flight tx already holds (a double-spend of a committed input). Non-stakers /
   unscanned wallets report an honest `Ok(0)` (short-circuited before
   anchoring). The new `DrainBalanceReadError` is two-armed by design (rule 82;
   DS-PR-3 locked decision) — `Unanchorable` (transient; the UI renders

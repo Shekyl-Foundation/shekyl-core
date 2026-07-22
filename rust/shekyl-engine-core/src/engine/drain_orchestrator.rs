@@ -180,18 +180,30 @@ fn is_mature(record: &PFundingOutputRecord, reference_height: BlockHeight) -> bo
 }
 
 /// Project `P`'s persisted funding records into the drain operands: drop
-/// `{lineage, epoch, height}`, keep only the provable (mature) subset, and
-/// reduce to the aggregate scalar + the stripped candidate vector.
+/// `{lineage, epoch, height}`, keep only the provable (mature) **and
+/// unreserved** subset, and reduce to the aggregate scalar + the stripped
+/// candidate vector.
+///
+/// `reserved` is the gindex union already committed to in-flight bond posts /
+/// claims / drains (`PendingPostBlock::reserved_gindexes`). Excluding it here —
+/// the *same* carve [`drain_balance`] applies — keeps both operands consistent:
+/// the spendable scalar the amount stage checks affordability against, and the
+/// candidate set [`select_for_drain`] draws from, are one net set. That is what
+/// makes the totals reconcile (a plan can never be sized against funds a live tx
+/// already holds) and structurally bars the selector from choosing a reserved
+/// output — a double-spend of an in-flight input. A gindex is a public
+/// curve-tree leaf position, so the filter stays lineage-blind.
 ///
 /// This is the sole site that reads the funding record's stripped-away
 /// fields; the operands it returns carry none of them.
 fn project_drain_operands(
     records: &[PFundingOutputRecord],
     reference_height: BlockHeight,
+    reserved: &BTreeSet<GlobalOutputIndex>,
 ) -> Result<DrainOperands, DrainError> {
     let candidates: Vec<DrainCandidate> = records
         .iter()
-        .filter(|r| is_mature(r, reference_height))
+        .filter(|r| is_mature(r, reference_height) && !reserved.contains(&r.gindex))
         .map(|r| DrainCandidate {
             output_id: r.gindex,
             amount: r.amount,
@@ -243,9 +255,15 @@ pub fn drain_balance(
 /// Plan a drain of `target` atomic units out of `P`'s spendable funding
 /// outputs at `reference_height`.
 ///
-/// Runs the three F-D1 stages in order — project (this module) → amount
-/// ([`choose_drain_amount`], affordability against the aggregate scalar only)
-/// → select ([`select_for_drain`], lineage-blind over the stripped vector).
+/// Runs the three F-D1 stages in order — project (this module; mature ∧
+/// unreserved) → amount ([`choose_drain_amount`], affordability against the
+/// aggregate scalar only) → select ([`select_for_drain`], lineage-blind over the
+/// stripped vector). `reserved` (the in-flight gindex union) is excluded at the
+/// projection, so the spendable scalar, the affordability check, and the
+/// selectable candidates are one consistent net set — a drain can neither be
+/// planned against nor select an output an in-flight tx already holds, and its
+/// figure reconciles with the [`drain_balance`] read.
+///
 /// `target` is a single scalar (F-D2 core-side contract): the caller cannot
 /// hand in a reward decomposition, and the per-output reward vector never
 /// reaches the amount stage — so core code cannot *compute* a reward-shaped
@@ -255,8 +273,9 @@ pub fn plan_drain(
     records: &[PFundingOutputRecord],
     reference_height: BlockHeight,
     target: AtomicUnits,
+    reserved: &BTreeSet<GlobalOutputIndex>,
 ) -> Result<DrainPlan, DrainError> {
-    let operands = project_drain_operands(records, reference_height)?;
+    let operands = project_drain_operands(records, reference_height, reserved)?;
     let amount = choose_drain_amount(DrainRequest { target }, operands.balance.spendable)?;
     let selection = select_for_drain(&operands.candidates, amount, reference_height)?;
     let change = selection
@@ -322,6 +341,7 @@ mod tests {
             &records,
             BlockHeight::from_raw(REF),
             AtomicUnits::from_raw(90),
+            &BTreeSet::new(),
         )
         .expect("affordable and coverable");
 
@@ -339,6 +359,7 @@ mod tests {
             &records,
             BlockHeight::from_raw(REF),
             AtomicUnits::from_raw(0),
+            &BTreeSet::new(),
         );
         assert_eq!(err, Err(DrainError::EmptyRequest));
     }
@@ -354,7 +375,43 @@ mod tests {
             &records,
             BlockHeight::from_raw(REF),
             AtomicUnits::from_raw(101),
+            &BTreeSet::new(),
         );
         assert_eq!(err, Err(DrainError::Unaffordable));
+    }
+
+    #[test]
+    fn plan_drain_never_plans_against_or_selects_a_reserved_output() {
+        // The big output (gindex 2, 100) is committed to an in-flight tx. The
+        // plan must (a) size affordability against the unreserved total only —
+        // 30 + 30 = 60, so a target of 90 is Unaffordable — and (b) never select
+        // the reserved output. Both operands must be net, or the read total and
+        // the drainable total disagree and the selector could double-spend an
+        // in-flight input.
+        let records = [mature(1, 30), mature(2, 100), mature(3, 30)];
+        let reserved = BTreeSet::from([GlobalOutputIndex::from_raw(2)]);
+
+        // (a) affordability is against the net scalar (60), not the gross (160).
+        let err = plan_drain(
+            &records,
+            BlockHeight::from_raw(REF),
+            AtomicUnits::from_raw(90),
+            &reserved,
+        );
+        assert_eq!(err, Err(DrainError::Unaffordable));
+
+        // (b) an affordable target draws only from the unreserved candidates.
+        let plan = plan_drain(
+            &records,
+            BlockHeight::from_raw(REF),
+            AtomicUnits::from_raw(50),
+            &reserved,
+        )
+        .expect("50 <= 60 net spendable");
+        assert!(
+            !plan.inputs.contains(&GlobalOutputIndex::from_raw(2)),
+            "selector chose a reserved (in-flight) output: {:?}",
+            plan.inputs
+        );
     }
 }

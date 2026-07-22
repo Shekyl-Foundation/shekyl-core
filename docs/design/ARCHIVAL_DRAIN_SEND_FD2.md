@@ -92,8 +92,11 @@ seal input (seat removed 2026-07-19; see the charter note above).
   boundary. `drain_balance(records, reference_height, reserved) -> DrainBalance`
   (aggregate scalar only, `:218`; "spendable" = mature ∧ **unreserved** — the
   `reserved` gindex union is netted out, matching the bond sweep's spendable
-  definition); `plan_drain(request, records,
-  reference_height) -> DrainPlan` (`:243`); `DrainPlan { amount, inputs:
+  definition); `plan_drain(records, reference_height, target, reserved) ->
+  DrainPlan` (`:243`; the projection excludes `reserved` too, so the spendable
+  scalar, the affordability check, and the selectable candidates are one net
+  set — the plan can neither be sized against nor select an in-flight-held
+  output); `DrainPlan { amount, inputs:
   Vec<GlobalOutputIndex>, input_total, change }` (`:80`, Debug redacts
   `inputs`). Maturity = `spendable_height <= reference_height` (`:177`).
 - **The planner is fee-agnostic** — no fee operand anywhere in the three
