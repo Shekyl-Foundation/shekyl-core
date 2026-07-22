@@ -90,15 +90,15 @@ seal input (seat removed 2026-07-19; see the charter note above).
 
 - `shekyl-engine-core/src/engine/drain_orchestrator.rs` — the F-D1 trust
   boundary. `drain_balance(records, reference_height, reserved) -> DrainBalance`
-  (aggregate scalar only, `:218`; "spendable" = mature ∧ **unreserved** — the
+  (aggregate scalar only, `:240`; "spendable" = mature ∧ **unreserved** — the
   `reserved` gindex union is netted out, matching the bond sweep's spendable
   definition); `plan_drain(records, reference_height, target, reserved) ->
-  DrainPlan` (`:243`; the projection excludes `reserved` too, so the spendable
+  DrainPlan` (`:272`; the projection excludes `reserved` too, so the spendable
   scalar, the affordability check, and the selectable candidates are one net
   set — the plan can neither be sized against nor select an in-flight-held
   output); `DrainPlan { amount, inputs:
-  Vec<GlobalOutputIndex>, input_total, change }` (`:80`, Debug redacts
-  `inputs`). Maturity = `spendable_height <= reference_height` (`:177`).
+  Vec<GlobalOutputIndex>, input_total, change }` (`:82`, Debug redacts
+  `inputs`). Maturity = `spendable_height <= reference_height` (`:178`).
 - **The planner is fee-agnostic** — no fee operand anywhere in the three
   stages; `change = input_total − amount` exactly. Sweep, as built, is
   the `target == spendable` boundary (largest-first takes every mature
