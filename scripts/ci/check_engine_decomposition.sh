@@ -100,31 +100,50 @@ fi
 
 # --- 3. per-file line-count ratchet + new-file cap ---------------------------
 while IFS= read -r path; do
-  base="$(basename "${path}")"
-  [ -n "${EXCLUDE[$base]:-}" ] && continue
+  rel="${path#"${ENGINE_DIR}/"}"
+  [ -n "${EXCLUDE[$rel]:-}" ] && continue
   lines="$(wc -l < "${path}")"
-  if [ -n "${FILE_CEIL[$base]:-}" ]; then
-    ceil="${FILE_CEIL[$base]}"
+  if [ -n "${FILE_CEIL[$rel]:-}" ]; then
+    ceil="${FILE_CEIL[$rel]}"
     if [ "${lines}" -gt "${ceil}" ]; then
-      echo "FAIL: ${base} is ${lines} lines (ceiling ${ceil}) — regression."
+      echo "FAIL: ${rel} is ${lines} lines (ceiling ${ceil}) — regression."
       note "Split by workflow (§2) instead of growing the god-file."
       fail=1
     elif [ "${lines}" -lt "$(( ceil - BAND ))" ]; then
-      echo "FAIL: ${base} is ${lines} lines, >${BAND} under ceiling ${ceil} — tighten it."
+      echo "FAIL: ${rel} is ${lines} lines, >${BAND} under ceiling ${ceil} — tighten it."
       note "Lower its FILE line in engine_decomposition_ratchet.conf to lock the win in."
       fail=1
     fi
   elif [ "${lines}" -gt "${NEW_FILE_CAP}" ]; then
-    echo "FAIL: ${base} is ${lines} lines (>${NEW_FILE_CAP}) and is not baselined — new god-file."
+    echo "FAIL: ${rel} is ${lines} lines (>${NEW_FILE_CAP}) and is not baselined — new god-file."
     note "Carve it, or add a reviewed FILE baseline in engine_decomposition_ratchet.conf."
     fail=1
   fi
-done < <(find "${ENGINE_DIR}" -maxdepth 1 -name '*.rs' | sort)
+# Top-level engine/*.rs plus workflow extraction dirs (transfer/). Do NOT
+# recurse into traits/ or pscan/: those reuse basenames (e.g. traits/refresh.rs
+# vs refresh.rs) and are not the monofile-orchestration concern this ratchet
+# polices. FILE/EXCLUDE keys are ENGINE_DIR-relative paths (e.g. `merge.rs`,
+# `transfer/engine.rs`), so nested files that share a basename (mod.rs vs
+# transfer/mod.rs) stay distinct keys — a top-level file's key still equals its
+# bare basename, so existing top-level baselines are unaffected.
+done < <({
+  find "${ENGINE_DIR}" -maxdepth 1 -name '*.rs'
+  # transfer/ is an optional workflow-extraction dir; scan it only when present.
+  # An `if -d` guard (not a bare `find ... 2>/dev/null`) keeps a missing dir a
+  # clean zero-exit "no files" in ANY caller context — a bare find exits
+  # non-zero on a missing dir, which would abort the script under `set -e` the
+  # moment this list is refactored out of the exit-status-swallowing `<(...)`.
+  if [ -d "${ENGINE_DIR}/transfer" ]; then
+    find "${ENGINE_DIR}/transfer" -name '*.rs'
+  fi
+} | sort)
 
 # --- 4. stale baseline entries -----------------------------------------------
-for base in "${!FILE_CEIL[@]}"; do
-  [ -f "${ENGINE_DIR}/${base}" ] || {
-    echo "FAIL: ratchet baselines ${base} but engine/${base} no longer exists — stale entry."
+# Keys are ENGINE_DIR-relative, so this resolves both top-level (`merge.rs`) and
+# nested (`transfer/engine.rs`) baselines against their real on-disk location.
+for key in "${!FILE_CEIL[@]}"; do
+  [ -f "${ENGINE_DIR}/${key}" ] || {
+    echo "FAIL: ratchet baselines ${key} but engine/${key} no longer exists — stale entry."
     note "Remove its FILE line from engine_decomposition_ratchet.conf."
     fail=1
   }

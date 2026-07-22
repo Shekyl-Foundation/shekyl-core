@@ -354,6 +354,9 @@ pub(crate) mod stake_persist;
 /// (distinct inner types → compile error on cross-apply). Design-now; real checks
 /// wire in cold-start / 2d wiring.
 pub(crate) mod stake_timing;
+/// Transfer / pending-tx workflow (extracted from the former monofile
+/// `local_pending_tx.rs` — see `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`).
+pub mod transfer;
 // WI-RPC-1: read-only staked-balance/staked-output aggregation over the
 // authoritative sealed pscan/pending records, for the wallet-RPC surface.
 pub mod staking_read;
