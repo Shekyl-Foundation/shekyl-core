@@ -1392,9 +1392,10 @@ the constant is allowed to price in.
 >    (`ARCHIVAL_REWARD_GATE_M1.md` §14 retirement). The arm measures a posture
 >    that no longer exists.
 > 3. **The feature dictionary is a strawman — 70% of it is non-observable.** The
->    ten-feature dictionary (`partition_adversary.rs::features`) declares itself
->    "chain-visible observables only" (:508), but is built over `observable()` =
->    `{funding, bond, per_p, drain, resume}`, and **funding** is the unnamed
+>    ten-feature dictionary (`PairRaw::features` in `partition_adversary.rs`)
+>    declares itself "chain-visible observables only," but is built over
+>    `PairRaw::observable` = `{funding, bond, per_p, drain, resume}`, and
+>    **funding** is the unnamed
 >    FCMP++ transfer no observer can attribute, **drain** is F-W10's phantom
 >    ("the drain is not an identifiable transaction under FCMP++," ratified
 >    2026-07-16 — *five days after* §14.4, and the dictionary was never
@@ -1403,9 +1404,9 @@ the constant is allowed to price in.
 >    `|bond−funding|`, `f[2..7]` gaps over the phantom-bearing event set, `f[7]`
 >    cadence = drain−bond, `f[8]` event count. Two of the five witness controls
 >    aim at phantom coordinates: **M-c**'s cohesion is the seam band `f[0]`
->    (verified 2026-07-22 — it bites at `aimLft +0.649` even after the coin
->    coordinate is removed, i.e. via the phantom seam band alone), and **M-d**'s
->    manifold is `(t0, period, seam)`. So the validity precondition "all five
+>    (verified 2026-07-22 — it bites at `aimed_member_lift +0.619` even after the
+>    shared-coin coordinate is removed, i.e. via the phantom seam band alone),
+>    and **M-d**'s manifold is `(t0, period, seam)`. So the validity precondition "all five
 >    controls bite" is satisfied by signal `T` cannot obtain.
 >
 > **Why the deployed-clean result is not conservative evidence.** It is

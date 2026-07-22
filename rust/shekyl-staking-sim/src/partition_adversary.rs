@@ -797,28 +797,38 @@ fn gen_founders(rng: &mut SplitMix64, control: MarkedControl, window: u64) -> Ve
             // rejection-conditioned into `centre ± 20` (a mid-window centre so
             // the band is never marginally extreme).
             //
-            // PR-B (§14.4 premise audit, 2026-07-22): the shared order-coin
-            // coordinate is REMOVED. It was a phantom — the coin permutes an
-            // ordering no chain observer can resolve (`ARCHIVAL_FIREWALL_GATE6.md`
-            // method note 8), so a shared coin outcome is cohesion in a
-            // coordinate the adversary cannot see. Plan causal. NOTE: the
-            // surviving cohesion is the seam band, which is `f[0] = |bond −
-            // funding|` — itself phantom, because `funding` is the unnamed
-            // FCMP++ transfer the observer cannot attribute (the module-doc
-            // audit note). So M-c's cohesion is phantom with or without the
-            // coin; this change removes one phantom coordinate of two.
+            // PR-B (§14.4 premise audit, 2026-07-22): the SHARED order-coin
+            // cohesion coordinate is removed — the `&& d.1 == shared_coin`
+            // constraint is dropped, so the founders no longer share an ordering
+            // outcome. Each founder keeps its OWN per-draw coin (the sim
+            // population's law, `gen_at`), which isolates the measurement to
+            // exactly the shared coordinate under test: nothing else about
+            // M-c's marginal law changes. In particular the *clean* bond-
+            // position feature `f[1]` is left unperturbed — `plan_entry_seam`'s
+            // ordering bit places `bond` at either `t0` or `t0 + spread`, so
+            // forcing a constant ordering here while the rest of the population
+            // draws its own would shift `bond` by `spread` and manufacture an
+            // artefactual signal in a clean feature. The coin is a phantom
+            // regardless — it permutes an ordering no chain observer can resolve
+            // (`ARCHIVAL_FIREWALL_GATE6.md` method note 8) — and the surviving
+            // seam-band cohesion is `f[0] = |bond − funding|`, `abs_diff` hence
+            // invariant to the coin and itself phantom (funding is the unnamed
+            // FCMP++ transfer the observer cannot attribute; the module-doc
+            // audit note). PR-A deletes the coin uniformly across the whole sim;
+            // here we remove only the one shared coordinate, so M-c's cohesion
+            // is phantom (seam band) with or without it.
             let seam_centre = 150 + rng.next_u64() % (window / 2);
             (0..FOUNDER_COUNT)
                 .map(|_| {
                     let period = band_lo + rng.next_u64() % period_band;
                     let t0 = base_t0 + rng.next_u64() % 60;
-                    let spread = loop {
+                    let (spread, bond_first) = loop {
                         let d = draw_entry_gap(window, rng);
                         if d.0.abs_diff(seam_centre) <= 20 {
-                            break d.0;
+                            break d;
                         }
                     };
-                    let plan = plan_entry_seam((spread, false));
+                    let plan = plan_entry_seam((spread, bond_first));
                     let k = window / period + 1;
                     PairRaw {
                         funding: t0 + plan.entry_offset_blocks,
