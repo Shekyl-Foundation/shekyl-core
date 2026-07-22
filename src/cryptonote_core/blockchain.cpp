@@ -3312,6 +3312,20 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
 static bool check_commitment_mask_valid(const transaction& tx)
 {
   const auto& rv = tx.rct_signatures;
+
+  // Every tx shape carries exactly one outPk commitment per vout (0 == 0 for
+  // the no-output serve-credit shape). The wire serializer already pins this
+  // (serialize_rctsig_base sizes outPk to vout.size(), rctTypes.h) and
+  // check_tx_semantic re-checks it for pool txs — but this gate must be
+  // locally sound rather than lean on a distant invariant, or an empty outPk
+  // beside a non-empty vout would skate through the empty fast-path below
+  // with no mask ever checked.
+  if (rv.outPk.size() != tx.vout.size())
+  {
+    MERROR("outPk count " << rv.outPk.size() << " != vout count " << tx.vout.size()
+      << ", tx " << get_transaction_hash(tx));
+    return false;
+  }
   if (rv.outPk.empty())
     return true;
 
