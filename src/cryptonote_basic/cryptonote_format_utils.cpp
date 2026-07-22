@@ -39,6 +39,7 @@
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
 #include "fcmp/rctSigs.h"
+#include "shekyl/shekyl_ffi.h"
 
 using namespace epee;
 
@@ -751,14 +752,32 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool check_outs_valid(const transaction& tx)
   {
+    if (tx.vout.empty())
+      return true;
+
+    std::vector<uint8_t> keys_flat;
+    keys_flat.reserve(tx.vout.size() * sizeof(crypto::public_key));
     for(const tx_out& out: tx.vout)
     {
       crypto::public_key output_public_key;
       CHECK_AND_ASSERT_MES(get_output_public_key(out, output_public_key), false, "Failed to get output public key (output target index: "
         << out.target.index() << "), in transaction id=" << get_transaction_hash(tx));
+      keys_flat.insert(keys_flat.end(),
+        reinterpret_cast<const uint8_t*>(&output_public_key),
+        reinterpret_cast<const uint8_t*>(&output_public_key) + sizeof(output_public_key));
+    }
 
-      if(!check_key(output_public_key))
-        return false;
+    // GENESIS_TX_WIRE_FORMAT.md §2.3 output-point rule: every output public
+    // key must be a canonical, prime-order (torsion-free), non-identity point
+    // — the same strictness the FCMP++ leaf builder applies, so nothing
+    // accepted here is silently skipped from the curve tree. Replaces the
+    // inherited crypto::check_key, which only checked on-curve.
+    const uint8_t rc = shekyl_check_output_keys(keys_flat.data(), tx.vout.size());
+    if (rc != SHEKYL_OUTPUT_POINTS_OK)
+    {
+      MERROR("Invalid output public key (non-canonical, torsioned, or identity; rc="
+        << unsigned(rc) << "), in transaction id=" << get_transaction_hash(tx));
+      return false;
     }
     return true;
   }
