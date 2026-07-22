@@ -69,7 +69,9 @@
     persona may not spend the pool below the reserve
     (`DrainOrchestrationError::ReserveBreached`); a **retired** persona sweeps
     to zero (reserve-moot). The `retired` flag is resolved engine-side from
-    `PScanState::retired_records`.
+    `PScanState::pending_unbonds` (confirmed terminal `Unbond` → no future
+    `Unbond` owed) — not `retired_records`, which is funded-gated and would
+    deadlock the reserve gate against a drain-all sweep.
   - **Dispatch seam (T-DS-2).** `Engine::submit_drain` (`engine/drain_dispatch.rs`,
     the `claim_dispatch` sibling): resolve the wallet's own principal
     destination engine-side (T-DS-3, never caller-supplied), assemble through

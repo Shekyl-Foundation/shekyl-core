@@ -389,13 +389,16 @@ pub(crate) struct DrainCtx<'a> {
     pub payment: u64,
     /// The fee the drain tx must fund from its swept `P` inputs.
     pub fee: u64,
-    /// Whether the persona is **retired** (its bond has terminally unbonded).
-    /// A live persona is a mid-life constructor and must retain the exit-fee
-    /// reserve ([`EXIT_FEE_RESERVE_ATOMIC`], DS-4); a retired persona has no
-    /// future `Unbond`, so the reserve is moot and a drain-all may sweep the
-    /// pool to zero. Resolved engine-side from
-    /// [`PScanState::retired_records`](shekyl_engine_state::pscan_state::PScanState::retired_records)
-    /// by the dispatch seam.
+    /// Whether the persona is **retired** (its terminal `Unbond` has
+    /// confirmed). A live persona is a mid-life constructor and must retain the
+    /// exit-fee reserve ([`EXIT_FEE_RESERVE_ATOMIC`], DS-4); a retired persona
+    /// has no future `Unbond`, so the reserve is moot and a drain-all may sweep
+    /// the pool to zero. Resolved engine-side by the dispatch seam from
+    /// [`PScanState::pending_unbonds`](shekyl_engine_state::pscan_state::PScanState::pending_unbonds)
+    /// — the authoritative "no future `Unbond` owed" signal — deliberately not
+    /// `retired_records`, which is funded-gated and omits a persona throughout
+    /// the very drain-all that empties its slot (see `submit_drain` for the
+    /// reserve deadlock this avoids).
     pub retired: bool,
     /// The wallet's synced chain tip — the send-path anchor input.
     pub chain_tip: u64,

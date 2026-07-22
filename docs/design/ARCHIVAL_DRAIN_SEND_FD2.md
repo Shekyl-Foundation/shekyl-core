@@ -618,7 +618,10 @@ composite arm's final leg, all on `shekyl-core`:
   reserve (refused with `DrainOrchestrationError::ReserveBreached`); a
   **retired** persona's sweep is reserve-moot (the `Unbond` already fired),
   so it may drain to zero. The `retired` flag rides `DrainCtx`, resolved
-  engine-side from `PScanState::retired_records`.
+  engine-side from `PScanState::pending_unbonds` (the authoritative "no future
+  `Unbond` owed" signal) — deliberately not `retired_records`, which is
+  funded-gated and omits a persona throughout the drain-all that empties its
+  slot, deadlocking the reserve gate against the sweep.
 - **T-DS-2 transport arm (self-grep, now live).** `submit_drain`
   (`drain_dispatch.rs`, the `claim_dispatch` sibling) dispatches **only**
   through the audited persona-transport choke point
