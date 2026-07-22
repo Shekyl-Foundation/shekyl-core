@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Security
+
+- **consensus: output points must be canonical prime-order at admission**
+  (`GENESIS_TX_WIRE_FORMAT.md` §2.3 output-point rule, ratified 2026-07-22;
+  prompted by advisory GHSA-r675-h3pj-wj2f). Every output public key `O`
+  (all tx shapes, including coinbase) and every coinbase `outPk` mask must
+  be a canonical, prime-order (torsion-free) encoding — output keys
+  additionally non-identity — matching the strictness the FCMP++ leaf
+  builder already applies. Previously a torsioned/identity output point
+  passed the inherited `crypto::check_key` (on-curve only) or, for coinbase
+  masks under `CTTypeNull`, no point check at all, and was then *silently
+  skipped* by curve-tree leaf construction: deterministic on every node and
+  self-inflicted (the output was unspendable and unreceivable — not a theft
+  or inflation vector), but a permanent hole in the
+  every-on-chain-output-is-a-leaf invariant. Admission now rejects loudly.
+  Single home `shekyl-ct-balance::{check_output_keys, check_commitment_masks}`
+  (the crate owning §2.3 point canonicality), exported as
+  `shekyl_check_output_keys` / `shekyl_check_commitment_masks`; the C++
+  `check_outs_valid` / `check_commitment_mask_valid` are now thin marshaling
+  shims (rule 20 boundary advancement), the trivial-mask fingerprints
+  (identity, `G`, coinbase `zeroCommit(amount)`) migrated to Rust in the
+  same cut, and `prevalidate_miner_transaction` gains the previously-missing
+  output-key gate for the miner tx. Pre-genesis freeze: no installed base
+  ever ran the lax rule, so no fork surface exists.
+
 ### Removed
 
 - **the M1 `K_COVER` gate machinery** (the implementation half of the

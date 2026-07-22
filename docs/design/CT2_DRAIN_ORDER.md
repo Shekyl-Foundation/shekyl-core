@@ -208,6 +208,11 @@ re-raised:
    `C = zG + aH` lies in the prime-order subgroup by construction. No torsion
    enters the leaf, and even if a malformed on-chain `O` carried torsion, ground
    (1) makes daemon and wallet agree on its x byte-for-byte regardless.
+   *(UPDATE 2026-07-22: the hypothetical is now foreclosed at admission — the
+   `GENESIS_TX_WIRE_FORMAT.md` §2.3 output-point rule rejects any
+   non-canonical / torsioned / identity `O` before it can enter a block, so a
+   "malformed on-chain `O`" cannot exist. Ground (1) remains the load-bearing
+   divergence argument.)*
 
 **Consequence for the KAT.** There is **no engineered-torsion vector in §8** —
 it would test nothing about S1/S2/S3 drain-order agreement (the divergence
