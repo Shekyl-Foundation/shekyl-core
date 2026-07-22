@@ -17,10 +17,10 @@
 //! Spend-time invariant only: the cover **draw** ([`crate::cover`]) is never
 //! consulted or narrowed by it (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4). Kept in
 //! this crate — the single source for `P`-lane wallet-side amount floors,
-//! beside [`COVER_RUNWAY_FLOOR_ATOMIC`] — so the dominance relation between
+//! beside [`COVER_RUNG_ATOMIC`] — so the dominance relation between
 //! the two floors is asserted at the one site that sees both.
 
-use crate::cover::COVER_RUNWAY_FLOOR_ATOMIC;
+use crate::cover::COVER_RUNG_ATOMIC;
 
 /// The exit-fee reserve in atomic units (1 SKL = 1_000_000_000 atomic).
 ///
@@ -41,7 +41,7 @@ use crate::cover::COVER_RUNWAY_FLOOR_ATOMIC;
 ///   floor.
 ///
 /// **Bounds for safe adjustment** (rule 75). Must satisfy
-/// `0 < EXIT_FEE_RESERVE_ATOMIC < COVER_RUNWAY_FLOOR_ATOMIC` (asserted below):
+/// `0 < EXIT_FEE_RESERVE_ATOMIC < COVER_RUNG_ATOMIC` (asserted below):
 /// the smallest cover draw is `C_min = 0.75 SKL`, so a freshly-funded persona's
 /// pool always clears the reserve with margin — the reserve never pathologically
 /// blocks a first drain. **Raising** it strands more value on live personas
@@ -52,10 +52,10 @@ use crate::cover::COVER_RUNWAY_FLOOR_ATOMIC;
 pub const EXIT_FEE_RESERVE_ATOMIC: u64 = 50_000_000;
 
 /// Pinned dominance assert (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.2: "Lands with a
-/// pinned dominance assert against `COVER_RUNWAY_FLOOR_ATOMIC`"): the reserve is
+/// pinned dominance assert against `COVER_RUNG_ATOMIC`"): the reserve is
 /// a small carve-out of the runway floor, never the other way round. If a future
 /// re-sizing inverts the relation this fails to compile.
-const _: () = assert!(EXIT_FEE_RESERVE_ATOMIC < COVER_RUNWAY_FLOOR_ATOMIC);
+const _: () = assert!(EXIT_FEE_RESERVE_ATOMIC < COVER_RUNG_ATOMIC);
 
 /// The reserve is nonzero (a zero reserve would silently disable the spend-time
 /// floor for every live-persona mid-life constructor).
