@@ -32,6 +32,14 @@
 //! genesis reliability/durability (`FOUNDATION_GENESIS_IDENTITY_SET.md`),
 //! a distinct object, unaffected.
 //!
+//! ---
+//!
+//! *Everything below this banner is the historical record of the withdrawn arm
+//! — the spec, the co-first deliverables, and the grading law it was built to.
+//! Read it as documentation of what was built and why it was retracted, **not**
+//! as current security evidence. The present-tense phrasing below is the
+//! original spec voice, preserved unedited.*
+//!
 //! # What this arm tests
 //!
 //! Not "2-means fails" but the stronger null (§14.4): *no decision rule the
