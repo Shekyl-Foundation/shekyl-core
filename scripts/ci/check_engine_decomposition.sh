@@ -128,7 +128,14 @@ while IFS= read -r path; do
 # bare basename, so existing top-level baselines are unaffected.
 done < <({
   find "${ENGINE_DIR}" -maxdepth 1 -name '*.rs'
-  find "${ENGINE_DIR}/transfer" -name '*.rs' 2>/dev/null
+  # transfer/ is an optional workflow-extraction dir; scan it only when present.
+  # An `if -d` guard (not a bare `find ... 2>/dev/null`) keeps a missing dir a
+  # clean zero-exit "no files" in ANY caller context — a bare find exits
+  # non-zero on a missing dir, which would abort the script under `set -e` the
+  # moment this list is refactored out of the exit-status-swallowing `<(...)`.
+  if [ -d "${ENGINE_DIR}/transfer" ]; then
+    find "${ENGINE_DIR}/transfer" -name '*.rs'
+  fi
 } | sort)
 
 # --- 4. stale baseline entries -----------------------------------------------
