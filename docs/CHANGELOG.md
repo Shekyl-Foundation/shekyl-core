@@ -52,6 +52,23 @@
 
 ### Added
 
+- **wallet (engine): F-D2 aggregate drain-balance read — DS-PR-3 PR-A
+  (`ARCHIVAL_DRAIN_SEND_FD2.md` §1 layer 1).** The core-side "how much is
+  drainable?" accessor the GUI polls: `Engine::drain_balance_aggregate`
+  (`engine/drain_read.rs`), a self-arc method that loads the sealed
+  `PScanState`, anchors the canonical send-path reference via
+  `bond_orchestrator::anchored_reference_block` (the same helper the drain
+  path anchors through — so the displayed drainable figure is measured at
+  the block a spend proves against, never raw tip), and returns
+  `drain_balance`'s aggregate scalar. Non-stakers / unscanned wallets report
+  an honest `Ok(0)` (short-circuited before anchoring). The new
+  `DrainBalanceReadError` is two-armed by design (rule 82; DS-PR-3 locked
+  decision) — `Unanchorable` (transient; the UI renders "syncing", never a
+  zero) vs. `State` (non-transient fault) — so a balance read never renders
+  a misleading zero and never conflates "still syncing" with a real fault.
+  Aggregate-only by construction: no reward decomposition crosses the
+  surface (F-D1 trust boundary). The GUI wiring (`EngineSession`/command/
+  render) follows in DS-PR-3 PR-B (`shekyl-gui-wallet`).
 - **wallet (engine): F-D2 drain assembly landed — DS-PR-1
   (`ARCHIVAL_DRAIN_SEND_FD2.md` §DS-PR-1).** The actor-side
   `P`→principal drain-send assembly, mirroring the emission-claim shape:

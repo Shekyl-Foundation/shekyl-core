@@ -48,6 +48,19 @@ hold** (Gate-6 §12.4 build notes, verified at source 2026-07-19):
    in the GUI process — GUI-PR1 starts `start_pscan_if_staker` at every
    engine open, §2.4; the layer's remainder is the aggregate read
    surface over it.)*
+   *(UPDATE 2026-07-21, DS-PR-3 PR-A: the aggregate read surface now
+   exists **core-side** as `Engine::drain_balance_aggregate`
+   (`engine/drain_read.rs`) — a self-arc accessor that loads the sealed
+   `PScanState`, anchors the canonical send-path reference via
+   `bond_orchestrator::anchored_reference_block` (the same helper the
+   drain path anchors through), and returns `drain_balance`'s aggregate
+   scalar. `Ok(0)` on no seal (non-staker). Its `DrainBalanceReadError`
+   is two-armed — `Unanchorable` (transient; render "syncing", never a
+   zero) vs. `State` (non-transient fault) — so the read never renders a
+   misleading zero (rule 82; DS-PR-3 locked decision). The layer's
+   remainder is now the **GUI wiring** — `EngineSession::drain_balance()`
+   + `get_drain_balance` command + the "Drainable (P)" render — carried
+   by DS-PR-3 PR-B in `shekyl-gui-wallet`.)*
 2. **A drain tx-assembly path** — `plan_drain` returns a `DrainPlan`
    (amount, input gindices, change), not a signed/broadcast transaction;
    the assemble→sign→broadcast follow-on (the claim-assembly analog) is
