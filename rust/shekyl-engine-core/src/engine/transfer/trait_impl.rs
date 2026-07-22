@@ -8,42 +8,27 @@
 use std::collections::HashSet;
 use std::future::Future;
 
-use shekyl_curve_tree::{
-    select_reference_height,
-    BlockHeight, ReferenceBlock,
-};
+use shekyl_curve_tree::{select_reference_height, BlockHeight, ReferenceBlock};
 use shekyl_engine_state::LedgerBlock;
 
-use super::super::diagnostics::{
-    emit_pending_tx_diagnostic, DiscardReason,
-    PendingTxDiagnostic,
-};
-use super::super::error::{
-    PendingTxError, SendError, SignerError, SubmitError,
-};
+use super::super::diagnostics::{emit_pending_tx_diagnostic, DiscardReason, PendingTxDiagnostic};
+use super::super::error::{PendingTxError, SendError, SignerError, SubmitError};
 use super::super::fee_estimator::FeeEstimator;
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::output_selector::OutputSelector;
-use super::super::pending::{
-    PendingTx, ReservationId, TxHash, TxRequest,
-};
+use super::super::pending::{PendingTx, ReservationId, TxHash, TxRequest};
 use super::super::signer::{Signer, TransferSigningContext};
 use super::super::signing_assembly::assemble_tx_to_sign;
 use super::super::submit_lifecycle::WatchdogHost;
 use super::super::submit_watchdog::{self, HeldSubmit};
 use super::super::traits::{LedgerEngine, PendingTxEngine};
 use super::super::transaction_submitter::TransactionSubmitter;
-use super::engine::{
-    BuildReservationCleanup, BuildSelected, LocalPendingTx,
-};
+use super::engine::{BuildReservationCleanup, BuildSelected, LocalPendingTx};
 use super::support::{
     build_error_kind, emit_build_failed, fail_build_after_attempted,
     map_curve_tree_handle_error_for_send, map_fee_estimator_error, map_signer_error, TreeSpendGate,
 };
-use super::types::{
-    RescanRequest,
-    Stage1LedgerSpendableAccess,
-};
+use super::types::{RescanRequest, Stage1LedgerSpendableAccess};
 
 // ============================================================================
 // PendingTxEngine impl
@@ -337,4 +322,3 @@ where
         state.consumer_held.len() + state.in_flight.len()
     }
 }
-

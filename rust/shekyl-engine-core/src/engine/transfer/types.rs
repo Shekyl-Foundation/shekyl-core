@@ -9,17 +9,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use shekyl_curve_tree::{BlockHeight, ReferenceBlock};
+use shekyl_curve_tree::ReferenceBlock;
 use shekyl_engine_state::LedgerBlock;
 use shekyl_units::AtomicUnits;
 
-use super::super::error::{
-    SendError, TerminalErrorKind,
-};
+use super::super::error::{SendError, TerminalErrorKind};
 use super::super::local_ledger::LocalLedger;
 use super::super::pending::{
-    InFlightSubmit, ReservationId, SnapshotId, TxHash,
-    TxRecipientSummary, TxRequest,
+    InFlightSubmit, ReservationId, SnapshotId, TxHash, TxRecipientSummary, TxRequest,
 };
 use super::super::traits::LedgerEngine;
 
@@ -181,7 +178,7 @@ impl ConsumerHeldEntry {
                 priority: crate::engine::pending::FeePriority::Standard,
             },
             reference: ReferenceBlock {
-                height: BlockHeight(0),
+                height: shekyl_curve_tree::BlockHeight(0),
                 curve_tree_root: [0u8; 32],
                 block_hash: [0u8; 32],
             },
@@ -232,7 +229,8 @@ where
 // PendingTxState (γ three-collection lean shape)
 // ============================================================================
 
-/// Engine-internal mutable state guarded by [`LocalPendingTx::state`].
+/// Engine-internal mutable state guarded by
+/// [`LocalPendingTx::state`](super::engine::LocalPendingTx::state).
 ///
 /// Segment-2h (γ) lean shape per
 /// [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`] §5.6.8 (γ):
@@ -307,7 +305,8 @@ pub(crate) struct PendingTxState {
 }
 
 /// A targeted re-scan request enqueued by
-/// [`LocalPendingTx::finalize_submit_already_in_chain`] and drained by
+/// [`LocalPendingTx::finalize_submit_already_in_chain`](super::engine::LocalPendingTx::finalize_submit_already_in_chain)
+/// and drained by
 /// the submit lifecycle driver (`DAEMON_SUBMIT_VERDICT.md` §2.5(b) /
 /// F40, decision 3).
 ///
@@ -344,11 +343,12 @@ pub(crate) struct RescanRequest {
 ///   streak.
 /// - The **second** consecutive same-kind rejection trips the breaker:
 ///   an operator alarm is emitted
-///   ([`PendingTxDiagnostic::SubmitLoopBreakerTripped`]) and further
+///   ([`PendingTxDiagnostic::SubmitLoopBreakerTripped`](super::super::diagnostics::PendingTxDiagnostic::SubmitLoopBreakerTripped))
+///   and further
 ///   `build` calls are refused with
 ///   [`SendError::SubmitLoopBreakerTripped`] until the operator
 ///   acknowledges via
-///   [`LocalPendingTx::acknowledge_submit_loop_breaker`].
+///   [`LocalPendingTx::acknowledge_submit_loop_breaker`](super::engine::LocalPendingTx::acknowledge_submit_loop_breaker).
 /// - An accepted submit while tripped resets the *streak* but not the
 ///   tripped state: acceptance of a different tx does not falsify the
 ///   systematic-disagreement hypothesis for the failing payment, and
@@ -466,5 +466,3 @@ pub(crate) enum ReanchorError {
     /// A transient assembly/signing failure that leaves the reservation intact.
     Failed(SendError),
 }
-
-

@@ -5,9 +5,7 @@
 
 //! Unit tests for the transfer / pending-tx implementor.
 
-use std::collections::HashSet;
 use std::sync::Arc;
-
 use std::time::Instant;
 
 use shekyl_address::ShekylAddress;
@@ -53,7 +51,6 @@ use crate::engine::transaction_submitter::{
 };
 use crate::engine::tx_counts::{InputCount, OutputCount};
 use crate::engine::LocalLedger;
-
 
 /// Deterministic raw32 test seed. Distinct from `SIGNER_TEST_MASTER_SEED`
 /// (`engine/signer.rs`) so pending-tx tests do not share derivation state
@@ -860,8 +857,7 @@ fn content_fingerprint_is_order_invariant_and_amount_sensitive() {
         "output order must not change the fingerprint"
     );
     // Idempotent: rebuilding the identical content compares equal.
-    let again =
-        ContentFingerprint::from_parts(fee, &[r("addr_a", 10), r("addr_b", 20)], change);
+    let again = ContentFingerprint::from_parts(fee, &[r("addr_a", 10), r("addr_b", 20)], change);
     assert_eq!(base, again, "identical content is idempotent");
 
     // The consent axis: fee, change amount, and recipient amount each move it.
@@ -1344,8 +1340,7 @@ async fn join_market_bond_post_signs_and_verifies_over_real_tree() {
         &out_masks_flat,
         fee,
         BondTerm::Credit(
-            NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor))
-                .expect("bond floor is non-zero"),
+            NonZeroAtomicUnits::new(AtomicUnits::from_raw(floor)).expect("bond floor is non-zero"),
         ),
     )
     .expect("bond-post CT balance closes over the real-tree prover output");
@@ -2428,9 +2423,7 @@ type DaemonBackedPendingTx = LocalPendingTx<
     LocalSigner,
     WalletGreedyOutputSelector,
     DaemonFeeEstimator,
-    crate::engine::fee_snapshot::DaemonFeeSnapshotSource<
-        crate::engine::test_support::TestDaemon,
-    >,
+    crate::engine::fee_snapshot::DaemonFeeSnapshotSource<crate::engine::test_support::TestDaemon>,
     crate::engine::transaction_submitter::DaemonTransactionSubmitter<
         crate::engine::test_support::TestDaemon,
     >,
@@ -2476,9 +2469,7 @@ async fn reserved_outputs_blocked_from_second_build() {
 fn assemble_tx_to_sign_rejects_missing_key_image() {
     use crate::engine::signing_assembly::assemble_tx_to_sign;
     use crate::engine::tx_fee_model::build_fee_directive;
-    use shekyl_curve_tree::{
-        AssembleInput, AssembledPath, Gindex, TreeContext as CtTreeContext,
-    };
+    use shekyl_curve_tree::{AssembleInput, AssembledPath, Gindex, TreeContext as CtTreeContext};
     use shekyl_rpc_client::FeeRate;
 
     let ledger = Arc::new(test_ledger());

@@ -15,15 +15,13 @@
 //! a `Signer`, an `OutputSelector`, a `FeeEstimator`, a `LedgerEngine`
 //! handle, the diagnostic sink, and reservation state under a `Mutex`.
 
-mod types;
-mod support;
 mod engine;
+mod support;
 mod trait_impl;
+mod types;
 
 #[cfg(test)]
 mod transfer_pending_tx_tests;
 
 pub use engine::LocalPendingTx;
-pub(crate) use types::{
-    ConsumerHeldEntry, RescanRequest,
-};
+pub(crate) use types::{ConsumerHeldEntry, RescanRequest};

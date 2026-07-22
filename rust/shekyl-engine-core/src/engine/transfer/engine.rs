@@ -22,16 +22,16 @@ use super::super::diagnostics::{
     PendingTxDiagnostic,
 };
 use super::super::error::{
-    AmbiguousErrorKind, OutputSelectorError, PendingTxError,
-    RetryableRejectCause, SendError, SignerError, SubmitError, TerminalErrorKind,
+    AmbiguousErrorKind, OutputSelectorError, PendingTxError, RetryableRejectCause, SendError,
+    SignerError, SubmitError, TerminalErrorKind,
 };
 use super::super::fee_estimator::{FeeEstimationContext, FeeEstimator};
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::network::Network;
 use super::super::output_selector::{OutputCandidate, OutputSelector, SelectedOutputs};
 use super::super::pending::{
-    InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, TxHash,
-    TxRecipientSummary, TxRequest,
+    InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, TxHash, TxRecipientSummary,
+    TxRequest,
 };
 use super::super::refresh::{derive_snapshot_id, LedgerSnapshot};
 use super::super::signer::{Signer, TransferSigningContext};
@@ -43,13 +43,13 @@ use super::super::tx_counts::{InputCount, OutputCount};
 use super::super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 
 use super::support::{
-    build_error_kind, fail_build_after_attempted, map_fee_estimator_error, map_handle_err_to_reanchor,
-    map_output_selector_error, map_signer_error, phase1_tx_hash, release_output_locks_for,
-    with_pending_tx_state_mut, TreeSpendGate,
+    build_error_kind, fail_build_after_attempted, map_fee_estimator_error,
+    map_handle_err_to_reanchor, map_output_selector_error, map_signer_error, phase1_tx_hash,
+    release_output_locks_for, with_pending_tx_state_mut, TreeSpendGate,
 };
 use super::types::{
-    ConsumerHeldEntry, ContentFingerprint, OutputId, PendingTxState, RescanRequest,
-    Stage1LedgerSpendableAccess, SubmitLoopBreaker, ReanchorError, ReanchorOutcome,
+    ConsumerHeldEntry, ContentFingerprint, OutputId, PendingTxState, ReanchorError,
+    ReanchorOutcome, RescanRequest, Stage1LedgerSpendableAccess, SubmitLoopBreaker,
     REANCHOR_MAX_RETRIES,
 };
 
@@ -57,7 +57,7 @@ use super::types::{
 // LocalPendingTx aggregate
 // ============================================================================
 
-/// Stage 1 production [`PendingTxEngine`] implementor.
+/// Stage 1 production [`PendingTxEngine`](super::super::traits::PendingTxEngine) implementor.
 ///
 /// Holds the four constructor-bound dependencies (signer, output
 /// selector, fee estimator, ledger handle), the diagnostic sink, the
@@ -85,25 +85,25 @@ use super::types::{
 /// [`Self::new`]. Future revisions add fields through `Self::new`
 /// API revisions; the public-API surface is the constructor
 /// signature plus the (`pub(crate)`)
-/// [`PendingTxEngine`] impl, not the
+/// [`PendingTxEngine`](super::super::traits::PendingTxEngine) impl, not the
 /// struct shape itself.
 ///
 /// # Not `Debug`
 ///
 /// `LocalPendingTx` does not derive [`Debug`] because the
 /// `signer: Arc<S>` field's implementor (the default
-/// [`LocalSigner`](super::signer::LocalSigner)) holds sensitive
+/// [`LocalSigner`](super::super::signer::LocalSigner)) holds sensitive
 /// material (`AllKeysBlob`) and is explicitly non-`Debug` per F3
 /// sensitive-material discipline. The pattern matches
-/// [`LocalRefresh`](super::local_refresh::LocalRefresh) and
-/// [`Engine`](super::Engine).
+/// [`LocalRefresh`](super::super::local_refresh::LocalRefresh) and
+/// [`Engine`](super::super::Engine).
 ///
 /// # Trait-implementation visibility
 ///
 /// `LocalPendingTx` is `pub` so external callers can name the type
 /// in the orchestrator's `Engine<S, D, L, R, P = LocalPendingTx<…>>`
 /// default (C6). The
-/// [`PendingTxEngine`] trait it
+/// [`PendingTxEngine`](super::super::traits::PendingTxEngine) trait it
 /// implements is itself `pub(crate)` per `V3_ENGINE_TRAIT_BOUNDARIES.md`
 /// §1.4, so external callers can name `LocalPendingTx` but cannot
 /// reach its trait surface directly — only through the inherent
@@ -127,14 +127,14 @@ where
 {
     /// Spend-secret holder. `Arc<S>` because the constructor takes
     /// a pre-`Arc`'d signer (the default
-    /// [`LocalSigner`](super::signer::LocalSigner) is held under
+    /// [`LocalSigner`](super::super::signer::LocalSigner) is held under
     /// `Arc<AllKeysBlob>` per §5.4 R11 (b); the surrounding Arc lets
     /// the engine clone-share the signer with future spawn sites
     /// without re-cloning the secret bytes).
     pub(crate) signer: Arc<S>,
     /// Output-selection strategy; held by value because typical
     /// implementors (e.g., the default
-    /// [`WalletGreedyOutputSelector`](super::output_selector::WalletGreedyOutputSelector))
+    /// [`WalletGreedyOutputSelector`](super::super::output_selector::WalletGreedyOutputSelector))
     /// are zero-sized and need no sharing semantics.
     pub(crate) output_selector: O,
     /// Fee-estimation strategy; held by value for the same reason
@@ -144,10 +144,10 @@ where
     pub(crate) fee_snapshot_source: FS,
     /// Daemon (or test) transaction broadcaster.
     pub(crate) submitter: Arc<TS>,
-    /// Shared `LedgerEngine` handle (same `Arc` as [`Engine`](super::Engine)'s
+    /// Shared `LedgerEngine` handle (same `Arc` as [`Engine`](super::super::Engine)'s
     /// `ledger` field at C6 assembly).
     pub(crate) ledger: Arc<L>,
-    /// Clone of [`Engine`](super::Engine)'s FCMP++ curve-tree actor handle, used
+    /// Clone of [`Engine`](super::super::Engine)'s FCMP++ curve-tree actor handle, used
     /// to read the tree's `ingested_tip_height` at build time and gate the
     /// spendable set on `min(synced_height, tree_cursor)` (CT-5 §3.2.1 D1/D3,
     /// commit 4b). `None` only in direct-construction unit tests that exercise
@@ -161,8 +161,8 @@ where
     /// the C7 R8 TTL sweep; constructor-held at C5β.
     #[allow(dead_code)]
     pub(crate) ttl: ReservationTTLConfig,
-    /// Network the wallet was opened against. Consumed when address-
-    /// Network the wallet was opened against (address decode at sign).
+    /// Network the wallet was opened against; consumed when decoding
+    /// recipient addresses at signing time.
     pub(crate) network: Network,
     /// Engine state guarded by [`Mutex`] for interior mutability;
     /// see [`PendingTxState`] rustdoc.
@@ -207,7 +207,10 @@ where
     TS: TransactionSubmitter,
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
-    pub(super) fn new(engine: &'a LocalPendingTx<S, O, F, FS, TS, L>, reservation_id: ReservationId) -> Self {
+    pub(super) fn new(
+        engine: &'a LocalPendingTx<S, O, F, FS, TS, L>,
+        reservation_id: ReservationId,
+    ) -> Self {
         Self {
             engine,
             reservation_id,
@@ -279,7 +282,9 @@ where
     }
 
     #[allow(clippy::unused_self)] // `self` is used only under `test` / `test-helpers` cfgs.
-    pub(super) fn take_queued_submit_outcome(&self) -> Option<Result<SubmitSuccess, SubmitterError>> {
+    pub(super) fn take_queued_submit_outcome(
+        &self,
+    ) -> Option<Result<SubmitSuccess, SubmitterError>> {
         #[cfg(any(test, feature = "test-helpers"))]
         {
             self.submit_daemon_outcome
@@ -1486,7 +1491,11 @@ where
         }))
     }
 
-    pub(super) async fn submit_async(&self, id: ReservationId, seen_gen: u64) -> Result<TxHash, SubmitError> {
+    pub(super) async fn submit_async(
+        &self,
+        id: ReservationId,
+        seen_gen: u64,
+    ) -> Result<TxHash, SubmitError> {
         // --- pre-flight: membership under the state lock, staleness outside it
         // (CT-5d §5). The reference is the staleness authority — it *replaces* the
         // SnapshotId / built_at_tip_hash checks, so a benign tip advance no longer
@@ -1691,7 +1700,11 @@ where
         })
     }
 
-    pub(super) fn discard_sync(&self, id: ReservationId, reason: DiscardReason) -> Result<(), PendingTxError> {
+    pub(super) fn discard_sync(
+        &self,
+        id: ReservationId,
+        reason: DiscardReason,
+    ) -> Result<(), PendingTxError> {
         let mut state = self
             .state
             .lock()
@@ -1744,7 +1757,10 @@ where
     }
 
     #[allow(dead_code)] // trait surface only; production wiring lands with mempool eviction (V3.x).
-    pub(super) fn signal_mempool_evicted_sync(&self, rid: ReservationId) -> Result<(), PendingTxError> {
+    pub(super) fn signal_mempool_evicted_sync(
+        &self,
+        rid: ReservationId,
+    ) -> Result<(), PendingTxError> {
         let mut state = self
             .state
             .lock()

@@ -7,18 +7,14 @@
 
 use std::sync::{Mutex, PoisonError};
 
-
 use super::super::curve_tree_actor::CurveTreeHandleError;
 use super::super::diagnostics::{
-    emit_pending_tx_diagnostic, BuildErrorKind, DiagnosticSink,
-    PendingTxDiagnostic,
+    emit_pending_tx_diagnostic, BuildErrorKind, DiagnosticSink, PendingTxDiagnostic,
 };
 use super::super::error::{
     FeeEstimatorError, IoError, OutputSelectorError, SendError, SignerError,
 };
-use super::super::pending::{
-    ReservationId, TxHash,
-};
+use super::super::pending::{ReservationId, TxHash};
 
 use super::types::{PendingTxState, ReanchorError};
 
@@ -180,4 +176,3 @@ pub(super) fn phase1_tx_hash(id: ReservationId) -> TxHash {
     bytes[..8].copy_from_slice(&id.raw().to_le_bytes());
     TxHash::from_bytes(bytes)
 }
-
