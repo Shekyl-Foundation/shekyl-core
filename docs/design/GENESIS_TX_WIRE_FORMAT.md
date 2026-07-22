@@ -401,6 +401,52 @@ inherited `rct` token in the V3.0 ct sweep), shared by construct
 (`shekyl-tx-builder`) and verify (`shekyl-archival-retention`), exposed to C++
 consensus via the `shekyl_verify_ct_balance` FFI export.
 
+**Output-point validity — BINDING consensus rule (genesis, ratified 2026-07-22).**
+Every compressed curve25519 point a transaction places in the *output set* —
+each output public key `O` (all tx shapes, **including coinbase**) and each
+coinbase `outPk[i].mask` (non-coinbase masks are already gated by the CT rule
+above) — MUST be a canonical, prime-order (torsion-free), non-identity
+encoding. A non-canonical encoding, an order-8 (cofactor) component, or the
+identity is **rejected at admission** (`shekyl_check_output_keys` /
+`shekyl_check_commitment_masks` → `INVALID_KEY` / `INVALID_MASK`); the trivial-
+mask fingerprint checks (identity, `G`, coinbase `zeroCommit(amount)` — the
+confidential-coinbase leak guards previously native in
+`check_commitment_mask_valid`) ride the same Rust entry point.
+
+*Uniformity, plus a silent-skip hole closed.* This extends the commitment rule
+above to the two point classes it did not reach: output public keys (the
+inherited `crypto::check_key` accepts any curve point — no canonicality, no
+subgroup, no identity check) and coinbase masks (`CTTypeNull` has no balance
+equation, so `shekyl_verify_ct_balance` never sees them). Absent this rule, a
+torsioned or identity `O` — or a torsioned coinbase mask — is accepted on-chain
+but rejected by the FCMP++ leaf builder (`ed25519_point_to_selene_scalar`
+decodes prime-order-only; `to_xy` has no affine form for the identity), so the
+output is silently skipped from the curve tree (`blockchain_db.cpp` leaf
+construction returns false → no leaf) and is permanently unspendable. That is
+deterministic on every node (single shared leaf primitive) and self-inflicted
+— but it is a permanent hole in the every-on-chain-output-is-a-leaf invariant.
+With this rule the malformed tx never enters a block: "accepted on-chain"
+implies "representable in the tree."
+
+*Adversarial-only.* Honest output keys are torsion-free by construction
+(`O = ho·G + B + y·T`, `is_torsion_free`-checked at creation in
+`shekyl-crypto-pq::output`); honest masks are `zG + aH`. No valid transaction
+is affected. Prompted by advisory GHSA-r675-h3pj-wj2f: the reporter's
+Monero-compatibility premise does not apply (there is no Monero chain state to
+cover), but the admission-vs-leaf-builder strictness gap the report surfaced is
+real, and this rule closes it in the direction the tree already enforces.
+
+*Safe to freeze pre-genesis.* Same posture as the commitment rule above: no
+installed base ever ran the lax inherited check. Single home:
+`shekyl-ct-balance::{check_output_keys, check_commitment_masks}` (the crate
+already owning §2.3 point canonicality), exposed via the
+`shekyl_check_output_keys` / `shekyl_check_commitment_masks` FFI exports; the
+C++ `check_outs_valid` (`cryptonote_format_utils.cpp`, pool txs +
+`prevalidate_miner_transaction` for coinbase output keys) and
+`check_commitment_mask_valid` (`blockchain.cpp`) are thin marshaling shims per
+rule 20 boundary advancement — the native `crypto::check_key` /
+`rct::zeroCommit` logic is retired from the admission path in the same cut.
+
 ### 2.4 Coinbase construction
 
 | Element | Source | Disposition |
