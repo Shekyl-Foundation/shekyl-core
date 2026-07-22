@@ -21,10 +21,10 @@ pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 pub use engine::MultisigSignerV2;
 pub use engine::{
     Capability, CapabilityInput, ChangePasswordError, Credentials, DaemonClient, DaemonOp,
-    DiagnosticSink, Engine, EngineCreateParams, EngineSignerKind, FeePriority, FeeTierQuote,
-    FirstStakeError, FirstStakeOutcome, InputCount, IoError, KeyError, LocalRefresh, MalformedKind,
-    Network, NoopDiagnosticSink, OpenError, OpenedEngine, OutputCount, PScanHandle,
-    PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
+    DiagnosticSink, DrainBalanceReadError, Engine, EngineCreateParams, EngineSignerKind,
+    FeePriority, FeeTierQuote, FirstStakeError, FirstStakeOutcome, InputCount, IoError, KeyError,
+    LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine, OutputCount,
+    PScanHandle, PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
     RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
     RefreshReorgEvent, RefreshSummary, ReservationId, ScannableBlock, SendError, SoloSigner,
     StakedBalance, StakedOutput, StakingReadError, StakingReadView, StateWrapKey, SuppressedClass,

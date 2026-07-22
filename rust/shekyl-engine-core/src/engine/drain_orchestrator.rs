@@ -188,18 +188,31 @@ fn is_mature(record: &PFundingOutputRecord, reference_height: BlockHeight) -> bo
 }
 
 /// Project `P`'s persisted funding records into the drain operands: drop
-/// `{lineage, epoch, height}`, keep only the provable (mature) subset, and
-/// reduce to the aggregate scalar + the stripped candidate vector.
+/// `{lineage, epoch, height}`, keep only the provable (mature) **and
+/// unreserved** subset, and reduce to the aggregate scalar + the stripped
+/// candidate vector.
+///
+/// `reserved` is the gindex union already committed to in-flight bond posts /
+/// claims / drains (`PendingPostBlock::reserved_gindexes`). Excluding it here —
+/// the *same* carve [`drain_balance`] applies — keeps both operands consistent:
+/// the spendable scalar the amount stage checks affordability against, and the
+/// candidate set [`select_for_drain`] draws from, are one net set. That is what
+/// makes the totals reconcile (a plan can never be sized against funds a live tx
+/// already holds) and structurally bars the selector from choosing a reserved
+/// output — a double-spend of an in-flight input — regardless of whether the
+/// caller pre-scoped the records. A gindex is a public curve-tree leaf position,
+/// so the filter stays lineage-blind.
 ///
 /// This is the sole site that reads the funding record's stripped-away
 /// fields; the operands it returns carry none of them.
 fn project_drain_operands(
     records: &[PFundingOutputRecord],
     reference_height: BlockHeight,
+    reserved: &BTreeSet<GlobalOutputIndex>,
 ) -> Result<DrainOperands, DrainError> {
     let candidates: Vec<DrainCandidate> = records
         .iter()
-        .filter(|r| is_mature(r, reference_height))
+        .filter(|r| is_mature(r, reference_height) && !reserved.contains(&r.gindex))
         .map(|r| DrainCandidate {
             output_id: r.gindex,
             amount: r.amount,
@@ -219,20 +232,29 @@ fn project_drain_operands(
 /// F-D2 core-side surface: the aggregate spendable `P` balance at a reference
 /// height. Exposes only the scalar — no decomposition reaches the caller.
 ///
-/// A balance read needs only the aggregate, so it sums the mature amounts
+/// "Spendable" is **mature ∧ unreserved** — the codebase's standing definition
+/// of a persona's usable `P` funding (`bond_assembly`'s sweep sums the
+/// *unreserved* mature records, and `InsufficientFunding.available` is their
+/// sum). `reserved` is the union of gindexes already committed to in-flight
+/// bond posts / claims / drains (`PendingPostBlock::reserved_gindexes`); an
+/// output a live tx holds cannot also be drained, so counting it would
+/// over-report "drainable". A gindex is a public curve-tree leaf position, so
+/// the filter stays lineage-blind — never a reward-sequence coordinate.
+///
+/// A balance read needs only the aggregate, so it sums the eligible amounts
 /// directly rather than routing through [`project_drain_operands`], which
 /// materialises the stripped candidate vector the *select* stage consumes — a
 /// heap allocation a poll-frequency query has no use for. It observes the same
-/// carve: only `amount`, gated by the shared [`is_mature`] predicate, never a
-/// reward-sequence coordinate.
+/// carve: only `amount`, gated by the shared [`is_mature`] predicate.
 pub fn drain_balance(
     records: &[PFundingOutputRecord],
     reference_height: BlockHeight,
+    reserved: &BTreeSet<GlobalOutputIndex>,
 ) -> Result<DrainBalance, DrainError> {
     let spendable = AtomicUnits::checked_sum(
         records
             .iter()
-            .filter(|r| is_mature(r, reference_height))
+            .filter(|r| is_mature(r, reference_height) && !reserved.contains(&r.gindex))
             .map(|r| r.amount),
     )
     .ok_or(DrainError::AmountOverflow)?;
@@ -242,9 +264,15 @@ pub fn drain_balance(
 /// Plan a drain of `target` atomic units out of `P`'s spendable funding
 /// outputs at `reference_height`.
 ///
-/// Runs the three F-D1 stages in order — project (this module) → amount
-/// ([`choose_drain_amount`], affordability against the aggregate scalar only)
-/// → select ([`select_for_drain`], lineage-blind over the stripped vector).
+/// Runs the three F-D1 stages in order — project (this module; mature ∧
+/// unreserved) → amount ([`choose_drain_amount`], affordability against the
+/// aggregate scalar only) → select ([`select_for_drain`], lineage-blind over the
+/// stripped vector). `reserved` (the in-flight gindex union) is excluded at the
+/// projection, so the spendable scalar, the affordability check, and the
+/// selectable candidates are one consistent net set — a drain can neither be
+/// planned against nor select an output an in-flight tx already holds, and its
+/// figure reconciles with the [`drain_balance`] read.
+///
 /// `target` is a single scalar (F-D2 core-side contract): the caller cannot
 /// hand in a reward decomposition, and the per-output reward vector never
 /// reaches the amount stage — so core code cannot *compute* a reward-shaped
@@ -254,8 +282,9 @@ pub fn plan_drain(
     records: &[PFundingOutputRecord],
     reference_height: BlockHeight,
     target: AtomicUnits,
+    reserved: &BTreeSet<GlobalOutputIndex>,
 ) -> Result<DrainPlan, DrainError> {
-    let operands = project_drain_operands(records, reference_height)?;
+    let operands = project_drain_operands(records, reference_height, reserved)?;
     plan_from_operands(&operands, reference_height, target)
 }
 
@@ -561,12 +590,15 @@ pub(crate) async fn orchestrate_drain(
         .checked_add(ctx.fee)
         .ok_or(DrainError::AmountOverflow)?;
 
-    // Project the scoped records **once**: the same mature-filter pass yields
-    // both the aggregate scalar (the reserve gate's input, also the F-D2 balance
-    // surface) and the stripped candidate vector the planner selects over —
-    // rather than summing in `drain_balance` and then re-summing inside
-    // `plan_drain`'s own projection.
-    let operands = project_drain_operands(&scoped, reference_height)?;
+    // Project the scoped records **once**: the same mature ∧ unreserved pass
+    // yields both the aggregate scalar (the reserve gate's input, also the F-D2
+    // balance surface) and the stripped candidate vector the planner selects
+    // over — rather than summing in `drain_balance` and then re-summing inside
+    // `plan_drain`'s own projection. `scoped` is already reserved-free
+    // (`scoped_records`), so passing `ctx.reserved` here is defense in depth:
+    // the projection is net by construction, so no caller — scoped or not — can
+    // produce a plan sized against, or selecting, an in-flight-held output.
+    let operands = project_drain_operands(&scoped, reference_height, ctx.reserved)?;
     let scoped_spendable = operands.balance.spendable.to_raw();
 
     // DS-4 exit-reserve enforcement (before selection): a **live** persona must
@@ -688,10 +720,26 @@ mod tests {
         immature.spendable_height = BlockHeight::from_raw(REF + 1);
         let records = [mature(1, 40), mature(2, 60), immature];
 
-        let balance = drain_balance(&records, BlockHeight::from_raw(REF)).expect("projects");
+        let balance = drain_balance(&records, BlockHeight::from_raw(REF), &BTreeSet::new())
+            .expect("projects");
 
         // 40 + 60; the immature million is excluded from the spendable scalar.
         assert_eq!(balance.spendable, AtomicUnits::from_raw(100));
+    }
+
+    #[test]
+    fn drain_balance_excludes_reserved_outputs() {
+        // gindex 2 is committed to an in-flight bond post / claim / drain, so it
+        // is not drainable — it must not count toward the spendable scalar even
+        // though it is mature ("spendable = unreserved mature").
+        let records = [mature(1, 40), mature(2, 60), mature(3, 5)];
+        let reserved = BTreeSet::from([GlobalOutputIndex::from_raw(2)]);
+
+        let balance =
+            drain_balance(&records, BlockHeight::from_raw(REF), &reserved).expect("projects");
+
+        // 40 + 5; the reserved 60 is excluded.
+        assert_eq!(balance.spendable, AtomicUnits::from_raw(45));
     }
 
     #[test]
@@ -702,6 +750,7 @@ mod tests {
             &records,
             BlockHeight::from_raw(REF),
             AtomicUnits::from_raw(90),
+            &BTreeSet::new(),
         )
         .expect("affordable and coverable");
 
@@ -713,12 +762,48 @@ mod tests {
     }
 
     #[test]
+    fn plan_drain_never_plans_against_or_selects_a_reserved_output() {
+        // The big output (gindex 2, 100) is committed to an in-flight tx. The
+        // plan must (a) size affordability against the unreserved total only —
+        // 30 + 30 = 60, so a target of 90 is Unaffordable — and (b) never select
+        // the reserved output. Both operands must be net, or the read total and
+        // the drainable total disagree and the selector could double-spend an
+        // in-flight input.
+        let records = [mature(1, 30), mature(2, 100), mature(3, 30)];
+        let reserved = BTreeSet::from([GlobalOutputIndex::from_raw(2)]);
+
+        // (a) affordability is against the net scalar (60), not the gross (160).
+        let err = plan_drain(
+            &records,
+            BlockHeight::from_raw(REF),
+            AtomicUnits::from_raw(90),
+            &reserved,
+        );
+        assert_eq!(err, Err(DrainError::Unaffordable));
+
+        // (b) an affordable target draws only from the unreserved candidates.
+        let plan = plan_drain(
+            &records,
+            BlockHeight::from_raw(REF),
+            AtomicUnits::from_raw(50),
+            &reserved,
+        )
+        .expect("50 <= 60 net spendable");
+        assert!(
+            !plan.inputs.contains(&GlobalOutputIndex::from_raw(2)),
+            "selector chose a reserved (in-flight) output: {:?}",
+            plan.inputs
+        );
+    }
+
+    #[test]
     fn plan_drain_rejects_zero_target() {
         let records = [mature(1, 100)];
         let err = plan_drain(
             &records,
             BlockHeight::from_raw(REF),
             AtomicUnits::from_raw(0),
+            &BTreeSet::new(),
         );
         assert_eq!(err, Err(DrainError::EmptyRequest));
     }
@@ -734,6 +819,7 @@ mod tests {
             &records,
             BlockHeight::from_raw(REF),
             AtomicUnits::from_raw(101),
+            &BTreeSet::new(),
         );
         assert_eq!(err, Err(DrainError::Unaffordable));
     }
@@ -816,6 +902,7 @@ mod tests {
             std::slice::from_ref(&r),
             BlockHeight::from_raw(REF),
             AtomicUnits::from_raw(pool + 1),
+            &BTreeSet::new(),
         );
         assert_eq!(err, Err(DrainError::Unaffordable));
     }

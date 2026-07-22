@@ -52,6 +52,33 @@
 
 ### Added
 
+- **wallet (engine): F-D2 aggregate drain-balance read — DS-PR-3 PR-A
+  (`ARCHIVAL_DRAIN_SEND_FD2.md` §1 layer 1).** The core-side "how much is
+  drainable?" accessor the GUI polls: `Engine::drain_balance_aggregate`
+  (`engine/drain_read.rs`), a self-arc method that loads the sealed
+  `PScanState`, anchors the canonical send-path reference via
+  `bond_orchestrator::anchored_reference_block` (the same helper the drain
+  path anchors through — so the displayed drainable figure is measured at
+  the block a spend proves against, never raw tip), and returns
+  `drain_balance`'s aggregate scalar. "Spendable" is **mature ∧ unreserved**:
+  a funding output a live bond post / claim / drain already commits (the
+  sealed `reserved_gindexes` union, read via `load_pending_posts_for_engine`)
+  is netted out — the same "spendable = unreserved mature" definition the bond
+  sweep uses. The F-D1 planner (`plan_drain` / `project_drain_operands`) applies
+  the identical `reserved` carve, so the read total, the drain plan's
+  affordability check, and the selectable candidate set are one consistent net
+  set: the numbers reconcile, and the selector can never pick an output an
+  in-flight tx already holds (a double-spend of a committed input). Non-stakers /
+  unscanned wallets report an honest `Ok(0)` (short-circuited before
+  anchoring). The new `DrainBalanceReadError` is two-armed by design (rule 82;
+  DS-PR-3 locked decision) — `Unanchorable` (transient; the UI renders
+  "syncing", never a zero) vs. `State` (non-transient fault) — so a balance
+  read never renders a misleading zero and never conflates "still syncing"
+  with a real fault; the anchor-error mapping fails closed with a static
+  message on any unexpected arm, so no amount or gindex crosses the read
+  surface. Aggregate-only by construction: no reward decomposition crosses the
+  surface (F-D1 trust boundary). The GUI wiring (`EngineSession`/command/
+  render) follows in DS-PR-3 PR-B (`shekyl-gui-wallet`).
 - **wallet (engine): F-D2 drain orchestration + dispatch landed — DS-PR-2
   (`ARCHIVAL_DRAIN_SEND_FD2.md` §DS-PR-2, the core-side dispatch half).**
   The `P`→principal drain **request path**, the emission-claim sibling:

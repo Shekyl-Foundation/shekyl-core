@@ -246,6 +246,15 @@ pub(crate) mod drain_dispatch;
 /// ([`drain_orchestrator::DrainBalance`]). Public: the drain planner is the
 /// API the eventual drain command/actor calls.
 pub mod drain_orchestrator;
+/// F-D2 aggregate drain-balance read (`ARCHIVAL_DRAIN_SEND_FD2.md`): the
+/// engine-side "how much is drainable?" accessor a UI polls. Lifts the sealed
+/// `P` funding set, anchors the canonical send-path reference
+/// ([`bond_orchestrator::anchored_reference_block`], the same helper the drain
+/// itself anchors through), and returns the aggregate spendable scalar. Its
+/// [`drain_read::DrainBalanceReadError`] is two-armed by design (transient
+/// "syncing" vs. non-transient state fault) so the read never renders a
+/// misleading zero.
+pub(crate) mod drain_read;
 /// F-D1 select stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): lineage-blind coin
 /// selection over the stripped `{output_id, amount, spendable_height}`
 /// vector — a guarded module the M1 import-check arm keeps blind to the
@@ -423,6 +432,11 @@ pub use pending::{
 // handle embedder-held, not engine-held — see `pscan::start`'s docs) can name
 // the types without reaching into the `pub(crate)` pscan internals.
 pub use bond_orchestrator::{FirstStakeError, FirstStakeOutcome};
+// F-D2 aggregate drain-balance read error: two-armed (transient "syncing" vs.
+// non-transient state fault), re-exported flat so the wallet/GUI can match on
+// the arm across the command boundary without reaching into the `pub(crate)`
+// drain-read module (mirrors the `FirstStakeError` re-export just above).
+pub use drain_read::DrainBalanceReadError;
 pub use pscan::start::{PScanHandle, PScanStartError, DEFAULT_PSCAN_CADENCE};
 pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
