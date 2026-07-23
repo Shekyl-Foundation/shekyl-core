@@ -4,6 +4,42 @@
 
 ### Security
 
+- **wallet-rpc: in-process RPC serves over a private Unix domain socket,
+  not auth-less loopback TCP** (WI-RPC-2a; `WALLET_REWRITE_PLAN.md` Shape B).
+  `spawn_in_process` previously bound an ephemeral `127.0.0.1` TCP port with
+  authentication disabled — reachable by any local process for the lifetime
+  of a CLI session. It now serves over a UDS created `0600` inside a private
+  per-spawn `0700` directory under `$XDG_RUNTIME_DIR` (private tempdir
+  fallback), removed on shutdown. Priority-1 fix under `00-mission.mdc`:
+  the wallet's unauthenticated command surface is no longer visible to
+  other local users or processes outside the owning uid.
+
+### Added
+
+- **wallet-rpc: `restore_wallet`** (WI-RPC-2a; contract in
+  `docs/api/wallet_rpc.yaml` same PR). Restores a wallet from a BIP-39
+  mnemonic + password + optional `restore_height`, mirroring
+  `create_wallet`'s lifecycle shape. Error mapping keeps mnemonic material
+  out of every message (stable `InvalidParams` strings).
+- **cli: native wallet-RPC client** (WI-RPC-2a; ratified Shape B, decision
+  log 2026-04-25). `shekyl-cli` is now always a JSON-RPC client:
+  the REPL and one-shot commands self-host `shekyl-wallet-rpc` in-process
+  over the private UDS above; `--rpc-url` targets an external daemon. Core
+  commands (lifecycle incl. `restore`, balance, address, status, refresh,
+  the build→confirm→submit/discard transfer flow, transfers) run over the
+  OpenAPI contract; the CLI is presentation-only.
+
+### Removed
+
+- **cli: the wallet2 FFI path** (WI-RPC-2a). `EngineContext` and the
+  `shekyl-engine-rpc` dependency are deleted from `shekyl-cli`; a test
+  gate greps the crate for `wallet2`/`shekyl-engine-rpc`/`EngineContext`
+  identifier residue. Commands whose native RPC surface has not landed
+  answer with a uniform transitional stub (migrated or deleted in
+  WI-RPC-2b).
+
+### Security
+
 - **consensus: output points must be canonical prime-order at admission**
   (`GENESIS_TX_WIRE_FORMAT.md` §2.3 output-point rule, ratified 2026-07-22;
   prompted by advisory GHSA-r675-h3pj-wj2f). Every output public key `O`
