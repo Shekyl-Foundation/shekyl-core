@@ -93,7 +93,11 @@ fn print_request_row(r: &Value) {
     let state = r.get("state").and_then(|v| v.as_str()).unwrap_or("?");
     let amount = opt_amount(r, "amount");
     let created = r.get("created_at").and_then(|v| v.as_i64()).unwrap_or(0);
-    let label = r.get("label").and_then(|v| v.as_str()).unwrap_or("");
+    // Free-form label: neutralize control chars so a crafted value cannot
+    // inject terminal escape sequences.
+    let label = crate::display::sanitize_for_terminal(
+        r.get("label").and_then(|v| v.as_str()).unwrap_or(""),
+    );
     println!("{id:<16} {state:<10} {amount:>18} {created:>10}  {label}");
     if let Some(tx) = r.get("matched_tx_hash").and_then(|v| v.as_str()) {
         println!("{:<16} matched by tx {tx}", "");
@@ -137,16 +141,19 @@ pub fn cmd_parse_uri(rpc: &RpcSession, uri: &str) {
     }
     match rpc.call("parse_uri", json!({ "uri": uri })) {
         Ok(val) => {
+            // Every string field here is decoded from an attacker-controlled
+            // URI, so neutralize control chars before printing.
+            use crate::display::sanitize_for_terminal as safe;
             let address = val.get("address").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Address: {address}");
+            println!("Address: {}", safe(address));
             if let Some(amount) = val.get("amount").and_then(|v| v.as_str()) {
-                println!("Amount:  {} SKL", format_amount_str(amount));
+                println!("Amount:  {} SKL", safe(&format_amount_str(amount)));
             }
             if let Some(label) = val.get("label").and_then(|v| v.as_str()) {
-                println!("Label:   {label}");
+                println!("Label:   {}", safe(label));
             }
             if let Some(rid) = val.get("rid").and_then(|v| v.as_str()) {
-                println!("Request: {rid}");
+                println!("Request: {}", safe(rid));
             }
             if let Some(expiry) = val.get("expiry").and_then(|v| v.as_i64()) {
                 println!("Expiry:  height {expiry}");

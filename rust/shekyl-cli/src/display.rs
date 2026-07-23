@@ -118,3 +118,44 @@ fn multiplexer_warning() -> Option<&'static str> {
 pub fn is_secret_command(cmd: &str) -> bool {
     cmd == "restore"
 }
+
+/// Neutralize control characters in free-form, externally-supplied text before
+/// printing it to the terminal, replacing each with the Unicode replacement
+/// char. A payment-request label is free-form and, when carried on a
+/// counterparty's `shekyl:` URI (`parse_uri`), attacker-controlled — rendering
+/// it raw would let a crafted value inject ANSI/OSC escape sequences (cursor
+/// moves, screen clears, clipboard writes). Borrows unchanged when the text is
+/// already clean, so the common path does not allocate.
+pub fn sanitize_for_terminal(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.chars().any(char::is_control) {
+        std::borrow::Cow::Owned(
+            s.chars()
+                .map(|c| if c.is_control() { '\u{FFFD}' } else { c })
+                .collect(),
+        )
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_for_terminal;
+    use std::borrow::Cow;
+
+    #[test]
+    fn sanitize_neutralizes_control_chars_and_borrows_clean_text() {
+        // An embedded ANSI clear-screen escape and a newline are neutralized.
+        let cleaned = sanitize_for_terminal("safe\u{1b}[2Jmore\ntail");
+        assert!(
+            !cleaned.chars().any(char::is_control),
+            "no control chars survive: {cleaned:?}"
+        );
+        assert!(cleaned.contains('\u{FFFD}'));
+        // Clean text is borrowed unchanged — no allocation on the common path.
+        assert!(matches!(
+            sanitize_for_terminal("plain label"),
+            Cow::Borrowed("plain label")
+        ));
+    }
+}

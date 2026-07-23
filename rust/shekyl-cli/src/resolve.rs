@@ -287,9 +287,17 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 diag("request new: need <amount> <label> [--expiry <height>]")
             }
         }
-        "requests" if args.first().copied() == Some("list") => ResolvedCommand::RequestsList {
-            filter: args.get(1).map(|s| s.to_string()),
-        },
+        "requests" if args.first().copied() == Some("list") => {
+            // Reject stray extra args instead of silently dropping them (a
+            // `requests list pending extra` typo must not look like it worked).
+            if args.len() > 2 {
+                diag("requests list: too many arguments (usage: requests list [pending|matched|all])")
+            } else {
+                ResolvedCommand::RequestsList {
+                    filter: args.get(1).map(|s| s.to_string()),
+                }
+            }
+        }
         "history" if args.first().copied() == Some("incoming") => {
             if args.contains(&"--unattributed") {
                 ResolvedCommand::HistoryIncomingUnattributed
@@ -812,6 +820,11 @@ mod tests {
             ResolvedCommand::RequestsList { filter } => assert!(filter.is_none()),
             other => panic!("expected RequestsList, got {other:?}"),
         }
+        // Stray extra args are rejected, not silently dropped.
+        assert!(matches!(
+            parse("requests list pending extra"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
     }
 
     #[test]

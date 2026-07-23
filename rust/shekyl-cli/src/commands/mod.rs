@@ -218,19 +218,19 @@ pub fn repl(
                     | ResolvedCommand::CheckTxProof { .. }
                     | ResolvedCommand::GetReserveProof { .. }
                     | ResolvedCommand::CheckReserveProof { .. } => {
-                        reserved("proofs", "the transaction-proof RPC surface");
+                        reserved(first_token, "the transaction-proof RPC surface");
                     }
 
                     // Signing (RESERVED)
                     ResolvedCommand::Sign { .. } | ResolvedCommand::Verify { .. } => {
-                        reserved("sign/verify", "the message-signing RPC surface");
+                        reserved(first_token, "the message-signing RPC surface");
                     }
 
                     // Offline signing (RESERVED)
                     ResolvedCommand::DescribeTransfer { .. }
                     | ResolvedCommand::SignTransfer { .. }
                     | ResolvedCommand::SubmitTransfer { .. } => {
-                        reserved("offline signing", "the offline cold-signing workflow");
+                        reserved(first_token, "the offline cold-signing workflow");
                     }
 
                     // Meta
