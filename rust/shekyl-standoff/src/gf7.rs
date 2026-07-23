@@ -34,10 +34,9 @@
 //!   to ground truth on its own side (it *is* the ground truth), so the
 //!   emission needs correlatable ordinals only — the hook surface is
 //!   secret-free by construction.
-//! - **Sweepable parameters ride the events.** Window, spread, order-coin
-//!   appear where they were consumed, so the measurement round grades
-//!   `P(link | T_obs)` *as a function of* those parameters without
-//!   re-instrumenting.
+//! - **Sweepable parameters ride the events.** Window and spread appear where
+//!   they were consumed, so the measurement round grades `P(link | T_obs)`
+//!   *as a function of* those parameters without re-instrumenting.
 
 /// A logical instant: a block height in the sim's frame, or a block offset
 /// where the event says so. Never wall clock (see the module docs).
@@ -55,9 +54,11 @@ pub type PersonaOrdinal = u64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TimelineEvent {
     // -- Axis (iii): principal lifecycle -----------------------------------
-    /// The principal dispatched a funding send (toward a `P` or otherwise —
-    /// the adversary sees the send, not its purpose).
-    FundingSendDispatched { at: LogicalTime },
+    // NOTE: there is deliberately no `FundingSendDispatched` event. The funding
+    // send is the unnamed, CT-hidden FCMP++ input — not a chain-attributable
+    // event — so emitting it made the sim's observable set include a phantom,
+    // which is how the "second event" regenerated after method note 8. The bond
+    // post is the single attributable entry event.
     /// The principal dispatched a drain / unbond-shaped operation.
     DrainDispatched { at: LogicalTime },
     /// A principal refresh cycle ran (the wallet's periodic chain-sync
@@ -68,24 +69,22 @@ pub enum TimelineEvent {
     WalletSessionMarker { at: LogicalTime },
 
     // -- Axis (i): the bond-post and its draw ------------------------------
-    /// The entry-gap draw was consumed by the planner. Carries the draw
-    /// parameters — the actual values that ran, so the sim grades the draw
-    /// that happened, not a re-derivation.
+    /// The entry-gap draw was consumed. Carries the draw parameters — the
+    /// actual values that ran, so the sim grades the draw that happened, not a
+    /// re-derivation. There is no order-coin field: the draw is a single spread.
     EntryGapDrawConsumed {
         persona: PersonaOrdinal,
         /// The window the draw ran at (`spread ~ U[0, window]`).
         window_blocks: u64,
         /// The drawn spread.
         spread_blocks: u64,
-        /// The fair order-coin (`true` = bond-post precedes the entry event).
-        bond_first: bool,
     },
-    /// The planner placed the two seam events. Offsets are **blocks relative
-    /// to the private-intent anchor** (`shekyl_standoff::plan`); the anchor
-    /// itself is the principal's secret and never appears.
+    /// The bond post was scheduled. The offset is **blocks relative to the
+    /// private-intent anchor** `t0`; the anchor itself is the principal's
+    /// secret and never appears. There is no second (entry) offset — only the
+    /// bond post is chain-attributable.
     BondPostScheduled {
         persona: PersonaOrdinal,
-        entry_offset_blocks: u64,
         bond_post_offset_blocks: u64,
     },
     /// The bond-post actually went to a wire (absolute logical time in the

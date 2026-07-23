@@ -734,6 +734,15 @@ valid** (positive `P(link)=0.996 ≥ 0.80`; negative `P(link)=0.102`,
 
 ### 13.1 Verdict: PROVISIONAL-PASS (local-daemon posture only; remote-daemon posture unmet, named residual; wall-clock leg (b) open)
 
+> **⛔ INTERIM (GF-7 coin retirement, PR-A): the `r = 1.86` verdict is
+> FAIL-CLOSED.** The order coin and the `FundingSendDispatched` event the
+> correlator graded were retired — only the bond post is chain-attributable, so
+> the entry-seam ordering channel `r = 1.86` measured no longer has an input.
+> The `shekyl-staking-sim` GF-7 arm now emits `GF7_FAIL_CLOSED`, not a verdict.
+> The retraction narrative and the honest re-derivation (chain-observer half is
+> unconditional; transport-observer half is a named residual defended by circuit
+> isolation) land in **PR-C**. Do not cite `r = 1.86` as live.
+
 The verdict is deliberately narrow, per the review: it certifies the
 recommended **local-daemon posture** against a **block-resolution**
 observer in **steady state**, and it names what it does not certify — the

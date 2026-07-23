@@ -32,8 +32,9 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # depends on; CI asserts the dependency graph). The `gf7-hooks` feature pulls
 # the observer trait + event vocabulary; the `--gf7-timeline` mode drives the
 # joint three-axis scenario through the recorded timeline (§6.3). The sim also
-# imports the single-sourced `draw_entry_gap` + `plan_entry_seam` so it grades
-# the same draw/planner the wallet runs ("what we validated is what ships").
+# imports the single-sourced `draw_entry_gap` so it grades the same draw the
+# wallet runs ("what we validated is what ships"). (The order-coin planner
+# `plan_entry_seam` it also used is retired — GF-7 coin retirement.)
 shekyl-standoff = { path = "../shekyl-standoff", features = ["gf7-hooks"] }
 
 # The `conformance` feature (float grading + self-cert harness) stays dev-only:

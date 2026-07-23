@@ -31,11 +31,11 @@ use shekyl_stats::{chi_square_upper_crit, Z_ALPHA_1E6};
 
 #[test]
 fn correct_draw_is_well_distributed() {
-    // A large sample of the realized (spread, order) must be uniform in spread
-    // and balanced in order — well-distributed, not merely within ±window.
+    // A large sample of the realized spread must be uniform — well-distributed,
+    // not merely within ±window.
     let window = 600u64;
     let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
-    let sample: Vec<(u64, bool)> = (0..CERTIFY_SAMPLE_N)
+    let sample: Vec<u64> = (0..CERTIFY_SAMPLE_N)
         .map(|_| draw_entry_gap(window, &mut rng))
         .collect();
     let st = summarize_gaps(&sample, window);
@@ -43,11 +43,6 @@ fn correct_draw_is_well_distributed() {
         (st.mean_spread - 300.0).abs() < 6.0,
         "mean_spread = {}",
         st.mean_spread
-    );
-    assert!(
-        (st.bond_first_frac - 0.5).abs() < 0.01,
-        "order = {}",
-        st.bond_first_frac
     );
     assert!(
         (st.first_decile_frac - 0.10).abs() < 0.01,
@@ -68,7 +63,7 @@ fn double_jitter_trap_fails_the_same_check() {
     // zero-peaked; the conformance summary must reject it.
     let window = 600u64;
     let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
-    let sample: Vec<(u64, bool)> = (0..CERTIFY_SAMPLE_N)
+    let sample: Vec<u64> = (0..CERTIFY_SAMPLE_N)
         .map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng))
         .collect();
     let st = summarize_gaps(&sample, window);
@@ -87,12 +82,6 @@ fn double_jitter_trap_fails_the_same_check() {
         "trap max decile dev = {}",
         st.max_decile_dev
     );
-    // The order coin can still look fair — order-balance alone is insufficient.
-    assert!(
-        (st.bond_first_frac - 0.5).abs() < 0.02,
-        "trap order = {}",
-        st.bond_first_frac
-    );
 }
 
 #[test]
@@ -103,10 +92,10 @@ fn chi_square_grades_uniform_at_strict_alpha() {
     let n_bins = 60;
     let crit = chi_square_upper_crit((n_bins - 1) as f64, Z_ALPHA_1E6);
     let mut rng = SplitMix64(0x5EED_1234_ABCD_0001);
-    let good: Vec<(u64, bool)> = (0..CERTIFY_SAMPLE_N)
+    let good: Vec<u64> = (0..CERTIFY_SAMPLE_N)
         .map(|_| draw_entry_gap(window, &mut rng))
         .collect();
-    let bad: Vec<(u64, bool)> = (0..CERTIFY_SAMPLE_N)
+    let bad: Vec<u64> = (0..CERTIFY_SAMPLE_N)
         .map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng))
         .collect();
     let chi_good = chi_square_uniform(&good, window, n_bins);
@@ -154,7 +143,7 @@ fn serial_independence_reference_passes_correlated_fails() {
     let window = 600u64;
     let m = 20_000usize;
     let mut rng = SplitMix64(0x5E11_A1B2_C3D4_E5F6);
-    let reference: Vec<u64> = (0..m).map(|_| draw_entry_gap(window, &mut rng).0).collect();
+    let reference: Vec<u64> = (0..m).map(|_| draw_entry_gap(window, &mut rng)).collect();
     let correlated = correlated_walk(&mut rng, window, m);
     let r_ref = lag1_autocorr_u64(&reference).abs();
     let r_corr = lag1_autocorr_u64(&correlated).abs();
@@ -179,9 +168,7 @@ fn exactly_uniform_sample_scores_zero_despite_unequal_bin_widths() {
     // counts the statistic is exactly zero.
     let window = 600u64;
     let reps = 333usize;
-    let exact: Vec<(u64, bool)> = (0..reps)
-        .flat_map(|r| (0..=window).map(move |s| (s, (s + r as u64) & 1 == 0)))
-        .collect();
+    let exact: Vec<u64> = (0..reps).flat_map(|_| 0..=window).collect();
     let report = grade_sample(&exact, window);
     assert!(
         report.chi_square.abs() < 1e-9,
@@ -200,7 +187,6 @@ fn self_cert_passes_reference_rng() {
     let mut rng = SplitMix64(0x90DE_4242_7777_0001);
     let report = certify_draw(&mut rng, 600, CERTIFY_SAMPLE_N);
     assert!(report.uniform_ok, "uniform grade failed: {report:?}");
-    assert!(report.order_balanced, "order grade failed: {report:?}");
     assert!(report.serial_independent, "serial grade failed: {report:?}");
     assert!(report.passed(), "overall self-cert failed: {report:?}");
 }
@@ -213,7 +199,7 @@ fn self_cert_rejects_trap_and_correlated_samples() {
     let mut rng = SplitMix64(0x90DE_4242_7777_0002);
 
     // Triangular trap: spread is non-uniform.
-    let trap: Vec<(u64, bool)> = (0..CERTIFY_SAMPLE_N)
+    let trap: Vec<u64> = (0..CERTIFY_SAMPLE_N)
         .map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng))
         .collect();
     let trap_report = grade_sample(&trap, window);
@@ -226,9 +212,8 @@ fn self_cert_rejects_trap_and_correlated_samples() {
         "trap should not pass self-cert: {trap_report:?}"
     );
 
-    // Correlated walk paired with a fair coin: marginal ~uniform, serial-dependent.
-    let walk = correlated_walk(&mut rng, window, 20_000);
-    let correlated: Vec<(u64, bool)> = walk.iter().map(|&s| (s, true)).collect();
+    // Correlated walk: marginal ~uniform, serial-dependent.
+    let correlated = correlated_walk(&mut rng, window, 20_000);
     let corr_report = grade_sample(&correlated, window);
     assert!(
         !corr_report.serial_independent,
@@ -250,8 +235,7 @@ fn helpers_are_well_defined_at_extreme_windows() {
     let walk = correlated_walk(&mut rng, u64::MAX, 256);
     assert_eq!(walk.len(), 256);
 
-    let sample: Vec<(u64, bool)> = walk.iter().map(|&s| (s, s & 1 == 0)).collect();
-    let report = grade_sample(&sample, u64::MAX);
+    let report = grade_sample(&walk, u64::MAX);
     assert_eq!(report.n, 256);
 }
 
@@ -264,7 +248,6 @@ fn empty_sample_summary_does_not_manufacture_a_shape() {
     assert_eq!(st.n, 0);
     assert_eq!(st.mean_spread, 0.0);
     assert_eq!(st.max_spread, 0);
-    assert_eq!(st.bond_first_frac, 0.0);
     assert_eq!(st.first_decile_frac, 0.0);
     assert_eq!(
         st.max_decile_dev, 0.0,
@@ -288,7 +271,7 @@ fn no_observations_cannot_claim_uniformity() {
         "empty sample must not self-certify: {empty:?}"
     );
 
-    let single = grade_sample(&[(123u64, true)], window);
+    let single = grade_sample(&[123u64], window);
     assert!(
         !single.uniform_ok,
         "a single draw cannot evidence a distribution shape: {single:?}"

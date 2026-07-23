@@ -12,8 +12,9 @@
 //!   triangular double-jitter trap and the epoch-snapped anchor cluster).
 //! - **Self-certification** ([`certify_draw`] / [`grade_sample`]) — the
 //!   RNG-generic tool a wallet runs against **its own** CSPRNG to grade the
-//!   draw property (uniform spread, fair order, serial independence), not just
-//!   the reference. The anchor-independence demonstration stays a separate,
+//!   draw property (uniform spread, serial independence), not just the
+//!   reference. (The former fair-order grade went with the retired order coin.)
+//!   The anchor-independence demonstration stays a separate,
 //!   consumer-side instrument because the anchor is consensus-unenforceable.
 //!
 //! Grading uses a strict alpha (1e-6, via [`shekyl_stats::Z_ALPHA_1E6`]): a
@@ -41,18 +42,16 @@ use crate::draw::{bounded_uniform, draw_entry_gap, GapRng};
 /// distinct outcomes when `window` is small).
 const UNIFORM_BINS: usize = 60;
 
-/// Distribution summary of a `(spread, bond_first)` sample — the quantities the
-/// conformance vector asserts on. A correct (uniform) draw gives
-/// `mean_spread ~ window/2`, `bond_first_frac ~ 0.5`, `first_decile_frac ~ 0.10`,
-/// and a small `max_decile_dev`; the triangular double-jitter trap collapses
-/// `mean_spread` toward `window/3` and spikes `first_decile_frac` /
-/// `max_decile_dev`.
+/// Distribution summary of a `spread` sample — the quantities the conformance
+/// vector asserts on. A correct (uniform) draw gives `mean_spread ~ window/2`,
+/// `first_decile_frac ~ 0.10`, and a small `max_decile_dev`; the triangular
+/// double-jitter trap collapses `mean_spread` toward `window/3` and spikes
+/// `first_decile_frac` / `max_decile_dev`.
 #[derive(Debug, Clone)]
 pub struct GapSampleStats {
     pub n: usize,
     pub mean_spread: f64,
     pub max_spread: u64,
-    pub bond_first_frac: f64,
     /// Mass in the first decile `[0, window/10)`; uniform ⇒ ~0.10.
     pub first_decile_frac: f64,
     /// Largest `|decile bucket share - 0.10|` over the 10 deciles (a coarse
@@ -62,7 +61,7 @@ pub struct GapSampleStats {
 
 /// Summarize a realized sample. `window` defines the decile bucketing.
 #[must_use]
-pub fn summarize_gaps(samples: &[(u64, bool)], window: u64) -> GapSampleStats {
+pub fn summarize_gaps(samples: &[u64], window: u64) -> GapSampleStats {
     let n = samples.len();
     // An empty sample has no distribution to summarize. Returning explicit zeros is the
     // honest answer; the `denom = 1.0` fallback below would otherwise manufacture a
@@ -75,21 +74,16 @@ pub fn summarize_gaps(samples: &[(u64, bool)], window: u64) -> GapSampleStats {
             n: 0,
             mean_spread: 0.0,
             max_spread: 0,
-            bond_first_frac: 0.0,
             first_decile_frac: 0.0,
             max_decile_dev: 0.0,
         };
     }
     let mut deciles = [0usize; 10];
     let mut spread_sum = 0u128;
-    let mut bond_first = 0usize;
     let mut max_spread = 0u64;
-    for &(s, bf) in samples {
+    for &s in samples {
         spread_sum += u128::from(s);
         max_spread = max_spread.max(s);
-        if bf {
-            bond_first += 1;
-        }
         let idx = ((s as f64 / (window as f64 + 1.0)) * 10.0) as usize;
         deciles[idx.min(9)] += 1;
     }
@@ -102,7 +96,6 @@ pub fn summarize_gaps(samples: &[(u64, bool)], window: u64) -> GapSampleStats {
         n,
         mean_spread: spread_sum as f64 / denom,
         max_spread,
-        bond_first_frac: bond_first as f64 / denom,
         first_decile_frac: deciles[0] as f64 / denom,
         max_decile_dev,
     }
@@ -154,12 +147,12 @@ fn uniform_bin_expected(n: usize, window: u64, n_bins: usize) -> Vec<f64> {
 /// crit` check closed) when `n_bins > window + 1` leaves a bin with zero
 /// width — ask for at most one bin per outcome.
 #[must_use]
-pub fn chi_square_uniform(samples: &[(u64, bool)], window: u64, n_bins: usize) -> f64 {
+pub fn chi_square_uniform(samples: &[u64], window: u64, n_bins: usize) -> f64 {
     if n_bins == 0 {
         return 0.0;
     }
     let mut counts = vec![0u64; n_bins];
-    for &(s, _) in samples {
+    for &s in samples {
         counts[uniform_bin_index(s, window, n_bins)] += 1;
     }
     chi_square_counts_expected(
@@ -174,13 +167,10 @@ pub fn chi_square_uniform(samples: &[(u64, bool)], window: u64, n_bins: usize) -
 /// is `|a - b|` — triangular, peaked at zero — which still satisfies the ±window
 /// bound a naive check would accept.
 #[must_use]
-pub fn draw_entry_gap_double_jitter_trap<R: GapRng + ?Sized>(
-    window: u64,
-    rng: &mut R,
-) -> (u64, bool) {
+pub fn draw_entry_gap_double_jitter_trap<R: GapRng + ?Sized>(window: u64, rng: &mut R) -> u64 {
     let a = bounded_uniform(rng, window);
     let b = bounded_uniform(rng, window);
-    (a.abs_diff(b), a >= b)
+    a.abs_diff(b)
 }
 
 /// Lag-1 autocorrelation over an integer gap sequence — the serial-independence
@@ -210,12 +200,9 @@ pub fn population_bond_time<R: GapRng + ?Sized>(
     } else {
         bounded_uniform(rng, span.saturating_sub(1))
     };
-    let (s, bond_first) = draw_entry_gap(window, rng);
-    if bond_first {
-        t0
-    } else {
-        t0 + s
-    }
+    // No order coin: the bond post fires `spread` blocks after the private
+    // intent `t0` (there is no second event for it to precede).
+    t0 + draw_entry_gap(window, rng)
 }
 
 /// Reusable anchor-independence demonstration / negative control: a population
@@ -313,8 +300,13 @@ pub fn max_bin_share(times: &[u64], bin_width: u64) -> f64 {
     max as f64 / times.len() as f64
 }
 
-/// Grade of a realized draw against the three properties the conformance vector
+/// Grade of a realized draw against the two properties the conformance vector
 /// asserts. [`passed`](CertifyReport::passed) is the wallet-facing verdict.
+///
+/// The former order-balance property (a fair-coin check on `bond_first`) is
+/// gone with the order coin: there is no second event to order, so there is no
+/// ordering to balance. What remains is spread-uniformity and serial
+/// independence.
 #[derive(Debug, Clone)]
 pub struct CertifyReport {
     pub n: usize,
@@ -323,27 +315,23 @@ pub struct CertifyReport {
     pub chi_square: f64,
     pub chi_square_crit: f64,
     pub uniform_ok: bool,
-    /// Share of draws with the bond appearing first; fair ⇒ ~0.5.
-    pub bond_first_frac: f64,
-    pub order_balanced: bool,
     /// Lag-1 autocorrelation of the spread sequence; independent ⇒ ~0.
     pub lag1: f64,
     pub serial_independent: bool,
 }
 
 impl CertifyReport {
-    /// Overall verdict: all three properties hold.
+    /// Overall verdict: both properties hold.
     #[must_use]
     pub fn passed(&self) -> bool {
-        self.uniform_ok && self.order_balanced && self.serial_independent
+        self.uniform_ok && self.serial_independent
     }
 }
 
-/// Order-balance / serial-independence tolerance, scaled to sample size. A fair
-/// coin's observed frequency has standard error `0.5/sqrt(n)`; an independent
-/// series' lag-1 is order `1/sqrt(n)`. `8/sqrt(n)` is many standard errors —
-/// generous enough that a correct RNG never false-fails, tight enough that
-/// gross bias (≳ 0.1) fails for any `n` beyond a few thousand.
+/// Serial-independence tolerance, scaled to sample size. An independent series'
+/// lag-1 is order `1/sqrt(n)`. `8/sqrt(n)` is many standard errors — generous
+/// enough that a correct RNG never false-fails, tight enough that gross serial
+/// correlation (≳ 0.1) fails for any `n` beyond a few thousand.
 fn tolerance(n: usize) -> f64 {
     if n == 0 {
         return f64::INFINITY;
@@ -351,13 +339,13 @@ fn tolerance(n: usize) -> f64 {
     8.0 / (n as f64).sqrt()
 }
 
-/// Grade a realized `(spread, bond_first)` sample produced by **any** source
-/// against spread-uniformity (discrete chi-square at alpha = 1e-6),
-/// order-balance, and serial independence (lag-1). A wallet calls this on its
-/// own CSPRNG's output to self-certify; the grade is on the *property*, not on
-/// emitting any particular sequence.
+/// Grade a realized `spread` sample produced by **any** source against
+/// spread-uniformity (discrete chi-square at alpha = 1e-6) and serial
+/// independence (lag-1). A wallet calls this on its own CSPRNG's output to
+/// self-certify; the grade is on the *property*, not on emitting any particular
+/// sequence.
 #[must_use]
-pub fn grade_sample(samples: &[(u64, bool)], window: u64) -> CertifyReport {
+pub fn grade_sample(samples: &[u64], window: u64) -> CertifyReport {
     let n = samples.len();
     // Bin count is at most `UNIFORM_BINS`, capped at the number of outcomes
     // (`window + 1`). Computed in `u64` so it is well-defined for every `u64`
@@ -367,13 +355,9 @@ pub fn grade_sample(samples: &[(u64, bool)], window: u64) -> CertifyReport {
     let n_bins = (UNIFORM_BINS as u64).min(window.saturating_add(1)).max(1) as usize;
 
     let mut counts = vec![0u64; n_bins];
-    let mut bond_first = 0usize;
     let mut spreads = Vec::with_capacity(n);
-    for &(s, bf) in samples {
+    for &s in samples {
         counts[uniform_bin_index(s, window, n_bins)] += 1;
-        if bf {
-            bond_first += 1;
-        }
         spreads.push(s as f64);
     }
 
@@ -394,13 +378,6 @@ pub fn grade_sample(samples: &[(u64, bool)], window: u64) -> CertifyReport {
     // claim a property the sample cannot support.
     let uniform_ok = n >= 2 && n_bins >= 2 && chi_square < chi_square_crit;
 
-    let bond_first_frac = if n == 0 {
-        0.0
-    } else {
-        bond_first as f64 / n as f64
-    };
-    let order_balanced = n > 0 && (bond_first_frac - 0.5).abs() < tolerance(n);
-
     let lag1 = lag1_autocorr(&spreads);
     let serial_independent = n >= 2 && lag1.abs() < tolerance(n);
 
@@ -410,8 +387,6 @@ pub fn grade_sample(samples: &[(u64, bool)], window: u64) -> CertifyReport {
         chi_square,
         chi_square_crit,
         uniform_ok,
-        bond_first_frac,
-        order_balanced,
         lag1,
         serial_independent,
     }
@@ -436,6 +411,6 @@ pub const CERTIFY_SAMPLE_N: usize = 200_000;
 /// and checking [`CertifyReport::passed`].
 #[must_use]
 pub fn certify_draw<R: GapRng + ?Sized>(rng: &mut R, window: u64, n: usize) -> CertifyReport {
-    let samples: Vec<(u64, bool)> = (0..n).map(|_| draw_entry_gap(window, rng)).collect();
+    let samples: Vec<u64> = (0..n).map(|_| draw_entry_gap(window, rng)).collect();
     grade_sample(&samples, window)
 }

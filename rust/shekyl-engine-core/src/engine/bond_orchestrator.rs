@@ -422,7 +422,7 @@ where
             p_slot,
             persona: *assembled.bound_tx.persona(),
             tx_bytes: assembled.bound_tx.bytes().to_vec(),
-            bond_post_offset_blocks: assembled.plan.bond_post_offset_blocks,
+            bond_post_offset_blocks: assembled.bond_post_offset_blocks,
             anchor_t0,
             funding_gindexes: assembled.funding_gindexes.clone(),
             state: PendingPostState::Pending,

@@ -69,10 +69,21 @@
 
 use serde::Serialize;
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
-use shekyl_standoff::{bounded_uniform, draw_entry_gap, plan_entry_seam, DEFAULT_ENTRY_GAP_WINDOW};
+use shekyl_standoff::{bounded_uniform, draw_entry_gap, DEFAULT_ENTRY_GAP_WINDOW};
 
 use crate::standoff::SplitMix64;
 use crate::wallclock_leg::{run_wallclock_leg, WallclockLegReport};
+
+/// The interim fail-closed verdict for the entry-seam measurement (GF-7 coin
+/// retirement). The correlator this module ran graded the ordering of the bond
+/// post against the principal's funding send — an ordering carried by the
+/// **order coin** and observed through the **`FundingSendDispatched`** event.
+/// Both were retired: the funding send is the unnamed, CT-hidden FCMP++ input,
+/// not a chain-attributable event, so the entry-seam channel (`r = 1.86`
+/// measured) no longer has an input. With no input there is no honest grade,
+/// so every entry-seam verdict this module and its riders emit fail closed to
+/// this named message rather than reporting a stale pass.
+pub(crate) const GF7_FAIL_CLOSED: &str = "FAIL-CLOSED (WITHDRAWN, interim): the order coin and the FundingSendDispatched event this correlator graded were retired (GF-7 coin retirement). The entry-seam channel r = 1.86 measured — the ordering of the bond post against the principal's funding-send — no longer has an input, so the sim cannot emit a valid entry-seam verdict. Withdrawn pending re-derivation (see WI-4 measurement doc §13.1).";
 
 /// The committed a-priori advantage-ratio bound (measurement doc §3.2):
 /// `r = P(link) · N < RATIO_BOUND`. Committed in the reviewed design doc
@@ -185,9 +196,6 @@ impl DrawShape {
 #[derive(Clone, Copy)]
 pub struct SynthParams {
     pub window: u64,
-    /// Order-coin on/off. Off ⇒ funding always precedes the bond (no inversion
-    /// prior break) — the standoff's low-activity lever.
-    pub inversion: bool,
     /// WI-3 intra-tick dispersal bound (blocks): the bond dispatch gets
     /// `U[0, dispersal_bound)` added via `bounded_uniform`, matching the live
     /// driver's draw shape for distributional parity (§7). `0` = no dispersal.
@@ -236,7 +244,7 @@ pub struct SynthParams {
 
 impl SynthParams {
     /// The recommended posture (measurement doc §3.2 / standoff): 600-block
-    /// uniform-independent window, inversion on, steady-state — and
+    /// uniform-independent window, steady-state — and
     /// `dispersal_bound = 0` because the *realistic* dispersal is sub-block.
     ///
     /// WI-3's dispersal is `U[0, DEFAULT_PSCAN_CADENCE)` = `U[0, 60s)`, well
@@ -251,7 +259,6 @@ impl SynthParams {
     pub(crate) fn posture() -> Self {
         Self {
             window: DEFAULT_ENTRY_GAP_WINDOW,
-            inversion: true,
             dispersal_bound: 0,
             draw_shape: DrawShape::Direct,
             independent_bond: false,
@@ -263,21 +270,12 @@ impl SynthParams {
         }
     }
 
-    /// A row is gate-relevant iff it sits at the realistic recommended posture
-    /// (steady-state, real draw, inversion on, full window, realistic sub-block
-    /// dispersal ⇒ `dispersal_bound == 0`): the swept surface around it (weaker
-    /// windows, inversion off, the trap, low-activity, and the block-unit
-    /// dispersal counterfactual) is reported as context/anchors, not as the
-    /// pass/fail gate (measurement doc §3.2/§3.3/§3.5).
-    fn gate_relevant(&self) -> bool {
-        self.regime == Regime::SteadyState
-            && self.draw_shape == DrawShape::Direct
-            && self.inversion
-            && self.window == DEFAULT_ENTRY_GAP_WINDOW
-            && self.dispersal_bound == 0
-            && !self.independent_bond
-            && !self.resume_redispatch
-    }
+    // There is deliberately no `gate_relevant()` predicate. It selected the
+    // "recommended-posture family" of rows the steady-state gate graded — but
+    // the entry-seam verdict is now fail-closed (`GF7_FAIL_CLOSED`; GF-7 coin
+    // retirement), so there is no gate for any row to be relevant to. Keeping a
+    // gate-relevance marker would read as a live gate on a retracted arm (the
+    // WITHDRAWN-FAIL-CLOSED treatment, not a predicate edit).
 
     /// Correlator kernel width for this posture (blocks).
     fn sigma(&self) -> u64 {
@@ -291,9 +289,10 @@ impl SynthParams {
 /// near-periodic wallet sessions (with a refresh each) at `phase + k·period`;
 /// the funding intent **co-triggers** with a session (GATE6 §6/S-1), a drain
 /// rides a later session, and the persona makes two later `PerP` submits. The
-/// entry-seam placement is the real pipeline (`draw_entry_gap` →
-/// `plan_entry_seam`) for the [`DrawShape::Direct`] shape; the bond dispatch
-/// then gets WI-3's modeled intra-tick dispersal added.
+/// entry-seam placement is the real `draw_entry_gap` for the
+/// [`DrawShape::Direct`] shape, placed causally (funding precedes the bond post
+/// it funds — the order coin is retired); the bond dispatch then gets WI-3's
+/// modeled intra-tick dispersal added.
 ///
 /// # Preconditions (asserted — misconfiguration fails loudly)
 ///
@@ -357,11 +356,14 @@ fn simulate_pair(rng: &mut SplitMix64, p: &SynthParams, observer: &mut Recording
 
     // Axis (i): the entry seam. Direct = the real shipped draw; Trap = the
     // conformance-trap draw (two offsets off a common anchor, spread = diff).
-    let (spread_blocks, bond_first) = match p.draw_shape {
-        DrawShape::Direct => {
-            let (spread, coin) = draw_entry_gap(p.window, rng);
-            (spread, if p.inversion { coin } else { false })
-        }
+    // Coin-free and causal (GF-7 coin retirement): the draw yields a single
+    // spread, and the funding always precedes the bond post it funds — the
+    // physical order the wallet's join enforces (funding at the anchor `t0`,
+    // bond post `spread` blocks later). No order coin, and the funding send is
+    // not recorded: it is the unnamed, CT-hidden FCMP++ input, not a
+    // chain-attributable event, so it is deliberately absent from the timeline.
+    let spread_blocks = match p.draw_shape {
+        DrawShape::Direct => draw_entry_gap(p.window, rng),
         DrawShape::Trap => {
             let a = if p.window > 0 {
                 bounded_uniform(rng, p.window)
@@ -373,24 +375,19 @@ fn simulate_pair(rng: &mut SplitMix64, p: &SynthParams, observer: &mut Recording
             } else {
                 0
             };
-            let coin = b < a;
-            (a.abs_diff(b), if p.inversion { coin } else { false })
+            a.abs_diff(b)
         }
     };
     observer.record(TimelineEvent::EntryGapDrawConsumed {
         persona: 0,
         window_blocks: p.window,
         spread_blocks,
-        bond_first,
     });
-    let plan = plan_entry_seam((spread_blocks, bond_first));
+    // Causal placement: the bond post sits `spread_blocks` after the private
+    // intent anchor (bond-post offset = spread; there is no entry offset).
     observer.record(TimelineEvent::BondPostScheduled {
         persona: 0,
-        entry_offset_blocks: plan.entry_offset_blocks,
-        bond_post_offset_blocks: plan.bond_post_offset_blocks,
-    });
-    observer.record(TimelineEvent::FundingSendDispatched {
-        at: t0 + plan.entry_offset_blocks,
+        bond_post_offset_blocks: spread_blocks,
     });
 
     // WI-3 intra-tick dispersal: add `U[0, dispersal_bound)` to the scheduled
@@ -405,7 +402,7 @@ fn simulate_pair(rng: &mut SplitMix64, p: &SynthParams, observer: &mut Recording
         // §5 control 2: dispatch time independent of the principal lifecycle.
         bounded_uniform(rng, horizon.saturating_sub(1).max(1))
     } else {
-        t0 + plan.bond_post_offset_blocks + dispersal
+        t0 + spread_blocks + dispersal
     };
     observer.record(TimelineEvent::BondPostDispatched {
         persona: 0,
@@ -435,22 +432,6 @@ fn simulate_pair(rng: &mut SplitMix64, p: &SynthParams, observer: &mut Recording
         let at = bond_at + 200 + rng.next_u64() % 1_000;
         observer.record(TimelineEvent::PerPSubmitDispatched { persona: 0, at });
     }
-}
-
-/// The first bond-post dispatch time, read back **from the recorded stream**
-/// (the correlator's view — never sim internals). Production scoring goes
-/// through [`query_times`] (all dispatches); this single-event accessor
-/// remains for the pipeline-integrity test, which checks the *first* dispatch
-/// against the recorded seam plan.
-#[cfg(test)]
-fn recorded_bond_time(events: &[TimelineEvent]) -> u64 {
-    events
-        .iter()
-        .find_map(|e| match e {
-            TimelineEvent::BondPostDispatched { at, .. } => Some(*at),
-            _ => None,
-        })
-        .expect("every pair timeline records a bond-post dispatch")
 }
 
 /// The persona-side query the correlator scores against every candidate
@@ -524,16 +505,11 @@ fn lifecycle_times(events: &[TimelineEvent]) -> Vec<u64> {
         .collect()
 }
 
-/// Funding-send feature times (axis i seam).
-fn funding_times(events: &[TimelineEvent]) -> Vec<u64> {
-    events
-        .iter()
-        .filter_map(|e| match e {
-            TimelineEvent::FundingSendDispatched { at } => Some(*at),
-            _ => None,
-        })
-        .collect()
-}
+// The funding-send feature channel is retired (GF-7 coin retirement). The
+// funding send was the CT-hidden FCMP++ input; it is no longer emitted as a
+// chain-attributable `FundingSendDispatched` event, so the correlator has no
+// funding anchor set to score against. What remains is the lifecycle cadence
+// (`lifecycle_times`) and the bond-post query (`query_times`).
 
 /// Joint linkage score of a persona's query under a candidate principal's
 /// anchor set: for each query event, the nearest anchor's **bounded** Gaussian
@@ -564,19 +540,26 @@ fn kernel_sum(query: &[u64], anchors: &[u64], sigma2: f64) -> f64 {
     s
 }
 
-/// The three grading arms (measurement doc §4.3).
+/// The two grading arms (measurement doc §4.3). With the funding seam retired
+/// (GF-7 coin retirement) the modeled S-3 observer no longer has a funding
+/// anchor to fuse, so its anchor set (`s3`) is the lifecycle cadence — the same
+/// set the blind arm scores. Both arms are kept so the rows still compute a
+/// context grade, but the entry-seam **verdict** is fail-closed
+/// (`GF7_FAIL_CLOSED`): the channel they once separated no longer exists.
 #[derive(Clone, Copy)]
 enum Arm {
     /// Lifecycle cadence only — the §2 named failure mode.
     Blind,
-    /// Funding seam ∪ lifecycle, joint MAP — the modeled S-3 observer.
+    /// The modeled S-3 observer's fused anchor set. Was funding-seam ∪
+    /// lifecycle; with the funding seam retired it is lifecycle only.
     ModeledS3,
 }
 
 /// Per-arm anchor sets for one candidate principal.
 struct Candidate {
     lifecycle: Vec<u64>,
-    funding: Vec<u64>,
+    /// The modeled-S-3 fused anchor set. With the funding seam retired this is
+    /// the lifecycle cadence (there is no funding anchor to add).
     s3: Vec<u64>,
 }
 
@@ -615,54 +598,15 @@ fn guess_density_corrected(query: &[u64], candidates: &[Candidate], sigma2: f64)
     best.1
 }
 
-/// Seam-consistency-gated MAP — the **exact in-model likelihood filter**, the
-/// panel's Neyman-Pearson-honest member. The generative model puts the
-/// **first** bond dispatch within `spread + dispersal` of the candidate's
-/// funding send (`plan_entry_seam`: one offset is `0`, the other
-/// `spread ~ U[0, window]`, dispersal `U[0, dispersal_bound)` added on top),
-/// so the true candidate **always** has its earliest dispatch inside `bound`
-/// of a funding send — that box is the true support of the seam likelihood,
-/// and candidates outside it have exact likelihood zero. The correlator
-/// hard-rejects them and runs the kernel MAP among the survivors: strictly
-/// better use of the known model than the smooth kernel alone whenever the
-/// plain MAP would have picked an inconsistent candidate.
-///
-/// The gate reads only the **earliest** dispatch (`min`, an observer-realizable
-/// statistic over the recorded timestamps): the D-B3 resume resubmit lands on
-/// the session lattice, not the seam, so admitting a candidate on resubmit
-/// proximity would widen the gate past the true support — exactly the
-/// exact-zero-likelihood leak the filter exists to reject. The first dispatch
-/// alone carries the seam, and it always admits the truth.
-fn guess_consistency_gated(
-    query: &[u64],
-    candidates: &[Candidate],
-    sigma2: f64,
-    bound: u64,
-) -> usize {
-    let consistent = |c: &Candidate| {
-        query
-            .iter()
-            .min()
-            .is_some_and(|&first| c.funding.iter().any(|&f| first.abs_diff(f) <= bound))
-    };
-    let mut best = (f64::NEG_INFINITY, 0usize);
-    for (idx, c) in candidates.iter().enumerate() {
-        // Inconsistent candidates score below every consistent one
-        // (kernel_sum ≥ 0), preserving deterministic lowest-index ties.
-        let s = if consistent(c) {
-            kernel_sum(query, &c.s3, sigma2)
-        } else {
-            -1.0
-        };
-        if s > best.0 {
-            best = (s, idx);
-        }
-    }
-    best.1
-}
+// The seam-consistency-gated MAP is retired (GF-7 coin retirement): it was the
+// exact in-model likelihood filter over the funding seam — it hard-rejected any
+// candidate whose earliest bond dispatch was not within `spread + dispersal` of
+// a recorded funding send. With the funding send no longer a chain-attributable
+// event there is no seam to gate on, so this stress-panel member is removed and
+// the stress arm reduces to `{MAP, density-corrected MAP}`.
 
 /// Grade one parameter point: `trials` independent worlds of `n` pairs each;
-/// all three arms consume only the recorded streams. Returns `(blind, s3, lr)`
+/// all arms consume only the recorded streams. Returns `(blind, s3, lr)`
 /// P(link) over `trials · n` linking decisions.
 pub(crate) fn grade(
     p: &SynthParams,
@@ -688,35 +632,21 @@ pub(crate) fn grade(
             .iter()
             .map(|ev| {
                 // Under the certified own-node posture the observer has no
-                // per-candidate principal attribution: funding and drain are
-                // unnamed FCMP++ transactions with CT-hidden sources, so there
-                // is no way to say *which* principal any of them belongs to.
-                // Empty anchors ⇒ `kernel_sum` returns 0 for every candidate,
-                // the argmax ties, and the correlator lands at `1/N`.
-                let (lifecycle, funding) = if p.principal_observable {
-                    (lifecycle_times(ev), funding_times(ev))
+                // per-candidate principal attribution: the drain is an unnamed
+                // FCMP++ transaction with a CT-hidden source, so there is no way
+                // to say *which* principal it belongs to. Empty anchors ⇒
+                // `kernel_sum` returns 0 for every candidate, the argmax ties,
+                // and the correlator lands at `1/N`. With the funding seam
+                // retired the S-3 fused set is the lifecycle cadence itself.
+                let lifecycle = if p.principal_observable {
+                    lifecycle_times(ev)
                 } else {
-                    (Vec::new(), Vec::new())
+                    Vec::new()
                 };
-                let mut s3 = funding.clone();
-                s3.extend_from_slice(&lifecycle);
-                Candidate {
-                    lifecycle,
-                    funding,
-                    s3,
-                }
+                let s3 = lifecycle.clone();
+                Candidate { lifecycle, s3 }
             })
             .collect();
-
-        // The exact in-model seam support: `spread ≤ window` plus the maximum
-        // dispersal added to the dispatch — the draw is `U[0, dispersal_bound)`
-        // (`bounded_uniform(max = dispersal_bound - 1)`, matching the live
-        // driver), so its supremum is `dispersal_bound - 1`, not
-        // `dispersal_bound`. A bound wider by even one block admits candidates
-        // with exact likelihood zero and understates the gated member — the
-        // stress panel must be graded on the tight support
-        // (guess_consistency_gated docs).
-        let seam_bound = p.window + p.dispersal_bound.saturating_sub(1);
 
         for (truth, ev) in streams.iter().enumerate() {
             let query = query_times(ev);
@@ -729,16 +659,14 @@ pub(crate) fn grade(
             }
             // Stronger-than-S-3 stress panel (§4.3 as amended): an
             // oracle-panel upper bound — link if *any* fielded correlator
-            // identifies truth (MAP, density-corrected MAP, or the exact
-            // seam-consistency-gated MAP). The oracle framing is deliberate:
-            // it upper-bounds every realizable per-instance strategy over
-            // these correlators, so `lr ≥ s3` cannot certify a floor the
-            // panel's stronger members break — the gated member is where the
-            // exact generative knowledge bites.
+            // identifies truth (MAP or density-corrected MAP). The
+            // seam-consistency-gated member is retired with the funding seam
+            // (GF-7 coin retirement). The oracle framing is deliberate: it
+            // upper-bounds every realizable per-instance strategy over these
+            // correlators, so `lr ≥ s3` cannot certify a floor a stronger
+            // member breaks.
             let dens_hit = guess_density_corrected(&query, &candidates, sigma2) == truth;
-            let gated_hit =
-                guess_consistency_gated(&query, &candidates, sigma2, seam_bound) == truth;
-            if s3_hit || dens_hit || gated_hit {
+            if s3_hit || dens_hit {
                 lr += 1;
             }
         }
@@ -776,7 +704,6 @@ impl ArmResult {
 pub struct ScenarioRow {
     pub group: &'static str,
     pub window_blocks: u64,
-    pub inversion: bool,
     pub dispersal_bound: u64,
     pub draw_shape: &'static str,
     pub regime: &'static str,
@@ -785,11 +712,9 @@ pub struct ScenarioRow {
     pub blind: ArmResult,
     pub modeled_s3: ArmResult,
     pub lr_stress: ArmResult,
-    /// All graded arms clear the bound.
+    /// All graded arms clear the bound. Retained as per-row context of the
+    /// retracted arm; the run's verdict is `GF7_FAIL_CLOSED` regardless.
     pub pass: bool,
-    /// This row sits at the recommended posture family — it participates in the
-    /// steady-state gate verdict (measurement doc §3.2/§3.5).
-    pub gate_relevant: bool,
 }
 
 /// A control result and its validity verdict (measurement doc §5).
@@ -822,9 +747,10 @@ pub struct MeasurementReport {
     pub n_principals: usize,
     pub trials: u32,
     pub controls_valid: bool,
-    /// PROVISIONAL-PASS / PROVISIONAL-FAIL / INVALID — the computed
-    /// conjunction (criterion 9.9) over the steady-state gate-relevant rows
-    /// (measurement doc §3.5) AND the leg-(b) wall-clock arm (§19.6).
+    /// The entry-seam verdict. Fail-closed to `GF7_FAIL_CLOSED` (GF-7 coin
+    /// retirement): the order coin and the `FundingSendDispatched` event this
+    /// correlator graded were retired, so the sim cannot emit a valid
+    /// entry-seam verdict. The grading rows below still compute for context.
     pub gate_status: String,
     pub controls: Vec<ControlResult>,
     pub coverage: AxisCoverage,
@@ -857,17 +783,11 @@ fn run_controls(cfg: &RunConfig, rng: &mut SplitMix64) -> (Vec<ControlResult>, b
     let baseline = 1.0 / cfg.n as f64;
 
     // Positive: un-jittered coupling (window 0, no dispersal) — must link.
+    // The controls must keep the anchors: the positive control exists to prove
+    // the correlator bites when a channel IS present.
     let pos = SynthParams {
         window: 0,
-        inversion: true,
-        dispersal_bound: 0,
-        draw_shape: DrawShape::Direct,
-        independent_bond: false,
-        regime: Regime::SteadyState,
-        resume_redispatch: false,
-        // The controls must keep the anchors: the positive control exists to
-        // prove the correlator bites when a channel IS present.
-        principal_observable: true,
+        ..SynthParams::posture()
     };
     let (_, pos_s3, _) = grade(&pos, cfg.n, cfg.trials, rng);
     let pos_ok = pos_s3 >= POSITIVE_CONTROL_MIN;
@@ -919,17 +839,8 @@ fn sweep_specs() -> Vec<(&'static str, SynthParams)> {
             },
         ));
     }
-    // Group "inversion": order-coin off/on (the low-activity lever).
-    for inv in [false, true] {
-        specs.push((
-            "inversion",
-            SynthParams {
-                inversion: inv,
-                window: 300,
-                ..base
-            },
-        ));
-    }
+    // (The "inversion" order-coin on/off group is retired — the order coin is
+    // gone, GF-7 coin retirement, so there is no inversion axis to sweep.)
     // Group "draw": real vs conformance-trap draw (negative anchor).
     for shape in [DrawShape::Direct, DrawShape::Trap] {
         specs.push((
@@ -940,38 +851,17 @@ fn sweep_specs() -> Vec<(&'static str, SynthParams)> {
             },
         ));
     }
-    // Group "regime": steady-state vs low-activity/cold-start.
+    // Group "regime": steady-state vs low-activity/cold-start. The synthesis is
+    // now always causal (funding precedes the bond post it funds — the order
+    // coin is retired), so these rows are the honest un-inverted grade at the
+    // operational window across both regimes; the separate "causal" group that
+    // used to force `inversion: false` is redundant and is removed.
     for regime in [Regime::SteadyState, Regime::LowActivity] {
         specs.push(("regime", SynthParams { regime, ..base }));
     }
-    // Group "causal": the arm PRODUCTION ACTUALLY RUNS (2026-07-20).
-    //
-    // Every other row here grades `inversion: true`, but the wallet now forces
-    // causal order at the plan seam (`FORCED_CAUSAL_ORDER`, `stake_engine.rs`):
-    // the inverted branch is unexecutable, because `entry_offset_blocks` has no
-    // scheduler consumer and, at a join, the principal's funding transfer must
-    // precede the post it funds (a fresh `P` has no earnings; `bond_assembly`
-    // sweeps only the persona's own mature, tree-drained outputs). A coin whose
-    // outcomes are decided by physics is not drawn.
-    //
-    // Without these rows the report grades an inversion the chain never
-    // performs — the `inversion` group's only inversion-off row sits at the
-    // non-operational 300 window and steady state, so neither the operational
-    // window nor the cold-start regime had an honest un-inverted grade.
-    // These two rows are that grade: full window, causal order, both regimes.
-    for regime in [Regime::SteadyState, Regime::LowActivity] {
-        specs.push((
-            "causal",
-            SynthParams {
-                regime,
-                inversion: false,
-                ..base
-            },
-        ));
-    }
     // Group "own-node": the CERTIFIED posture — the observer has no
     // principal-attributed anchor, because there is no acquisition path for
-    // one. Same wallet behaviour as the `causal` rows; the only change is
+    // one. Same wallet behaviour as the posture rows; the only change is
     // removing an observer capability the architecture denies.
     //
     // Read `r` together with `N`, never alone. `r = P(link) * N` is
@@ -998,7 +888,6 @@ fn sweep_specs() -> Vec<(&'static str, SynthParams)> {
             "own-node",
             SynthParams {
                 regime,
-                inversion: false,
                 principal_observable: false,
                 ..base
             },
@@ -1037,8 +926,7 @@ fn coverage_sample(cfg: &RunConfig) -> AxisCoverage {
             | TimelineEvent::BondPostScheduled { .. }
             | TimelineEvent::BondPostDispatched { .. } => cov.axis_i_bond_post_events += 1,
             TimelineEvent::PerPSubmitDispatched { .. } => cov.axis_ii_per_p_submits += 1,
-            TimelineEvent::FundingSendDispatched { .. }
-            | TimelineEvent::DrainDispatched { .. }
+            TimelineEvent::DrainDispatched { .. }
             | TimelineEvent::RefreshCycleMarker { .. }
             | TimelineEvent::WalletSessionMarker { .. } => cov.axis_iii_lifecycle_events += 1,
         }
@@ -1068,7 +956,6 @@ fn run_measurement(cfg: &RunConfig) -> MeasurementReport {
             ScenarioRow {
                 group,
                 window_blocks: p.window,
-                inversion: p.inversion,
                 dispersal_bound: p.dispersal_bound,
                 draw_shape: p.draw_shape.label(),
                 regime: p.regime.label(),
@@ -1078,43 +965,24 @@ fn run_measurement(cfg: &RunConfig) -> MeasurementReport {
                 modeled_s3: s3,
                 lr_stress: lr,
                 pass,
-                gate_relevant: p.gate_relevant(),
             }
         })
         .collect();
 
-    // The §19 leg-(b) wall-clock arm joins the computed conjunction
-    // (criterion 9.9): its bound is committed in the doc like the
-    // steady-state bound, so its measurement is a verdict input, never a
-    // narrated aside. An invalid leg (controls or the §19.5 strength
-    // tripwire) grades the whole run INVALID — a gate that cannot see the
-    // channel it certifies is not a gate.
+    // The §19 leg-(b) wall-clock arm still runs (its channel is unaffected by
+    // the coin retirement) and its full status is reported under
+    // `wallclock_leg.status`; it is no longer folded into an entry-seam verdict.
     let wallclock_leg = run_wallclock_leg();
 
-    let steady_pass = rows.iter().filter(|r| r.gate_relevant).all(|r| r.pass);
-    // The two leg-invalid branches name the failed check themselves rather
-    // than embedding `wallclock_leg.status` (which carries its own "INVALID
-    // (...)" prefix — nesting it made the verdict line read
-    // `INVALID (... — INVALID (...))`, PR #292 review). The leg's full
-    // status stays in the report under `wallclock_leg.status`.
-    let gate_status = if !controls_valid {
-        "INVALID (controls failed — the run counts for nothing)".to_string()
-    } else if !wallclock_leg.controls_valid {
-        "INVALID (leg-b wall-clock controls failed — the run counts for nothing)".to_string()
-    } else if !wallclock_leg.observer_strength_ok {
-        "INVALID (leg-b modeled observer weaker than the channel — §19.5 tripwire)".to_string()
-    } else if steady_pass && wallclock_leg.pass {
-        // The sealing form's standing is deliberately not asserted here:
-        // this sim cannot know it (grades, withdrawals, and §19.1
-        // reopenings happen outside it), so the verdict points at where
-        // that standing lives instead.
-        "PROVISIONAL-PASS (local-daemon posture only; remote-daemon posture unmet, \
-         named residual; wall-clock leg b graded in-model — the §19.1 sealing form \
-         is graded separately (`--gf7-seal`, §19.8/§19.9))"
-            .to_string()
-    } else {
-        "PROVISIONAL-FAIL (decorrelation-redesign signal; pre-WI-3-live)".to_string()
-    };
+    // FAIL-CLOSED (GF-7 coin retirement): the order coin and the
+    // `FundingSendDispatched` event this correlator graded were retired, so the
+    // entry-seam channel `r = 1.86` measured no longer has an input. There is
+    // no honest grade to compute, so the verdict is the named fail-closed
+    // message unconditionally. The grading rows above are still computed and
+    // stored for context, but they certify nothing. The controls
+    // (`controls_valid`) and the wall-clock leg remain in the report for the
+    // reader; they no longer move this verdict.
+    let gate_status = GF7_FAIL_CLOSED.to_string();
 
     MeasurementReport {
         provisional: true,
@@ -1138,7 +1006,6 @@ pub fn run_full_report() -> MeasurementReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_standoff::EntrySeamPlan;
 
     /// Small config for fast, deterministic tests (the binary uses the full
     /// surface via `run_full_report`).
@@ -1180,7 +1047,9 @@ mod tests {
             e,
             TimelineEvent::PerPSubmitDispatched { .. }
         )));
-        // Axis (iii)
+        // Axis (iii). The funding send is deliberately NOT recorded (GF-7 coin
+        // retirement): it is the CT-hidden FCMP++ input, not a chain-attributable
+        // event, so the observable lifecycle axis is the session/refresh cadence.
         assert!(has(&|e| matches!(
             e,
             TimelineEvent::WalletSessionMarker { .. }
@@ -1189,20 +1058,18 @@ mod tests {
             e,
             TimelineEvent::RefreshCycleMarker { .. }
         )));
-        assert!(has(&|e| matches!(
-            e,
-            TimelineEvent::FundingSendDispatched { .. }
-        )));
     }
 
-    /// Pipeline integrity, correlator-side: re-derive the plan from the
-    /// *recorded* draw parameters and check the recorded schedule and the
-    /// funding event time are exactly that plan — over the events alone. The
-    /// bond dispatch may carry the dispersal offset, so we check the funding
-    /// event (undispersed) against the plan and the schedule/order separately.
+    /// Pipeline integrity, correlator-side: the recorded bond-post schedule is
+    /// the **causal** placement of the recorded draw — over the events alone.
+    /// With the order coin retired the placement is deterministic: the bond post
+    /// sits `spread` after the private funding anchor (bond-post offset = spread,
+    /// no entry offset, funding-first), and no funding event is recorded (it is
+    /// the CT-hidden input). The bond dispatch may carry the dispersal offset, so
+    /// this checks the undispersed schedule against the recorded spread.
     #[test]
-    fn recorded_schedule_is_the_planner_over_the_recorded_draw() {
-        // Dispersal off here so the bond↔funding separation equals the spread.
+    fn recorded_schedule_is_the_causal_placement_of_the_recorded_draw() {
+        // Dispersal off here so the schedule offset equals the drawn spread.
         let p = SynthParams {
             dispersal_bound: 0,
             ..SynthParams::posture()
@@ -1210,78 +1077,70 @@ mod tests {
         for seed in [1u64, 7, 99, 12345] {
             let events = recorded_sample(&p, seed);
 
-            let (spread, coin) = events
+            let spread = events
                 .iter()
                 .find_map(|e| match e {
-                    TimelineEvent::EntryGapDrawConsumed {
-                        spread_blocks,
-                        bond_first,
-                        ..
-                    } => Some((*spread_blocks, *bond_first)),
+                    TimelineEvent::EntryGapDrawConsumed { spread_blocks, .. } => {
+                        Some(*spread_blocks)
+                    }
                     _ => None,
                 })
                 .unwrap();
-            let expected = plan_entry_seam((spread, coin));
 
-            let recorded_plan = events
+            let bond_offset = events
                 .iter()
                 .find_map(|e| match e {
                     TimelineEvent::BondPostScheduled {
-                        entry_offset_blocks,
                         bond_post_offset_blocks,
                         ..
-                    } => Some(EntrySeamPlan {
-                        entry_offset_blocks: *entry_offset_blocks,
-                        bond_post_offset_blocks: *bond_post_offset_blocks,
-                    }),
+                    } => Some(*bond_post_offset_blocks),
                     _ => None,
                 })
                 .unwrap();
-            assert_eq!(recorded_plan, expected);
-
-            let entry_at = events
-                .iter()
-                .find_map(|e| match e {
-                    TimelineEvent::FundingSendDispatched { at } => Some(*at),
-                    _ => None,
-                })
-                .unwrap();
-            let bond_at = recorded_bond_time(&events);
-            assert_eq!(entry_at.abs_diff(bond_at), spread);
-            if spread > 0 {
-                assert_eq!(bond_at < entry_at, coin);
-            }
+            // Causal placement: the bond-post offset is exactly the drawn spread.
+            assert_eq!(bond_offset, spread);
         }
     }
 
-    /// The controls gate the run (measurement doc §5): the known-linked
-    /// positive control links, the known-independent negative control is at
-    /// chance. If this ever breaks, every graded number is measuring
-    /// `P(link | axes independent)` and must not be trusted.
+    /// The §5 controls still run and are reported for context. Two things
+    /// survive the seam retirement (GF-7 coin retirement) and are asserted:
+    /// both controls are present, and the **negative** control (known-
+    /// independent — bond dispatch drawn independently of the principal) still
+    /// sits at chance, because it is a property of the correlator's linkage
+    /// machinery, not of the retired seam. The **positive** control was the
+    /// un-jittered *seam* coupling — funding and bond coincided so the funding
+    /// anchor drove a near-perfect link — and its `>= 0.80` floor
+    /// (`POSITIVE_CONTROL_MIN`) was that seam link. With the funding seam
+    /// retired the correlator has only the lifecycle cadence, so the un-jittered
+    /// coupling still links **above chance** (the tripwire responds to a present
+    /// channel) but no longer clears the seam-era floor; the run's §5 validity
+    /// therefore fail-closes with the seam, which does not matter because the
+    /// entry-seam verdict is fail-closed (`GF7_FAIL_CLOSED`) independently.
     #[test]
-    fn controls_pass_on_the_measurement() {
+    fn controls_report_survives_seam_retirement() {
         let report = run_measurement(&small());
-        assert!(
-            report.controls_valid,
-            "controls must gate the run valid: {:?}",
-            report
-                .controls
-                .iter()
-                .map(|c| (c.name, c.p_link, c.passed))
-                .collect::<Vec<_>>()
-        );
+        assert_eq!(report.controls.len(), 2, "both §5 controls are reported");
         let pos = &report.controls[0];
         let neg = &report.controls[1];
-        assert!(pos.passed && pos.p_link >= POSITIVE_CONTROL_MIN);
+        // The correlator still bites on a present channel: the un-jittered
+        // coupling links above the `1/N` blind baseline, even though it can no
+        // longer reach the retired seam's `POSITIVE_CONTROL_MIN` floor.
+        assert!(pos.p_link > pos.baseline);
+        assert!(pos.p_link < POSITIVE_CONTROL_MIN);
+        // The negative control is seam-independent and must still hold at chance.
         assert!(neg.passed && (neg.p_link - neg.baseline).abs() < NEGATIVE_CONTROL_TOL);
+        // The verdict fail-closes regardless of the seam-calibrated controls.
+        assert!(report.gate_status.starts_with("FAIL-CLOSED"));
     }
 
-    /// The funding-seam-blind null is no stronger than the seam-using S-3 arm
-    /// (the funding seam is real signal the null throws away), the stress
-    /// panel dominates the modeled S-3 on every row (`lr ≥ s3` is the panel's
-    /// oracle-union construction — the property that makes it an upper bound
-    /// rather than a second opinion), and all arms are well-defined
-    /// probabilities. Deterministic via the seeded PRNG.
+    /// The funding-seam-blind null is no stronger than the modeled-S-3 arm.
+    /// With the funding seam retired (GF-7 coin retirement) the S-3 fused set is
+    /// the lifecycle cadence — the same set the blind arm scores — so the two
+    /// arms now coincide (`blind == s3`), and the inequality holds trivially
+    /// rather than because the null throws away real signal. The stress panel
+    /// still dominates the modeled S-3 on every row (`lr ≥ s3` is the panel's
+    /// oracle-union construction), and all arms are well-defined probabilities.
+    /// Deterministic via the seeded PRNG.
     #[test]
     fn blind_null_is_no_stronger_than_the_seam_arm() {
         let report = run_measurement(&small());
@@ -1332,62 +1191,31 @@ mod tests {
         assert!((1..=2).contains(&recorded));
     }
 
-    /// Widening the entry jitter degrades the seam-using arm (the jitter works
-    /// on the axis it targets): the zero-window row (dispersal only) links
-    /// better than the full-window row (dispersal + full entry spread).
-    #[test]
-    fn jitter_degrades_the_seam_arm() {
-        let report = run_measurement(&small());
-        let by_window = |w: u64| {
-            report
-                .rows
-                .iter()
-                .find(|r| r.group == "window" && r.window_blocks == w)
-                .unwrap()
-        };
-        let w0 = by_window(0);
-        let w600 = by_window(DEFAULT_ENTRY_GAP_WINDOW);
-        assert!(w0.modeled_s3.p_link > w600.modeled_s3.p_link);
-    }
-
-    /// The conformance-trap draw is catastrophically more linkable than the
-    /// real draw at the same posture (the standoff's "shared trigger is
-    /// catastrophic" negative anchor, reproduced): the trap clusters the seam,
-    /// so the S-3 arm links much harder than under the shipped uniform draw.
-    #[test]
-    fn conformance_trap_is_more_linkable_than_the_real_draw() {
-        let report = run_measurement(&small());
-        let direct = report
-            .rows
-            .iter()
-            .find(|r| r.group == "draw" && r.draw_shape == "direct")
-            .unwrap();
-        let trap = report
-            .rows
-            .iter()
-            .find(|r| r.group == "draw" && r.draw_shape == "trap")
-            .unwrap();
-        assert!(trap.modeled_s3.p_link > direct.modeled_s3.p_link);
-    }
+    // The two seam-behaviour tests — `jitter_degrades_the_seam_arm` (entry
+    // jitter degrades the seam-using arm) and
+    // `conformance_trap_is_more_linkable_than_the_real_draw` (the trap clusters
+    // the seam) — are removed with the funding seam (GF-7 coin retirement). Both
+    // asserted the S-3 arm's *seam* response; with the funding send no longer a
+    // chain-attributable event the S-3 arm scores the lifecycle cadence only, so
+    // there is no seam response left to assert. The verdict is fail-closed
+    // (`GF7_FAIL_CLOSED`), so these grades certify nothing in any case.
 
     /// The report is well-formed: every row carries all three arms with ratios
-    /// = P(link)·N, the gate family is non-empty, and the status is provisional.
+    /// = P(link)·N, the recommended-posture family is non-empty, and the verdict
+    /// is the fail-closed entry-seam string (GF-7 coin retirement).
     #[test]
     fn report_is_well_formed() {
         let report = run_measurement(&small());
         assert!(report.provisional);
         assert_eq!(report.ratio_bound, RATIO_BOUND);
-        assert!(report.rows.iter().any(|r| r.gate_relevant));
+        assert!(!report.rows.is_empty());
         for r in &report.rows {
             for a in [&r.blind, &r.modeled_s3, &r.lr_stress] {
                 assert!((a.ratio - a.p_link * r.n as f64).abs() < 1e-9);
                 assert_eq!(a.clears_bound, a.ratio < RATIO_BOUND);
             }
         }
-        assert!(
-            report.gate_status.starts_with("PROVISIONAL")
-                || report.gate_status.starts_with("INVALID")
-        );
+        assert!(report.gate_status.starts_with("FAIL-CLOSED"));
     }
 
     /// Coverage sample reports non-zero counts on every axis.

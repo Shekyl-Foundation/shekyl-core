@@ -85,9 +85,9 @@
 //!
 //! The actor is reworked to Model D here; the live spawn (`assemble()` deriving
 //! the union and spawning the handle, `Engine.stake`) lands in this same PR's
-//! `assemble()` wiring. 2c-2b wires the block-timed placement plan into the
+//! `assemble()` wiring. 2c-2b wires the block-timed placement offset into the
 //! [`SignBond`] reply ([`SignedBondPost`] pairs the signed vin with its
-//! [`EntrySeamPlan`]) and the GF-7 measurement seam (`gf7-hooks`,
+//! bond-post offset) and the GF-7 measurement seam (`gf7-hooks`,
 //! `docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md`). The first live caller (the
 //! JoinMarket bond request that consumes a [`PersistedBondTicket`] +
 //! [`PersonaHandle`] and dispatches at the planned offsets) lands with the
@@ -110,7 +110,7 @@
 //! - The emission block's only statements call
 //!   [`BroadcastTimelineObserver::record`], whose return type is `()` — it
 //!   cannot feed a value back into the handler. The draw, the degeneracy
-//!   guard, [`plan_entry_seam`], the vin signing, and the
+//!   guard, the offset computation, the vin signing, and the
 //!   [`SignedBondPost`] reply all sit **outside** the `cfg`, unconditioned.
 //! - The production observer is the no-op even when the feature is on;
 //!   recording observers exist only in `shekyl-staking-sim` (CI-asserted by
@@ -157,7 +157,6 @@ use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
-use shekyl_standoff::plan::{plan_entry_seam, EntrySeamPlan};
 use shekyl_tx_builder::{
     phase1_payload_hashes, prove_backing_membership, sign_pqc_auths, sign_transaction_with_terms,
     tx_prefix_hash_from_parts_with_extra, InputTerm, LeafEntry, PqcAuth, SpendInput, TreeContext,
@@ -838,11 +837,11 @@ impl StakeEngine {
     /// the draw/guard discipline (a stronger degeneracy check, a new observer
     /// event) lands once rather than silently diverging between two copies and
     /// weakening the timing firewall in the un-updated path with no compile error.
-    fn validate_and_plan_entry_seam(
+    fn validate_and_draw_bond_offset(
         &mut self,
         handle: &PersonaHandle,
         ticket_slot: PSlot,
-    ) -> Result<(PSlot, EntrySeamPlan), StakeEngineError> {
+    ) -> Result<(PSlot, u64), StakeEngineError> {
         // 1. Validate the handle: generation currency + slot membership.
         self.validate_handle(handle)?;
 
@@ -874,15 +873,18 @@ impl StakeEngine {
         //    fires `RngDegeneracy` if they are equal (double-jitter-trap detection).
         //    The actual timing draw result is returned on success.
         let mut rng = OsRngGapAdapter;
-        let (spread, _coin) = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
+        let spread = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
             .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
         // S6: the session-level `certify_draw` self-cert (over `OsRngGapAdapter`,
         // gated, at session start) is wired in `on_start` — see
         // `run_session_self_cert` and the `conformance` feature.
 
-        // 5. Forced causal: only the post is attributable, so there is no second
-        //    event to order (`ARCHIVAL_FIREWALL_GATE6.md` pass-4 (d) + note 8).
-        let plan = plan_entry_seam((spread, FORCED_CAUSAL_ORDER));
+        // 5. The bond post fires `spread` blocks after the private intent `t0`.
+        //    There is no second event to order and no plan to build: only the
+        //    post is chain-attributable, the funding transfer is the unnamed
+        //    CT-hidden FCMP++ input (`ARCHIVAL_FIREWALL_GATE6.md` pass-4 (d) +
+        //    note 8), so the order coin was retired and the offset *is* the draw.
+        let bond_post_offset_blocks = spread;
 
         // GF-7 hooks-spec §3: emit the draw-consumption and schedule events to
         // the injected observer. Sim-facing only — this block is compiled out
@@ -896,16 +898,14 @@ impl StakeEngine {
                 persona,
                 window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
                 spread_blocks: spread,
-                bond_first: FORCED_CAUSAL_ORDER,
             });
             self.observer.record(TimelineEvent::BondPostScheduled {
                 persona,
-                entry_offset_blocks: plan.entry_offset_blocks,
-                bond_post_offset_blocks: plan.bond_post_offset_blocks,
+                bond_post_offset_blocks,
             });
         }
 
-        Ok((handle_slot, plan))
+        Ok((handle_slot, bond_post_offset_blocks))
     }
 
     /// Project the public identity of a held slot. The caller must have
@@ -1512,10 +1512,9 @@ impl Message<ActivePersonaReceiveAddress> for StakeEngine {
 /// The `ArchivalPKeys` bundle is borrowed inside the actor and never crosses
 /// the actor boundary (rule 36-secret-locality). `build_join_market_vin` is
 /// called here; the reply is a [`SignedBondPost`] carrying the signed
-/// `JoinMarketVin` **and** the [`EntrySeamPlan`] derived from this request's
-/// entry-gap draw — the caller receives the placement plan with the bytes it
-/// places, so the draw cannot be silently dropped between signing and
-/// scheduling.
+/// `JoinMarketVin` **and** the bond-post placement offset derived from this
+/// request's entry-gap draw — the caller receives the placement offset with the
+/// bytes it places, so the draw cannot be lost between signing and scheduling.
 ///
 /// Does **not** advance the activation generation — signing does not change
 /// the active slot or wipe any persona.
@@ -1546,22 +1545,22 @@ pub(crate) struct SignBond {
 }
 
 /// Reply of [`SignBond`]: the signed bond vin **and** the block-timed
-/// placement plan derived from the same request's entry-gap draw.
+/// placement offset derived from the same request's entry-gap draw.
 ///
 /// Pairing them in one reply is the seam discipline: the caller that receives
-/// the bytes to place also receives *where to place them* (relative to its
-/// private intent anchor `t0`), so the order-coin cannot be silently dropped
-/// between signing and scheduling — the failure mode named in
-/// [`shekyl_standoff::plan`]'s module docs. The plan is relative (blocks from
-/// `t0`); the anchor itself never leaves the caller.
+/// the bytes to place also receives *where to place them* (blocks from its
+/// private intent anchor `t0`), so the placement offset cannot be lost between
+/// signing and scheduling. The offset is relative; the anchor itself never
+/// leaves the caller.
 #[allow(dead_code)] // inert until the 2c-2a assemble / 2d dispatch consumer lands
 #[derive(Debug)]
 pub(crate) struct SignedBondPost {
     /// The signed JoinMarket bond vin, ready for transaction assembly.
     pub vin: JoinMarketVin,
-    /// Relative placement of the entry event and the bond-post broadcast,
-    /// from [`plan_entry_seam`] over this request's draw.
-    pub plan: EntrySeamPlan,
+    /// Blocks from the private-intent anchor `t0` to the bond-post broadcast —
+    /// the drawn entry-gap spread. (No entry offset: only the bond post is
+    /// chain-attributable, so there is no second event to place.)
+    pub bond_post_offset_blocks: u64,
 }
 
 impl Message<SignBond> for StakeEngine {
@@ -1574,7 +1573,7 @@ impl Message<SignBond> for StakeEngine {
     ) -> Self::Reply {
         // Steps 1–5 (validate + slot cross-check + entropy preflight + guarded
         // draw + entry-seam plan + GF-7 hooks) are the shared bond-handler
-        // prologue; see `validate_and_plan_entry_seam`.
+        // prologue; see `validate_and_draw_bond_offset`.
         //
         // GF-7 SCOPE (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §4): the jitter that
         // prologue draws decorrelates the bond-post from `P`'s own observable
@@ -1591,8 +1590,8 @@ impl Message<SignBond> for StakeEngine {
         // The remaining CONSUMER wiring is the 2c-2a assemble / 2d dispatch path
         // (see `AssembleBond`); this handler plans + signs the vin, it does not
         // broadcast.
-        let (handle_slot, plan) =
-            self.validate_and_plan_entry_seam(&msg.handle, msg.ticket.p_slot())?;
+        let (handle_slot, bond_post_offset_blocks) =
+            self.validate_and_draw_bond_offset(&msg.handle, msg.ticket.p_slot())?;
 
         // 6. Borrow the held bundle — slot membership confirmed by step 1.
         let keys = self
@@ -1604,10 +1603,13 @@ impl Message<SignBond> for StakeEngine {
         // 7. Build and sign the JoinMarket vin inside the actor.
         //    `ArchivalPKeys` is borrowed here and never returned to the caller
         //    (rule 36-secret-locality): only the signed `JoinMarketVin` (paired
-        //    with its placement plan) crosses the actor boundary.
+        //    with its placement offset) crosses the actor boundary.
         let vin = build_join_market_vin(keys, msg.holdings, &msg.tx_prefix_hash)
             .map_err(StakeEngineError::BondBuild)?;
-        Ok(SignedBondPost { vin, plan })
+        Ok(SignedBondPost {
+            vin,
+            bond_post_offset_blocks,
+        })
     }
 }
 
@@ -1627,8 +1629,8 @@ impl Message<SignBond> for StakeEngine {
 /// record's `(ciphertext, index)` inside the handler
 /// ([`derive_p_source_secrets_bundle`], rule 36).
 ///
-/// The reply pairs the minted [`PBoundBytes`] with the [`EntrySeamPlan`] from
-/// this request's entry-gap draw — the same seam discipline as
+/// The reply pairs the minted [`PBoundBytes`] with the bond-post placement
+/// offset from this request's entry-gap draw — the same seam discipline as
 /// [`SignedBondPost`]: the caller that receives the bytes to place receives
 /// where to place them.
 ///
@@ -1655,20 +1657,21 @@ pub(crate) struct AssembleBond {
 }
 
 /// Reply of [`AssembleBond`]: the persona-bound wire bytes (minted at the
-/// single P-1 site, [`finalize_bond_tx`]), the placement plan, and the
+/// single P-1 site, [`finalize_bond_tx`]), the placement offset, and the
 /// funding gindexes for the caller's reservation record (§3.5). Secrets never
 /// cross the boundary.
 ///
 /// Dead_code allow: reply type of the wired orchestrator; same dual gate as
 /// [`AssembleBond`].
 #[allow(dead_code)]
-// rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332)
+// rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332). The placement carrier is the bare `bond_post_offset_blocks` (the entry-seam plan/order-coin was retired in the GF-7 coin retirement).
 #[derive(Debug)]
 pub(crate) struct AssembledBondPost {
     /// The fully-signed, wire-encoded bond transaction, persona-bound.
     pub bound_tx: PBoundBytes,
-    /// Relative placement of the entry event and the bond-post broadcast.
-    pub plan: EntrySeamPlan,
+    /// Blocks from the private-intent anchor `t0` to the bond-post broadcast —
+    /// the drawn entry-gap spread.
+    pub bond_post_offset_blocks: u64,
     /// The spent funding records' gindexes — the §3.5 reservation set.
     pub funding_gindexes: Vec<shekyl_types::GlobalOutputIndex>,
 }
@@ -1683,9 +1686,9 @@ impl Message<AssembleBond> for StakeEngine {
     ) -> Self::Reply {
         // ── Steps 1–5: the shared bond-handler prologue (identical typed
         // contracts + guarded draw as `SignBond`); see
-        // `validate_and_plan_entry_seam`. ──────────────────────────────────
-        let (handle_slot, plan) =
-            self.validate_and_plan_entry_seam(&msg.handle, msg.ticket.p_slot())?;
+        // `validate_and_draw_bond_offset`. ──────────────────────────────────
+        let (handle_slot, bond_post_offset_blocks) =
+            self.validate_and_draw_bond_offset(&msg.handle, msg.ticket.p_slot())?;
 
         // ── Step 6: borrow the held bundle (never crosses the boundary) ──
         let keys = self
@@ -1936,7 +1939,7 @@ impl Message<AssembleBond> for StakeEngine {
 
         Ok(AssembledBondPost {
             bound_tx,
-            plan,
+            bond_post_offset_blocks,
             funding_gindexes,
         })
     }
@@ -2949,9 +2952,8 @@ pub(crate) struct DegenerateDraw;
 ///
 /// Draws twice from `rng`. If the two `spread` values are equal, the guard
 /// fires and [`DegenerateDraw`] is returned — the caller maps this to
-/// [`StakeEngineError::RngDegeneracy`]. On success, the first draw's
-/// `(spread, bond_first)` is returned; the probe draw is consumed and
-/// discarded.
+/// [`StakeEngineError::RngDegeneracy`]. On success, the first draw's `spread`
+/// is returned; the probe draw is consumed and discarded.
 ///
 /// **Why two draws?** The double-jitter trap produces a triangular spread
 /// distribution (peaked at 0) by computing `|a - b|`; consecutive draws from
@@ -2981,26 +2983,26 @@ pub(crate) struct DegenerateDraw;
 /// builds rather than silently mislabelling it as `RngDegeneracy`. (More
 /// generally the guard is only well-behaved for windows large enough that
 /// `1/(window+1)` is an acceptable false-positive rate — 600 gives ≈ 0.17 %.)
-/// Forced order-coin — the inverted branch orders a chain event that does not
-/// exist (`ARCHIVAL_FIREWALL_GATE6.md` method note 8).
-pub(crate) const FORCED_CAUSAL_ORDER: bool = false;
-
+///
+/// The draw yields a single `spread` — there is no order coin (retired: only the
+/// bond post is chain-attributable, so there is no second event to order,
+/// `ARCHIVAL_FIREWALL_GATE6.md` method note 8).
 pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
     window: u64,
     rng: &mut R,
-) -> Result<(u64, bool), DegenerateDraw> {
+) -> Result<u64, DegenerateDraw> {
     debug_assert!(
         window > 0,
         "entry-gap window must be > 0: a zero-width standoff provides no \
          decorrelation and makes the degeneracy guard fire unconditionally; \
          pass the operational DEFAULT_ENTRY_GAP window"
     );
-    let (spread_draw, bond_first) = draw_entry_gap(window, rng);
-    let (spread_probe, _) = draw_entry_gap(window, rng);
+    let spread_draw = draw_entry_gap(window, rng);
+    let spread_probe = draw_entry_gap(window, rng);
     if spread_draw == spread_probe {
         return Err(DegenerateDraw);
     }
-    Ok((spread_draw, bond_first))
+    Ok(spread_draw)
 }
 
 // ---------------------------------------------------------------------------
@@ -4103,10 +4105,11 @@ mod tests {
     /// GF-7 hooks-spec §6.2 (emission-complete for the 2c-2b surface) — a
     /// successful `sign_bond` emits exactly the draw-consumption and schedule
     /// events to the **injected** observer, and the emitted payloads are
-    /// internally consistent: the schedule event equals `plan_entry_seam` over
-    /// the emitted draw, and both match the plan riding the reply. Also pins
-    /// the §3 payload discipline the sim depends on: opaque slot ordinal and
-    /// the sweepable window parameter on the draw event.
+    /// internally consistent: the scheduled offset equals the drawn spread
+    /// (causal — the post fires `spread` blocks after the private intent), and
+    /// it matches the offset riding the reply. Also pins the §3 payload
+    /// discipline the sim depends on: opaque slot ordinal and the sweepable
+    /// window parameter on the draw event.
     #[cfg(feature = "gf7-hooks")]
     #[tokio::test]
     async fn sign_bond_emits_gf7_draw_and_schedule_events() {
@@ -4158,12 +4161,11 @@ mod tests {
             "exactly the two 2c-2b emission points fire: {events:?}"
         );
 
-        let (spread, bond_first) = match events[0] {
+        let spread = match events[0] {
             TimelineEvent::EntryGapDrawConsumed {
                 persona,
                 window_blocks,
                 spread_blocks,
-                bond_first,
             } => {
                 assert_eq!(persona, 0, "opaque wallet-local slot ordinal");
                 assert_eq!(
@@ -4171,7 +4173,7 @@ mod tests {
                     DEFAULT_ENTRY_GAP.as_blocks(),
                     "sweepable window parameter rides the event"
                 );
-                (spread_blocks, bond_first)
+                spread_blocks
             }
             ref other => panic!("first event must be the draw consumption, got {other:?}"),
         };
@@ -4179,24 +4181,18 @@ mod tests {
         match events[1] {
             TimelineEvent::BondPostScheduled {
                 persona,
-                entry_offset_blocks,
                 bond_post_offset_blocks,
             } => {
                 assert_eq!(persona, 0, "same persona ordinal as the draw event");
-                let emitted = EntrySeamPlan {
-                    entry_offset_blocks,
-                    bond_post_offset_blocks,
-                };
+                // Causal by construction: the post fires `spread` blocks after
+                // the private intent; there is no second event and no coin.
                 assert_eq!(
-                    emitted,
-                    plan_entry_seam((spread, bond_first)),
-                    "schedule event must be the planner over the emitted draw"
+                    bond_post_offset_blocks, spread,
+                    "scheduled offset must be the drawn spread"
                 );
-                // Tripwire if sim and production diverge (offsets pinned above).
-                assert!(!bond_first && !emitted.is_inverted(), "forced causal");
                 assert_eq!(
-                    emitted, post.plan,
-                    "schedule event must match the plan riding the reply"
+                    bond_post_offset_blocks, post.bond_post_offset_blocks,
+                    "schedule event must match the offset riding the reply"
                 );
             }
             ref other => panic!("second event must be the schedule, got {other:?}"),
