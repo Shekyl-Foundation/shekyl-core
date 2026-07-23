@@ -185,10 +185,11 @@ pub async fn run_server(
         ListenAddr::Uds(path) => {
             prepare_uds_path(path)?;
             let listener = UnixListener::bind(path)?;
-            restrict_socket_perms(path)?;
-            // Always unlink on exit — success or serve error — so the next
-            // bind is not blocked by a leftover path.
+            // Own the socket path for cleanup BEFORE any fallible step: a
+            // failure in restrict_socket_perms below must still unlink the
+            // bound socket, or the leftover path blocks the next bind.
             let _cleanup = UdsCleanup(path.clone());
+            restrict_socket_perms(path)?;
             info!(path = %path.display(), "shekyl-wallet-rpc listening (UDS)");
             axum::serve(listener, app)
                 .with_graceful_shutdown(async move {
@@ -357,8 +358,11 @@ pub async fn spawn_in_process_with(
         ListenAddr::Uds(path) => {
             prepare_uds_path(path)?;
             let listener = UnixListener::bind(path)?;
-            restrict_socket_perms(path)?;
+            // Own the socket path for cleanup BEFORE restrict_socket_perms so a
+            // chmod failure still unlinks the bound socket rather than leaking
+            // it. Ownership then moves into the serve task below.
             let cleanup = UdsCleanup(path.clone());
+            restrict_socket_perms(path)?;
             let join = tokio::spawn(async move {
                 // Owned by the serve task so the socket is unlinked on any
                 // exit path, success or error.

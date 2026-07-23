@@ -13,14 +13,27 @@
   fallback), removed on shutdown. Priority-1 fix under `00-mission.mdc`:
   the wallet's unauthenticated command surface is no longer visible to
   other local users or processes outside the owning uid.
+- **cli/wallet-rpc: seed and secret hygiene across the RPC surface**
+  (WI-RPC-2a). The interactive `create` now preflights terminal safety
+  *before* creating the wallet and has no non-TTY fallback: it refuses to
+  print the one-time seed to a pipe, redirect, or log (the deliberate,
+  auditable file path is `create --seed-out`). The JSON-RPC client zeroizes
+  the serialized request/response byte buffers that carry the password and
+  seed (rule 35), not just the caller's own copies. Internal wallet-RPC error
+  messages no longer echo raw `io`/persistence strings that can carry a local
+  filesystem path or schema detail — they return a category-only message and
+  log the cause server-side (honoring the `message()` never-carries-secrets
+  contract, rule 30).
 
 ### Added
 
 - **wallet-rpc: `restore_wallet`** (WI-RPC-2a; contract in
-  `docs/api/wallet_rpc.yaml` same PR). Restores a wallet from a BIP-39
-  mnemonic + password + optional `restore_height`, mirroring
-  `create_wallet`'s lifecycle shape. Error mapping keeps mnemonic material
-  out of every message (stable `InvalidParams` strings).
+  `docs/api/wallet_rpc.yaml` same PR). Restores a wallet from its seed backup
+  + password + optional `restore_height`, mirroring `create_wallet`'s
+  lifecycle shape. The seed format is network-governed, matching create:
+  mainnet/stagenet take a BIP-39 mnemonic, testnet a 32-byte raw seed as hex
+  (so a testnet wallet made by this stack is recoverable). Error mapping keeps
+  seed material out of every message (stable `InvalidParams` strings).
 - **cli: native wallet-RPC client** (WI-RPC-2a; ratified Shape B, decision
   log 2026-04-25). `shekyl-cli` is now always a JSON-RPC client:
   the REPL and one-shot commands self-host `shekyl-wallet-rpc` in-process
@@ -28,6 +41,13 @@
   commands (lifecycle incl. `restore`, balance, address, status, refresh,
   the build→confirm→submit/discard transfer flow, transfers) run over the
   OpenAPI contract; the CLI is presentation-only.
+- **cli: non-interactive `create` / `restore` subcommands** (WI-RPC-2a) for
+  scripting/automation. `shekyl-cli create <name> --seed-out <path>
+  [--password-file <path> | --password-stdin]` writes the one-time seed backup
+  to an explicit `0600` file (O_EXCL, fsync) instead of a terminal; `restore
+  <name> --seed-file <path> …` reads it back. This is the sanctioned way for a
+  seed to reach a file — the interactive path refuses non-TTY output rather
+  than leak it (see Security).
 
 ### Removed
 

@@ -16,6 +16,20 @@ pub fn cmd_create(rpc: &RpcSession, filename: &str) {
     if !require_closed(rpc) {
         return;
     }
+    // Gate the one-time seed display BEFORE creating anything. The server never
+    // re-exposes the seed, so a wallet created here whose backup we then cannot
+    // safely show (stdout is a pipe/file, or the user declines under tmux)
+    // would be permanently unrecoverable. Refuse and create nothing; scripted
+    // creation has its own deliberate, file-based path.
+    if let Err(e) = crate::display::preflight_secret_display() {
+        eprintln!("{e}");
+        eprintln!(
+            "Refusing to create a wallet whose one-time seed backup cannot be shown here.\n\
+             For non-interactive or scripted creation, use:\n  \
+             shekyl-cli create <name> --seed-out <path> --password-file <path>"
+        );
+        return;
+    }
     let Some(mut password) = read_password("New wallet password: ") else {
         return;
     };
@@ -49,12 +63,10 @@ pub fn cmd_create(rpc: &RpcSession, filename: &str) {
             if let Some(backup) = backup {
                 let mut secret = backup.to_owned();
                 println!("Write down your seed backup NOW. It is shown only once.");
-                if let Err(e) = crate::display::display_secret("Seed backup", &mut secret) {
-                    // Not a TTY (or declined): print anyway — a wallet whose
-                    // only backup was silently discarded is unrecoverable.
-                    eprintln!("{e}");
-                    println!("Seed backup: {backup}");
-                }
+                // preflight_secret_display() above already guaranteed a safe
+                // terminal, so show_secret has no non-TTY fallback that could
+                // leak the seed to a pipe or file.
+                crate::display::show_secret("Seed backup", &mut secret);
             }
         }
         Err(e) => rpc.report("Failed to create wallet", &e),
@@ -191,16 +203,24 @@ pub fn cmd_status(rpc: &RpcSession) {
                 .get("wallet_height")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            let daemon = val
-                .get("daemon_height")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
             println!("Wallet height: {wallet}");
-            println!("Daemon height: {daemon}");
-            if daemon > wallet {
-                println!("Behind by {} blocks — run \"refresh\".", daemon - wallet);
-            } else {
-                println!("Synced.");
+            // daemon_height is null when the daemon is unreachable; still show
+            // the wallet height rather than reporting a total failure.
+            match val.get("daemon_height").and_then(|v| v.as_i64()) {
+                Some(daemon) => {
+                    println!("Daemon height: {daemon}");
+                    if daemon > wallet {
+                        println!("Behind by {} blocks — run \"refresh\".", daemon - wallet);
+                    } else {
+                        println!("Synced.");
+                    }
+                }
+                None => {
+                    println!("Daemon height: unavailable (daemon unreachable).");
+                    println!(
+                        "Showing wallet height only — start/sync your node, then \"refresh\"."
+                    );
+                }
             }
         }
         Err(e) => rpc.report("Failed to get status", &e),

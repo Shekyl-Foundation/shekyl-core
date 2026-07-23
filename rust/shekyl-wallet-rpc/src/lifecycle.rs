@@ -188,14 +188,16 @@ async fn create_wallet_engine(
     Ok((engine, backup))
 }
 
-/// `restore_wallet` — recreate a wallet from its BIP-39 mnemonic backup
-/// (WI-RPC-2a; the deterministic inverse of `create_wallet`'s mnemonic).
+/// `restore_wallet` — recreate a wallet from its seed backup (WI-RPC-2a; the
+/// deterministic inverse of `create_wallet`'s backup material).
 ///
 /// Same tenant choreography as `create_wallet`: refuse-if-busy, reserve the
-/// opening slot, slow work off the mutex, install or clear. The mnemonic is
-/// seed material — it moves into a `Zeroizing` wrapper before any slow work
-/// and is never echoed in errors or logs (rule 30). Networks whose seed
-/// format is not BIP-39 (testnet) refuse as invalid params.
+/// opening slot, slow work off the mutex, install or clear. The seed is key
+/// material — it moves into a `Zeroizing` wrapper before any slow work and is
+/// never echoed in errors or logs (rule 30). The seed format is
+/// network-governed, matching create: mainnet/stagenet take a BIP-39 mnemonic,
+/// testnet a 32-byte raw seed as hex. A seed that does not match the network's
+/// format refuses as invalid params.
 pub(crate) async fn restore_wallet(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
@@ -280,18 +282,45 @@ async fn restore_wallet_engine(
     let daemon = make_daemon(daemon_address).await?;
     let creds = Credentials::password_only(password.as_slice());
 
-    // Validation lives in the derivation: word-set / checksum failures and
-    // BIP-39-forbidding networks (testnet is raw-seed) surface here. The
-    // message is stable and detail-free — the mnemonic is key material and
-    // is never reflected (rule 30).
-    let (master_seed, _blob) =
-        generate_account_from_bip39(mnemonic, "", network_to_derivation(network)).map_err(
-            |_| {
+    // Seed format is network-governed, mirroring generate_seed_material on the
+    // create path: mainnet/stagenet derive from a BIP-39 mnemonic; testnet
+    // from a raw 32-byte seed (hex-encoded, as create returns it in
+    // raw_seed_hex). Restoring a testnet wallet through the BIP-39 path would
+    // wrongly reject it. Validation lives in the derivation; messages are
+    // stable and detail-free — the seed is key material, never reflected
+    // (rule 30).
+    let (master_seed, seed_format) = match network {
+        Network::Mainnet | Network::Stagenet => {
+            let (master_seed, _blob) =
+                generate_account_from_bip39(mnemonic, "", network_to_derivation(network)).map_err(
+                    |_| {
+                        WalletRpcError::InvalidParams(
+                            "invalid mnemonic (or the network does not use BIP-39 seeds)".into(),
+                        )
+                    },
+                )?;
+            (master_seed, SeedFormat::Bip39)
+        }
+        Network::Testnet => {
+            let decoded = Zeroizing::new(hex::decode(mnemonic.trim()).map_err(|_| {
                 WalletRpcError::InvalidParams(
-                    "invalid mnemonic (or the network does not use BIP-39 seeds)".into(),
+                    "invalid testnet seed (expected a 32-byte raw seed as hex)".into(),
                 )
-            },
-        )?;
+            })?);
+            if decoded.len() != RAW_SEED_BYTES {
+                return Err(WalletRpcError::InvalidParams(
+                    "invalid testnet seed (expected a 32-byte raw seed as hex)".into(),
+                ));
+            }
+            let mut raw = [0u8; RAW_SEED_BYTES];
+            raw.copy_from_slice(&decoded);
+            let derived = generate_account_from_raw_seed(&raw, network_to_derivation(network))
+                .map_err(|_| WalletRpcError::InvalidParams("invalid testnet raw seed".into()));
+            raw.zeroize();
+            let (master_seed, _blob) = derived?;
+            (master_seed, SeedFormat::Raw32)
+        }
+    };
 
     // A restored wallet's creation time is unknown; 0 keeps the scan floor
     // governed solely by restore_height.
@@ -301,7 +330,7 @@ async fn restore_wallet_engine(
         network,
         capability: CapabilityInput::Full {
             master_seed_64: &master_seed,
-            seed_format: SeedFormat::Bip39,
+            seed_format,
         },
         creation_timestamp: 0,
         restore_height_hint: restore_height,
@@ -1241,7 +1270,9 @@ mod tests {
         .expect_err("file exists");
         assert!(matches!(collision, WalletRpcError::WalletFileExists));
 
-        // Raw-seed network: a testnet tenant refuses BIP-39 restore.
+        // Raw-seed network: a testnet tenant restores from a 32-byte raw seed
+        // (hex), so garbage that is neither valid hex nor 32 bytes refuses as
+        // typed InvalidParams (the positive round-trip is covered separately).
         let tdir = tempfile::tempdir().expect("tempdir");
         let testnet = tenants_in(tdir.path());
         let refused = restore_wallet(
@@ -1250,8 +1281,75 @@ mod tests {
             fast_kdf(),
         )
         .await
-        .expect_err("testnet is raw-seed");
-        assert!(matches!(refused, WalletRpcError::InvalidParams(_)));
+        .expect_err("not a 32-byte raw seed");
+        match refused {
+            WalletRpcError::InvalidParams(msg) => {
+                assert!(
+                    !msg.contains('x') || msg.contains("hex"),
+                    "must not echo the input"
+                )
+            }
+            other => panic!("expected InvalidParams, got {other:?}"),
+        }
+    }
+
+    /// #5 regression: a testnet wallet is raw-seed, so `restore_wallet` must
+    /// accept the `raw_seed_hex` that `create_wallet` returns and reproduce the
+    /// same primary address — the BIP-39-only path made testnet wallets
+    /// unrecoverable.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn testnet_restore_round_trips_the_raw_seed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = tenants_in(dir.path());
+
+        let created = create_wallet(
+            &tenants,
+            &json!({ "name": "orig", "password": "pw" }),
+            fast_kdf(),
+        )
+        .await
+        .expect("create");
+        let raw_seed_hex = created["raw_seed_hex"]
+            .as_str()
+            .expect("testnet create returns raw_seed_hex")
+            .to_owned();
+        assert!(
+            created.get("mnemonic").is_none(),
+            "testnet create must not return a BIP-39 mnemonic"
+        );
+        let orig_addr = crate::queries::get_primary_address(&tenants, &json!({}))
+            .await
+            .expect("address")["address"]
+            .as_str()
+            .expect("string")
+            .to_owned();
+        close_wallet(&tenants, &json!({})).await.expect("close");
+
+        let restored = restore_wallet(
+            &tenants,
+            &json!({
+                "name": "rest",
+                "password": "other-pw",
+                "mnemonic": raw_seed_hex,
+                "restore_height": 0,
+            }),
+            fast_kdf(),
+        )
+        .await
+        .expect("testnet raw-seed restore");
+        assert_eq!(restored["wallet"]["name"], "rest");
+
+        let rest_addr = crate::queries::get_primary_address(&tenants, &json!({}))
+            .await
+            .expect("address")["address"]
+            .as_str()
+            .expect("string")
+            .to_owned();
+        assert_eq!(
+            orig_addr, rest_addr,
+            "raw-seed restore must reproduce the account"
+        );
+        close_wallet(&tenants, &json!({})).await.expect("close");
     }
 
     /// Verify-then-close: a `stake` with a wrong password refuses with

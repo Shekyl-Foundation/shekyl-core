@@ -818,14 +818,20 @@ components:
 
     GetHeightResult:
       type: object
-      required: [wallet_height, daemon_height]
+      required: [wallet_height]
       properties:
         wallet_height:
           type: integer
           format: int64
+          description: Wallet synced height; always present (local state).
         daemon_height:
           type: integer
           format: int64
+          nullable: true
+          description: >-
+            Daemon chain height, or null when the daemon is unreachable. The
+            wallet_height is still returned in that case so an offline or
+            still-syncing node does not hide the wallet's own status.
 
     GetVersionParams:
       type: object

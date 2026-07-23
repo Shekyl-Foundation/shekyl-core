@@ -174,6 +174,83 @@ fn send_lifecycle_errors_are_typed_end_to_end() {
     rpc.shutdown();
 }
 
+/// The non-interactive `create`/`restore` subcommands (the scriptable path
+/// that closes the interactive seed-leak finding): `create` writes the
+/// one-time seed to a 0600 file and refuses to overwrite it, and `restore`
+/// reads it back to reproduce the same account — the seed never touches a
+/// terminal or a pipe.
+#[test]
+fn scripted_create_writes_seed_file_and_restore_round_trips() {
+    use shekyl_cli::commands::scripted::{run_create, run_restore, CreateArgs, RestoreArgs};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rpc = host(dir.path());
+
+    let seed_out = dir.path().join("seed.txt");
+    let pw_file = dir.path().join("pw");
+    std::fs::write(&pw_file, "s3cret\n").expect("write password file");
+
+    let create = CreateArgs {
+        name: "orig".into(),
+        seed_out: seed_out.clone(),
+        password_file: Some(pw_file.clone()),
+        password_stdin: false,
+    };
+    run_create(&rpc, &create).expect("scripted create");
+
+    // Seed written owner-only and non-empty; the seed never reached stdout.
+    let mode = std::fs::metadata(&seed_out)
+        .expect("seed metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "seed file must be owner-only");
+    assert!(
+        !std::fs::read_to_string(&seed_out)
+            .expect("read seed")
+            .trim()
+            .is_empty(),
+        "seed file must hold the backup"
+    );
+
+    // O_EXCL: refuse to overwrite an existing seed-out path (the check runs
+    // before create_wallet, so nothing is created on this refusal).
+    let clobber = CreateArgs {
+        name: "orig2".into(),
+        seed_out: seed_out.clone(),
+        password_file: Some(pw_file.clone()),
+        password_stdin: false,
+    };
+    run_create(&rpc, &clobber).expect_err("must refuse to overwrite an existing seed file");
+
+    let orig_addr = rpc.call("get_primary_address", json!({})).expect("address")["address"]
+        .as_str()
+        .expect("address string")
+        .to_owned();
+    rpc.call("close_wallet", json!({})).expect("close");
+
+    let restore = RestoreArgs {
+        name: "rest".into(),
+        seed_file: seed_out.clone(),
+        restore_height: None,
+        password_file: Some(pw_file.clone()),
+        password_stdin: false,
+    };
+    run_restore(&rpc, &restore).expect("scripted restore");
+
+    let rest_addr = rpc.call("get_primary_address", json!({})).expect("address")["address"]
+        .as_str()
+        .expect("address string")
+        .to_owned();
+    assert_eq!(
+        orig_addr, rest_addr,
+        "scripted restore must reproduce the account"
+    );
+
+    rpc.call("close_wallet", json!({})).expect("close");
+    rpc.shutdown();
+}
+
 /// WI-RPC-2a grep gate: the CLI has no wallet2 / EngineContext /
 /// shekyl-engine-rpc code reference left. Prose may say "wallet2" only to
 /// state the absence or name the era; identifiers may not.

@@ -27,9 +27,18 @@
 use std::cell::{Cell, RefCell};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use shekyl_wallet_rpc::{InProcessHandle, Network};
+use zeroize::Zeroizing;
+
+/// Idle read/write timeout for the self-hosted / `uds://` HTTP transport.
+/// Bounds an infinite hang against an untrusted `--rpc-url uds://` server
+/// that accepts the request but never replies. Applied per read/write
+/// syscall (not total), so a slow-but-progressing operation is unaffected;
+/// only a genuinely stalled socket trips it.
+const UDS_IO_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// JSON-RPC failure surfaced to command handlers.
 #[derive(Debug)]
@@ -151,13 +160,26 @@ impl RpcSession {
                  https://host:port, or uds:///path/to.sock"
             ));
         };
-        Ok(Self {
+        let session = Self {
             transport,
             hosted: None,
             next_id: Cell::new(1),
             open_wallet: RefCell::new(None),
             debug,
-        })
+        };
+        // A remote server may already have a wallet open (opened by the
+        // operator or another client). Probe once so is_open()/require_open()
+        // and the prompt reflect the server's actual tenant state — otherwise
+        // every wallet command is blocked ("no wallet open") against an
+        // already-open remote wallet, with no in-CLI recovery. Best-effort:
+        // get_primary_address needs an open wallet but not the daemon, so a
+        // success means "open"; any error (including "no wallet open", or a
+        // transport failure) leaves the flag closed, which is safe — commands
+        // still reach the server and surface its authoritative errors.
+        if session.call("get_primary_address", json!({})).is_ok() {
+            session.set_open("(remote)");
+        }
+        Ok(session)
     }
 
     /// The UDS socket path requests go to, when this is a UDS session.
@@ -194,10 +216,14 @@ impl RpcSession {
             "params": params,
         });
 
-        let raw = match &self.transport {
+        // The response buffer holds cleartext secret material for some
+        // methods (create_wallet returns the new BIP-39 mnemonic / raw seed).
+        // Wrap it so the serialized bytes are wiped on drop (rule 35); the
+        // request-side serialization is wiped inside the transport helpers.
+        let raw = Zeroizing::new(match &self.transport {
             Transport::Uds(path) => http_post_uds(path, &body)?,
             Transport::Http(url) => http_post_tcp(url, &body)?,
-        };
+        });
 
         let parsed: Value = serde_json::from_str(&raw)
             .map_err(|e| RpcError::Transport(format!("malformed JSON-RPC response: {e}")))?;
@@ -257,14 +283,24 @@ impl RpcSession {
 /// POST the JSON-RPC body over a Unix domain socket (HTTP/1.1,
 /// `Connection: close`) and return the response body.
 fn http_post_uds(path: &Path, body: &Value) -> Result<String, RpcError> {
-    let payload = serde_json::to_vec(body)
-        .map_err(|e| RpcError::Transport(format!("serialize request: {e}")))?;
+    // The serialized request holds cleartext secrets (password / mnemonic) for
+    // create/restore/open/change_password. Wipe the bytes on drop (rule 35) so
+    // the request buffer does not outlive the caller's own zeroize.
+    let payload = Zeroizing::new(
+        serde_json::to_vec(body)
+            .map_err(|e| RpcError::Transport(format!("serialize request: {e}")))?,
+    );
     let mut stream = std::os::unix::net::UnixStream::connect(path).map_err(|e| {
         RpcError::Transport(format!(
             "cannot connect to wallet RPC socket {}: {e}",
             path.display()
         ))
     })?;
+    // Bound an infinite hang against an untrusted `uds://` server that accepts
+    // the request but never replies (self-hosted mode is trusted; this guards
+    // the external `--rpc-url uds://` path).
+    let _ = stream.set_read_timeout(Some(UDS_IO_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(UDS_IO_TIMEOUT));
 
     let request = format!(
         "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
@@ -276,7 +312,9 @@ fn http_post_uds(path: &Path, body: &Value) -> Result<String, RpcError> {
         .and_then(|()| stream.write_all(&payload))
         .map_err(|e| RpcError::Transport(format!("write request: {e}")))?;
 
-    let mut raw = Vec::new();
+    // The response can carry secret material (create_wallet returns the seed);
+    // wipe the read buffer on drop.
+    let mut raw = Zeroizing::new(Vec::new());
     stream
         .read_to_end(&mut raw)
         .map_err(|e| RpcError::Transport(format!("read response: {e}")))?;
@@ -287,9 +325,11 @@ fn http_post_uds(path: &Path, body: &Value) -> Result<String, RpcError> {
 /// body. JSON-RPC application errors ride back as HTTP 200 with an `error`
 /// object, which the caller decodes.
 fn http_post_tcp(url: &str, body: &Value) -> Result<String, RpcError> {
+    // Serialized request holds cleartext secrets; wipe on drop (rule 35).
+    let payload = Zeroizing::new(body.to_string().into_bytes());
     let mut response = ureq::post(url)
         .header("Content-Type", "application/json")
-        .send(body.to_string().as_bytes())
+        .send(payload.as_slice())
         .map_err(|e| RpcError::Transport(e.to_string()))?;
     response
         .body_mut()
@@ -301,11 +341,17 @@ fn http_post_tcp(url: &str, body: &Value) -> Result<String, RpcError> {
 /// checks the status line, then extracts the body (chunked or
 /// length/EOF-delimited).
 fn parse_http_response(raw: &[u8]) -> Result<String, RpcError> {
-    let text = std::str::from_utf8(raw)
-        .map_err(|_| RpcError::Transport("non-UTF-8 HTTP response".into()))?;
-    let (head, body) = text
-        .split_once("\r\n\r\n")
+    // Split header/body on the raw bytes. The header is ASCII (parsed as
+    // UTF-8), but the body may contain multibyte UTF-8 (addresses, labels,
+    // error text) that must not be sliced at a non-char boundary — so it stays
+    // bytes until fully reassembled.
+    let sep = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
         .ok_or_else(|| RpcError::Transport("truncated HTTP response".into()))?;
+    let head = std::str::from_utf8(&raw[..sep])
+        .map_err(|_| RpcError::Transport("non-UTF-8 HTTP header".into()))?;
+    let body = &raw[sep + 4..];
 
     let status_line = head.lines().next().unwrap_or("");
     let status = status_line
@@ -323,33 +369,46 @@ fn parse_http_response(raw: &[u8]) -> Result<String, RpcError> {
         let lower = line.to_ascii_lowercase();
         lower.starts_with("transfer-encoding:") && lower.contains("chunked")
     });
-    if chunked {
-        decode_chunked(body)
+    let body = if chunked {
+        decode_chunked(body)?
     } else {
         // `Connection: close` — the body runs to EOF (Content-Length, when
         // present, matches by construction).
-        Ok(body.to_owned())
-    }
+        body.to_vec()
+    };
+    String::from_utf8(body).map_err(|_| RpcError::Transport("non-UTF-8 HTTP body".into()))
 }
 
 /// Decode a chunked transfer-encoded body.
-fn decode_chunked(mut body: &str) -> Result<String, RpcError> {
-    let mut out = String::new();
+///
+/// Operates on raw bytes and concatenates chunk data byte-for-byte: a
+/// multibyte UTF-8 sequence can straddle a chunk boundary, so slicing each
+/// chunk as `&str` would panic on a non-char boundary. The caller validates
+/// UTF-8 once on the fully reassembled body.
+fn decode_chunked(body: &[u8]) -> Result<Vec<u8>, RpcError> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut rest = body;
     loop {
-        let (size_line, rest) = body
-            .split_once("\r\n")
+        let nl = rest
+            .windows(2)
+            .position(|w| w == b"\r\n")
             .ok_or_else(|| RpcError::Transport("truncated chunked body".into()))?;
-        let size_hex = size_line.split(';').next().unwrap_or("").trim();
+        let size_hex = std::str::from_utf8(&rest[..nl])
+            .ok()
+            .and_then(|line| line.split(';').next())
+            .map(str::trim)
+            .ok_or_else(|| RpcError::Transport("bad chunk size line".into()))?;
         let size = usize::from_str_radix(size_hex, 16)
             .map_err(|_| RpcError::Transport(format!("bad chunk size: {size_hex:?}")))?;
+        let after = &rest[nl + 2..];
         if size == 0 {
             return Ok(out);
         }
-        if rest.len() < size + 2 {
+        if after.len() < size + 2 {
             return Err(RpcError::Transport("truncated chunk".into()));
         }
-        out.push_str(&rest[..size]);
-        body = &rest[size + 2..];
+        out.extend_from_slice(&after[..size]);
+        rest = &after[size + 2..];
     }
 }
 
@@ -368,6 +427,17 @@ mod tests {
     fn parses_chunked_response() {
         let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n";
         assert_eq!(parse_http_response(raw).unwrap(), "{}");
+    }
+
+    #[test]
+    fn chunked_response_splits_multibyte_utf8_across_chunks() {
+        // Body `{"m":"—"}` (— is U+2014 = 0xE2 0x80 0x94) split so the em-dash
+        // straddles the chunk boundary: chunk 1 = `{"m":"` + 0xE2 (7 bytes),
+        // chunk 2 = 0x80 0x94 + `"}` (4 bytes). Byte-wise reassembly must
+        // decode it; slicing each chunk as &str would panic / reject it.
+        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n\
+                    7\r\n{\"m\":\"\xe2\r\n4\r\n\x80\x94\"}\r\n0\r\n\r\n";
+        assert_eq!(parse_http_response(raw).unwrap(), "{\"m\":\"\u{2014}\"}");
     }
 
     #[test]

@@ -30,6 +30,15 @@ enum Commands {
     /// Offline check that the embedded ADDRESS_DERIVATION_V1 corpus matches
     /// the compile-time manifest hash pin (release / genesis tooling).
     DerivationFreezeSelfCheck,
+
+    /// Non-interactively create a wallet, writing its one-time seed backup to
+    /// a file (for scripting / automation). Connection flags (--network,
+    /// --engine-dir, --rpc-url, …) must come BEFORE the subcommand name.
+    Create(commands::scripted::CreateArgs),
+
+    /// Non-interactively restore a wallet from a seed file (for scripting /
+    /// automation). Connection flags must come BEFORE the subcommand name.
+    Restore(commands::scripted::RestoreArgs),
 }
 
 #[derive(Parser)]
@@ -74,11 +83,51 @@ pub struct ReplArgs {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    if matches!(cli.command, Some(Commands::DerivationFreezeSelfCheck)) {
-        return run_derivation_freeze_self_check();
+    match &cli.command {
+        Some(Commands::DerivationFreezeSelfCheck) => run_derivation_freeze_self_check(),
+        Some(Commands::Create(args)) => {
+            run_scripted(&cli.repl, |rpc| commands::scripted::run_create(rpc, args))
+        }
+        Some(Commands::Restore(args)) => {
+            run_scripted(&cli.repl, |rpc| commands::scripted::run_restore(rpc, args))
+        }
+        None => run_repl(cli.repl),
     }
+}
 
-    run_repl(cli.repl)
+/// Build the wallet-RPC session from the shared connection flags: an external
+/// daemon when `--rpc-url` is set, otherwise a self-hosted in-process server.
+fn build_session(cli: &ReplArgs) -> Result<rpc_client::RpcSession, Box<dyn std::error::Error>> {
+    match &cli.rpc_url {
+        Some(url) => Ok(rpc_client::RpcSession::connect(url, cli.debug)?),
+        None => {
+            let network = parse_network(&cli.network)?;
+            Ok(rpc_client::RpcSession::host_in_process(
+                std::path::PathBuf::from(&cli.engine_dir),
+                network,
+                daemon_url(&cli.daemon_address),
+                cli.debug,
+            )?)
+        }
+    }
+}
+
+/// Run one non-interactive subcommand against a fresh session and translate a
+/// failure into a non-zero exit (so automation sees the error), tearing the
+/// session down either way.
+fn run_scripted<F>(conn: &ReplArgs, run: F) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: FnOnce(&rpc_client::RpcSession) -> Result<(), Box<dyn std::error::Error>>,
+{
+    let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
+    let rpc = build_session(conn)?;
+    let outcome = run(&rpc);
+    rpc.shutdown();
+    if let Err(e) = outcome {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn run_derivation_freeze_self_check() -> Result<(), Box<dyn std::error::Error>> {
@@ -119,18 +168,7 @@ fn daemon_url(daemon_address: &str) -> String {
 fn run_repl(cli: ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
 
-    let rpc = match &cli.rpc_url {
-        Some(url) => rpc_client::RpcSession::connect(url, cli.debug)?,
-        None => {
-            let network = parse_network(&cli.network)?;
-            rpc_client::RpcSession::host_in_process(
-                std::path::PathBuf::from(&cli.engine_dir),
-                network,
-                daemon_url(&cli.daemon_address),
-                cli.debug,
-            )?
-        }
-    };
+    let rpc = build_session(&cli)?;
 
     let daemon_client = match daemon::DaemonClient::new(
         &cli.daemon_address,

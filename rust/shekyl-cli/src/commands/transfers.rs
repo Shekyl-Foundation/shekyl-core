@@ -51,36 +51,64 @@ pub fn cmd_transfer(
         }
     };
 
+    // build_pending_tx succeeded, so the server now holds a funds reservation
+    // keyed by pending_tx_id. Every abort path from here MUST release it, or
+    // the reserved outputs stay unspendable (drain_balance nets out reserved
+    // gindexes) until the wallet is closed and reopened.
     let Some(pending_tx_id) = built
         .get("pending_tx_id")
         .and_then(|v| v.as_str())
         .map(str::to_owned)
     else {
+        // Without the handle there is nothing to discard with; the contract
+        // guarantees this field, so its absence is a genuine protocol error.
         eprintln!("Malformed build_pending_tx response (missing pending_tx_id).");
         return;
     };
-    let seen_gen = built
-        .get("content_gen")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    let fee = built
+
+    // content_gen and fee are contractually required. Do NOT default them: a
+    // wrong seen_gen guarantees a CONTENT_GEN_MISMATCH on submit (leaving the
+    // reservation live), and a missing fee would ask the user to confirm a
+    // send without its real cost. Treat either as malformed → discard + abort.
+    let Some(seen_gen) = built.get("content_gen").and_then(|v| v.as_i64()) else {
+        eprintln!("Malformed build_pending_tx response (missing content_gen).");
+        discard_reservation(rpc, &pending_tx_id);
+        return;
+    };
+    let Some(fee) = built
         .get("fee")
         .and_then(|v| v.as_str())
         .map(format_amount_str)
-        .unwrap_or_else(|| "?".to_owned());
+    else {
+        eprintln!("Malformed build_pending_tx response (missing fee).");
+        discard_reservation(rpc, &pending_tx_id);
+        return;
+    };
 
     println!("Transaction summary:");
     println!("  To:     {dest}");
     println!("  Amount: {} SKL", format_amount(amount));
     println!("  Fee:    {fee} SKL");
 
+    let stdin_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
     let accepted = if no_confirm {
-        if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        if stdin_is_tty {
             eprintln!("--no-confirm is only honored for non-interactive input; confirming.");
             confirm("Send this transaction?")
         } else {
             true
         }
+    } else if !stdin_is_tty {
+        // Non-interactive input without --no-confirm: reading confirm() here
+        // would silently consume the next piped line (or hit EOF) as the
+        // answer and discard the send with no clear reason — automation would
+        // see funds "sent" that never moved. Refuse loudly and point at the
+        // explicit flag instead.
+        eprintln!(
+            "Refusing to send without confirmation on non-interactive input. \
+             Re-run with --no-confirm to send unattended, or run interactively."
+        );
+        false
     } else {
         confirm("Send this transaction?")
     };
@@ -104,7 +132,28 @@ pub fn cmd_transfer(
             let tx_hash = val.get("tx_hash").and_then(|v| v.as_str()).unwrap_or("?");
             println!("Transaction submitted: {tx_hash}");
         }
-        Err(e) => rpc.report("Failed to submit transaction", &e),
+        Err(e) => {
+            rpc.report("Failed to submit transaction", &e);
+            // The failed submit left the reservation live; release it so the
+            // user's spendable balance is not silently tied up.
+            discard_reservation(rpc, &pending_tx_id);
+        }
+    }
+}
+
+/// Best-effort release of a `build_pending_tx` reservation on an abort path
+/// (malformed response or failed submit). A failure to discard is surfaced,
+/// since the reserved funds stay unspendable until the wallet is reopened.
+fn discard_reservation(rpc: &RpcSession, pending_tx_id: &str) {
+    if let Err(e) = rpc.call(
+        "discard_pending_tx",
+        json!({ "pending_tx_id": pending_tx_id }),
+    ) {
+        rpc.report(
+            "Failed to release reserved funds (close and reopen the wallet if a \
+             later send reports insufficient funds)",
+            &e,
+        );
     }
 }
 
@@ -114,20 +163,16 @@ pub fn cmd_transfers(rpc: &RpcSession) {
     }
     match rpc.call("get_transfers", json!({})) {
         Ok(val) => {
-            let transfers = val
-                .get("transfers")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            if transfers.is_empty() {
+            let transfers = val.get("transfers").and_then(|v| v.as_array());
+            let Some(transfers) = transfers.filter(|a| !a.is_empty()) else {
                 println!("No transfers.");
                 return;
-            }
+            };
             println!(
                 "{:<10} {:<10} {:>18} {:>10}  TxID",
                 "Direction", "State", "Amount (SKL)", "Height"
             );
-            for t in &transfers {
+            for t in transfers {
                 print_transfer_row(t);
             }
         }

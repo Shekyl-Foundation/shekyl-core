@@ -444,7 +444,9 @@ async fn queries_balance_address_transfers_after_create() {
     .await;
     assert_eq!(missing["error"]["code"], -29400);
 
-    // Unreachable daemon → -29201 for get_height.
+    // Unreachable daemon → get_height still succeeds, returning the local
+    // wallet height with daemon_height=null (an offline/syncing node must not
+    // hide the wallet's own status).
     let height = rpc(
         state.clone(),
         json!({
@@ -455,7 +457,15 @@ async fn queries_balance_address_transfers_after_create() {
         }),
     )
     .await;
-    assert_eq!(height["error"]["code"], -29201);
+    assert!(height.get("error").is_none(), "{height}");
+    assert!(
+        height["result"]["wallet_height"].is_i64(),
+        "wallet_height present: {height}"
+    );
+    assert!(
+        height["result"]["daemon_height"].is_null(),
+        "daemon_height null when daemon unreachable: {height}"
+    );
 
     // Unreachable daemon → -29201 for refresh.
     let refreshed = rpc(

@@ -34,6 +34,14 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 > wallet2-era account/subaddress/key-image/secret-display rows as
 > deleted-by-design) happens in the WI-RPC-2b commit, which lands the
 > deletions this matrix must reflect.
+>
+> **Update (2026-07-23, WI-RPC-2a review fixes).** For scripting/automation
+> the CLI now also has non-interactive `create` / `restore` **subcommands**
+> (`shekyl-cli create <name> --seed-out <path> [--password-file|--password-stdin]`;
+> `restore <name> --seed-file <path> …`). The seed reaches a file **only**
+> through the explicit `--seed-out` (0600, O_EXCL); the interactive `create`
+> refuses to print the seed to a non-TTY (pipe/redirect/log) rather than leak
+> it — so the `seed`-safety row's guarantee now holds on every path.
 
 ## Parity matrix (40 covered, 41 out of scope)
 

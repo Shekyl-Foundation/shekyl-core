@@ -256,10 +256,12 @@ pub struct GetPrimaryAddressResult {
 /// `get_height` result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetHeightResult {
-    /// Wallet synced height.
+    /// Wallet synced height (always available — read from local state).
     pub wallet_height: i64,
-    /// Daemon chain height.
-    pub daemon_height: i64,
+    /// Daemon chain height, or `null` when the daemon is unreachable. The
+    /// wallet height is still returned in that case so an offline/​syncing
+    /// node does not hide the wallet's own status.
+    pub daemon_height: Option<i64>,
 }
 
 /// Transfer direction (OpenAPI `Transfer.direction`).

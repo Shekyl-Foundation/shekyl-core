@@ -13,6 +13,7 @@
 mod balance;
 mod chain;
 mod lifecycle;
+pub mod scripted;
 mod transfers;
 
 use crate::daemon::DaemonClient;
