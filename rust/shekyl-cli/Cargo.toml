@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-types = { path = "../shekyl-types" }
 shekyl-wallet-rpc = { path = "../shekyl-wallet-rpc" }
 clap = { version = "4", features = ["derive"] }
 rustyline = "15"
