@@ -160,6 +160,14 @@ impl RpcSession {
         })
     }
 
+    /// The UDS socket path requests go to, when this is a UDS session.
+    pub fn socket_path(&self) -> Option<&Path> {
+        match &self.transport {
+            Transport::Uds(path) => Some(path),
+            Transport::Http(_) => None,
+        }
+    }
+
     /// Whether the CLI believes a wallet is open on this session.
     pub fn is_open(&self) -> bool {
         self.open_wallet.borrow().is_some()

@@ -11,15 +11,8 @@
 //! `--rpc-url` connects to an external `shekyl-wallet-rpc` daemon instead.
 //! There is no wallet2 / FFI path.
 
-pub mod commands;
-pub mod daemon;
-pub mod display;
-pub mod resolve;
-pub mod rpc_client;
-pub mod session;
-pub mod validate;
-
 use clap::{Parser, Subcommand};
+use shekyl_cli::{commands, daemon, prompt_password, rpc_client};
 use shekyl_wallet_rpc::Network;
 
 #[derive(Parser)]
@@ -153,11 +146,13 @@ fn run_repl(cli: ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if let Some(ref filename) = cli.engine_file {
-        let password = prompt_password("Wallet password: ")?;
-        match rpc.call(
+        let mut password = prompt_password("Wallet password: ")?;
+        let opened = rpc.call(
             "open_wallet",
             serde_json::json!({ "name": filename, "password": password }),
-        ) {
+        );
+        zeroize::Zeroize::zeroize(&mut password);
+        match opened {
             Ok(_) => {
                 rpc.set_open(filename);
                 println!("Opened wallet: {filename}");
@@ -171,8 +166,4 @@ fn run_repl(cli: ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     commands::repl(rpc, daemon_client)
-}
-
-pub fn prompt_password(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
-    rpassword::prompt_password(prompt).map_err(Into::into)
 }

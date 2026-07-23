@@ -224,21 +224,28 @@ fn restrict_socket_perms(path: &Path) -> std::io::Result<()> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
 }
 
-/// Create the private, pid-scoped runtime directory that holds the
+/// Create the private, per-spawn runtime directory that holds the
 /// in-process UDS socket.
 ///
 /// Prefers `$XDG_RUNTIME_DIR` (user-private tmpfs per the XDG base-dir
 /// spec; `WALLET_REWRITE_PLAN.md` Phase 3 deliverables), falling back to
-/// the system temp dir. Created 0700. A pre-existing entry at the path is
-/// removed if we own it; if removal fails (e.g. an attacker-planted entry
-/// under a sticky-bit temp dir) creation fails loud rather than reusing it.
+/// the system temp dir. Created 0700. The name is pid- **and**
+/// spawn-counter-scoped so multiple in-process servers in one process
+/// (test binaries; future multi-session hosts) never collide. A
+/// pre-existing entry at the path is removed if we own it; if removal
+/// fails (e.g. an attacker-planted entry under a sticky-bit temp dir)
+/// creation fails loud rather than reusing it.
 fn private_socket_dir() -> std::io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SPAWN_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let base = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    let dir = base.join(format!("shekyl-rpc-{}", std::process::id()));
-    // Stale same-pid leftover from a crashed run: remove if ours.
+    let n = SPAWN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = base.join(format!("shekyl-rpc-{}-{n}", std::process::id()));
+    // Stale leftover from a crashed run with a recycled pid: remove if ours.
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
     Ok(dir)

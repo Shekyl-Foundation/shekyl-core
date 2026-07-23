@@ -3718,6 +3718,7 @@ dependencies = [
  "shekyl-logging",
  "shekyl-units",
  "shekyl-wallet-rpc",
+ "tempfile",
  "tokio",
  "tracing",
  "ureq",

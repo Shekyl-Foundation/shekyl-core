@@ -17,8 +17,8 @@ use super::{confirm, format_amount, format_amount_str, require_open};
 use crate::rpc_client::RpcSession;
 
 /// Map the wallet2-era numeric `--priority N` flag onto the wallet-RPC
-/// named tiers: 0-1 → ECONOMY-adjacent defaults, 2 → STANDARD, 3+ → PRIORITY.
-fn priority_tier(priority: Option<u32>) -> &'static str {
+/// named tiers: 0-1 → ECONOMY, 2 (and unset) → STANDARD, 3+ → PRIORITY.
+pub(crate) fn priority_tier(priority: Option<u32>) -> &'static str {
     match priority {
         None | Some(2) => "STANDARD",
         Some(0 | 1) => "ECONOMY",
@@ -171,5 +171,22 @@ pub fn cmd_show_transfer(rpc: &RpcSession, id: &str) {
             }
         }
         Err(e) => rpc.report("Failed to get transfer", &e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::priority_tier;
+
+    /// The named tiers are the OpenAPI `FeePriority` enum values; the
+    /// default (no flag) is the server's documented STANDARD default.
+    #[test]
+    fn priority_flag_maps_onto_named_tiers() {
+        assert_eq!(priority_tier(None), "STANDARD");
+        assert_eq!(priority_tier(Some(0)), "ECONOMY");
+        assert_eq!(priority_tier(Some(1)), "ECONOMY");
+        assert_eq!(priority_tier(Some(2)), "STANDARD");
+        assert_eq!(priority_tier(Some(3)), "PRIORITY");
+        assert_eq!(priority_tier(Some(9)), "PRIORITY");
     }
 }

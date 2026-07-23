@@ -27,3 +27,4 @@ shekyl-units = { path = "../shekyl-units" }
 
 [dev-dependencies]
 proptest = "1"
+tempfile = "3"
