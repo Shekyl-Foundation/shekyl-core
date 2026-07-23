@@ -3,40 +3,45 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Balance and address commands.
+//! Balance and address commands over the native RPC surface (WI-RPC-2a).
 
-use crate::engine::EngineContext;
+use serde_json::json;
 
-pub fn cmd_address(ctx: &EngineContext, account_index: u32) {
-    if !super::require_open(ctx) {
+use super::{format_amount_str, require_open};
+use crate::rpc_client::RpcSession;
+
+pub fn cmd_balance(rpc: &RpcSession) {
+    if !require_open(rpc) {
         return;
     }
-    match ctx.get_address(account_index) {
+    match rpc.call("get_balance", json!({})) {
         Ok(val) => {
-            if let Some(addr) = val.get("address").and_then(|a| a.as_str()) {
-                println!("Primary address: {addr}");
-            } else {
-                println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
-            }
+            let field = |name: &str| {
+                val.get(name)
+                    .and_then(|v| v.as_str())
+                    .map(format_amount_str)
+                    .unwrap_or_else(|| "?".to_owned())
+            };
+            println!("Balance:");
+            println!("  Unlocked:           {} SKL", field("unlocked"));
+            println!("  Liquid:             {} SKL", field("liquid"));
+            println!("  Pending:            {} SKL", field("pending"));
+            println!("  Staked:             {} SKL", field("staked"));
+            println!("  Claimable rewards:  {} SKL", field("claimable_rewards"));
         }
-        Err(e) => eprintln!("Failed to get address: {e}"),
+        Err(e) => rpc.report("Failed to get balance", &e),
     }
 }
 
-pub fn cmd_balance(ctx: &EngineContext, account_index: u32) {
-    if !super::require_open(ctx) {
+pub fn cmd_address(rpc: &RpcSession) {
+    if !require_open(rpc) {
         return;
     }
-    match ctx.get_balance(account_index) {
-        Ok(val) => {
-            let balance = val.get("balance").and_then(|v| v.as_u64()).unwrap_or(0);
-            let unlocked = val
-                .get("unlocked_balance")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            println!("Balance:          {} SKL", super::format_amount(balance));
-            println!("Unlocked balance: {} SKL", super::format_amount(unlocked));
-        }
-        Err(e) => eprintln!("Failed to get balance: {e}"),
+    match rpc.call("get_primary_address", json!({})) {
+        Ok(val) => match val.get("address").and_then(|v| v.as_str()) {
+            Some(address) => println!("{address}"),
+            None => eprintln!("Malformed get_primary_address response."),
+        },
+        Err(e) => rpc.report("Failed to get address", &e),
     }
 }

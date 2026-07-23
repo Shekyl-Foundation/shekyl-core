@@ -4,19 +4,19 @@
 // BSD-3-Clause
 
 //! REPL command loop, dispatch, and shared helpers for shekyl-cli.
+//!
+//! Every command executes through the [`crate::rpc_client::RpcSession`]
+//! JSON-RPC surface (WI-RPC-2a). Commands whose native RPC method has not
+//! landed yet answer with a uniform "not available" stub; they are either
+//! migrated or deleted in WI-RPC-2b.
 
 mod balance;
 mod chain;
-mod keys;
 mod lifecycle;
-mod offline;
-mod payment_requests;
-mod proofs;
-mod sign;
 mod transfers;
 
 use crate::daemon::DaemonClient;
-use crate::engine::EngineContext;
+use crate::rpc_client::RpcSession;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
@@ -94,10 +94,30 @@ Meta:
 Global flags (use with any command):
   --account N                         Override session default account";
 
+/// Uniform WI-RPC-2a stub for commands whose native RPC surface has not
+/// landed. Each is either migrated or deleted (with help-text rewrite) in
+/// WI-RPC-2b.
+fn stub(cmd: &str) {
+    eprintln!(
+        "{cmd}: not available yet — this command has no native wallet-RPC \
+         surface (WI-RPC-2a transitional stub)."
+    );
+}
+
+/// Warn when a wallet2-era `--account N` selector is used: Shekyl has no
+/// account/subaddress model (rule 60; WI-RPC-1 pin 1).
+fn warn_account_flag(account_index: u32) {
+    if account_index != 0 {
+        eprintln!(
+            "Note: accounts were removed; --account {account_index} is ignored \
+             (the wallet has a single primary address)."
+        );
+    }
+}
+
 pub fn repl(
-    ctx: EngineContext,
-    _daemon_client: Option<DaemonClient>,
-    _debug: bool,
+    rpc: RpcSession,
+    daemon_client: Option<DaemonClient>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::resolve::{self, ResolvedCommand};
     use crate::session::ReplSession;
@@ -111,10 +131,10 @@ pub fn repl(
 
     println!("Welcome to shekyl-cli. Type \"help\" for commands.");
 
-    let mut session = ReplSession::new();
+    let session = ReplSession::new();
 
     loop {
-        let prompt = session.prompt(ctx.is_open());
+        let prompt = session.prompt(rpc.is_open());
 
         match rl.readline(&prompt) {
             Ok(line) => {
@@ -132,283 +152,113 @@ pub fn repl(
 
                 match resolved {
                     ResolvedCommand::Help => println!("{HELP_TEXT}"),
-                    ResolvedCommand::Exit => {
-                        if ctx.is_open() {
-                            if let Err(e) = ctx.close() {
-                                eprintln!("Warning: failed to close engine: {e}");
-                            }
-                        }
-                        break;
-                    }
+                    ResolvedCommand::Exit => break,
 
                     // Lifecycle
                     ResolvedCommand::Create { filename } => {
-                        lifecycle::cmd_create(&ctx, &[&filename]);
+                        lifecycle::cmd_create(&rpc, &filename);
                     }
                     ResolvedCommand::Open { filename } => {
-                        lifecycle::cmd_open(&ctx, &[&filename]);
+                        lifecycle::cmd_open(&rpc, &filename);
                     }
-                    ResolvedCommand::Close => lifecycle::cmd_close(&ctx),
+                    ResolvedCommand::Close => lifecycle::cmd_close(&rpc),
                     ResolvedCommand::Restore {
                         filename,
                         seed_words,
                     } => {
-                        let mut args: Vec<&str> = vec![&filename];
-                        args.extend(seed_words.iter().map(|s| s.as_str()));
-                        lifecycle::cmd_restore(&ctx, &args);
+                        lifecycle::cmd_restore(&rpc, &filename, &seed_words);
                     }
-                    ResolvedCommand::Refresh => lifecycle::cmd_refresh(&ctx),
-                    ResolvedCommand::Save => lifecycle::cmd_save(&ctx),
-                    ResolvedCommand::Status => lifecycle::cmd_status(&ctx),
+                    ResolvedCommand::Refresh => lifecycle::cmd_refresh(&rpc),
+                    ResolvedCommand::Save => stub("save"),
+                    ResolvedCommand::Status => lifecycle::cmd_status(&rpc),
+                    ResolvedCommand::Password => lifecycle::cmd_password(&rpc),
+                    ResolvedCommand::Rescan { .. } => stub("rescan"),
 
                     // Balance / address
-                    ResolvedCommand::Balance { account_index, .. } => {
-                        balance::cmd_balance(&ctx, account_index);
+                    ResolvedCommand::Balance { account_index } => {
+                        warn_account_flag(account_index);
+                        balance::cmd_balance(&rpc);
                     }
-                    ResolvedCommand::Address { account_index, .. } => {
-                        balance::cmd_address(&ctx, account_index);
+                    ResolvedCommand::Address { account_index } => {
+                        warn_account_flag(account_index);
+                        balance::cmd_address(&rpc);
                     }
 
-                    // Account management
-                    ResolvedCommand::AccountShow => {
-                        if !require_open(&ctx) {
-                            continue;
-                        }
-                        match ctx.json_rpc("get_accounts", "{}") {
-                            Ok(val) => {
-                                if let Some(accts) =
-                                    val.get("subaddress_accounts").and_then(|a| a.as_array())
-                                {
-                                    for acct in accts {
-                                        let idx = acct
-                                            .get("account_index")
-                                            .and_then(|i| i.as_u64())
-                                            .unwrap_or(0);
-                                        let balance = acct
-                                            .get("balance")
-                                            .and_then(|b| b.as_u64())
-                                            .unwrap_or(0);
-                                        let label = acct
-                                            .get("label")
-                                            .and_then(|l| l.as_str())
-                                            .unwrap_or("");
-                                        let marker = if idx as u32 == session.default_account {
-                                            " *"
-                                        } else {
-                                            ""
-                                        };
-                                        println!(
-                                            "  Account {idx}{marker}: {label} ({})",
-                                            format_amount(balance)
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => eprintln!("Failed to get accounts: {e}"),
-                        }
-                    }
-                    ResolvedCommand::AccountDefault { index } => {
-                        if !require_open(&ctx) {
-                            continue;
-                        }
-                        match ctx.json_rpc("get_accounts", "{}") {
-                            Ok(val) => {
-                                let count = val
-                                    .get("subaddress_accounts")
-                                    .and_then(|a| a.as_array())
-                                    .map(|a| a.len() as u32)
-                                    .unwrap_or(0);
-                                if index >= count {
-                                    eprintln!("Account {index} does not exist. Use 'account show' to list accounts.");
-                                } else {
-                                    session.default_account = index;
-                                    println!("Session default account is now {index}.");
-                                    println!("Destructive operations (sweep, key export) still require --account explicitly.");
-                                }
-                            }
-                            Err(e) => eprintln!("Failed to get accounts: {e}"),
-                        }
-                    }
-                    ResolvedCommand::AccountNew { label } => {
-                        if !require_open(&ctx) {
-                            continue;
-                        }
-                        let params = serde_json::json!({ "label": label }).to_string();
-                        match ctx.json_rpc("create_account", &params) {
-                            Ok(val) => {
-                                let idx = val
-                                    .get("account_index")
-                                    .and_then(|i| i.as_u64())
-                                    .unwrap_or(0);
-                                let addr =
-                                    val.get("address").and_then(|a| a.as_str()).unwrap_or("?");
-                                println!("Created account {idx}: {addr}");
-                            }
-                            Err(e) => eprintln!("Failed to create account: {e}"),
-                        }
-                    }
+                    // Account management (no account model in Shekyl)
+                    ResolvedCommand::AccountShow
+                    | ResolvedCommand::AccountDefault { .. }
+                    | ResolvedCommand::AccountNew { .. } => stub("account"),
 
                     // Transfers
                     ResolvedCommand::Transfer {
                         account_index,
                         dest,
                         amount,
-                        ..
+                        priority,
+                        do_not_relay,
+                        no_confirm,
                     } => {
-                        let amount_str = format_amount(amount);
-                        let dest_ref: &str = &dest;
-                        transfers::cmd_transfer(&ctx, &[&amount_str, dest_ref], account_index);
+                        warn_account_flag(account_index);
+                        if do_not_relay {
+                            stub("transfer --do-not-relay");
+                        } else {
+                            transfers::cmd_transfer(&rpc, amount, &dest, priority, no_confirm);
+                        }
                     }
                     ResolvedCommand::Transfers { account_index } => {
-                        transfers::cmd_transfers(&ctx, account_index);
+                        warn_account_flag(account_index);
+                        transfers::cmd_transfers(&rpc);
                     }
-                    ResolvedCommand::RequestNew { amount, label } => {
-                        payment_requests::cmd_request_new(&ctx, amount, &label);
-                    }
-                    ResolvedCommand::RequestsList => {
-                        payment_requests::cmd_requests_list(&ctx);
-                    }
-                    ResolvedCommand::HistoryIncomingUnattributed { account_index } => {
-                        payment_requests::cmd_history_incoming_unattributed(&ctx, account_index);
-                    }
-
-                    // Keys
-                    ResolvedCommand::Seed => keys::cmd_seed(&ctx),
-
-                    // Engine ops
-                    ResolvedCommand::Password => lifecycle::cmd_password(&ctx),
-                    ResolvedCommand::Rescan { hard } => lifecycle::cmd_rescan(&ctx, hard),
                     ResolvedCommand::ShowTransfer { txid } => {
-                        transfers::cmd_show_transfer(&ctx, &txid);
+                        transfers::cmd_show_transfer(&rpc, &txid);
                     }
-                    ResolvedCommand::SweepAll {
-                        account_index,
-                        dest,
-                        priority,
-                    } => {
-                        transfers::cmd_sweep_all(&ctx, account_index, &dest, priority);
+                    ResolvedCommand::SweepAll { .. } => stub("sweep_all"),
+
+                    // Payment requests (un-stubbed over WI-RPC-1 in 2b)
+                    ResolvedCommand::RequestNew { .. } => stub("request new"),
+                    ResolvedCommand::RequestsList => stub("requests list"),
+                    ResolvedCommand::HistoryIncomingUnattributed { .. } => {
+                        stub("history incoming");
                     }
 
                     ResolvedCommand::ChainHealth => {
-                        chain::cmd_chain_health(_daemon_client.as_ref());
+                        chain::cmd_chain_health(daemon_client.as_ref());
                     }
 
-                    // Keys
-                    ResolvedCommand::Viewkey => keys::cmd_viewkey(&ctx),
-                    ResolvedCommand::Spendkey => keys::cmd_spendkey(&ctx),
-                    ResolvedCommand::ExportKeyImages {
-                        filename,
-                        all,
-                        since_height,
-                        account_index,
-                    } => {
-                        keys::cmd_export_key_images(
-                            &ctx,
-                            &filename,
-                            all,
-                            since_height,
-                            account_index,
-                        );
-                    }
-                    ResolvedCommand::ImportKeyImages { filename } => {
-                        keys::cmd_import_key_images(&ctx, &filename);
-                    }
+                    // Keys (secret egress is deliberately absent from the RPC)
+                    ResolvedCommand::Seed => stub("seed"),
+                    ResolvedCommand::Viewkey => stub("viewkey"),
+                    ResolvedCommand::Spendkey => stub("spendkey"),
+                    ResolvedCommand::ExportKeyImages { .. } => stub("export_key_images"),
+                    ResolvedCommand::ImportKeyImages { .. } => stub("import_key_images"),
 
                     // Proofs
-                    ResolvedCommand::GetTxKey { txid } => {
-                        proofs::cmd_get_tx_key(&ctx, &txid);
-                    }
-                    ResolvedCommand::CheckTxKey {
-                        txid,
-                        tx_key,
-                        address,
-                    } => {
-                        proofs::cmd_check_tx_key(&ctx, &txid, &tx_key, &address);
-                    }
-                    ResolvedCommand::GetTxProof {
-                        txid,
-                        address,
-                        message,
-                    } => {
-                        proofs::cmd_get_tx_proof(&ctx, &txid, &address, message.as_deref());
-                    }
-                    ResolvedCommand::CheckTxProof {
-                        txid,
-                        address,
-                        signature,
-                        message,
-                    } => {
-                        proofs::cmd_check_tx_proof(
-                            &ctx,
-                            &txid,
-                            &address,
-                            &signature,
-                            message.as_deref(),
-                        );
-                    }
-                    ResolvedCommand::GetReserveProof {
-                        account_index,
-                        amount,
-                        message,
-                    } => {
-                        proofs::cmd_get_reserve_proof(
-                            &ctx,
-                            account_index,
-                            amount,
-                            message.as_deref(),
-                        );
-                    }
-                    ResolvedCommand::CheckReserveProof {
-                        address,
-                        signature,
-                        message,
-                    } => {
-                        proofs::cmd_check_reserve_proof(
-                            &ctx,
-                            &address,
-                            &signature,
-                            message.as_deref(),
-                        );
-                    }
+                    ResolvedCommand::GetTxKey { .. } => stub("get_tx_key"),
+                    ResolvedCommand::CheckTxKey { .. } => stub("check_tx_key"),
+                    ResolvedCommand::GetTxProof { .. } => stub("get_tx_proof"),
+                    ResolvedCommand::CheckTxProof { .. } => stub("check_tx_proof"),
+                    ResolvedCommand::GetReserveProof { .. } => stub("get_reserve_proof"),
+                    ResolvedCommand::CheckReserveProof { .. } => stub("check_reserve_proof"),
 
                     // Signing
-                    ResolvedCommand::Sign { message } => sign::cmd_sign(&ctx, &message),
-                    ResolvedCommand::Verify {
-                        address,
-                        message,
-                        signature,
-                    } => {
-                        sign::cmd_verify(&ctx, &address, &message, &signature);
-                    }
+                    ResolvedCommand::Sign { .. } => stub("sign"),
+                    ResolvedCommand::Verify { .. } => stub("verify"),
 
                     // Offline signing
-                    ResolvedCommand::DescribeTransfer { unsigned_hex } => {
-                        offline::cmd_describe_transfer(&ctx, &unsigned_hex);
-                    }
-                    ResolvedCommand::SignTransfer { unsigned_hex, file } => {
-                        offline::cmd_sign_transfer(&ctx, &unsigned_hex, file.as_deref());
-                    }
-                    ResolvedCommand::SubmitTransfer { signed_hex } => {
-                        offline::cmd_submit_transfer(&ctx, &signed_hex);
-                    }
+                    ResolvedCommand::DescribeTransfer { .. } => stub("describe_transfer"),
+                    ResolvedCommand::SignTransfer { .. } => stub("sign_transfer"),
+                    ResolvedCommand::SubmitTransfer { .. } => stub("submit_transfer"),
 
                     // Meta
-                    ResolvedCommand::Version => sign::cmd_version(),
-                    ResolvedCommand::EngineInfo => sign::cmd_engine_info(&ctx),
+                    ResolvedCommand::Version => cmd_version(&rpc),
+                    ResolvedCommand::EngineInfo => stub("engine_info"),
 
                     ResolvedCommand::Unknown { cmd } => {
                         eprintln!("Unknown command: {cmd}. Type \"help\" for available commands.");
                     }
                 }
             }
-            Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
-                if ctx.is_open() {
-                    if let Err(e) = ctx.close() {
-                        eprintln!("Warning: failed to close engine: {e}");
-                    }
-                }
-                break;
-            }
+            Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
             Err(e) => {
                 eprintln!("Input error: {e}");
                 break;
@@ -417,7 +267,24 @@ pub fn repl(
     }
 
     let _ = rl.save_history(&hist);
+    // Closes any open wallet and stops the self-hosted server (removing its
+    // private UDS socket directory).
+    rpc.shutdown();
     Ok(())
+}
+
+/// `version`: CLI version, plus the connected wallet-RPC server's version
+/// when reachable.
+fn cmd_version(rpc: &RpcSession) {
+    println!("shekyl-cli {}", env!("CARGO_PKG_VERSION"));
+    match rpc.call("get_version", serde_json::json!({})) {
+        Ok(val) => {
+            let server = val.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+            let api = val.get("api_version").and_then(|v| v.as_i64()).unwrap_or(0);
+            println!("shekyl-wallet-rpc {server} (api v{api})");
+        }
+        Err(e) => eprintln!("wallet RPC unreachable: {e}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -435,21 +302,6 @@ pub(crate) fn confirm(prompt: &str) -> bool {
     input.trim() == "yes"
 }
 
-/// Dangerous-operation confirmation: user must type a context-specific token.
-///
-/// The token should encode operation-specific information that forces the user
-/// to verify what they're doing (e.g. the total amount, truncated address, or
-/// an acknowledgment phrase).
-pub(crate) fn confirm_dangerous(prompt: &str, expected_token: &str) -> bool {
-    eprint!("{prompt}");
-    let _ = std::io::Write::flush(&mut std::io::stderr());
-    let mut input = String::new();
-    if std::io::stdin().read_line(&mut input).is_err() {
-        return false;
-    }
-    input.trim() == expected_token
-}
-
 // ---------------------------------------------------------------------------
 // Shared helpers used by submodule command handlers
 // ---------------------------------------------------------------------------
@@ -463,17 +315,17 @@ fn history_path() -> Option<String> {
     })
 }
 
-pub(crate) fn require_open(ctx: &EngineContext) -> bool {
-    if !ctx.is_open() {
-        eprintln!("No engine is open. Use \"open <filename>\" or \"create <filename>\" first.");
+pub(crate) fn require_open(rpc: &RpcSession) -> bool {
+    if !rpc.is_open() {
+        eprintln!("No wallet is open. Use \"open <filename>\" or \"create <filename>\" first.");
         return false;
     }
     true
 }
 
-pub(crate) fn require_closed(ctx: &EngineContext) -> bool {
-    if ctx.is_open() {
-        eprintln!("An engine is already open. Use \"close\" first.");
+pub(crate) fn require_closed(rpc: &RpcSession) -> bool {
+    if rpc.is_open() {
+        eprintln!("A wallet is already open. Use \"close\" first.");
         return false;
     }
     true
@@ -503,6 +355,15 @@ pub fn format_amount(atomic: u64) -> String {
     shekyl_units::AtomicUnits::from_raw(atomic).to_skl_string()
 }
 
+/// Render an OpenAPI `AtomicUnits` decimal string as SKL, falling back to
+/// the raw string when it does not parse as `u64`.
+pub(crate) fn format_amount_str(atomic: &str) -> String {
+    match atomic.parse::<u64>() {
+        Ok(v) => format_amount(v),
+        Err(_) => atomic.to_owned(),
+    }
+}
+
 /// Parse a user-entered SKL string into raw atomic units.
 ///
 /// Routes through [`shekyl_units::AtomicUnits::from_skl_str`], which rejects
@@ -526,6 +387,12 @@ mod tests {
         assert_eq!(format_amount(1_000_000_000), "1.000000000");
         assert_eq!(format_amount(1_500_000_000), "1.500000000");
         assert_eq!(format_amount(123_456_789), "0.123456789");
+    }
+
+    #[test]
+    fn test_format_amount_str() {
+        assert_eq!(format_amount_str("1000000000"), "1.000000000");
+        assert_eq!(format_amount_str("not-a-number"), "not-a-number");
     }
 
     #[test]

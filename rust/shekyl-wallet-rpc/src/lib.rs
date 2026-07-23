@@ -40,6 +40,9 @@ pub use server::{
     build_router, run_server, spawn_in_process, spawn_in_process_with, AppState, InProcessHandle,
     InProcessListen, ListenAddr, ServerConfig,
 };
+// Re-exported so in-process hosts (shekyl-cli) can name the network a
+// spawned server binds to without a direct shekyl-engine-core dependency.
+pub use shekyl_engine_core::Network;
 pub use tenant::{SharedEngine, Tenant, TenantState};
 pub use types::{GetVersionResult, JsonRpcRequest, JsonRpcResponse, WalletHandle, API_VERSION};
 

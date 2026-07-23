@@ -3,177 +3,173 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Transfer commands: transfer, transfers (list), show_transfer, sweep_all.
+//! Transfer commands over the native RPC surface (WI-RPC-2a).
+//!
+//! The send flow follows the wallet-RPC three-phase contract:
+//! `build_pending_tx` (funds reserved) → CLI-side confirmation showing the
+//! actual fee → `submit_pending_tx` on an explicit "yes", or
+//! `discard_pending_tx` on anything else. Confirmation lives here, not in
+//! the server (rewrite-plan pin: the RPC surface is UI-free).
 
-use crate::engine::EngineContext;
+use serde_json::{json, Value};
 
-pub fn cmd_transfer(ctx: &EngineContext, args: &[&str], account_index: u32) {
-    if !super::require_open(ctx) {
+use super::{confirm, format_amount, format_amount_str, require_open};
+use crate::rpc_client::RpcSession;
+
+/// Map the wallet2-era numeric `--priority N` flag onto the wallet-RPC
+/// named tiers: 0-1 → ECONOMY-adjacent defaults, 2 → STANDARD, 3+ → PRIORITY.
+fn priority_tier(priority: Option<u32>) -> &'static str {
+    match priority {
+        None | Some(2) => "STANDARD",
+        Some(0 | 1) => "ECONOMY",
+        Some(_) => "PRIORITY",
+    }
+}
+
+pub fn cmd_transfer(
+    rpc: &RpcSession,
+    amount: u64,
+    dest: &str,
+    priority: Option<u32>,
+    no_confirm: bool,
+) {
+    if !require_open(rpc) {
         return;
     }
-    if args.len() < 2 {
-        eprintln!("Usage: transfer <amount> <address>");
-        return;
-    }
 
-    let amount_str = args[0];
-    let address = args[1];
-
-    let atomic = match super::parse_amount(amount_str) {
-        Some(a) => a,
-        None => {
-            eprintln!("Invalid amount: {amount_str}. Use decimal SKL (e.g. 1.5).");
+    let built = match rpc.call(
+        "build_pending_tx",
+        json!({
+            "recipients": [{ "address": dest, "amount": amount.to_string() }],
+            "priority": priority_tier(priority),
+        }),
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            rpc.report("Failed to build transaction", &e);
             return;
         }
     };
 
-    let destinations = serde_json::json!([{
-        "amount": atomic,
-        "address": address
-    }]);
-
-    println!(
-        "Sending {} SKL to {address}...",
-        super::format_amount(atomic)
-    );
-
-    match ctx.transfer(&destinations.to_string(), 0, account_index) {
-        Ok(val) => {
-            if let Some(tx_hash) = val.get("tx_hash").and_then(|h| h.as_str()) {
-                println!("Transaction sent: {tx_hash}");
-            } else if let Some(tx_hash_list) = val.get("tx_hash_list").and_then(|l| l.as_array()) {
-                for h in tx_hash_list {
-                    if let Some(hash) = h.as_str() {
-                        println!("Transaction sent: {hash}");
-                    }
-                }
-            } else {
-                println!("Transfer submitted.");
-                println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
-            }
-        }
-        Err(e) => eprintln!("Transfer failed: {e}"),
-    }
-}
-
-pub fn cmd_transfers(ctx: &EngineContext, account_index: u32) {
-    if !super::require_open(ctx) {
+    let Some(pending_tx_id) = built
+        .get("pending_tx_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+    else {
+        eprintln!("Malformed build_pending_tx response (missing pending_tx_id).");
         return;
-    }
-    match ctx.get_transfers(true, true, true, false, false, account_index) {
-        Ok(val) => {
-            let mut found = false;
-            for direction in &["in", "out", "pending"] {
-                if let Some(txs) = val.get(direction).and_then(|v| v.as_array()) {
-                    for tx in txs {
-                        found = true;
-                        let amount = tx.get("amount").and_then(|a| a.as_u64()).unwrap_or(0);
-                        let height = tx.get("height").and_then(|h| h.as_u64()).unwrap_or(0);
-                        let txid = tx.get("txid").and_then(|t| t.as_str()).unwrap_or("?");
-                        println!(
-                            "  [{direction:>7}] height={height:<8} amount={:<14} tx={txid}",
-                            super::format_amount(amount)
-                        );
-                    }
-                }
-            }
-            if !found {
-                println!("No transactions found.");
-            }
-        }
-        Err(e) => eprintln!("Failed to get transfers: {e}"),
-    }
-}
+    };
+    let seen_gen = built
+        .get("content_gen")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let fee = built
+        .get("fee")
+        .and_then(|v| v.as_str())
+        .map(format_amount_str)
+        .unwrap_or_else(|| "?".to_owned());
 
-pub fn cmd_show_transfer(ctx: &EngineContext, txid: &str) {
-    if !super::require_open(ctx) {
-        return;
-    }
-    let params = serde_json::json!({ "txid": txid });
-    match ctx.json_rpc("get_transfer_by_txid", &params.to_string()) {
-        Ok(val) => {
-            if let Some(transfer) = val.get("transfer") {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(transfer).unwrap_or_default()
-                );
-            } else {
-                println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
-            }
-        }
-        Err(e) => eprintln!("Failed to get transfer: {e}"),
-    }
-}
+    println!("Transaction summary:");
+    println!("  To:     {dest}");
+    println!("  Amount: {} SKL", format_amount(amount));
+    println!("  Fee:    {fee} SKL");
 
-pub fn cmd_sweep_all(ctx: &EngineContext, account_index: u32, dest: &str, priority: Option<u32>) {
-    if !super::require_open(ctx) {
+    let accepted = if no_confirm {
+        if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            eprintln!("--no-confirm is only honored for non-interactive input; confirming.");
+            confirm("Send this transaction?")
+        } else {
+            true
+        }
+    } else {
+        confirm("Send this transaction?")
+    };
+
+    if !accepted {
+        match rpc.call(
+            "discard_pending_tx",
+            json!({ "pending_tx_id": pending_tx_id }),
+        ) {
+            Ok(_) => println!("Transaction discarded."),
+            Err(e) => rpc.report("Failed to discard pending transaction", &e),
+        }
         return;
     }
 
-    eprintln!(
-        "WARNING: Sweeping all outputs to a single address reveals that all\n\
-         listed outputs belong to one engine. This creates strong on-chain linkage."
-    );
-
-    match ctx.get_balance(account_index) {
+    match rpc.call(
+        "submit_pending_tx",
+        json!({ "pending_tx_id": pending_tx_id, "seen_gen": seen_gen }),
+    ) {
         Ok(val) => {
-            let balance = val
-                .get("unlocked_balance")
-                .and_then(|b| b.as_u64())
-                .unwrap_or(0);
-            let amount_str = super::format_amount(balance);
-            println!(
-                "Will sweep approximately {} SKL from account {account_index}.",
-                amount_str
-            );
+            let tx_hash = val.get("tx_hash").and_then(|v| v.as_str()).unwrap_or("?");
+            println!("Transaction submitted: {tx_hash}");
+        }
+        Err(e) => rpc.report("Failed to submit transaction", &e),
+    }
+}
 
-            let addr_match = match ctx.get_address(account_index) {
-                Ok(addr_val) => {
-                    let own_addr = addr_val
-                        .get("address")
-                        .and_then(|a| a.as_str())
-                        .unwrap_or("");
-                    dest.starts_with(&own_addr[..8.min(own_addr.len())])
-                }
-                Err(_) => false,
-            };
-            if !addr_match {
-                eprintln!("Destination is an external address. This will link your entire balance to that address on-chain.");
-            }
-
-            let prompt = format!("Type the total amount in SKL to confirm ({amount_str}): ");
-            if !super::confirm_dangerous(&prompt, &amount_str) {
-                println!("Cancelled.");
+pub fn cmd_transfers(rpc: &RpcSession) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call("get_transfers", json!({})) {
+        Ok(val) => {
+            let transfers = val
+                .get("transfers")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if transfers.is_empty() {
+                println!("No transfers.");
                 return;
             }
-        }
-        Err(e) => {
-            eprintln!("Failed to get balance: {e}");
-            return;
-        }
-    }
-
-    let mut params = serde_json::json!({
-        "address": dest,
-        "account_index": account_index,
-    });
-    if let Some(p) = priority {
-        params["priority"] = serde_json::json!(p);
-    }
-
-    match ctx.json_rpc("sweep_all", &params.to_string()) {
-        Ok(val) => {
-            if let Some(hashes) = val.get("tx_hash_list").and_then(|l| l.as_array()) {
-                for h in hashes {
-                    if let Some(hash) = h.as_str() {
-                        println!("Swept: {hash}");
-                    }
-                }
-            } else {
-                println!("Sweep submitted.");
-                println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
+            println!(
+                "{:<10} {:<10} {:>18} {:>10}  TxID",
+                "Direction", "State", "Amount (SKL)", "Height"
+            );
+            for t in &transfers {
+                print_transfer_row(t);
             }
         }
-        Err(e) => eprintln!("Sweep failed: {e}"),
+        Err(e) => rpc.report("Failed to get transfers", &e),
+    }
+}
+
+fn print_transfer_row(t: &Value) {
+    let s = |name: &str| t.get(name).and_then(|v| v.as_str()).unwrap_or("?");
+    let direction = s("direction");
+    let state = s("state");
+    let amount = format_amount_str(s("amount"));
+    let height = t.get("block_height").and_then(|v| v.as_i64()).unwrap_or(0);
+    let tx_hash = s("tx_hash");
+    println!("{direction:<10} {state:<10} {amount:>18} {height:>10}  {tx_hash}");
+}
+
+pub fn cmd_show_transfer(rpc: &RpcSession, id: &str) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call("get_transfer_by_id", json!({ "id": id })) {
+        Ok(val) => {
+            let Some(t) = val.get("transfer") else {
+                eprintln!("Malformed get_transfer_by_id response.");
+                return;
+            };
+            let s = |name: &str| t.get(name).and_then(|v| v.as_str()).unwrap_or("?");
+            println!("Transfer {}:", s("id"));
+            println!("  Direction: {}", s("direction"));
+            println!("  State:     {}", s("state"));
+            println!("  TxID:      {}", s("tx_hash"));
+            println!("  Amount:    {} SKL", format_amount_str(s("amount")));
+            println!("  Fee:       {} SKL", format_amount_str(s("fee")));
+            println!(
+                "  Height:    {}",
+                t.get("block_height").and_then(|v| v.as_i64()).unwrap_or(0)
+            );
+            if let Some(spent) = t.get("spent_height").and_then(|v| v.as_i64()) {
+                println!("  Spent at:  {spent}");
+            }
+        }
+        Err(e) => rpc.report("Failed to get transfer", &e),
     }
 }

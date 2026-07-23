@@ -3,25 +3,27 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! shekyl-cli: interactive CLI engine for Shekyl.
+//! shekyl-cli: interactive CLI wallet for Shekyl.
 //!
-//! Thin REPL frontend over `shekyl-engine-rpc` (library mode). Uses the same
-//! Rust engine stack as the GUI: wallet2 via FFI for lifecycle, Rust scanner
-//! for reads, and native-sign for transaction construction.
+//! Thin REPL frontend over the native `shekyl-wallet-rpc` JSON-RPC surface
+//! (Shape B, `docs/V3_WALLET_DECISION_LOG.md` 2026-04-25). By default the
+//! CLI self-hosts an in-process RPC server over a private UDS socket;
+//! `--rpc-url` connects to an external `shekyl-wallet-rpc` daemon instead.
+//! There is no wallet2 / FFI path.
 
 pub mod commands;
 pub mod daemon;
 pub mod display;
-mod engine;
-pub mod errors;
 pub mod resolve;
+pub mod rpc_client;
 pub mod session;
 pub mod validate;
 
 use clap::{Parser, Subcommand};
+use shekyl_wallet_rpc::Network;
 
 #[derive(Parser)]
-#[command(name = "shekyl-cli", about = "Shekyl interactive CLI engine", version)]
+#[command(name = "shekyl-cli", about = "Shekyl interactive CLI wallet", version)]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -39,31 +41,29 @@ enum Commands {
 
 #[derive(Parser)]
 pub struct ReplArgs {
-    /// Daemon address (host:port or full URL)
+    /// Daemon address the self-hosted wallet RPC connects to
+    /// (host:port or full URL). Ignored with --rpc-url.
     #[arg(long, default_value = "localhost:11028")]
     daemon_address: String,
 
-    /// Daemon login (user:password)
-    #[arg(long, default_value = "")]
-    daemon_login: String,
+    /// Connect to an external shekyl-wallet-rpc daemon instead of
+    /// self-hosting one (http://host:port or uds:///path/to.sock).
+    #[arg(long)]
+    rpc_url: Option<String>,
 
-    /// Trust the daemon (skip proof verification for faster sync)
-    #[arg(long, default_value_t = false)]
-    trusted_daemon: bool,
-
-    /// Network type: mainnet, testnet, stagenet
+    /// Network type: mainnet, testnet, stagenet. Ignored with --rpc-url.
     #[arg(long, default_value = "mainnet")]
     network: String,
 
-    /// Directory for engine files
+    /// Directory for wallet files. Ignored with --rpc-url.
     #[arg(long, default_value = ".")]
     engine_dir: String,
 
-    /// Open an engine file immediately on startup
+    /// Open a wallet immediately on startup
     #[arg(long)]
     engine_file: Option<String>,
 
-    /// SOCKS5 proxy for daemon connections (e.g. socks5://127.0.0.1:9050).
+    /// SOCKS5 proxy for direct daemon queries (e.g. socks5://127.0.0.1:9050).
     /// Uses distinct SOCKS auth for Tor stream isolation.
     #[arg(long)]
     proxy: Option<String>,
@@ -73,8 +73,7 @@ pub struct ReplArgs {
     #[arg(long)]
     daemon_ca_cert: Option<String>,
 
-    /// Show raw error details. Output goes to stderr (if TTY) or
-    /// ~/.shekyl/debug.log (0600) when stderr is piped.
+    /// Show structured RPC error details (error.data) on failures.
     #[arg(long, default_value_t = false)]
     pub debug: bool,
 }
@@ -102,33 +101,43 @@ fn run_derivation_freeze_self_check() -> Result<(), Box<dyn std::error::Error>> 
     }
 }
 
+/// Parse the `--network` flag. Unknown values fail loud rather than
+/// defaulting to mainnet.
+fn parse_network(s: &str) -> Result<Network, String> {
+    match s {
+        "mainnet" => Ok(Network::Mainnet),
+        "testnet" => Ok(Network::Testnet),
+        "stagenet" => Ok(Network::Stagenet),
+        other => Err(format!(
+            "invalid --network '{other}': expected mainnet, testnet, or stagenet"
+        )),
+    }
+}
+
+/// Normalize a daemon address to the URL form the wallet RPC expects.
+fn daemon_url(daemon_address: &str) -> String {
+    if daemon_address.contains("://") {
+        daemon_address.to_owned()
+    } else {
+        format!("http://{daemon_address}")
+    }
+}
+
 fn run_repl(cli: ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
 
-    let nettype = match cli.network.as_str() {
-        "testnet" => 1u8,
-        "stagenet" => 2u8,
-        _ => 0u8,
+    let rpc = match &cli.rpc_url {
+        Some(url) => rpc_client::RpcSession::connect(url, cli.debug)?,
+        None => {
+            let network = parse_network(&cli.network)?;
+            rpc_client::RpcSession::host_in_process(
+                std::path::PathBuf::from(&cli.engine_dir),
+                network,
+                daemon_url(&cli.daemon_address),
+                cli.debug,
+            )?
+        }
     };
-
-    let (daemon_user, daemon_pass) = if cli.daemon_login.contains(':') {
-        let mut parts = cli.daemon_login.splitn(2, ':');
-        (
-            parts.next().unwrap_or("").to_string(),
-            parts.next().unwrap_or("").to_string(),
-        )
-    } else {
-        (cli.daemon_login, String::new())
-    };
-
-    let ctx = engine::EngineContext::new(
-        nettype,
-        &cli.daemon_address,
-        &daemon_user,
-        &daemon_pass,
-        cli.trusted_daemon,
-        &cli.engine_dir,
-    )?;
 
     let daemon_client = match daemon::DaemonClient::new(
         &cli.daemon_address,
@@ -144,12 +153,24 @@ fn run_repl(cli: ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if let Some(ref filename) = cli.engine_file {
-        let password = prompt_password("Engine password: ")?;
-        ctx.open(filename, &password)?;
-        println!("Opened engine: {filename}");
+        let password = prompt_password("Wallet password: ")?;
+        match rpc.call(
+            "open_wallet",
+            serde_json::json!({ "name": filename, "password": password }),
+        ) {
+            Ok(_) => {
+                rpc.set_open(filename);
+                println!("Opened wallet: {filename}");
+            }
+            Err(e) => {
+                rpc.report("Failed to open wallet", &e);
+                rpc.shutdown();
+                std::process::exit(1);
+            }
+        }
     }
 
-    commands::repl(ctx, daemon_client, cli.debug)
+    commands::repl(rpc, daemon_client)
 }
 
 pub fn prompt_password(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
