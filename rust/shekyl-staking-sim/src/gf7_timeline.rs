@@ -83,7 +83,13 @@ use crate::wallclock_leg::{run_wallclock_leg, WallclockLegReport};
 /// measured) no longer has an input. With no input there is no honest grade,
 /// so every entry-seam verdict this module and its riders emit fail closed to
 /// this named message rather than reporting a stale pass.
-pub(crate) const GF7_FAIL_CLOSED: &str = "FAIL-CLOSED (WITHDRAWN, interim): the order coin and the FundingSendDispatched event this correlator graded were retired (GF-7 coin retirement). The entry-seam channel r = 1.86 measured — the ordering of the bond post against the principal's funding-send — no longer has an input, so the sim cannot emit a valid entry-seam verdict. Withdrawn pending re-derivation (see WI-4 measurement doc §13.1).";
+pub(crate) const GF7_FAIL_CLOSED: &str =
+    "FAIL-CLOSED (WITHDRAWN, interim): the order coin and the FundingSendDispatched \
+     event this correlator graded were retired (GF-7 coin retirement). The \
+     entry-seam channel r = 1.86 measured — the ordering of the bond post against \
+     the principal's funding-send — no longer has an input, so the sim cannot emit \
+     a valid entry-seam verdict. Withdrawn pending re-derivation (see WI-4 \
+     measurement doc §13.1).";
 
 /// The committed a-priori advantage-ratio bound (measurement doc §3.2):
 /// `r = P(link) · N < RATIO_BOUND`. Committed in the reviewed design doc
@@ -555,19 +561,25 @@ enum Arm {
     ModeledS3,
 }
 
-/// Per-arm anchor sets for one candidate principal.
+/// One candidate principal's anchor set. Both grading arms (`Blind`,
+/// `ModeledS3`) currently score this **same** lifecycle cadence: the funding
+/// channel that once separated the modeled-S-3 set from the blind set is retired
+/// (GF-7 coin retirement), so the two arms coincide. Stored as a single vector
+/// rather than a duplicated `s3 = lifecycle.clone()` — a clone would read as two
+/// distinct anchor sets and copy per candidate in `grade`'s trial loop. PR-C
+/// reintroduces a distinct S-3 (transport-observer) anchor set.
 struct Candidate {
     lifecycle: Vec<u64>,
-    /// The modeled-S-3 fused anchor set. With the funding seam retired this is
-    /// the lifecycle cadence (there is no funding anchor to add).
-    s3: Vec<u64>,
 }
 
 /// Score one candidate under one single-correlator arm.
 fn arm_score(arm: Arm, query: &[u64], c: &Candidate, sigma2: f64) -> f64 {
     match arm {
-        Arm::Blind => kernel_sum(query, &c.lifecycle, sigma2),
-        Arm::ModeledS3 => kernel_sum(query, &c.s3, sigma2),
+        // Both arms score the same lifecycle anchor set post-retirement (see
+        // `Candidate`); merged rather than duplicated so the identity is
+        // explicit. PR-C re-separates `ModeledS3` when it re-derives the honest
+        // instrument.
+        Arm::Blind | Arm::ModeledS3 => kernel_sum(query, &c.lifecycle, sigma2),
     }
 }
 
@@ -590,7 +602,7 @@ fn guess(arm: Arm, query: &[u64], candidates: &[Candidate], sigma2: f64) -> usiz
 fn guess_density_corrected(query: &[u64], candidates: &[Candidate], sigma2: f64) -> usize {
     let mut best = (f64::NEG_INFINITY, 0usize);
     for (idx, c) in candidates.iter().enumerate() {
-        let s = kernel_sum(query, &c.s3, sigma2) / (c.s3.len().max(1) as f64);
+        let s = kernel_sum(query, &c.lifecycle, sigma2) / (c.lifecycle.len().max(1) as f64);
         if s > best.0 {
             best = (s, idx);
         }
@@ -637,14 +649,14 @@ pub(crate) fn grade(
                 // to say *which* principal it belongs to. Empty anchors ⇒
                 // `kernel_sum` returns 0 for every candidate, the argmax ties,
                 // and the correlator lands at `1/N`. With the funding seam
-                // retired the S-3 fused set is the lifecycle cadence itself.
+                // retired the S-3 fused set is the lifecycle cadence itself, so
+                // there is one anchor set both arms score (no `s3` clone).
                 let lifecycle = if p.principal_observable {
                     lifecycle_times(ev)
                 } else {
                     Vec::new()
                 };
-                let s3 = lifecycle.clone();
-                Candidate { lifecycle, s3 }
+                Candidate { lifecycle }
             })
             .collect();
 
