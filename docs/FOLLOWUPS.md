@@ -6985,6 +6985,62 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1.x — dependency migrations
 
+- **Self-hosted daemon scan cannot honor `--proxy`; keep the minimal transport,
+  do not adopt `reqwest` (surfaced 2026-07-23, #360 §15 network-posture review).**
+  The in-process wallet server dials the daemon for block scanning via
+  `shekyl-rpc-transport::SimpleRequestRpc` → `simple_request::Client`, whose
+  connection stack is a bare hyper `HttpsConnector<HttpConnector>` (a direct TCP
+  dialer, optional rustls TLS) with **no proxy layer and no proxy API** — only
+  `with/without_connection_pool`. So `--proxy` (which the CLI's own
+  `DaemonClient` and the `--rpc-url` ureq client honor) cannot reach that scan
+  connection. #360 shipped the honest posture rather than pretending otherwise:
+  `network_posture::disclose_unproxyable` warns on a non-loopback daemon
+  **regardless of `--proxy`**, remedy = a local node (the `(b)` fallback; the
+  `(a)` proxy wiring landed only for `--rpc-url`, which is ureq and proxies
+  trivially).
+
+  **Closing the gap — the fork, and the decision (keep it simple):**
+  - *Option A — `reqwest`.* First-class `Proxy` (incl. `socks5h://`, remote
+    DNS) and could retire *both* HTTP stacks (ureq on the CLI, simple-request on
+    the engine) for one async proxy-capable client. **Not the default path:** it
+    drags a large transitive tree (h2, tower, http, url, cookie/mime, its own
+    TLS plumbing) into the *daemon transport* — a material `cargo audit` / audit
+    surface expansion for an auditable, long-lived money wallet, against
+    [`17-dependency-discipline`](../.cursor/rules/17-dependency-discipline.mdc).
+    It is also a rewrite of `shekyl-rpc-transport` (re-implementing the
+    Monero/serai `shekyl_rpc_client::Rpc` trait + `digest_auth` + pooling) on the
+    critical wallet↔daemon path, and diverges from the oxide-lineage transport.
+    reqwest's *only* justifying tipping point is a deliberate **stack-wide
+    HTTP-client consolidation** (delete ureq *and* simple-request) — a separate
+    architecture decision, not a "fix the proxy gap" one.
+  - *Option B — SOCKS connector on the existing hyper transport (the chosen
+    shape if/when we close the gap).* Add a small `tower`/hyper `Connect` service
+    (e.g. over `tokio-socks`) that performs the **SOCKS5h** handshake, then wraps
+    the rustls TLS, and thread a proxy option through `ServerConfig →
+    TenantState → make_daemon → SimpleRequestRpc`. ~1 small dep plus a bounded
+    connector we own — keeping the minimal-transport philosophy the crate name
+    advertises.
+
+  **Correctness bar for any proxy path — SOCKS5h (remote DNS).** A connector
+  that resolves the daemon hostname *locally* before dialing the proxy leaks the
+  host to the local resolver — the same leak we refused to introduce in
+  `is_loopback_host` (a proxy buys nothing if DNS goes in the clear; Tor uses
+  SOCKS5h precisely for this). *Adjacent check, possibly ahead of this item:*
+  confirm the CLI's **existing** ureq `--proxy` paths (`daemon::DaemonClient`
+  and the `--rpc-url` client added in #360) do *remote* resolution — that a
+  `socks5h://` proxy resolves at the proxy and a bare `socks5://` is not silently
+  resolving locally first. If they leak, that is a shipped-code fix, not a
+  migration.
+
+  **Target: V3.1+ (post-genesis).** The warn-only disclosure is honest and
+  shipped, so nothing here gates genesis — a user who needs the self-hosted scan
+  proxied points `--daemon-address` at a local node today (the recommended
+  own-node default anyway; SP-T2, `own-node-default-remote-discouraged`).
+  *Reopen when:* there is real demand to route the self-hosted scan over a proxy
+  (e.g. a Tor-by-default posture that also covers the scan), or a stack-wide
+  HTTP-client consolidation is on the table — at which point re-weigh A vs B with
+  the audit-surface cost front and centre.
+
 - **Retire the iai-callgrind→gungraun bench-flake bisect harness once gungraun
   proves out (spawned by the gungraun 0.19 migration, 2026-06-16).** The
   migration from `iai-callgrind 0.16` to `gungraun 0.19`
