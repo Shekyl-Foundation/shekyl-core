@@ -11,6 +11,15 @@ facade. This provides:
 - **Embedded library**: Linked directly into the Tauri GUI wallet for
   zero-overhead wallet operations without HTTP or process spawning
 
+> **Note (2026-07-22, WI-RPC-2a).** `shekyl-cli` no longer consumes this
+> crate's wallet2 dispatcher. The CLI is now a JSON-RPC client of the native
+> `rust/shekyl-wallet-rpc` server (contract in
+> [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml)): the REPL and one-shot
+> commands self-host it in-process over a private Unix domain socket, and
+> `--rpc-url` targets an external instance. The remaining consumer of
+> `shekyl-engine-rpc` is the GUI wallet bridge described below; the crate
+> stays a Phase 5 deletion target.
+
 ## Architecture
 
 ```

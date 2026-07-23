@@ -301,10 +301,34 @@ async fn basic_auth_accepts_valid_credentials() {
 }
 
 #[tokio::test]
-async fn spawn_in_process_serves_get_version() {
-    let handle = shekyl_wallet_rpc::spawn_in_process(std::env::temp_dir())
-        .await
-        .expect("spawn");
+async fn spawn_in_process_serves_get_version_over_private_uds() {
+    let handle = shekyl_wallet_rpc::spawn_in_process(
+        std::env::temp_dir(),
+        Network::Stagenet,
+        "http://127.0.0.1:1".into(),
+    )
+    .await
+    .expect("spawn");
+
+    // The secure default is UDS: socket 0600 in a 0700 private dir. That
+    // filesystem gate is the auth story for the auth-disabled in-process
+    // server, so the perms are load-bearing, not cosmetic.
+    let socket = handle
+        .socket_path()
+        .expect("default spawn is UDS")
+        .to_owned();
+    use std::os::unix::fs::PermissionsExt;
+    let socket_mode = std::fs::metadata(&socket)
+        .expect("socket meta")
+        .permissions()
+        .mode();
+    assert_eq!(socket_mode & 0o777, 0o600, "socket must be owner-only");
+    let dir = socket.parent().expect("socket has parent dir").to_owned();
+    let dir_mode = std::fs::metadata(&dir)
+        .expect("dir meta")
+        .permissions()
+        .mode();
+    assert_eq!(dir_mode & 0o777, 0o700, "socket dir must be owner-only");
 
     let body = serde_json::to_vec(&json!({
         "jsonrpc": "2.0",
@@ -317,7 +341,7 @@ async fn spawn_in_process_serves_get_version() {
         body.len()
     );
 
-    let mut stream = tokio::net::TcpStream::connect(handle.local_addr)
+    let mut stream = tokio::net::UnixStream::connect(&socket)
         .await
         .expect("connect");
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -332,6 +356,12 @@ async fn spawn_in_process_serves_get_version() {
     assert_eq!(json["id"], 42);
 
     handle.shutdown().await.expect("shutdown");
+    // Shutdown removes both the socket and its private directory.
+    assert!(!socket.exists(), "socket must be unlinked on shutdown");
+    assert!(
+        !dir.exists(),
+        "private socket dir must be removed on shutdown"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -414,7 +444,9 @@ async fn queries_balance_address_transfers_after_create() {
     .await;
     assert_eq!(missing["error"]["code"], -29400);
 
-    // Unreachable daemon → -29201 for get_height.
+    // Unreachable daemon → get_height still succeeds, returning the local
+    // wallet height with daemon_height=null (an offline/syncing node must not
+    // hide the wallet's own status).
     let height = rpc(
         state.clone(),
         json!({
@@ -425,7 +457,15 @@ async fn queries_balance_address_transfers_after_create() {
         }),
     )
     .await;
-    assert_eq!(height["error"]["code"], -29201);
+    assert!(height.get("error").is_none(), "{height}");
+    assert!(
+        height["result"]["wallet_height"].is_i64(),
+        "wallet_height present: {height}"
+    );
+    assert!(
+        height["result"]["daemon_height"].is_null(),
+        "daemon_height null when daemon unreachable: {height}"
+    );
 
     // Unreachable daemon → -29201 for refresh.
     let refreshed = rpc(
@@ -690,7 +730,11 @@ async fn spawn_in_process_with_lifecycle() {
         "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    let mut stream = tokio::net::TcpStream::connect(handle.local_addr)
+    let local_addr = match &handle.listen {
+        shekyl_wallet_rpc::InProcessListen::Tcp(addr) => *addr,
+        other => panic!("expected TCP listen, got {other:?}"),
+    };
+    let mut stream = tokio::net::TcpStream::connect(local_addr)
         .await
         .expect("connect");
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

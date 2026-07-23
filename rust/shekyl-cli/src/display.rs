@@ -30,15 +30,19 @@ impl std::fmt::Display for DisplaySafetyError {
     }
 }
 
-/// Display a secret with full terminal-safety protocol:
+/// Preflight the terminal for a one-time secret display, WITHOUT printing
+/// anything:
 ///
-/// 1. Refuse if stdout is not a TTY.
-/// 2. Warn if running under a terminal multiplexer (tmux, screen).
-/// 3. Print the secret.
-/// 4. Wait for Enter, then best-effort clear screen + scrollback.
-/// 5. Print honest residual-scrollback warning.
-/// 6. Zeroize the secret string.
-pub fn display_secret(label: &str, secret: &mut String) -> Result<(), DisplaySafetyError> {
+/// 1. Refuse if stdout is not a TTY (pipe / redirect / log file).
+/// 2. Under a terminal multiplexer (tmux, screen) whose scrollback may retain
+///    the secret, require an explicit `YES`.
+///
+/// This MUST be called *before* the secret exists (before the wallet is
+/// created), so that a refusal creates nothing rather than orphaning a wallet
+/// whose one-time backup can never be shown — the server never re-exposes it.
+/// The deliberate, auditable way to capture a seed non-interactively is the
+/// `create --seed-out <path>` subcommand, not a redirected terminal.
+pub fn preflight_secret_display() -> Result<(), DisplaySafetyError> {
     if !io::stdout().is_terminal() {
         return Err(DisplaySafetyError::NotATty);
     }
@@ -51,11 +55,19 @@ pub fn display_secret(label: &str, secret: &mut String) -> Result<(), DisplaySaf
 
         let mut confirm = String::new();
         if io::stdin().read_line(&mut confirm).is_err() || confirm.trim() != "YES" {
-            secret.zeroize();
             return Err(DisplaySafetyError::UserDeclined);
         }
     }
 
+    Ok(())
+}
+
+/// Display a secret to the terminal and best-effort clear it afterwards, then
+/// zeroize `secret`. Call ONLY after [`preflight_secret_display`] returned
+/// `Ok` (stdout is a TTY and any multiplexer warning was accepted); there is
+/// deliberately no non-TTY fallback here, so the secret can never reach a pipe
+/// or file.
+pub fn show_secret(label: &str, secret: &mut String) {
     println!("\n{label}:");
     println!("{secret}");
     println!();
@@ -78,7 +90,6 @@ pub fn display_secret(label: &str, secret: &mut String) -> Result<(), DisplaySaf
     );
 
     secret.zeroize();
-    Ok(())
 }
 
 /// Check for well-known terminal multiplexer environment variables.

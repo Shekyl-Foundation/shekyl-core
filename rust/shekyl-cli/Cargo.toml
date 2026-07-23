@@ -12,14 +12,12 @@ path = "src/main.rs"
 
 [dependencies]
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-shekyl-engine-rpc = { path = "../shekyl-engine-rpc", features = ["rust-scanner", "native-sign"] }
+shekyl-wallet-rpc = { path = "../shekyl-wallet-rpc" }
 clap = { version = "4", features = ["derive"] }
 rustyline = "15"
 tokio = { version = "1", features = ["full"] }
-serde = { workspace = true }
 serde_json = "1"
 zeroize = { workspace = true }
-regex-lite = "0.1"
 rpassword = "7"
 dirs = "6"
 ureq = { version = "3", default-features = false, features = ["rustls", "socks-proxy"] }
@@ -29,3 +27,4 @@ shekyl-units = { path = "../shekyl-units" }
 
 [dev-dependencies]
 proptest = "1"
+tempfile = "3"

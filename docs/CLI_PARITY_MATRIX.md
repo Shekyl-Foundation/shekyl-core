@@ -23,6 +23,26 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 > address + payment-request commands; the matrix rows stay as-is until that
 > migration lands because they document the current wallet2-backed CLI.
 
+> **Note (2026-07-22, WI-RPC-2a).** The transport migration has landed:
+> `shekyl-cli` is off wallet2 and is now a JSON-RPC client of
+> `shekyl-wallet-rpc` (Shape B — self-hosted in-process over a private UDS,
+> or `--rpc-url`). Core commands (lifecycle incl. `restore` via the new
+> `restore_wallet` RPC, `balance`, `address`, `status`, `refresh`, the
+> transfer flow, `transfers`, `show_transfer`, `password`, `version`) run
+> natively; commands whose RPC surface has not landed answer with a uniform
+> transitional stub. Row-by-row reconciliation (including closing the
+> wallet2-era account/subaddress/key-image/secret-display rows as
+> deleted-by-design) happens in the WI-RPC-2b commit, which lands the
+> deletions this matrix must reflect.
+>
+> **Update (2026-07-23, WI-RPC-2a review fixes).** For scripting/automation
+> the CLI now also has non-interactive `create` / `restore` **subcommands**
+> (`shekyl-cli create <name> --seed-out <path> [--password-file|--password-stdin]`;
+> `restore <name> --seed-file <path> …`). The seed reaches a file **only**
+> through the explicit `--seed-out` (0600, O_EXCL); the interactive `create`
+> refuses to print the seed to a non-TTY (pipe/redirect/log) rather than leak
+> it — so the `seed`-safety row's guarantee now holds on every path.
+
 ## Parity matrix (40 covered, 41 out of scope)
 
 | # | simplewallet command | shekyl-cli equivalent | Status | Notes |

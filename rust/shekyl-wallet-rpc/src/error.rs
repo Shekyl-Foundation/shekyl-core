@@ -262,9 +262,9 @@ impl From<OpenError> for WalletRpcError {
             )),
             OpenError::Io(IoError::WalletFile { detail }) => classify_wallet_file_detail(&detail),
             OpenError::Io(IoError::Daemon { .. }) => Self::DaemonUnreachable,
-            OpenError::Io(other) => Self::InternalError(other.to_string()),
-            OpenError::Key(e) => Self::InternalError(e.to_string()),
-            OpenError::Persistence(e) => Self::InternalError(e.to_string()),
+            OpenError::Io(other) => internal_detail("wallet I/O error", other),
+            OpenError::Key(e) => internal_detail("wallet key error", e),
+            OpenError::Persistence(e) => internal_detail("wallet persistence error", e),
         }
     }
 }
@@ -275,9 +275,9 @@ impl From<ChangePasswordError> for WalletRpcError {
             ChangePasswordError::RotateFailed(PersistenceError::WalletFile(
                 WalletFileError::Envelope(_),
             )) => Self::InvalidPassword,
-            ChangePasswordError::RotateFailed(e) => Self::InternalError(e.to_string()),
+            ChangePasswordError::RotateFailed(e) => internal_detail("password rotation failed", e),
             ChangePasswordError::RotatedButPrefsFlushFailed(e) => {
-                Self::InternalError(format!("password rotated but prefs flush failed: {e}"))
+                internal_detail("password rotated but preferences flush failed", e)
             }
         }
     }
@@ -289,7 +289,7 @@ impl From<RefreshError> for WalletRpcError {
             RefreshError::AlreadyRunning => Self::RefreshInProgress,
             RefreshError::Io(IoError::Daemon { .. })
             | RefreshError::Io(IoError::Scanner { .. }) => Self::DaemonUnreachable,
-            RefreshError::Io(other) => Self::InternalError(other.to_string()),
+            RefreshError::Io(other) => internal_detail("refresh I/O error", other),
             RefreshError::ConcurrentMutation { wallet, result } => Self::InternalError(format!(
                 "refresh concurrent mutation: wallet={wallet}, result={result}"
             )),
@@ -437,6 +437,17 @@ impl From<PendingTxError> for WalletRpcError {
             other => Self::InternalError(other.to_string()),
         }
     }
+}
+
+/// Map an internal error to a category-only RPC message, logging the raw cause
+/// server-side. `message()` is the most-logged surface and, in remote mode,
+/// crosses to the client, so it must never carry a local filesystem path or
+/// internal schema (rule 30; the `message()` contract). The full detail is
+/// preserved in the server's own logs for diagnosis — mirroring the
+/// `PScanStartError::LoadFailed` discipline above.
+fn internal_detail(category: &'static str, detail: impl std::fmt::Display) -> WalletRpcError {
+    tracing::warn!(category, detail = %detail, "wallet-rpc internal error");
+    WalletRpcError::InternalError(category.to_owned())
 }
 
 fn classify_wallet_file_detail(detail: &str) -> WalletRpcError {

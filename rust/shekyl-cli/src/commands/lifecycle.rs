@@ -3,215 +3,264 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Engine lifecycle commands: create, open, close, restore.
+//! Wallet lifecycle commands over the native RPC surface (WI-RPC-2a):
+//! create, open, close, restore, refresh, status, password.
 
-use crate::engine::EngineContext;
+use serde_json::json;
 use zeroize::Zeroize;
 
-pub fn cmd_create(ctx: &EngineContext, args: &[&str]) {
-    if !super::require_closed(ctx) {
+use super::{read_password, require_closed, require_open};
+use crate::rpc_client::RpcSession;
+
+pub fn cmd_create(rpc: &RpcSession, filename: &str) {
+    if !require_closed(rpc) {
         return;
     }
-    let filename = match args.first() {
-        Some(f) => *f,
-        None => {
-            eprintln!("Usage: create <filename>");
-            return;
-        }
-    };
-    let Some(mut password) = super::read_password("New engine password: ") else {
+    // Gate the one-time seed display BEFORE creating anything. The server never
+    // re-exposes the seed, so a wallet created here whose backup we then cannot
+    // safely show (stdout is a pipe/file, or the user declines under tmux)
+    // would be permanently unrecoverable. Refuse and create nothing; scripted
+    // creation has its own deliberate, file-based path.
+    if let Err(e) = crate::display::preflight_secret_display() {
+        eprintln!("{e}");
+        eprintln!(
+            "Refusing to create a wallet whose one-time seed backup cannot be shown here.\n\
+             For non-interactive or scripted creation, use:\n  \
+             shekyl-cli create <name> --seed-out <path> --password-file <path>"
+        );
+        return;
+    }
+    let Some(mut password) = read_password("New wallet password: ") else {
         return;
     };
-    let Some(confirm) = super::read_password("Confirm password: ") else {
+    let Some(mut confirm) = read_password("Confirm password: ") else {
         password.zeroize();
         return;
     };
     if password != confirm {
+        password.zeroize();
+        confirm.zeroize();
         eprintln!("Passwords do not match.");
-        password.zeroize();
         return;
     }
-    drop(confirm);
+    confirm.zeroize();
 
-    match ctx.create(filename, &password, "English") {
-        Ok(()) => println!("Engine created: {filename}"),
-        Err(e) => eprintln!("Failed to create engine: {e}"),
-    }
+    let result = rpc.call(
+        "create_wallet",
+        json!({ "name": filename, "password": password }),
+    );
     password.zeroize();
-}
 
-pub fn cmd_open(ctx: &EngineContext, args: &[&str]) {
-    if !super::require_closed(ctx) {
-        return;
-    }
-    let filename = match args.first() {
-        Some(f) => *f,
-        None => {
-            eprintln!("Usage: open <filename>");
-            return;
-        }
-    };
-    let Some(mut password) = super::read_password("Engine password: ") else {
-        return;
-    };
-
-    match ctx.open(filename, &password) {
-        Ok(()) => println!("Opened engine: {filename}"),
-        Err(e) => eprintln!("Failed to open engine: {e}"),
-    }
-    password.zeroize();
-}
-
-pub fn cmd_close(ctx: &EngineContext) {
-    if !super::require_open(ctx) {
-        return;
-    }
-    match ctx.close() {
-        Ok(()) => println!("Engine closed."),
-        Err(e) => eprintln!("Failed to close engine: {e}"),
-    }
-}
-
-pub fn cmd_restore(ctx: &EngineContext, args: &[&str]) {
-    if !super::require_closed(ctx) {
-        return;
-    }
-    if args.len() < 2 {
-        eprintln!("Usage: restore <filename> <seed words...>");
-        return;
-    }
-    let filename = args[0];
-    let seed = args[1..].join(" ");
-
-    let Some(mut password) = super::read_password("New engine password: ") else {
-        return;
-    };
-
-    eprint!("Restore height (0 for full scan): ");
-    let mut height_str = String::new();
-    if std::io::stdin().read_line(&mut height_str).is_err() {
-        eprintln!("Failed to read restore height.");
-        password.zeroize();
-        return;
-    }
-    let restore_height: u64 = height_str.trim().parse().unwrap_or(0);
-
-    match ctx.restore_from_seed(filename, &seed, &password, "English", restore_height, "") {
+    match result {
         Ok(val) => {
-            if let Some(addr) = val.get("address").and_then(|a| a.as_str()) {
-                println!("Engine restored: {filename}");
-                println!("Address: {addr}");
-            } else {
-                println!("Engine restored: {filename}");
+            rpc.set_open(filename);
+            println!("Created wallet: {filename}");
+            // Mainnet/Stagenet return a BIP-39 mnemonic; Testnet a raw seed.
+            let backup = val
+                .get("mnemonic")
+                .or_else(|| val.get("raw_seed_hex"))
+                .and_then(|v| v.as_str());
+            if let Some(backup) = backup {
+                let mut secret = backup.to_owned();
+                println!("Write down your seed backup NOW. It is shown only once.");
+                // preflight_secret_display() above already guaranteed a safe
+                // terminal, so show_secret has no non-TTY fallback that could
+                // leak the seed to a pipe or file.
+                crate::display::show_secret("Seed backup", &mut secret);
             }
         }
-        Err(e) => eprintln!("Failed to restore engine: {e}"),
+        Err(e) => rpc.report("Failed to create wallet", &e),
     }
-    password.zeroize();
 }
 
-pub fn cmd_refresh(ctx: &EngineContext) {
-    if !super::require_open(ctx) {
+pub fn cmd_open(rpc: &RpcSession, filename: &str) {
+    if !require_closed(rpc) {
+        return;
+    }
+    let Some(mut password) = read_password("Wallet password: ") else {
+        return;
+    };
+    let result = rpc.call(
+        "open_wallet",
+        json!({ "name": filename, "password": password }),
+    );
+    password.zeroize();
+
+    match result {
+        Ok(_) => {
+            rpc.set_open(filename);
+            println!("Opened wallet: {filename}");
+        }
+        Err(e) => rpc.report("Failed to open wallet", &e),
+    }
+}
+
+pub fn cmd_close(rpc: &RpcSession) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call("close_wallet", json!({})) {
+        Ok(_) => {
+            rpc.set_closed();
+            println!("Wallet closed.");
+        }
+        Err(e) => rpc.report("Failed to close wallet", &e),
+    }
+}
+
+pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
+    if !require_closed(rpc) {
+        return;
+    }
+    let mut mnemonic = seed_words.join(" ");
+    let Some(mut password) = read_password("New wallet password: ") else {
+        mnemonic.zeroize();
+        return;
+    };
+
+    eprint!("Restore height (block height the wallet existed at; 0 = scan from genesis): ");
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    let mut height_input = String::new();
+    if std::io::stdin().read_line(&mut height_input).is_err() {
+        mnemonic.zeroize();
+        password.zeroize();
+        eprintln!("Failed to read restore height.");
+        return;
+    }
+    let height_input = height_input.trim();
+    let restore_height: u64 = if height_input.is_empty() {
+        0
+    } else {
+        match height_input.parse() {
+            Ok(h) => h,
+            Err(_) => {
+                mnemonic.zeroize();
+                password.zeroize();
+                eprintln!("Invalid restore height: expected a block height number.");
+                return;
+            }
+        }
+    };
+
+    let result = rpc.call(
+        "restore_wallet",
+        json!({
+            "name": filename,
+            "password": password,
+            "mnemonic": mnemonic,
+            "restore_height": restore_height,
+        }),
+    );
+    mnemonic.zeroize();
+    password.zeroize();
+
+    match result {
+        Ok(_) => {
+            rpc.set_open(filename);
+            println!("Restored wallet: {filename}");
+            println!("Run \"refresh\" to scan the chain for your funds.");
+        }
+        Err(e) => rpc.report("Failed to restore wallet", &e),
+    }
+}
+
+pub fn cmd_refresh(rpc: &RpcSession) {
+    if !require_open(rpc) {
         return;
     }
     println!("Refreshing...");
-    match ctx.refresh() {
-        Ok(()) => println!("Refresh complete. Height: {}", ctx.get_height()),
-        Err(e) => eprintln!("Refresh failed: {e}"),
-    }
-}
-
-pub fn cmd_save(ctx: &EngineContext) {
-    if !super::require_open(ctx) {
-        return;
-    }
-    match ctx.store() {
-        Ok(()) => println!("Engine saved."),
-        Err(e) => eprintln!("Failed to save engine: {e}"),
-    }
-}
-
-pub fn cmd_status(ctx: &EngineContext) {
-    if ctx.is_open() {
-        println!("Engine: open");
-        println!("Height: {}", ctx.get_height());
-    } else {
-        println!("Engine: not open");
-    }
-}
-
-pub fn cmd_password(ctx: &EngineContext) {
-    if !super::require_open(ctx) {
-        return;
-    }
-
-    let Some(mut old_pw) = super::read_password("Password: ") else {
-        return;
-    };
-
-    match ctx.json_rpc("get_version", "{}") {
-        Ok(_) => {}
-        Err(_) => {
-            eprintln!("Incorrect password.");
-            old_pw.zeroize();
-            return;
+    match rpc.call("refresh", json!({})) {
+        Ok(val) => {
+            let blocks = val
+                .get("blocks_processed")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let detected = val
+                .get("transfers_detected")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let height = val
+                .get("synced_height")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            println!("Refreshed: {blocks} blocks processed, {detected} transfers detected.");
+            println!("Wallet height: {height}");
+            if let Some(fork) = val.get("reorg_fork_height").and_then(|v| v.as_i64()) {
+                println!("Note: a chain reorg was detected and rewound (fork height {fork}).");
+            }
         }
+        Err(e) => rpc.report("Refresh failed", &e),
     }
+}
 
-    let Some(mut new_pw) = super::read_password("New password: ") else {
-        old_pw.zeroize();
+pub fn cmd_status(rpc: &RpcSession) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call("get_height", json!({})) {
+        Ok(val) => {
+            let wallet = val
+                .get("wallet_height")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            println!("Wallet height: {wallet}");
+            // daemon_height is null when the daemon is unreachable; still show
+            // the wallet height rather than reporting a total failure.
+            match val.get("daemon_height").and_then(|v| v.as_i64()) {
+                Some(daemon) => {
+                    println!("Daemon height: {daemon}");
+                    if daemon > wallet {
+                        println!("Behind by {} blocks — run \"refresh\".", daemon - wallet);
+                    } else {
+                        println!("Synced.");
+                    }
+                }
+                None => {
+                    println!("Daemon height: unavailable (daemon unreachable).");
+                    println!(
+                        "Showing wallet height only — start/sync your node, then \"refresh\"."
+                    );
+                }
+            }
+        }
+        Err(e) => rpc.report("Failed to get status", &e),
+    }
+}
+
+pub fn cmd_password(rpc: &RpcSession) {
+    if !require_open(rpc) {
+        return;
+    }
+    let Some(mut old_password) = read_password("Current password: ") else {
         return;
     };
-    let Some(confirm_pw) = super::read_password("Confirm password: ") else {
-        old_pw.zeroize();
-        new_pw.zeroize();
+    let Some(mut new_password) = read_password("New password: ") else {
+        old_password.zeroize();
         return;
     };
-
-    if new_pw != confirm_pw {
+    let Some(mut confirm) = read_password("Confirm new password: ") else {
+        old_password.zeroize();
+        new_password.zeroize();
+        return;
+    };
+    if new_password != confirm {
+        old_password.zeroize();
+        new_password.zeroize();
+        confirm.zeroize();
         eprintln!("Passwords do not match.");
-        old_pw.zeroize();
-        new_pw.zeroize();
         return;
     }
-    drop(confirm_pw);
+    confirm.zeroize();
 
-    let params = serde_json::json!({
-        "old_password": old_pw,
-        "new_password": new_pw,
-    });
+    let result = rpc.call(
+        "change_password",
+        json!({ "old_password": old_password, "new_password": new_password }),
+    );
+    old_password.zeroize();
+    new_password.zeroize();
 
-    match ctx.json_rpc("change_wallet_password", &params.to_string()) {
-        Ok(_) => println!("Password changed successfully."),
-        Err(e) => eprintln!("Failed to change password: {e}"),
-    }
-
-    old_pw.zeroize();
-    new_pw.zeroize();
-}
-
-pub fn cmd_rescan(ctx: &EngineContext, hard: bool) {
-    if !super::require_open(ctx) {
-        return;
-    }
-
-    if hard {
-        eprintln!(
-            "WARNING: Hard rescan will reset the engine's transaction history metadata.\n\
-             Balances will be recalculated but labels and notes will be lost."
-        );
-        if !super::confirm_dangerous(
-            "Type 'I UNDERSTAND I WILL LOSE METADATA' to confirm: ",
-            "I UNDERSTAND I WILL LOSE METADATA",
-        ) {
-            println!("Cancelled.");
-            return;
-        }
-    }
-
-    let params = serde_json::json!({ "hard": hard });
-    match ctx.json_rpc("rescan_blockchain", &params.to_string()) {
-        Ok(_) => println!("Rescan initiated."),
-        Err(e) => eprintln!("Rescan failed: {e}"),
+    match result {
+        Ok(_) => println!("Password changed."),
+        Err(e) => rpc.report("Failed to change password", &e),
     }
 }

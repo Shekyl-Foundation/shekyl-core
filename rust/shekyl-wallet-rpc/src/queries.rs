@@ -172,11 +172,15 @@ pub(crate) async fn get_height(
         (wallet_height, engine.daemon().clone())
     };
 
+    // Do not fail the whole call when the daemon is unreachable: the wallet
+    // height is local and always meaningful (a user whose own node is down or
+    // still syncing must still be able to see their wallet's status). Report
+    // daemon_height as null in that case rather than erroring out.
     let daemon_height = daemon
         .get_height()
         .await
-        .map_err(|_e| WalletRpcError::DaemonUnreachable)?;
-    let daemon_height = i64::try_from(daemon_height).unwrap_or(i64::MAX);
+        .ok()
+        .map(|h| i64::try_from(h).unwrap_or(i64::MAX));
 
     let result = GetHeightResult {
         wallet_height,
