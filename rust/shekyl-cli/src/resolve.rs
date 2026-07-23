@@ -298,17 +298,33 @@ pub fn parse(input: &str) -> ResolvedCommand {
             }
         }
         "make_uri" => {
-            let amount = match extract_flag_str(args, "--amount") {
-                Some(raw) => match crate::commands::parse_amount(&raw) {
+            // A present-but-empty string flag (`--address`, `--address=`) is a
+            // parse-time error, not an empty value sent on the wire (rule 82).
+            let str_flag = |flag: &str| match parse_flag_str(args, flag) {
+                FlagValue::Absent => Ok(None),
+                FlagValue::Set(v) => Ok(Some(v)),
+                FlagValue::Invalid(_) => Err(format!("make_uri: {flag} expects a value")),
+            };
+            let address = match str_flag("--address") {
+                Ok(v) => v,
+                Err(m) => return diag(m),
+            };
+            let label = match str_flag("--label") {
+                Ok(v) => v,
+                Err(m) => return diag(m),
+            };
+            let amount = match str_flag("--amount") {
+                Ok(None) => None,
+                Ok(Some(raw)) => match crate::commands::parse_amount(&raw) {
                     Some(v) => Some(v),
                     None => return diag(format!("make_uri: invalid amount {raw:?}")),
                 },
-                None => None,
+                Err(m) => return diag(m),
             };
             ResolvedCommand::MakeUri {
-                address: extract_flag_str(args, "--address"),
+                address,
                 amount,
-                label: extract_flag_str(args, "--label"),
+                label,
             }
         }
         "parse_uri" => {
@@ -440,7 +456,11 @@ pub fn parse(input: &str) -> ResolvedCommand {
             }
         }
         "sign_transfer" => {
-            let file = extract_flag_str(args, "--file");
+            let file = match parse_flag_str(args, "--file") {
+                FlagValue::Absent => None,
+                FlagValue::Set(f) => Some(f),
+                FlagValue::Invalid(_) => return diag("sign_transfer: --file expects a path"),
+            };
             let filtered: Vec<&str> = args
                 .iter()
                 .filter(|a| !a.starts_with("--"))
@@ -606,8 +626,17 @@ fn diag(message: impl Into<String>) -> ResolvedCommand {
     }
 }
 
-fn extract_flag_str(args: &[&str], flag: &str) -> Option<String> {
-    flag_value(args, flag).map(str::to_owned)
+/// Like [`parse_flag`] but for string-valued flags: a present-but-empty value
+/// (`--flag`, `--flag=`, or `--flag ""`) is `Invalid`, not an accepted empty
+/// string — so it surfaces as a parse-time diagnostic instead of an empty value
+/// crossing the wire (rule 82). `String`'s infallible `FromStr` makes the
+/// generic `parse_flag` unable to reject empties, hence the dedicated form.
+fn parse_flag_str(args: &[&str], flag: &str) -> FlagValue<String> {
+    match flag_value(args, flag) {
+        None => FlagValue::Absent,
+        Some("") => FlagValue::Invalid(String::new()),
+        Some(v) => FlagValue::Set(v.to_owned()),
+    }
 }
 
 /// Remove `flag` and its value from `args`, handling both `--flag value` (two
@@ -739,6 +768,34 @@ mod tests {
             parse("fee --inputs=five"),
             ResolvedCommand::Diagnostic { .. }
         ));
+    }
+
+    /// A present-but-empty string flag is a hard diagnostic, not an empty
+    /// value crossing the wire (rule 82).
+    #[test]
+    fn empty_string_flags_are_diagnostics() {
+        for line in [
+            "make_uri --address",
+            "make_uri --address=",
+            "make_uri --label",
+            "make_uri --amount",
+            "sign_transfer --file",
+        ] {
+            assert!(
+                matches!(parse(line), ResolvedCommand::Diagnostic { .. }),
+                "{line:?} should be a Diagnostic"
+            );
+        }
+        // A non-empty value still parses.
+        match parse("make_uri --address skl1abc --amount 1.0") {
+            ResolvedCommand::MakeUri {
+                address, amount, ..
+            } => {
+                assert_eq!(address.as_deref(), Some("skl1abc"));
+                assert_eq!(amount, Some(1_000_000_000));
+            }
+            other => panic!("expected MakeUri, got {other:?}"),
+        }
     }
 
     #[test]
