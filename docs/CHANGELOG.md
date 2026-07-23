@@ -147,13 +147,13 @@
   errs in both directions (tunnel false-negative — §15.3's own concession
   — and own-LAN/VPS false-positive); refusal removes user choice on a
   proxy signal; and the pricing's `r ≈ 5` basis is from the withdrawn
-  instrument. What ships instead: the **asymmetric warn-only rule**
+  instrument. The ratified replacement: the **asymmetric warn-only rule**
   (non-loopback draws a warning true regardless of daemon control;
   loopback draws silence; *no configuration ever draws an assurance* —
   the anti-autodetect rule) and the structural defense of **circuit
-  isolation** (`shekyl-p-transport`, persona side
-  unrepresentable-otherwise) with the principal-side Tor **default flip**
-  as the open front. §15.4's transport-isolation reopening criterion is
+  isolation** (persona side already built — `shekyl-p-transport`,
+  unrepresentable-otherwise), with the principal-side Tor **default
+  flip** as the open front. §15.4's transport-isolation reopening criterion is
   dispositioned absorbed — the path it named was built. The warn-UI +
   default-flip implementation is deferred on a named blocker (the
   WI-RPC-2b CLI surface rework, PR #358, owns the files) and lands

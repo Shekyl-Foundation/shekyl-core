@@ -1921,7 +1921,7 @@ section** — the same spec-first checkpoint the main gate ran on.
 > (founder anchor visible at cumulative ≈ 1.0). Out of this slice per
 > the round's scope: leg-(b) wall-clock emission, M4/M5/M7, GF-4.
 
-## 15. Addendum (2026-07-06): the remote-daemon posture — ⛔ REJECTED at review 2026-07-23 (was: refuse, not accept; warn-only ships instead)
+## 15. Addendum (2026-07-06): the remote-daemon posture — ⛔ REJECTED at review 2026-07-23 (was: refuse, not accept; warn-only ratified instead, implementation deferred)
 
 **Status: ⛔ REJECTED (2026-07-23, maintainer review, GF-7 retirement arc)
 — the structural refusal does not ship.** The review ran the checkpoint
@@ -1936,8 +1936,8 @@ grounds, any one sufficient:
    tell. A check with false negatives on the attack and false positives
    on the safe case is not structure — it is a mitigation wearing
    structural clothes.
-2. **Refusal removes user choice on a proxy signal.** What ships instead
-   is the **asymmetric warn-only rule**: a non-loopback endpoint draws a
+2. **Refusal removes user choice on a proxy signal.** The ratified
+   replacement is the **asymmetric warn-only rule**: a non-loopback endpoint draws a
    warning — true regardless of who controls the daemon, even the user's
    own, if the network path is not isolated — and a loopback endpoint
    draws **silence**. No configuration ever draws an assurance: a
@@ -1966,9 +1966,9 @@ grounds, any one sufficient:
    **principal-side default flip** (§18.13's named work item) as the
    remaining open front.
 
-**What ships instead** (deferred on a named blocker — the WI-RPC-2b CLI
-surface rework, PR #358, owns the files; built against the post-#358
-surface): the asymmetric warn-only disclosure at the daemon-endpoint
+**The ratified replacement** (implementation deferred on a named blocker —
+the WI-RPC-2b CLI surface rework, PR #358, owns the files; built against
+the post-#358 surface): the asymmetric warn-only disclosure at the daemon-endpoint
 choice site, and the principal-side Tor **default flip** with loud
 failure and a named opt-out — a dead Tor is an error the user sees, never
 a silent fallback to a direct connection (the no-silent-③ shape).

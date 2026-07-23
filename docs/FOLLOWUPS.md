@@ -9109,10 +9109,14 @@ one place to confirm each item's relationship to the wallet stack.
   enumeration} against the permutation null of the maximized statistic, with a marked
   control per failure mode). §14 is spec-committed, **implementation gated on review**
   (§3.5 ordering); a §14.4 bound-1 fail is a launch blocker. **Remote-daemon disposition
-  made explicit (§15, proposed, review-gated *(since ⛔ REJECTED 2026-07-23 — WI-4 §15 head; warn-only + transport isolation ship instead)*):** structural refusal at the dispatch driver
+  made explicit (§15) — proposed as** structural refusal at the dispatch driver
   (bond path unavailable on a non-local daemon endpoint; no warned override — privacy is
   not a setting), honest-user protection scope named (tunneled circumvention a residual),
-  reversion on a measured decorrelated remote transport. The §4.3.1/§13.1 in-model ceiling
+  reversion on a measured decorrelated remote transport — **and ⛔ REJECTED at review
+  2026-07-23** (WI-4 §15 head banner: the endpoint check errs in both directions and
+  removes choice on a proxy signal; the ratified replacement is the asymmetric warn-only
+  rule + circuit isolation — persona side already built, warn-UI + principal-side default
+  flip implementation deferred on PR #358). The §4.3.1/§13.1 in-model ceiling
   is pinned: `r = 1.86` is against the strongest observer of the *modeled* channel, not the
   strongest adversary. **Mechanization addendum (§16, proposed, review-gated):** the launch
   posture converted from policy to structure under the global-and-blind constraint (sort on
