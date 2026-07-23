@@ -13,7 +13,7 @@
 
 use serde_json::json;
 
-use super::{format_amount_str, require_open};
+use super::{opt_amount, require_open};
 use crate::rpc_client::RpcSession;
 
 pub fn cmd_fee(rpc: &RpcSession, n_inputs: Option<i64>, n_outputs: Option<i64>) {
@@ -41,13 +41,7 @@ pub fn cmd_fee(rpc: &RpcSession, n_inputs: Option<i64>, n_outputs: Option<i64>) 
     let shape_out = n_outputs.unwrap_or(2);
     println!("Fee quotes for a {shape_in}-input, {shape_out}-output transaction:");
 
-    let tier = |name: &str| {
-        quotes
-            .get(name)
-            .and_then(|v| v.as_str())
-            .map(format_amount_str)
-            .unwrap_or_else(|| "?".to_owned())
-    };
+    let tier = |name: &str| opt_amount(&quotes, name);
     let default_tier = quotes
         .get("default_priority")
         .and_then(|v| v.as_str())

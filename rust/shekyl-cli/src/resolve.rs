@@ -10,8 +10,10 @@
 //! self-describing -- no handler reads session state during execution.
 //!
 //! The wallet2-era commands (accounts, key images, secret display, sweep) are
-//! **removed**, not stubbed: they resolve to `Unknown` with a message that
+//! **removed**, not stubbed: they resolve to `Diagnostic` with a message that
 //! names the replacement or the reason (rule 60; WI-RPC-2b deletions).
+
+use shekyl_types::BlockHeight;
 
 /// A fully-resolved command ready for execution.
 #[derive(Debug)]
@@ -55,7 +57,9 @@ pub enum ResolvedCommand {
     RequestNew {
         amount: u64,
         label: String,
-        expiry: Option<u64>,
+        /// Expiry as an absolute chain instant (shared `shekyl-types` newtype);
+        /// serialized transparently as a raw height on the JSON-RPC wire.
+        expiry: Option<BlockHeight>,
     },
     RequestsList {
         filter: Option<String>,
@@ -145,8 +149,17 @@ pub enum ResolvedCommand {
     EngineInfo,
 
     // -- Unknown --
+    /// An unrecognized command token (the `other` catch-all). Rendered as
+    /// "Unknown command: <cmd>. Type help ...".
     Unknown {
         cmd: String,
+    },
+    /// A parse-time diagnostic already formatted for the user: a usage error,
+    /// removed-surface guidance, or a bad flag value. Kept distinct from
+    /// `Unknown` so the dispatcher never has to guess which one it holds
+    /// (previously disambiguated by a fragile whitespace heuristic).
+    Diagnostic {
+        message: String,
     },
 }
 
@@ -161,10 +174,10 @@ pub fn parse(input: &str) -> ResolvedCommand {
     let args = &tokens[1..];
 
     if let Some(msg) = reject_removed_flags(args) {
-        return ResolvedCommand::Unknown { cmd: msg };
+        return diag(msg);
     }
     if let Some(msg) = reject_removed_command(cmd, args) {
-        return ResolvedCommand::Unknown { cmd: msg };
+        return diag(msg);
     }
 
     match cmd {
@@ -176,9 +189,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     filename: filename.to_string(),
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "create: missing filename".to_string(),
-                }
+                diag("create: missing filename")
             }
         }
         "open" => {
@@ -187,9 +198,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     filename: filename.to_string(),
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "open: missing filename".to_string(),
-                }
+                diag("open: missing filename")
             }
         }
         "close" => ResolvedCommand::Close,
@@ -202,9 +211,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     seed_words,
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "restore: need <filename> <seed...>".to_string(),
-                }
+                diag("restore: need <filename> <seed...>")
             }
         }
         "refresh" => ResolvedCommand::Refresh,
@@ -215,7 +222,13 @@ pub fn parse(input: &str) -> ResolvedCommand {
         "transfer" => {
             let do_not_relay = args.contains(&"--do-not-relay");
             let no_confirm = args.contains(&"--no-confirm");
-            let priority = extract_flag_u32(args, "--priority");
+            let priority = match parse_flag::<u32>(args, "--priority") {
+                FlagValue::Absent => None,
+                FlagValue::Set(p) => Some(p),
+                FlagValue::Invalid(v) => {
+                    return diag(format!("transfer: --priority expects a number, got {v:?}"));
+                }
+            };
             let filtered: Vec<&str> = args
                 .iter()
                 .filter(|a| !a.starts_with("--"))
@@ -231,14 +244,10 @@ pub fn parse(input: &str) -> ResolvedCommand {
                         no_confirm,
                     }
                 } else {
-                    ResolvedCommand::Unknown {
-                        cmd: format!("transfer: invalid amount {:?}", filtered[0]),
-                    }
+                    diag(format!("transfer: invalid amount {:?}", filtered[0]))
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "transfer: need <amount> <address>".to_string(),
-                }
+                diag("transfer: need <amount> <address>")
             }
         }
         "transfers" => ResolvedCommand::Transfers,
@@ -248,14 +257,20 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     txid: txid.to_string(),
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "show_transfer: need <txid>".to_string(),
-                }
+                diag("show_transfer: need <txid>")
             }
         }
         "request" if args.first().copied() == Some("new") => {
             let rest: Vec<&str> = args.iter().skip(1).copied().collect();
-            let expiry = extract_flag_u64(&rest, "--expiry");
+            let expiry = match parse_flag::<u64>(&rest, "--expiry") {
+                FlagValue::Absent => None,
+                FlagValue::Set(h) => Some(BlockHeight::from_raw(h)),
+                FlagValue::Invalid(v) => {
+                    return diag(format!(
+                        "request new: --expiry expects a block height, got {v:?}"
+                    ));
+                }
+            };
             let filtered: Vec<&str> = strip_flag_with_value(&rest, "--expiry");
             if filtered.len() >= 2 {
                 if let Some(amount) = crate::commands::parse_amount(filtered[0]) {
@@ -266,14 +281,10 @@ pub fn parse(input: &str) -> ResolvedCommand {
                         expiry,
                     }
                 } else {
-                    ResolvedCommand::Unknown {
-                        cmd: format!("request new: invalid amount {:?}", filtered[0]),
-                    }
+                    diag(format!("request new: invalid amount {:?}", filtered[0]))
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "request new: need <amount> <label> [--expiry <height>]".to_string(),
-                }
+                diag("request new: need <amount> <label> [--expiry <height>]")
             }
         }
         "requests" if args.first().copied() == Some("list") => ResolvedCommand::RequestsList {
@@ -283,20 +294,14 @@ pub fn parse(input: &str) -> ResolvedCommand {
             if args.contains(&"--unattributed") {
                 ResolvedCommand::HistoryIncomingUnattributed
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "history incoming: use --unattributed".to_string(),
-                }
+                diag("history incoming: use --unattributed")
             }
         }
         "make_uri" => {
             let amount = match extract_flag_str(args, "--amount") {
                 Some(raw) => match crate::commands::parse_amount(&raw) {
                     Some(v) => Some(v),
-                    None => {
-                        return ResolvedCommand::Unknown {
-                            cmd: format!("make_uri: invalid amount {raw:?}"),
-                        }
-                    }
+                    None => return diag(format!("make_uri: invalid amount {raw:?}")),
                 },
                 None => None,
             };
@@ -312,19 +317,30 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     uri: uri.to_string(),
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "parse_uri: need <uri>".to_string(),
-                }
+                diag("parse_uri: need <uri>")
             }
         }
         "stake" => ResolvedCommand::Stake,
         "staked_balance" => ResolvedCommand::StakedBalance,
         "staked_outputs" => ResolvedCommand::StakedOutputs,
         "staking_info" => ResolvedCommand::StakingInfo,
-        "fee" => ResolvedCommand::Fee {
-            n_inputs: extract_flag_u64(args, "--inputs").map(|v| v as i64),
-            n_outputs: extract_flag_u64(args, "--outputs").map(|v| v as i64),
-        },
+        "fee" => {
+            // Counts are validated non-negative here; the server clamps to the
+            // consensus MAX_INPUTS/MAX_OUTPUTS. A present-but-non-numeric value
+            // is a hard error, not a silent fall-back to the default shape.
+            let count = |flag| match parse_flag::<u64>(args, flag) {
+                FlagValue::Absent => Ok(None),
+                FlagValue::Set(v) => Ok(Some(v as i64)),
+                FlagValue::Invalid(v) => Err(format!("fee: {flag} expects a count, got {v:?}")),
+            };
+            match (count("--inputs"), count("--outputs")) {
+                (Ok(n_inputs), Ok(n_outputs)) => ResolvedCommand::Fee {
+                    n_inputs,
+                    n_outputs,
+                },
+                (Err(msg), _) | (_, Err(msg)) => diag(msg),
+            }
+        }
         "chain_health" => ResolvedCommand::ChainHealth,
         "get_tx_key" => {
             if let Some(txid) = args.first() {
@@ -332,9 +348,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     txid: txid.to_string(),
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "get_tx_key: need <txid>".to_string(),
-                }
+                diag("get_tx_key: need <txid>")
             }
         }
         "check_tx_key" => {
@@ -345,9 +359,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     address: args[2].to_string(),
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "check_tx_key: need <txid> <tx_key> <address>".to_string(),
-                }
+                diag("check_tx_key: need <txid> <tx_key> <address>")
             }
         }
         "get_tx_proof" => {
@@ -358,9 +370,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     message: args.get(2).map(|s| s.to_string()),
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "get_tx_proof: need <txid> <address> [message]".to_string(),
-                }
+                diag("get_tx_proof: need <txid> <address> [message]")
             }
         }
         "check_tx_proof" => {
@@ -372,9 +382,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     message: args.get(3).map(|s| s.to_string()),
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "check_tx_proof: need <txid> <address> <sig> [msg]".to_string(),
-                }
+                diag("check_tx_proof: need <txid> <address> <sig> [msg]")
             }
         }
         "get_reserve_proof" => {
@@ -397,17 +405,13 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     message: args.get(2).map(|s| s.to_string()),
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "check_reserve_proof: need <address> <sig> [msg]".to_string(),
-                }
+                diag("check_reserve_proof: need <address> <sig> [msg]")
             }
         }
         "sign" => {
             let message = args.join(" ");
             if message.is_empty() {
-                ResolvedCommand::Unknown {
-                    cmd: "sign: need <message>".to_string(),
-                }
+                diag("sign: need <message>")
             } else {
                 ResolvedCommand::Sign { message }
             }
@@ -420,9 +424,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     signature: args[2].to_string(),
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "verify: need <address> <message> <signature>".to_string(),
-                }
+                diag("verify: need <address> <message> <signature>")
             }
         }
         "describe_transfer" => {
@@ -431,9 +433,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     unsigned_hex: hex.to_string(),
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "describe_transfer: need <unsigned_hex>".to_string(),
-                }
+                diag("describe_transfer: need <unsigned_hex>")
             }
         }
         "sign_transfer" => {
@@ -454,9 +454,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     file,
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "sign_transfer: need <hex> or --file <path>".to_string(),
-                }
+                diag("sign_transfer: need <hex> or --file <path>")
             }
         }
         "submit_transfer" => {
@@ -470,9 +468,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     signed_hex: hex.to_string(),
                 }
             } else {
-                ResolvedCommand::Unknown {
-                    cmd: "submit_transfer: need <signed_hex>".to_string(),
-                }
+                diag("submit_transfer: need <signed_hex>")
             }
         }
         "password" => ResolvedCommand::Password,
@@ -555,22 +551,40 @@ fn reject_removed_command(cmd: &str, args: &[&str]) -> Option<String> {
 // Flag extraction helpers
 // ---------------------------------------------------------------------------
 
-fn extract_flag_u32(args: &[&str], flag: &str) -> Option<u32> {
-    for (i, arg) in args.iter().enumerate() {
-        if *arg == flag {
-            return args.get(i + 1).and_then(|v| v.parse().ok());
-        }
-    }
-    None
+/// Outcome of parsing an optional flag that carries a typed value.
+///
+/// Unlike an `Option<T>` return, this keeps "not given" and "given but
+/// unparseable" distinct. The old `extract_flag_*` helpers collapsed both into
+/// `None`, so a typo'd `--expiry tomorrow` / `--inputs five` was silently
+/// dropped and the command ran with a wrong/default value (rule 82). Callers
+/// must handle `Invalid` — the compiler no longer lets it be ignored.
+enum FlagValue<T> {
+    Absent,
+    Set(T),
+    Invalid(String),
 }
 
-fn extract_flag_u64(args: &[&str], flag: &str) -> Option<u64> {
+/// Parse an optional `flag <value>` into a typed 3-state outcome. A trailing
+/// flag with no following token parses the empty string, which surfaces as
+/// `Invalid` (a missing value, not a silent absence).
+fn parse_flag<T: std::str::FromStr>(args: &[&str], flag: &str) -> FlagValue<T> {
     for (i, arg) in args.iter().enumerate() {
         if *arg == flag {
-            return args.get(i + 1).and_then(|v| v.parse().ok());
+            let raw = args.get(i + 1).copied().unwrap_or("");
+            return match raw.parse::<T>() {
+                Ok(v) => FlagValue::Set(v),
+                Err(_) => FlagValue::Invalid(raw.to_owned()),
+            };
         }
     }
-    None
+    FlagValue::Absent
+}
+
+/// Construct a formatted parse-time [`ResolvedCommand::Diagnostic`].
+fn diag(message: impl Into<String>) -> ResolvedCommand {
+    ResolvedCommand::Diagnostic {
+        message: message.into(),
+    }
 }
 
 fn extract_flag_str(args: &[&str], flag: &str) -> Option<String> {
@@ -644,10 +658,36 @@ mod tests {
             } => {
                 assert_eq!(amount, 2_500_000_000);
                 assert_eq!(label, "coffee order 42");
-                assert_eq!(expiry, Some(1000));
+                assert_eq!(expiry, Some(BlockHeight::from_raw(1000)));
             }
             other => panic!("expected RequestNew, got {other:?}"),
         }
+    }
+
+    /// A present-but-unparseable flag value is a hard diagnostic, never a
+    /// silent drop back to `None`/default (rule 82 — findings #1/#2).
+    #[test]
+    fn bad_flag_values_are_diagnostics_not_silent_drops() {
+        assert!(matches!(
+            parse("request new 5.0 rent --expiry tomorrow"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+        assert!(matches!(
+            parse("fee --inputs five --outputs two"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+        assert!(matches!(
+            parse("transfer --priority soon 1.0 skl1addr"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+        // A valid value still parses (absent stays absent, set stays set).
+        assert!(matches!(
+            parse("fee --inputs 3"),
+            ResolvedCommand::Fee {
+                n_inputs: Some(3),
+                n_outputs: None
+            }
+        ));
     }
 
     #[test]
@@ -739,10 +779,10 @@ mod tests {
             "transfer --account 1 1.0 skl1addr",
         ] {
             match parse(line) {
-                ResolvedCommand::Unknown { cmd } => {
-                    assert!(cmd.contains("removed flag"), "{line:?} -> {cmd}");
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(message.contains("removed flag"), "{line:?} -> {message}");
                 }
-                other => panic!("expected Unknown for {line:?}, got {other:?}"),
+                other => panic!("expected Diagnostic for {line:?}, got {other:?}"),
             }
         }
     }
@@ -761,13 +801,13 @@ mod tests {
             ("sweep_all skl1addr", "FOLLOWUPS"),
         ] {
             match parse(line) {
-                ResolvedCommand::Unknown { cmd } => {
+                ResolvedCommand::Diagnostic { message } => {
                     assert!(
-                        cmd.contains("removed") && cmd.contains(expect),
-                        "{line:?} -> {cmd}"
+                        message.contains("removed") && message.contains(expect),
+                        "{line:?} -> {message}"
                     );
                 }
-                other => panic!("expected Unknown for {line:?}, got {other:?}"),
+                other => panic!("expected Diagnostic for {line:?}, got {other:?}"),
             }
         }
     }

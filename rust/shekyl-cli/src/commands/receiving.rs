@@ -12,11 +12,12 @@
 //! account/subaddress model (rule 60; WI-RPC-1 pin 1).
 
 use serde_json::{json, Value};
+use shekyl_types::BlockHeight;
 
-use super::{format_amount, format_amount_str, require_open};
+use super::{format_amount, format_amount_str, opt_amount, require_open};
 use crate::rpc_client::RpcSession;
 
-pub fn cmd_request_new(rpc: &RpcSession, amount: u64, label: &str, expiry: Option<u64>) {
+pub fn cmd_request_new(rpc: &RpcSession, amount: u64, label: &str, expiry: Option<BlockHeight>) {
     if !require_open(rpc) {
         return;
     }
@@ -25,7 +26,9 @@ pub fn cmd_request_new(rpc: &RpcSession, amount: u64, label: &str, expiry: Optio
         "amount": amount.to_string(),
     });
     if let Some(h) = expiry {
-        params["expiry"] = json!(h);
+        // BlockHeight is #[serde(transparent)] over u64 — the wire stays a
+        // plain height number.
+        params["expiry"] = json!(h.to_raw());
     }
     match rpc.call("create_payment_request", params) {
         Ok(val) => {
@@ -42,13 +45,15 @@ pub fn cmd_request_new(rpc: &RpcSession, amount: u64, label: &str, expiry: Optio
 }
 
 /// Map the CLI filter word onto the wire enum. Defaults to `ALL`.
+/// Case-insensitive: `ALL` / `Pending` are accepted like `all` / `pending`.
 fn filter_param(filter: Option<&str>) -> Result<&'static str, String> {
-    match filter {
+    match filter.map(str::to_ascii_lowercase).as_deref() {
         None | Some("all") => Ok("ALL"),
         Some("pending") => Ok("PENDING"),
         Some("matched") => Ok("MATCHED"),
-        Some(other) => Err(format!(
-            "unknown filter {other:?}: expected pending, matched, or all"
+        Some(_) => Err(format!(
+            "unknown filter {:?}: expected pending, matched, or all",
+            filter.unwrap_or_default()
         )),
     }
 }
@@ -66,20 +71,16 @@ pub fn cmd_requests_list(rpc: &RpcSession, filter: Option<&str>) {
     };
     match rpc.call("list_payment_requests", json!({ "filter": wire_filter })) {
         Ok(val) => {
-            let requests = val
-                .get("payment_requests")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            if requests.is_empty() {
+            let requests = val.get("payment_requests").and_then(|v| v.as_array());
+            let Some(requests) = requests.filter(|a| !a.is_empty()) else {
                 println!("No payment requests.");
                 return;
-            }
+            };
             println!(
                 "{:<16} {:<10} {:>18} {:>10}  Label",
                 "Request id", "State", "Amount (SKL)", "Created"
             );
-            for r in &requests {
+            for r in requests {
                 print_request_row(r);
             }
         }
@@ -90,11 +91,7 @@ pub fn cmd_requests_list(rpc: &RpcSession, filter: Option<&str>) {
 fn print_request_row(r: &Value) {
     let id = r.get("id").and_then(|v| v.as_str()).unwrap_or("?");
     let state = r.get("state").and_then(|v| v.as_str()).unwrap_or("?");
-    let amount = r
-        .get("amount")
-        .and_then(|v| v.as_str())
-        .map(format_amount_str)
-        .unwrap_or_else(|| "?".to_owned());
+    let amount = opt_amount(r, "amount");
     let created = r.get("created_at").and_then(|v| v.as_i64()).unwrap_or(0);
     let label = r.get("label").and_then(|v| v.as_str()).unwrap_or("");
     println!("{id:<16} {state:<10} {amount:>18} {created:>10}  {label}");
@@ -172,5 +169,13 @@ mod tests {
         assert_eq!(filter_param(Some("pending")).unwrap(), "PENDING");
         assert_eq!(filter_param(Some("matched")).unwrap(), "MATCHED");
         assert!(filter_param(Some("bogus")).is_err());
+    }
+
+    /// Correctly-spelled filter words are accepted regardless of case.
+    #[test]
+    fn filter_words_are_case_insensitive() {
+        assert_eq!(filter_param(Some("ALL")).unwrap(), "ALL");
+        assert_eq!(filter_param(Some("Pending")).unwrap(), "PENDING");
+        assert_eq!(filter_param(Some("MATCHED")).unwrap(), "MATCHED");
     }
 }

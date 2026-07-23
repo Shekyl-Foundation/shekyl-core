@@ -87,7 +87,6 @@ pub fn repl(
     daemon_client: Option<DaemonClient>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::resolve::{self, ResolvedCommand};
-    use crate::session::ReplSession;
 
     let mut rl = DefaultEditor::new()?;
     let hist = history_path().unwrap_or_default();
@@ -98,10 +97,8 @@ pub fn repl(
 
     println!("Welcome to shekyl-cli. Type \"help\" for commands.");
 
-    let session = ReplSession::new();
-
     loop {
-        let prompt = session.prompt(rpc.is_open());
+        let prompt = crate::session::prompt(rpc.is_open());
 
         match rl.readline(&prompt) {
             Ok(line) => {
@@ -243,17 +240,10 @@ pub fn repl(
                     }
 
                     ResolvedCommand::Unknown { cmd } => {
-                        // `cmd` is either a bare unrecognized token or a full
-                        // diagnostic (usage / removed-command guidance).
-                        // Tokens are whitespace-split, so a bare token never
-                        // contains a space.
-                        if cmd.contains(' ') {
-                            eprintln!("{cmd}");
-                        } else {
-                            eprintln!(
-                                "Unknown command: {cmd}. Type \"help\" for available commands."
-                            );
-                        }
+                        eprintln!("Unknown command: {cmd}. Type \"help\" for available commands.");
+                    }
+                    ResolvedCommand::Diagnostic { message } => {
+                        eprintln!("{message}");
                     }
                 }
             }
@@ -361,6 +351,16 @@ pub(crate) fn format_amount_str(atomic: &str) -> String {
         Ok(v) => format_amount(v),
         Err(_) => atomic.to_owned(),
     }
+}
+
+/// Read an optional `AtomicUnits` string field from a JSON object and render it
+/// as SKL, falling back to `"?"` when the field is absent or non-string. The
+/// single home for the receiving/staking/fee row-formatting idiom.
+pub(crate) fn opt_amount(v: &serde_json::Value, key: &str) -> String {
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .map(format_amount_str)
+        .unwrap_or_else(|| "?".to_owned())
 }
 
 /// Parse a user-entered SKL string into raw atomic units.

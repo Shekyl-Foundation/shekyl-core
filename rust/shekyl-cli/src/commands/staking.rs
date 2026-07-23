@@ -14,7 +14,7 @@
 use serde_json::{json, Value};
 use zeroize::Zeroize;
 
-use super::{confirm, format_amount_str, read_password, require_open};
+use super::{confirm, opt_amount, read_password, require_open};
 use crate::rpc_client::RpcSession;
 
 pub fn cmd_stake(rpc: &RpcSession) {
@@ -66,13 +66,7 @@ pub fn cmd_staked_balance(rpc: &RpcSession) {
 }
 
 fn print_staked_balance(balance: &Value, indent: &str) {
-    let field = |name: &str| {
-        balance
-            .get(name)
-            .and_then(|v| v.as_str())
-            .map(format_amount_str)
-            .unwrap_or_else(|| "?".to_owned())
-    };
+    let field = |name: &str| opt_amount(balance, name);
     println!(
         "{indent}Bonded principal (confirmed): {} SKL",
         field("bonded_principal_confirmed")
@@ -93,26 +87,18 @@ pub fn cmd_staked_outputs(rpc: &RpcSession) {
     }
     match rpc.call("get_staked_outputs", json!({})) {
         Ok(val) => {
-            let outputs = val
-                .get("staked_outputs")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            if outputs.is_empty() {
+            let outputs = val.get("staked_outputs").and_then(|v| v.as_array());
+            let Some(outputs) = outputs.filter(|a| !a.is_empty()) else {
                 println!("No staked outputs.");
                 return;
-            }
+            };
             println!(
                 "{:<14} {:>18} {:>6} {:>14}",
                 "Output", "Amount (SKL)", "Slot", "Unlock height"
             );
-            for o in &outputs {
+            for o in outputs {
                 let gindex = o.get("gindex").and_then(|v| v.as_str()).unwrap_or("?");
-                let amount = o
-                    .get("amount")
-                    .and_then(|v| v.as_str())
-                    .map(format_amount_str)
-                    .unwrap_or_else(|| "?".to_owned());
+                let amount = opt_amount(o, "amount");
                 let slot = o.get("p_slot").and_then(|v| v.as_i64()).unwrap_or(-1);
                 let unlock = o.get("unlock_height").and_then(|v| v.as_i64()).unwrap_or(0);
                 println!("{gindex:<14} {amount:>18} {slot:>6} {unlock:>14}");

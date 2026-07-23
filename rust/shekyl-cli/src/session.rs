@@ -3,28 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! REPL session state.
+//! REPL prompt rendering.
 //!
-//! `ReplSession` lives on the REPL loop's stack frame. It is never shared
-//! and never leaks into RPC-level state. With the wallet2-era account model
-//! deleted (WI-RPC-2b), the only session-local presentation state left is
-//! the prompt.
+//! With the wallet2-era account model deleted (WI-RPC-2b), the REPL carries no
+//! session-local state: the prompt is a pure function of whether a wallet is
+//! open, so it is a free function rather than a method on an empty struct.
 
-/// Local session state for the interactive REPL.
-#[derive(Default)]
-pub struct ReplSession {}
-
-impl ReplSession {
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    /// Build the REPL prompt string.
-    pub fn prompt(&self, wallet_open: bool) -> String {
-        if wallet_open {
-            "shekyl-cli [wallet]> ".to_string()
-        } else {
-            "shekyl-cli> ".to_string()
-        }
+/// Build the REPL prompt string.
+pub fn prompt(wallet_open: bool) -> String {
+    if wallet_open {
+        "shekyl-cli [wallet]> ".to_string()
+    } else {
+        "shekyl-cli> ".to_string()
     }
 }
