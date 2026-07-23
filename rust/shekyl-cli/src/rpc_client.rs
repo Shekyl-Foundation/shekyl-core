@@ -146,8 +146,10 @@ impl RpcSession {
 
     /// Connect to an externally managed `shekyl-wallet-rpc` daemon.
     ///
-    /// Accepts `http://…` / `https://…` URLs or a `uds:///path/to.sock`
-    /// socket path.
+    /// Accepts `http://…` / `https://…` URLs or a `uds:///path/to.sock` socket
+    /// path. `proxy` (a SOCKS address) applies **only** to the HTTP(S)
+    /// transport; a `uds://` session is a local socket with no network path to
+    /// route, so the argument is ignored for it.
     pub fn connect(rpc_url: &str, proxy: Option<&str>, debug: bool) -> Result<Self, String> {
         let transport = if let Some(path) = rpc_url.strip_prefix("uds://") {
             if path.is_empty() {

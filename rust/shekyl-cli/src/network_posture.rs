@@ -10,9 +10,9 @@
 //! # The rule, and why it is asymmetric
 //!
 //! - **Non-loopback with no proxy → warn.** True regardless of who controls the
-//!   far end: the traffic crosses a network path in the clear, so a passive
-//!   observer on that path learns the operator runs a Shekyl wallet and when it
-//!   is active.
+//!   far end: an observer on that network path learns the operator runs a Shekyl
+//!   wallet and when it is active. This is *metadata* exposure — it holds even
+//!   if the link is encrypted (TLS) — not a claim that the payload is cleartext.
 //! - **Loopback, unix socket, or any configured proxy → silence.**
 //! - **No configuration ever draws an assurance.** This is the load-bearing
 //!   half. A positive "your connection is private" claim derived from an
@@ -103,11 +103,23 @@ fn host_of(endpoint: &str) -> &str {
 /// This is deliberately a **syntactic** check — it does not resolve names. A
 /// custom hostname alias that maps to loopback (e.g. an `/etc/hosts` entry for
 /// `127.0.0.1`) is therefore not recognized and draws the clear-network
-/// warning; use `localhost` or `127.0.0.1` to silence it. Resolving would be
-/// worse than the nag: `is_loopback_host` runs *before* the proxy check, so a
-/// lookup here would hand the daemon hostname to the local resolver even for a
-/// proxied endpoint — a DNS leak that defeats the very privacy a proxy buys
-/// (Tor proxies DNS through the SOCKS layer precisely to avoid this).
+/// warning; use `localhost` or `127.0.0.1` to silence it.
+///
+/// Resolving is avoided for two reasons, the first fundamental:
+///
+/// 1. **DNS is not a locality measurement.** Asking a resolver "does this name
+///    map to loopback?" trusts a manipulable oracle to report the network fact
+///    rather than establishing it — a poisoned resolver, a hostile
+///    `/etc/hosts`, an on-path answer, or plain resolve-then-connect TOCTOU can
+///    all make the answer lie. That is the exact §15 category error the
+///    warn-only rule exists to reject (deriving a claim a check cannot
+///    measure): a host is not on-machine because DNS *says* so. An IP literal,
+///    by contrast, *is* loopback by definition — the syntactic check measures
+///    the very thing it asserts.
+/// 2. **It would also leak.** `is_loopback_host` runs *before* the proxy
+///    branch, so a lookup here hands the daemon hostname to the local resolver
+///    even for a proxied endpoint — a DNS leak that defeats the privacy a proxy
+///    buys (Tor proxies DNS through the SOCKS layer precisely to avoid this).
 fn is_loopback_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost")
         || host
