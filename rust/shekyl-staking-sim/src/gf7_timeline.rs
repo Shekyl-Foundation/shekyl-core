@@ -1123,10 +1123,19 @@ mod tests {
         let pos = &report.controls[0];
         let neg = &report.controls[1];
         // The correlator still bites on a present channel: the un-jittered
-        // coupling links above the `1/N` blind baseline, even though it can no
-        // longer reach the retired seam's `POSITIVE_CONTROL_MIN` floor.
+        // coupling links above the `1/N` blind baseline.
         assert!(pos.p_link > pos.baseline);
-        assert!(pos.p_link < POSITIVE_CONTROL_MIN);
+        // ...but no longer clears its seam-era validity floor. Assert the
+        // control's own verdict (`!passed`) rather than re-deriving the
+        // `p_link < POSITIVE_CONTROL_MIN` comparison inline, so the test tracks
+        // the §5 pass logic itself rather than a hard-coded restatement that
+        // would drift if that logic is ever tuned.
+        assert!(
+            !pos.passed,
+            "the seam-era positive control must no longer pass its own floor \
+             after the seam retirement (p_link {:.3})",
+            pos.p_link
+        );
         // The negative control is seam-independent and must still hold at chance.
         assert!(neg.passed && (neg.p_link - neg.baseline).abs() < NEGATIVE_CONTROL_TOL);
         // The verdict fail-closes regardless of the seam-calibrated controls.
