@@ -341,14 +341,16 @@ pub fn parse(input: &str) -> ResolvedCommand {
         "staked_outputs" => ResolvedCommand::StakedOutputs,
         "staking_info" => ResolvedCommand::StakingInfo,
         "fee" => {
-            // Counts are validated non-negative here; the server clamps to the
-            // consensus MAX_INPUTS/MAX_OUTPUTS. A present-but-non-numeric value
-            // is a hard error, not a silent fall-back to the default shape.
+            // Parsed as u64, so a negative or non-numeric value is a hard
+            // client-side diagnostic, never a silent fall-back to the default
+            // shape. Range is the server's authority: it rejects an
+            // out-of-contract count (below n_inputs>=1 / n_outputs>=2, or above
+            // the consensus max) with InvalidParams — the CLI does not clamp.
             let count = |flag| match parse_flag::<u64>(args, flag) {
                 FlagValue::Absent => Ok(None),
-                // Saturate rather than `as`-cast: an absurd count above i64::MAX
-                // maps to i64::MAX (which the server clamps to MAX_INPUTS/
-                // MAX_OUTPUTS anyway) instead of wrapping to a negative.
+                // Saturate rather than `as`-cast so an absurd count above
+                // i64::MAX becomes i64::MAX (which the server then rejects as
+                // out-of-range) instead of wrapping to a negative.
                 FlagValue::Set(v) => Ok(Some(i64::try_from(v).unwrap_or(i64::MAX))),
                 FlagValue::Invalid(v) => Err(format!("fee: {flag} expects a count, got {v:?}")),
             };
