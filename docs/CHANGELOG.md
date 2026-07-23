@@ -181,10 +181,16 @@
   isolation** (persona side already built — `shekyl-p-transport`,
   unrepresentable-otherwise), with the principal-side Tor **default
   flip** as the open front. §15.4's transport-isolation reopening criterion is
-  dispositioned absorbed — the path it named was built. The warn-UI +
-  default-flip implementation is deferred on a named blocker (the
-  WI-RPC-2b CLI surface rework, PR #358, owns the files) and lands
-  against the post-#358 surface. The broadcast-③ type-level refusal
+  dispositioned absorbed — the path it named was built. **The warn-only
+  disclosure is BUILT** (`shekyl-cli::network_posture`: warns on a
+  non-loopback endpoint with no proxy, silent on loopback / unix socket /
+  any configured proxy, and a test pins that the only emissible message
+  is a warning — never an assurance; it does not grade the operator's own
+  proxy). **The principal-side Tor default flip is not yet built** — Tor
+  as default and a first-class, never-ambient opt-out are settled, but the
+  embedded-Arti-vs-external-Tor source fork and the transport-selection
+  knob (whose axis is *who provides the transport*, not "Tor or not")
+  remain open and are deliberately not being decided by implementation. The broadcast-③ type-level refusal
   (SP-T4a `BroadcastPosture`, no ThirdParty variant) is untouched — that
   one is structure, not detection.
 

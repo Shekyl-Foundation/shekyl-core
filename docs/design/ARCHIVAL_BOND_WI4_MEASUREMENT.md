@@ -1921,7 +1921,7 @@ section** — the same spec-first checkpoint the main gate ran on.
 > (founder anchor visible at cumulative ≈ 1.0). Out of this slice per
 > the round's scope: leg-(b) wall-clock emission, M4/M5/M7, GF-4.
 
-## 15. Addendum (2026-07-06): the remote-daemon posture — ⛔ REJECTED at review 2026-07-23 (was: refuse, not accept; warn-only ratified instead, implementation deferred)
+## 15. Addendum (2026-07-06): the remote-daemon posture — ⛔ REJECTED at review 2026-07-23 (was: refuse, not accept; warn-only ratified instead — disclosure BUILT, Tor default flip still open)
 
 **Status: ⛔ REJECTED (2026-07-23, maintainer review, GF-7 retirement arc)
 — the structural refusal does not ship.** The review ran the checkpoint
@@ -1966,12 +1966,35 @@ grounds, any one sufficient:
    **principal-side default flip** (§18.13's named work item) as the
    remaining open front.
 
-**The ratified replacement** (implementation deferred on a named blocker —
-the WI-RPC-2b CLI surface rework, PR #358, owns the files; built against
-the post-#358 surface): the asymmetric warn-only disclosure at the daemon-endpoint
-choice site, and the principal-side Tor **default flip** with loud
-failure and a named opt-out — a dead Tor is an error the user sees, never
-a silent fallback to a direct connection (the no-silent-③ shape).
+**The ratified replacement**, in two parts with different build states:
+
+**(a) The asymmetric warn-only disclosure — BUILT (2026-07-23, post-#358).**
+`shekyl-cli`'s `network_posture` module classifies each endpoint the process
+actually opens and emits *at most* a warning: non-loopback with no proxy
+warns; loopback, unix socket, or any configured proxy is silent; **no
+configuration ever draws an assurance** (the load-bearing half — a positive
+claim from an endpoint check asserts a property the check cannot measure, and
+a test pins that the only emissible message is a warning). It does not grade
+the operator's proxy: a user on their own hardened Tor or VPN may be better
+protected than any default we ship, and warning them would repeat this
+section's rejected false-positive error.
+
+**(b) The principal-side Tor default flip — NOT YET BUILT; design open.**
+Two forks are unresolved and are deliberately not being decided by
+implementation: the **embedded-Arti-vs-external-Tor** source question
+(FOLLOWUPS), and the **transport-selection knob**, whose axis is *who provides
+the primary transport* (ours / the operator's / none) rather than "Tor or
+not" — a user pointing at their own Tor instance has not opted out of Tor, so
+an anti-Tor toggle would misname the common case. Two constraints are already
+settled: **Tor is the default**, and the opt-out is **first-class and
+explicit**, never an ambient side effect of setting some other flag. The
+loud-failure rule extends to the operator's own proxy — a configured proxy
+that is down must fail loudly, never silently fall back to clear
+(`posture.rs`'s no-silent-③ shape); believing you are proxied when you are
+not is worse than knowingly running clear.
+
+Historical note on (a)'s deferral: it was blocked on the WI-RPC-2b CLI
+surface rework (PR #358, merged 2026-07-23), which owned the files.
 
 The text below is the rejected proposal, preserved as the record of what
 was considered and why it was rejected. Same spec-first ordering as §14.

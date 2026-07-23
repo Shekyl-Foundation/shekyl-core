@@ -9163,8 +9163,8 @@ one place to confirm each item's relationship to the wallet stack.
   reversion on a measured decorrelated remote transport — **and ⛔ REJECTED at review
   2026-07-23** (WI-4 §15 head banner: the endpoint check errs in both directions and
   removes choice on a proxy signal; the ratified replacement is the asymmetric warn-only
-  rule + circuit isolation — persona side already built, warn-UI + principal-side default
-  flip implementation deferred on PR #358). The §4.3.1/§13.1 in-model ceiling
+  rule + circuit isolation — persona side already built; the warn-only disclosure BUILT
+  2026-07-23 (`shekyl-cli::network_posture`), the principal-side Tor default flip still open). The §4.3.1/§13.1 in-model ceiling
   is pinned: `r = 1.86` is against the strongest observer of the *modeled* channel, not the
   strongest adversary. **Mechanization addendum (§16, proposed, review-gated):** the launch
   posture converted from policy to structure under the global-and-blind constraint (sort on
