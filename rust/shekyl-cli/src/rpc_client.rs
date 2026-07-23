@@ -83,8 +83,10 @@ impl RpcError {
 enum Transport {
     /// HTTP/1.1 over a Unix domain socket.
     Uds(PathBuf),
-    /// HTTP(S) over TCP to an external daemon.
-    Http(String),
+    /// HTTP(S) over TCP to an external daemon, through a ureq agent that
+    /// carries the `--proxy` SOCKS config (if any) — so a proxied `--rpc-url`
+    /// is genuinely proxied, which the network-posture disclosure relies on.
+    Http { url: String, agent: ureq::Agent },
 }
 
 /// The runtime and server handle backing a self-hosted session.
@@ -146,14 +148,17 @@ impl RpcSession {
     ///
     /// Accepts `http://…` / `https://…` URLs or a `uds:///path/to.sock`
     /// socket path.
-    pub fn connect(rpc_url: &str, debug: bool) -> Result<Self, String> {
+    pub fn connect(rpc_url: &str, proxy: Option<&str>, debug: bool) -> Result<Self, String> {
         let transport = if let Some(path) = rpc_url.strip_prefix("uds://") {
             if path.is_empty() {
                 return Err("--rpc-url uds:// path must not be empty".into());
             }
             Transport::Uds(PathBuf::from(path))
         } else if rpc_url.starts_with("http://") || rpc_url.starts_with("https://") {
-            Transport::Http(rpc_url.trim_end_matches('/').to_owned())
+            Transport::Http {
+                url: rpc_url.trim_end_matches('/').to_owned(),
+                agent: build_http_agent(proxy)?,
+            }
         } else {
             return Err(format!(
                 "invalid --rpc-url '{rpc_url}': expected http://host:port, \
@@ -186,7 +191,7 @@ impl RpcSession {
     pub fn socket_path(&self) -> Option<&Path> {
         match &self.transport {
             Transport::Uds(path) => Some(path),
-            Transport::Http(_) => None,
+            Transport::Http { .. } => None,
         }
     }
 
@@ -222,7 +227,7 @@ impl RpcSession {
         // request-side serialization is wiped inside the transport helpers.
         let raw = Zeroizing::new(match &self.transport {
             Transport::Uds(path) => http_post_uds(path, &body)?,
-            Transport::Http(url) => http_post_tcp(url, &body)?,
+            Transport::Http { url, agent } => http_post_tcp(agent, url, &body)?,
         });
 
         let parsed: Value = serde_json::from_str(&raw)
@@ -324,10 +329,25 @@ fn http_post_uds(path: &Path, body: &Value) -> Result<String, RpcError> {
 /// POST the JSON-RPC body to an HTTP(S) endpoint and return the response
 /// body. JSON-RPC application errors ride back as HTTP 200 with an `error`
 /// object, which the caller decodes.
-fn http_post_tcp(url: &str, body: &Value) -> Result<String, RpcError> {
+/// Build the ureq agent for the `--rpc-url` HTTP transport, applying the
+/// operator's `--proxy` SOCKS config when set. This is what makes a proxied
+/// `--rpc-url` actually route through the proxy — mirrors `daemon::DaemonClient`
+/// so both CLI HTTP paths honor `--proxy` identically.
+fn build_http_agent(proxy: Option<&str>) -> Result<ureq::Agent, String> {
+    let mut config = ureq::Agent::config_builder();
+    if let Some(proxy_addr) = proxy {
+        let proxy_obj = ureq::Proxy::new(proxy_addr)
+            .map_err(|e| format!("invalid --proxy '{proxy_addr}': {e}"))?;
+        config = config.proxy(Some(proxy_obj));
+    }
+    Ok(config.build().new_agent())
+}
+
+fn http_post_tcp(agent: &ureq::Agent, url: &str, body: &Value) -> Result<String, RpcError> {
     // Serialized request holds cleartext secrets; wipe on drop (rule 35).
     let payload = Zeroizing::new(body.to_string().into_bytes());
-    let mut response = ureq::post(url)
+    let mut response = agent
+        .post(url)
         .header("Content-Type", "application/json")
         .send(payload.as_slice())
         .map_err(|e| RpcError::Transport(e.to_string()))?;
@@ -450,9 +470,17 @@ mod tests {
 
     #[test]
     fn connect_rejects_unknown_scheme() {
-        assert!(RpcSession::connect("ftp://host", false).is_err());
-        assert!(RpcSession::connect("uds://", false).is_err());
-        assert!(RpcSession::connect("http://127.0.0.1:29500", false).is_ok());
-        assert!(RpcSession::connect("uds:///tmp/x.sock", false).is_ok());
+        assert!(RpcSession::connect("ftp://host", None, false).is_err());
+        assert!(RpcSession::connect("uds://", None, false).is_err());
+        assert!(RpcSession::connect("http://127.0.0.1:29500", None, false).is_ok());
+        assert!(RpcSession::connect("uds:///tmp/x.sock", None, false).is_ok());
+        // A well-formed SOCKS proxy builds the agent (reachability is not
+        // checked at connect time — the open-state probe is best-effort).
+        assert!(RpcSession::connect(
+            "http://127.0.0.1:29500",
+            Some("socks5://127.0.0.1:9050"),
+            false
+        )
+        .is_ok());
     }
 }

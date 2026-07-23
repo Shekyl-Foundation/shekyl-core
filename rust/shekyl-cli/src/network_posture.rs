@@ -71,10 +71,13 @@ fn host_of(endpoint: &str) -> &str {
     let after_scheme = endpoint
         .split_once("://")
         .map_or(endpoint, |(_, rest)| rest);
-    // Strip any path/query the URL forms carry.
+    // The authority ends at the first path/query/fragment delimiter — stop at
+    // whichever comes first so a `?query` or `#fragment` with no path cannot
+    // pull a stray `@`/`:` into the userinfo/port split below.
     let authority = after_scheme
-        .split_once('/')
-        .map_or(after_scheme, |(auth, _)| auth);
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
     // Strip userinfo if present (`user@host:port`).
     let authority = authority
         .rsplit_once('@')
@@ -95,7 +98,16 @@ fn host_of(endpoint: &str) -> &str {
 }
 
 /// `true` for the loopback forms: the `localhost` name and any address
-/// `std` classifies as loopback (`127.0.0.0/8`, `::1`).
+/// literal `std` classifies as loopback (`127.0.0.0/8`, `::1`).
+///
+/// This is deliberately a **syntactic** check — it does not resolve names. A
+/// custom hostname alias that maps to loopback (e.g. an `/etc/hosts` entry for
+/// `127.0.0.1`) is therefore not recognized and draws the clear-network
+/// warning; use `localhost` or `127.0.0.1` to silence it. Resolving would be
+/// worse than the nag: `is_loopback_host` runs *before* the proxy check, so a
+/// lookup here would hand the daemon hostname to the local resolver even for a
+/// proxied endpoint — a DNS leak that defeats the very privacy a proxy buys
+/// (Tor proxies DNS through the SOCKS layer precisely to avoid this).
 fn is_loopback_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost")
         || host
@@ -130,19 +142,40 @@ pub fn classify(endpoint: &str, proxy: Option<&str>) -> Exposure {
     }
 }
 
-/// The warning text for a clear-network endpoint. `label` names which endpoint
-/// (so an operator with several configured knows which one to fix).
+/// The warning text for a clear-network endpoint whose connection **can** be
+/// proxied (the `--rpc-url` client and the REPL's direct daemon client); it
+/// therefore fires only when no proxy is configured. `label` names which
+/// endpoint (so an operator with several configured knows which one to fix).
 ///
-/// Phrased as a statement of exposure, never as a grade: it does not say the
-/// far end is hostile, and it never implies any other configuration is "safe".
+/// Phrased as a statement of exposure, never as a grade: it frames the leak as
+/// *metadata* (that a Shekyl wallet is running, and when) rather than claiming
+/// the payload is unencrypted — the exposure holds even over TLS — and it never
+/// implies any other configuration is "safe".
 #[must_use]
 pub fn warning_for(label: &str, host: &str) -> String {
     format!(
         "Warning: {label} '{host}' is not loopback and no proxy is configured. \
-         This connection crosses a network path in the clear, so an observer on \
-         that path can see that you run a Shekyl wallet and when it is active — \
-         true regardless of who operates the far end. Route it through a proxy \
-         (--proxy), or point it at a node on this machine."
+         An observer on the network path can see that you connect to a remote \
+         node — that you run a Shekyl wallet, and when it is active — which \
+         holds regardless of who operates the far end and even if the link is \
+         encrypted. Route it through a proxy (--proxy), or point it at a node \
+         on this machine."
+    )
+}
+
+/// The warning text for the self-hosted wallet server's connection to a remote
+/// daemon. That connection **cannot** be proxied (its transport has no proxy
+/// support), so — unlike [`warning_for`] — it fires regardless of `--proxy`,
+/// and its only remedy is a node on this machine.
+#[must_use]
+pub fn warning_for_direct(label: &str, host: &str) -> String {
+    format!(
+        "Warning: {label} '{host}' is not loopback. The self-hosted wallet \
+         server scans the chain over this connection, which does not use \
+         --proxy, so an observer on the network path can see that you run a \
+         Shekyl wallet and when it is active — regardless of who operates the \
+         node and even if the link is encrypted. Point --daemon-address at a \
+         node on this machine to avoid this."
     )
 }
 
@@ -154,6 +187,26 @@ pub fn disclose(label: &str, endpoint: &str, proxy: Option<&str>) -> Option<Stri
         Exposure::Local | Exposure::Proxied => None,
         Exposure::ClearNetwork { host } => {
             let msg = warning_for(label, &host);
+            eprintln!("{msg}");
+            Some(msg)
+        }
+    }
+}
+
+/// Disclose an endpoint whose connection **cannot** honor `--proxy` — the
+/// self-hosted wallet server's block-scanning link to the daemon, whose
+/// transport has no proxy support. Warns on a non-loopback daemon *regardless*
+/// of `--proxy` (it genuinely does not protect this connection), and is silent
+/// for a loopback / unix-socket / unconfigured daemon. Returns the warning
+/// printed, if any.
+pub fn disclose_unproxyable(label: &str, endpoint: &str) -> Option<String> {
+    // Passing `None` makes `classify` do the loopback/uds/empty determination
+    // without ever reporting `Proxied` — which is exactly right here, since the
+    // proxy does not reach this connection.
+    match classify(endpoint, None) {
+        Exposure::Local | Exposure::Proxied => None,
+        Exposure::ClearNetwork { host } => {
+            let msg = warning_for_direct(label, &host);
             eprintln!("{msg}");
             Some(msg)
         }
@@ -271,5 +324,47 @@ mod tests {
         assert!(w.contains("regardless of who operates the far end"));
         assert!(!w.to_lowercase().contains("secure"));
         assert!(!w.to_lowercase().contains("safe"));
+    }
+
+    #[test]
+    fn host_of_stops_at_query_and_fragment() {
+        // A query or fragment with no path must not pull an `@`/`:` into the
+        // userinfo/port split (regression: `rsplit_once('@')` inside a query).
+        assert_eq!(host_of("http://node:11028?u=a@b"), "node");
+        assert_eq!(host_of("http://node:11028#frag"), "node");
+        assert_eq!(host_of("node.example.com:11028?x=1"), "node.example.com");
+        assert_eq!(
+            classify("http://node:11028?u=a@b", None),
+            Exposure::ClearNetwork {
+                host: "node".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn unproxyable_disclosure_warns_regardless_of_proxy() {
+        // The self-hosted scan connection cannot use --proxy: a non-loopback
+        // daemon warns; loopback / unix-socket / unconfigured stay silent.
+        assert!(disclose_unproxyable("daemon address", "127.0.0.1:11028").is_none());
+        assert!(disclose_unproxyable("daemon address", "uds:///run/w.sock").is_none());
+        assert!(disclose_unproxyable("daemon address", "").is_none());
+        let w = disclose_unproxyable("daemon address", "node.example.com:11028")
+            .expect("a non-loopback self-hosted daemon warns");
+        assert!(w.starts_with("Warning:"));
+        assert!(w.contains("does not use --proxy"));
+        assert!(w.contains("node.example.com"));
+    }
+
+    #[test]
+    fn warnings_do_not_claim_the_payload_is_cleartext() {
+        // #5: neither warning says "in the clear" — the exposure is metadata,
+        // which holds even over an encrypted (TLS) link.
+        for w in [
+            warning_for("daemon", "node"),
+            warning_for_direct("daemon", "node"),
+        ] {
+            assert!(!w.to_lowercase().contains("in the clear"), "{w}");
+            assert!(w.contains("even if the link is encrypted"), "{w}");
+        }
     }
 }

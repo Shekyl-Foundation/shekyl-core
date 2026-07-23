@@ -117,9 +117,13 @@ fn disclose_network_posture(cli: &ReplArgs, opens_direct_daemon: bool) {
                 network_posture::disclose("daemon address", &cli.daemon_address, proxy);
             }
         }
-        // Session and direct client share this endpoint — disclose it once.
+        // Self-hosted: the in-process wallet server does the bulk block scan to
+        // the daemon, and its transport cannot honor --proxy. Disclose it as an
+        // unproxyable connection so a non-loopback daemon warns regardless of
+        // --proxy (the REPL's own DaemonClient does honor --proxy, but it is not
+        // the dominant exposure — the scan is). Disclosed once for both.
         None => {
-            network_posture::disclose("daemon address", &cli.daemon_address, proxy);
+            network_posture::disclose_unproxyable("daemon address", &cli.daemon_address);
         }
     }
 }
@@ -128,7 +132,11 @@ fn disclose_network_posture(cli: &ReplArgs, opens_direct_daemon: bool) {
 /// daemon when `--rpc-url` is set, otherwise a self-hosted in-process server.
 fn build_session(cli: &ReplArgs) -> Result<rpc_client::RpcSession, Box<dyn std::error::Error>> {
     match &cli.rpc_url {
-        Some(url) => Ok(rpc_client::RpcSession::connect(url, cli.debug)?),
+        Some(url) => Ok(rpc_client::RpcSession::connect(
+            url,
+            cli.proxy.as_deref(),
+            cli.debug,
+        )?),
         None => {
             let network = parse_network(&cli.network)?;
             Ok(rpc_client::RpcSession::host_in_process(

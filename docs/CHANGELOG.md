@@ -183,10 +183,15 @@
   flip** as the open front. §15.4's transport-isolation reopening criterion is
   dispositioned absorbed — the path it named was built. **The warn-only
   disclosure is BUILT** (`shekyl-cli::network_posture`: warns on a
-  non-loopback endpoint with no proxy, silent on loopback / unix socket /
-  any configured proxy, and a test pins that the only emissible message
-  is a warning — never an assurance; it does not grade the operator's own
-  proxy). **The principal-side Tor default flip is not yet built** — Tor
+  non-loopback endpoint that no configured proxy actually reaches, silent on
+  loopback / unix socket / a genuinely proxied connection. `--proxy` is wired
+  into the `--rpc-url` client (ureq) and the REPL's direct daemon client, so
+  those are proxied and stay silent; the self-hosted server's block-scanning
+  connection to the daemon has no proxy support in its transport, so a
+  non-loopback daemon warns regardless of `--proxy` — the warning reflects what
+  is actually proxied, never a global `--proxy is set` guess. A test pins that
+  the only emissible message is a warning — never an assurance; it does not
+  grade the operator's own proxy). **The principal-side Tor default flip is not yet built** — Tor
   as default and a first-class, never-ambient opt-out are settled, but the
   embedded-Arti-vs-external-Tor source fork and the transport-selection
   knob (whose axis is *who provides the transport*, not "Tor or not")

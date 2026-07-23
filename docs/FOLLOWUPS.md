@@ -9157,7 +9157,7 @@ one place to confirm each item's relationship to the wallet stack.
   enumeration} against the permutation null of the maximized statistic, with a marked
   control per failure mode). §14 is spec-committed, **implementation gated on review**
   (§3.5 ordering); a §14.4 bound-1 fail is a launch blocker. **Remote-daemon disposition
-  made explicit (§15) — proposed as** structural refusal at the dispatch driver
+  made explicit (§15)** — proposed as structural refusal at the dispatch driver
   (bond path unavailable on a non-local daemon endpoint; no warned override — privacy is
   not a setting), honest-user protection scope named (tunneled circumvention a residual),
   reversion on a measured decorrelated remote transport — **and ⛔ REJECTED at review
