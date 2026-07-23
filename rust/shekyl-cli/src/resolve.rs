@@ -567,20 +567,36 @@ enum FlagValue<T> {
     Invalid(String),
 }
 
-/// Parse an optional `flag <value>` into a typed 3-state outcome. A trailing
-/// flag with no following token parses the empty string, which surfaces as
-/// `Invalid` (a missing value, not a silent absence).
-fn parse_flag<T: std::str::FromStr>(args: &[&str], flag: &str) -> FlagValue<T> {
+/// Locate `flag` in `args` and return its raw value, accepting both spellings:
+/// `--flag value` (two tokens) and `--flag=value` (one token). A bare trailing
+/// `--flag` (or `--flag=`) yields `Some("")` — a present-but-empty value, not a
+/// silent absence. `None` means the flag is not present at all.
+fn flag_value<'a>(args: &[&'a str], flag: &str) -> Option<&'a str> {
     for (i, arg) in args.iter().enumerate() {
         if *arg == flag {
-            let raw = args.get(i + 1).copied().unwrap_or("");
-            return match raw.parse::<T>() {
-                Ok(v) => FlagValue::Set(v),
-                Err(_) => FlagValue::Invalid(raw.to_owned()),
-            };
+            return Some(args.get(i + 1).copied().unwrap_or(""));
+        }
+        if let Some(value) = arg
+            .strip_prefix(flag)
+            .and_then(|rest| rest.strip_prefix('='))
+        {
+            return Some(value);
         }
     }
-    FlagValue::Absent
+    None
+}
+
+/// Parse an optional flag value into a typed 3-state outcome. A present-but-
+/// unparseable value (including a flag given with no value) surfaces as
+/// `Invalid` — never a silent absence.
+fn parse_flag<T: std::str::FromStr>(args: &[&str], flag: &str) -> FlagValue<T> {
+    match flag_value(args, flag) {
+        None => FlagValue::Absent,
+        Some(raw) => match raw.parse::<T>() {
+            Ok(v) => FlagValue::Set(v),
+            Err(_) => FlagValue::Invalid(raw.to_owned()),
+        },
+    }
 }
 
 /// Construct a formatted parse-time [`ResolvedCommand::Diagnostic`].
@@ -591,15 +607,12 @@ fn diag(message: impl Into<String>) -> ResolvedCommand {
 }
 
 fn extract_flag_str(args: &[&str], flag: &str) -> Option<String> {
-    for (i, arg) in args.iter().enumerate() {
-        if *arg == flag {
-            return args.get(i + 1).map(|v| v.to_string());
-        }
-    }
-    None
+    flag_value(args, flag).map(str::to_owned)
 }
 
-/// Remove `flag` and its value token from `args`.
+/// Remove `flag` and its value from `args`, handling both `--flag value` (two
+/// tokens) and `--flag=value` (one token) so a stripped flag never leaks its
+/// value into the positional args.
 fn strip_flag_with_value<'a>(args: &[&'a str], flag: &str) -> Vec<&'a str> {
     let mut out = Vec::new();
     let mut skip_next = false;
@@ -610,6 +623,12 @@ fn strip_flag_with_value<'a>(args: &[&'a str], flag: &str) -> Vec<&'a str> {
         }
         if *arg == flag {
             skip_next = true;
+            continue;
+        }
+        if arg
+            .strip_prefix(flag)
+            .is_some_and(|rest| rest.starts_with('='))
+        {
             continue;
         }
         out.push(*arg);
@@ -690,6 +709,35 @@ mod tests {
                 n_inputs: Some(3),
                 n_outputs: None
             }
+        ));
+    }
+
+    /// Both `--flag value` and `--flag=value` are accepted, and the `=` form
+    /// is stripped so it never leaks into the positional args (label/amount).
+    #[test]
+    fn flags_accept_the_equals_form_without_leaking() {
+        match parse("request new 5.0 rent --expiry=1000") {
+            ResolvedCommand::RequestNew { label, expiry, .. } => {
+                assert_eq!(label, "rent", "the =flag must not leak into the label");
+                assert_eq!(expiry, Some(BlockHeight::from_raw(1000)));
+            }
+            other => panic!("expected RequestNew, got {other:?}"),
+        }
+        assert!(matches!(
+            parse("fee --inputs=3"),
+            ResolvedCommand::Fee {
+                n_inputs: Some(3),
+                n_outputs: None
+            }
+        ));
+        match parse("transfer --priority=2 1.0 skl1addr") {
+            ResolvedCommand::Transfer { priority, .. } => assert_eq!(priority, Some(2)),
+            other => panic!("expected Transfer, got {other:?}"),
+        }
+        // A bad =value is still a hard diagnostic, not a silent drop.
+        assert!(matches!(
+            parse("fee --inputs=five"),
+            ResolvedCommand::Diagnostic { .. }
         ));
     }
 
