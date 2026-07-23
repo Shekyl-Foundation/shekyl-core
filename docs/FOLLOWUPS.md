@@ -47,6 +47,54 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **WI-RPC-2b deferrals — CLI RESERVED commands awaiting their RPC
+  surfaces** (added 2026-07-22; WI-RPC-2b, `feat/cli-rpc-client-surface`;
+  the `reserved()` refusals in `rust/shekyl-cli/src/commands/mod.rs` point
+  here by name). The CLI is presentation-only under Shape B — it can expose
+  nothing the `wallet_rpc.yaml` contract doesn't carry — so these commands
+  answer with a RESERVED refusal naming their gate rather than shipping a
+  wallet2-era side door. Each is a *deferral with a named blocker* (rule 22),
+  not a deletion:
+  - **`rescan`** — blocked on the Engine rescan API; `rescan_blockchain`
+    is already contract-`SPECIFIED` and returns `-32601` (see the existing
+    "Phase 4b: `rescan_blockchain` needs an Engine rescan API" item in
+    this queue — this row adds the CLI consumer, not a second blocker).
+  - **Transaction proofs** (`get/check_tx_key`, `get/check_tx_proof`,
+    `get/check_reserve_proof`) — blocked on Phase 2c (addresses/proofs)
+    landing the proof surfaces in the Engine and the contract.
+  - **`sign`/`verify` message signing** — blocked on the same Phase 2c
+    surface decision (domain-separated message signing under hybrid keys).
+  - **Offline cold-signing** (`describe_transfer`, `sign_transfer`,
+    `submit_transfer`, `transfer --do-not-relay`) — blocked on Phase 2d
+    (`UnsignedTxBundle`/`SignedTxBundle` air-gapped bundles).
+  - **`engine_info` wallet-info display** — blocked on a native
+    wallet-info RPC method (the wallet2 `engine_info` aggregate has no
+    contract equivalent yet).
+  - **`history incoming` unattributed receives** — blocked on the FA-8
+    unattributed-receives RPC projection (the payment-request surface
+    landed in WI-RPC-1; the unattributed-view read did not).
+  **Reopen when** the named gating surface lands in `wallet_rpc.yaml` +
+  `shekyl-wallet-rpc`; the re-evaluation shape is the landing PR wiring the
+  CLI command in the same change (un-stubbing is part of the surface PR's
+  scope, not a separate follow-up). **Target: V3.0 pre-genesis** (all gates
+  are Phase 2c/2d/4b items already in this queue or the phase plan).
+
+- **`sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide
+  whether a sweep primitive returns** (added 2026-07-22; WI-RPC-2b,
+  `feat/cli-rpc-client-surface`). The wallet2-era `sweep_all` (spend every
+  unlocked output to one destination) was deleted with the CLI migration:
+  no Engine send-path supports it (the native flow is amount-addressed
+  `build_pending_tx`), and projecting it would mean the RPC synthesizing a
+  "spend everything" amount client-side — a footgun the confirmation flow
+  can't render honestly (fee-dependent final amount). **Rejection:** no
+  sweep surface at V3.0 unless a concrete consumer emerges. **Reopen when**
+  a real workflow needs whole-wallet egress (e.g. wallet retirement /
+  migration UX in the GUI), at which point the shape is an Engine-level
+  `build_sweep_tx` (fee-aware, change-free by construction) specced in
+  `wallet_rpc.yaml` first — not a CLI-side loop over `build_pending_tx`.
+  **Target: V3.1 (decision; delete this row as "won't fix" if no consumer
+  by then).**
+
 - **`stake_engine.rs` decomposition — ratchet the god-file back down**
   (added 2026-07-21; DS-PR-1 / PR #347; carrier for the
   `engine_decomposition_ratchet.conf` `stake_engine.rs 4749 → 5253` raise).
