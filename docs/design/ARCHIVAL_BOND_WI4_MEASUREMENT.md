@@ -1373,6 +1373,74 @@ the constant is allowed to price in.
 
 ### 14.4 The partition-adversary arm (pre-committed spec; hypothesis class widened 2026-07-06 and 2026-07-10, pre-implementation)
 
+> ## ⛔ WITHDRAWN (2026-07-22) — the PARTITION-PASS is retracted in full, deployed result included
+>
+> **The §14.4 founder-cover partition-adversary certification (PARTITION-PASS,
+> RATIFIED PR #291) is withdrawn.** Not re-graded, not weakened — withdrawn. It
+> certifies nothing, and its deployed-clean number carries **no evidentiary
+> weight**. Three independent grounds, any one sufficient:
+>
+> 1. **False premise.** The arm certifies that five founder personas *providing
+>    cover* do not partition the anonymity set. But founders do not provide
+>    cover: cover is per-transaction unprovability (`cover ~ U(0, bond_floor)`,
+>    `ARCHIVAL_COVER_DRAW.md`) plus per-`P` circuit isolation (`shekyl-p-transport`),
+>    and `r` is *blind* to herd size (§13.5). "Founder cover" is the retired
+>    herd-cover model; there is no founder cover obligation, so the mechanism the
+>    arm validates does not exist.
+> 2. **Retired posture.** §14 (of *this* doc) — the founder-cover launch posture
+>    ("refuse the genesis regime") this arm was built to validate — is itself
+>    **RETIRED**: un-ratified by commit `830a850a0` ("retire 'refuse the genesis
+>    regime' outright — the question does not exist"), recorded in
+>    `ARCHIVAL_REWARD_GATE_M1.md` **§13** (the retirement record). The arm
+>    measures a posture that no longer exists.
+> 3. **The feature dictionary is a strawman — 70% of it is non-observable.** The
+>    ten-feature dictionary (`PairRaw::features` in `partition_adversary.rs`)
+>    declares itself "chain-visible observables only," but is built over
+>    `PairRaw::observable` = `{funding, bond, per_p, drain, resume}`, and
+>    **funding** is the unnamed
+>    FCMP++ transfer no observer can attribute, **drain** is F-W10's phantom
+>    ("the drain is not an identifiable transaction under FCMP++," ratified
+>    2026-07-16 — *five days after* §14.4, and the dictionary was never
+>    re-walked). Classifying the ten: clean = `f[1]` bond position, `f[9]`
+>    resume spacing, member-7's raw bond (3/10); phantom/contaminated = `f[0]`
+>    `|bond−funding|`, `f[2..7]` gaps over the phantom-bearing event set, `f[7]`
+>    cadence = drain−bond, `f[8]` event count. Two of the five witness controls
+>    aim at phantom coordinates: **M-c**'s cohesion is the seam band `f[0]`
+>    (verified 2026-07-22 — it bites at `aimed_member_lift +0.619` even after the
+>    shared-coin coordinate is removed, i.e. via the phantom seam band alone),
+>    and **M-d**'s manifold is `(t0, period, seam)`. So the validity precondition "all five
+>    controls bite" is satisfied by signal `T` cannot obtain.
+>
+> **Why the deployed-clean result is not conservative evidence.** It is
+> tempting to say "clean over ten features is stronger than clean over three."
+> It is not — for the joint detectors (members 1/4/6, k-means / spectral /
+> joint-density) seven noise dimensions *dilute*, and can mask a real partition
+> living in the three observable coordinates (curse of dimensionality). But the
+> decisive point is simpler: **a test against features the adversary does not
+> have is a test against a strawman.** One can add phantom coordinates until the
+> deployed config passes and call it a stronger result, having only proven it
+> hides from a fabricated adversary. That is a marketing claim wearing a
+> security number. The rule it violates is the one that should have caught this
+> at birth: name `T`, then name how `T` physically obtains each observable —
+> `T` never obtains funding or drain, so any pass built on them is theater.
+>
+> **Disposition.** There is **no result** on the founder-cover partition
+> question — not conservative, not weak, none — until a detector is built over
+> the observable-only dictionary (`f[1]`, `f[9]`, member-7 bond) and *that* is
+> run. That re-walk is **conditional on the §14 posture ever being revived**,
+> which it will not be (§14 is retired). Per retire-≠-delete, the arm stays
+> in-tree as the record of what was built and why it was withdrawn — **not as a
+> result anyone may cite.** Everything below is that record.
+>
+> **Scope — this does NOT touch the Foundation.** The §14.4 "founders" are
+> founder-*cover* personas (a privacy claim). The **Foundation** — the five
+> `CompleteTree` shard servers that anchor genesis **reliability / durability**
+> (`FOUNDATION_GENESIS_IDENTITY_SET.md`: special in exactly one consensus check,
+> full-tree durability credit; market-excluded; "representability + uniform
+> slash path, not economic skin") — is a **distinct object with a distinct
+> role** and is entirely unaffected by this withdrawal. Do not read a demotion
+> of the Foundation into a withdrawal of a founder-cover privacy certification.
+
 A new correlator probe in the GF-7 sim, gating the launch-posture claim
 the way §5's controls gate the run. **Bounds committed here, ahead of
 implementation, per §3.5.** *(Amended 2026-07-06, before any
@@ -1616,6 +1684,12 @@ the null distribution then models.
   > shared-intermediate mechanism is the criterion's carrier, verified
   > at source per the M-d member-1 precedent above, which resolved to
   > geometry and correctly did *not* reopen).
+  >
+  > **⛔ RATIFICATION WITHDRAWN 2026-07-22 — see the §14.4 header banner.**
+  > This PARTITION-PASS is retracted in full (false premise, retired §14
+  > posture, 70%-phantom feature dictionary). The deployed-clean result
+  > carries no evidentiary weight; the arm is retained as record, not as a
+  > citable result. The historical ratification text follows.
   >
   > **RATIFIED 2026-07-11 (decision-anchored: PR #291,
   > `feat/sim-partition-adversary`).** The resolution above — the

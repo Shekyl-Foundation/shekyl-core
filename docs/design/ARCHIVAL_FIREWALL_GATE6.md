@@ -1952,7 +1952,8 @@ at adoption:** `K_COVER` is the only seal queued behind stressnet entry and pass
 §14.4 partition run is mechanism — a pre-registered partition-adversary arm). *(As of
 2026-07-19, PR #346, `K_COVER` is RETIRED and no longer queued behind stressnet entry at
 all; the filter's verdict is preserved as the record of the run, and the queue is emptier
-than it describes.)* The remaining
+than it describes. And as of 2026-07-22 the §14.4 PARTITION-PASS is itself WITHDRAWN — WI-4
+§14.4 header banner — so the arm is no longer a valid mechanism either.)* The remaining
 Phase 7.7 entries (F11-S Windows-midrange bench, historical reference-block/reorg exercise,
 archival multi-staker path, `tests/stressnet/README.md` acceptance criteria) are mechanism
 exercises; the FA-6 wire lock is a sequencing pin, not a measurement. **Filter extended

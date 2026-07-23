@@ -3,6 +3,43 @@
 //! ([`docs/design/ARCHIVAL_BOND_WI4_MEASUREMENT.md`] §14.4, frozen spec; §17
 //! rounds R4–R7 ratified 2026-07-11, PR #290).
 //!
+//! # ⛔ WITHDRAWN 2026-07-22 — this arm's PARTITION-PASS is retracted in full
+//!
+//! Retained as record, **not a citable result** (retire ≠ delete). The
+//! certification is withdrawn on three independent grounds — see the §14.4
+//! header banner in `ARCHIVAL_BOND_WI4_MEASUREMENT.md`. In one line each:
+//!
+//! - **False premise.** Founders do not provide "cover" — cover is
+//!   per-transaction unprovability (`ARCHIVAL_COVER_DRAW.md`) plus circuit
+//!   isolation, and `r` is blind to herd size. The mechanism this arm validates
+//!   does not exist.
+//! - **Retired posture.** §14 (the founder-cover launch posture) is retired;
+//!   this arm measures a posture that no longer exists.
+//! - **Strawman dictionary.** [`PairRaw::features`] declares "chain-visible
+//!   observables only" but is built over [`PairRaw::observable`] =
+//!   `{funding, bond, per_p, drain, resume}`, where **funding** (the unnamed
+//!   FCMP++ transfer) and **drain** (F-W10, ratified *after* §14.4 and never
+//!   re-walked) are non-observable. 7 of 10 features are phantom/contaminated;
+//!   `f[0]`/`f[7]`/gaps/count all read them. M-c aims at the phantom seam band
+//!   `f[0]`, M-d at the `(t0, period, seam)` manifold. The deployed-clean result
+//!   is **not** conservative evidence — a test against features `T` cannot
+//!   obtain is a test against a strawman (marketing, not security). Name `T`,
+//!   then name how `T` obtains each observable: `T` never obtains funding or
+//!   drain.
+//!
+//! **Scope:** this is the founder-*cover* (privacy) arm. It says nothing about
+//! the **Foundation** — the five `CompleteTree` shard servers that anchor
+//! genesis reliability/durability (`FOUNDATION_GENESIS_IDENTITY_SET.md`),
+//! a distinct object, unaffected.
+//!
+//! ---
+//!
+//! *Everything below this banner is the historical record of the withdrawn arm
+//! — the spec, the co-first deliverables, and the grading law it was built to.
+//! Read it as documentation of what was built and why it was retracted, **not**
+//! as current security evidence. The present-tense phrasing below is the
+//! original spec voice, preserved unedited.*
+//!
 //! # What this arm tests
 //!
 //! Not "2-means fails" but the stronger null (§14.4): *no decision rule the
@@ -766,17 +803,36 @@ fn gen_founders(rng: &mut SplitMix64, control: MarkedControl, window: u64) -> Ve
             let base_t0 = rng.next_u64() % (HORIZON / 2 - 300);
             // One in-range seam band centre; each founder's production draw is
             // rejection-conditioned into `centre ± 20` (a mid-window centre so
-            // the band is never marginally extreme), with one shared
-            // order-coin outcome (a common playbook posts in a common order).
+            // the band is never marginally extreme).
+            //
+            // PR-B (§14.4 premise audit, 2026-07-22): the SHARED order-coin
+            // cohesion coordinate is removed — the `&& d.1 == shared_coin`
+            // constraint is dropped, so the founders no longer share an ordering
+            // outcome. Each founder keeps its OWN per-draw coin (the sim
+            // population's law, `gen_at`), which isolates the measurement to
+            // exactly the shared coordinate under test: nothing else about
+            // M-c's marginal law changes. In particular the *clean* bond-
+            // position feature `f[1]` is left unperturbed — `plan_entry_seam`'s
+            // ordering bit places `bond` at either `t0` or `t0 + spread`, so
+            // forcing a constant ordering here while the rest of the population
+            // draws its own would shift `bond` by `spread` and manufacture an
+            // artefactual signal in a clean feature. The coin is a phantom
+            // regardless — it permutes an ordering no chain observer can resolve
+            // (`ARCHIVAL_FIREWALL_GATE6.md` method note 8) — and the surviving
+            // seam-band cohesion is `f[0] = |bond − funding|`, `abs_diff` hence
+            // invariant to the coin and itself phantom (funding is the unnamed
+            // FCMP++ transfer the observer cannot attribute; the module-doc
+            // audit note). PR-A deletes the coin uniformly across the whole sim;
+            // here we remove only the one shared coordinate, so M-c's cohesion
+            // is phantom (seam band) with or without it.
             let seam_centre = 150 + rng.next_u64() % (window / 2);
-            let shared_coin = rng.next_u64() & 1 == 0;
             (0..FOUNDER_COUNT)
                 .map(|_| {
                     let period = band_lo + rng.next_u64() % period_band;
                     let t0 = base_t0 + rng.next_u64() % 60;
                     let (spread, bond_first) = loop {
                         let d = draw_entry_gap(window, rng);
-                        if d.0.abs_diff(seam_centre) <= 20 && d.1 == shared_coin {
+                        if d.0.abs_diff(seam_centre) <= 20 {
                             break d;
                         }
                     };
