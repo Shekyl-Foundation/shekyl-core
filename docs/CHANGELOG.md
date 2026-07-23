@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Added
+
+- **cli: receiving, staking, and fee commands over the WI-RPC-1 surface**
+  (WI-RPC-2b). `request new` / `requests list` (payment requests — the
+  Shekyl-native receive-attribution primitive, un-deadening the FA-8
+  stubs), `make_uri` / `parse_uri`, `stake` / `staked_balance` /
+  `staked_outputs` / `staking_info` (never-conflated staked-balance
+  breakdown as the RPC reports it), and `fee` (tier quotes + size/weight
+  estimate; principal lane only — P-lane fees are canonical and never
+  user-facing).
+
+### Removed
+
+- **cli: wallet2-era commands with no Shekyl-native equivalent**
+  (WI-RPC-2b; rule 60, WI-RPC-1 pin 1). `account`* / `address new` (no
+  account or subaddress model — payment requests replace receive
+  attribution), `seed` / `viewkey` / `spendkey` (no secret-egress RPC by
+  design; the mnemonic shows once at create/restore), `export`/
+  `import_key_images` (Phase 2d bundles replace the workflow — locked),
+  and `sweep_all` (no engine surface; FOLLOWUPS row carries the reopening
+  criterion). Removed commands and `--account`/`--subaddr-*` flags refuse
+  at parse time with guidance naming the replacement. RESERVED stubs
+  (proofs, `sign`/`verify`, offline signing, `rescan`, wallet info,
+  unattributed receives) name their gates; carriers in
+  `docs/FOLLOWUPS.md` §"WI-RPC-2b deferrals". `CLI_PARITY_MATRIX.md`
+  reconciled against the new command set.
+
 ### Security
 
 - **wallet-rpc: in-process RPC serves over a private Unix domain socket,

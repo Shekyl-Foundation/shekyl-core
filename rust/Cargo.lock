@@ -3716,6 +3716,7 @@ dependencies = [
  "serde_json",
  "shekyl-crypto-pq",
  "shekyl-logging",
+ "shekyl-types",
  "shekyl-units",
  "shekyl-wallet-rpc",
  "tempfile",

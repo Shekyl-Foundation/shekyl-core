@@ -6,14 +6,18 @@
 //! REPL command loop, dispatch, and shared helpers for shekyl-cli.
 //!
 //! Every command executes through the [`crate::rpc_client::RpcSession`]
-//! JSON-RPC surface (WI-RPC-2a). Commands whose native RPC method has not
-//! landed yet answer with a uniform "not available" stub; they are either
-//! migrated or deleted in WI-RPC-2b.
+//! JSON-RPC surface (Shape B). The wallet2-era commands with no Shekyl-native
+//! equivalent were deleted in WI-RPC-2b (they refuse with guidance at parse
+//! time, see [`crate::resolve`]); commands whose native surface is designed
+//! but not yet landed answer with a RESERVED message naming what gates them.
 
 mod balance;
 mod chain;
+mod fees;
 mod lifecycle;
+mod receiving;
 pub mod scripted;
+mod staking;
 mod transfers;
 
 use crate::daemon::DaemonClient;
@@ -22,98 +26,60 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
 const HELP_TEXT: &str = "\
-Engine lifecycle:
-  create <filename>                   Create a new engine
-  open <filename>                     Open an existing engine
-  close                               Close the current engine
-  restore <filename> <seed...>        Restore engine from mnemonic seed
-  password                            Change engine password
-  rescan [hard]                       Rescan blockchain (hard = lose metadata)
+Wallet lifecycle:
+  create <filename>                   Create a new wallet
+  open <filename>                     Open an existing wallet
+  close                               Close the current wallet
+  restore <filename> <seed...>        Restore wallet from mnemonic seed
+  password                            Change wallet password
   refresh                             Sync with the daemon
-  save                                Save engine to disk
-  status                              Show sync height and engine state
-  engine_info                         Show engine info (no filename)
+  status                              Show wallet and daemon sync heights
 
-Accounts and addresses:
-  account show                        List accounts (default marked with *)
-  account default <N>                 Set session default account
-  account new [label]                 Create a new account
-  address                             Show primary address
-  address new [label]                 Alias for account new
-  balance [--account N]               Show balance (unlocked, locked)
+Address and balance:
+  address                             Show the wallet's primary address
+  balance                             Show balance breakdown
 
 Transfers:
   transfer <amount> <address>         Send SKL to an address
-    [--account N] [--priority N]      (optional flags)
-    [--do-not-relay]                  Create but don't broadcast (offline use)
+    [--priority N]                    0-1 economy, 2 standard, 3+ priority
     [--no-confirm]                    Skip confirmation (non-TTY only)
-  transfers [--account N]             Show recent transactions
+  transfers                           Show recent transactions
   show_transfer <txid>                Show details for a transaction
-  sweep_all <address>                 Sweep all outputs to address
-    [--account N] [--priority N]      (explicit --account required)
+  fee [--inputs N] [--outputs N]      Show fee quotes and size estimate
 
-Payment requests (FA-8, feature-flagged cooperative path):
-  request new <amount> <label>        Create off-chain payment request (stub)
-  requests list                       List payment requests (stub)
-  history incoming --unattributed     Show unattributed receives (stub)
+Receiving (payment requests):
+  request new <amount> <label>        Create a payment request (shekyl: URI)
+    [--expiry <height>]               Optional absolute expiry height
+  requests list [pending|matched|all] List payment requests
+  make_uri [--amount X] [--label L]   Compose a shekyl: payment URI
+    [--address ADDR]                  Defaults to the wallet's address
+  parse_uri <uri>                     Decode a shekyl: payment URI
 
 Staking:
+  stake                               Make this wallet a staker
+  staked_balance                      Show the staked-balance breakdown
+  staked_outputs                      List unspent staking-side outputs
+  staking_info                        Show staking state and scan height
   chain_health                        Show daemon/chain health (separate conn)
 
-Keys (secret-displaying commands excluded from history):
-  seed                                Display mnemonic seed
-  viewkey                             Display view key
-  spendkey                            Display spend key
-  export_key_images [file]            Export key images to file
-    [--all] [--since-height N]        Scope control
-  import_key_images <file>            Import key images from file
-
-Proofs:
-  get_tx_key <txid>                   Get transaction secret key
-  check_tx_key <txid> <key> <addr>    Verify a transaction key
-  get_tx_proof <txid> <addr> [msg]    Generate a tx proof
-  check_tx_proof <txid> <addr> <sig>  Verify a tx proof
-  get_reserve_proof [amount] [msg]    Generate a reserve proof
-  check_reserve_proof <addr> <sig>    Verify a reserve proof
-
-Signing:
-  sign <message>                      Sign a message with spend key
-  verify <addr> <msg> <sig>           Verify a signed message
-  NOTE: Signatures use Shekyl-specific domain separation
-        (ShekylMessageSignature) and are NOT compatible with Monero.
-
-Offline signing (cold-engine workflow):
-  describe_transfer <unsigned_hex>    Inspect an unsigned transaction
-  sign_transfer <hex> [--file path]   Sign an unsigned transaction (full engine)
-  submit_transfer <signed_hex>        Broadcast a signed transaction
-
 Meta:
-  version                             Show shekyl-cli version
+  version                             Show CLI and wallet-RPC versions
   help                                Show this help
   exit / quit                         Exit shekyl-cli
 
-Global flags (use with any command):
-  --account N                         Override session default account";
+Not yet available (the RPC surface is designed but has not landed; see
+docs/FOLLOWUPS.md): rescan, transaction proofs (get/check_tx_key,
+get/check_tx_proof, get/check_reserve_proof), message signing
+(sign/verify), and the offline cold-signing workflow
+(describe/sign/submit_transfer, transfer --do-not-relay).";
 
-/// Uniform WI-RPC-2a stub for commands whose native RPC surface has not
-/// landed. Each is either migrated or deleted (with help-text rewrite) in
-/// WI-RPC-2b.
-fn stub(cmd: &str) {
+/// RESERVED-surface refusal: the command is part of the target set, but the
+/// wallet-RPC method that would back it has not landed. Names the gate so
+/// the user (and the FOLLOWUPS reader) can tell it apart from a deletion.
+fn reserved(cmd: &str, gate: &str) {
     eprintln!(
-        "{cmd}: not available yet — this command has no native wallet-RPC \
-         surface (WI-RPC-2a transitional stub)."
+        "{cmd}: not available yet — gated on {gate} (docs/FOLLOWUPS.md, WI-RPC-2b deferrals)."
     );
-}
-
-/// Warn when a wallet2-era `--account N` selector is used: Shekyl has no
-/// account/subaddress model (rule 60; WI-RPC-1 pin 1).
-fn warn_account_flag(account_index: u32) {
-    if account_index != 0 {
-        eprintln!(
-            "Note: accounts were removed; --account {account_index} is ignored \
-             (the wallet has a single primary address)."
-        );
-    }
 }
 
 pub fn repl(
@@ -121,7 +87,6 @@ pub fn repl(
     daemon_client: Option<DaemonClient>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::resolve::{self, ResolvedCommand};
-    use crate::session::ReplSession;
 
     let mut rl = DefaultEditor::new()?;
     let hist = history_path().unwrap_or_default();
@@ -132,10 +97,8 @@ pub fn repl(
 
     println!("Welcome to shekyl-cli. Type \"help\" for commands.");
 
-    let session = ReplSession::new();
-
     loop {
-        let prompt = session.prompt(rpc.is_open());
+        let prompt = crate::session::prompt(rpc.is_open());
 
         match rl.readline(&prompt) {
             Ok(line) => {
@@ -149,9 +112,7 @@ pub fn repl(
                     let _ = rl.add_history_entry(line);
                 }
 
-                let resolved = resolve::parse(line, &session);
-
-                match resolved {
+                match resolve::parse(line) {
                     ResolvedCommand::Help => println!("{HELP_TEXT}"),
                     ResolvedCommand::Exit => break,
 
@@ -170,92 +131,119 @@ pub fn repl(
                         lifecycle::cmd_restore(&rpc, &filename, &seed_words);
                     }
                     ResolvedCommand::Refresh => lifecycle::cmd_refresh(&rpc),
-                    ResolvedCommand::Save => stub("save"),
+                    ResolvedCommand::Save => {
+                        println!(
+                            "Wallet state is persisted automatically (crash-atomically) \
+                             after every operation; there is nothing to save."
+                        );
+                    }
                     ResolvedCommand::Status => lifecycle::cmd_status(&rpc),
                     ResolvedCommand::Password => lifecycle::cmd_password(&rpc),
-                    ResolvedCommand::Rescan { .. } => stub("rescan"),
+                    ResolvedCommand::Rescan { .. } => {
+                        reserved("rescan", "the native rescan RPC surface");
+                    }
 
                     // Balance / address
-                    ResolvedCommand::Balance { account_index } => {
-                        warn_account_flag(account_index);
-                        balance::cmd_balance(&rpc);
-                    }
-                    ResolvedCommand::Address { account_index } => {
-                        warn_account_flag(account_index);
-                        balance::cmd_address(&rpc);
-                    }
-
-                    // Account management (no account model in Shekyl)
-                    ResolvedCommand::AccountShow
-                    | ResolvedCommand::AccountDefault { .. }
-                    | ResolvedCommand::AccountNew { .. } => stub("account"),
+                    ResolvedCommand::Balance => balance::cmd_balance(&rpc),
+                    ResolvedCommand::Address => balance::cmd_address(&rpc),
 
                     // Transfers
                     ResolvedCommand::Transfer {
-                        account_index,
                         dest,
                         amount,
                         priority,
                         do_not_relay,
                         no_confirm,
                     } => {
-                        warn_account_flag(account_index);
                         if do_not_relay {
-                            stub("transfer --do-not-relay");
+                            reserved(
+                                "transfer --do-not-relay",
+                                "the offline cold-signing workflow",
+                            );
                         } else {
                             transfers::cmd_transfer(&rpc, amount, &dest, priority, no_confirm);
                         }
                     }
-                    ResolvedCommand::Transfers { account_index } => {
-                        warn_account_flag(account_index);
-                        transfers::cmd_transfers(&rpc);
-                    }
+                    ResolvedCommand::Transfers => transfers::cmd_transfers(&rpc),
                     ResolvedCommand::ShowTransfer { txid } => {
                         transfers::cmd_show_transfer(&rpc, &txid);
                     }
-                    ResolvedCommand::SweepAll { .. } => stub("sweep_all"),
 
-                    // Payment requests (un-stubbed over WI-RPC-1 in 2b)
-                    ResolvedCommand::RequestNew { .. } => stub("request new"),
-                    ResolvedCommand::RequestsList => stub("requests list"),
-                    ResolvedCommand::HistoryIncomingUnattributed { .. } => {
-                        stub("history incoming");
+                    // Receiving (WI-RPC-1 surface)
+                    ResolvedCommand::RequestNew {
+                        amount,
+                        label,
+                        expiry,
+                    } => {
+                        receiving::cmd_request_new(&rpc, amount, &label, expiry);
                     }
+                    ResolvedCommand::RequestsList { filter } => {
+                        receiving::cmd_requests_list(&rpc, filter.as_deref());
+                    }
+                    ResolvedCommand::HistoryIncomingUnattributed => {
+                        reserved(
+                            "history incoming",
+                            "an unattributed-receives RPC surface (FA-8)",
+                        );
+                    }
+                    ResolvedCommand::MakeUri {
+                        address,
+                        amount,
+                        label,
+                    } => {
+                        receiving::cmd_make_uri(&rpc, address.as_deref(), amount, label.as_deref());
+                    }
+                    ResolvedCommand::ParseUri { uri } => receiving::cmd_parse_uri(&rpc, &uri),
+
+                    // Staking (WI-RPC-1 surface)
+                    ResolvedCommand::Stake => staking::cmd_stake(&rpc),
+                    ResolvedCommand::StakedBalance => staking::cmd_staked_balance(&rpc),
+                    ResolvedCommand::StakedOutputs => staking::cmd_staked_outputs(&rpc),
+                    ResolvedCommand::StakingInfo => staking::cmd_staking_info(&rpc),
+
+                    // Fees (WI-RPC-1 surface)
+                    ResolvedCommand::Fee {
+                        n_inputs,
+                        n_outputs,
+                    } => fees::cmd_fee(&rpc, n_inputs, n_outputs),
 
                     ResolvedCommand::ChainHealth => {
                         chain::cmd_chain_health(daemon_client.as_ref());
                     }
 
-                    // Keys (secret egress is deliberately absent from the RPC)
-                    ResolvedCommand::Seed => stub("seed"),
-                    ResolvedCommand::Viewkey => stub("viewkey"),
-                    ResolvedCommand::Spendkey => stub("spendkey"),
-                    ResolvedCommand::ExportKeyImages { .. } => stub("export_key_images"),
-                    ResolvedCommand::ImportKeyImages { .. } => stub("import_key_images"),
+                    // Proofs (RESERVED)
+                    ResolvedCommand::GetTxKey { .. }
+                    | ResolvedCommand::CheckTxKey { .. }
+                    | ResolvedCommand::GetTxProof { .. }
+                    | ResolvedCommand::CheckTxProof { .. }
+                    | ResolvedCommand::GetReserveProof { .. }
+                    | ResolvedCommand::CheckReserveProof { .. } => {
+                        reserved(first_token, "the transaction-proof RPC surface");
+                    }
 
-                    // Proofs
-                    ResolvedCommand::GetTxKey { .. } => stub("get_tx_key"),
-                    ResolvedCommand::CheckTxKey { .. } => stub("check_tx_key"),
-                    ResolvedCommand::GetTxProof { .. } => stub("get_tx_proof"),
-                    ResolvedCommand::CheckTxProof { .. } => stub("check_tx_proof"),
-                    ResolvedCommand::GetReserveProof { .. } => stub("get_reserve_proof"),
-                    ResolvedCommand::CheckReserveProof { .. } => stub("check_reserve_proof"),
+                    // Signing (RESERVED)
+                    ResolvedCommand::Sign { .. } | ResolvedCommand::Verify { .. } => {
+                        reserved(first_token, "the message-signing RPC surface");
+                    }
 
-                    // Signing
-                    ResolvedCommand::Sign { .. } => stub("sign"),
-                    ResolvedCommand::Verify { .. } => stub("verify"),
-
-                    // Offline signing
-                    ResolvedCommand::DescribeTransfer { .. } => stub("describe_transfer"),
-                    ResolvedCommand::SignTransfer { .. } => stub("sign_transfer"),
-                    ResolvedCommand::SubmitTransfer { .. } => stub("submit_transfer"),
+                    // Offline signing (RESERVED)
+                    ResolvedCommand::DescribeTransfer { .. }
+                    | ResolvedCommand::SignTransfer { .. }
+                    | ResolvedCommand::SubmitTransfer { .. } => {
+                        reserved(first_token, "the offline cold-signing workflow");
+                    }
 
                     // Meta
                     ResolvedCommand::Version => cmd_version(&rpc),
-                    ResolvedCommand::EngineInfo => stub("engine_info"),
+                    ResolvedCommand::EngineInfo => {
+                        reserved("engine_info", "a native wallet-info RPC surface");
+                    }
 
                     ResolvedCommand::Unknown { cmd } => {
                         eprintln!("Unknown command: {cmd}. Type \"help\" for available commands.");
+                    }
+                    ResolvedCommand::Diagnostic { message } => {
+                        eprintln!("{message}");
                     }
                 }
             }
@@ -363,6 +351,16 @@ pub(crate) fn format_amount_str(atomic: &str) -> String {
         Ok(v) => format_amount(v),
         Err(_) => atomic.to_owned(),
     }
+}
+
+/// Read an optional `AtomicUnits` string field from a JSON object and render it
+/// as SKL, falling back to `"?"` when the field is absent or non-string. The
+/// single home for the receiving/staking/fee row-formatting idiom.
+pub(crate) fn opt_amount(v: &serde_json::Value, key: &str) -> String {
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .map(format_amount_str)
+        .unwrap_or_else(|| "?".to_owned())
 }
 
 /// Parse a user-entered SKL string into raw atomic units.
