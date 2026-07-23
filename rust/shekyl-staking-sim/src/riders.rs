@@ -37,7 +37,7 @@
 
 use serde::Serialize;
 
-use crate::gf7_timeline::{grade, ArmResult, SynthParams, RATIO_BOUND};
+use crate::gf7_timeline::{grade, ArmResult, SynthParams, GF7_FAIL_CLOSED, RATIO_BOUND};
 use crate::standoff::SplitMix64;
 
 /// The swept anonymity-set sizes (§16.7 item 4).
@@ -313,27 +313,13 @@ pub fn run_riders_report() -> RidersReport {
         })
         .collect();
 
-    // §9 criterion 9: the verdict is a computed conjunction over the
-    // committed bounds, never narrated.
-    let n_sweep_ok = n_sweep.iter().all(|r| r.pass);
-    let bridge_ok = bridge.iter().all(|b| b.passed);
-    let status = if n_sweep_ok && coupling.passed && bridge_ok {
-        "PASS (N-sweep r < 2 at every swept N; M6.2 coupling floor held; \
-         bridge validity pair held)"
-            .to_string()
-    } else if !coupling.passed {
-        "INVALID (M6.2: generator produced session-independent chain-visible \
-         timing — the hollow-pass tripwire fired)"
-            .to_string()
-    } else if !bridge_ok {
-        "INVALID (bridge validity pair failed — instrument cannot certify \
-         the deployed no-bridge claim)"
-            .to_string()
-    } else {
-        "FAIL (measured r grew past the bound at a swept N — the N = 10 pass \
-         was a small-candidate-set artifact; redesign signal, never absorbed)"
-            .to_string()
-    };
+    // FAIL-CLOSED (GF-7 coin retirement): this posture-based report grades the
+    // same entry-seam correlator whose order coin and `FundingSendDispatched`
+    // input were retired, so it cannot emit a valid entry-seam verdict. The
+    // rider rows (N-sweep, coupling, bridge, lifetime) are still computed and
+    // stored below for context; only the top-line verdict fail-closes to the
+    // named message.
+    let status = GF7_FAIL_CLOSED.to_string();
 
     RidersReport {
         trials,
@@ -353,11 +339,12 @@ pub fn run_riders_report() -> RidersReport {
 mod tests {
     use super::*;
 
-    /// The full riders artifact holds its committed bounds at a test-scale
-    /// run: `r < 2` at every swept `N` (the ratio bar is N-invariant and the
-    /// measured `r(N)` must not grow), the M6.2 coupling floor bites, the
-    /// bridge pair certifies (deployed at null, coupled control decisive),
-    /// and the lifetime sweep is monotone with the founder anchor last.
+    /// The full riders artifact computes its context rows at a test-scale run:
+    /// `r < 2` at every swept `N` (the ratio bar is N-invariant and the measured
+    /// `r(N)` must not grow), the M6.2 coupling floor bites, the bridge pair
+    /// certifies (deployed at null, coupled control decisive), and the lifetime
+    /// sweep is monotone with the founder anchor last — while the top-line
+    /// verdict is fail-closed (GF-7 coin retirement).
     #[test]
     fn riders_hold_their_committed_bounds() {
         let r = run_riders_report();
@@ -386,6 +373,8 @@ mod tests {
             "cumulative exposure must be monotone in lifetime"
         );
         assert!(r.lifetime.last().unwrap().founder_anchor);
-        assert!(r.status.starts_with("PASS"), "status: {}", r.status);
+        // The entry-seam verdict is fail-closed (GF-7 coin retirement); the
+        // rider rows above are still computed for context.
+        assert!(r.status.starts_with("FAIL-CLOSED"), "status: {}", r.status);
     }
 }

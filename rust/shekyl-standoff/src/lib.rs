@@ -10,26 +10,27 @@
 //! observable, and Gate-6 §12.9 re-homed the seam to the off-chain crossing —
 //! the exit mechanism was deleted at decision 5's scope,
 //! `docs/design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §15.4/§15.5.)
-//! The timing draw's single-sourced **consumer** is [`plan_entry_seam`]
-//! (`plan`): the one conversion from the drawn `(spread, bond_first)` pair to
-//! the relative placement of the two seam events, shared by wallet and sim so
-//! the conformance-correct construction cannot fork between them.
+//! The timing draw yields a single scalar `spread`: there is no separate
+//! consumer to single-source, because there is no second event to place the
+//! bond post against.
 //!
 //! The funding seam (`docs/design/ARCHIVAL_FIREWALL_GATE6.md` §10.12) is
 //! decorrelated by a randomized **standoff window**: at a private intent the
-//! actor draws a gap `s ~ U[0, window]` between its observable funding/entry
-//! event and the bond-post, plus a fair **order coin** so the bond may appear
-//! *before or after* the entry (the inversion that removes the adversary's
-//! "bond-post follows a recent spend" ordering prior). This crate is the single
-//! source for that draw: the simulator, the published conformance vector, and
-//! (when the V3.0 funding flow is built) the wallet all import the **same**
-//! [`draw_entry_gap`], so "what we validated is what ships" holds by
-//! construction rather than by vigilance.
+//! actor draws a gap `s ~ U[0, window]` between its private intent moment `t0`
+//! and the bond-post broadcast. There is **no order coin** — the coin once
+//! modelled ordering a *second* (funding) event relative to the bond post, but
+//! at entry only the bond post is chain-attributable; the funding transfer is
+//! the unnamed, CT-hidden FCMP++ input, so there is no second event to order
+//! (method note 8, retired here). This crate is the single source for that
+//! draw: the simulator, the published conformance vector, and (when the V3.0
+//! funding flow is built) the wallet all import the **same** [`draw_entry_gap`],
+//! so "what we validated is what ships" holds by construction rather than by
+//! vigilance.
 //!
 //! # Determinism boundary (what the cross-arch guarantee covers)
 //!
 //! The draw is **pure integer arithmetic** (unbiased rejection sampling, no
-//! float, no modulo bias). Given an RNG, the `(spread, bond_first)` sequence is
+//! float, no modulo bias). Given an RNG, the `spread` sequence is
 //! deterministic and **bit-identical across architectures** — the same property
 //! `reward_arithmetic` gets from being pure-integer, and the reason the
 //! published integer golden vector (`tests/golden_vector.rs`) runs on the
@@ -62,12 +63,10 @@
 
 pub mod cover;
 pub mod draw;
-pub mod plan;
 pub mod reserve;
 
 pub use cover::{draw_cover_amount, COVER_RUNG_ATOMIC};
 pub use draw::{bounded_uniform, draw_entry_gap, GapRng, DEFAULT_ENTRY_GAP_WINDOW};
-pub use plan::{plan_entry_seam, EntrySeamPlan};
 pub use reserve::EXIT_FEE_RESERVE_ATOMIC;
 
 #[cfg(feature = "conformance")]

@@ -69,8 +69,8 @@
 use serde::Serialize;
 
 use crate::gf7_timeline::{
-    grade, ArmResult, SynthParams, NEGATIVE_CONTROL_TOL, NOMINAL_COVER_N, POSITIVE_CONTROL_MIN,
-    RATIO_BOUND,
+    grade, ArmResult, SynthParams, GF7_FAIL_CLOSED, NEGATIVE_CONTROL_TOL, NOMINAL_COVER_N,
+    POSITIVE_CONTROL_MIN, RATIO_BOUND,
 };
 use crate::standoff::SplitMix64;
 
@@ -105,6 +105,14 @@ pub struct BreakevenRow {
 /// The full breakeven report.
 #[derive(Serialize)]
 pub struct BreakevenReport {
+    /// The entry-seam verdict this sweep sits under. Fail-closed to
+    /// `GF7_FAIL_CLOSED` (GF-7 coin retirement): the WI-4 gate (`r = 1.86 < 2`
+    /// at `N = 10`) this sweep referenced was graded by a correlator whose order
+    /// coin and `FundingSendDispatched` input were retired, so the gate is
+    /// withdrawn. The sensitivity rows below are still computed for context —
+    /// the "`r` is structurally blind to cover" finding is a property of the
+    /// ratio, independent of the coin — but they certify no verdict.
+    pub verdict: String,
     pub ratio_bound: f64,
     pub trials: u32,
     /// The nominal gate point (`NOMINAL_COVER_N`, shared with the measurement
@@ -234,6 +242,9 @@ fn run_breakeven(trials: u32, seed: u64) -> BreakevenReport {
         .min_by_key(|r| r.n);
 
     BreakevenReport {
+        // Fail-closed (GF-7 coin retirement): the underlying WI-4 gate is
+        // withdrawn; the sweep rows below are context only.
+        verdict: GF7_FAIL_CLOSED.to_string(),
         ratio_bound: RATIO_BOUND,
         trials,
         nominal_n: NOMINAL_COVER_N,

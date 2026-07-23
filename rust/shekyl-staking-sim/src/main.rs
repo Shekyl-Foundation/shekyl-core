@@ -572,11 +572,11 @@ fn print_standoff_report() {
     eprintln!(
         "  set = candidate funders (1 target + Poisson background decoys); link = 1/set (uniform);"
     );
-    eprintln!("  thin = P(set ≤ 2) (the tail an averaged window hides); invBrk = share where bond");
-    eprintln!("  precedes entry (causal 0; inversion ~0.5); latΕ = entry latency / epoch.");
+    eprintln!("  thin = P(set ≤ 2) (the tail an averaged window hides);");
+    eprintln!("  latΕ = entry latency / epoch.");
     eprintln!();
     eprintln!(
-        "{:<20} {:<20} {:>6} {:>7} {:>6} {:>4} {:>4} | {:>6} {:>6} {:>6} {:>6} | {:>6} {:>7} {:>5}",
+        "{:<20} {:<20} {:>6} {:>7} {:>6} {:>4} {:>4} | {:>6} {:>6} {:>6} {:>6} | {:>7} {:>5}",
         "scenario",
         "axis",
         "win",
@@ -588,13 +588,12 @@ fn print_standoff_report() {
         "setP05",
         "thin",
         "link",
-        "invBrk",
         "latΕ",
         "free",
     );
     for r in &report.results {
         eprintln!(
-            "{:<20} {:<20} {:>6} {:>7.0} {:>6.3} {:>4} {:>4} | {:>6.2} {:>6.1} {:>6.3} {:>6.3} | {:>6.2} {:>7.4} {:>5}",
+            "{:<20} {:<20} {:>6} {:>7.0} {:>6.3} {:>4} {:>4} | {:>6.2} {:>6.1} {:>6.3} {:>6.3} | {:>7.4} {:>5}",
             r.name,
             r.axis,
             r.window_blocks,
@@ -606,7 +605,6 @@ fn print_standoff_report() {
             r.anon_set_p05,
             r.thin_cover_frac,
             r.link_prob_mean,
-            r.inversion_prior_break,
             r.entry_latency_frac_epoch,
             if r.homeostasis_free { "Y" } else { "n" },
         );
@@ -706,6 +704,14 @@ fn print_gf7_timeline_report() {
         "shekyl-staking-sim — GF-7 measurement round (ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4)"
     );
     eprintln!(
+        "VERDICT WITHDRAWN (fail-closed; GF-7 coin retirement): the order coin and the funding-"
+    );
+    eprintln!(
+        "  send event this correlator graded were retired, so the entry-seam channel has no input"
+    );
+    eprintln!("  and the sim cannot emit a valid entry-seam verdict. Rows below are context only.");
+    eprintln!();
+    eprintln!(
         "GRADED genesis gate for principal↔P funding-seam unlinkability. A-priori bound (§3,"
     );
     eprintln!(
@@ -757,24 +763,24 @@ fn print_gf7_timeline_report() {
     eprintln!(
         "  Arms: blind = funding-seam-blind null (§2 failure mode, observable cadence only);"
     );
-    eprintln!("  s3 = modeled S-3 (joint MAP fusion, seam + observable lifecycle); lr = stress");
-    eprintln!("  PANEL, an oracle-union upper bound over {{MAP, density-corrected MAP, exact");
-    eprintln!("  seam-consistency-gated MAP}} — ≥ s3 by construction, with teeth from the gated");
-    eprintln!("  member (the true in-model seam support: first |bond−funding| ≤ window plus");
-    eprintln!("  the max dispersal offset, dispersal−1 — the draw is U[0, dispersal)).");
-    eprintln!("  Bound applies to each arm; '*' marks a gate-relevant row (realistic posture:");
-    eprintln!("  full window, inversion on, steady-state, sub-block dispersal ⇒ dispersal=0).");
+    eprintln!("  s3 = modeled S-3 (joint MAP fusion). The funding seam is retired (GF-7 coin");
+    eprintln!("  retirement), so the S-3 fused set is the observable lifecycle cadence — the same");
+    eprintln!("  set blind scores, so blind == s3 now; lr = stress PANEL, an oracle-union upper");
+    eprintln!("  bound over {{MAP, density-corrected MAP}} — ≥ s3 by construction (the exact");
+    eprintln!("  seam-consistency-gated member is retired with the seam it filtered on).");
+    eprintln!("  The per-row grades are retained as context of the retracted arm; there is no");
+    eprintln!("  gate for any row to be relevant to — the entry-seam verdict is WITHDRAWN");
+    eprintln!("  (fail-closed) regardless of any row's score.");
     eprintln!();
     eprintln!(
-        "{:<10} {:>4} {:>3} {:>5} {:>6} {:>6} | {:>7} {:>7} {:>7} | {:>4} {:>4}",
-        "group", "win", "inv", "disp", "draw", "regime", "blind", "s3", "lr", "r_lr", "pass",
+        "{:<10} {:>4} {:>5} {:>6} {:>6} | {:>7} {:>7} {:>7} | {:>4} {:>4}",
+        "group", "win", "disp", "draw", "regime", "blind", "s3", "lr", "r_lr", "pass",
     );
     for r in &report.rows {
         eprintln!(
-            "{:<10} {:>4} {:>3} {:>5} {:>6} {:>6} | {:>7.3} {:>7.3} {:>7.3} | {:>4.2} {:>4}{}",
+            "{:<10} {:>4} {:>5} {:>6} {:>6} | {:>7.3} {:>7.3} {:>7.3} | {:>4.2} {:>4}",
             r.group,
             r.window_blocks,
-            if r.inversion { "Y" } else { "n" },
             r.dispersal_bound,
             r.draw_shape,
             r.regime,
@@ -783,13 +789,13 @@ fn print_gf7_timeline_report() {
             r.lr_stress.p_link,
             r.lr_stress.ratio,
             if r.pass { "Y" } else { "N" },
-            if r.gate_relevant { " *" } else { "" },
         );
     }
     eprintln!();
     eprintln!("Gate status: {}", report.gate_status);
     eprintln!(
-        "  Verdict is over gate-relevant rows (*) only. Non-gated rows are context (§3.2/§3.3):"
+        "  Entry-seam verdict WITHDRAWN (fail-closed; GF-7 coin retirement) — the rows are \
+         context, not a pass/fail gate (§3.2/§3.3):"
     );
     eprintln!("  - low-activity/cold-start FAILS the bound, and cold-start is the genesis regime:");
     eprintln!("    disposition is the §14 founder-cover launch posture (refuse the regime —");
@@ -878,7 +884,9 @@ fn print_gf7_breakeven_report() {
     eprintln!(
         "shekyl-staking-sim — GF-7 effective-cover sensitivity sweep (WI-4 §13.5 fifth conditional)"
     );
-    eprintln!("NOT A GATE. The WI-4 verdict (r = 1.86 < 2 at N = 10) was computed at NOMINAL");
+    eprintln!("Verdict: {}", report.verdict);
+    eprintln!("NOT A GATE. The WI-4 verdict (r = 1.86 < 2 at N = 10) it referenced is WITHDRAWN");
+    eprintln!("  (fail-closed; GF-7 coin retirement). It was computed at NOMINAL");
     eprintln!("  cover (Gate-6 §11 qualifier (iv): an upper bound); effective post-isolation");
     eprintln!("  cover is economics (§11.8 method note 3) — unmeasurable pre-genesis. This sweep");
     eprintln!("  measures how the model's own r(N) and P(link) move with cover at the gate");

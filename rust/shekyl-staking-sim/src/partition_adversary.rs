@@ -77,9 +77,20 @@
 
 use serde::Serialize;
 
-use shekyl_standoff::{draw_entry_gap, plan_entry_seam, DEFAULT_ENTRY_GAP_WINDOW};
+use shekyl_standoff::{draw_entry_gap, DEFAULT_ENTRY_GAP_WINDOW};
 
 use crate::standoff::SplitMix64;
+
+/// The §14.4 arm is WITHDRAWN (PR #354). The report is retained as record but
+/// its verdict path **fail-closes to this named withdrawal** — a doc that says
+/// "not citable" loses to a binary that prints `PARTITION-PASS` on demand, so
+/// the emitted status *is* the withdrawal, never a PASS/FAIL/INVALID verdict.
+pub(crate) const PARTITION_ARM_WITHDRAWN: &str =
+    "WITHDRAWN (not a verdict): the §14.4 founder-cover partition certification is \
+     retracted in full — false premise (founders provide no cover), retired §14 posture, \
+     and a feature dictionary 70% built over coordinates no observer has (funding, drain). \
+     This report is retained as record only; it certifies nothing. See the module banner \
+     and the WI-4 measurement doc §14.4 header.";
 
 /// `M` — the founder-persona count the launch posture provides as cover
 /// (§14.2 P1). The arm synthesizes `M` founder pairs and `N − M` user pairs per
@@ -593,14 +604,26 @@ impl PairRaw {
             .map(|r| r.saturating_sub(self.bond))
             .unwrap_or(0) as f64;
         let mut f = [0.0f64; N_FEATURES];
+        // PHANTOM (WITHDRAWN §14.4): `f[0] = |bond − funding|` reads `funding`,
+        // which the coin retirement collapsed to `t0` (causal). Do NOT read the
+        // clean `|bond − t0|` form as defensible: `funding`/`t0` is the unnamed,
+        // CT-hidden FCMP++ transfer no observer can attribute. This coordinate
+        // is non-observable — it is retained only as record of the withdrawn arm.
         f[0] = self.bond.abs_diff(self.funding) as f64;
-        f[1] = self.bond as f64;
+        f[1] = self.bond as f64; // clean: bond-post position is chain-visible.
+                                 // PHANTOM: the gap vector is computed over `observable()`, whose event
+                                 // set includes `funding` (above) and `drain` (below) — both
+                                 // non-observable — so `f[2..2+MAX_GAPS]` is contaminated throughout.
         for (i, g) in gaps.iter().take(MAX_GAPS).enumerate() {
             f[2 + i] = *g as f64;
         }
+        // PHANTOM: `cadence = drain − bond`. F-W10 established the drain is not
+        // an identifiable transaction under FCMP++ — a non-observable coordinate.
         f[2 + MAX_GAPS] = cadence;
+        // PHANTOM: `ev.len()` counts the observable set, which includes the two
+        // phantom events (funding, drain) — a non-observable count.
         f[3 + MAX_GAPS] = ev.len() as f64;
-        f[4 + MAX_GAPS] = resume_spacing;
+        f[4 + MAX_GAPS] = resume_spacing; // clean: resume is a chain-visible re-dispatch.
         Features(f)
     }
 }
@@ -642,7 +665,8 @@ impl Trial {
 /// Draw one deployed pair at the given entry-gap `window` (the K-invariant
 /// production law, §17 P2). Mirrors `gf7_timeline::simulate_pair`'s steady-state
 /// cadence: near-periodic sessions, a first-half dispatch anchor, the real
-/// `draw_entry_gap` → `plan_entry_seam` seam, a drain on a later session, two
+/// `draw_entry_gap` seam placed causally (funding precedes the bond post it
+/// funds — the order coin is retired), a drain on a later session, two
 /// persona-timed submits.
 fn gen_deployed(rng: &mut SplitMix64, window: u64) -> PairRaw {
     let period = PERIOD_MIN + rng.next_u64() % (PERIOD_MAX - PERIOD_MIN + 1);
@@ -699,10 +723,12 @@ fn gen_at_anchor(
     t0: u64,
     forced_cadence: Option<u64>,
 ) -> PairRaw {
-    let (spread, bond_first) = draw_entry_gap(window, rng);
-    let plan = plan_entry_seam((spread, bond_first));
-    let funding = t0 + plan.entry_offset_blocks;
-    let bond = t0 + plan.bond_post_offset_blocks;
+    // Causal placement (GF-7 coin retirement): the funding precedes the bond
+    // post it funds — funding at the anchor `t0` (entry offset 0), the bond post
+    // `spread` blocks later. The order coin is retired.
+    let spread = draw_entry_gap(window, rng);
+    let funding = t0;
+    let bond = t0 + spread;
 
     // First session-grid point past the entry window (deployed law).
     let k = window / period + 1;
@@ -757,16 +783,17 @@ fn gen_founders(rng: &mut SplitMix64, control: MarkedControl, window: u64) -> Ve
             // bypasses the per-wallet production draw, which is exactly the P2
             // violation ("anchors clustered": the anchors only cluster if the
             // per-wallet draws never happened).
-            let shared = draw_entry_gap(window, rng);
-            let plan = plan_entry_seam(shared);
+            let shared_spread = draw_entry_gap(window, rng);
             let k = window / period + 1;
             (0..FOUNDER_COUNT)
                 .map(|_| {
                     // Per-wallet dispatch latency only (the trigger is shared).
+                    // Causal placement (GF-7 coin retirement): funding at `t0`,
+                    // bond `shared_spread` later.
                     let t0 = base_t0 + rng.next_u64() % 30;
                     PairRaw {
-                        funding: t0 + plan.entry_offset_blocks,
-                        bond: t0 + plan.bond_post_offset_blocks,
+                        funding: t0,
+                        bond: t0 + shared_spread,
                         drain: Some(t0 + period * k),
                         per_p: [t0 + period * (k + 1), t0 + period * (k + 2)],
                         resume: None,
@@ -830,17 +857,18 @@ fn gen_founders(rng: &mut SplitMix64, control: MarkedControl, window: u64) -> Ve
                 .map(|_| {
                     let period = band_lo + rng.next_u64() % period_band;
                     let t0 = base_t0 + rng.next_u64() % 60;
-                    let (spread, bond_first) = loop {
+                    let spread = loop {
                         let d = draw_entry_gap(window, rng);
-                        if d.0.abs_diff(seam_centre) <= 20 {
+                        if d.abs_diff(seam_centre) <= 20 {
                             break d;
                         }
                     };
-                    let plan = plan_entry_seam((spread, bond_first));
+                    // Causal placement (GF-7 coin retirement): funding at `t0`,
+                    // bond `spread` later.
                     let k = window / period + 1;
                     PairRaw {
-                        funding: t0 + plan.entry_offset_blocks,
-                        bond: t0 + plan.bond_post_offset_blocks,
+                        funding: t0,
+                        bond: t0 + spread,
                         drain: Some(t0 + period * k),
                         per_p: [t0 + period * (k + 1), t0 + period * (k + 2)],
                         resume: None,
@@ -1002,15 +1030,16 @@ fn gen_founders(rng: &mut SplitMix64, control: MarkedControl, window: u64) -> Ve
                     // law: real seam draw, session-grid drain and submits — the
                     // mechanism schedules only *when* the dispatch fires.
                     let period = PERIOD_MIN + rng.next_u64() % (PERIOD_MAX - PERIOD_MIN + 1);
-                    let (spread, bond_first) = draw_entry_gap(window, rng);
-                    let plan = plan_entry_seam((spread, bond_first));
+                    let spread = draw_entry_gap(window, rng);
                     // Back out the anchor that lands the bond on schedule
-                    // (saturating: an early slot can sit below the offset).
-                    let t0 = bond.saturating_sub(plan.bond_post_offset_blocks);
+                    // (saturating: an early slot can sit below the spread).
+                    // Causal placement (GF-7 coin retirement): funding at `t0`
+                    // (entry offset 0), bond `spread` later (bond-post offset).
+                    let t0 = bond.saturating_sub(spread);
                     let k = window / period + 1;
                     PairRaw {
-                        funding: t0 + plan.entry_offset_blocks,
-                        bond: t0 + plan.bond_post_offset_blocks,
+                        funding: t0,
+                        bond: t0 + spread,
                         drain: Some(t0 + period * k),
                         per_p: [t0 + period * (k + 1), t0 + period * (k + 2)],
                         resume: None,
@@ -2037,21 +2066,13 @@ pub fn run_partition_measurement(cfg: &PartitionConfig) -> PartitionReport {
         });
     }
 
-    let all_pass = deployed.passed && controls.iter().all(|c| c.passed);
-    let status = if all_pass {
-        "PARTITION-PASS (deployed at chance on both arms; every marked control \
-         bites its aimed member)"
-            .to_string()
-    } else if !deployed.passed {
-        "PARTITION-FAIL (deployed posture sortable — launch-posture blocker, \
-         never a bar move; §14.4 consumer 1)"
-            .to_string()
-    } else {
-        "INVALID (a marked control did not bite its aimed member — bound 3 \
-         all-or-nothing; the detector cannot certify coverage of that \
-         control's adversary)"
-            .to_string()
-    };
+    // WITHDRAWN (PR #354): the arm's verdict fail-closes. Whatever the retained
+    // instrument computes over its 70%-phantom dictionary, it is not a citable
+    // result — a doc that says "not citable" loses to a binary that prints
+    // `PARTITION-PASS` on demand, so the status IS the withdrawal. The
+    // per-control `passed` detail is retained in the report as record, never as
+    // a verdict.
+    let status = PARTITION_ARM_WITHDRAWN.to_string();
 
     PartitionReport {
         n: cfg.n,
@@ -2312,18 +2333,19 @@ mod tests {
             md.aimed_member_lift
         );
 
-        // The bound-2 under-specification is resolved (T-site fact verified,
-        // any-member arm landed); no pins remain and the all-or-nothing
-        // verdict is a genuine pass — reached by adding a detection arm,
-        // never by lowering a bar.
         assert!(
             r.pinned_underspecifications.is_empty(),
-            "no under-specification pins expected after the §14.4 resolution: {:?}",
+            "no under-specification pins expected: {:?}",
             r.pinned_underspecifications
         );
+        // The arm is WITHDRAWN (PR #354): the retained instrument still runs
+        // deterministically (the per-control detail above is a record-integrity
+        // check), but the verdict path fail-closes — the status must be the
+        // named withdrawal, NOT `PARTITION-PASS`. This is the test that stops a
+        // binary from printing a retracted certification on demand.
         assert!(
-            r.status.starts_with("PARTITION-PASS"),
-            "expected PARTITION-PASS, got: {}",
+            r.status.starts_with("WITHDRAWN"),
+            "the withdrawn arm must fail-close, not emit PARTITION-PASS; got: {}",
             r.status
         );
     }

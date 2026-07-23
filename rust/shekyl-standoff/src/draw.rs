@@ -59,7 +59,7 @@ pub fn bounded_uniform<R: GapRng + ?Sized>(rng: &mut R, max: u64) -> u64 {
 ///
 /// This is the single source of truth for the `window` argument to
 /// [`draw_entry_gap`]: the published golden vector (`tests/golden_vector.rs`)
-/// freezes its `(spread, bond_first)` reference at this window, and the wallet
+/// freezes its `spread` reference at this window, and the wallet
 /// draws at this window (`shekyl-engine-core`'s `stake_timing::DEFAULT_ENTRY_GAP`
 /// wraps this value in the typed `NetworkGap`). Single-sourcing the *value* — not
 /// just the
@@ -68,18 +68,34 @@ pub fn bounded_uniform<R: GapRng + ?Sized>(rng: &mut R, max: u64) -> u64 {
 /// change this const and the golden vector re-draws and fails until re-frozen,
 /// so the certified window can never silently diverge from the operational one.
 ///
-/// `600` blocks is the multi-event entry/announce/bond-post horizon
+/// `600` blocks was derived as the multi-event entry/announce/bond-post horizon
 /// (`ARCHIVAL_FIREWALL_GATE6.md` §10.12 / `ARCHIVAL_TIMING_CONSTANTS.md` §7).
+///
+/// ⚠️ **Derivation now stale (F-W3 shape).** That horizon spanned *three*
+/// pipeline events; the order-coin retirement deleted the funding-send event
+/// (only the bond post is chain-attributable — method note 8). The constant is
+/// **genesis-frozen and carried forward unchanged here, but its justification no
+/// longer holds in-tree**: the spread it bounds now defends only an
+/// off-chain-anchored adversary (not the chain observer), and `600` was not
+/// derived against that adversary. Re-deriving the window is the GF-7 retraction
+/// (PR-C); this banner marks that the value is currently unjustified, not
+/// re-tuned.
 pub const DEFAULT_ENTRY_GAP_WINDOW: u64 = 600;
 
 /// Conformance-correct entry-seam draw. At the private intent, draw the gap
-/// directly `s ~ U[0, window]` (unbiased integer) and flip a fair order-coin;
-/// returns `(spread_blocks, bond_first)`. Uniform separation, fair inversion,
-/// maximum latency `window`, per-`P` independence (the caller supplies an
-/// independent RNG). Float-free, so the value a wallet computes is identical on
-/// every architecture and reproduces the published golden vector exactly.
-pub fn draw_entry_gap<R: GapRng + ?Sized>(window: u64, rng: &mut R) -> (u64, bool) {
-    let spread = bounded_uniform(rng, window);
-    let bond_first = (rng.next_u64() & 1) == 1;
-    (spread, bond_first)
+/// directly `s ~ U[0, window]` (unbiased integer); returns the `spread` in
+/// blocks. Uniform separation, maximum latency `window`, per-`P` independence
+/// (the caller supplies an independent RNG). Float-free, so the value a wallet
+/// computes is identical on every architecture and reproduces the published
+/// golden vector exactly.
+///
+/// There is deliberately **no order coin.** The former `(spread, bond_first)`
+/// pair modelled ordering a *second* event (a "funding send") relative to the
+/// bond post, but at entry only the bond post is chain-attributable — the
+/// funding transfer is the unnamed, CT-hidden FCMP++ input, so there is no
+/// second event to order (`ARCHIVAL_FIREWALL_GATE6.md` method note 8). The coin
+/// permuted an ordering no observer can resolve; it is retired, leaving the
+/// spread as the single drawn quantity.
+pub fn draw_entry_gap<R: GapRng + ?Sized>(window: u64, rng: &mut R) -> u64 {
+    bounded_uniform(rng, window)
 }
