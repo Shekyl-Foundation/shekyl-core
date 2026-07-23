@@ -59,6 +59,12 @@
 #     get_staked_balance, get_staked_outputs,
 #     staking_info                                 (authoritative staking
 #                                                   read view; read-only)
+#   SPECIFIED (WI-RPC-2a — CLI-off-wallet2 transport swap):
+#     restore_wallet                               (deterministic inverse of
+#                                                   create_wallet's BIP-39
+#                                                   backup; mainnet/stagenet
+#                                                   only — testnet is
+#                                                   raw-seed)
 #   RESERVED (prerequisite in parentheses):
 #     unstake, claim, get_stakes                   (Stage 3 StakeEngine +
 #                                                   Phase 2b orchestrator;
@@ -170,6 +176,7 @@ components:
           # not client-breaking skew (see GetVersionResult.api_version, rule 16).
           enum:
             - create_wallet
+            - restore_wallet
             - open_wallet
             - close_wallet
             - change_password
@@ -435,6 +442,48 @@ components:
           description: >
             32-byte raw seed as lowercase hex (testnet only). Absent on
             mainnet/stagenet.
+
+    RestoreWalletParams:
+      type: object
+      required: [name, password, mnemonic]
+      description: >
+        Recreate a wallet from its BIP-39 backup (WI-RPC-2a). The name must
+        not collide with an existing wallet file (-29002). Networks whose
+        seed format is not BIP-39 (testnet) refuse with -32602; the invalid-
+        mnemonic error message is stable and never reflects the mnemonic.
+      properties:
+        name:
+          type: string
+        password:
+          type: string
+          description: New envelope password for the restored wallet file.
+        mnemonic:
+          type: string
+          description: >
+            24-word BIP-39 English mnemonic from CreateWalletResult. Equally
+            secret with the master seed — never log.
+        restore_height:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            Rescan floor — a block height at or below the wallet's first
+            output. Omitted or 0 scans from genesis. Values above the u32
+            keys-file field refuse with -32602 rather than truncating.
+        language:
+          type: string
+          default: en
+          description: BIP-39 wordlist language of the supplied mnemonic.
+
+    RestoreWalletResult:
+      type: object
+      required: [wallet]
+      description: >
+        On success the wallet is open. No backup material is echoed — the
+        caller supplied the mnemonic.
+      properties:
+        wallet:
+          $ref: "#/components/schemas/WalletHandle"
 
     OpenWalletParams:
       type: object

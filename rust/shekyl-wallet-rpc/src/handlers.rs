@@ -38,6 +38,7 @@ pub async fn dispatch(
     match method {
         "get_version" => get_version(params),
         "create_wallet" => lifecycle::create_wallet(tenants, params, kdf).await,
+        "restore_wallet" => lifecycle::restore_wallet(tenants, params, kdf).await,
         "open_wallet" => lifecycle::open_wallet(tenants, params).await,
         "close_wallet" => lifecycle::close_wallet(tenants, params).await,
         "change_password" => lifecycle::change_password(tenants, params).await,

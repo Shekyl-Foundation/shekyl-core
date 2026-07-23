@@ -50,6 +50,20 @@ fn default_language() -> String {
     "en".to_owned()
 }
 
+/// Params for `restore_wallet`.
+#[derive(Debug, Deserialize)]
+struct RestoreWalletParams {
+    name: String,
+    password: String,
+    mnemonic: String,
+    /// Rescan floor: block height the wallet existed at. Optional; `0`
+    /// (scan from genesis) when omitted.
+    #[serde(default)]
+    restore_height: Option<u64>,
+    #[serde(default = "default_language")]
+    language: String,
+}
+
 /// Params for `open_wallet`.
 #[derive(Debug, Deserialize)]
 struct OpenWalletParams {
@@ -172,6 +186,135 @@ async fn create_wallet_engine(
     // Drop master seed as soon as create returns (Zeroizing on drop).
     drop(master_seed);
     Ok((engine, backup))
+}
+
+/// `restore_wallet` — recreate a wallet from its BIP-39 mnemonic backup
+/// (WI-RPC-2a; the deterministic inverse of `create_wallet`'s mnemonic).
+///
+/// Same tenant choreography as `create_wallet`: refuse-if-busy, reserve the
+/// opening slot, slow work off the mutex, install or clear. The mnemonic is
+/// seed material — it moves into a `Zeroizing` wrapper before any slow work
+/// and is never echoed in errors or logs (rule 30). Networks whose seed
+/// format is not BIP-39 (testnet) refuse as invalid params.
+pub(crate) async fn restore_wallet(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+    kdf: KdfParams,
+) -> Result<Value, WalletRpcError> {
+    let p: RestoreWalletParams = parse_required_object(params, "restore_wallet")?;
+    validate_wallet_name(&p.name)?;
+    if p.language != "en" {
+        return Err(WalletRpcError::InvalidParams(
+            "only language \"en\" is supported".into(),
+        ));
+    }
+    // The rescan floor is a u32 in the keys file; refuse out-of-range
+    // instead of silently truncating.
+    let restore_height = match p.restore_height {
+        None => 0u32,
+        Some(h) => u32::try_from(h)
+            .map_err(|_| WalletRpcError::InvalidParams("restore_height out of range".into()))?,
+    };
+    // Seed material: consume the serde String immediately so every path —
+    // including each early error return below — wipes it on drop.
+    let mnemonic = Zeroizing::new(p.mnemonic);
+    let password = Zeroizing::new(p.password.into_bytes());
+
+    let (base, network, daemon_address) = {
+        let mut state = tenants.lock().await;
+        if state.tenant.is_busy() {
+            return Err(WalletRpcError::WalletAlreadyOpen);
+        }
+        let base = wallet_base(&state.wallet_dir, &p.name);
+        if keys_path_from(&base).exists() {
+            return Err(WalletRpcError::WalletFileExists);
+        }
+        state.tenant.begin_opening();
+        (base, state.network, state.daemon_address.clone())
+    };
+
+    let restored = restore_wallet_engine(
+        &base,
+        network,
+        &daemon_address,
+        password,
+        &mnemonic,
+        restore_height,
+        kdf,
+    )
+    .await;
+    let engine = match restored {
+        Ok(v) => v,
+        Err(e) => {
+            tenants.lock().await.tenant.clear_opening();
+            return Err(e);
+        }
+    };
+
+    let restore_hint = (restore_height > 0).then_some(i64::from(restore_height));
+    let handle = wallet_handle(&p.name, &engine, restore_hint);
+    let (shared, pscan) = match wrap_and_start_pscan(engine).await {
+        Ok(v) => v,
+        Err(e) => {
+            tenants.lock().await.tenant.clear_opening();
+            return Err(e);
+        }
+    };
+    tenants.lock().await.tenant.set_open(p.name, shared, pscan);
+
+    // No seed backup in the result: the caller supplied the mnemonic.
+    Ok(json!({ "wallet": handle }))
+}
+
+/// Slow half of restore: daemon connect + mnemonic derivation + Argon2
+/// `Engine::create`. Runs without holding the tenant mutex.
+async fn restore_wallet_engine(
+    base: &Path,
+    network: Network,
+    daemon_address: &str,
+    password: Zeroizing<Vec<u8>>,
+    mnemonic: &str,
+    restore_height: u32,
+    kdf: KdfParams,
+) -> Result<Engine<SoloSigner>, WalletRpcError> {
+    let daemon = make_daemon(daemon_address).await?;
+    let creds = Credentials::password_only(password.as_slice());
+
+    // Validation lives in the derivation: word-set / checksum failures and
+    // BIP-39-forbidding networks (testnet is raw-seed) surface here. The
+    // message is stable and detail-free — the mnemonic is key material and
+    // is never reflected (rule 30).
+    let (master_seed, _blob) =
+        generate_account_from_bip39(mnemonic, "", network_to_derivation(network)).map_err(
+            |_| {
+                WalletRpcError::InvalidParams(
+                    "invalid mnemonic (or the network does not use BIP-39 seeds)".into(),
+                )
+            },
+        )?;
+
+    // A restored wallet's creation time is unknown; 0 keeps the scan floor
+    // governed solely by restore_height.
+    let create_params = EngineCreateParams {
+        base_path: base,
+        credentials: &creds,
+        network,
+        capability: CapabilityInput::Full {
+            master_seed_64: &master_seed,
+            seed_format: SeedFormat::Bip39,
+        },
+        creation_timestamp: 0,
+        restore_height_hint: restore_height,
+        kdf,
+        overrides: SafetyOverrides::none(),
+        prefs: WalletPrefs::default(),
+    };
+
+    let engine =
+        tokio::task::block_in_place(|| Engine::<SoloSigner>::create(create_params, daemon))
+            .map_err(WalletRpcError::from)?;
+    drop(master_seed);
+    Ok(engine)
 }
 
 pub(crate) async fn open_wallet(
@@ -776,7 +919,7 @@ async fn restart_pscan(shared: &SharedEngine) -> Option<PScanHandle> {
 
 #[cfg(test)]
 mod tests {
-    use super::{close_wallet, create_wallet, open_wallet, stake};
+    use super::{close_wallet, create_wallet, open_wallet, restore_wallet, stake};
     use crate::tenant::TenantState;
 
     use serde_json::json;
@@ -975,6 +1118,140 @@ mod tests {
         ));
 
         close_wallet(&tenants, &json!({})).await.expect("close");
+    }
+
+    /// A Stagenet tenant dir (mainnet/stagenet wallets carry the BIP-39
+    /// backup that `restore_wallet` consumes; testnet is raw-seed).
+    fn stagenet_tenants_in(dir: &std::path::Path) -> Mutex<TenantState> {
+        Mutex::new(TenantState::new(
+            dir.to_path_buf(),
+            Network::Stagenet,
+            "http://127.0.0.1:1".to_string(),
+        ))
+    }
+
+    /// The WI-RPC-2a restore contract: create → back up the mnemonic →
+    /// restore under a new name reproduces the same primary address, and no
+    /// backup material is echoed by the restore.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn restore_round_trips_the_primary_address() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = stagenet_tenants_in(dir.path());
+
+        let created = create_wallet(
+            &tenants,
+            &json!({ "name": "orig", "password": "pw" }),
+            fast_kdf(),
+        )
+        .await
+        .expect("create");
+        let mnemonic = created["mnemonic"].as_str().expect("mnemonic").to_owned();
+        let orig_addr = crate::queries::get_primary_address(&tenants, &json!({}))
+            .await
+            .expect("address")["address"]
+            .as_str()
+            .expect("string")
+            .to_owned();
+        close_wallet(&tenants, &json!({})).await.expect("close");
+
+        let restored = restore_wallet(
+            &tenants,
+            &json!({
+                "name": "rest",
+                "password": "other-pw",
+                "mnemonic": mnemonic,
+                "restore_height": 0,
+            }),
+            fast_kdf(),
+        )
+        .await
+        .expect("restore");
+        assert!(
+            restored.get("mnemonic").is_none() && restored.get("raw_seed_hex").is_none(),
+            "restore must not echo backup material"
+        );
+        assert_eq!(restored["wallet"]["name"], "rest");
+
+        let rest_addr = crate::queries::get_primary_address(&tenants, &json!({}))
+            .await
+            .expect("address")["address"]
+            .as_str()
+            .expect("string")
+            .to_owned();
+        assert_eq!(orig_addr, rest_addr, "restore must reproduce the account");
+        close_wallet(&tenants, &json!({})).await.expect("close");
+    }
+
+    /// Restore refusals: invalid mnemonic and raw-seed networks are
+    /// `-32602` with a stable, mnemonic-free message; a name collision is
+    /// `-29002`; an over-u32 restore_height refuses instead of truncating.
+    /// Every refusal leaves the tenant idle (a follow-up create works).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn restore_refusals_are_typed_and_leave_the_tenant_idle() {
+        use crate::error::WalletRpcError;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = stagenet_tenants_in(dir.path());
+
+        let bad = restore_wallet(
+            &tenants,
+            &json!({ "name": "w", "password": "pw", "mnemonic": "not a mnemonic" }),
+            fast_kdf(),
+        )
+        .await
+        .expect_err("invalid mnemonic");
+        match bad {
+            WalletRpcError::InvalidParams(msg) => {
+                assert!(!msg.contains("not a mnemonic"), "must not echo the input")
+            }
+            other => panic!("expected InvalidParams, got {other:?}"),
+        }
+
+        let too_high = restore_wallet(
+            &tenants,
+            &json!({
+                "name": "w",
+                "password": "pw",
+                "mnemonic": "x",
+                "restore_height": u64::from(u32::MAX) + 1,
+            }),
+            fast_kdf(),
+        )
+        .await
+        .expect_err("restore_height out of range");
+        assert!(matches!(too_high, WalletRpcError::InvalidParams(_)));
+
+        // Tenant is idle after refusals: a real create works, and restoring
+        // over its file refuses as a collision.
+        let created = create_wallet(
+            &tenants,
+            &json!({ "name": "w", "password": "pw" }),
+            fast_kdf(),
+        )
+        .await
+        .expect("create after refusals");
+        let mnemonic = created["mnemonic"].as_str().expect("mnemonic").to_owned();
+        close_wallet(&tenants, &json!({})).await.expect("close");
+        let collision = restore_wallet(
+            &tenants,
+            &json!({ "name": "w", "password": "pw", "mnemonic": mnemonic }),
+            fast_kdf(),
+        )
+        .await
+        .expect_err("file exists");
+        assert!(matches!(collision, WalletRpcError::WalletFileExists));
+
+        // Raw-seed network: a testnet tenant refuses BIP-39 restore.
+        let tdir = tempfile::tempdir().expect("tempdir");
+        let testnet = tenants_in(tdir.path());
+        let refused = restore_wallet(
+            &testnet,
+            &json!({ "name": "t", "password": "pw", "mnemonic": "x" }),
+            fast_kdf(),
+        )
+        .await
+        .expect_err("testnet is raw-seed");
+        assert!(matches!(refused, WalletRpcError::InvalidParams(_)));
     }
 
     /// Verify-then-close: a `stake` with a wrong password refuses with
