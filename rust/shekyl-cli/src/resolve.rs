@@ -330,7 +330,10 @@ pub fn parse(input: &str) -> ResolvedCommand {
             // is a hard error, not a silent fall-back to the default shape.
             let count = |flag| match parse_flag::<u64>(args, flag) {
                 FlagValue::Absent => Ok(None),
-                FlagValue::Set(v) => Ok(Some(v as i64)),
+                // Saturate rather than `as`-cast: an absurd count above i64::MAX
+                // maps to i64::MAX (which the server clamps to MAX_INPUTS/
+                // MAX_OUTPUTS anyway) instead of wrapping to a negative.
+                FlagValue::Set(v) => Ok(Some(i64::try_from(v).unwrap_or(i64::MAX))),
                 FlagValue::Invalid(v) => Err(format!("fee: {flag} expects a count, got {v:?}")),
             };
             match (count("--inputs"), count("--outputs")) {
