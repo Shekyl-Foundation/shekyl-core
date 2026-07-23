@@ -722,6 +722,9 @@ derivation and correlator spec):
 
 ## 13. Result — provisional grading round (implementation 2026-07-05, re-graded 2026-07-06 post-review)
 
+> **⛔ The verdict below is WITHDRAWN in full (2026-07-23) — see the §13.1
+> banner.** This section is the historical record of the withdrawn round.
+
 The §11 round landed the correlator, controls, and sweep in
 `shekyl-staking-sim/src/gf7_timeline.rs` (binary `--gf7-timeline`). The
 2026-07-06 review round then forced three strengthenings — the
@@ -732,16 +735,82 @@ Run config: `N = 10`, `1000` trials/point, deterministic seed. **Controls
 valid** (positive `P(link)=0.996 ≥ 0.80`; negative `P(link)=0.102`,
 `|·−0.1|<0.05`), so the graded rows count.
 
-### 13.1 Verdict: PROVISIONAL-PASS (local-daemon posture only; remote-daemon posture unmet, named residual; wall-clock leg (b) open)
+### 13.1 Verdict: ⛔ WITHDRAWN 2026-07-23 (was: PROVISIONAL-PASS, local-daemon posture only)
 
-> **⛔ INTERIM (GF-7 coin retirement, PR-A): the `r = 1.86` verdict is
-> FAIL-CLOSED.** The order coin and the `FundingSendDispatched` event the
-> correlator graded were retired — only the bond post is chain-attributable, so
-> the entry-seam ordering channel `r = 1.86` measured no longer has an input.
-> The `shekyl-staking-sim` GF-7 arm now emits `GF7_FAIL_CLOSED`, not a verdict.
-> The retraction narrative and the honest re-derivation (chain-observer half is
-> unconditional; transport-observer half is a named residual defended by circuit
-> isolation) land in **PR-C**. Do not cite `r = 1.86` as live.
+> ## ⛔ WITHDRAWN (2026-07-23, GF-7 retirement PR-C) — the `r = 1.86` verdict is retracted in full
+>
+> **The entry-seam measurement is withdrawn, not re-graded.** The channel it
+> measured — the ordering of the bond post against the principal's funding-send
+> — **was never on the chain**, and this ground is **unconditional**: it carries
+> no posture qualifier and needs none. The funding send is the unnamed,
+> CT-hidden FCMP++ input; the chain expresses no backward edge from a bond post
+> to its funding, no second attributable entry event, and no principal anchor.
+> Every earlier framing that grounded the withdrawal in posture ("the
+> architecture denies the adversary the capability") smuggled in a condition the
+> chain-observer half never needed — the channel is absent from the chain for
+> *every* observer, in *every* configuration.
+>
+> **How the number was produced anyway (the strawman):** the correlator's S-3
+> arm held per-candidate funding and drain timestamps by construction
+> (`SynthParams::principal_observable: true` — its own comment names this "the
+> remote / hostile-daemon posture"). That is signal no chain observer can
+> obtain; grading it violates the standing rule — name `T`, then name how `T`
+> physically obtains each observable. `r = 1.86` bounded an adversary that was
+> handed its anchors by the generator.
+>
+> **The transport observer is the honest residual, and it is named, not
+> smuggled.** A daemon serving the principal sees query timing regardless of
+> chain contents. That residual is defended **structurally, by circuit
+> isolation**, not by detection: `shekyl-p-transport` gives each persona its own
+> Tor circuit with "`P` rides the principal's circuit" *unrepresentable*
+> (persona side mandatory-by-construction). The principal side is opt-in today;
+> the open front is the **principal-side default flip** (§18.13's named V3.0
+> work item), and the rule-21 reopen for this residual is attached **there**,
+> not to this withdrawn number.
+>
+> **Why the spread survives the coin (and the only reason it does).**
+> Permutation needs two events; jitter needs one event *plus an adversary
+> hypothesis to anchor the delay against*. `t0` is the principal's private
+> intent moment and appears nowhere an on-chain observer can reach, so a delay
+> from `t0` to the single observable event is itself unobservable *to a chain
+> observer*. The spread is therefore **live defense-in-depth only against an
+> off-chain-anchored adversary** — someone who knows the principal and saw them
+> act at time `T` — and **dead against the chain observer**, which is exactly
+> the non-certified posture. Its single execution site is `due_height` in
+> `shekyl-engine-core`'s `pscan/dispatch.rs`
+> (`due = anchor_t0 + bond_post_offset_blocks`) — the claim is checkable there,
+> not prose.
+>
+> **What remains on the entry seam is one channel, not none.** **GF4b-2**: the
+> bond post exposes its raw funding-input *count* on the `P`-public post —
+> plain-chain-visible under the certified posture, no hostile daemon, no
+> amounts, no phantom event. It is priority-1, already gated, and its
+> structural answer (`stake_in`, a constant input count) is designed and not
+> yet closed. A withdrawal that removed the only published entry-seam number
+> must not read as "nothing here": the accurate reading is *one channel here,
+> structural, already gated, not yet closed* (`FOLLOWUPS.md` GF4b-2).
+>
+> **The entry window converts to an F-W3-pattern provisional sentinel.**
+> `DEFAULT_ENTRY_GAP_WINDOW = 600` was derived as a multi-event horizon over a
+> pipeline whose second event this retirement deleted, so its derivation is
+> void. The surviving justification target is the off-chain-anchored adversary
+> above, whose anchor precision is **unquantifiable in principle** (it is how
+> well someone who knows the principal can pin `t0` — off-chain, unmeasurable
+> by any chain or testnet instrument; the F-D5/F-W3 benefit-side shape). The
+> value therefore holds at `600` as a **provisional sentinel with the decision
+> rule frozen now**: it re-derives only on (a) a measurable off-chain
+> anchor-precision model arriving, or (b) a pure cost-side (latency) decision,
+> which *is* derivable. The window is wallet-side, golden-vector-pinned, not
+> consensus: a change is a wallet release plus a golden re-freeze, not a fork.
+>
+> **The instrument is retained fail-closed, as record.** The
+> `shekyl-staking-sim` GF-7 arm emits `GF7_FAIL_CLOSED`, never a verdict; the
+> §14.4 partition arm (withdrawn separately, PR #354) emits its own named
+> withdrawal. Method note 8 and pass-4 (d) in `ARCHIVAL_FIREWALL_GATE6.md` are
+> the retirement's rationale and stand. Everything below this banner is the
+> historical record of the withdrawn grading round — read it as what was built
+> and measured under the strawman observer, **not** as a live verdict. Do not
+> cite `r = 1.86`.
 
 The verdict is deliberately narrow, per the review: it certifies the
 recommended **local-daemon posture** against a **block-resolution**

@@ -29,6 +29,38 @@
 
 ### Removed
 
+- **the GF-7 order coin, the entry-seam "second event," and the `r = 1.86`
+  verdict** (the GF-7 retirement: PR #354 §14.4 withdrawal, PR #356
+  deletion, PR-C retraction; `ARCHIVAL_BOND_WI4_MEASUREMENT.md` §13.1 +
+  §14.4 banners). Gone: the `bond_first` order coin (`draw_entry_gap` now
+  returns the bare `spread`), the whole second-event abstraction
+  (`shekyl-standoff::plan` — `EntrySeamPlan`/`plan_entry_seam`/
+  `is_inverted`), the phantom `FundingSendDispatched` timeline event, the
+  conformance fair-order grade, `FORCED_CAUSAL_ORDER`, and the sim's
+  inversion axis. Ground (unconditional, no posture qualifier): at entry
+  only the bond post is chain-attributable — the funding transfer is the
+  unnamed, CT-hidden FCMP++ input, so there was never a second event to
+  order, and the channel `r = 1.86` measured was never on the chain (the
+  correlator held its anchors by construction — the strawman). The
+  transport observer is the named residual, defended structurally by
+  `shekyl-p-transport` circuit isolation (open front: the principal-side
+  default flip, WI-4 §18.13). The spread survives only against an
+  off-chain-anchored adversary (execution site `due_height`,
+  `pscan/dispatch.rs`); `DEFAULT_ENTRY_GAP_WINDOW = 600` converts to an
+  F-W3-pattern provisional sentinel; GF4b-2's funding-input count is the
+  surviving entry-seam channel (structural, gated, not yet closed). The
+  §14.4 founder-cover PARTITION-PASS was withdrawn in full alongside
+  (false premise, retired §14 posture, 70%-phantom feature dictionary) —
+  distinct from and not touching the Foundation's five `CompleteTree`
+  reliability anchors. Golden vector re-frozen `[u64; 16]` with a
+  consumption-identity proof (exactly one word removed per draw); new
+  `bounded_uniform` cover-scale KAT. No wire change (the persisted record
+  already stored the bare scalar).
+  **Deliberately retained fail-closed as reference**: both sim arms emit
+  named withdrawals (`GF7_FAIL_CLOSED`, the §14.4 `WITHDRAWN` status) —
+  never a verdict — a doc that says "not citable" loses to a binary that
+  prints a pass on demand.
+
 - **the M1 `K_COVER` gate machinery** (the implementation half of the
   retirement below; `ARCHIVAL_REWARD_GATE_M1.md` §13.3 enumerates the
   surface). Gone from production code: the `epoch_close_compute` early

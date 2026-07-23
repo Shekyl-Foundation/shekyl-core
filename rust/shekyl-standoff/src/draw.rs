@@ -69,17 +69,22 @@ pub fn bounded_uniform<R: GapRng + ?Sized>(rng: &mut R, max: u64) -> u64 {
 /// so the certified window can never silently diverge from the operational one.
 ///
 /// `600` blocks was derived as the multi-event entry/announce/bond-post horizon
-/// (`ARCHIVAL_FIREWALL_GATE6.md` §10.12 / `ARCHIVAL_TIMING_CONSTANTS.md` §7).
+/// (`ARCHIVAL_FIREWALL_GATE6.md` §10.12); that derivation is **void** — the
+/// order-coin retirement deleted the second (funding-send) event, and only the
+/// bond post is chain-attributable (method note 8).
 ///
-/// ⚠️ **Derivation now stale (F-W3 shape).** That horizon spanned *three*
-/// pipeline events; the order-coin retirement deleted the funding-send event
-/// (only the bond post is chain-attributable — method note 8). The constant is
-/// **genesis-frozen and carried forward unchanged here, but its justification no
-/// longer holds in-tree**: the spread it bounds now defends only an
-/// off-chain-anchored adversary (not the chain observer), and `600` was not
-/// derived against that adversary. Re-deriving the window is the GF-7 retraction
-/// (PR-C); this banner marks that the value is currently unjustified, not
-/// re-tuned.
+/// **Disposition (GF-7 retraction, WI-4 §13.1 banner, 2026-07-23): F-W3-pattern
+/// provisional sentinel, decision rule frozen now.** The spread this window
+/// bounds defends only an **off-chain-anchored adversary** (someone who knows
+/// the principal and saw them act near `t0`); that adversary's anchor precision
+/// is unquantifiable in principle (off-chain — no chain or testnet instrument
+/// measures it; the F-D5/F-W3 benefit-side shape), so no honest re-derivation
+/// of the *value* exists. The value therefore holds at `600` as a provisional
+/// sentinel. It re-derives only on (a) a measurable off-chain anchor-precision
+/// model arriving, or (b) a pure cost-side (latency) decision, which *is*
+/// derivable (`E[wait] = window/2` blocks). Wallet-side and golden-pinned, not
+/// consensus: changing it is a wallet release plus a golden-vector re-freeze,
+/// never a fork.
 pub const DEFAULT_ENTRY_GAP_WINDOW: u64 = 600;
 
 /// Conformance-correct entry-seam draw. At the private intent, draw the gap

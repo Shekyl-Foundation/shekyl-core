@@ -562,7 +562,10 @@ ratified rather than accumulated inputs:
   dependence in the persona lifecycle (WI-4 §19.10.1) — bounds at
   worst `r = 1.86` at `N = 10` (thin margin), holds `r < 2` across
   `N ∈ {10, 20, 50}`, and **fails at thin cover** (`r = 3.54`), which
-  is the fact this gate exists to enforce. Floor: `N ≈ 10` minimum,
+  is the fact this gate exists to enforce. *(⛔ 2026-07-23: that
+  entry-seam measurement is WITHDRAWN in full — the graded channel was
+  never on the chain (WI-4 §13.1 banner); doubly moot here, since this
+  gate and `K_COVER` are themselves retired.)* Floor: `N ≈ 10` minimum,
   `N ≈ 20` with margin. The operand (segment count) is deliberately a
   partition-proof **proxy** — no consensus-computable function maps
   segments to persona population — so sufficiency rests, by design,
