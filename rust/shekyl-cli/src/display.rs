@@ -5,8 +5,9 @@
 
 //! Terminal safety for secret display.
 //!
-//! Secrets (seed, viewkey, spendkey) must never leak through pipes, log files,
-//! or terminal scrollback. This module gates display behind safety checks.
+//! Secrets (the once-only seed backup at create/restore time) must never
+//! leak through pipes, log files, or terminal scrollback. This module gates
+//! display behind safety checks.
 
 use std::io::{self, IsTerminal, Write};
 use zeroize::Zeroize;
@@ -109,8 +110,11 @@ fn multiplexer_warning() -> Option<&'static str> {
     None
 }
 
-/// Returns true if the given command name is a secret-displaying command
-/// whose input line should NOT be added to readline history.
+/// Returns true if the given command's input line carries secret material
+/// and must NOT be added to readline history. `restore` is the one such
+/// command: its arguments are the BIP-39 mnemonic itself. (The wallet2-era
+/// secret-*display* commands — seed/viewkey/spendkey — were removed in
+/// WI-RPC-2b; their input lines carried no secret.)
 pub fn is_secret_command(cmd: &str) -> bool {
-    matches!(cmd, "seed" | "viewkey" | "spendkey")
+    cmd == "restore"
 }

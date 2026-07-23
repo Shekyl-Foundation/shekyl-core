@@ -5,20 +5,18 @@
 
 //! Parse-time command resolution.
 //!
-//! The parser turns raw input tokens into `ResolvedCommand` values with all
-//! parameters (including `account_index`) baked in. After parsing, the command
-//! struct is immutable and self-describing -- no handler reads session state
-//! during execution.
-
-use crate::session::ReplSession;
+//! The parser turns raw user input into `ResolvedCommand` values with all
+//! parameters baked in. After parsing, the command struct is immutable and
+//! self-describing -- no handler reads session state during execution.
+//!
+//! The wallet2-era commands (accounts, key images, secret display, sweep) are
+//! **removed**, not stubbed: they resolve to `Unknown` with a message that
+//! names the replacement or the reason (rule 60; WI-RPC-2b deletions).
 
 /// A fully-resolved command ready for execution.
-///
-/// Every variant that operates on an account carries an explicit `account_index`
-/// resolved from either `--account N` or the session default at parse time.
 #[derive(Debug)]
 pub enum ResolvedCommand {
-    // -- Lifecycle (no account needed) --
+    // -- Lifecycle --
     Create {
         filename: String,
     },
@@ -37,68 +35,56 @@ pub enum ResolvedCommand {
     Exit,
 
     // -- Balance / address --
-    Balance {
-        account_index: u32,
-    },
-    Address {
-        account_index: u32,
-    },
-
-    // -- Account management --
-    AccountShow,
-    AccountDefault {
-        index: u32,
-    },
-    AccountNew {
-        label: String,
-    },
+    Balance,
+    Address,
 
     // -- Transfers --
     Transfer {
-        account_index: u32,
         dest: String,
         amount: u64,
         priority: Option<u32>,
         do_not_relay: bool,
         no_confirm: bool,
     },
-    Transfers {
-        account_index: u32,
-    },
+    Transfers,
     ShowTransfer {
         txid: String,
     },
-    SweepAll {
-        account_index: u32,
-        dest: String,
-        priority: Option<u32>,
-    },
+
+    // -- Receiving (payment requests / URIs, WI-RPC-1) --
     RequestNew {
         amount: u64,
         label: String,
+        expiry: Option<u64>,
     },
-    RequestsList,
-    HistoryIncomingUnattributed {
-        account_index: u32,
+    RequestsList {
+        filter: Option<String>,
+    },
+    HistoryIncomingUnattributed,
+    MakeUri {
+        address: Option<String>,
+        amount: Option<u64>,
+        label: Option<String>,
+    },
+    ParseUri {
+        uri: String,
+    },
+
+    // -- Staking (WI-RPC-1) --
+    Stake,
+    StakedBalance,
+    StakedOutputs,
+    StakingInfo,
+
+    // -- Fees (WI-RPC-1) --
+    Fee {
+        n_inputs: Option<i64>,
+        n_outputs: Option<i64>,
     },
 
     ChainHealth,
 
-    // -- Keys --
-    Seed,
-    Viewkey,
-    Spendkey,
-    ExportKeyImages {
-        filename: String,
-        all: bool,
-        since_height: Option<u64>,
-        account_index: u32,
-    },
-    ImportKeyImages {
-        filename: String,
-    },
-
-    // -- Proofs --
+    // -- Proofs (RESERVED: proofs engine not landed) --
     GetTxKey {
         txid: String,
     },
@@ -119,7 +105,6 @@ pub enum ResolvedCommand {
         message: Option<String>,
     },
     GetReserveProof {
-        account_index: u32,
         amount: Option<u64>,
         message: Option<String>,
     },
@@ -129,7 +114,7 @@ pub enum ResolvedCommand {
         message: Option<String>,
     },
 
-    // -- Signing --
+    // -- Signing (RESERVED) --
     Sign {
         message: String,
     },
@@ -139,7 +124,7 @@ pub enum ResolvedCommand {
         signature: String,
     },
 
-    // -- Offline signing --
+    // -- Offline signing (RESERVED: cold-wallet workflow) --
     DescribeTransfer {
         unsigned_hex: String,
     },
@@ -166,12 +151,7 @@ pub enum ResolvedCommand {
 }
 
 /// Parse a line of user input into a ResolvedCommand.
-///
-/// The session's `default_account` is used when `--account` is not explicitly
-/// specified. Destructive operations that require `--account` explicitly will
-/// be validated by their handlers, not here (since we can't know the full
-/// semantics at parse time without querying engine state).
-pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
+pub fn parse(input: &str) -> ResolvedCommand {
     let tokens: Vec<&str> = input.split_whitespace().collect();
     if tokens.is_empty() {
         return ResolvedCommand::Unknown { cmd: String::new() };
@@ -180,12 +160,13 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
     let cmd = tokens[0];
     let args = &tokens[1..];
 
-    if let Some(msg) = reject_removed_subaddr_flags(args) {
+    if let Some(msg) = reject_removed_flags(args) {
+        return ResolvedCommand::Unknown { cmd: msg };
+    }
+    if let Some(msg) = reject_removed_command(cmd, args) {
         return ResolvedCommand::Unknown { cmd: msg };
     }
 
-    // Extract --account N from args, returning (account_index, remaining_args)
-    let (account_index, args) = extract_account(args, session.default_account);
     match cmd {
         "help" => ResolvedCommand::Help,
         "exit" | "quit" => ResolvedCommand::Exit,
@@ -229,37 +210,12 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
         "refresh" => ResolvedCommand::Refresh,
         "save" => ResolvedCommand::Save,
         "status" => ResolvedCommand::Status,
-        "balance" => ResolvedCommand::Balance { account_index },
-        "address" => {
-            if args.first().copied() == Some("new") {
-                let label = args.get(1..).map(|s| s.join(" ")).unwrap_or_default();
-                return ResolvedCommand::AccountNew { label };
-            }
-            ResolvedCommand::Address { account_index }
-        }
-        "account" => match args.first().copied() {
-            Some("show") | None => ResolvedCommand::AccountShow,
-            Some("default") => {
-                if let Some(idx) = args.get(1).and_then(|s| s.parse::<u32>().ok()) {
-                    ResolvedCommand::AccountDefault { index: idx }
-                } else {
-                    ResolvedCommand::Unknown {
-                        cmd: "account default: need index".to_string(),
-                    }
-                }
-            }
-            Some("new") => {
-                let label = args.get(1..).map(|s| s.join(" ")).unwrap_or_default();
-                ResolvedCommand::AccountNew { label }
-            }
-            _ => ResolvedCommand::Unknown {
-                cmd: format!("account: unknown subcommand {:?}", args.first()),
-            },
-        },
+        "balance" => ResolvedCommand::Balance,
+        "address" => ResolvedCommand::Address,
         "transfer" => {
             let do_not_relay = args.contains(&"--do-not-relay");
             let no_confirm = args.contains(&"--no-confirm");
-            let priority = extract_flag_u32(&args, "--priority");
+            let priority = extract_flag_u32(args, "--priority");
             let filtered: Vec<&str> = args
                 .iter()
                 .filter(|a| !a.starts_with("--"))
@@ -268,7 +224,6 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
             if filtered.len() >= 2 {
                 if let Some(amount) = crate::commands::parse_amount(filtered[0]) {
                     ResolvedCommand::Transfer {
-                        account_index,
                         dest: filtered[1].to_string(),
                         amount,
                         priority,
@@ -286,7 +241,7 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
                 }
             }
         }
-        "transfers" => ResolvedCommand::Transfers { account_index },
+        "transfers" => ResolvedCommand::Transfers,
         "show_transfer" => {
             if let Some(txid) = args.first() {
                 ResolvedCommand::ShowTransfer {
@@ -300,85 +255,77 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
         }
         "request" if args.first().copied() == Some("new") => {
             let rest: Vec<&str> = args.iter().skip(1).copied().collect();
-            if rest.len() >= 2 {
-                if let Some(amount) = crate::commands::parse_amount(rest[0]) {
-                    let label = rest[1..].join(" ");
-                    ResolvedCommand::RequestNew { amount, label }
+            let expiry = extract_flag_u64(&rest, "--expiry");
+            let filtered: Vec<&str> = strip_flag_with_value(&rest, "--expiry");
+            if filtered.len() >= 2 {
+                if let Some(amount) = crate::commands::parse_amount(filtered[0]) {
+                    let label = filtered[1..].join(" ");
+                    ResolvedCommand::RequestNew {
+                        amount,
+                        label,
+                        expiry,
+                    }
                 } else {
                     ResolvedCommand::Unknown {
-                        cmd: format!("request new: invalid amount {:?}", rest[0]),
+                        cmd: format!("request new: invalid amount {:?}", filtered[0]),
                     }
                 }
             } else {
                 ResolvedCommand::Unknown {
-                    cmd: "request new: need <amount> <label>".to_string(),
+                    cmd: "request new: need <amount> <label> [--expiry <height>]".to_string(),
                 }
             }
         }
-        "requests" if args.first().copied() == Some("list") => ResolvedCommand::RequestsList,
+        "requests" if args.first().copied() == Some("list") => ResolvedCommand::RequestsList {
+            filter: args.get(1).map(|s| s.to_string()),
+        },
         "history" if args.first().copied() == Some("incoming") => {
-            let unattributed = args.contains(&"--unattributed");
-            if unattributed {
-                ResolvedCommand::HistoryIncomingUnattributed { account_index }
+            if args.contains(&"--unattributed") {
+                ResolvedCommand::HistoryIncomingUnattributed
             } else {
                 ResolvedCommand::Unknown {
-                    cmd: "history incoming: use --unattributed (FA-8 stub)".to_string(),
+                    cmd: "history incoming: use --unattributed".to_string(),
                 }
             }
         }
-        "sweep_all" => {
-            let priority = extract_flag_u32(&args, "--priority");
-            let filtered: Vec<&str> = args
-                .iter()
-                .filter(|a| !a.starts_with("--"))
-                .copied()
-                .collect();
-            if let Some(dest) = filtered.first() {
-                ResolvedCommand::SweepAll {
-                    account_index,
-                    dest: dest.to_string(),
-                    priority,
+        "make_uri" => {
+            let amount = match extract_flag_str(args, "--amount") {
+                Some(raw) => match crate::commands::parse_amount(&raw) {
+                    Some(v) => Some(v),
+                    None => {
+                        return ResolvedCommand::Unknown {
+                            cmd: format!("make_uri: invalid amount {raw:?}"),
+                        }
+                    }
+                },
+                None => None,
+            };
+            ResolvedCommand::MakeUri {
+                address: extract_flag_str(args, "--address"),
+                amount,
+                label: extract_flag_str(args, "--label"),
+            }
+        }
+        "parse_uri" => {
+            if let Some(uri) = args.first() {
+                ResolvedCommand::ParseUri {
+                    uri: uri.to_string(),
                 }
             } else {
                 ResolvedCommand::Unknown {
-                    cmd: "sweep_all: need <address>".to_string(),
+                    cmd: "parse_uri: need <uri>".to_string(),
                 }
             }
         }
+        "stake" => ResolvedCommand::Stake,
+        "staked_balance" => ResolvedCommand::StakedBalance,
+        "staked_outputs" => ResolvedCommand::StakedOutputs,
+        "staking_info" => ResolvedCommand::StakingInfo,
+        "fee" => ResolvedCommand::Fee {
+            n_inputs: extract_flag_u64(args, "--inputs").map(|v| v as i64),
+            n_outputs: extract_flag_u64(args, "--outputs").map(|v| v as i64),
+        },
         "chain_health" => ResolvedCommand::ChainHealth,
-        "seed" => ResolvedCommand::Seed,
-        "viewkey" => ResolvedCommand::Viewkey,
-        "spendkey" => ResolvedCommand::Spendkey,
-        "export_key_images" => {
-            let all = args.contains(&"--all");
-            let since_height = extract_flag_u64(&args, "--since-height");
-            let filtered: Vec<&str> = args
-                .iter()
-                .filter(|a| !a.starts_with("--"))
-                .copied()
-                .collect();
-            let filename = filtered
-                .first()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "key_images".to_string());
-            ResolvedCommand::ExportKeyImages {
-                filename,
-                all,
-                since_height,
-                account_index,
-            }
-        }
-        "import_key_images" => {
-            if let Some(filename) = args.first() {
-                ResolvedCommand::ImportKeyImages {
-                    filename: filename.to_string(),
-                }
-            } else {
-                ResolvedCommand::Unknown {
-                    cmd: "import_key_images: need <filename>".to_string(),
-                }
-            }
-        }
         "get_tx_key" => {
             if let Some(txid) = args.first() {
                 ResolvedCommand::GetTxKey {
@@ -440,11 +387,7 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
                 .first()
                 .and_then(|s| crate::commands::parse_amount(s));
             let message = filtered.get(1).map(|s| s.to_string());
-            ResolvedCommand::GetReserveProof {
-                account_index,
-                amount,
-                message,
-            }
+            ResolvedCommand::GetReserveProof { amount, message }
         }
         "check_reserve_proof" => {
             if args.len() >= 2 {
@@ -494,7 +437,7 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
             }
         }
         "sign_transfer" => {
-            let file = extract_flag_str(&args, "--file");
+            let file = extract_flag_str(args, "--file");
             let filtered: Vec<&str> = args
                 .iter()
                 .filter(|a| !a.starts_with("--"))
@@ -546,54 +489,71 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
 }
 
 // ---------------------------------------------------------------------------
-// Flag extraction helpers
+// Removed-surface rejection (rule 60 / rule 82: fail loud with guidance)
 // ---------------------------------------------------------------------------
 
-/// Reject removed FA-2 subaddress CLI flags instead of silently ignoring them.
-fn reject_removed_subaddr_flags(args: &[&str]) -> Option<String> {
-    const REMOVED: &[&str] = &["--subaddr-index", "--subaddr-indices"];
+/// Reject removed wallet2-era flags instead of silently ignoring them.
+fn reject_removed_flags(args: &[&str]) -> Option<String> {
+    const REMOVED: &[(&str, &str)] = &[
+        (
+            "--subaddr-index",
+            "subaddresses were deleted; the wallet has a single primary address",
+        ),
+        (
+            "--subaddr-indices",
+            "subaddresses were deleted; the wallet has a single primary address",
+        ),
+        (
+            "--account",
+            "accounts were deleted; use payment requests (\"request new\") to \
+             attribute incoming payments",
+        ),
+    ];
     for arg in args {
-        if REMOVED.contains(arg) {
-            return Some(removed_subaddr_flag_message(arg));
-        }
-        for flag in REMOVED {
-            if let Some(rest) = arg.strip_prefix(&format!("{flag}=")) {
-                return Some(removed_subaddr_flag_message(&format!("{flag}={rest}")));
+        for (flag, reason) in REMOVED {
+            if arg == flag || arg.starts_with(&format!("{flag}=")) {
+                return Some(format!("removed flag {flag}: {reason}"));
             }
         }
     }
     None
 }
 
-fn removed_subaddr_flag_message(flag: &str) -> String {
-    format!("removed flag {flag}: subaddresses were deleted; use account-level addresses only")
+/// Reject removed wallet2-era commands with a message naming the replacement
+/// or the reason (WI-RPC-2b deletions; `docs/CLI_PARITY_MATRIX.md`).
+fn reject_removed_command(cmd: &str, args: &[&str]) -> Option<String> {
+    let removed = match cmd {
+        "account" => Some(
+            "accounts were removed; the wallet has a single primary address. \
+             Use \"address\" and payment requests (\"request new\") for \
+             receive attribution.",
+        ),
+        "address" if args.first().copied() == Some("new") => Some(
+            "\"address new\" was removed with the account model; the wallet \
+             has a single primary address. Use \"request new\" to hand out \
+             per-payer URIs.",
+        ),
+        "seed" | "viewkey" | "spendkey" => Some(
+            "secret-displaying commands were removed: the wallet RPC \
+             deliberately has no secret-egress surface. Your seed backup is \
+             shown exactly once, at create/restore time.",
+        ),
+        "export_key_images" | "import_key_images" => Some(
+            "key-image export/import was removed; Phase 2d sync bundles \
+             replace the wallet2-era key-image workflow.",
+        ),
+        "sweep_all" => Some(
+            "sweep_all was removed: no native sweep surface exists yet \
+             (see docs/FOLLOWUPS.md for the reopening criterion).",
+        ),
+        _ => None,
+    };
+    removed.map(|reason| format!("removed command {cmd}: {reason}"))
 }
 
-/// Extract `--account N` from args, returning (resolved index, remaining args).
-fn extract_account<'a>(args: &[&'a str], default: u32) -> (u32, Vec<&'a str>) {
-    let mut account = default;
-    let mut remaining = Vec::new();
-    let mut skip_next = false;
-
-    for (i, arg) in args.iter().enumerate() {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if *arg == "--account" {
-            if let Some(val) = args.get(i + 1) {
-                if let Ok(idx) = val.parse::<u32>() {
-                    account = idx;
-                    skip_next = true;
-                    continue;
-                }
-            }
-        }
-        remaining.push(*arg);
-    }
-
-    (account, remaining)
-}
+// ---------------------------------------------------------------------------
+// Flag extraction helpers
+// ---------------------------------------------------------------------------
 
 fn extract_flag_u32(args: &[&str], flag: &str) -> Option<u32> {
     for (i, arg) in args.iter().enumerate() {
@@ -622,58 +582,45 @@ fn extract_flag_str(args: &[&str], flag: &str) -> Option<String> {
     None
 }
 
+/// Remove `flag` and its value token from `args`.
+fn strip_flag_with_value<'a>(args: &[&'a str], flag: &str) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut skip_next = false;
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if *arg == flag {
+            skip_next = true;
+            continue;
+        }
+        out.push(*arg);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn session() -> ReplSession {
-        ReplSession::new()
-    }
-
     #[test]
     fn test_basic_commands() {
-        assert!(matches!(parse("help", &session()), ResolvedCommand::Help));
-        assert!(matches!(parse("exit", &session()), ResolvedCommand::Exit));
-        assert!(matches!(parse("quit", &session()), ResolvedCommand::Exit));
-        assert!(matches!(parse("close", &session()), ResolvedCommand::Close));
-        assert!(matches!(
-            parse("refresh", &session()),
-            ResolvedCommand::Refresh
-        ));
-    }
-
-    #[test]
-    fn test_account_default_from_session() {
-        let mut s = session();
-        s.default_account = 5;
-        match parse("balance", &s) {
-            ResolvedCommand::Balance { account_index, .. } => assert_eq!(account_index, 5),
-            other => panic!("expected Balance, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_account_flag_overrides_session() {
-        let mut s = session();
-        s.default_account = 5;
-        match parse("balance --account 2", &s) {
-            ResolvedCommand::Balance { account_index, .. } => assert_eq!(account_index, 2),
-            other => panic!("expected Balance, got {other:?}"),
-        }
+        assert!(matches!(parse("help"), ResolvedCommand::Help));
+        assert!(matches!(parse("exit"), ResolvedCommand::Exit));
+        assert!(matches!(parse("quit"), ResolvedCommand::Exit));
+        assert!(matches!(parse("close"), ResolvedCommand::Close));
+        assert!(matches!(parse("refresh"), ResolvedCommand::Refresh));
+        assert!(matches!(parse("balance"), ResolvedCommand::Balance));
+        assert!(matches!(parse("address"), ResolvedCommand::Address));
     }
 
     #[test]
     fn test_transfer_parsing() {
-        match parse("transfer 1.5 skl1abc123", &session()) {
-            ResolvedCommand::Transfer {
-                amount,
-                dest,
-                account_index,
-                ..
-            } => {
+        match parse("transfer 1.5 skl1abc123") {
+            ResolvedCommand::Transfer { amount, dest, .. } => {
                 assert_eq!(amount, 1_500_000_000);
                 assert_eq!(dest, "skl1abc123");
-                assert_eq!(account_index, 0);
             }
             other => panic!("expected Transfer, got {other:?}"),
         }
@@ -681,30 +628,144 @@ mod tests {
 
     #[test]
     fn test_transfer_do_not_relay() {
-        match parse("transfer --do-not-relay 1.0 skl1addr", &session()) {
+        match parse("transfer --do-not-relay 1.0 skl1addr") {
             ResolvedCommand::Transfer { do_not_relay, .. } => assert!(do_not_relay),
             other => panic!("expected Transfer, got {other:?}"),
         }
     }
 
     #[test]
+    fn test_request_new_with_expiry() {
+        match parse("request new 2.5 coffee order 42 --expiry 1000") {
+            ResolvedCommand::RequestNew {
+                amount,
+                label,
+                expiry,
+            } => {
+                assert_eq!(amount, 2_500_000_000);
+                assert_eq!(label, "coffee order 42");
+                assert_eq!(expiry, Some(1000));
+            }
+            other => panic!("expected RequestNew, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_requests_list_filter() {
+        match parse("requests list pending") {
+            ResolvedCommand::RequestsList { filter } => {
+                assert_eq!(filter.as_deref(), Some("pending"));
+            }
+            other => panic!("expected RequestsList, got {other:?}"),
+        }
+        match parse("requests list") {
+            ResolvedCommand::RequestsList { filter } => assert!(filter.is_none()),
+            other => panic!("expected RequestsList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_make_uri_flags() {
+        match parse("make_uri --amount 1.5 --label store") {
+            ResolvedCommand::MakeUri {
+                address,
+                amount,
+                label,
+            } => {
+                assert!(address.is_none());
+                assert_eq!(amount, Some(1_500_000_000));
+                assert_eq!(label.as_deref(), Some("store"));
+            }
+            other => panic!("expected MakeUri, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_staking_commands() {
+        assert!(matches!(parse("stake"), ResolvedCommand::Stake));
+        assert!(matches!(
+            parse("staked_balance"),
+            ResolvedCommand::StakedBalance
+        ));
+        assert!(matches!(
+            parse("staked_outputs"),
+            ResolvedCommand::StakedOutputs
+        ));
+        assert!(matches!(
+            parse("staking_info"),
+            ResolvedCommand::StakingInfo
+        ));
+    }
+
+    #[test]
+    fn test_fee_shape_flags() {
+        match parse("fee --inputs 3 --outputs 2") {
+            ResolvedCommand::Fee {
+                n_inputs,
+                n_outputs,
+            } => {
+                assert_eq!(n_inputs, Some(3));
+                assert_eq!(n_outputs, Some(2));
+            }
+            other => panic!("expected Fee, got {other:?}"),
+        }
+        match parse("fee") {
+            ResolvedCommand::Fee {
+                n_inputs,
+                n_outputs,
+            } => {
+                assert!(n_inputs.is_none());
+                assert!(n_outputs.is_none());
+            }
+            other => panic!("expected Fee, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_unknown_command() {
-        match parse("foobar", &session()) {
+        match parse("foobar") {
             ResolvedCommand::Unknown { cmd } => assert_eq!(cmd, "foobar"),
             other => panic!("expected Unknown, got {other:?}"),
         }
     }
 
     #[test]
-    fn test_removed_subaddr_flags_rejected() {
+    fn test_removed_flags_rejected() {
         for line in [
             "balance --subaddr-index 0",
             "balance --subaddr-index=0",
             "transfers --subaddr-indices 0:1",
+            "balance --account 2",
+            "transfer --account 1 1.0 skl1addr",
         ] {
-            match parse(line, &session()) {
+            match parse(line) {
                 ResolvedCommand::Unknown { cmd } => {
-                    assert!(cmd.contains("removed flag"));
+                    assert!(cmd.contains("removed flag"), "{line:?} -> {cmd}");
+                }
+                other => panic!("expected Unknown for {line:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_removed_commands_rejected_with_guidance() {
+        for (line, expect) in [
+            ("account show", "single primary address"),
+            ("account new label", "single primary address"),
+            ("address new label", "request new"),
+            ("seed", "no secret-egress"),
+            ("viewkey", "no secret-egress"),
+            ("spendkey", "no secret-egress"),
+            ("export_key_images out", "Phase 2d"),
+            ("import_key_images in", "Phase 2d"),
+            ("sweep_all skl1addr", "FOLLOWUPS"),
+        ] {
+            match parse(line) {
+                ResolvedCommand::Unknown { cmd } => {
+                    assert!(
+                        cmd.contains("removed") && cmd.contains(expect),
+                        "{line:?} -> {cmd}"
+                    );
                 }
                 other => panic!("expected Unknown for {line:?}, got {other:?}"),
             }
