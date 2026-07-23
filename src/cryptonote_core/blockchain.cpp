@@ -1616,6 +1616,11 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 
   CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx, hf_version), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
 
+  // §2.3 output-point rule for coinbase output keys: pool txs get this via
+  // core::check_tx_semantic -> check_outs_valid; the miner tx never passes
+  // through that path, so the gate is applied here.
+  CHECK_AND_ASSERT_MES(check_outs_valid(b.miner_tx), false, "miner transaction has invalid output public key(s) in block " << get_block_hash(b));
+
   if (!check_commitment_mask_valid(b.miner_tx))
   {
     MERROR("Coinbase transaction has invalid output commitment mask in block " << get_block_hash(b));
@@ -3288,54 +3293,77 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
   return true;
 }
 //------------------------------------------------------------------
-// Reject outputs whose Pedersen commitment mask is trivially 0 or 1.
+// Validate outPk commitment masks per the GENESIS_TX_WIRE_FORMAT.md §2.3
+// output-point rule — a thin marshaling shim over shekyl_check_commitment_masks
+// (single home: shekyl-ct-balance). The Rust side enforces:
 //
-// For non-coinbase (CTTypeFcmpPlusPlusPqc): BP+ range proof + balance equation
-// fully constrain the mask, so the identity/G checks are defense-in-depth against
-// construction bugs (they only trigger when amount=0).
+// Structural (every mask): canonical, prime-order (torsion-free) encoding —
+// the same strictness the FCMP++ leaf builder applies, so no accepted mask is
+// silently skipped from the curve tree. For non-coinbase this is redundant
+// with shekyl_verify_ct_balance's point gate; for coinbase (CTTypeNull, no
+// balance equation) this is the sole gate.
 //
-// For coinbase (CTTypeNull): there is no range proof and no balance equation.
-// The amount is public in tx.vout[i].amount, so an attacker who sets mask=1
-// produces C = G + amount*H which is computable by anyone — a fingerprint that
-// defeats confidential-amount coinbase. We therefore check C != zeroCommit(amount)
-// for coinbase outputs, using the public amount.
+// Trivial forms (every mask): identity (mask=0, amount=0) and G (mask=1,
+// amount=0) — defense-in-depth against construction bugs.
+//
+// Coinbase fingerprint: C != zeroCommit(public_amount) = G + amount*H, the
+// trivially-computable commitment that would leak the confidential-coinbase
+// amount to any observer.
 static bool check_commitment_mask_valid(const transaction& tx)
 {
-  const bool is_coinbase = (tx.rct_signatures.type == rct::CTTypeNull);
   const auto& rv = tx.rct_signatures;
 
-  for (size_t i = 0; i < rv.outPk.size(); ++i)
+  // Every tx shape carries exactly one outPk commitment per vout (0 == 0 for
+  // the no-output serve-credit shape). The wire serializer already pins this
+  // (serialize_rctsig_base sizes outPk to vout.size(), rctTypes.h) and
+  // check_tx_semantic re-checks it for pool txs — but this gate must be
+  // locally sound rather than lean on a distant invariant, or an empty outPk
+  // beside a non-empty vout would skate through the empty fast-path below
+  // with no mask ever checked.
+  if (rv.outPk.size() != tx.vout.size())
   {
-    const rct::key& C = rv.outPk[i].mask;
-
-    if (C == rct::identity())
-    {
-      MERROR("Output " << i << " commitment is identity (mask=0, amount=0)");
-      return false;
-    }
-
-    rct::key G;
-    rct::scalarmultBase(G, rct::d2h(1));
-    if (C == G)
-    {
-      MERROR("Output " << i << " commitment equals G (mask=1, amount=0)");
-      return false;
-    }
-
-    // Coinbase-specific: reject C == zeroCommit(public_amount) for any amount.
-    // zeroCommit(a) = 1*G + a*H — trivial mask that leaks amount to observers.
-    if (is_coinbase && i < tx.vout.size())
-    {
-      rct::key trivial = rct::zeroCommit(tx.vout[i].amount);
-      if (C == trivial)
-      {
-        MERROR("Coinbase output " << i << " uses zeroCommit form (mask=1, amount="
-          << tx.vout[i].amount << ") — trivial commitment leaks amount");
-        return false;
-      }
-    }
+    MERROR("outPk count " << rv.outPk.size() << " != vout count " << tx.vout.size()
+      << ", tx " << get_transaction_hash(tx));
+    return false;
   }
-  return true;
+  if (rv.outPk.empty())
+    return true;
+
+  static_assert(sizeof(rct::key) == 32, "rct::key must be 32 bytes");
+  std::vector<uint8_t> masks_flat;
+  masks_flat.reserve(rv.outPk.size() * sizeof(rct::key));
+  for (const auto& pk : rv.outPk)
+    masks_flat.insert(masks_flat.end(), pk.mask.bytes, pk.mask.bytes + sizeof(rct::key));
+
+  std::vector<uint64_t> coinbase_amounts;
+  if (rv.type == rct::CTTypeNull)
+  {
+    coinbase_amounts.reserve(tx.vout.size());
+    for (const auto& o : tx.vout)
+      coinbase_amounts.push_back(o.amount);
+  }
+
+  const uint8_t rc = shekyl_check_commitment_masks(
+    masks_flat.data(), rv.outPk.size(),
+    coinbase_amounts.empty() ? nullptr : coinbase_amounts.data(),
+    coinbase_amounts.size());
+  switch (rc)
+  {
+    case SHEKYL_OUTPUT_POINTS_OK:
+      return true;
+    case SHEKYL_OUTPUT_POINTS_ERR_INVALID_MASK:
+      MERROR("An output commitment mask is not a canonical prime-order point, tx "
+        << get_transaction_hash(tx));
+      return false;
+    case SHEKYL_OUTPUT_POINTS_ERR_TRIVIAL_MASK:
+      MERROR("An output commitment mask uses a trivial amount-leaking form "
+        "(identity, G, or coinbase zeroCommit), tx " << get_transaction_hash(tx));
+      return false;
+    default:
+      MERROR("shekyl_check_commitment_masks failed with rc=" << unsigned(rc)
+        << ", tx " << get_transaction_hash(tx));
+      return false;
+  }
 }
 //------------------------------------------------------------------
 bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context &tvc, std::uint8_t hf_version)
