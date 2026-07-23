@@ -1693,7 +1693,11 @@ sustainability is unaffected by the recalibration.
   Load-bearing because the `1.86` was computed on nominal cover
   (`gf7_timeline.rs` seeds `N = TARGET_ANON_SET` at full honest strength)
   against a 7% margin, and per WI-4's no-cross-subsidy pin the conditional
-  cannot borrow that margin.   **UPDATE 2026-07-16 (later same day — kind
+  cannot borrow that margin. *(2026-07-23: the `1.86` anchor is WITHDRAWN in
+  full — WI-4 §13.1 banner — so this entry's number-margin framing is
+  historical. The reclassification itself stands on its own ground: the cover
+  level is economics, unfalsifiable pre-genesis, regardless of any entry-seam
+  number; and the cover-blindness below is metric arithmetic, which stands.)*   **UPDATE 2026-07-16 (later same day — kind
   sharpened, sensitivity sweep run; reading corrected same day, per
   review):** the conditional conditions the *number itself*, not a
   channel (isolation's kind) — `1.86` was computed at nominal cover, an

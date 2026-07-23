@@ -1243,7 +1243,7 @@ pin, not a measurement. One live hit: GF-7's *effective-vs-nominal cover* residu
 testnet-gradeable only on its observer machinery — the cover *level* is driven by the
 post-isolation network-event rate, an economics number, unfalsifiable pre-genesis, and was
 subsequently reclassified as the fifth WI-4 §13.5 standing conditional (Gate-6 §12.8;
-the `1.86` was verified computed on nominal cover, so the conditional is load-bearing —
+the `1.86` was verified computed on nominal cover, so the conditional is load-bearing *(2026-07-23: the `1.86` itself is now WITHDRAWN — WI-4 §13.1; the reclassification stands on measurability grounds alone)* —
 on realized per-event exposure, the sweep below showing the gate's `r` itself is
 cover-blind). The hit's follow-through demonstrates the filter's
 constructive half: the level is economics, but the *sensitivity sweep* — how the model's

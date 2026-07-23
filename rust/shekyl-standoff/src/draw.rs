@@ -68,18 +68,15 @@ pub fn bounded_uniform<R: GapRng + ?Sized>(rng: &mut R, max: u64) -> u64 {
 /// change this const and the golden vector re-draws and fails until re-frozen,
 /// so the certified window can never silently diverge from the operational one.
 ///
-/// `600` blocks was derived as the multi-event entry/announce/bond-post horizon
-/// (`ARCHIVAL_FIREWALL_GATE6.md` §10.12 / `ARCHIVAL_TIMING_CONSTANTS.md` §7).
-///
-/// ⚠️ **Derivation now stale (F-W3 shape).** That horizon spanned *three*
-/// pipeline events; the order-coin retirement deleted the funding-send event
-/// (only the bond post is chain-attributable — method note 8). The constant is
-/// **genesis-frozen and carried forward unchanged here, but its justification no
-/// longer holds in-tree**: the spread it bounds now defends only an
-/// off-chain-anchored adversary (not the chain observer), and `600` was not
-/// derived against that adversary. Re-deriving the window is the GF-7 retraction
-/// (PR-C); this banner marks that the value is currently unjustified, not
-/// re-tuned.
+/// `600` — an **F-W3-pattern provisional sentinel**: the original multi-event
+/// entry/announce/bond-post derivation is void (the second event was retired
+/// with the order coin, `ARCHIVAL_FIREWALL_GATE6.md` method note 8), and no
+/// honest re-derivation of the value exists. The canonical disposition — the
+/// surviving adversary model and the frozen decision rule — lives in the GF-7
+/// retraction, `ARCHIVAL_BOND_WI4_MEASUREMENT.md` §13.1 banner; it is
+/// deliberately not restated here (a second copy drifts). Wallet-side, not
+/// consensus: a change is a wallet release (plus the golden re-freeze above),
+/// never a fork.
 pub const DEFAULT_ENTRY_GAP_WINDOW: u64 = 600;
 
 /// Conformance-correct entry-seam draw. At the private intent, draw the gap
