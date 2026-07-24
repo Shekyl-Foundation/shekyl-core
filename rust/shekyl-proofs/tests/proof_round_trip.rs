@@ -139,7 +139,7 @@ fn test_01_outbound_proof_round_trip() {
         "outbound proof size: expected {expected_size}, got {}",
         proof.len()
     );
-    assert_eq!(expected_size, 101 + 128, "wire format: 101 + 128*N");
+    assert_eq!(expected_size, 101 + 132, "wire format: 101 + 132*N");
 
     let verified = verify_outbound_proof(
         &proof,
@@ -192,13 +192,13 @@ fn test_02_inbound_proof_round_trip() {
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
-        &[ps],
+        &[(0, ps)],
     )
     .expect("generate inbound proof");
 
     let expected_size = tx_proof::inbound_proof_size(1);
     assert_eq!(proof.len(), expected_size);
-    assert_eq!(expected_size, 69 + 128, "wire format: 69 + 128*N");
+    assert_eq!(expected_size, 69 + 132, "wire format: 69 + 132*N");
 
     let verified = verify_inbound_proof(
         &proof,
@@ -267,7 +267,10 @@ fn test_03_outbound_inbound_consistency() {
             i as u64,
         )
         .expect("scan");
-        per_output_secrets.push(derive_proof_secrets(&recovered.combined_ss, i as u64));
+        per_output_secrets.push((
+            u32::try_from(i).unwrap(),
+            derive_proof_secrets(&recovered.combined_ss, i as u64),
+        ));
     }
 
     let inbound = generate_inbound_proof(
@@ -400,8 +403,9 @@ fn test_05_tampered_proof_secrets_rejected() {
     )
     .expect("generate");
 
-    // Flip one bit in the first byte of ho (starts at offset 101 in outbound proof)
-    proof[101] ^= 0x01;
+    // Flip one bit in the first byte of ho (per-output entries start at
+    // offset 101; the first 4 bytes are the carried vout index, ho follows)
+    proof[105] ^= 0x01;
 
     let result = verify_outbound_proof(
         &proof,
@@ -439,11 +443,13 @@ fn test_06_swapped_proof_secrets_rejected() {
     )
     .expect("generate");
 
-    // Swap per-output entries (128 bytes each, starting at offset 101)
+    // Swap per-output entries (132 bytes each, starting at offset 101).
+    // The swap also reverses the carried vout indices, so the verifier
+    // refuses on the strictly-increasing ordering check.
     let header = 101;
-    let entry_size = 128;
-    let mut entry0 = [0u8; 128];
-    let mut entry1 = [0u8; 128];
+    let entry_size = 132;
+    let mut entry0 = [0u8; 132];
+    let mut entry1 = [0u8; 132];
     entry0.copy_from_slice(&proof[header..header + entry_size]);
     entry1.copy_from_slice(&proof[header + entry_size..header + 2 * entry_size]);
     proof[header..header + entry_size].copy_from_slice(&entry1);
@@ -542,7 +548,7 @@ fn test_08_wrong_view_key_inbound_rejected() {
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
-        &[ps],
+        &[(0, ps)],
     )
     .expect("generate with wrong view key");
 
@@ -576,12 +582,12 @@ fn test_wire_format_sizes() {
     for n in [0, 1, 2, 5, 10, 100] {
         assert_eq!(
             tx_proof::outbound_proof_size(n),
-            101 + 128 * n,
+            101 + 132 * n,
             "outbound size for N={n}"
         );
         assert_eq!(
             tx_proof::inbound_proof_size(n),
-            69 + 128 * n,
+            69 + 132 * n,
             "inbound size for N={n}"
         );
         assert_eq!(
@@ -631,6 +637,115 @@ fn test_multi_output_outbound() {
         assert_eq!(v.amount, 100_000 + i as u64);
     }
     eprintln!("[multi_output] 5-output outbound proof verified");
+}
+
+// --------------------------------------------------------------------------
+// Non-prefix output subset: prove only output 1 of a 3-output tx.
+//
+// Regression for the positional-indexing defect: the pre-vout wire format
+// re-derived KEM material by entry POSITION, so any proof over a subset
+// that wasn't [0, 1, …, k] verified against the wrong outputs (the second
+// recipient of a two-recipient tx was unprovable). The carried vout_index
+// makes the subset explicit.
+// --------------------------------------------------------------------------
+#[test]
+fn test_non_prefix_subset_round_trip() {
+    let ctx = setup(3, 7_000_000);
+
+    // Outbound: prove only vout 1.
+    let proof = generate_outbound_proof(
+        &ctx.tx_key_secret,
+        &ctx.txid,
+        &ctx.address_bytes,
+        &ctx.user_message,
+        &ctx.kem_pk_x25519,
+        &ctx.kem_pk_ml_kem,
+        &[1],
+    )
+    .expect("outbound over vout 1");
+
+    let verified = verify_outbound_proof(
+        &proof,
+        &ctx.txid,
+        &ctx.address_bytes,
+        &ctx.user_message,
+        &ctx.spend_pubkey,
+        &ctx.kem_pk_x25519,
+        &ctx.kem_pk_ml_kem,
+        &ctx.on_chain,
+    )
+    .expect("verify outbound over vout 1");
+
+    assert_eq!(verified.len(), 1);
+    assert_eq!(verified[0].output_index, 1);
+    assert_eq!(verified[0].amount, 7_000_001);
+
+    // Inbound: prove only vout 1 with recipient-derived secrets.
+    let recovered = scan_output_recover(
+        &ctx.kem_sk_x25519,
+        &ctx.kem_sk_ml_kem,
+        &ctx.on_chain[1].x25519_eph_pk,
+        &ctx.on_chain[1].ml_kem_ct,
+        &ctx.on_chain[1].output_key,
+        &ctx.on_chain[1].commitment,
+        &ctx.on_chain[1].enc_amount,
+        ctx.outputs[1].amount_tag,
+        &ctx.outputs[1].enc_label,
+        ctx.outputs[1].label_tag,
+        ctx.outputs[1].view_tag_prefilter,
+        1,
+    )
+    .expect("scan vout 1");
+    let ps = derive_proof_secrets(&recovered.combined_ss, 1);
+
+    let inbound = generate_inbound_proof(
+        &ctx.view_secret,
+        &ctx.txid,
+        &ctx.address_bytes,
+        &ctx.user_message,
+        &[(1, ps)],
+    )
+    .expect("inbound over vout 1");
+
+    let verified = verify_inbound_proof(
+        &inbound,
+        &ctx.txid,
+        &ctx.address_bytes,
+        &ctx.user_message,
+        &ctx.view_pubkey,
+        &ctx.spend_pubkey,
+        &ctx.on_chain,
+    )
+    .expect("verify inbound over vout 1");
+
+    assert_eq!(verified.len(), 1);
+    assert_eq!(verified[0].output_index, 1);
+    assert_eq!(verified[0].amount, 7_000_001);
+
+    // Ordering discipline: duplicate and descending indices are refused
+    // at generation.
+    assert!(generate_outbound_proof(
+        &ctx.tx_key_secret,
+        &ctx.txid,
+        &ctx.address_bytes,
+        &ctx.user_message,
+        &ctx.kem_pk_x25519,
+        &ctx.kem_pk_ml_kem,
+        &[1, 1],
+    )
+    .is_err());
+    assert!(generate_outbound_proof(
+        &ctx.tx_key_secret,
+        &ctx.txid,
+        &ctx.address_bytes,
+        &ctx.user_message,
+        &ctx.kem_pk_x25519,
+        &ctx.kem_pk_ml_kem,
+        &[2, 0],
+    )
+    .is_err());
+
+    eprintln!("[non_prefix_subset] vout-carrying wire format verified");
 }
 
 // --------------------------------------------------------------------------

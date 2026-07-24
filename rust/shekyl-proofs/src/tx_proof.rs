@@ -16,13 +16,25 @@
 //!
 //! Wire format (hand-rolled canonical, no bincode):
 //!
-//! Outbound: `101 + 128*N` bytes
+//! Outbound: `101 + 132*N` bytes
 //!   header: version[1] + tx_key_secret[32] + schnorr[64] + output_count[4]
-//!   per-output: ho[32] + y[32] + z[32] + k_amount[32]
+//!   per-output: vout_index[u32 LE] + ho[32] + y[32] + z[32] + k_amount[32]
 //!
-//! Inbound: `69 + 128*N` bytes
+//! Inbound: `69 + 132*N` bytes
 //!   header: version[1] + schnorr[64] + output_count[4]
-//!   per-output: ho[32] + y[32] + z[32] + k_amount[32]
+//!   per-output: vout_index[u32 LE] + ho[32] + y[32] + z[32] + k_amount[32]
+//!
+//! Each entry carries the transaction-level output index (`vout_index`) it
+//! proves, and entries are ordered strictly increasing by that index. The
+//! carried index is load-bearing twice over: the verifier holds only
+//! `(proof, txid, address)` and needs to know WHICH tx outputs each entry
+//! refers to, and outbound KEM re-derivation is per-output-index
+//! (`rederive_combined_ss(tx_key_secret, …, vout_index)`), so a positional
+//! convention would silently mis-verify any proof over a non-prefix output
+//! subset (e.g. the second recipient of a two-recipient tx). The index rides
+//! inside the Schnorr-signed per-output blob; independently of the
+//! signature, an entry re-pointed at a different output fails the
+//! `O = ho*G + B + y*T` check against that output's on-chain key.
 
 #![deny(unsafe_code)]
 
@@ -44,34 +56,52 @@ pub const CURRENT_PROOF_VERSION: u8 = 1;
 const OUTBOUND_DOMAIN: &[u8] = b"shekyl-outbound-tx-proof-v1";
 const INBOUND_DOMAIN: &[u8] = b"shekyl-inbound-tx-proof-v1";
 
-const PER_OUTPUT_SIZE: usize = 128; // ho[32] + y[32] + z[32] + k_amount[32]
+const PER_OUTPUT_SIZE: usize = 132; // vout[4] + ho[32] + y[32] + z[32] + k_amount[32]
 const OUTBOUND_HEADER_SIZE: usize = 101; // version[1] + tx_key_secret[32] + sig[64] + count[4]
 const INBOUND_HEADER_SIZE: usize = 69; // version[1] + sig[64] + count[4]
 
 // ── Per-output entry serialization ──────────────────────────────────
 
-fn write_per_output(ps: &ProofSecrets, buf: &mut Vec<u8>) {
+fn write_per_output(vout_index: u32, ps: &ProofSecrets, buf: &mut Vec<u8>) {
+    buf.extend_from_slice(&vout_index.to_le_bytes());
     buf.extend_from_slice(&ps.ho);
     buf.extend_from_slice(&ps.y);
     buf.extend_from_slice(&ps.z);
     buf.extend_from_slice(&ps.k_amount);
 }
 
-fn read_per_output(data: &[u8]) -> Result<ProofSecrets, ProofError> {
+fn read_per_output(data: &[u8]) -> Result<(u32, ProofSecrets), ProofError> {
     if data.len() < PER_OUTPUT_SIZE {
         return Err(ProofError::InvalidFormat(
             "per-output entry too short".into(),
         ));
     }
+    let vout_index = u32::from_le_bytes(data[0..4].try_into().unwrap());
     let mut ho = [0u8; 32];
     let mut y = [0u8; 32];
     let mut z = [0u8; 32];
     let mut k_amount = [0u8; 32];
-    ho.copy_from_slice(&data[0..32]);
-    y.copy_from_slice(&data[32..64]);
-    z.copy_from_slice(&data[64..96]);
-    k_amount.copy_from_slice(&data[96..128]);
-    Ok(ProofSecrets { ho, y, z, k_amount })
+    ho.copy_from_slice(&data[4..36]);
+    y.copy_from_slice(&data[36..68]);
+    z.copy_from_slice(&data[68..100]);
+    k_amount.copy_from_slice(&data[100..132]);
+    Ok((vout_index, ProofSecrets { ho, y, z, k_amount }))
+}
+
+/// Enforce the strictly-increasing-`vout_index` entry ordering shared by
+/// both proof directions. Rejects duplicates and unordered entries in one
+/// check; generation and verification both call it so a proof that
+/// generates also verifies, and a hand-forged unordered blob is refused
+/// at parse.
+fn check_strictly_increasing(prev: Option<u32>, next: u32) -> Result<(), ProofError> {
+    if let Some(p) = prev {
+        if next <= p {
+            return Err(ProofError::InvalidFormat(format!(
+                "output indices must be strictly increasing: {next} follows {p}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 // ── Schnorr signature (Ed25519 key, SHA-512 challenge) ──────────────
@@ -167,7 +197,9 @@ pub struct VerifiedOutput {
 /// - `user_message`: arbitrary user-supplied message string
 /// - `recipient_x25519_pk`: recipient's X25519 view public key
 /// - `recipient_ml_kem_ek`: recipient's ML-KEM-768 encapsulation key
-/// - `output_indices`: which output indices in the tx to include
+/// - `output_indices`: which transaction-level output indices (vout) to
+///   include; must be strictly increasing (each is carried in the proof
+///   so the verifier knows which on-chain outputs the entries name)
 #[allow(clippy::cast_possible_truncation)]
 pub fn generate_outbound_proof(
     tx_key_secret: &[u8; 32],
@@ -186,12 +218,19 @@ pub fn generate_outbound_proof(
     let mut per_output_blob = Vec::with_capacity(n * PER_OUTPUT_SIZE);
     let mut secrets_for_signing: Vec<ProofSecrets> = Vec::with_capacity(n);
 
+    let mut prev: Option<u32> = None;
     for &idx in output_indices {
+        let vout: u32 = idx
+            .try_into()
+            .map_err(|_| ProofError::InvalidFormat(format!("output index {idx} exceeds u32")))?;
+        check_strictly_increasing(prev, vout)?;
+        prev = Some(vout);
+
         let (combined_ss, _x25519_eph_pk, _ml_kem_ct) =
             rederive_combined_ss(tx_key_secret, recipient_x25519_pk, recipient_ml_kem_ek, idx)?;
 
         let ps = derive_proof_secrets(&combined_ss.0, idx);
-        write_per_output(&ps, &mut per_output_blob);
+        write_per_output(vout, &ps, &mut per_output_blob);
         secrets_for_signing.push(ps);
     }
 
@@ -243,7 +282,8 @@ pub struct OnChainOutput {
 /// - `recipient_spend_pubkey`: B (32 bytes)
 /// - `recipient_x25519_pk`: recipient's X25519 view public key
 /// - `recipient_ml_kem_ek`: recipient's ML-KEM-768 encapsulation key
-/// - `on_chain_outputs`: per-output data fetched from the blockchain
+/// - `on_chain_outputs`: ALL of the transaction's outputs, in vout order
+///   (each proof entry names its output by carried `vout_index`)
 #[allow(clippy::too_many_arguments)]
 pub fn verify_outbound_proof(
     proof_bytes: &[u8],
@@ -284,9 +324,9 @@ pub fn verify_outbound_proof(
         )));
     }
 
-    if output_count != on_chain_outputs.len() {
+    if output_count > on_chain_outputs.len() {
         return Err(ProofError::InvalidFormat(format!(
-            "proof has {output_count} outputs but {} on-chain outputs provided",
+            "proof has {output_count} outputs but the tx has only {}",
             on_chain_outputs.len(),
         )));
     }
@@ -310,15 +350,26 @@ pub fn verify_outbound_proof(
 
     let mut results = Vec::with_capacity(output_count);
 
-    for (i, on_chain) in on_chain_outputs.iter().enumerate() {
-        let offset = i * PER_OUTPUT_SIZE;
-        let ps = read_per_output(&per_output_blob[offset..])?;
+    let mut prev: Option<u32> = None;
+    for entry in 0..output_count {
+        let offset = entry * PER_OUTPUT_SIZE;
+        let (vout, ps) = read_per_output(&per_output_blob[offset..])?;
+        check_strictly_increasing(prev, vout)?;
+        prev = Some(vout);
+
+        let i = vout as usize;
+        let on_chain = on_chain_outputs.get(i).ok_or_else(|| {
+            ProofError::InvalidFormat(format!(
+                "proof names output {i} but the tx has only {} outputs",
+                on_chain_outputs.len(),
+            ))
+        })?;
 
         let (rederived_ss, rederived_x25519_eph, rederived_ml_kem_ct) = rederive_combined_ss(
             &tx_key_secret,
             recipient_x25519_pk,
             recipient_ml_kem_ek,
-            i as u64,
+            u64::from(vout),
         )?;
 
         if rederived_x25519_eph != on_chain.x25519_eph_pk {
@@ -328,7 +379,7 @@ pub fn verify_outbound_proof(
             return Err(ProofError::KemCtMismatch);
         }
 
-        let expected_ps = derive_proof_secrets(&rederived_ss.0, i as u64);
+        let expected_ps = derive_proof_secrets(&rederived_ss.0, u64::from(vout));
         if ps.ho != expected_ps.ho
             || ps.y != expected_ps.y
             || ps.z != expected_ps.z
@@ -400,15 +451,17 @@ pub fn verify_outbound_proof(
 /// - `txid`: transaction hash
 /// - `address_bytes`: canonical encoding of the recipient address
 /// - `user_message`: arbitrary user-supplied message string
-/// - `per_output_secrets`: ProofSecrets for each output, derived from
-///   KEM decapsulation by the recipient
+/// - `per_output_secrets`: `(vout_index, ProofSecrets)` for each proven
+///   output — the transaction-level output index alongside the secrets the
+///   recipient derived for it via KEM decapsulation; strictly increasing
+///   by index
 #[allow(clippy::cast_possible_truncation)]
 pub fn generate_inbound_proof(
     view_secret_key: &[u8; 32],
     txid: &[u8; 32],
     address_bytes: &[u8],
     user_message: &[u8],
-    per_output_secrets: &[ProofSecrets],
+    per_output_secrets: &[(u32, ProofSecrets)],
 ) -> Result<Vec<u8>, ProofError> {
     if per_output_secrets.is_empty() {
         return Err(ProofError::InvalidFormat("no outputs specified".into()));
@@ -416,8 +469,11 @@ pub fn generate_inbound_proof(
 
     let n = per_output_secrets.len();
     let mut per_output_blob = Vec::with_capacity(n * PER_OUTPUT_SIZE);
-    for ps in per_output_secrets {
-        write_per_output(ps, &mut per_output_blob);
+    let mut prev: Option<u32> = None;
+    for (vout, ps) in per_output_secrets {
+        check_strictly_increasing(prev, *vout)?;
+        prev = Some(*vout);
+        write_per_output(*vout, ps, &mut per_output_blob);
     }
 
     let msg = assemble_proof_message(txid, address_bytes, user_message, &per_output_blob);
@@ -447,7 +503,8 @@ pub fn generate_inbound_proof(
 /// - `user_message`: arbitrary user-supplied message string
 /// - `view_public_key`: recipient's Ed25519 view public key (32 bytes)
 /// - `recipient_spend_pubkey`: B (32 bytes)
-/// - `on_chain_outputs`: per-output data fetched from the blockchain
+/// - `on_chain_outputs`: ALL of the transaction's outputs, in vout order
+///   (each proof entry names its output by carried `vout_index`)
 pub fn verify_inbound_proof(
     proof_bytes: &[u8],
     txid: &[u8; 32],
@@ -483,9 +540,9 @@ pub fn verify_inbound_proof(
         )));
     }
 
-    if output_count != on_chain_outputs.len() {
+    if output_count > on_chain_outputs.len() {
         return Err(ProofError::InvalidFormat(format!(
-            "proof has {output_count} outputs but {} on-chain outputs provided",
+            "proof has {output_count} outputs but the tx has only {}",
             on_chain_outputs.len(),
         )));
     }
@@ -508,9 +565,20 @@ pub fn verify_inbound_proof(
 
     let mut results = Vec::with_capacity(output_count);
 
-    for (i, on_chain) in on_chain_outputs.iter().enumerate() {
-        let offset = i * PER_OUTPUT_SIZE;
-        let ps = read_per_output(&per_output_blob[offset..])?;
+    let mut prev: Option<u32> = None;
+    for entry in 0..output_count {
+        let offset = entry * PER_OUTPUT_SIZE;
+        let (vout, ps) = read_per_output(&per_output_blob[offset..])?;
+        check_strictly_increasing(prev, vout)?;
+        prev = Some(vout);
+
+        let i = vout as usize;
+        let on_chain = on_chain_outputs.get(i).ok_or_else(|| {
+            ProofError::InvalidFormat(format!(
+                "proof names output {i} but the tx has only {} outputs",
+                on_chain_outputs.len(),
+            ))
+        })?;
 
         let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.ho)).ok_or(
             ProofError::InvalidFormat(format!("non-canonical ho at output {i}")),

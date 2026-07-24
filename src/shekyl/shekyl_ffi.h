@@ -751,6 +751,8 @@ bool shekyl_verify_tx_proof_outbound(
 /// Generate inbound transaction proof (recipient proves receipt).
 /// proof_secrets: output_count * 128 bytes — packed (ho[32]+y[32]+z[32]+k_amount[32])
 ///   per output, derived via shekyl_derive_proof_secrets.
+/// output_indices: output_count u32 vout indices, strictly increasing, entry i
+///   pairing with proof-secrets entry i (carried in the proof wire format).
 bool shekyl_generate_tx_proof_inbound(
     const uint8_t* view_secret_key,        // 32 bytes
     const uint8_t* txid,                   // 32 bytes
@@ -759,6 +761,7 @@ bool shekyl_generate_tx_proof_inbound(
     const uint8_t* message,                // message_len bytes
     size_t message_len,
     const uint8_t* proof_secrets,          // output_count * 128 bytes
+    const uint32_t* output_indices,        // output_count u32 values
     uint32_t output_count,
     ShekylBuffer* proof_out);
 
