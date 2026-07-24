@@ -516,7 +516,11 @@ nobody re-checks a closed gate. If the margin fails to bind, the answer is **not
 redesigning D2; it is tightening the gate-4 grace window or accelerating the PoRep
 reopen — both already the doc's own named economics-reopens
 (`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`: *"traffic-proportional pay (§0.3) or
-PoRep durability fork"*). Folded: **W10** (§9) and a **Stage-2 arm** (§5).
+PoRep durability fork"*). Folded: **W10** (§9) and a **Stage-2 arm** (§5). The
+reciprocal pointer lands in the closed gate itself — `8C` §7.4 and §9.1 reopen
+(d) now flag this equilibrium as under re-measurement (**X-1**), so a reader of
+`8C` sees it, not only a reader of this doc: the correction lands where the claim
+is *consumed*, not only where it is argued.
 
 ### 11.2 Gap — the missing sim quadrant: long history, low activity (→ scenario 9, Kryder param)
 

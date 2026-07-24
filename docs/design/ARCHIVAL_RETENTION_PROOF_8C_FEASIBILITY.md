@@ -209,6 +209,12 @@ subset. It does **not** prevent reacquiring the revealed `ℓ` after `H_anchor`.
   forged response impossible.
 - **"Lazy re-fetch from peers is orthogonal"** — if re-fetch is cheap, the challenge **is**
   the free-rider equilibrium (`STAKER_ARCHIVAL_SIM.md` L14 residue: *challenge-faking cost*).
+  *(**X-1, 2026-07-24 — this equilibrium is under active re-measurement.** It was priced
+  against the old reward economics: a frozen 25% staker share **and** a work-score truncation
+  that paid bulk holders zero. Both change under
+  [`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)
+  (D1 restores bulk-holder pay; D2 escalates the pool a lazy proxy would drain), which
+  re-measures this equilibrium as wargame **W10** — see §9.1 reopen (d).)*
 - **"Verify is cheap"** — true and irrelevant; soundness rests on **generate/reacquire** cost
   vs deadline, not verify cost.
 
@@ -259,7 +265,12 @@ Reopen **BUILD** if hash-path verify fails substrate review or verify budget exc
 limit.
 
 Reopen **economics** for: (a) **traffic-proportional pay** (gate-2 §0.3), (b) **PoRep
-independent storage** fork, (c) binding failure at gate-6 firewall.
+independent storage** fork, (c) binding failure at gate-6 firewall, **(d)** the §7.4
+re-fetch free-rider equilibrium failing re-measurement under the changed reward economics
+(X-1) — **trigger:** the W10 proxy-cost arm in
+[`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)
+showing the fetch-cost-vs-deadline margin no longer binds; **disposition:** (a) or (b) above
+(never a redesign of the reward escalation), per that doc's reopen (d).
 
 ---
 
