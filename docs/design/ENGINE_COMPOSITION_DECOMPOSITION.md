@@ -205,14 +205,38 @@ Do **not** invent a second framework. Do invent **stable trait methods + service
 
 ---
 
+## Transfer workflow ownership (policy)
+
+**Status:** landed structurally (`engine/transfer/`) + ownership pin
+(docs + `check_engine_decomposition.sh` tripwire). No separate
+`TransferWorkflow` type is required for ownership.
+
+| Claim | Detail |
+|-------|--------|
+| **The transfer workflow is** | `engine/transfer/` — production type [`LocalPendingTx`], trait [`PendingTxEngine`] |
+| **Engine's role** | Owns `pending: P` (default `LocalPendingTx`); may expose **thin** delegates that only call `self.pending.…` |
+| **Compat path** | `engine/local_pending_tx.rs` re-exports only — no multi-step bodies |
+| **Do not** | Re-inflate select/assemble/sign/reserve/submit/re-anchor logic into `Engine`, `lifecycle.rs`, or a new top-level monofile |
+| **Mechanical pin** | `scripts/ci/check_engine_decomposition.sh` §Transfer workflow ownership: `transfer/` must exist; `LocalPendingTx` defined there; shim re-exports; named orchestration methods must not be *defined* outside `transfer/` |
+
+**Deferred (not blocked on this pin):** a `TransferCtx` struct, `engine.transfer()` façades, renaming `LocalPendingTx` → `TransferWorkflow`. Those are optional API polish once a product surface needs them.
+
+**Tests:** construct `LocalPendingTx` under `transfer/` (see
+`transfer_pending_tx_tests.rs`); do not require `Engine::open` for unit
+coverage of the send pipeline.
+
+---
+
 ## Suggested sequence (practical)
 
 1. **Type alias the production engine** so most of the tree never writes the 7-param form.
 2. **Group Engine fields** into `identity` / `caps` / `runtime` (structural, low risk).
 3. **Extract `transfer/` from `local_pending_tx`**; `Engine` methods become delegates. No behavior change.
    **Done** (`chore/transfer-from-local-pending-tx`): monofile → `engine/transfer/{types,support,engine,trait_impl}.rs` + `transfer_pending_tx_tests.rs`; thin `local_pending_tx` re-export shim; decomposition ratchet drops the 5420-line baseline and scans `engine/transfer/`.
-4. **Introduce `TransferCtx`** and stop any new send-path code from taking `&Engine`.
-5. **Façade methods** (`engine.transfer()`, `engine.scan()`) for RPC/CLI.
+3b. **Pin transfer workflow ownership** (docs + CI tripwire; no new types).
+   **Done** (`chore/transfer-workflow-ownership-pin`): this section + decomposition-check ownership invariants.
+4. **Introduce `TransferCtx`** only when a new feature needs it — stop new send-path code from taking `&Engine` as a habit, not as a big-bang rename.
+5. **Façade methods** (`engine.transfer()`, `engine.scan()`) for RPC/CLI when those surfaces want a clean cut.
 6. **`StakeWorkflow` / StakeEngine** as a real subsystem (optional field), not more inherent methods on Engine.
 7. **PScan supervisor** already modular — stop growing it via Engine glue; give it a single start/stop API.
 8. Only then Stage 4 actor swaps per trait, with services already isolated.
@@ -255,5 +279,5 @@ That is the same architecture already halfway in — finished, instead of “sev
 | | |
 |--|--|
 | **Location** | `shekyl-core/docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md` |
-| **Status** | Design recommendation — not an implementation plan / PR series |
-| **Follow-up** | Optional: concrete `transfer/` module map against `LocalPendingTx` methods (what moves where, API stability on Engine) |
+| **Status** | Living design + partial enforcement (transfer extract + ownership pin) |
+| **Follow-up** | Optional: `TransferCtx` / façades when product needs them; stake test extract + ratchet-down when that file is quiet |

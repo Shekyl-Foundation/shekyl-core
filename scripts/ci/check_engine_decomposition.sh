@@ -149,6 +149,68 @@ for key in "${!FILE_CEIL[@]}"; do
   }
 done
 
+# --- 5. Transfer workflow ownership pin --------------------------------------
+# docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md §"Transfer workflow ownership"
+#
+# Multi-step send lives under engine/transfer/ as LocalPendingTx. Re-inflating
+# those orchestration methods onto Engine / lifecycle / top-level monofiles is
+# the failure mode this tripwire catches. Pure grep (no ripgrep) so this script
+# stays dependency-free for CI.
+TRANSFER_ENGINE_RS="${ENGINE_DIR}/transfer/engine.rs"
+TRANSFER_MOD_RS="${ENGINE_DIR}/transfer/mod.rs"
+SHIM_RS="${ENGINE_DIR}/local_pending_tx.rs"
+
+if [ ! -d "${ENGINE_DIR}/transfer" ] || [ ! -f "${TRANSFER_ENGINE_RS}" ] || [ ! -f "${TRANSFER_MOD_RS}" ]; then
+  echo "FAIL: engine/transfer/ workflow tree is missing (expected transfer/mod.rs + transfer/engine.rs)."
+  note "Transfer ownership is engine/transfer/ — restore it, do not move send logic onto Engine."
+  fail=1
+elif ! grep -q 'pub struct LocalPendingTx' "${TRANSFER_ENGINE_RS}"; then
+  echo "FAIL: LocalPendingTx is not defined in engine/transfer/engine.rs."
+  note "Production transfer implementor must live under engine/transfer/."
+  fail=1
+fi
+
+if [ ! -f "${SHIM_RS}" ]; then
+  echo "FAIL: engine/local_pending_tx.rs shim is missing."
+  note "Keep the re-export shim so historical import paths keep working."
+  fail=1
+elif ! grep -q 'pub use super::transfer::LocalPendingTx' "${SHIM_RS}"; then
+  echo "FAIL: local_pending_tx.rs does not re-export transfer::LocalPendingTx."
+  note "Shim must stay a re-export path, not a second implementor."
+  fail=1
+fi
+
+# Method *definitions* that belong only under transfer/. Mentions in comments
+# or call sites elsewhere are fine; a second `fn build_select_sync` body is not.
+TRANSFER_OWNED_FNS=(
+  build_select_sync
+  reanchor_consumer_held
+  finalize_submit_accept
+  finalize_submit_terminal
+  finalize_submit_retryable
+  finalize_submit_ambiguous
+  finalize_submit_already_in_chain
+  commit_built_sync
+  signal_mempool_evicted_sync
+)
+while IFS= read -r path; do
+  case "${path}" in
+    "${ENGINE_DIR}/transfer"/*) continue ;;
+  esac
+  for sym in "${TRANSFER_OWNED_FNS[@]}"; do
+    # Match inherent/method defs only (optional pub / pub(crate) / pub(super) / async).
+    # Pattern anchors at line start so doc comments naming the symbol do not trip.
+    if hits="$(grep -nE "^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+${sym}[[:space:]]*\(" "${path}" 2>/dev/null)"; then
+      echo "FAIL: transfer orchestration method '${sym}' is defined outside engine/transfer/:"
+      echo "${hits}" | while IFS= read -r hit; do
+        echo "  ${path}:${hit}"
+      done
+      note "Move the body into engine/transfer/ (or delete the duplicate). See ENGINE_COMPOSITION_DECOMPOSITION.md §Transfer workflow ownership."
+      fail=1
+    fi
+  done
+done < <(find "${ENGINE_DIR}" -name '*.rs' | sort)
+
 if [ "${fail}" -ne 0 ]; then
   echo "check_engine_decomposition: FAILED"
   exit 1

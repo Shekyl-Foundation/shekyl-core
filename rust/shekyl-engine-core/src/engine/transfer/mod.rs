@@ -3,12 +3,30 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Transfer / pending-tx workflow ([`LocalPendingTx`]).
+//! # Transfer workflow (ownership pin)
+//!
+//! **This module *is* the transfer / pending-tx workflow.** There is no
+//! separate `TransferWorkflow` type yet — and none is required for ownership.
+//! Multi-step send logic (select → assemble → sign → reserve → submit →
+//! re-anchor → discard / mempool-evict) lives here as
+//! [`LocalPendingTx`] + [`PendingTxEngine`](super::traits::PendingTxEngine).
+//!
+//! | Role | Where |
+//! |------|--------|
+//! | Production implementor | [`LocalPendingTx`] in this module |
+//! | Trait surface | [`PendingTxEngine`](super::traits::PendingTxEngine) |
+//! | Engine ownership | [`Engine::pending`](super::Engine) holds `P: PendingTxEngine` |
+//! | Compat import path | [`crate::engine::local_pending_tx`] re-exports |
+//!
+//! **Do not re-inflate send orchestration onto `Engine` or `lifecycle`.**
+//! New multi-step transfer code lands under `engine/transfer/`. Thin
+//! Engine delegates that only call `self.pending.…` are fine; new bodies
+//! for `build_select_sync` / `finalize_submit_*` / `reanchor_consumer_held`
+//! outside this tree fail `scripts/ci/check_engine_decomposition.sh`.
 //!
 //! Extracted from the former monofile `engine/local_pending_tx.rs` per
-//! `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`. The compatibility
-//! shim at [`crate::engine::local_pending_tx`] re-exports the surface that
-//! other modules historically imported from that path.
+//! `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`. Policy + ratchet:
+//! same doc, §"Transfer workflow ownership".
 //!
 //! Per [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`] §5.0.1 and
 //! `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.4, [`LocalPendingTx`] aggregates
