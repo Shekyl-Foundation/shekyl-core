@@ -4236,6 +4236,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-relay-privacy"
+version = "3.1.0"
+dependencies = [
+ "shekyl-relay-privacy",
+ "shekyl-stats",
+]
+
+[[package]]
 name = "shekyl-rpc-client"
 version = "0.1.0"
 dependencies = [
