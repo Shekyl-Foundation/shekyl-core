@@ -240,11 +240,10 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         let burn_pct = match (&config.archival_lock, staked_atomic) {
             // Gate-7 path: the engine-equivalent composition over the
             // consensus circulating quantity (follows the recorder).
-            (Some(_), Some(locked)) => calc_burn_pct_from_activity(
+            (Some(_), Some(_locked)) => calc_burn_pct_from_activity(
                 tx_volume,
                 params.tx_volume_baseline,
                 circ_consensus,
-                locked,
                 &economic,
             ),
             // Legacy path: byte-identical to the pre-gate-7 modeling loop.
@@ -253,7 +252,6 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 params.tx_volume_baseline,
                 circulating,
                 params.money_supply,
-                stake_ratio,
                 params.burn_base_rate,
                 params.burn_cap,
             ),

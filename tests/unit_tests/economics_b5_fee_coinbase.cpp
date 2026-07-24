@@ -132,7 +132,7 @@ B5Operands expected_operands(const Blockchain& bc)
   ops.split = shekyl::compute_emission_split(ops.base_reward, kBlockHeight,
     /*genesis_ng_height=*/0, kHfVersion);
   ops.burn = shekyl::compute_fee_burn(kFee, tx_volume_avg,
-    kAlreadyGenerated, /*stake_ratio=*/0, kHfVersion);
+    kAlreadyGenerated, kHfVersion);
   return ops;
 }
 

@@ -217,17 +217,13 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             0
         };
 
-        // Engine-equivalent burn: the `from_activity` path forms
-        // `stake_ratio` via the single shared helper (Bug-2 class), so
-        // the recorded `burn_pct_bp` is reproducible by
-        // `LocalEconomics::burn_amount`'s composition.
-        let burn_pct = calc_burn_pct_from_activity(
-            tx_volume,
-            sim.tx_volume_baseline,
-            circulating,
-            total_staked,
-            &params,
-        );
+        // Engine-equivalent burn over the `from_activity` path, so the
+        // recorded `burn_pct_bp` is reproducible by
+        // `LocalEconomics::burn_amount`'s composition (Bug-2 class). Burn no
+        // longer consumes stake (F-D); `total_staked` is recorded below as a
+        // scenario observable only.
+        let burn_pct =
+            calc_burn_pct_from_activity(tx_volume, sim.tx_volume_baseline, circulating, &params);
         let total_fees = (u128::from(tx_volume) * u128::from(config.fee_per_tx))
             .min(u128::from(u64::MAX)) as u64;
         let fee_split = compute_burn_split(total_fees, burn_pct, sim.staker_pool_share);

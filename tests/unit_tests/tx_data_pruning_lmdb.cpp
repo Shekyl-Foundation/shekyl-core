@@ -121,7 +121,6 @@ bool construct_miner_only_block(
             hf_version,
             /*tx_volume_avg=*/0,
             /*circulating_supply=*/already_generated_coins,
-            /*stake_ratio=*/0,
             /*genesis_ng_height=*/0))
       return false;
 

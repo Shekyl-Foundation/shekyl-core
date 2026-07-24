@@ -118,18 +118,13 @@ impl EconomicsEngine for LocalEconomics {
     }
 
     fn burn_amount(&self, fee: u64, activity: ActivityMetric) -> Result<u64, Self::Error> {
-        // `activity` was validated at `ActivityMetric::new`, so the
-        // structural invariant `total_staked <= circulating_supply`
-        // holds and `total_staked` fits in `u64`. The `unwrap_or` clamp
-        // to `circulating_supply` is the proven upper bound and is never
-        // reached in practice; it keeps the path panic-free regardless.
-        let total_staked =
-            u64::try_from(activity.total_staked()).unwrap_or(activity.circulating_supply());
+        // Burn no longer consumes stake (F-D): `activity.total_staked()` is a
+        // sampled observable the burn formula ignores. Only tx volume and
+        // circulating supply feed the rate.
         let burn_pct = shekyl_economics::calc_burn_pct_from_activity(
             activity.tx_volume(),
             self.params.tx_volume_baseline,
             activity.circulating_supply(),
-            total_staked,
             &self.params,
         );
         // Absolute atomic units to burn: apply the SCALE-fixed-point

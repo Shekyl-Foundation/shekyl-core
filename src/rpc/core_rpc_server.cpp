@@ -395,13 +395,12 @@ namespace cryptonote
     const uint64_t tx_vol_avg = m_core.get_blockchain_storage().get_tx_volume_avg(res.height);
     res.release_multiplier = shekyl_calc_release_multiplier(
         tx_vol_avg, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
-    // Claim-era staked-output aggregation is retired; the burn curve's
-    // stake-ratio input is identically zero until the archival-bond-based
-    // feed lands (2b reward-emission consensus work).
+    // Burn is a pure function of activity and supply — stake was deleted as a
+    // burn input (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md F-D).
     res.burn_pct = shekyl_calc_burn_pct(
         tx_vol_avg, SHEKYL_TX_VOLUME_BASELINE,
         already_generated, MONEY_SUPPLY,
-        /*stake_ratio*/ 0, SHEKYL_BURN_BASE_RATE, SHEKYL_BURN_CAP);
+        SHEKYL_BURN_BASE_RATE, SHEKYL_BURN_CAP);
     res.total_burned = m_core.get_blockchain_storage().get_db().get_total_burned();
 
     // Component 4: effective staker emission share at current height

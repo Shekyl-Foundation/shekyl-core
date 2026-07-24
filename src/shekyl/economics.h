@@ -36,7 +36,6 @@ inline BurnResult compute_fee_burn(
     uint64_t total_fees,
     uint64_t tx_volume,
     uint64_t circulating_supply,
-    uint64_t stake_ratio,
     uint8_t hf_version)
 {
     if (hf_version < HF_VERSION_SHEKYL_NG || total_fees == 0)
@@ -49,7 +48,6 @@ inline BurnResult compute_fee_burn(
         SHEKYL_TX_VOLUME_BASELINE,
         circulating_supply,
         MONEY_SUPPLY,
-        stake_ratio,
         SHEKYL_BURN_BASE_RATE,
         SHEKYL_BURN_CAP);
 

@@ -244,12 +244,6 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             params.tx_volume_baseline,
             circulating,
             params.money_supply,
-            // stake_ratio: the macro budget sim does not model a stake schedule;
-            // pass 0 (the stake term contributes <10^-3 to burn_pct per the
-            // gate-7 read, and is disposition-neutral). The fee leg's volume
-            // response — the demand-responsive part both arms share — is what
-            // matters here.
-            0,
             params.burn_base_rate,
             params.burn_cap,
         );

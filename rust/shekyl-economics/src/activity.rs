@@ -1,14 +1,15 @@
 //! Chain-derived activity observables for the adaptive fee burn.
 //!
-//! [`ActivityMetric`] carries the **raw integer observables** the burn
-//! formula consumes (transaction volume, circulating supply, total
-//! staked) plus the height they were sampled at. Per
+//! [`ActivityMetric`] carries the **raw integer observables** sampled at a
+//! height: transaction volume, circulating supply, and total staked, plus
+//! the height they were sampled at. Burn consumes **tx volume and circulating
+//! supply**; `total_staked` is **retained as a sampled observable but is no
+//! longer a burn input** — the `× (1 + stake_ratio)` factor was deleted
+//! (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` F-D; see [`crate::burn`]). Per
 //! `docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md` §5.3 R1, ratios
-//! (`stake_ratio`, `supply_ratio`, `volume_ratio`) are **not** carried
-//! here — they are formed inside [`crate::burn::calc_burn_pct`] from a
-//! single ratio helper ([`crate::params::calc_stake_ratio`]) so the
-//! `EconomicsEngine::burn_amount` path and the consensus FFI path
-//! cannot diverge (Bug-2 class).
+//! (`supply_ratio`, `volume_ratio`) are **not** carried here — they are formed
+//! inside [`crate::burn::calc_burn_pct`] so the `EconomicsEngine::burn_amount`
+//! path and the consensus FFI path cannot diverge (Bug-2 class).
 //!
 //! # Coherence is a constructor-caller obligation
 //!

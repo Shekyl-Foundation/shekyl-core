@@ -602,7 +602,6 @@ pub extern "C" fn shekyl_calc_burn_pct(
     tx_baseline: u64,
     circulating_supply: u64,
     total_supply: u64,
-    stake_ratio: u64,
     burn_base_rate: u64,
     burn_cap: u64,
 ) -> u64 {
@@ -611,7 +610,6 @@ pub extern "C" fn shekyl_calc_burn_pct(
         tx_baseline,
         circulating_supply,
         total_supply,
-        stake_ratio,
         burn_base_rate,
         burn_cap,
     )
@@ -5492,7 +5490,6 @@ mod tests {
                 50u64,
                 1_000_000u64,
                 4_294_967_296_000_000_000u64,
-                100_000u64,
                 500_000u64,
                 900_000u64,
             ),
@@ -5501,7 +5498,6 @@ mod tests {
                 50,
                 2_000_000_000_000_000_000,
                 4_294_967_296_000_000_000,
-                250_000,
                 500_000,
                 900_000,
             ),
@@ -5510,15 +5506,13 @@ mod tests {
                 50,
                 3_000_000_000_000_000_000,
                 4_294_967_296_000_000_000,
-                400_000,
                 500_000,
                 900_000,
             ),
         ];
-        for (txv, base, circ, total, stake, rate, cap) in cases {
-            let ffi = shekyl_calc_burn_pct(txv, base, circ, total, stake, rate, cap);
-            let direct =
-                shekyl_economics::burn::calc_burn_pct(txv, base, circ, total, stake, rate, cap);
+        for (txv, base, circ, total, rate, cap) in cases {
+            let ffi = shekyl_calc_burn_pct(txv, base, circ, total, rate, cap);
+            let direct = shekyl_economics::burn::calc_burn_pct(txv, base, circ, total, rate, cap);
             assert_eq!(ffi, direct);
         }
     }
