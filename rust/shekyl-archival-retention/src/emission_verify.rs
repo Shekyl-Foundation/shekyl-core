@@ -41,7 +41,7 @@
 use crate::claimed_epochs::{claim_window_floor, claimed_epochs_contains};
 use crate::consensus_state::{
     as_of_e_served_work, capped_work_milli, epoch_close_height, settlement_epoch_at_height,
-    shard_contribution_milli, CreditIndexOutOfRange, EpochCloseInputs, ServedWork,
+    shard_contribution_micro, CreditIndexOutOfRange, EpochCloseInputs, ServedWork,
 };
 use crate::emission_wire::{ArchivalRewardEmissionVin, EmissionAuthRole, RewardCommit, WireError};
 use crate::reward_arithmetic::reward_share_floor;
@@ -141,7 +141,7 @@ pub enum EmissionVerifyError {
         claimed: bool,
     },
 
-    /// Step 4: an entry's `scarcity_milli` differs from the recompute over
+    /// Step 4: an entry's `scarcity_micro` differs from the recompute over
     /// the frozen as-of-`E` rows (integer-exact, tolerance zero).
     #[error("epoch {epoch}, shard {shard_id}: scarcity {claimed} != recomputed {recomputed}")]
     ScarcityMismatch {
@@ -151,8 +151,9 @@ pub enum EmissionVerifyError {
         recomputed: u64,
     },
 
-    /// Step 4: the per-shard entries do not sum to the recomputed
-    /// `work_P(E)` — an omitted (or padded) credited shard.
+    /// Step 4: the per-shard entries (micro) do not sum to the recomputed
+    /// `work_P(E)` micro total — an omitted (or padded) credited shard. Compared
+    /// in micro-space, before the single floor to milli.
     #[error("epoch {epoch}: work claim total {claimed} != recomputed {recomputed}")]
     WorkTotalMismatch {
         epoch: u64,
@@ -348,8 +349,14 @@ pub struct ClaimantShare {
     /// The full [`as_of_e_served_work`] recompute (the per-entry compares
     /// and the builder's row assembly consume its per-shard terms).
     pub served: ServedWork,
-    /// `work_P(E)` — zero when the claimant has no serve-credit row.
+    /// `work_P(E)` in **milli** — the curve/reward operand (floored once at the
+    /// aggregate). Zero when the claimant has no serve-credit row.
     pub work_p: u64,
+    /// `work_P(E)` in **micro** — the un-floored per-bond sum the verify body's
+    /// aggregate compare runs against (`entry_sum` of the claim's per-entry
+    /// `scarcity_micro`), so an omitted/padded sub-milli shard cannot hide under
+    /// a milli-granular total (F-E, wargame W3). Zero without a serve-credit row.
+    pub work_micro_p: u64,
     /// Market membership at `E` (the claimant's mask term).
     pub is_member: bool,
     /// `reward_share_floor(budget, capped_work_milli(work_P, member, curve),
@@ -385,15 +392,19 @@ pub fn claimant_reward_share(
     // Bounds-check the caller-supplied index before indexing so a malformed
     // gather is a clean rejection, not a daemon-aborting panic (fail-closed,
     // as the FFI numerator's ERR_INDEX_RANGE guard does).
-    let (work_p, is_member) = match source.claimant_bond_idx {
+    let (work_p, work_micro_p, is_member) = match source.claimant_bond_idx {
         Some(idx) if idx >= served.work_by_bond.len() => {
             return Err(ClaimantShareError::ClaimantIndexOutOfRange {
                 claimant_bond_idx: idx,
                 bonds_len: served.work_by_bond.len(),
             });
         }
-        Some(idx) => (served.work_by_bond[idx], served.member[idx]),
-        None => (0, false),
+        Some(idx) => (
+            served.work_by_bond[idx],
+            served.work_micro_by_bond[idx],
+            served.member[idx],
+        ),
+        None => (0, 0, false),
     };
     // The capped term is the same single-sourced per-P definition that built
     // the persisted `Σwork(E)` denominator.
@@ -402,6 +413,7 @@ pub fn claimant_reward_share(
     Ok(ClaimantShare {
         served,
         work_p,
+        work_micro_p,
         is_member,
         reward,
     })
@@ -526,12 +538,16 @@ pub fn emission_vin_verify_claims(
                 bonds_len,
             },
         })?;
-        let (served, work_p, is_member) = (&share.served, share.work_p, share.is_member);
+        let (served, work_micro_p, is_member) =
+            (&share.served, share.work_micro_p, share.is_member);
 
         // Per-entry exactness (§5.4): the bit must equal the ledger fact,
         // the scarcity must equal the member-masked recompute — a claim
         // carrying unvalidated misinformation is rejected even when the
-        // totals happen to agree.
+        // totals happen to agree. Both the per-entry value and this running
+        // total are **micro** (the D1 fix): the floor to milli happens once,
+        // inside `as_of_e_served_work`, so the aggregate compare below runs in
+        // micro-space before any truncation (F-E, wargame W3).
         let mut entry_sum: u64 = 0;
         let mut seen_shards: Vec<u64> = Vec::with_capacity(claim.shard_entries.len());
         for entry in &claim.shard_entries {
@@ -557,10 +573,10 @@ pub fn emission_vin_verify_claims(
                 });
             }
 
-            // Expected contribution: exactly the term `as_of_e_served_work`
-            // added for this pair (zero for non-members and uncredited
-            // shards) — recomputed per shard so a wrong per-shard split
-            // cannot hide behind a correct total.
+            // Expected contribution (micro): exactly the term
+            // `as_of_e_served_work` added for this pair (zero for non-members
+            // and uncredited shards) — recomputed per shard so a wrong
+            // per-shard split cannot hide behind a correct total.
             let expected = if credited && is_member {
                 let shard_idx = source
                     .inputs
@@ -568,35 +584,38 @@ pub fn emission_vin_verify_claims(
                     .iter()
                     .position(|s| s.shard_id == entry.shard_id)
                     .expect("credited pair implies the shard row exists");
-                shard_contribution_milli(&source.inputs, &served.r_market_by_shard, shard_idx)
+                shard_contribution_micro(&source.inputs, &served.r_market_by_shard, shard_idx)
             } else {
                 0
             };
-            if u64::from(entry.scarcity_milli) != expected {
+            if u64::from(entry.scarcity_micro) != expected {
                 return Err(EmissionVerifyError::ScarcityMismatch {
                     epoch,
                     shard_id: entry.shard_id,
-                    claimed: u64::from(entry.scarcity_milli),
+                    claimed: u64::from(entry.scarcity_micro),
                     recomputed: expected,
                 });
             }
-            entry_sum = entry_sum.saturating_add(u64::from(entry.scarcity_milli));
+            entry_sum = entry_sum.saturating_add(u64::from(entry.scarcity_micro));
         }
 
-        // Completeness: an omitted credited shard leaves `entry_sum` short
-        // of the recompute; a padded one was already rejected per entry.
-        // Soundness of the per-shard (`entry_sum`, deduped by `shard_id`) vs
-        // per-pair (`work_p`, one term per credit pair) comparison rests on the
+        // Completeness (micro-space): an omitted credited shard leaves
+        // `entry_sum` short of the recompute; a padded one was already rejected
+        // per entry. Comparing in micro — `work_micro_p`, the un-floored per-bond
+        // sum — is load-bearing: a shard worth `< 1` milli would be invisible if
+        // both sides floored first, but shows here (F-E, wargame W3). Soundness
+        // of the per-shard (`entry_sum`, deduped by `shard_id`) vs per-pair
+        // (`work_micro_p`, one term per credit pair) comparison rests on the
         // serve-credit key `P‖shard‖E` being unique: the gather yields at most
-        // one credit pair per (claimant, shard) in an epoch, so `work_p` counts
-        // each shard once — the same multiplicity `entry_sum` uses. Relaxing
-        // that key's uniqueness would double-count `work_p` and must revisit
-        // this check (dedup `work_p` by shard).
-        if entry_sum != work_p {
+        // one credit pair per (claimant, shard) in an epoch, so `work_micro_p`
+        // counts each shard once — the same multiplicity `entry_sum` uses.
+        // Relaxing that key's uniqueness would double-count `work_micro_p` and
+        // must revisit this check (dedup by shard).
+        if entry_sum != work_micro_p {
             return Err(EmissionVerifyError::WorkTotalMismatch {
                 epoch,
                 claimed: entry_sum,
-                recomputed: work_p,
+                recomputed: work_micro_p,
             });
         }
 

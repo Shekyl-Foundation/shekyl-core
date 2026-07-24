@@ -69,7 +69,7 @@ fn build_connect_vin() -> ArchivalRewardEmissionVin {
                 shard_entries: vec![ShardWorkEntry {
                     shard_id: SHARD,
                     serve_credit_bit: true,
-                    scarcity_milli: 250,
+                    scarcity_micro: 250,
                 }],
             })
             .collect(),

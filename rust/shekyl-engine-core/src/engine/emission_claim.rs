@@ -78,7 +78,7 @@
 //!   is internally inconsistent, e.g. duplicate `shard_id` rows).
 //!
 //! - **The u64→u32 conversion guard.** The recompute chain is `u64`; the
-//!   wire's `scarcity_milli` is `u32`. The builder refuses at its own
+//!   wire's `scarcity_micro` is `u32`. The builder refuses at its own
 //!   conversion site ([`EmissionClaimError::ScarcityConversion`]) rather
 //!   than relying on the encoder's `ScarcityOverflow` — the encoder
 //!   catching it would mean the builder emitted an invalid value and got
@@ -180,11 +180,11 @@
 
 use shekyl_archival_retention::{
     claimant_reward_share, claimed_epochs_contains, emission_vin_verify_claims, epoch_close_height,
-    epoch_is_before_join, epoch_is_claim_expired, epoch_is_not_settled, shard_contribution_milli,
+    epoch_is_before_join, epoch_is_claim_expired, epoch_is_not_settled, shard_contribution_micro,
     ArchivalRewardEmissionVin, EmissionEpochSource, EmissionVerifyContext, EmissionWireError,
     EpochCloseBond, HoldingsDescriptor, MembershipOnlyBacking, ServedWork, ShardWorkEntry,
     WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_BACKING_PROOF_BYTES,
-    MAX_SETTLEMENT_EPOCHS_PER_EMISSION, WORK_MILLI_SCALE,
+    MAX_SETTLEMENT_EPOCHS_PER_EMISSION, WORK_MICRO_PER_MILLI, WORK_MILLI_SCALE,
 };
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
@@ -194,13 +194,15 @@ use super::emission_source::{BondContext, EmissionClaimSource, EpochSnapshot};
 
 // The compiled-constants bound behind the conversion guard's structural-
 // unreachability claim (module doc): an honest recompute through
-// `verify_view` satisfies `scarcity ≤ WORK_MILLI_SCALE + weight` (age is
-// depth-fraction-bounded to `WORK_MILLI_SCALE`, `r_market ≥ 1` for a
-// nonzero term). A weight bump that could cross the wire field's width
-// must fail this build, not silently arm the runtime refusal.
+// `verify_view` satisfies `scarcity_micro ≤ WORK_MICRO_PER_MILLI ·
+// (WORK_MILLI_SCALE + weight)` (age is depth-fraction-bounded to
+// `WORK_MILLI_SCALE`, so `g ≤ WORK_MILLI_SCALE + weight`, and `r_market ≥ 1`
+// for a nonzero term makes `scarcity_micro = floor(WORK_MICRO_PER_MILLI · g /
+// r) ≤ WORK_MICRO_PER_MILLI · g`). A weight bump that could cross the wire
+// field's width must fail this build, not silently arm the runtime refusal.
 const _: () = assert!(
-    WORK_MILLI_SCALE + ARCHIVAL_REWARD_AGE_WEIGHT_MILLI <= u32::MAX as u64,
-    "compiled constants must keep scarcity_milli within the u32 wire field"
+    WORK_MICRO_PER_MILLI * (WORK_MILLI_SCALE + ARCHIVAL_REWARD_AGE_WEIGHT_MILLI) <= u32::MAX as u64,
+    "compiled constants must keep scarcity_micro within the u32 wire field"
 );
 
 /// Bytes of the [`TX_WEIGHT_LIMIT`] envelope reserved for everything
@@ -678,7 +680,7 @@ pub fn assemble_claims(
 /// by `shard_id`, `serve_credit_bit = true`, scarcity resolved by first
 /// position of `shard_id` — byte-exactly verify's `ScarcityMismatch`
 /// lookup. This is **the** builder conversion site for the wire's
-/// `u32 scarcity_milli` (checked, refusing — module doc).
+/// `u32 scarcity_micro` (checked, refusing — module doc).
 ///
 /// `claimant` is the derivation's admitted claimant index (bounds-checked
 /// by [`claimant_reward_share`] before admission).
@@ -723,23 +725,25 @@ fn work_epoch_claim(
             .iter()
             .position(|s| s.shard_id == shard_id)
             .expect("credited pair implies the shard row exists");
-        let scarcity = shard_contribution_milli(&view.inputs, &served.r_market_by_shard, shard_idx);
-        let scarcity_milli = u32::try_from(scarcity)
+        let scarcity = shard_contribution_micro(&view.inputs, &served.r_market_by_shard, shard_idx);
+        let scarcity_micro = u32::try_from(scarcity)
             .map_err(|_| EmissionClaimError::ScarcityConversion { epoch, shard_id })?;
         entry_sum = entry_sum.saturating_add(scarcity);
         shard_entries.push(ShardWorkEntry {
             shard_id,
             serve_credit_bit: true,
-            scarcity_milli,
+            scarcity_micro,
         });
     }
 
     // The id-resolved recompute must equal the pair-indexed accumulation
     // the derivation selected on (verify's `WorkTotalMismatch` compare,
-    // run here so a doomed vin refuses at derivation, not on-chain). They
-    // diverge only on an internally inconsistent gather — e.g. duplicate
-    // `shard_id` rows shadowing the credited row's index.
-    if entry_sum != served.work_by_bond[claimant] {
+    // run here so a doomed vin refuses at derivation, not on-chain). Both are
+    // **micro** — the compare runs in micro-space before the single floor,
+    // mirroring the verify body (D1 fix). They diverge only on an internally
+    // inconsistent gather — e.g. duplicate `shard_id` rows shadowing the
+    // credited row's index.
+    if entry_sum != served.work_micro_by_bond[claimant] {
         return Err(EmissionClaimError::SourceInvalid { epoch });
     }
     Ok(WorkEpochClaim {
@@ -1236,11 +1240,11 @@ mod tests {
                 .claim
                 .shard_entries
                 .iter()
-                .map(|e| u64::from(e.scarcity_milli))
+                .map(|e| u64::from(e.scarcity_micro))
                 .sum();
             assert_eq!(
-                entry_sum, served.work_by_bond[idx],
-                "the carried row must be the admitting evaluation's"
+                entry_sum, served.work_micro_by_bond[idx],
+                "the carried row must be the admitting evaluation's (micro-space)"
             );
         }
     }
@@ -1617,17 +1621,17 @@ mod tests {
                 .iter()
                 .position(|s| s.shard_id == entry.shard_id)
                 .unwrap();
-            let expected = shard_contribution_milli(&view.inputs, &served.r_market_by_shard, idx);
+            let expected = shard_contribution_micro(&view.inputs, &served.r_market_by_shard, idx);
             assert_eq!(
-                u64::from(entry.scarcity_milli),
+                u64::from(entry.scarcity_micro),
                 expected,
-                "verify's ScarcityMismatch compare (tolerance zero)"
+                "verify's ScarcityMismatch compare (tolerance zero, micro)"
             );
             entry_sum += expected;
         }
         assert_eq!(
-            entry_sum, served.work_by_bond[0],
-            "verify's WorkTotalMismatch compare (tolerance zero)"
+            entry_sum, served.work_micro_by_bond[0],
+            "verify's WorkTotalMismatch compare (tolerance zero, micro-space)"
         );
     }
 
@@ -1635,9 +1639,9 @@ mod tests {
     /// site**, not the encoder's `ScarcityOverflow`. The production
     /// decode path cannot reach it — `verify_view` pins
     /// `age_weight_milli` to the compiled constant, bounding an honest
-    /// recompute to `WORK_MILLI_SCALE + weight` (const-asserted at module
-    /// scope) — so the KAT builds the hostile view directly and drives
-    /// the same per-epoch row builder the derivation runs.
+    /// recompute to `WORK_MICRO_PER_MILLI · (WORK_MILLI_SCALE + weight)`
+    /// (const-asserted at module scope) — so the KAT builds the hostile view
+    /// directly and drives the same per-epoch row builder the derivation runs.
     #[test]
     fn scarcity_conversion_refuses_at_the_builder() {
         let bonds = [EpochCloseBond {
@@ -1659,8 +1663,13 @@ mod tests {
                 settlement_epoch: 4,
                 close_block_height: epoch_close_height(4).unwrap(),
                 settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
-                // Hostile: unreachable through `verify_view`.
-                age_weight_milli: u64::MAX,
+                // Hostile: unreachable through `verify_view` (which pins the
+                // weight to the compiled ~2000). Drives the micro recompute over
+                // u32::MAX without overflowing the u128 quotient into
+                // `mul_div_floor`'s 0-fallback: `g = 1000 + weight`, `r = 1`, so
+                // `scarcity_micro = 1000·g ≈ 1.0×10¹⁰ ∈ (u32::MAX, u64::MAX]`.
+                // (`u64::MAX` would overflow to 0 — no longer a hostile value.)
+                age_weight_milli: 10_000_000,
                 curve: BandedCurveParams {
                     plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
                     plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
@@ -1676,7 +1685,7 @@ mod tests {
         let served = as_of_e_served_work(&view.inputs).unwrap();
         // Premise armed: the recompute really exceeds the wire field.
         assert!(
-            shard_contribution_milli(&view.inputs, &served.r_market_by_shard, 0)
+            shard_contribution_micro(&view.inputs, &served.r_market_by_shard, 0)
                 > u64::from(u32::MAX),
             "fixture must drive the recompute over u32::MAX"
         );
@@ -1843,7 +1852,7 @@ mod tests {
         type Mutation = fn(&mut ArchivalRewardEmissionVin);
         let mutations: [(&str, Mutation); 6] = [
             ("scarcity +1 (verify: ScarcityMismatch)", |vin| {
-                vin.work_claim[0].shard_entries[0].scarcity_milli += 1;
+                vin.work_claim[0].shard_entries[0].scarcity_micro += 1;
             }),
             (
                 "credit bit cleared (verify: ServeCreditBitMismatch)",

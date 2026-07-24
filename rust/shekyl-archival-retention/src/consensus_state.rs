@@ -12,7 +12,8 @@ use crate::bond_floor::{
 };
 use crate::constants::{effective_settlement_epoch_blocks, SETTLEMENT_EPOCH_BLOCKS};
 use crate::reward_arithmetic::{
-    curve_milli, mul_div_floor, scarcity_milli, BandedCurveParams, WORK_MILLI_SCALE,
+    curve_milli, mul_div_floor, scarcity_micro, work_milli_from_micro, BandedCurveParams,
+    WORK_MILLI_SCALE,
 };
 
 const _: () = assert!(
@@ -155,9 +156,11 @@ pub fn r_market_count(rows: &[ServeCreditRow], shard_id: u64, settlement_epoch: 
     n
 }
 
-/// Work milli for one held shard with serve credit.
+/// Per-shard work in **micro-units** for one held shard with serve credit —
+/// summed per bond and floored to milli once at the aggregate
+/// ([`as_of_e_served_work`]). Zero without serve credit or a market co-holder.
 #[must_use]
-pub fn shard_work_milli(
+pub fn shard_work_micro(
     r_market: u64,
     age_milli: u64,
     age_weight_milli: u64,
@@ -166,7 +169,7 @@ pub fn shard_work_milli(
     if !serve_credit || r_market == 0 {
         return 0;
     }
-    scarcity_milli(r_market, age_milli, age_weight_milli)
+    scarcity_micro(r_market, age_milli, age_weight_milli)
 }
 
 /// `Σwork(E)` milli — sum of `Curve(work_P)` over market archivers.
@@ -401,7 +404,17 @@ pub struct ServedWork {
     pub member: Vec<bool>,
     /// `R_market(shard, E)` per input shard (parallel to `EpochCloseInputs::shards`).
     pub r_market_by_shard: Vec<u64>,
-    /// `work_P(E)` milli per input bond (parallel to `EpochCloseInputs::bonds`).
+    /// `work_P(E)` in **micro-units** per input bond — the un-floored sum of
+    /// per-shard [`scarcity_micro`] terms (parallel to `EpochCloseInputs::bonds`).
+    /// This is the wire-compare quantity: the emission verify body sums the
+    /// claim's per-entry `scarcity_micro` and demands equality with this **before**
+    /// any floor, so an omitted or padded shard worth `< 1` milli cannot hide
+    /// under a milli-granular total (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`
+    /// F-E, wargame W3).
+    pub work_micro_by_bond: Vec<u64>,
+    /// `work_P(E)` in **milli** per input bond — `work_micro_by_bond` floored
+    /// once via [`work_milli_from_micro`] (the single floor-site). Curve-ready:
+    /// `Σwork(E)` ([`sigma_work_milli`]) and the emission numerator consume this.
     pub work_by_bond: Vec<u64>,
 }
 
@@ -459,38 +472,53 @@ pub fn as_of_e_served_work(
 
     // A member-credited shard's contribution is a pure function of its index
     // (its `r_market`, age, and the epoch's age-weight), so compute it via the
-    // single `shard_contribution_milli` source and memoize per shard index — a
+    // single `shard_contribution_micro` source and memoize per shard index — a
     // shard whose only credit comes from a non-member bond never pays the two
-    // `shard_age_milli` divisions.
+    // `shard_age_milli` divisions. Accumulate in **micro** so no shard is
+    // floored before the sum (the D1 fix): the pre-fix per-shard milli floor
+    // zeroed every shard past the co-holder cliff.
     let mut contribution_by_shard: Vec<Option<u64>> = vec![None; shards.len()];
 
-    let mut work_by_bond = vec![0u64; bonds.len()];
+    let mut work_micro_by_bond = vec![0u64; bonds.len()];
     for pair in inputs.credit_pairs {
         if !member[pair.bond_idx] {
             continue;
         }
         let contribution = *contribution_by_shard[pair.shard_idx].get_or_insert_with(|| {
-            shard_contribution_milli(inputs, &r_market_by_shard, pair.shard_idx)
+            shard_contribution_micro(inputs, &r_market_by_shard, pair.shard_idx)
         });
-        work_by_bond[pair.bond_idx] = work_by_bond[pair.bond_idx].saturating_add(contribution);
+        work_micro_by_bond[pair.bond_idx] =
+            work_micro_by_bond[pair.bond_idx].saturating_add(contribution);
     }
+
+    // The single floor-to-milli site (F-E): one `work_milli_from_micro` per
+    // bond, shared with the verify body because both reach here through this
+    // one function. Floors down (§11.5) — the dropped sub-milli favours the
+    // protocol.
+    let work_by_bond: Vec<u64> = work_micro_by_bond
+        .iter()
+        .map(|&micro| work_milli_from_micro(micro))
+        .collect();
 
     Ok(ServedWork {
         member,
         r_market_by_shard,
+        work_micro_by_bond,
         work_by_bond,
     })
 }
 
-/// The per-shard work term for a member-credited shard, exactly as
-/// [`as_of_e_served_work`] accumulates it into `work_by_bond`. Single source
-/// for the per-shard math so the close's denominator and the verify body's
-/// per-shard `ScarcityMismatch` recompute cannot drift (WS-1 §5.5): a shard's
-/// contribution is `shard_work_milli(r_market[s], age[s], age_weight)` with
-/// `age[s] = 0` for a shard with no frozen segment. The caller establishes
-/// membership and credit; this computes the term those two facts imply.
+/// The per-shard work term (**micro-units**) for a member-credited shard,
+/// exactly as [`as_of_e_served_work`] accumulates it into `work_micro_by_bond`.
+/// Single source for the per-shard math so the close's denominator and the
+/// verify body's per-shard `ScarcityMismatch` recompute cannot drift (WS-1
+/// §5.5): a shard's contribution is `shard_work_micro(r_market[s], age[s],
+/// age_weight)` with `age[s] = 0` for a shard with no frozen segment. The caller
+/// establishes membership and credit; this computes the term those two facts
+/// imply. The claim carries this micro value per entry; the floor to milli is
+/// deferred to the per-bond aggregate.
 #[must_use]
-pub fn shard_contribution_milli(
+pub fn shard_contribution_micro(
     inputs: &EpochCloseInputs<'_>,
     r_market_by_shard: &[u64],
     shard_idx: usize,
@@ -505,7 +533,7 @@ pub fn shard_contribution_milli(
     } else {
         0
     };
-    shard_work_milli(
+    shard_work_micro(
         r_market_by_shard[shard_idx],
         age_milli,
         inputs.age_weight_milli,
@@ -520,10 +548,11 @@ pub fn shard_contribution_milli(
 /// 1. **Market membership** per bond — [`market_member_at_epoch`].
 /// 2. **`R_market(shard, E)`** — count of serve-credit rows whose `P` is a
 ///    market member (§3.3 pinned measure).
-/// 3. **`work_P`** — Σ over credited shards of [`shard_work_milli`]
-///    (scarcity × age weighting), saturating. The held-and-served set is the
-///    serve-credit ledger itself (WS-1 §5) via [`as_of_e_served_work`], the
-///    single sourcing function shared with the emission verify body.
+/// 3. **`work_P`** — Σ over credited shards of [`shard_work_micro`]
+///    (scarcity × age weighting) in micro, floored to milli once at the
+///    aggregate, saturating. The held-and-served set is the serve-credit ledger
+///    itself (WS-1 §5) via [`as_of_e_served_work`], the single sourcing function
+///    shared with the emission verify body.
 /// 4. **`Σwork(E)`** — [`sigma_work_milli`] over per-bond `Curve(work_P)`.
 ///
 /// Errors (rather than panics) on malformed gather indices so the FFI shim
@@ -686,30 +715,26 @@ mod tests {
         served.work_by_bond[0]
     }
 
-    /// RED (Stage-1 acceptance gate for D1): a bulk holder whose shards are each
-    /// past the co-holder cliff (`r_market > g_milli`) must earn `work_P > 0` and
-    /// proportional to how many shards they serve — **not zero**.
+    /// The D1 fix (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §7 acceptance
+    /// gate): a bulk holder whose shards are each past the co-holder cliff
+    /// (`r_market > g_milli`) earns `work_P > 0` and proportional to how many
+    /// shards they serve — **not zero**.
     ///
-    /// Today `as_of_e_served_work` sums `floor(g_milli / r_market)` PER SHARD
-    /// before aggregating (`Σ floor(1000 / 1001) = Σ 0`), so a holder of any
-    /// number of common shards scores exactly 0 — 13.6 GB served, every
-    /// challenge passed, no reward
-    /// (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` D1). The honest score sums
-    /// first (at bounded precision) and floors once, giving a positive value
-    /// that grows with the shard count.
+    /// The pre-fix `as_of_e_served_work` summed `floor(g_milli / r_market)` PER
+    /// SHARD before aggregating (`Σ floor(1000 / 1001) = Σ 0`), so a holder of
+    /// any number of common shards scored exactly 0 — 13.6 GB served, every
+    /// challenge passed, no reward (D1). The micro path sums per-shard
+    /// [`scarcity_micro`] first and floors **once** at the aggregate, giving a
+    /// positive value that grows with the shard count.
     ///
     /// This asserts only the **fix-shape-agnostic** property (non-zero +
-    /// proportional), so it does not prejudge micro-vs-nano-vs-aggregate — any
-    /// correct single-floor fix satisfies it. Kept `#[ignore]` so CI stays green
-    /// on the (broken) current code; **un-ignoring this is Stage 1's acceptance
-    /// gate.**
+    /// proportional), landed here as this crate's §7 red test. Introduced
+    /// `#[ignore]`'d (red against the truncating code); un-ignored in the same
+    /// Stage-1 diff that lands the micro fix — the ratified acceptance gate.
     #[test]
-    #[ignore = "RED: documents the D1 aggregate-truncation defect (Σ floor(g/r) zeroes bulk holders \
-                past the co-holder cliff). Un-ignore as the Stage-1 acceptance gate when the \
-                single-floor micro fix lands — ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §7."]
     fn bulk_holder_past_cliff_earns_proportional_not_zero() {
-        // crowd = 1000 ⇒ r_market = 1001 > g_milli = 1000 ⇒ per-shard floor is 0
-        // under the current truncate-then-sum. This is the real fresh-shard cliff.
+        // crowd = 1000 ⇒ r_market = 1001 > g_milli = 1000 ⇒ the pre-fix per-shard
+        // floor was 0 (`floor(1000/1001)`). This is the real fresh-shard cliff.
         const CROWD: usize = 1000;
         let work_10 = victim_work_over_crowded_shards(10, CROWD);
         let work_20 = victim_work_over_crowded_shards(20, CROWD);
@@ -732,6 +757,49 @@ mod tests {
         assert!(
             work_20.abs_diff(2 * work_10) <= 2,
             "work should be ~proportional to shard count: 2 x (10-shard {work_10}) vs 20-shard {work_20}"
+        );
+    }
+
+    /// §11.5 rounding-direction demonstration (ERC-4626 post-mortem discipline):
+    /// every rounding in the micro path floors **against the claimant**, so the
+    /// residual error always favours the protocol — never the reverse.
+    ///
+    /// Worked at the fresh-shard cliff (`r_market = 1001`, `g_milli = 1000`):
+    /// 1. Per-shard [`scarcity_micro`] floors `10⁶·1000/1001 = 999.0009…` down to
+    ///    `999` micro — the claimant loses the `.0009`, not gains a rounded-up
+    ///    `1000`.
+    /// 2. The single aggregate [`work_milli_from_micro`] floors the 10-shard sum
+    ///    `9990` micro `= 9.99` milli down to `9` — the claimant's honest
+    ///    `9.99` milli entitlement is truncated to `9`; the dropped `0.99`
+    ///    milli stays with the protocol.
+    ///
+    /// Both directions asserted explicitly (equal to the floor, strictly less
+    /// than the round-up) so a future change to `mul_div_floor` or the divide
+    /// that silently rounded up would fail here.
+    #[test]
+    fn micro_path_rounds_against_the_claimant() {
+        // Step 1: per-shard scarcity floors down.
+        assert_eq!(
+            scarcity_micro(1001, 0, 0),
+            999,
+            "scarcity_micro floors 10^6/1001 = 999.0009… down to 999"
+        );
+        assert!(
+            scarcity_micro(1001, 0, 0) < 1000,
+            "must not round up to 1000"
+        );
+
+        // Step 2: the single aggregate floor drops the sub-milli remainder.
+        let ten_shard_micro = 10 * scarcity_micro(1001, 0, 0); // 9990 micro = 9.99 milli
+        assert_eq!(ten_shard_micro, 9_990);
+        assert_eq!(
+            work_milli_from_micro(ten_shard_micro),
+            9,
+            "9.99 milli floors down to 9 — the .99 favours the protocol"
+        );
+        assert!(
+            work_milli_from_micro(ten_shard_micro) < 10,
+            "must not round up to 10"
         );
     }
 

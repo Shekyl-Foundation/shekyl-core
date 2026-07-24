@@ -187,7 +187,7 @@ pub fn emission_vin_bytes() -> Vec<u8> {
                 shard_entries: vec![ShardWorkEntry {
                     shard_id: 7,
                     serve_credit_bit: true,
-                    scarcity_milli: 850,
+                    scarcity_micro: 850_000,
                 }],
             },
             WorkEpochClaim {

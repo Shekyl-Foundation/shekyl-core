@@ -44,7 +44,7 @@
 //!   (`bond_wire::HoldingsDescriptor::shard_ids`) — so re-using it across rotation
 //!   is a linkable correlate.
 //! - Consensus scarcity is `1/R · g(age)` with **no intrinsic per-shard difficulty
-//!   term** (`reward_arithmetic::scarcity_milli`; `g_age` is the only weight —
+//!   term** (`reward_arithmetic::scarcity_micro`; `g_age` is the only weight —
 //!   `model::g_age`). So a shard is "high-value" purely because few chose it
 //!   (demand-driven), never because it is hard to serve. The `phi` sensitivity arm
 //!   injects a per-shard cost the protocol lacks, to confirm the verdict is not an

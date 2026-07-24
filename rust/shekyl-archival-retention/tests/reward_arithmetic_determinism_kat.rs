@@ -28,8 +28,8 @@
 //! which exercised neither a second arch nor the Form-C division path.
 
 use shekyl_archival_retention::reward_arithmetic::{
-    curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_milli, BandedCurveParams,
-    WORK_MILLI_SCALE,
+    curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_micro,
+    work_milli_from_micro, BandedCurveParams, WORK_MICRO_SCALE, WORK_MILLI_SCALE,
 };
 
 #[test]
@@ -76,13 +76,24 @@ fn g_age_milli_golden() {
 }
 
 #[test]
-fn scarcity_milli_golden() {
-    // scarcity = floor(g(age) / r_market), in milli.
-    assert_eq!(scarcity_milli(0, 1_000, 2_000), 0); // r=0 dead
-    assert_eq!(scarcity_milli(1, 1_000, 2_000), 3_000);
-    assert_eq!(scarcity_milli(2, 1_000, 2_000), 1_500);
-    assert_eq!(scarcity_milli(3, 500, 2_000), 666); // floor(2000/3)
-    assert_eq!(scarcity_milli(7, 333, 1_500), 214); // floor(1499/7)
+fn scarcity_micro_golden() {
+    // scarcity_micro = floor(WORK_MICRO_PER_MILLI · g(age) / r_market), in micro
+    // (the D1 fix: per-shard precision carried at 10⁻⁶ before the single
+    // aggregate floor). Golden values are 1000× the pre-fix milli scarcity,
+    // now capturing the sub-milli remainder that the pre-fix per-shard floor
+    // discarded.
+    assert_eq!(scarcity_micro(0, 1_000, 2_000), 0); // r=0 dead
+    assert_eq!(scarcity_micro(1, 1_000, 2_000), 3_000_000); // g=3000 → 1000·3000/1
+    assert_eq!(scarcity_micro(2, 1_000, 2_000), 1_500_000); // 3e9/2000
+    assert_eq!(scarcity_micro(3, 500, 2_000), 666_666); // floor(2e9/3000)
+    assert_eq!(scarcity_micro(7, 333, 1_500), 214_142); // floor(1.499e9/7000)
+
+    // The single floor-to-milli site collapses a micro accumulator back to
+    // milli, flooring the sub-milli remainder against the claimant (§11.5).
+    assert_eq!(WORK_MICRO_SCALE, 1_000_000);
+    assert_eq!(work_milli_from_micro(3_000_000), 3_000); // exact
+    assert_eq!(work_milli_from_micro(666_666), 666); // 666.666 → 666 (floors down)
+    assert_eq!(work_milli_from_micro(214_142), 214); // 214.142 → 214
 }
 
 #[test]
