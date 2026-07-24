@@ -173,7 +173,17 @@ if [ ! -d "${TRANSFER_DIR}" ] || [ ! -f "${TRANSFER_MOD_RS}" ]; then
   fail=1
 else
   # Definition may live in transfer/engine.rs today or another transfer/*.rs later.
-  lpt_def_hits="$(grep -RsnE '^[[:space:]]*pub[[:space:]]+struct[[:space:]]+LocalPendingTx\b' "${TRANSFER_DIR}" --include='*.rs' 2>/dev/null || true)"
+  # Use find + per-file grep (same style as the method-def loop below) so we do
+  # not depend on recursive-grep option ordering (`--include` must precede paths
+  # on some greps, and a misordered flag is easy to treat as a path).
+  lpt_def_hits=""
+  while IFS= read -r transfer_rs; do
+    if hits="$(grep -nE '^[[:space:]]*pub[[:space:]]+struct[[:space:]]+LocalPendingTx\b' "${transfer_rs}" 2>/dev/null)"; then
+      while IFS= read -r hit; do
+        lpt_def_hits+="${transfer_rs}:${hit}"$'\n'
+      done <<<"${hits}"
+    fi
+  done < <(find "${TRANSFER_DIR}" -name '*.rs' | sort)
   if [ -z "${lpt_def_hits}" ]; then
     echo "FAIL: LocalPendingTx is not defined under engine/transfer/."
     note "Production transfer implementor must live under engine/transfer/ (any .rs in that tree)."
