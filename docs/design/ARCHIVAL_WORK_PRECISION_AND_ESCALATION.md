@@ -188,6 +188,12 @@ fossil with a stale C-1 pointer, and leaves one clean decomposition: **burn rate
 = activity × supply; staker share = archival work** (rule 15, rule 05). The
 `:1663` stale comment is fixed in Stage 1's diff.
 
+The §6.0 wide-band framing **retroactively strengthens** the delete: `stake_factor`
+is a *fast, participation-keyed* multiplier — precisely the manipulable-axis,
+swing-prone family §6.0 excludes — while `n` is *slow chain structure*. Keeping it
+would stack a swing-prone lever under a swing-resistant one, not just two levers.
+One lever, one honest measure, wide guardrails.
+
 ### F-E — preserve the single-source property; bump the auth-msg separator (Ⓥ)
 
 The single-source property is the load-bearing safety feature
@@ -255,7 +261,12 @@ measures the wrong thing — this is evidence validity.
   **Extend scope to the distributional shift (W6):** the D1 fix moves ex-zero
   archivers into `Σwork`, shrinking scarce-holders' shares of a fixed budget —
   model the redistribution, not just the aggregate lift. Joint with stranding:
-  what fraction of diverted budget goes unclaimed.
+  what fraction of diverted budget goes unclaimed. **And the durable-stuffing
+  sweep (W9, §6.2):** `scenario_4_stuffing_attack` gains an output-heavy variant
+  (segment-freeze rate, not the volume metric), crossed with
+  `scenario_7_bootstrap` (steepest early-chain slope), measuring cost-per-shard
+  vs the permanent Δshare captured — the sweep that confirms the burden-coupling
+  argument leaves no early-chain regime where Δshare outruns Δburden.
 - **Stage 3 — the escalation (D2; gated on Stage 2).** `compute_burn_split`
   gains the shard-count operand; `staker_pool_share` becomes the function's floor
   parameter; the `blockchain.cpp:6081` site reads `frozen_segment_count` at the
@@ -317,6 +328,52 @@ burden."
   ratchets up and is pop-symmetric on reorg — no ratchet-down object to reason
   about beyond the reorg path already handled.
 
+### 6.1 Shape constraints (the frozen set)
+
+The constraints §6.0 and the operand imply, to be pinned at Stage 3:
+
+1. **Monotone in `n`** (shards only increase).
+2. **Floor at the current 25%** (never below today's `staker_pool_share`).
+3. **Asymptote strictly below 100%** — the deflation channel
+   (`actually_destroyed`) survives forever.
+4. **Banded piecewise-linear in integer fixed-point**, per the `curve_milli`
+   precedent (`reward_arithmetic.rs` — the same shape the reward curve already
+   uses; bit-exact, no float on the consensus path).
+5. **No time-derivative or smoothing terms.** Smoothness is *inherited from the
+   operand* (monotone + slow, §6.0); an EMA, rate-limiter, or any stateful
+   controller on top would be exactly the narrow-band control machinery §6.0
+   rejects — and it would add per-block state to a function that should be a pure
+   map of `n`.
+
+### 6.2 The ratchet cuts both ways — durable output-stuffing (wargame W9)
+
+The same monotonicity that defeats fast-swing manipulation (W8) *enables* a
+durable one, and it deserves its own row. Unlike volume-stuffing — whose effect
+**decays** when the stuffing stops — a stuffed shard raises `n` **forever**. And
+the ratified anti-stuffing analysis (`DESIGN_CONCEPTS.md` §6) **does not cover
+this channel**: it keys the stuffer's cost to *transaction count* — `tx_volume`
+is a tx count (`burn.rs:35`), and the `√(tx_volume/baseline)` damper escalates
+against that metric. The D2 operand keys to **outputs** (leaves). An
+output-maximizing stuffer inflates leaf count while barely moving `tx_volume`, so
+the sqrt damper does **not** escalate against them — only weight-proportional
+fees do.
+
+**Why it should still price out — and why it must still be swept.** The operand
+is not a *proxy*. `tx_volume` proxies demand, and a proxy can be fed cheaply;
+`frozen_segment_count` **is the archival burden** — the exact quantity the
+escalation exists to fund. A stuffer who mints 26k outputs creates a real
+~3.33 MB shard that every archiver must hold and serve **forever**; they raise
+the share and the cost it compensates **together**, in the mechanically coupled
+ratio. Manipulating an honest measure of the funded quantity mostly just… funds
+the quantity. That is the *argument*; the *sim's* job (Stage 2) is to confirm no
+regime exists where the marginal Δshare briefly outruns the marginal burden. The
+danger zone is early chain / low `n` / steepest share slope — where any
+saturating curve is steepest — so **`scenario_4_stuffing_attack` gains an
+output-heavy variant** (targeting segment-freeze rate rather than the volume
+metric it currently keys on), **crossed with `scenario_7_bootstrap`**, measuring
+**cost-per-shard** (25,992 outputs of weight-fees + burn) against the **permanent
+Δshare** the stuffer captures through their stake fraction of the pool.
+
 ---
 
 ## 7. The red property test (authorized, test-only)
@@ -362,7 +419,8 @@ decision.
 | W5 | Stacked stake-responsive multipliers on `staker_pool_amount` | Delete `stake_factor` in Stage 0 (F-D) | ✅ by disposition |
 | W6 | Distributional dilution: D1 fix moves ex-zero archivers into `Σwork`, shrinking scarce-holders' shares of fixed budget | Stage-2 sim models the shift, not just aggregate lift | ⏳ sim-arm scope |
 | W7 | Cached `frozen_segment_count` drift at the D2 read-point | Pinned read through frontier-check (M1 §11.8 M3-1) | ✅ carried |
-| W8 | Swing/churn manipulation of the staker share (pump-and-dump, whale dive, reflexive feedback) | Operand is monotone, slow (output-volume-paced), unmanipulable-by-acting, and predictable (§6.0); function is smooth/bounded-slope, no cliffs — there is no fast-swinging lever to whipsaw | ⏳ shape-dependent (Stage 2/3) |
+| W8 | **Fast-swing** manipulation of the staker share (pump-and-dump, whale dive, reflexive feedback) | The operand is monotone + slow + predictable (§6.0) and the function is a pure map of `n` with no controller (§6.1) — pump/dump/whale have **no lever** on a monotone chain-state operand; the only lever is the durable one (W9) | ✅ by operand (fast-swing has no lever) |
+| W9 | **Durable output-stuffing** — mint outputs to inflate leaf count → segment-freeze rate → `n` → share, permanently (the ratchet cuts both ways, §6.2). Not covered by `DESIGN_CONCEPTS.md` §6, which keys the stuffer's cost to `tx_volume` (a tx count) via the sqrt damper, which does not escalate against output count | Burden-coupling: the operand *is* the funded quantity, so a stuffer raises the share and the real cost (a permanent ~3.33 MB shard held forever) in the coupled ratio — "manipulating an honest measure of the funded quantity mostly funds the quantity"; only weight-fees escalate against outputs | ⏳ pending Stage-2 sweep (`scenario_4` output variant × `scenario_7` bootstrap, §6.2) |
 
 ---
 
