@@ -65,8 +65,11 @@ pub struct ReplArgs {
     #[arg(long)]
     engine_file: Option<String>,
 
-    /// SOCKS5 proxy for direct daemon queries (e.g. socks5://127.0.0.1:9050).
-    /// Uses distinct SOCKS auth for Tor stream isolation.
+    /// SOCKS proxy for the wallet's daemon connections — the self-hosted
+    /// block scan and the REPL's direct daemon queries (e.g.
+    /// socks5h://127.0.0.1:9050). Prefer `socks5h://`: the scan resolves the
+    /// daemon hostname at the proxy regardless, but the direct queries honor
+    /// the scheme, and `socks5://` resolves it locally (a DNS leak).
     #[arg(long)]
     proxy: Option<String>,
 
@@ -123,12 +126,15 @@ fn disclose_network_posture(cli: &ReplArgs, opens_direct_daemon: bool) {
             }
         }
         // Self-hosted: the in-process wallet server does the bulk block scan to
-        // the daemon, and its transport cannot honor --proxy. Disclose it as an
-        // unproxyable connection so a non-loopback daemon warns regardless of
-        // --proxy (the REPL's own DaemonClient does honor --proxy, but it is not
-        // the dominant exposure — the scan is). Disclosed once for both.
+        // the daemon, and that transport now honors --proxy (SOCKS5h). Disclose
+        // it proxy-aware, same as the --rpc-url daemon: a non-loopback daemon
+        // with no proxy warns; a remote-resolving proxy silences it; a
+        // local-resolving socks5:// warns about the DNS leak (the scan itself
+        // upgrades to remote resolution, but the REPL's ureq DaemonClient — the
+        // same daemon_address — honors the scheme and would leak). One
+        // disclosure covers both, since they share endpoint and proxy.
         None => {
-            network_posture::disclose_unproxyable("daemon address", &cli.daemon_address);
+            network_posture::disclose("daemon address", &cli.daemon_address, proxy);
         }
     }
 }
@@ -148,6 +154,7 @@ fn build_session(cli: &ReplArgs) -> Result<rpc_client::RpcSession, Box<dyn std::
                 std::path::PathBuf::from(&cli.engine_dir),
                 network,
                 daemon_url(&cli.daemon_address),
+                cli.proxy.clone(),
                 cli.debug,
             )?)
         }

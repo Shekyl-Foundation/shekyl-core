@@ -192,22 +192,6 @@ pub fn warning_for(label: &str, host: &str) -> String {
     )
 }
 
-/// The warning text for the self-hosted wallet server's connection to a remote
-/// daemon. That connection **cannot** be proxied (its transport has no proxy
-/// support), so — unlike [`warning_for`] — it fires regardless of `--proxy`,
-/// and its only remedy is a node on this machine.
-#[must_use]
-pub fn warning_for_direct(label: &str, host: &str) -> String {
-    format!(
-        "Warning: {label} '{host}' is not loopback. The self-hosted wallet \
-         server scans the chain over this connection, which does not use \
-         --proxy, so an observer on the network path can see that you run a \
-         Shekyl wallet and when it is active — regardless of who operates the \
-         node and even if the link is encrypted. Point --daemon-address at a \
-         node on this machine to avoid this."
-    )
-}
-
 /// `true` for SOCKS schemes that resolve the target hostname **locally** and
 /// then connect the proxy to the resulting IP — leaking the hostname to the
 /// system resolver in cleartext before the proxy is ever involved.
@@ -267,26 +251,6 @@ pub fn disclose(label: &str, endpoint: &str, proxy: Option<&str>) -> Option<Stri
         }
         Exposure::ClearNetwork { host } => {
             let msg = warning_for(label, &host);
-            eprintln!("{msg}");
-            Some(msg)
-        }
-    }
-}
-
-/// Disclose an endpoint whose connection **cannot** honor `--proxy` — the
-/// self-hosted wallet server's block-scanning link to the daemon, whose
-/// transport has no proxy support. Warns on a non-loopback daemon *regardless*
-/// of `--proxy` (it genuinely does not protect this connection), and is silent
-/// for a loopback / unix-socket / unconfigured daemon. Returns the warning
-/// printed, if any.
-pub fn disclose_unproxyable(label: &str, endpoint: &str) -> Option<String> {
-    // Passing `None` makes `classify` do the loopback/uds/empty determination
-    // without ever reporting `Proxied` — which is exactly right here, since the
-    // proxy does not reach this connection.
-    match classify(endpoint, None) {
-        Exposure::Local | Exposure::Proxied => None,
-        Exposure::ClearNetwork { host } => {
-            let msg = warning_for_direct(label, &host);
             eprintln!("{msg}");
             Some(msg)
         }
@@ -431,7 +395,6 @@ mod tests {
             disclose("daemon", "node.example.com:11028", Some("socks5://x")),
             disclose("daemon", "node.example.com:11028", Some("socks5h://x")),
             disclose("daemon", "node.example.com:11028", None),
-            disclose_unproxyable("daemon", "node.example.com:11028"),
         ];
         for out in outputs.into_iter().flatten() {
             assert!(
@@ -480,30 +443,31 @@ mod tests {
         );
     }
 
+    /// The self-hosted daemon scan now honors --proxy (SOCKS5h), so it is
+    /// disclosed via `disclose` like every other daemon connection — there is
+    /// no longer an "unproxyable" path. A non-loopback daemon with no proxy
+    /// warns; a remote-resolving proxy silences it.
     #[test]
-    fn unproxyable_disclosure_warns_regardless_of_proxy() {
-        // The self-hosted scan connection cannot use --proxy: a non-loopback
-        // daemon warns; loopback / unix-socket / unconfigured stay silent.
-        assert!(disclose_unproxyable("daemon address", "127.0.0.1:11028").is_none());
-        assert!(disclose_unproxyable("daemon address", "uds:///run/w.sock").is_none());
-        assert!(disclose_unproxyable("daemon address", "").is_none());
-        let w = disclose_unproxyable("daemon address", "node.example.com:11028")
-            .expect("a non-loopback self-hosted daemon warns");
+    fn self_hosted_daemon_is_disclosed_proxy_aware() {
+        assert!(disclose("daemon address", "127.0.0.1:11028", None).is_none());
+        assert!(disclose(
+            "daemon address",
+            "node.example.com:11028",
+            Some("socks5h://x")
+        )
+        .is_none());
+        let w = disclose("daemon address", "node.example.com:11028", None)
+            .expect("a non-loopback daemon with no proxy warns");
         assert!(w.starts_with("Warning:"));
-        assert!(w.contains("does not use --proxy"));
         assert!(w.contains("node.example.com"));
     }
 
     #[test]
     fn warnings_do_not_claim_the_payload_is_cleartext() {
-        // #5: neither warning says "in the clear" — the exposure is metadata,
-        // which holds even over an encrypted (TLS) link.
-        for w in [
-            warning_for("daemon", "node"),
-            warning_for_direct("daemon", "node"),
-        ] {
-            assert!(!w.to_lowercase().contains("in the clear"), "{w}");
-            assert!(w.contains("even if the link is encrypted"), "{w}");
-        }
+        // #5: the warning does not say "in the clear" — the exposure is
+        // metadata, which holds even over an encrypted (TLS) link.
+        let w = warning_for("daemon", "node");
+        assert!(!w.to_lowercase().contains("in the clear"), "{w}");
+        assert!(w.contains("even if the link is encrypted"), "{w}");
     }
 }

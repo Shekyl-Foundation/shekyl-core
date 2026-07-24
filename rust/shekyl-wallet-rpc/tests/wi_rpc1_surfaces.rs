@@ -41,6 +41,7 @@ fn state(dir: &TempDir) -> Arc<AppState> {
             dir.path().to_path_buf(),
             Network::Stagenet,
             "http://127.0.0.1:1".into(),
+            None,
         )),
         auth: AuthConfig::Disabled,
         kdf: test_kdf(),

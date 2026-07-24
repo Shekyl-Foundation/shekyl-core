@@ -1,41 +1,45 @@
 // Provenance: forked from monero-oxide (Shekyl-Foundation/monero-oxide, fcmp++
 // lineage), originally `shekyl-oxide/rpc/simple-request`, last vendored at 2753111c50.
 // Relocated to a first-party shekyl-* crate in the shekyl-oxide un-vendor (slice 2); no
-// longer upstream-tracked. The simple-request/hyper transport implementing
-// shekyl-rpc-client's `Rpc` trait. See docs/design/SHEKYL_OXIDE_UNVENDOR.md.
+// longer upstream-tracked. Implements shekyl-rpc-client's `Rpc` trait over a small
+// hyper client (`http_client`, re-absorbed from the external simple-request so it can
+// carry an optional SOCKS5h proxy). See docs/design/SHEKYL_OXIDE_UNVENDOR.md.
 
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 use core::future::Future;
-use std::{io::Read, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use tokio::sync::Mutex;
 
 use digest_auth::{AuthContext, WwwAuthenticateHeader};
-use simple_request::{
-    hyper::{header::HeaderValue, Request, StatusCode},
-    Client, Response,
-};
+use http_body_util::{BodyExt, Full};
+use hyper::body::{Bytes, Incoming};
+use hyper::{header::HeaderValue, Request, StatusCode};
 use zeroize::Zeroizing;
 
 use shekyl_rpc_client::{Rpc, RpcError};
+
+mod http_client;
+use http_client::HttpClient;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 enum Authentication {
-    // If unauthenticated, use a single client
-    Unauthenticated(Client),
-    // If authenticated, use a single client which supports being locked and tracks its nonce
-    // This ensures that if a nonce is requested, another caller doesn't make a request invalidating
-    // it
+    // If unauthenticated, use a single pooled client
+    Unauthenticated(HttpClient),
+    // If authenticated, lock the client per request so the digest-auth nonce
+    // count (`nc`) increments monotonically: RFC 7616 scopes `nc` to the nonce,
+    // not the connection, so serialized requests over the pool stay valid even
+    // when the pool reuses or reopens a connection.
     Authenticated {
         username: Zeroizing<String>,
         password: Zeroizing<String>,
         #[allow(clippy::type_complexity)]
-        connection: Arc<Mutex<(Option<(WwwAuthenticateHeader, u64)>, Client)>>,
+        connection: Arc<Mutex<(Option<(WwwAuthenticateHeader, u64)>, HttpClient)>>,
     },
 }
 
@@ -51,7 +55,7 @@ pub struct SimpleRequestRpc {
 
 impl SimpleRequestRpc {
     fn digest_auth_challenge(
-        response: &Response,
+        response: &hyper::Response<Incoming>,
     ) -> Result<Option<(WwwAuthenticateHeader, u64)>, RpcError> {
         Ok(
             if let Some(header) = response.headers().get("www-authenticate") {
@@ -75,7 +79,7 @@ impl SimpleRequestRpc {
     /// A daemon requiring authentication can be used via including the username and password in the
     /// URL.
     pub async fn new(url: String) -> Result<SimpleRequestRpc, RpcError> {
-        Self::with_custom_timeout(url, DEFAULT_TIMEOUT).await
+        Self::with_options(url, DEFAULT_TIMEOUT, None).await
     }
 
     /// Create a new HTTP(S) RPC connection with a custom timeout.
@@ -83,8 +87,30 @@ impl SimpleRequestRpc {
     /// A daemon requiring authentication can be used via including the username and password in the
     /// URL.
     pub async fn with_custom_timeout(
+        url: String,
+        request_timeout: Duration,
+    ) -> Result<SimpleRequestRpc, RpcError> {
+        Self::with_options(url, request_timeout, None).await
+    }
+
+    /// Create a new HTTP(S) RPC connection routed through a **SOCKS5h** proxy
+    /// (`socks5h://`, `socks5://`, or bare `host:port` — the connector always
+    /// resolves the daemon hostname *at the proxy*, so the local resolver never
+    /// sees it). `proxy = None` behaves exactly like [`new`](Self::new).
+    ///
+    /// A daemon requiring authentication can be used via including the username and password in the
+    /// URL.
+    pub async fn with_proxy(
+        url: String,
+        proxy: Option<String>,
+    ) -> Result<SimpleRequestRpc, RpcError> {
+        Self::with_options(url, DEFAULT_TIMEOUT, proxy).await
+    }
+
+    async fn with_options(
         mut url: String,
         request_timeout: Duration,
+        proxy: Option<String>,
     ) -> Result<SimpleRequestRpc, RpcError> {
         // Credentials live only in the URL's AUTHORITY
         // (`scheme://user:pass@host:port/...`), which RFC 3986 terminates at
@@ -121,20 +147,20 @@ impl SimpleRequestRpc {
                 ))?;
             }
 
-            let client = Client::without_connection_pool(&url)
-                .map_err(|_| RpcError::ConnectionError("invalid URL".to_string()))?;
+            let client = HttpClient::new(proxy.as_deref())
+                .map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
             // Obtain the initial challenge, which also somewhat validates this connection
             let challenge = Self::digest_auth_challenge(
                 &client
                     .request(
                         Request::post(url.clone())
-                            .body(vec![].into())
+                            .body(Full::new(Bytes::new()))
                             .map_err(|e| {
                                 RpcError::ConnectionError(format!("couldn't make request: {e:?}"))
                             })?,
                     )
                     .await
-                    .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?,
+                    .map_err(|e| RpcError::ConnectionError(format!("{e}")))?,
             )?;
             Authentication::Authenticated {
                 username: Zeroizing::new(split_userpass[0].to_string()),
@@ -142,9 +168,11 @@ impl SimpleRequestRpc {
                 connection: Arc::new(Mutex::new((challenge, client))),
             }
         } else {
-            Authentication::Unauthenticated(Client::with_connection_pool().map_err(|e| {
-                RpcError::InternalError(format!("couldn't create a connection pool: {e:?}"))
-            })?)
+            Authentication::Unauthenticated(
+                HttpClient::new(proxy.as_deref()).map_err(|e| {
+                    RpcError::InternalError(format!("couldn't create a client: {e}"))
+                })?,
+            )
         };
 
         Ok(SimpleRequestRpc {
@@ -163,19 +191,21 @@ impl SimpleRequestRpc {
         let request_fn = |uri| {
             Request::post(uri)
                 .header("content-type", content_type)
-                .body(body.clone().into())
+                .body(Full::new(Bytes::from(body.clone())))
                 .map_err(|e| RpcError::ConnectionError(format!("couldn't make request: {e:?}")))
         };
 
-        async fn body_from_response(response: Response<'_>) -> Result<Vec<u8>, RpcError> {
-            let mut res = Vec::with_capacity(128);
-            response
-                .body()
+        async fn body_from_response(
+            response: hyper::Response<Incoming>,
+        ) -> Result<Vec<u8>, RpcError> {
+            // No streaming size cap (matches prior behavior): daemon block
+            // responses are large and the node is operator-selected.
+            let collected = response
+                .into_body()
+                .collect()
                 .await
-                .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?
-                .read_to_end(&mut res)
                 .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?;
-            Ok(res)
+            Ok(collected.to_bytes().to_vec())
         }
 
         for attempt in 0..2 {
@@ -196,7 +226,10 @@ impl SimpleRequestRpc {
                 } => {
                     let mut connection_lock = connection.lock().await;
 
-                    let mut request = request_fn("/".to_string() + route)?;
+                    // Absolute URI: the pooled client picks the connection from
+                    // the authority. `hyper` sends origin-form (`/route`) on the
+                    // wire, so the digest `uri=` computed over the path matches.
+                    let mut request = request_fn(self.url.clone() + "/" + route)?;
 
                     // If we don't have an auth challenge, obtain one
                     if connection_lock.0.is_none() {
@@ -207,7 +240,7 @@ impl SimpleRequestRpc {
                                 .await
                                 .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?,
                         )?;
-                        request = request_fn("/".to_string() + route)?;
+                        request = request_fn(self.url.clone() + "/" + route)?;
                     }
 
                     // Insert the challenge response, if we have a challenge
@@ -275,9 +308,9 @@ impl SimpleRequestRpc {
                         ),
                     };
 
-                    // If the connection entered an error state, drop the cached challenge as challenges are
-                    // per-connection
-                    // We don't need to create a new connection as simple-request will for us
+                    // On error or a stale nonce, drop the cached challenge; the
+                    // next attempt re-obtains one over the pool (which reopens a
+                    // connection as needed).
                     if error.is_some() || is_stale {
                         connection_lock.0 = None;
                         // If we're not already on our second attempt, move to the next loop iteration

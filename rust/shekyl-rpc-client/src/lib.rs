@@ -220,7 +220,7 @@ pub fn content_type_for(route: &str) -> &'static str {
 /// Tor/i2p-based transport, or even a memory buffer an external service somehow routes.
 ///
 /// While no implementors are directly provided here, the first-party
-/// `shekyl-rpc-transport` crate (the simple-request/hyper transport) is recommended.
+/// `shekyl-rpc-transport` crate (a hyper transport with optional SOCKS5h) is recommended.
 pub trait Rpc: Sync + Clone {
     /// Perform a POST request to the specified route with the specified body.
     ///

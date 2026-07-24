@@ -93,7 +93,7 @@ pub(crate) async fn create_wallet(
 
     // Short critical section: refuse if busy, reserve the opening slot,
     // snapshot config, then release the tenant mutex before slow work.
-    let (base, network, daemon_address) = {
+    let (base, network, daemon_address, proxy) = {
         let mut state = tenants.lock().await;
         if state.tenant.is_busy() {
             return Err(WalletRpcError::WalletAlreadyOpen);
@@ -103,13 +103,26 @@ pub(crate) async fn create_wallet(
             return Err(WalletRpcError::WalletFileExists);
         }
         state.tenant.begin_opening();
-        (base, state.network, state.daemon_address.clone())
+        (
+            base,
+            state.network,
+            state.daemon_address.clone(),
+            state.proxy.clone(),
+        )
     };
 
     // Move password into Zeroizing before any slow work so the serde
     // String is consumed (no residual plaintext copy beside the wipeable vec).
     let password = Zeroizing::new(p.password.into_bytes());
-    let created = create_wallet_engine(&base, network, &daemon_address, password, kdf).await;
+    let created = create_wallet_engine(
+        &base,
+        network,
+        &daemon_address,
+        proxy.as_deref(),
+        password,
+        kdf,
+    )
+    .await;
     let (engine, backup) = match created {
         Ok(v) => v,
         Err(e) => {
@@ -149,10 +162,11 @@ async fn create_wallet_engine(
     base: &Path,
     network: Network,
     daemon_address: &str,
+    proxy: Option<&str>,
     password: Zeroizing<Vec<u8>>,
     kdf: KdfParams,
 ) -> Result<(Engine<SoloSigner>, SeedBackup), WalletRpcError> {
-    let daemon = make_daemon(daemon_address).await?;
+    let daemon = make_daemon(daemon_address, proxy).await?;
     let creds = Credentials::password_only(password.as_slice());
 
     let (master_seed, seed_format, backup) = generate_seed_material(network)?;
@@ -222,7 +236,7 @@ pub(crate) async fn restore_wallet(
     let mnemonic = Zeroizing::new(p.mnemonic);
     let password = Zeroizing::new(p.password.into_bytes());
 
-    let (base, network, daemon_address) = {
+    let (base, network, daemon_address, proxy) = {
         let mut state = tenants.lock().await;
         if state.tenant.is_busy() {
             return Err(WalletRpcError::WalletAlreadyOpen);
@@ -232,13 +246,19 @@ pub(crate) async fn restore_wallet(
             return Err(WalletRpcError::WalletFileExists);
         }
         state.tenant.begin_opening();
-        (base, state.network, state.daemon_address.clone())
+        (
+            base,
+            state.network,
+            state.daemon_address.clone(),
+            state.proxy.clone(),
+        )
     };
 
     let restored = restore_wallet_engine(
         &base,
         network,
         &daemon_address,
+        proxy.as_deref(),
         password,
         &mnemonic,
         restore_height,
@@ -270,16 +290,21 @@ pub(crate) async fn restore_wallet(
 
 /// Slow half of restore: daemon connect + mnemonic derivation + Argon2
 /// `Engine::create`. Runs without holding the tenant mutex.
+// Slow-half orchestration: base + network + daemon endpoint (address, proxy) +
+// password + mnemonic + restore_height + kdf are all distinct inputs; bundling
+// them would obscure more than it saves.
+#[allow(clippy::too_many_arguments)]
 async fn restore_wallet_engine(
     base: &Path,
     network: Network,
     daemon_address: &str,
+    proxy: Option<&str>,
     password: Zeroizing<Vec<u8>>,
     mnemonic: &str,
     restore_height: u32,
     kdf: KdfParams,
 ) -> Result<Engine<SoloSigner>, WalletRpcError> {
-    let daemon = make_daemon(daemon_address).await?;
+    let daemon = make_daemon(daemon_address, proxy).await?;
     let creds = Credentials::password_only(password.as_slice());
 
     // Seed format is network-governed, mirroring generate_seed_material on the
@@ -353,7 +378,7 @@ pub(crate) async fn open_wallet(
     let p: OpenWalletParams = parse_required_object(params, "open_wallet")?;
     validate_wallet_name(&p.name)?;
 
-    let (base, network, daemon_address) = {
+    let (base, network, daemon_address, proxy) = {
         let mut state = tenants.lock().await;
         if state.tenant.is_busy() {
             return Err(WalletRpcError::WalletAlreadyOpen);
@@ -363,13 +388,19 @@ pub(crate) async fn open_wallet(
             return Err(WalletRpcError::WalletFileNotFound);
         }
         state.tenant.begin_opening();
-        (base, state.network, state.daemon_address.clone())
+        (
+            base,
+            state.network,
+            state.daemon_address.clone(),
+            state.proxy.clone(),
+        )
     };
 
     // Same password hand-off as create: consume the serde String into
     // Zeroizing before daemon connect / Argon2.
     let password = Zeroizing::new(p.password.into_bytes());
-    let opened = open_wallet_engine(&base, network, &daemon_address, password).await;
+    let opened =
+        open_wallet_engine(&base, network, &daemon_address, proxy.as_deref(), password).await;
     let (engine, restore_hint) = match opened {
         Ok(v) => v,
         Err(e) => {
@@ -398,9 +429,10 @@ async fn open_wallet_engine(
     base: &Path,
     network: Network,
     daemon_address: &str,
+    proxy: Option<&str>,
     password: Zeroizing<Vec<u8>>,
 ) -> Result<(Engine<SoloSigner>, Option<i64>), WalletRpcError> {
-    let daemon = make_daemon(daemon_address).await?;
+    let daemon = make_daemon(daemon_address, proxy).await?;
     let creds = Credentials::password_only(password.as_slice());
 
     let opened = tokio::task::block_in_place(|| {
@@ -601,8 +633,13 @@ fn validate_wallet_name(name: &str) -> Result<(), WalletRpcError> {
     Ok(())
 }
 
-async fn make_daemon(daemon_address: &str) -> Result<DaemonClient, WalletRpcError> {
-    let rpc = SimpleRequestRpc::new(daemon_address.to_owned())
+async fn make_daemon(
+    daemon_address: &str,
+    proxy: Option<&str>,
+) -> Result<DaemonClient, WalletRpcError> {
+    // SOCKS5h when a proxy is set: the daemon's block scan then resolves the
+    // node hostname *at the proxy*, never leaking it to the local resolver.
+    let rpc = SimpleRequestRpc::with_proxy(daemon_address.to_owned(), proxy.map(str::to_owned))
         .await
         .map_err(|_e| WalletRpcError::DaemonUnreachable)?;
     Ok(DaemonClient::new(rpc))
@@ -801,12 +838,13 @@ async fn reopen_with_first_stake_intent(
     password: Zeroizing<Vec<u8>>,
     slot: u32,
 ) -> Result<SharedEngine, WalletRpcError> {
-    let (base, network, daemon_address) = {
+    let (base, network, daemon_address, proxy) = {
         let state = tenants.lock().await;
         (
             wallet_base(&state.wallet_dir, expected_name),
             state.network,
             state.daemon_address.clone(),
+            state.proxy.clone(),
         )
     };
 
@@ -821,7 +859,7 @@ async fn reopen_with_first_stake_intent(
         other => WalletRpcError::InternalError(format!("stake: password verification: {other}")),
     })?;
     // Connect-then-close: a daemon refusal also lands pre-close.
-    let daemon = make_daemon(&daemon_address).await?;
+    let daemon = make_daemon(&daemon_address, proxy.as_deref()).await?;
 
     // Close via the shared choreography (identical restore-on-failure
     // semantics as `close_wallet`), name-bound so a concurrently swapped
@@ -859,7 +897,8 @@ async fn reopen_with_first_stake_intent(
             let restored = async {
                 let pw = Zeroizing::new(password.as_slice().to_vec());
                 let (engine, _hint) =
-                    open_wallet_engine(&base, network, &daemon_address, pw).await?;
+                    open_wallet_engine(&base, network, &daemon_address, proxy.as_deref(), pw)
+                        .await?;
                 wrap_and_start_pscan(engine).await
             }
             .await;
@@ -977,6 +1016,7 @@ mod tests {
             // tip fetch fails-and-retries inside the spawned loop), so the
             // lifecycle wiring is exercised without a live node.
             "http://127.0.0.1:1".to_string(),
+            None,
         ))
     }
 
@@ -1156,6 +1196,7 @@ mod tests {
             dir.to_path_buf(),
             Network::Stagenet,
             "http://127.0.0.1:1".to_string(),
+            None,
         ))
     }
 

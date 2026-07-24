@@ -115,6 +115,7 @@ mod tests {
             std::env::temp_dir(),
             Network::Stagenet,
             "http://127.0.0.1:1".into(),
+            None,
         ))
     }
 

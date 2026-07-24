@@ -3,9 +3,9 @@ use tokio::sync::Mutex;
 
 use shekyl_address::{Network, ShekylAddress, PQC_PAYLOAD_LEN};
 
-// shekyl-rpc doesn't include a transport
-// We can't include the simple-request crate there as then we'd have a cyclical dependency
-// Accordingly, we test shekyl-rpc here (implicitly testing the simple-request transport)
+// shekyl-rpc-client defines the `Rpc` trait but ships no transport; testing it
+// there would need this crate, a cyclical dependency. So the trait is exercised
+// here, implicitly testing the hyper transport this crate provides.
 use shekyl_rpc_transport::*;
 
 /// Mainnet default HTTP RPC port (`config::RPC_DEFAULT_PORT` / 11029 in shekyl-core). Use `--rpc-login`

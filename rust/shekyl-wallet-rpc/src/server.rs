@@ -70,6 +70,8 @@ pub struct ServerConfig {
     pub network: Network,
     /// Daemon JSON-RPC base URL (e.g. `http://127.0.0.1:28581`).
     pub daemon_address: String,
+    /// SOCKS5h proxy for the daemon transport (CLI `--proxy`); `None` = direct.
+    pub proxy: Option<String>,
     /// HTTP basic auth (disabled for UDS-by-default deployments).
     pub auth: AuthConfig,
     /// Argon2id cost for `create_wallet` / password rotation.
@@ -99,6 +101,7 @@ impl AppState {
                 config.wallet_dir.clone(),
                 config.network,
                 config.daemon_address.clone(),
+                config.proxy.clone(),
             )),
             auth: config.auth.clone(),
             kdf: config.kdf,
@@ -310,6 +313,7 @@ pub async fn spawn_in_process(
     wallet_dir: PathBuf,
     network: Network,
     daemon_address: String,
+    proxy: Option<String>,
 ) -> Result<InProcessHandle, Box<dyn std::error::Error + Send + Sync>> {
     let socket_dir = private_socket_dir()?;
     let mut handle = spawn_in_process_with(ServerConfig {
@@ -317,6 +321,7 @@ pub async fn spawn_in_process(
         wallet_dir,
         network,
         daemon_address,
+        proxy,
         auth: AuthConfig::Disabled,
         kdf: KdfParams::default(),
     })

@@ -38,6 +38,7 @@ fn test_state(auth: AuthConfig) -> Arc<AppState> {
             std::env::temp_dir(),
             Network::Stagenet,
             "http://127.0.0.1:1".into(),
+            None,
         )),
         auth,
         kdf: test_kdf(),
@@ -51,6 +52,7 @@ fn lifecycle_state(dir: &TempDir) -> Arc<AppState> {
             dir.path().to_path_buf(),
             Network::Stagenet,
             "http://127.0.0.1:1".into(),
+            None,
         )),
         auth: AuthConfig::Disabled,
         kdf: test_kdf(),
@@ -306,6 +308,7 @@ async fn spawn_in_process_serves_get_version_over_private_uds() {
         std::env::temp_dir(),
         Network::Stagenet,
         "http://127.0.0.1:1".into(),
+        None,
     )
     .await
     .expect("spawn");
@@ -713,6 +716,7 @@ async fn spawn_in_process_with_lifecycle() {
         wallet_dir: dir.path().to_path_buf(),
         network: Network::Stagenet,
         daemon_address: "http://127.0.0.1:1".into(),
+        proxy: None,
         auth: AuthConfig::Disabled,
         kdf: test_kdf(),
     })

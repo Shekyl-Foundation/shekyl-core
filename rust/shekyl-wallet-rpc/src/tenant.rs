@@ -258,6 +258,9 @@ pub struct TenantState {
     pub network: shekyl_engine_core::Network,
     /// Daemon JSON-RPC base URL (CLI `--daemon-address`).
     pub daemon_address: String,
+    /// SOCKS5h proxy for the daemon transport (CLI `--proxy`); `None` = direct.
+    /// Server-level constant, applied to every wallet's daemon connection.
+    pub proxy: Option<String>,
     /// The single tenant (Phase 4b).
     pub tenant: Tenant,
 }
@@ -268,11 +271,13 @@ impl TenantState {
         wallet_dir: PathBuf,
         network: shekyl_engine_core::Network,
         daemon_address: String,
+        proxy: Option<String>,
     ) -> Self {
         Self {
             wallet_dir,
             network,
             daemon_address,
+            proxy,
             tenant: Tenant::new(),
         }
     }
