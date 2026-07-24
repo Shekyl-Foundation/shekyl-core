@@ -47,6 +47,42 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **KEM-ciphertext extra packing mismatch — vout ≥ 1 unscannable in
+  production-built transactions** (added 2026-07-24; discovered during
+  WI-RPC-3 proofs work, `feat/wallet-rpc-proofs`; **funds-visibility bug,
+  fix before genesis**). The writers and readers of the `0x06`
+  `PqcKemCiphertext` tx_extra field disagree on packing. Writers —
+  `Extra::for_hybrid_transfer` as called by `sign_bridge.rs`,
+  `stake_engine.rs` (bond + emission change), and `drain_assembly.rs` —
+  emit **one `0x06` field per output** (each `HYBRID_KEM_CT_BYTES` long).
+  Readers — `shekyl-scanner/src/scan.rs` (`extra.pqc_kem_ciphertext()`,
+  first-match) and the WI-RPC-3 proof-check path
+  (`shekyl-engine-core/src/engine/proofs.rs::on_chain_outputs_of`) — take
+  only the **first** `0x06` field and slice per-output ciphertexts at
+  `o * HYBRID_KEM_CT_BYTES` offsets within it (the convention the
+  `bench_fixtures.rs` blob comment documents). Consequence: for any
+  multi-output production tx, every output at vout ≥ 1 — including all
+  change — fails the length guard and is silently undetectable by the
+  wallet (and unverifiable by proof checking). Demonstrated decisively
+  2026-07-24 by a scan experiment in `shekyl-scanner`: identical 2-output
+  ciphertexts packed concatenated recover 2/2; re-packed per-field (the
+  production shape) recover 1/2. Corroborating smell: the bond e2e
+  observes exactly ONE `BondPostChange` change record although the
+  assembly constructs two (`change_lo`/`change_hi`). Existing e2es mask
+  the loss because they keep mining fresh coinbases and never assert
+  change re-detection. **Fix direction (pre-genesis, no compat
+  constraint):** make `Extra::for_hybrid_transfer` concatenate all
+  per-output ciphertexts into a single `0x06` field (readers unchanged),
+  sync `tx_fee_model.rs::extra_kem_field_weight()`'s multiplicity
+  accounting, and land a scan regression test that asserts vout ≥ 1
+  recovery through `Scanner::scan` (none exists; the bench fixtures'
+  ownership check misses by design so they never cover the claim path —
+  note their placeholder spend secret `0x11 × 32` is also a non-canonical
+  scalar that would make key-image computation fail if ownership ever
+  hit). **Target: V3.0 pre-genesis (blocking — wallets lose sight of all
+  change until this lands; on-chain data is intact, a post-fix rescan
+  recovers).**
+
 - **WI-RPC-2b deferrals — CLI RESERVED commands awaiting their RPC
   surfaces** (added 2026-07-22; WI-RPC-2b, `feat/cli-rpc-client-surface`;
   the `reserved()` refusals in `rust/shekyl-cli/src/commands/mod.rs` point
