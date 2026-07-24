@@ -1,7 +1,7 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
 **Status:** ROUND 2 applied. The measurement that motivates this document
-landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 87 tests), so
+landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 88 tests), so
 every number below is reproducible rather than asserted. Rounds 1–2 raised
 findings RD-1…RD-4; **all are accepted and dispositioned in §10**, and their
 consequences are folded into the body rather than appended as errata.
@@ -499,6 +499,7 @@ comparison, the existing daemon-submit boundary is 754 lines of C++ shim plus
 | Black-hole attribution leak is mean-invariant; passive races are non-leaky | `black_hole_attack_leak_is_mean_invariant` | Round 2 ✅ |
 | First-spy diffusion precision π₀ | `first_spy_precision_rises_with_spy_fraction` | Round 2 ✅ |
 | Clearnet↔Tor delta: supernode observer collapses on Tor | `tor_collapses_the_supernode_diffusion_observer` | Round 2 (transport) ✅ |
+| Clearnet passive channel is real, mean-dependent, zero on Tor | `passive_clearnet_leak_is_mean_dependent_and_zero_on_tor` | Round 3 (ε lever) ✅ |
 | Origin always stems (unit stem at q=100%) | `always_fluffing_gives_a_unit_stem_the_origin_still_holds` | Round 2 (RD-4) ✅ |
 | Frozen reference vectors, cross-architecture | `tests/golden_vector.rs` | RP-1 ✅ |
 | 33 `levin_notify` gtests pass unchanged after the cut | `tests/unit_tests/levin.cpp` | RP-3 |
@@ -645,11 +646,59 @@ the cheap inbound supernode; the black-hole channel is unchanged, and remains
 the reason the mechanism itself (embargo distribution + Q-8a reshape) must be
 correct regardless of transport.**
 
+### 6.6 The clearnet passive channel is real, mean-dependent, and zero on Tor
+
+`simulate_transport_observation` (§6.5) measures the *diffusion-phase* supernode
+— what it learns from watching natural fluff. `simulate_passive_neighbor_leak`
+measures the *embargo-phase* leak the same inbound supernode gets: when a
+stem-prefix node's embargo fires before it is disarmed, a supernode neighbouring
+that node catches the early fluff and attributes the source to a prefix member.
+Measured (supernode reach φ = 0.10,
+`passive_clearnet_leak_is_mean_dependent_and_zero_on_tor`):
+
+| embargo mean | transport | leak rate | origin share of leaks |
+| --- | --- | --- | --- |
+| 31 s (pre-correction) | clearnet | 0.0465 | 0.21 |
+| 144 s (adopted) | clearnet | 0.0114 | 0.20 |
+| 300 s | clearnet | 0.0056 | 0.20 |
+| 500 s | clearnet | 0.0032 | 0.20 |
+| *any* | **Tor/I2P** | **0.0000** | — |
+
+Two properties, both load-bearing for Round 3:
+
+- **It is mean-dependent.** The leaky event is a *real* preemption, whose rate
+  falls with the embargo mean (`P(preempt)` scaled down). So a correctly
+  provisioned embargo *reduces* this channel — unlike the mean-invariant
+  black-hole. **This is what makes `ε` (correct provisioning) a live lever on
+  clearnet.** It is also why the RD-1/RD-4 corrections helped here as a side
+  effect: raising the embargo 31 s → 144 s already cut the passive leak ~4×.
+- **It is structurally zero on Tor.** Fluff never traverses the supernode's
+  inbound edges (§6.3), so there is no early fluff to catch.
+
+So the two channels bind different origins and answer to different levers, and
+**neither substitutes for the other**:
+
+| channel | binds | lever | why built |
+| --- | --- | --- | --- |
+| passive inbound supernode | clearnet origin | **`ε`** (correct embargo provisioning; mean-dependent) | clearnet is supported by the frozen default |
+| active on-path black-hole | every origin | **Q-8a** (re-stem-on-embargo; mean-invariant, transport-independent) | the only lever that touches the channel Tor does not collapse |
+
+Picking one lever would leave a real adversary unaddressed for a real
+configuration. That, not a "which lever first" trade-off, is why Round 3 opens
+with both live — and it opens on the clearnet floor because
+[`00-mission`](../../.cursor/rules/00-mission.mdc)'s "same guarantees for
+everyone" does not let a supported configuration go undefended.
+
 ---
 
 ## 7. Open questions (the Round-3 agenda)
 
-Round 1 closed Q-2 and Q-7; Round 2 corrected the model (RD-4), reframed Q-8 around the mechanism, and anchored everything against the sources (§11); the position-anchoring pass (§6, §10.8) then made the passive adversary transport-conditional. What remains for Round 3:
+Round 1 closed Q-2 and Q-7; Round 2 corrected the model (RD-4), reframed Q-8 around the mechanism, and anchored everything against the sources (§11); the position-anchoring pass (§6, §10.8) then made the passive adversary transport-conditional and *measured* the clearnet passive channel (§6.6).
+
+**Round 3 opens with both levers live, not a choice between them** — `ε` defends
+the clearnet origin against the passive channel (§6.6), Q-8a defends every origin
+against the black-hole (§10.6). Neither substitutes for the other, and the
+instruments for both are built or scoped. What remains is the *arguments*:
 
 - **Q-1 — is the stem model right?** *(Round 1 position: single-path is
   correct.)* Each node forwards to one per-source successor, so branching
@@ -742,6 +791,17 @@ Round 1 closed Q-2 and Q-7; Round 2 corrected the model (RD-4), reframed Q-8 aro
   `MIN_RELAY_TIME` (300 s)** rather than approaching it, so RP-4 must reconcile
   the two timers when the embargo cut lands — a black-holed origin's first
   MIN_RELAY_TIME re-relay and its embargo recovery can now cross.
+
+- **Q-9 (standing Round-3 obligation) — `ε` must be derived before any sweep.**
+  `simulate_passive_neighbor_leak` turns any `(δ, f, β, π₀)` into a leak number
+  instantly, but it cannot choose `δ` — the adversary-advantage we refuse to
+  grant — and choosing `δ` *is* the privacy decision. Per the project's GF-7
+  discipline, `δ` (and the `w(i)` it is stated in) must come from an a-priori
+  adversary-advantage bound, not from reading the instrument's output back as a
+  target. This is the one place in the whole arc where the source-anchoring
+  reflex does not help: the anchor is an argument about what advantage we deny an
+  adversary, not a fact in the tree. The instrument is the calculator; the
+  argument is the input, and it is owed before the calculator is run.
 
 **Closed in Rounds 1–2:**
 
@@ -1090,14 +1150,13 @@ SP-T0), not a parameter to sweep.
    could as easily have been a phantom on the transport that matters most. The
    source check should have come first — the standing "name T and its channel,
    or no threat model" rule. It now has.
-2. **The transport-aware instrument is now built** (`simulate_transport_observation`,
-   §6.5), carrying a `Transport` flag that zeroes the inbound-spy channel on the
-   Tor path exactly as §6.3 requires — so the clearnet↔Tor delta for the paper's
-   supernode observer is a *measurement* (π₀ 0.45 → 0.000). What remains unbuilt
-   is the narrower `simulate_passive_neighbor_leak` — the *mean-dependent*
-   magnitude of the clearnet passive channel as a function of the embargo mean —
-   which is only worth building if Round 3 decides clearnet `ε` is a live lever
-   (i.e. if the origin may be on clearnet). The other reaching-instruments
+2. **Both transport instruments are now built.** `simulate_transport_observation`
+   (§6.5) carries a `Transport` flag zeroing the inbound-spy channel on Tor, so
+   the supernode delta is a measurement (π₀ 0.45 → 0.000). And
+   `simulate_passive_neighbor_leak` (§6.6) — the narrower mean-dependent
+   magnitude — **is built, not deferred**: the §10.8 gate ("build if the origin
+   may be on clearnet") resolves to *yes* under the frozen clearnet default, so
+   it is Round-3 work, not a conditional. The other reaching-instruments
    (`simulate_fluff_return`, `simulate_sighting_separability`,
    `simulate_diffusion_first_spy`) still model the **public zone**; their rustdoc
    says so. The black-hole instrument is transport-independent and unaffected.

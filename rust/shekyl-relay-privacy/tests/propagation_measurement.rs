@@ -1347,3 +1347,104 @@ fn tor_collapses_the_supernode_diffusion_observer() {
          mean-invariant leak) is unchanged."
     );
 }
+
+/// **Round 3 — the clearnet passive channel is real, mean-dependent, and zero
+/// on Tor.** This is why ε (correct embargo provisioning) is a live lever for
+/// clearnet origins, and why it is built rather than deferred: the frozen
+/// default supports clearnet, so the channel is in scope by policy.
+#[test]
+fn passive_clearnet_leak_is_mean_dependent_and_zero_on_tor() {
+    use shekyl_relay_privacy::conformance::{simulate_passive_neighbor_leak, Transport};
+
+    let params = DandelionParams::inherited();
+
+    println!("\nPassive inbound-neighbour leak vs embargo mean (supernode reach φ=0.10)");
+    println!(
+        "{:>11} {:>10} {:>12} {:>14}",
+        "embargo (s)", "transport", "leak rate", "origin share"
+    );
+    println!("{}", "-".repeat(50));
+
+    let mut clearnet_rates = Vec::new();
+    for secs in [31_u32, 50, 144, 300, 500] {
+        let ticks = u32::try_from(u64::from(secs) * 1000 / DEFAULT_EMBARGO_TICK_MILLIS).unwrap();
+        let e = EmbargoTimer::geometric_from_ticks(ticks, DEFAULT_EMBARGO_TICK_MILLIS);
+
+        let mut cr = SplitMix64::new(0x9A5 + u64::from(secs));
+        let c = simulate_passive_neighbor_leak(
+            &params,
+            &e,
+            0.10,
+            Transport::Clearnet,
+            200_000,
+            &mut cr,
+        );
+        let mut tr = SplitMix64::new(0x9A5 + u64::from(secs) + 7919);
+        let t = simulate_passive_neighbor_leak(
+            &params,
+            &e,
+            0.10,
+            Transport::Anonymity,
+            200_000,
+            &mut tr,
+        );
+
+        println!(
+            "{secs:>11} {:>10} {:>12.5} {:>14.4}",
+            "clearnet", c.leak_rate, c.origin_share_of_leaks
+        );
+        println!(
+            "{secs:>11} {:>10} {:>12.5} {:>14.4}",
+            "tor/i2p", t.leak_rate, t.origin_share_of_leaks
+        );
+        // Tor is structurally zero at every mean.
+        assert!(
+            t.leak_rate < 1e-12,
+            "Tor passive leak must be structurally zero, got {:.6}",
+            t.leak_rate
+        );
+        clearnet_rates.push((secs, c.leak_rate));
+    }
+
+    // Mean-dependence: the clearnet leak falls monotonically as the embargo
+    // lengthens — the property that makes ε a live lever there.
+    for w in clearnet_rates.windows(2) {
+        assert!(
+            w[1].1 < w[0].1,
+            "clearnet leak should fall with embargo mean: {}s={:.5} then {}s={:.5}",
+            w[0].0,
+            w[0].1,
+            w[1].0,
+            w[1].1
+        );
+    }
+    // Non-negligible at the adopted 144 s embargo — a real channel, not noise.
+    let at_144 = clearnet_rates.iter().find(|(s, _)| *s == 144).unwrap().1;
+    assert!(
+        at_144 > 0.005,
+        "the clearnet passive channel should be non-negligible at the adopted \
+         embargo, got {at_144:.5}"
+    );
+    // The RD-1/RD-4 corrections already helped here: the 31 s (pre-correction)
+    // rate is several times the 144 s (adopted) rate.
+    let at_31 = clearnet_rates.iter().find(|(s, _)| *s == 31).unwrap().1;
+    assert!(
+        at_31 > at_144 * 3.0,
+        "correct provisioning should have cut the passive leak severalfold: \
+         31s={at_31:.5} vs 144s={at_144:.5}"
+    );
+
+    println!(
+        "\n  The clearnet passive channel is REAL and mean-DEPENDENT: the leak\n  \
+         rate falls with the embargo mean, so correct provisioning (ε) reduces\n  \
+         it — a live lever on clearnet. It is structurally ZERO on Tor (fluff\n  \
+         never traverses the supernode's inbound edges, levin_notify.cpp:448).\n\n  \
+         Both levers are therefore live and neither substitutes for the other:\n  \
+         ε defends the clearnet origin against THIS (passive, mean-dependent)\n  \
+         channel; Q-8a reshape defends every origin against the black-hole\n  \
+         (active, mean-invariant, transport-independent) channel. Round 3\n  \
+         derives ε from an a-priori adversary-advantage bound — the instrument\n  \
+         turns (δ,f,β,π₀) into a number but cannot choose δ, and choosing δ is\n  \
+         the privacy decision."
+    );
+}

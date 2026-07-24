@@ -1338,7 +1338,14 @@ pub struct SupernodeObservation {
     /// Fraction of transactions whose fluff the supernode observes at all.
     pub observed_fraction: f64,
     /// Among observed floods, P(the supernode's first-received predecessor is
-    /// the true source) — the first-spy attribution precision it achieves.
+    /// the true source) — the **inbound-fluff** first-spy attribution precision.
+    ///
+    /// The Tor `0.000` here means "zero via the cheap inbound direction," not
+    /// "zero first-spy precision on Tor": a supernode over Tor can still spend
+    /// the expensive resource it cannot create for free — an on-path *outbound*
+    /// stem-successor position — and there its reach is the black-hole channel's
+    /// (measured separately by [`simulate_blackhole_attack`]), not zero. This
+    /// field is only the inbound observable.
     pub first_spy_precision: f64,
 }
 
@@ -1488,5 +1495,118 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
         transport,
         observed_fraction,
         first_spy_precision,
+    }
+}
+
+/// The clearnet passive inbound-neighbour channel: how often a supernode's
+/// inbound edge to a stem-prefix node catches that node's *embargo-fired* fluff
+/// before the natural diffusion, and attributes the source to a prefix member.
+///
+/// **The mean-DEPENDENT channel (Round 3).** Unlike the black-hole
+/// ([`simulate_blackhole_attack`], mean-invariant), the passive channel's leaky
+/// event is a *real* preemption — a prefix node's embargo firing before it is
+/// disarmed — and `P(preempt)` scales *down* with the embargo mean. So a longer
+/// (correctly-provisioned) embargo reduces this leak, which is precisely what
+/// makes correct embargo provisioning (`ε`) a live lever *on clearnet*. On Tor
+/// the channel is structurally zero: fluff never traverses the supernode's
+/// inbound edges ([`levin_notify.cpp:448`], §6.3), so there is nothing to catch.
+///
+/// This is the instrument §10.8 deferred; it is built because the frozen default
+/// supports clearnet origins, so the channel is in scope by policy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PassiveNeighborLeak {
+    /// Transport measured.
+    pub transport: Transport,
+    /// Fraction of transactions where a neighboured prefix node's embargo fires
+    /// before its disarm and so is caught by the supernode as an early fluff.
+    pub leak_rate: f64,
+    /// Among leaked transactions, P(the earliest such prefix node is the
+    /// origin) — origin-biased, per the preemption profile.
+    pub origin_share_of_leaks: f64,
+}
+
+/// Measure [`PassiveNeighborLeak`] at supernode reach `dial_fraction`.
+///
+/// Each stem-prefix node is neighboured by the supernode with probability
+/// `dial_fraction` (a cheap inbound edge). A neighboured node leaks when its
+/// embargo fires before its disarm (`natural_fluff + F`) — the same preemption
+/// condition the survival equation counts — because on clearnet the supernode
+/// receives that fluff directly, before the natural diffusion reaches it. The
+/// origin always stems (RD-4).
+///
+/// # Panics
+///
+/// Panics if `trials` is zero or `dial_fraction` is outside `(0, 1]`.
+#[must_use]
+pub fn simulate_passive_neighbor_leak<R: RelayRng + ?Sized>(
+    params: &DandelionParams,
+    embargo: &EmbargoTimer,
+    dial_fraction: f64,
+    transport: Transport,
+    trials: usize,
+    rng: &mut R,
+) -> PassiveNeighborLeak {
+    assert!(trials > 0, "need at least one trial");
+    assert!(
+        dial_fraction > 0.0 && dial_fraction <= 1.0,
+        "dial fraction must be in (0, 1]"
+    );
+    let clearnet = matches!(transport, Transport::Clearnet);
+    let hop_ms = u64::from(params.time_between_hop_ms);
+    let q = u64::from(params.fluff_probability_pct);
+    let return_ms = u64::from(params.fluff_return_ms);
+    let dial_threshold = (dial_fraction * f64::from(u32::MAX)) as u32;
+
+    let mut leaks = 0_u64;
+    let mut origin_leaks = 0_u64;
+
+    for _ in 0..trials {
+        // (absolute fire time, neighboured?) per stem-prefix position.
+        let mut prefix: Vec<(u64, bool)> = Vec::new();
+        let mut t = 0_u64;
+        loop {
+            // On Tor the inbound edge never delivers fluff, so no position is
+            // observable — modelled by never marking a node neighboured.
+            let neighboured = clearnet && (rng.next_u64() as u32) < dial_threshold;
+            let deadline = embargo.deadline(t, rng);
+            // RD-4: origin always stems; fluff coin from the first relay.
+            if !prefix.is_empty() && bernoulli(rng, q, 100) {
+                break;
+            }
+            prefix.push((deadline, neighboured));
+            if prefix.len() >= MAX_SIMULATED_HOPS {
+                break;
+            }
+            t = t.saturating_add(hop_ms);
+        }
+
+        let natural_fluff = prefix.len() as u64 * hop_ms;
+        let disarm = natural_fluff.saturating_add(return_ms);
+
+        // Earliest neighboured prefix node whose embargo fires before disarm.
+        let mut earliest: Option<(u64, usize)> = None;
+        for (i, (fire, neighboured)) in prefix.iter().enumerate() {
+            if *neighboured && *fire < disarm && earliest.is_none_or(|(best, _)| *fire < best) {
+                earliest = Some((*fire, i));
+            }
+        }
+        if let Some((_, i)) = earliest {
+            leaks += 1;
+            if i == 0 {
+                origin_leaks += 1;
+            }
+        }
+    }
+
+    let leak_rate = leaks as f64 / trials as f64;
+    let origin_share_of_leaks = if leaks == 0 {
+        0.0
+    } else {
+        origin_leaks as f64 / leaks as f64
+    };
+    PassiveNeighborLeak {
+        transport,
+        leak_rate,
+        origin_share_of_leaks,
     }
 }
