@@ -737,6 +737,35 @@ async fn spawn_refuses_a_malformed_proxy_at_startup() {
     );
 }
 
+/// The daemon-address half of the same gate: a URL shape the transport
+/// cannot dial refuses at startup with the flag named and the shape cause
+/// carried.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_refuses_a_malformed_daemon_address_at_startup() {
+    let dir = TempDir::new().expect("tempdir");
+    let err = shekyl_wallet_rpc::spawn_in_process_with(ServerConfig {
+        listen: ListenAddr::Tcp(SocketAddr::from(([127, 0, 0, 1], 0))),
+        wallet_dir: dir.path().to_path_buf(),
+        network: Network::Stagenet,
+        daemon_address: "ftp://127.0.0.1:28581".into(),
+        proxy: None,
+        auth: AuthConfig::Disabled,
+        kdf: test_kdf(),
+    })
+    .await
+    .err()
+    .expect("a non-http(s) daemon URL must refuse at startup");
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("--daemon-address"),
+        "the startup error names the flag to fix: {rendered}"
+    );
+    assert!(
+        rendered.contains("daemon URL"),
+        "the startup error carries the shape cause: {rendered}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawn_in_process_with_lifecycle() {
     let dir = TempDir::new().expect("tempdir");

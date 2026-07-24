@@ -203,7 +203,16 @@ fn validate_daemon_endpoint(
     config: &ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     shekyl_rpc_transport::validate_endpoint(&config.daemon_address, config.proxy.as_deref())
-        .map_err(|e| format!("invalid daemon endpoint configuration: {e}").into())
+        .map_err(|e| {
+            // Both flags are named here; the inner cause identifies the half
+            // ("daemon URL ..." / "--proxy ..." / "TLS connector ...").
+            // Attributing one flag per failure would need either a second
+            // validation pass (mislabeling a TLS-root failure as
+            // --daemon-address) or matching on error text — both worse than
+            // naming the pair.
+            format!("invalid daemon endpoint configuration (--daemon-address / --proxy): {e}")
+                .into()
+        })
 }
 
 /// Run the server until shutdown (SIGINT / SIGTERM via the Notify, or
