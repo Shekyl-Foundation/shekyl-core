@@ -253,7 +253,10 @@ measures the wrong thing — this is evidence validity.
   signature moves; auth-msg binding. Fixture regen (expected to dominate the
   diff): `emission_verify_kat`, `emission_connect_kat`, `consensus_state_kat`,
   `kat_emission_auth_msg`, `EMISSION_KAT_SHAPE`; rule-42 snapshot check.
-  Acceptance gate: the §7 red test un-ignores and passes.
+  Acceptance gate: the §7 red test un-ignores and passes. **Review check
+  (§11.5):** the diff must *demonstrate* every rounding in the new micro path
+  floors **against the claimant** (error favours the protocol) — the ERC-4626
+  rounding-direction post-mortem discipline, not merely implied.
 - **Stage 1b — the `stake_factor` delete (F-D), its own atomic commit.** The
   FOLLOWUPS item this round supersedes says *"not a ride-along edit"* — the
   **review** requirement is met (this round is that review), but the **edit** is
@@ -278,8 +281,21 @@ measures the wrong thing — this is evidence validity.
   sweep (W9, §6.2):** `scenario_4_stuffing_attack` gains an output-heavy variant
   (segment-freeze rate, not the volume metric), crossed with
   `scenario_7_bootstrap` (steepest early-chain slope), measuring cost-per-shard
-  vs the permanent Δshare captured — the sweep that confirms the burden-coupling
-  argument leaves no early-chain regime where Δshare outruns Δburden.
+  vs the permanent Δshare captured — **calibrated against the March-2024
+  output-flood incident's cost profile** (§11.3), not an abstract stuffer — the
+  sweep that confirms the burden-coupling argument leaves no early-chain regime
+  where Δshare outruns Δburden. **Cross-chain-precedent arms (§11):**
+  - **Proxy-cost arm (W10, §11.1):** proxy cost (fetch-within-grace from public
+    daemons, per the gate-4 window) vs honest cost (hold ~13.6 GB) vs the
+    **post-D1/D2** reward — confirm the §7.4 fetch-cost-vs-deadline margin still
+    binds after D1 restores bulk-holder pay and D2 escalates the pool. If it does
+    not, the disposition is gate-4 grace tightening or PoRep-reopen acceleration,
+    not a D2 redesign.
+  - **A ninth scenario — high-history / low-activity (§11.2):** large `n`, low
+    current volume (the post-boom settled chain), the quadrant none of the
+    existing eight cover (`scenario_8_late_tail` is high-history but busy).
+  - **An explicit storage-cost-decline (Kryder) parameter**, so the arm's
+    conclusion *states* its cost-decline assumption rather than embedding it.
 - **Stage 3 — the escalation (D2; gated on Stage 2).** `compute_burn_split`
   gains the shard-count operand; `staker_pool_share` becomes the function's floor
   parameter; the `blockchain.cpp:6081` site reads `frozen_segment_count` at the
@@ -414,12 +430,27 @@ decision.
   numerics provisional, re-pin at testnet"*): Stage-1 work-precision **function
   shape genesis-frozen**; Stage-3 escalation **shape frozen, numerics provisional**
   per the sim.
+- **The asymptote re-pin is a freeze-decision, not a tuning (§11.4).** The
+  escalation asymptote's *shape* is frozen but its *number* is provisional-until-
+  testnet, and it is the one capture point in this design — no post-genesis
+  governance can relitigate it, so the testnet re-pin is the last moment it can be
+  captured, and stakeholder pressure runs one way (higher). Treat the re-pin with
+  **GF-7-threshold ceremony**: the adversary-advantage argument is committed
+  *before* the number, and the number is decision-anchored.
 - **Reopens to name in the frozen text:**
   - (a) redo the width and error-bound arithmetic (F-B/F-C) if
     `MAX_HOLDINGS_SHARDS` is ever raised;
   - (b) the `stake_factor` decision happens in **Stage 0**, not V3.1 — the
     `FOLLOWUPS.md:5255` item's own `> 10⁻³·SCALE` / V3.1 reopen is **superseded**
-    by D2 touching this math pre-freeze.
+    by D2 touching this math pre-freeze;
+  - (c) **a per-output fee-floor term** pricing the perpetual set-growth
+    externality at output creation (§11.3) — out of this round's pinned scope
+    (staker share only), **trigger:** the W9 sweep showing weight-fees alone do
+    not clear cost-of-burden;
+  - (d) **the §7.4 on-demand-serving equilibrium** (§11.1) — reopens via the doc's
+    own economics-reopens (traffic-proportional pay §0.3, or PoRep durability
+    fork) **trigger:** the W10 proxy-cost arm showing the fetch-cost-vs-deadline
+    margin no longer binds under the D1/D2 economics.
 
 ---
 
@@ -435,7 +466,8 @@ decision.
 | W6 | Distributional dilution: D1 fix moves ex-zero archivers into `Σwork`, shrinking scarce-holders' shares of fixed budget | Stage-2 sim models the shift, not just aggregate lift | ⏳ sim-arm scope |
 | W7 | Cached `frozen_segment_count` drift at the D2 read-point | Pinned read through frontier-check (M1 §11.8 M3-1) | ✅ carried |
 | W8 | **Fast-swing** manipulation of the staker share (pump-and-dump, whale dive, reflexive feedback) | The operand is monotone + slow + predictable (§6.0) and the function is a pure map of `n` with no controller (§6.1) — pump/dump/whale have **no lever** on a monotone chain-state operand; the only lever is the durable one (W9) | ✅ by operand (fast-swing has no lever) |
-| W9 | **Durable output-stuffing** — mint outputs to inflate leaf count → segment-freeze rate → `n` → share, permanently (the ratchet cuts both ways, §6.2). Not covered by `DESIGN_CONCEPTS.md` §6, which keys the stuffer's cost to `tx_volume` (a tx count) via the sqrt damper, which does not escalate against output count | Burden-coupling: the operand *is* the funded quantity, so a stuffer raises the share and the real cost (a permanent ~3.33 MB shard held forever) in the coupled ratio — "manipulating an honest measure of the funded quantity mostly funds the quantity"; only weight-fees escalate against outputs | ⏳ pending Stage-2 sweep (`scenario_4` output variant × `scenario_7` bootstrap, §6.2) |
+| W9 | **Durable output-stuffing** — mint outputs to inflate leaf count → segment-freeze rate → `n` → share, permanently (the ratchet cuts both ways, §6.2). Not covered by `DESIGN_CONCEPTS.md` §6, which keys the stuffer's cost to `tx_volume` (a tx count) via the sqrt damper, which does not escalate against output count. **Live precedent**: Monero's suspected March-2024 output-flood; Bitcoin's 2015 dust floods (§11.3) | Burden-coupling: the operand *is* the funded quantity, so a stuffer raises the share and the real cost (a permanent ~3.33 MB shard held forever) in the coupled ratio — "manipulating an honest measure of the funded quantity mostly funds the quantity"; only weight-fees escalate against outputs | ⏳ pending Stage-2 sweep — **calibrated against the March-2024 incident's cost profile** (`scenario_4` output variant × `scenario_7` bootstrap, §6.2); rule-21 reopen if weight-fees alone don't clear (§8) |
+| W10 | **Proxy free-riding on the on-demand-serving ruling** (§11.1) — a thin proxy re-fetches challenged data cheaply within the gate-4 grace window instead of holding it; D1 now *pays* that profile (was zero under truncation) and D2 escalates the pool it drains, re-pricing the §7.4 free-rider equilibrium that was closed under the old economics | Fetch-cost-vs-deadline margin must still bind (the §7.4/L14 judgment). If the Stage-2 arm shows it doesn't: tighten the gate-4 grace window or accelerate the PoRep reopen (the doc's own named economics-reopens) — **not** redesign D2 | ⏳ pending Stage-2 proxy-cost arm (§5) |
 
 ---
 
@@ -452,3 +484,108 @@ is *good*: it makes sim/production formula parity self-enforcing, and Stage 2's
 evidence validity depends on that parity; D2 escalation at Stage 3); the KAT
 fixtures listed in §5; a rule-42 persisted-schema snapshot check. Pre-genesis:
 **no fork surface**; genesis-freeze-class throughout.
+
+---
+
+## 11. Cross-chain precedent review (Stage 0 — importing others' scar tissue)
+
+Stage 0 is the last cheap place to import failures other chains paid for. Three
+directions searched: mechanisms we touch that failed elsewhere; settled decisions
+of ours that D1/D2 silently re-price; things we are *not* doing that backfired.
+Two genuine gaps (folded into the plan below), three precedent-anchored cautions,
+and a clean bill on the rest.
+
+### 11.1 Gap — D1/D2 re-price the on-demand-serving ruling without reopening it (→ W10, Stage-2 arm)
+
+The Filecoin lesson: when data is publicly reconstructible, "prove you have it"
+degenerates into "fetch it when challenged" — generation/outsourcing attacks are
+why PoRep needs per-provider *sealed replicas*. Shekyl already confronted this and
+ruled coherently (`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md` §7.5: the paid good
+is **response to demand, not 24/7 disk attestation**; *"Foundation owns
+durability; market owns reach"*; PoRep a named non-genesis path). **But §7.4
+explicitly rejects** the "lazy re-fetch is orthogonal" dismissal: *"if re-fetch is
+cheap, the challenge **is** the free-rider equilibrium"* (the L14
+challenge-faking-cost residue, verified verbatim). That equilibrium was priced
+against **today's** reward levels — under a frozen 25% share **and** the D1
+truncation that paid bulk holders **zero**. D1 restores full pay to exactly the
+bulk-holding profile a thin proxy would fake, and D2 escalates the pool such a
+proxy would drain. This is Method-Note-5's inherited-pin pattern pointed at *our
+own* project: a closed gate's ruling is a claim about the economics it was written
+for, and we are changing those economics. **The check must be named now** —
+nobody re-checks a closed gate. If the margin fails to bind, the answer is **not**
+redesigning D2; it is tightening the gate-4 grace window or accelerating the PoRep
+reopen — both already the doc's own named economics-reopens
+(`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`: *"traffic-proportional pay (§0.3) or
+PoRep durability fork"*). Folded: **W10** (§9) and a **Stage-2 arm** (§5).
+
+### 11.2 Gap — the missing sim quadrant: long history, low activity (→ scenario 9, Kryder param)
+
+Permanent storage funded by *current* activity flows is the least-validated
+economic mechanism in production crypto (Arweave's endowment-drawdown bet against
+assumed storage-cost decline, with Kryder's-law slowdown its named risk; Filecoin's
+other failure face — provider exodus when token rewards fell against fiat hardware
+costs). Shekyl's structure: burden grows with **cumulative** history (shards are
+forever), funding comes from **current** burn; the ratio degrades unless activity
+grows or storage costs fall. Verified: all eight sim scenarios assume the mature
+chain is **busy** — `scenario_8_late_tail` runs 180–300 tx/block against a 50
+baseline. The dangerous quadrant — **large `n`, low current volume**, the chain
+that had its boom and settled — is in **none** of them, and it is precisely where
+a 25%-floor-plus-escalation either saves the archival layer or demonstrably
+cannot. Folded: a **ninth scenario** (high-history / low-activity) and an explicit
+**storage-cost-decline parameter** (§5), so the conclusion *states* its Kryder
+assumption instead of embedding it.
+
+### 11.3 Caution — W9 has a live precedent on our own lineage (→ W9 calibration, rule-21 reopen)
+
+W9's adversary is not hypothetical. Bitcoin's 2015 dust floods demonstrated the
+general form — outputs carry a *perpetual* set-growth externality that one-time
+byte fees underprice — and Monero itself absorbed a suspected black-marble
+output-flood in **March 2024** (mass-minted outputs on a CryptoNote chain, cheaply,
+for weeks). On Monero the damage was decoy poisoning, which FCMP++ eliminates — but
+on Shekyl **every flooded output becomes a permanently-funded leaf under D2**. And
+our fee model is weight-priced with **no per-output perpetuity term** (verified:
+`predict_weight` sums wire bytes; an output pays its weight-share once), so it
+prices the flood exactly as Bitcoin did in 2015. The burden-coupling defense (§6.2)
+may still hold, but the **W9 sweep must be calibrated against that incident's
+actual cost profile**, not an abstract stuffer. A **named deferred option**, out of
+this round's pinned scope (staker share only) and therefore a **rule-21 reopen, not
+Stage 3**: a per-output fee-floor term pricing the perpetual externality at
+creation — trigger: the W9 sweep showing weight-fees alone do not clear
+cost-of-burden (§8).
+
+### 11.4 Caution — burn redirection's political economy: the asymptote is the capture point (→ §8 ceremony)
+
+Ethereum has repeatedly declined to redirect EIP-1559 burn toward public goods
+(pure destruction is credibly neutral; any redirection creates a permanent
+rent-seeking target). Shekyl's mitigations are the strong version: the redirection
+is **algorithmic** (no governance surface to capture), **work-gated** (you archive
+into the pool, you cannot lobby into it), and **fail-safe deflationary** (unclaimed
+budget reverts to destruction — the opposite of Terra/Anchor, which promised a rate
+and drained a reserve; we share revenue and never promise). The one place the
+precedent still bites: the **asymptote numeric**. Its shape is frozen but its
+number is provisional-until-testnet, and that is where every future stakeholder
+pressure concentrates — stakers always want it higher, and there is no
+post-genesis governance to relitigate it, so the **testnet re-pin is the last
+moment it can be captured**. Treat it with **freeze-decision ceremony** (§8):
+adversary-advantage argument first, then the number — the GF-7-threshold
+discipline.
+
+### 11.5 Caution — the rounding fix is validated by an exploited class (→ Stage-1 review check)
+
+Per-share-vs-aggregate rounding mismatches and rounding-direction errors are a
+repeatedly-exploited DeFi category (the ERC-4626 inflation attacks; lending-market
+rounding drains). Our F-B/F-E treatment — single floor-site shared by close and
+verify, floor-toward-zero so error always favours the protocol, per-entry compare
+so a wrong split cannot hide behind a right total — is the converged post-mortem
+answer from that history. **Stage-1 review check** (§5): confirm every rounding in
+the new micro path floors **against the claimant** — the doc implies it; the diff
+must demonstrate it.
+
+### 11.6 Clean bill (surveyed, cleared)
+
+No promised yield rate (Anchor). No usefulness oracle / notary layer to corrupt
+(Filecoin Plus's fake-verified-deals — we pay for consensus-defined chain data,
+nothing to adjudicate). No governance-settable economic knob (Curve gauge wars).
+No asymmetric adjustment on a reversible input (BCH's EDA oscillated because its
+input could swing; our operand cannot). Tail emission retained against fee-only
+security instability (Carlsten).
