@@ -249,6 +249,20 @@ pub(crate) async fn require_open_engine(
     state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)
 }
 
+/// The daemon endpoint every wallet on this server connects to. The address
+/// and its proxy are only ever meaningful together — threading them as two
+/// loose values is how a call site ends up proxying one connection and not
+/// another — so they snapshot, clone, and travel as one value.
+#[derive(Debug, Clone)]
+pub struct DaemonEndpoint {
+    /// Daemon JSON-RPC base URL (CLI `--daemon-address`).
+    pub address: String,
+    /// SOCKS5h proxy for the daemon transport (CLI `--proxy`); `None` =
+    /// direct. Server-level constant, applied to every wallet's daemon
+    /// connection.
+    pub proxy: Option<String>,
+}
+
 /// Process-level wallet directory + tenant slot + daemon/network binding.
 #[derive(Debug)]
 pub struct TenantState {
@@ -256,11 +270,8 @@ pub struct TenantState {
     pub wallet_dir: PathBuf,
     /// Network every create/open binds to (CLI `--network`).
     pub network: shekyl_engine_core::Network,
-    /// Daemon JSON-RPC base URL (CLI `--daemon-address`).
-    pub daemon_address: String,
-    /// SOCKS5h proxy for the daemon transport (CLI `--proxy`); `None` = direct.
-    /// Server-level constant, applied to every wallet's daemon connection.
-    pub proxy: Option<String>,
+    /// The daemon endpoint (address + proxy) every wallet connects to.
+    pub daemon: DaemonEndpoint,
     /// The single tenant (Phase 4b).
     pub tenant: Tenant,
 }
@@ -270,14 +281,12 @@ impl TenantState {
     pub fn new(
         wallet_dir: PathBuf,
         network: shekyl_engine_core::Network,
-        daemon_address: String,
-        proxy: Option<String>,
+        daemon: DaemonEndpoint,
     ) -> Self {
         Self {
             wallet_dir,
             network,
-            daemon_address,
-            proxy,
+            daemon,
             tenant: Tenant::new(),
         }
     }

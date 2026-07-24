@@ -33,9 +33,7 @@ async fn test_rpc() {
 
     let guard = SEQUENTIAL.lock().await;
 
-    let rpc = SimpleRequestRpc::new(DAEMON_RPC_URL.to_string())
-        .await
-        .unwrap();
+    let rpc = HttpRpc::new(DAEMON_RPC_URL.to_string()).await.unwrap();
 
     {
         // Block-metadata routes that survive the oxide block/tx serializer removal
@@ -78,7 +76,7 @@ async fn test_zero_out_tx_o_indexes() {
 
   let guard = SEQUENTIAL.lock().await;
 
-  let rpc = SimpleRequestRpc::new("https://node.sethforprivacy.com".to_string()).await.unwrap();
+  let rpc = HttpRpc::new("https://node.sethforprivacy.com".to_string()).await.unwrap();
 
   assert_eq!(
     rpc

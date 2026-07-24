@@ -112,6 +112,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// must be disclosed. (The flag's "ignored with --rpc-url" note covers only the
 /// self-hosted server's daemon connection, not the REPL's direct client.)
 fn disclose_network_posture(cli: &ReplArgs, opens_direct_daemon: bool) {
+    use network_posture::ProxyResolution;
+
     let proxy = cli.proxy.as_deref();
     match &cli.rpc_url {
         Some(url) => {
@@ -119,22 +121,40 @@ fn disclose_network_posture(cli: &ReplArgs, opens_direct_daemon: bool) {
             // unsupported scheme is rejected before any endpoint is opened, so
             // warning about it would contradict "endpoints actually used".
             if rpc_client::is_supported_rpc_url(url) {
-                network_posture::disclose("wallet-RPC endpoint", url, proxy);
+                network_posture::disclose(
+                    "wallet-RPC endpoint",
+                    url,
+                    proxy,
+                    ProxyResolution::HonorsScheme,
+                );
             }
             if opens_direct_daemon {
-                network_posture::disclose("daemon address", &cli.daemon_address, proxy);
+                network_posture::disclose(
+                    "daemon address",
+                    &cli.daemon_address,
+                    proxy,
+                    ProxyResolution::HonorsScheme,
+                );
             }
         }
-        // Self-hosted: the in-process wallet server does the bulk block scan to
-        // the daemon, and that transport now honors --proxy (SOCKS5h). Disclose
-        // it proxy-aware, same as the --rpc-url daemon: a non-loopback daemon
-        // with no proxy warns; a remote-resolving proxy silences it; a
-        // local-resolving socks5:// warns about the DNS leak (the scan itself
-        // upgrades to remote resolution, but the REPL's ureq DaemonClient — the
-        // same daemon_address — honors the scheme and would leak). One
-        // disclosure covers both, since they share endpoint and proxy.
+        // Self-hosted: the in-process wallet server does the bulk block scan
+        // to the daemon, and that transport honors --proxy with SOCKS5h
+        // semantics regardless of scheme — it never resolves the daemon
+        // hostname locally. The REPL *additionally* opens a direct ureq
+        // daemon client on the same address, and that client does honor the
+        // scheme (socks5:// = local resolve). So the DNS-leak disclosure
+        // applies exactly when the REPL client will open: on a scripted run
+        // the only connection is the always-remote scan, and warning would
+        // assert a lookup no opened transport performs (§15 warns only on
+        // established weaknesses). One disclosure covers both transports,
+        // since they share endpoint and proxy.
         None => {
-            network_posture::disclose("daemon address", &cli.daemon_address, proxy);
+            let resolution = if opens_direct_daemon {
+                ProxyResolution::HonorsScheme
+            } else {
+                ProxyResolution::AlwaysRemote
+            };
+            network_posture::disclose("daemon address", &cli.daemon_address, proxy, resolution);
         }
     }
 }

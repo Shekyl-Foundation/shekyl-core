@@ -28,7 +28,7 @@ use tracing::info;
 
 use crate::auth::{require_basic_auth, AuthConfig};
 use crate::handlers;
-use crate::tenant::TenantState;
+use crate::tenant::{DaemonEndpoint, TenantState};
 use crate::types::{JsonRpcRequest, JsonRpcResponse};
 
 /// Default max JSON-RPC body size (1 MiB). Wallet RPC payloads are small;
@@ -100,8 +100,10 @@ impl AppState {
             tenants: tokio::sync::Mutex::new(TenantState::new(
                 config.wallet_dir.clone(),
                 config.network,
-                config.daemon_address.clone(),
-                config.proxy.clone(),
+                DaemonEndpoint {
+                    address: config.daemon_address.clone(),
+                    proxy: config.proxy.clone(),
+                },
             )),
             auth: config.auth.clone(),
             kdf: config.kdf,
@@ -165,11 +167,25 @@ impl Drop for UdsCleanup {
     }
 }
 
+/// Refuse a malformed `--daemon-address` / `--proxy` at startup (offline
+/// shape check only — an unreachable daemon stays fine for offline
+/// commands). Deferred to first use, a bad flag would surface on
+/// `open_wallet` as "daemon unreachable": the wrong remedy pointer
+/// (rule 82 — the failure must name the flag, at the moment it can be
+/// fixed).
+fn validate_daemon_endpoint(
+    config: &ServerConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    shekyl_rpc_transport::validate_endpoint(&config.daemon_address, config.proxy.as_deref())
+        .map_err(|e| format!("invalid daemon endpoint configuration: {e}").into())
+}
+
 /// Run the server until shutdown (SIGINT / SIGTERM via the Notify, or
 /// process exit). Blocks the calling task.
 pub async fn run_server(
     config: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    validate_daemon_endpoint(&config)?;
     let state = AppState::new(&config);
     let app = build_router(state.clone());
     let shutdown = state.shutdown.clone();
@@ -338,6 +354,7 @@ pub async fn spawn_in_process(
 pub async fn spawn_in_process_with(
     config: ServerConfig,
 ) -> Result<InProcessHandle, Box<dyn std::error::Error + Send + Sync>> {
+    validate_daemon_endpoint(&config)?;
     let state = AppState::new(&config);
     let app = build_router(state.clone());
     let shutdown = state.shutdown.clone();

@@ -7009,7 +7009,7 @@ sustainability is unaffected by the recalibration.
   (SOCKS5h)**, the correctness bar, so a `socks5://` label cannot leak the daemon
   hostname on the scan. `simple-request` was dropped; `+tokio-socks` (verified at
   source, rule 17: no `unsafe`, `+thiserror` only). Proxy threads `ServerConfig →
-  TenantState → make_daemon → SimpleRequestRpc::with_proxy`; the CLI/wallet-rpc
+  TenantState → make_daemon → HttpRpc::with_proxy`; the CLI/wallet-rpc
   daemon both take `--proxy`. `network_posture::disclose_unproxyable` +
   `warning_for_direct` were **deleted** (their reason to exist — an unproxyable
   scan — is gone); the self-hosted daemon is now disclosed with the proxy-aware
@@ -8751,7 +8751,7 @@ one place to confirm each item's relationship to the wallet stack.
   inherit; a post-genesis flip re-partitions the population into before/after cohorts).**
 - **Principal-side `IsolateSOCKSAuth` — give the principal's `DaemonClient`s isolated circuits
   (2d-2 Round 0, deliberately a separate ticket).** Today the principal's two daemon surfaces
-  (`cli/daemon.rs::DaemonClient` ureq/SOCKS + `engine-core::DaemonClient` over `SimpleRequestRpc`)
+  (`cli/daemon.rs::DaemonClient` ureq/SOCKS + `engine-core::DaemonClient` over `HttpRpc`)
   share **one no-auth circuit** — *within-principal* correlation, not a firewall leak (both
   endpoints are already principal-side), so it was kept out of the firewall round. **Implementation
   precondition (load-bearing — this is *why* it was deferred, not a nice-to-have):** giving the

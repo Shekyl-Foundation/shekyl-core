@@ -62,7 +62,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use shekyl_rpc_client::Rpc;
-use shekyl_rpc_transport::SimpleRequestRpc;
+use shekyl_rpc_transport::HttpRpc;
 use shekyl_wire::Block;
 
 use super::regtest_e2e::RegtestDaemon;
@@ -276,11 +276,7 @@ impl ReadPath {
 
 /// One client, one path, one height — return the raw block bytes (`None` if the
 /// daemon has no block at that height, e.g. it was just popped).
-async fn fetch_block(
-    rpc: &SimpleRequestRpc,
-    path: ReadPath,
-    h: u64,
-) -> Result<Option<Vec<u8>>, String> {
+async fn fetch_block(rpc: &HttpRpc, path: ReadPath, h: u64) -> Result<Option<Vec<u8>>, String> {
     match path {
         ReadPath::Locked => {
             let v: Value = rpc
@@ -305,8 +301,8 @@ async fn fetch_block(
 
 /// Open an independent client — a distinct `reqwest` pool ⇒ a distinct TCP
 /// connection, mirroring the per-`P` isolation posture (never a shared clone).
-async fn open_client(port: u16) -> SimpleRequestRpc {
-    SimpleRequestRpc::new(format!("http://127.0.0.1:{port}"))
+async fn open_client(port: u16) -> HttpRpc {
+    HttpRpc::new(format!("http://127.0.0.1:{port}"))
         .await
         .expect("construct per-persona rpc client")
 }
@@ -341,7 +337,7 @@ async fn new_wallet_address(port: u16) -> String {
     use shekyl_engine_file::SafetyOverrides;
     use shekyl_engine_prefs::WalletPrefs;
 
-    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{port}"))
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{port}"))
         .await
         .expect("wallet rpc");
     let daemon_client = DaemonClient::new(rpc);
@@ -521,13 +517,7 @@ async fn measure_enum(port: u16) {
 // ---------------------------------------------------------------------------
 
 /// A contending persona: hammer `path` across the height range until stopped.
-async fn run_contender(
-    rpc: SimpleRequestRpc,
-    path: ReadPath,
-    tip: u64,
-    stop: Arc<AtomicBool>,
-    seed: u64,
-) {
+async fn run_contender(rpc: HttpRpc, path: ReadPath, tip: u64, stop: Arc<AtomicBool>, seed: u64) {
     let span = tip.max(1);
     let mut i = seed;
     while !stop.load(Ordering::Relaxed) {
@@ -537,12 +527,7 @@ async fn run_contender(
 }
 
 /// Collect `samples` sequential probe latencies (µs) on `path`, cycling heights.
-async fn probe_latencies(
-    rpc: &SimpleRequestRpc,
-    path: ReadPath,
-    tip: u64,
-    samples: usize,
-) -> Vec<u64> {
+async fn probe_latencies(rpc: &HttpRpc, path: ReadPath, tip: u64, samples: usize) -> Vec<u64> {
     let span = tip.max(1);
     let mut lat = Vec::with_capacity(samples);
     for k in 0..samples {

@@ -269,7 +269,7 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
     let creds = Credentials::password_only(password);
 
     let dummy_daemon = || async {
-        let rpc = shekyl_rpc_transport::SimpleRequestRpc::new("http://127.0.0.1:1".to_string())
+        let rpc = shekyl_rpc_transport::HttpRpc::new("http://127.0.0.1:1".to_string())
             .await
             .map_err(|e| format!("rpc stub: {e}"))?;
         Ok::<_, String>(DaemonClient::new(rpc))

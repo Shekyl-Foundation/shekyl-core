@@ -45,6 +45,8 @@ tokio-socks = { version = "0.5.3", default-features = false, features = ["tokio"
 shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-tokio = { version = "1", default-features = false, features = ["macros"] }
+# rt for #[tokio::test]; io-util for the in-test SOCKS5 acceptor's
+# read_exact/write_all (the ATYP=DOMAIN wire pin in `http_client`).
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "io-util"] }
 # Integration tests decode Bech32m addresses for generate_blocks (see tests/tests.rs).
 shekyl-address = { path = "../shekyl-address" }

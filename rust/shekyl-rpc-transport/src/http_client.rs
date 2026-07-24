@@ -35,6 +35,7 @@ use std::time::Duration;
 
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
+use hyper::http::uri::Authority;
 use hyper::Uri;
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::connect::{Connected, Connection, HttpConnector};
@@ -48,7 +49,7 @@ use tower_service::Service;
 /// Errors constructing or using the client.
 #[derive(Debug)]
 pub(crate) enum HttpError {
-    /// The `--proxy` value was not a usable `host:port` (`scheme://` stripped).
+    /// The `--proxy` value was not a usable SOCKS5 `host:port`.
     InvalidProxy(String),
     /// The TLS connector could not be built (no roots available).
     Tls(String),
@@ -111,7 +112,7 @@ impl Connection for SocksStream {
 /// A `tower` connector that dials the target **through a SOCKS5h proxy**,
 /// letting the proxy resolve the hostname (`TargetAddr::Domain`) — never the
 /// local resolver.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct SocksConnector {
     /// `host:port` of the SOCKS proxy (scheme stripped).
     proxy: Arc<str>,
@@ -119,17 +120,48 @@ pub(crate) struct SocksConnector {
 
 impl SocksConnector {
     fn new(proxy: &str) -> Result<Self, HttpError> {
-        // Accept `socks5h://h:p`, `socks5://h:p`, or a bare `h:p`; the scheme is
-        // advisory here — this connector is *always* remote-resolving, so a
-        // `socks5://` (local-resolving) label does not weaken it.
-        let hostport = proxy.split_once("://").map_or(proxy, |(_, rest)| rest);
-        if hostport.is_empty() || !hostport.contains(':') {
+        // Accept `socks5h://host:port`, `socks5://host:port`, or a bare
+        // `host:port`. The scheme is advisory — this connector is *always*
+        // remote-resolving, so a `socks5://` (local-resolving) label does not
+        // weaken it — but every OTHER scheme refuses here: silently speaking
+        // SOCKS5 to an `http://` (or `socks4://`) proxy would instead fail on
+        // every request with an opaque handshake error, pointing the operator
+        // at the network instead of the flag.
+        let hostport = match proxy.split_once("://") {
+            None => proxy,
+            Some(("socks5" | "socks5h", rest)) => rest,
+            Some((scheme, _)) => {
+                return Err(HttpError::InvalidProxy(format!(
+                    "unsupported scheme {scheme:?} — this transport speaks SOCKS5 only \
+                     (socks5h://host:port, socks5://host:port, or bare host:port)"
+                )))
+            }
+        };
+        // Userinfo before the grammar check, and never echoed: it may carry a
+        // credential, and this client performs no SOCKS authentication anyway
+        // (see the module doc — per-persona SOCKS identities are
+        // `shekyl-p-transport`'s, deliberately not this transport's).
+        if hostport.contains('@') {
+            return Err(HttpError::InvalidProxy(
+                "userinfo is not accepted — this transport performs no SOCKS authentication"
+                    .to_string(),
+            ));
+        }
+        // `Authority` is the exact grammar of what may follow the scheme: the
+        // parse rejects a path, query, fragment, or whitespace outright. It
+        // accepts a missing port, so that is refused explicitly —
+        // `tokio-socks` dials literal `host:port` strings only (the old
+        // `contains(':')` check falsely accepted `[::1]`).
+        let authority: Authority = hostport.parse().map_err(|_| {
+            HttpError::InvalidProxy(format!("expected host:port, got {hostport:?}"))
+        })?;
+        if authority.port_u16().is_none() {
             return Err(HttpError::InvalidProxy(format!(
-                "expected host:port, got {proxy:?}"
+                "missing port in {hostport:?} — expected host:port"
             )));
         }
         Ok(Self {
-            proxy: hostport.into(),
+            proxy: authority.as_str().into(),
         })
     }
 }
@@ -202,7 +234,7 @@ pub(crate) enum HttpClient {
 }
 
 impl std::fmt::Debug for HttpClient {
-    // Manual (not derived) so `SimpleRequestRpc: Debug` does not hinge on the
+    // Manual (not derived) so `HttpRpc: Debug` does not hinge on the
     // hyper client's Debug bounds; the transport mode is all that's useful here.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
@@ -244,8 +276,24 @@ impl HttpClient {
             Self::Direct(c) => c.request(request).await,
             Self::Socks(c) => c.request(request).await,
         };
-        res.map_err(|e| HttpError::Request(format!("{e}")))
+        res.map_err(|e| HttpError::Request(error_chain(&e)))
     }
+}
+
+/// Render an error with its full `source()` chain (`kind: cause: root`).
+/// hyper-util's legacy client `Display` prints only the error *kind*
+/// (`client error (Connect)`); the actionable cause — "Connection refused",
+/// the TLS failure, the SOCKS refusal — lives down the chain, and dropping it
+/// makes a down node, a bad proxy, and a broken TLS setup indistinguishable.
+fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut rendered = e.to_string();
+    let mut source = e.source();
+    while let Some(cause) = source {
+        rendered.push_str(": ");
+        rendered.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    rendered
 }
 
 #[cfg(test)]
@@ -254,7 +302,7 @@ mod tests {
 
     #[test]
     fn socks_connector_parses_and_strips_scheme() {
-        // Bare host:port, and each socks scheme, all accepted and normalized.
+        // Bare host:port, and each socks5 scheme, all accepted and normalized.
         for input in [
             "127.0.0.1:9050",
             "socks5://127.0.0.1:9050",
@@ -263,6 +311,9 @@ mod tests {
             let c = SocksConnector::new(input).expect("valid proxy");
             assert_eq!(&*c.proxy, "127.0.0.1:9050");
         }
+        // Bracketed IPv6 keeps its brackets (what a `host:port` dial needs).
+        let c = SocksConnector::new("socks5h://[::1]:9050").expect("IPv6 proxy");
+        assert_eq!(&*c.proxy, "[::1]:9050");
     }
 
     #[test]
@@ -270,5 +321,108 @@ mod tests {
         assert!(SocksConnector::new("socks5://").is_err());
         assert!(SocksConnector::new("9050").is_err());
         assert!(SocksConnector::new("").is_err());
+    }
+
+    /// The accepted surface is exactly `[socks5[h]://]host:port` — every
+    /// shape that would only fail later (inside the per-request SOCKS
+    /// handshake, with an opaque error) refuses at construction instead.
+    #[test]
+    fn socks_connector_rejects_malformed_and_unsupported_forms() {
+        // A ':' with no port after it — the old `contains(':')` check's
+        // false accept — and other port-less forms.
+        for input in ["[::1]", "socks5h://[::1]", "socks5://host"] {
+            assert!(
+                SocksConnector::new(input).is_err(),
+                "{input:?} has no port and must refuse"
+            );
+        }
+        // Path / query / fragment / whitespace are not part of host:port.
+        for input in [
+            "socks5h://host:9050/",
+            "socks5h://host:9050?x=1",
+            "socks5h://host:9050#f",
+            "host:9050 ",
+        ] {
+            assert!(SocksConnector::new(input).is_err(), "{input:?} must refuse");
+        }
+        // Non-SOCKS5 schemes refuse loudly instead of being spoken SOCKS5 to.
+        for input in [
+            "http://127.0.0.1:8080",
+            "https://127.0.0.1:8080",
+            "socks4://127.0.0.1:9050",
+            "socks4a://127.0.0.1:9050",
+        ] {
+            let err = SocksConnector::new(input).expect_err("unsupported scheme");
+            assert!(
+                format!("{err}").contains("SOCKS5"),
+                "{input:?}: the refusal names what is supported: {err}"
+            );
+        }
+        // SOCKS auth is unsupported; the refusal must never echo the
+        // credential the userinfo may carry.
+        let err = SocksConnector::new("socks5h://user:hunter2@127.0.0.1:9050")
+            .expect_err("userinfo refuses");
+        assert!(
+            !format!("{err}").contains("hunter2"),
+            "the error must not render a credential: {err}"
+        );
+    }
+
+    /// The crate's central privacy property, pinned on the wire: the
+    /// connector hands the proxy the daemon *hostname* (SOCKS5 ATYP=DOMAIN,
+    /// 0x03) for the proxy to resolve — never an address it resolved
+    /// locally (ATYP 0x01/0x04), which is the exact DNS leak this transport
+    /// exists to close. A refactor that resolves before
+    /// `Socks5Stream::connect` fails here.
+    #[tokio::test]
+    async fn socks_connector_sends_the_hostname_for_the_proxy_to_resolve() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let proxy_addr = listener.local_addr().expect("addr");
+        // A minimal SOCKS5 acceptor: greet, then capture the CONNECT
+        // request's address type and target before replying success.
+        let acceptor = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.expect("accept");
+            let mut greeting = [0u8; 2];
+            s.read_exact(&mut greeting).await.expect("greeting");
+            assert_eq!(greeting[0], 5, "SOCKS version");
+            let mut methods = vec![0u8; usize::from(greeting[1])];
+            s.read_exact(&mut methods).await.expect("methods");
+            s.write_all(&[5, 0]).await.expect("no-auth accepted");
+
+            let mut request = [0u8; 4];
+            s.read_exact(&mut request).await.expect("request head");
+            assert_eq!(request[1], 1, "CONNECT");
+            let atyp = request[3];
+            let mut len = [0u8; 1];
+            s.read_exact(&mut len).await.expect("domain length");
+            let mut name = vec![0u8; usize::from(len[0])];
+            s.read_exact(&mut name).await.expect("domain");
+            let mut port = [0u8; 2];
+            s.read_exact(&mut port).await.expect("port");
+            // Success, bound to 0.0.0.0:0.
+            s.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+                .await
+                .expect("reply");
+            (atyp, name, u16::from_be_bytes(port))
+        });
+
+        let mut connector =
+            SocksConnector::new(&proxy_addr.to_string()).expect("proxy addr parses");
+        // `.invalid` (RFC 2606): if anything tried to resolve this locally,
+        // the resolution itself would fail — the name must reach the proxy.
+        let stream = connector
+            .call("http://node.invalid:11029".parse().expect("uri"))
+            .await
+            .expect("handshake completes");
+        drop(stream);
+
+        let (atyp, name, port) = acceptor.await.expect("acceptor");
+        assert_eq!(atyp, 3, "ATYP must be DOMAIN (0x03), got {atyp:#04x}");
+        assert_eq!(name, b"node.invalid");
+        assert_eq!(port, 11029);
     }
 }

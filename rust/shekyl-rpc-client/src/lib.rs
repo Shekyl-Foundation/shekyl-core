@@ -204,7 +204,7 @@ pub use shekyl_rpc_types::{RejectCause, SubmitTransactionRequest, SubmitVerdict}
 ///
 /// This is a **protocol invariant** — which routes are EPEE-binary — so it lives
 /// once here (the `Rpc` trait's home) and is shared by every transport
-/// (`shekyl-rpc-transport`'s `SimpleRequestRpc`, the per-`P` `PRpc`) rather than
+/// (`shekyl-rpc-transport`'s `HttpRpc`, the per-`P` `PRpc`) rather than
 /// re-derived per impl, where the copies could drift.
 pub fn content_type_for(route: &str) -> &'static str {
     if route.ends_with(".bin") {

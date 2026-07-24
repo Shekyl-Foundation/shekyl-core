@@ -224,7 +224,7 @@ mod tests {
     use super::*;
 
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
-    use shekyl_rpc_transport::SimpleRequestRpc;
+    use shekyl_rpc_transport::HttpRpc;
     use tempfile::TempDir;
 
     use crate::engine::lifecycle::EngineCreateParams;
@@ -305,9 +305,9 @@ mod tests {
             *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(13);
         }
         let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
-        let rpc = SimpleRequestRpc::new("http://127.0.0.1:1".to_string())
+        let rpc = HttpRpc::new("http://127.0.0.1:1".to_string())
             .await
-            .expect("construct SimpleRequestRpc against unreachable URL (no connect attempt yet)");
+            .expect("construct HttpRpc against unreachable URL (no connect attempt yet)");
         let daemon = DaemonClient::new(rpc);
         let wallet = Engine::<SoloSigner>::create(params, daemon)
             .expect("create FULL wallet for drain-balance-read tests");
