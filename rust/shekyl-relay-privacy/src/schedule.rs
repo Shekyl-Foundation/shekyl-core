@@ -441,6 +441,32 @@ impl EmbargoTimer {
         }
     }
 
+    /// Build a memoryless embargo directly from a tick count.
+    ///
+    /// [`Self::geometric_with_tick`] takes seconds and reconverts, which loses
+    /// the sub-second precision [`crate::derive`] produces — the derived 446
+    /// ticks (111.5 s) becomes 448 ticks if round-tripped through `112 s`. When
+    /// the mean *is* the derivation's own `mean_ticks`, use this so the
+    /// measurement is taken at exactly the value that was solved for.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `mean_ticks` or `tick_millis` is zero.
+    #[must_use]
+    pub fn geometric_from_ticks(mean_ticks: u32, tick_millis: u64) -> Self {
+        assert!(mean_ticks > 0, "embargo mean must be non-zero");
+        assert!(tick_millis > 0, "embargo tick must be non-zero");
+        let mean_secs = u32::try_from((u64::from(mean_ticks) * tick_millis).div_ceil(1_000))
+            .unwrap_or(u32::MAX);
+        Self {
+            poisson: None,
+            geometric: Some(GeometricTable::new(mean_ticks)),
+            mean_secs,
+            tick_millis,
+            distribution: EmbargoDistribution::Geometric,
+        }
+    }
+
     /// Mean in force, in seconds.
     #[must_use]
     pub const fn mean_secs(&self) -> u32 {

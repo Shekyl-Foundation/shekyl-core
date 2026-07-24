@@ -718,3 +718,157 @@ pub fn residual_masses(masses: &[u64], phase: u64) -> Vec<u64> {
     }
     masses[start..].to_vec()
 }
+
+/// The preemption profile: **who** preempts, not just how often.
+///
+/// **Q-8's first-class instrument.** The total preemption rate says the
+/// embargo fires on ~10% of transactions; it does not say *which stem node*
+/// does the fluffing, and that is the entire question, because a preemption by
+/// the origin leaks the origin while a preemption by a late relay leaks almost
+/// nothing. Once the profile is a first-class output, any leakage-weight
+/// vector `w(i)` is a downstream dot product ([`Self::weighted_leakage`]) and a
+/// design round can compare targets without re-deriving anything.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreemptionProfile {
+    /// Trials run.
+    pub trials: usize,
+    /// Fraction of trials in which some stem node preempted.
+    pub p_preempt: f64,
+    /// `first[i]` = P(the *first* (earliest-firing) preempter is at separation
+    /// `i` from the origin | a preemption occurred). Separation 0 is the origin
+    /// itself. This is the distribution a leakage weighting acts on: the first
+    /// node to fluff early is the one that reveals itself.
+    pub first: Vec<f64>,
+    /// `marginal[i]` = P(the node at separation `i` fires before its own
+    /// disarm), per trial, unconditional. The analytic cross-check anchor
+    /// ([`crate::derive::marginal_preemption_profile`]) targets this, because
+    /// unlike the first-preempter order statistic it is a clean running
+    /// product.
+    pub marginal: Vec<f64>,
+}
+
+impl PreemptionProfile {
+    /// Expected leakage under a per-separation weight vector, as a fraction of
+    /// the no-Dandelion baseline (every transaction fluffs at its origin, so
+    /// baseline leakage is `w[0]`).
+    ///
+    /// This is the number Q-8 is actually about: `w` encodes how much an
+    /// adversary learns from a preemption at each separation, and the ratio
+    /// says how much of the un-protected leakage survives the design. `w[0]`
+    /// must be the origin weight and non-zero.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `weights` is empty or `weights[0]` is zero.
+    #[must_use]
+    pub fn weighted_leakage(&self, weights: &[f64]) -> f64 {
+        assert!(!weights.is_empty(), "need at least the origin weight");
+        assert!(weights[0] != 0.0, "baseline weight w[0] must be non-zero");
+        let weighted: f64 = self
+            .first
+            .iter()
+            .zip(weights.iter())
+            .map(|(share, w)| share * w)
+            .sum();
+        self.p_preempt * weighted / weights[0]
+    }
+
+    /// Separation carrying the largest share of first-preemptions.
+    #[must_use]
+    pub fn modal_separation(&self) -> usize {
+        self.first
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).expect("finite shares"))
+            .map_or(0, |(i, _)| i)
+    }
+}
+
+/// Measure the preemption profile at a parameter set and embargo.
+///
+/// Walks the stem exactly as [`simulate_propagation`] does — same
+/// disarm-on-observation model (RD-1), same terminal-node-discards-its-embargo
+/// rule — but records each stem node's embargo deadline so it can attribute
+/// the preemption to a position rather than only counting it.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero.
+#[must_use]
+pub fn simulate_preemption_profile<R: RelayRng + ?Sized>(
+    params: &DandelionParams,
+    embargo: &EmbargoTimer,
+    trials: usize,
+    rng: &mut R,
+) -> PreemptionProfile {
+    assert!(trials > 0, "profile needs at least one trial");
+    let hop_ms = u64::from(params.time_between_hop_ms);
+    let q = u64::from(params.fluff_probability_pct);
+    let return_ms = u64::from(params.fluff_return_ms);
+
+    let mut first_counts: Vec<u64> = Vec::new();
+    let mut marginal_counts: Vec<u64> = Vec::new();
+    let mut preempted = 0_u64;
+
+    // Reused across trials to avoid per-trial allocation.
+    let mut deadlines: Vec<u64> = Vec::new();
+
+    for _ in 0..trials {
+        deadlines.clear();
+        let mut t = 0_u64;
+        loop {
+            let deadline = embargo.deadline(t, rng);
+            if bernoulli(rng, q, 100) {
+                // Terminal node fluffs; it disarms its own embargo at emission,
+                // so its deadline is never recorded.
+                break;
+            }
+            deadlines.push(deadline);
+            if deadlines.len() >= MAX_SIMULATED_HOPS {
+                break;
+            }
+            t = t.saturating_add(hop_ms);
+        }
+
+        let natural_fluff = deadlines.len() as u64 * hop_ms;
+        let disarm = natural_fluff.saturating_add(return_ms);
+
+        if deadlines.len() > marginal_counts.len() {
+            marginal_counts.resize(deadlines.len(), 0);
+            first_counts.resize(deadlines.len(), 0);
+        }
+
+        let mut earliest: Option<(u64, usize)> = None;
+        for (i, deadline) in deadlines.iter().enumerate() {
+            if *deadline < disarm {
+                marginal_counts[i] += 1; // this node fires before its disarm
+                if earliest.is_none_or(|(best, _)| *deadline < best) {
+                    earliest = Some((*deadline, i));
+                }
+            }
+        }
+        if let Some((_, sep)) = earliest {
+            preempted += 1;
+            first_counts[sep] += 1;
+        }
+    }
+
+    let denom = trials as f64;
+    let p_preempt = preempted as f64 / denom;
+    let first = if preempted == 0 {
+        vec![0.0; first_counts.len()]
+    } else {
+        first_counts
+            .iter()
+            .map(|c| *c as f64 / preempted as f64)
+            .collect()
+    };
+    let marginal = marginal_counts.iter().map(|c| *c as f64 / denom).collect();
+
+    PreemptionProfile {
+        trials,
+        p_preempt,
+        first,
+        marginal,
+    }
+}

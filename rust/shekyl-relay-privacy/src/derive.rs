@@ -237,6 +237,76 @@ const fn div_ceil(numerator: u64, denominator: u64) -> u64 {
     numerator.div_ceil(denominator)
 }
 
+/// Analytic marginal preemption profile — the cross-check anchor for
+/// [`crate::conformance::simulate_preemption_profile`]'s `marginal` field.
+///
+/// `marginal[i]` is the probability, per transaction, that the stem node at
+/// separation `i` from the origin fires its embargo before it observes the
+/// fluff. Unlike the *first*-preempter distribution (an order statistic over
+/// staggered timers, which the simulator owns), the marginal is a clean
+/// running product and so keeps the analytic-vs-simulator pairing the rest of
+/// this module lives by.
+///
+/// For a node at separation `i`, present only when the stem reaches length
+/// `h > i`, at distance `k = h - i` from the terminal node its slack is
+/// `k·hop + F` and it fires early with probability `1 - (1-p)^ceil(slack/τ)`:
+///
+/// ```text
+/// marginal[i] = Σ_{h > i}  (1-q)^h · q · (1 - (1-p)^ceil(((h-i)·hop + F)/τ))
+/// ```
+///
+/// Transcendental-free, like [`full_travel_probability`].
+///
+/// # Panics
+///
+/// Panics as [`full_travel_probability`] does.
+#[must_use]
+pub fn marginal_preemption_profile(
+    params: &DandelionParams,
+    mean_ticks: u32,
+    tick_millis: u64,
+) -> Vec<f64> {
+    assert!(mean_ticks > 0, "embargo mean must be non-zero");
+    assert!(tick_millis > 0, "embargo tick must be non-zero");
+    assert!(
+        params.fluff_probability_pct > 0 && params.fluff_probability_pct <= 100,
+        "fluff probability must be a percentage in 1..=100"
+    );
+
+    let q = f64::from(params.fluff_probability_pct) / 100.0;
+    let stem_survives = 1.0 - q;
+    let p = 1.0 / (f64::from(mean_ticks) + 1.0);
+    let timer_survives = 1.0 - p;
+    let hop_ms = u64::from(params.time_between_hop_ms);
+    let return_ms = u64::from(params.fluff_return_ms);
+
+    // Determine how many separations carry non-negligible mass: (1-q)^{i+1} is
+    // the probability the origin's stem is at least i+1 long, i.e. that
+    // separation i exists at all.
+    let mut profile: Vec<f64> = Vec::new();
+    let mut exists_mass = 1.0_f64; // (1-q)^i, probability the stem reaches i
+    for i in 0..MAX_STEM_TERMS as usize {
+        if exists_mass < TAIL_MASS_CUTOFF {
+            break;
+        }
+        // marginal[i] = Σ_{h>i} (1-q)^h q (1 - timer_survives^slack)
+        let mut acc = 0.0_f64;
+        let mut stem_mass = exists_mass * stem_survives; // (1-q)^{i+1}, first h = i+1
+        let mut h = i + 1;
+        while stem_mass >= TAIL_MASS_CUTOFF && h < MAX_STEM_TERMS as usize {
+            let k = (h - i) as u64; // distance from terminal
+            let slack = div_ceil(k * hop_ms + return_ms, tick_millis);
+            let fires = 1.0 - pow_exact(timer_survives, slack);
+            acc += stem_mass * q * fires;
+            stem_mass *= stem_survives;
+            h += 1;
+        }
+        profile.push(acc);
+        exists_mass *= stem_survives;
+    }
+    profile
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,6 +442,48 @@ mod tests {
         // An enormous embargo approaches certainty; a tiny one does not.
         let huge = full_travel_probability(&params, 1_000_000, DEFAULT_EMBARGO_TICK_MILLIS);
         assert!(huge > 0.999, "huge embargo gave {huge}");
+    }
+
+    #[test]
+    fn marginal_profile_is_bounded_and_origin_dominant() {
+        // The analytic marginal profile: each entry is a probability, it decays
+        // away from the origin (further nodes exist in fewer trials), and it
+        // sums to at most the total preemption rate (a node can only be the
+        // first preempter once, but can be a marginal preempter alongside
+        // others, so the marginal sum is an upper bound on 1 - full_travel).
+        let params = DandelionParams::inherited();
+        let d = derive_embargo(
+            &params,
+            DEFAULT_EMBARGO_TICK_MILLIS,
+            EMBARGO_FULL_TRAVEL_PROBABILITY,
+        )
+        .expect("reachable");
+        let profile =
+            marginal_preemption_profile(&params, d.mean_ticks, DEFAULT_EMBARGO_TICK_MILLIS);
+
+        assert!(
+            !profile.is_empty(),
+            "profile should have at least the origin"
+        );
+        for m in &profile {
+            assert!((0.0..=1.0).contains(m), "marginal {m} out of range");
+        }
+        // Decays from the origin: separation 0 carries the most marginal mass,
+        // because it is present in every trial with a stem.
+        for w in profile[..profile.len().min(6)].windows(2) {
+            assert!(
+                w[0] >= w[1],
+                "marginal profile should not increase away from origin"
+            );
+        }
+        // The marginal sum bounds the total preemption rate from above.
+        let full = full_travel_probability(&params, d.mean_ticks, DEFAULT_EMBARGO_TICK_MILLIS);
+        let marginal_sum: f64 = profile.iter().sum();
+        assert!(
+            marginal_sum >= 1.0 - full - 1e-9,
+            "marginal sum {marginal_sum:.4} should upper-bound preemption {:.4}",
+            1.0 - full
+        );
     }
 
     #[test]

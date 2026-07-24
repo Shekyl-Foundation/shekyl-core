@@ -1,13 +1,15 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
 **Status:** ROUND 1 applied. The measurement that motivates this document
-landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 81 tests), so
+landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 84 tests), so
 every number below is reproducible rather than asserted. Round 1 raised three
 findings (RD-1…RD-3); **all three are accepted and dispositioned in §10**, and
 their consequences are folded into the body rather than appended as errata.
 RD-1 materially moved the adopted embargo (31 s → 112 s) and surfaced a fifth
-defect (F-5). RD-2 resolved Q-2, which is now closed. Decisions D-1…D-7 stand
-as amended; the remaining open questions in §7 are the Round-2 agenda.
+defect (F-5); its follow-on built the preemption-profile instrument and
+inverted the drafted Q-8 premise (§10.4). RD-2 resolved Q-2, which is now
+closed. Decisions D-1…D-7 stand as amended; the remaining open questions in §7
+are the Round-2 agenda, of which Q-8 is now the load-bearing one.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (FFI-boundary-moving), and
 [`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
@@ -340,7 +342,12 @@ a high quantile, with the same testnet reopening trigger — and after the RD-1
 correction it *dominates* the hop term, so the testnet measurement must capture
 fluff-return first passage and not only stem hop latency. It is currently
 **2250 ms**, the measured p90 for a memoryless flood at 8 peers
-(`simulate_fluff_return`). Sensitivity, at the 0.90 target:
+(`simulate_fluff_return`). *Round 1 refinement:* this is the p90 of the
+population-*marginal* first passage applied uniformly; `F(j)` actually grows
+with stem distance, so it is conservative for near positions and possibly
+slightly short for the origin. Negligible at the adopted parameters, but the
+Q-5 testnet measurement (and the Q-8 profile work) should measure `F`
+conditional on stem distance — see §10.4. Sensitivity, at the 0.90 target:
 
 | `F` | derived embargo |
 | --- | --- |
@@ -464,6 +471,8 @@ comparison, the existing daemon-submit boundary is 754 lines of C++ shim plus
 | Every grade paired with a **negative control that must fail** | same | RP-1 ✅ |
 | Analytic derivation cross-checked against an independent simulator | `analytic_derivation_agrees_with_the_simulator` | RP-1 ✅ |
 | Each finding pinned as an executable assertion | `params.rs`, `derive.rs`, `tests/propagation_measurement.rs` | RP-1 ✅ |
+| Preemption profile (who preempts) with analytic marginal cross-check | `simulate_preemption_profile`, `marginal_preemption_profile`, `preemption_profile_answers_who_preempts` | Round 1 ✅ |
+| Black-hole recovery scales as `M/(j+1)` | `black_hole_recovery_scales_with_holder_count` | Round 1 ✅ |
 | Frozen reference vectors, cross-architecture | `tests/golden_vector.rs` | RP-1 ✅ |
 | 33 `levin_notify` gtests pass unchanged after the cut | `tests/unit_tests/levin.cpp` | RP-3 |
 | `dandelionpp_map` gtests pass against the Rust map | `tests/unit_tests/net.cpp` | RP-2 |
@@ -529,14 +538,47 @@ Round 1 closed Q-2 and Q-7 and reframed Q-5. What remains:
   not invisible; the analysis gets its own document when the port reaches it.
   **Closed here, deferred to its own doc.**
 - **Q-8 (new, from RD-1) — is 0.90-on-*any*-preemption the right target?**
-  This is now the binding assumption. A 112 s embargo is a real liveness cost:
-  a black-holed transaction sits undiffused for ~112 s. But the equation weights
-  all preemptions equally, and a preemption by the *last* stem node leaks far
-  less than one by the first — the tail of the stem is the part an adversary
-  learns least from. A position-weighted target would likely permit a much
-  shorter embargo at the same privacy. **This is the question most likely to
-  change the adopted number, and it needs a stated leakage model before it can
-  be answered.**
+  This is now the binding assumption, and Round 1 built the profile instrument
+  needed to answer it (`simulate_preemption_profile`, §5). **The drafted premise
+  had the gradient backwards; see §10.4 for the correction.** In short: the
+  origin is the *modal* preempter (~21% of preemptions, ~2.1% of all
+  transactions fluff from their own origin node), so a leakage-weighted target
+  is *more* stringent than the equal-weight one, not less — the leakage-dominant
+  event is the likely one. Weighting alone does not license a shorter embargo.
+  Two things could, and each needs its own work before any number is swept:
+  - **A baseline-relative threshold.** State the target as leakage relative to
+    the no-Dandelion baseline (`w[0]`, every tx fluffing at origin), under an
+    explicit weight vector `w(i)` and spy fraction `f`. Per the project's own
+    GF-7 discipline, the acceptance `ε` must be **derived a priori from an
+    adversary-advantage argument, not read off a sweep**. Q-8's first
+    deliverable is `ε` and the `w(i)` it is stated in — not a number. The
+    profile makes any such `w(i)` a one-line dot product
+    ([`PreemptionProfile::weighted_leakage`]).
+  - **A knob that reshapes the profile rather than rescaling it (Q-8a).** Relays
+    are position-blind, so no per-position policy is implementable — except the
+    one distinction the protocol gives free: *the origin knows it is the
+    origin*. That admits exactly two designs, and they should be wargamed in a
+    round of their own: **(a) a two-class embargo** (origin mean ≫ relay mean),
+    which collapses the separation-0 row but concentrates its liveness cost at
+    the worst case, since a first-hop black hole leaves the origin as sole
+    holder; **(b) origin retry-then-fluff** — on origin-embargo fire, re-stem via
+    the *other* quasi-4-regular successor, bounded retries, fluff on exhaustion.
+    (b) removes separation-0 mass without inflating worst-case recovery, and a
+    first-pass wargame finds no new exposure: the alternate successor learns
+    nothing a stem successor doesn't already learn, and the retry instant is a
+    fresh memoryless draw so it carries no timing signature. The failure modes to
+    examine are both-candidates-spy (already the D++ two-candidate exposure, not
+    new) and a retry straddling an epoch boundary.
+
+  **Liveness, correctly stated.** The 112 s headline is the *worst case*, not
+  the typical one. Black-hole recovery is the minimum over all holders'
+  memoryless timers, so a black hole after hop `j` recovers with mean
+  `112/(j+1)` s (`black_hole_recovery_scales_with_holder_count`: measured
+  112/56/37/22 s for j=0..2,4). The headline applies only to a first-hop black
+  hole where the origin holds alone — mean 112 s, p90 ~258 s — which is exactly
+  the case Q-8a(b) is shaped to protect. *(Trivium for RP-4: that p90 approaches
+  `MIN_RELAY_TIME` = 300 s; no conflict, but glance at the two timers together
+  when the embargo cut lands.)*
 
 **Closed in Round 1:**
 
@@ -592,7 +634,11 @@ this document, and it is not on the path for RP-2…RP-4.
   wrong, the equation was corrected, the solve was re-run, and the adopted
   value moved 31 s → 112 s without D-2 itself being reopened. A hard-coded
   constant would have needed a decision to change; a derivation needed only a
-  corrected input.
+  corrected input. That is the derive-don't-hardcode argument made empirical —
+  and it is also quiet evidence that the equation-vs-mechanism seam (RD-1's
+  defect class) is now the *only* place this subsystem can still be wrong, which
+  is why Q-8's leakage model deserves the same source-anchored scrutiny the
+  survival equation just survived.
 - **D-5**'s 350 ms hop and 2250 ms fluff-return are both explicitly
   provisional and revert on the first real measurement. After RD-1 the return
   term dominates, so the measurement that matters most is the one nobody had
@@ -695,3 +741,43 @@ against 200k trials, but that granularity test runs at `TRIALS/4` = 50k, where
 σ ≈ 1.55e-3 and the gap is ~1.9σ. The underlying criticism stands regardless:
 the cross-check only asserted at 250 ms, so a genuine tick-dependent divergence
 would have had nothing watching it. It now sweeps the tick as well as the mean.
+
+### 10.4 RD-1 follow-on — the Q-8 gradient, verified and inverted
+
+Round 1 built the preempter-position profile before opining on Q-8, and the
+drafted premise ("a position-weighted target permits a *shorter* embargo")
+turned out to have the sign backwards. Reproduced independently and pinned in
+`preemption_profile_answers_who_preempts` (400k trials, adopted 446-tick
+embargo):
+
+| separation from origin | share of first-preemptions | marginal (analytic ✓ sim) |
+| --- | --- | --- |
+| 0 (the origin itself) | 0.215 | 0.0229 |
+| 1 | 0.172 | 0.0183 |
+| 2 | 0.136 | 0.0147 |
+| 3 | 0.104 | 0.0117 |
+| 4+ | 0.373 (decaying) | — |
+
+The origin is the **modal** preempter. The intuition is structural: position
+`i` exists only when the stem is longer than `i` (probability `(1-q)^{i+1}`) and
+earlier positions hold longest, so conditional on the ~10% tail firing it
+disproportionately fires where it hurts most. In absolute terms **~2.1% of all
+transactions fluff from their own origin node** at the adopted target. That is
+the number Q-8 is about.
+
+Consequence for the design: a decaying-`w(i)` target is *more* stringent per
+unit `P(preempt)`, not less, so weighting alone licenses a *longer* embargo.
+The question does not resolve to "shorten it"; it resolves to the two work items
+now in Q-8 (a stated `ε`/`w(i)`, or a profile-reshaping knob), plus the
+liveness reframing recorded there. The profile is now a first-class instrument,
+so any `w(i)` Round 2 proposes is a dot product rather than a re-run.
+
+A note logged against `F` while here: `fluff_return_ms` is the p90 of the
+**population-marginal** first passage, applied uniformly to every position. But
+`F(j)` grows with stem distance and the origin sits at maximum distance, so its
+return distribution is stochastically above the marginal — p90-of-marginal is
+conservative for near positions and could be neutral-to-slightly-short for the
+origin specifically. At 512/8 with graph distances capping around 3–4 this is
+noise against 446 ticks, but Q-8 concentrates exactly at the origin, so when the
+profile work lands `F` should be measured **conditional on stem distance**, and
+the Q-5 testnet measurement should stratify the same way.

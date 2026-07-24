@@ -893,3 +893,191 @@ fn residual_inversion_decides_the_distribution_shape() {
         at(&budgeted, 0)
     );
 }
+
+/// **Q-8, made decidable.** The preemption profile — *who* fluffs early, not
+/// just how often — plus the leakage dot-product it feeds. Round 1 (the review)
+/// found the drafted Q-8 premise had the gradient backwards; this test pins the
+/// corrected picture in code.
+#[test]
+fn preemption_profile_answers_who_preempts() {
+    use shekyl_relay_privacy::conformance::simulate_preemption_profile;
+    use shekyl_relay_privacy::marginal_preemption_profile;
+
+    let params = DandelionParams::inherited();
+    let d = derive_embargo(
+        &params,
+        DEFAULT_EMBARGO_TICK_MILLIS,
+        EMBARGO_FULL_TRAVEL_PROBABILITY,
+    )
+    .expect("reachable");
+    // Measured at the exact derived tick count, not the seconds-rounded one.
+    let embargo = EmbargoTimer::geometric_from_ticks(d.mean_ticks, DEFAULT_EMBARGO_TICK_MILLIS);
+    let mut rng = SplitMix64::new(0x9E8_2026);
+    let profile = simulate_preemption_profile(&params, &embargo, 400_000, &mut rng);
+    let analytic = marginal_preemption_profile(&params, d.mean_ticks, DEFAULT_EMBARGO_TICK_MILLIS);
+
+    println!(
+        "\nPreemption profile at the adopted embargo ({} ticks / {:.1}s, q=20%)",
+        d.mean_ticks,
+        f64::from(d.mean_ticks) * DEFAULT_EMBARGO_TICK_MILLIS as f64 / 1000.0
+    );
+    println!(
+        "{:<12} {:>12} {:>16} {:>18}",
+        "separation", "first (share)", "marginal (sim)", "marginal (analytic)"
+    );
+    println!("{}", "-".repeat(62));
+    for i in 0..7 {
+        println!(
+            "{i:<12} {:>12.3} {:>16.4} {:>18.4}",
+            profile.first[i],
+            profile.marginal[i],
+            analytic.get(i).copied().unwrap_or(0.0)
+        );
+    }
+
+    // The headline: the origin is the MODAL preempter, which is what inverts
+    // the drafted premise. A leakage-weighted target is more stringent, not
+    // less, because the leakage-dominant event is the likely one.
+    assert_eq!(
+        profile.modal_separation(),
+        0,
+        "origin should be the modal preempter"
+    );
+    assert!(
+        (0.19..0.24).contains(&profile.first[0]),
+        "origin share {:.3} outside the reproduced band",
+        profile.first[0]
+    );
+    // Monotone decay away from the origin (separations 0..3, before the tail).
+    for w in profile.first[..4].windows(2) {
+        assert!(
+            w[0] > w[1],
+            "first-preempter profile should decay from the origin"
+        );
+    }
+    // P(preempt) is 1 - full-travel, the existing analytic quantity.
+    let full = full_travel_probability(&params, d.mean_ticks, DEFAULT_EMBARGO_TICK_MILLIS);
+    assert!(
+        (profile.p_preempt - (1.0 - full)).abs() < 0.003,
+        "P(preempt) {:.4} should match 1 - full-travel {:.4}",
+        profile.p_preempt,
+        1.0 - full
+    );
+
+    // The analytic marginal profile cross-checks the simulator marginal — the
+    // same analytic-vs-simulator discipline F and the survival equation use,
+    // now on a per-position quantity.
+    for (i, (sim, ana)) in profile
+        .marginal
+        .iter()
+        .zip(analytic.iter())
+        .take(6)
+        .enumerate()
+    {
+        assert!(
+            (sim - ana).abs() < 0.001,
+            "separation {i}: analytic marginal {ana:.4} disagrees with sim {sim:.4}"
+        );
+    }
+
+    // The leakage dot-product Q-8 will use. Baseline (no Dandelion) = every tx
+    // fluffs at its origin, so leakage is measured as a fraction of w[0].
+    let flat = profile.weighted_leakage(&[1.0]); // origin-only weight
+    let origin_share_of_all = profile.p_preempt * profile.first[0];
+    assert!(
+        (flat - origin_share_of_all).abs() < 1e-9,
+        "origin-only leakage should equal P(preempt) x first[0]"
+    );
+    println!(
+        "\n  ~{:.1}% of ALL transactions fluff from their own origin node under\n  \
+         the adopted target. That is the number Q-8 is about. A leakage weight\n  \
+         w(i) turns the whole profile into one dot product; the origin-only\n  \
+         value ({:.4}) is its lower anchor, the flat P(preempt) ({:.4}) its\n  \
+         upper. Which target is right depends on an a-priori epsilon stated in\n  \
+         a chosen w(i) — Q-8's first deliverable, not a swept number.",
+        origin_share_of_all * 100.0,
+        flat,
+        profile.p_preempt
+    );
+
+    // A decaying weight sits strictly between the origin-only and flat anchors.
+    let decayed = profile.weighted_leakage(&[1.0, 0.5, 0.25, 0.125, 0.0625, 0.03, 0.015]);
+    assert!(
+        flat < decayed && decayed < profile.p_preempt,
+        "decaying-weight leakage {decayed:.4} should sit between origin-only {flat:.4} \
+         and flat {:.4}",
+        profile.p_preempt
+    );
+}
+
+/// **Q-8 liveness reframing.** Black-hole recovery is the minimum over all
+/// holders' memoryless timers, so a black hole after hop `j` recovers with mean
+/// `M/(j+1)`. The headline 112 s mean applies only to a first-hop black hole,
+/// where the origin holds alone — and that worst case is exactly what a
+/// profile-reshaping knob (Q-8a) would protect.
+#[test]
+fn black_hole_recovery_scales_with_holder_count() {
+    let params = DandelionParams::inherited();
+    let d = derive_embargo(
+        &params,
+        DEFAULT_EMBARGO_TICK_MILLIS,
+        EMBARGO_FULL_TRAVEL_PROBABILITY,
+    )
+    .expect("reachable");
+    let table = GeometricTable::new(d.mean_ticks);
+    let tick_ms = DEFAULT_EMBARGO_TICK_MILLIS;
+
+    println!(
+        "\nBlack-hole recovery = min over (j+1) memoryless timers (mean {:.1}s)",
+        f64::from(d.mean_ticks) * tick_ms as f64 / 1000.0
+    );
+    println!(
+        "{:<18} {:>12} {:>12}",
+        "black hole after", "mean (s)", "M/(j+1) (s)"
+    );
+    println!("{}", "-".repeat(44));
+
+    let base_mean = f64::from(d.mean_ticks);
+    let mut rng = SplitMix64::new(0xB1AC_0000);
+    let n = 100_000;
+    for j in [0_usize, 1, 2, 4] {
+        // j+1 independent timers held simultaneously; recovery = the min.
+        let mut sum = 0.0;
+        let mut p90_samples: Vec<u64> = Vec::with_capacity(n);
+        for _ in 0..n {
+            let recover = (0..=j)
+                .map(|_| table.draw(&mut rng))
+                .min()
+                .expect("non-empty");
+            sum += recover as f64;
+            p90_samples.push(recover);
+        }
+        let mean_s = sum / n as f64 * tick_ms as f64 / 1000.0;
+        let predicted = base_mean / (j as f64 + 1.0) * tick_ms as f64 / 1000.0;
+        println!(
+            "{:<18} {mean_s:>12.1} {predicted:>12.1}",
+            format!("hop {j}")
+        );
+        // Mean-of-min tracks M/(j+1) for the geometric (memoryless).
+        assert!(
+            (mean_s - predicted).abs() < predicted * 0.05 + 1.0,
+            "j={j}: recovery mean {mean_s:.1}s should track M/(j+1) = {predicted:.1}s"
+        );
+        if j == 0 {
+            p90_samples.sort_unstable();
+            let p90_ticks = p90_samples[n * 90 / 100];
+            let p90_s = p90_ticks as f64 * tick_ms as f64 / 1000.0;
+            println!("  origin-alone (j=0) recovery p90 = {p90_s:.1}s (MIN_RELAY_TIME = 300s)");
+            assert!(
+                (245.0..270.0).contains(&p90_s),
+                "origin-alone p90 {p90_s:.1}s outside the reproduced band"
+            );
+        }
+    }
+    println!(
+        "\n  Typical recovery is several-fold faster than the 112s headline —\n  \
+         only a first-hop black hole leaves the origin holding alone. The p90\n  \
+         of that worst case (~258s) approaches MIN_RELAY_TIME (300s), so RP-4\n  \
+         should glance at the two timers together when the embargo cut lands."
+    );
+}

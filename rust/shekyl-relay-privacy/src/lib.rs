@@ -129,7 +129,9 @@ pub mod stem_map;
 #[cfg(feature = "conformance")]
 pub mod conformance;
 
-pub use derive::{derive_embargo, full_travel_probability, EmbargoDerivation};
+pub use derive::{
+    derive_embargo, full_travel_probability, marginal_preemption_profile, EmbargoDerivation,
+};
 pub use geometric::GeometricTable;
 pub use params::{DandelionParams, StemGraph, EMBARGO_FULL_TRAVEL_PROBABILITY};
 pub use poisson::PoissonTable;
