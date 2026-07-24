@@ -5252,20 +5252,40 @@ sustainability is unaffected by the recalibration.
   Rust side's gungraun benches are the house pattern). *Target: V3.1*
   (not genesis-gating; the live perf gates are T5/T6, wired 2026-07).
 
-- **Re-evaluate the inert `(1 + stake_ratio)` factor in `calc_burn_pct`
-  (spawned gate-7 iteration 5, 2026-06-11).** The gate-7 locked-supply
+- **✅ RESOLVED 2026-07-24 — DELETED (commit `7256962`). Re-evaluate the inert
+  `(1 + stake_ratio)` factor in `calc_burn_pct` (spawned gate-7 iteration 5,
+  2026-06-11).** The gate-7 locked-supply
   re-pricing ([`design/STAKER_ARCHIVAL_SIM.md`](./design/STAKER_ARCHIVAL_SIM.md)
   §*Gate 7 iteration-5 — results*) showed the derived V3 archival lock holds
   `stake_ratio` at 10⁻⁷–10⁻⁴ of `SCALE`, so the `stake_factor` term in
-  `shekyl-economics::burn::calc_burn_pct` is effectively inert — it was
+  `shekyl-economics::burn::calc_burn_pct` was effectively inert — it was
   designed for the retired tier-staking model, whose 5–35 % asserted ratios
-  inflated burn ~22 % in the legacy sim scenarios. Decide: keep (inert but
-  harmless; preserves the lever if a future lock class materializes) or
-  delete (smaller consensus surface per `15-deletion-and-debt.mdc`). This is
-  consensus burn math — it needs its own review against `00-mission.mdc`,
-  not a ride-along edit. Target: V3.1. *Reopen sooner if:* any V3.0 change
-  introduces a lock class large enough to move `stake_ratio` above ~10⁻³ of
-  `SCALE` (the gate-7 reversion threshold).
+  inflated burn ~22 % in the legacy sim scenarios. **Resolution:** the Stage-0
+  archival-economics design round *was* the "own review against `00-mission.mdc`,
+  not a ride-along edit" this item demanded — pre-genesis, on that exact burn
+  math — so the V3.1 target and the >10⁻³ reopen are **superseded**. `stake_factor`
+  (and the `stake_ratio` parameter through the FFI + C++ chain) is deleted;
+  burn rate is now `activity × supply` (F-D,
+  [`design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](./design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)).
+
+- **Remove or retain the orphaned `ActivityMetric.total_staked` observable
+  (spawned Stage-1b `stake_factor` delete, commit `7256962`, 2026-07-24).** The
+  F-D delete severed burn's only consumer of `total_staked`
+  (`LocalEconomics::burn_amount`), leaving it a **carried-but-unconsumed** field
+  in the validated `ActivityMetric` bundle. It was kept in the Stage-1b commit
+  (doc updated) rather than excised, because removal is a **validation-surface**
+  change, not a burn-lever edit — the same F-D ride-along prohibition applies.
+  *Scope:* the `ActivityMetric.total_staked` field + accessor, the
+  `StakedExceedsCirculating` structural invariant (and the `GenesisStateNonZero`
+  stake clause), and the differential fixture format (`RecordedRow.total_staked`
+  \+ `baseline_steady_state.json`) it feeds through the one non-test constructor
+  (`economics_differential.rs:145`). *Decide at:* the next differential-corpus
+  format change, or V3.1 cleanup, whichever first. *Dispositions:* **excise**
+  for fossil-freeness (drop the field + invariant, re-record the corpus) **vs.
+  retain** as a validated sampled observable if a real non-burn consumer
+  materializes (Stage-3 telemetry, a future lock class). The
+  `StakedExceedsCirculating` invariant is not theater meanwhile — it guards the
+  recorded corpus's sanity at its sole live constructor.
 
 - **Typed epoch/height parameters across the archival FFI (spawned PR 123,
   2026-06-10).** `shekyl_archival_good_through(join_settlement_epoch,

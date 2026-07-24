@@ -245,7 +245,7 @@ measures the wrong thing — this is evidence validity.
 
 - **Stage 0 — this design round.** Both defects, the interaction, the
   dispositions above. Output: this doc, reviewed.
-- **Stage 1 — the precision fix (D1).** `scarcity_micro (u32)`; single floor-site
+- **Stage 1 — the precision fix (D1). ✅ landed (`699876d89`).** `scarcity_micro (u32)`; single floor-site
   shared by close + verify; aggregate compare in micro-space; the `-v2`
   separator bump. Surfaces: `reward_arithmetic.rs`, `consensus_state.rs`,
   `emission_wire.rs` (field + varint codec), `emission_verify.rs` (both
@@ -257,7 +257,7 @@ measures the wrong thing — this is evidence validity.
   (§11.5):** the diff must *demonstrate* every rounding in the new micro path
   floors **against the claimant** (error favours the protocol) — the ERC-4626
   rounding-direction post-mortem discipline, not merely implied.
-- **Stage 1b — the `stake_factor` delete (F-D), its own atomic commit.** The
+- **Stage 1b — the `stake_factor` delete (F-D), its own atomic commit. ✅ landed (`7256962`).** The
   FOLLOWUPS item this round supersedes says *"not a ride-along edit"* — the
   **review** requirement is met (this round is that review), but the **edit** is
   a distinct burn-math change and must not be blended into the emission-wire
@@ -462,7 +462,7 @@ decision.
 | W2 | Sub-micro truncation harvesting | Error ≤ 4,096 micro/bond ≈ 0.026% plateau (F-B) | ✅ (bounded) |
 | W3 | Per-shard/total scale split weakening `WorkTotalMismatch` | Single floor-site shared by close + verify; aggregate compare in micro-space (F-E) | ✅ landed (Stage 1) — `work_milli_from_micro` is the sole floor; `emission_verify` compares `entry_sum` vs `work_micro_p` pre-floor |
 | W4 | Old-format (milli) entries valid under new rules | Zero-tolerance recompute rejects; `-v2` separator adds belt (F-E) | ✅ landed (Stage 1) — recompute + `-v2` belt (auth customizations bumped; `EMISSION_AUTH_MSG_V1` regenerated) |
-| W5 | Stacked stake-responsive multipliers on `staker_pool_amount` | Delete `stake_factor` (F-D) | ⏳ arms when the F-D delete lands (Stage 1b) |
+| W5 | Stacked stake-responsive multipliers on `staker_pool_amount` | Delete `stake_factor` (F-D) | ✅ landed (Stage 1b, `7256962`) — `stake_factor` + the `stake_ratio` parameter deleted through Rust + FFI + C++; burn rate is now `activity × supply` |
 | W6 | Distributional dilution: D1 fix moves ex-zero archivers into `Σwork`, shrinking scarce-holders' shares of fixed budget | Stage-2 sim models the shift, not just aggregate lift | ⏳ sim-arm scope |
 | W7 | Cached `frozen_segment_count` drift at the D2 read-point | Pinned read through frontier-check (M1 §11.8 M3-1) | ✅ carried |
 | W8 | **Fast-swing** manipulation of the staker share (pump-and-dump, whale dive, reflexive feedback) | The operand is monotone + slow + predictable (§6.0) and the function is a pure map of `n` with no controller (§6.1) — pump/dump/whale have **no lever** on a monotone chain-state operand; the only lever is the durable one (W9) | ✅ by operand (fast-swing has no lever) |

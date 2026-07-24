@@ -83,6 +83,11 @@ impl Default for EconomicParams {
 }
 
 /// `stake_ratio = total_staked / circulating_supply` in fixed-point SCALE units.
+///
+/// **Observability only.** Burn no longer consumes `stake_ratio` — the
+/// `× (1 + stake_ratio)` factor was deleted (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`
+/// F-D). The one live consumer is the staking sim's gate-7 recorder, which
+/// reports the ratio as a scenario observable; it feeds no consensus quantity.
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
 pub fn calc_stake_ratio(total_staked: u64, circulating_supply: u64) -> u64 {
