@@ -7039,7 +7039,28 @@ sustainability is unaffected by the recalibration.
     scan hot path, and (per `shekyl-p-transport`'s own doc) a `spawn_blocking`
     ureq call is **not a cancellation point**, so shutdown semantics need care.
     Still a `SimpleRequestRpc` rewrite, but onto a proven in-tree pattern rather
-    than a novel connector or a heavyweight new dep.
+    than a novel connector or a heavyweight new dep. **Condition — this option
+    relaxes §2b invariant 1 (engine-core has no ureq; ureq confined to
+    shekyl-p-transport), so it may only ship WITH a guard that keeps the
+    persona/principal swap unrepresentable *and* un-regressable** (perf is a
+    non-issue — `spawn_blocking` overhead is µs against a ms network round-trip
+    on a single pooled connection; the real cost is this blast-radius, not
+    throughput). Co-equal deliverables, weakest→strongest: **(1) type wall** —
+    persona-request construction bound to the persona transport's concrete type
+    (never `impl Rpc`, or a sealed marker), agents private with no getter/Deref/
+    pub field, so the swap is a *compile* error; **(2) dep-graph containment**
+    (reuse the existing `GF-7 hooks: dependency-graph + feature containment` CI
+    check) — only `shekyl-p-transport`, the principal-transport crate, and
+    `shekyl-cli` may depend on `ureq`, so a crate that does not depend on ureq
+    *cannot* name `ureq::Agent`; a new dependent is a reviewed manifest change,
+    un-evadable by `use as`/re-export/macro; **(3) grep-gate** — catch a stray
+    `ureq::Agent` construction or raw-agent exposure *inside* an allowlisted
+    crate. Each guard fails loud with a banner naming the stakes (a deanonymized
+    persona is silent + irreversible), so "just add it to the allowlist" is a
+    conscious, reviewed act. Keep the persona type's `tor-socks` `compile_error!`
+    untouched. The invariant then *evolves* from "there is one ureq" to "there is
+    one *isolated* ureq, and nothing can route persona traffic through any other"
+    — a legitimately stronger statement that earns the client unification.
   - *Option B — SOCKS5h connector on the existing hyper transport.* Add a small
     `tower`/hyper `Connect` service (e.g. over `tokio-socks`) that does the
     SOCKS5h handshake and wraps the rustls TLS, threaded through `ServerConfig →
