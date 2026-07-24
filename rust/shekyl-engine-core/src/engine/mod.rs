@@ -328,6 +328,7 @@ pub(crate) mod principal_stake;
 /// WI-RPC-3 proof-generation bridge: the crypto bodies behind the
 /// [`key_actor::KeyActor`]'s inbound-tx-proof and reserve-proof messages.
 pub(crate) mod proof_bridge;
+pub mod proofs;
 pub(crate) mod pscan;
 pub mod refresh;
 /// Track-2 end-to-end FAKECHAIN regtest (C++↔Rust FCMP++ verify parity). Spawns

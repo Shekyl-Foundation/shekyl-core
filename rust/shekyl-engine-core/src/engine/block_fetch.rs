@@ -347,7 +347,7 @@ async fn fetch_transactions<R: Rpc>(
 /// through the fallback still passes [`parse_full_tx`]'s complete validator,
 /// so a hostile daemon cannot use the fallback to smuggle a
 /// prunable-stripped spend.
-fn parse_tx_batch(
+pub(crate) fn parse_tx_batch(
     batch: &[[u8; 32]],
     txs: &[Value],
     form: TxBodyForm,
@@ -403,7 +403,7 @@ fn parse_tx_batch(
 /// txs are missing. A malformed entry is a daemon protocol violation, not a
 /// missing tx, so it surfaces as [`RpcError::InvalidNode`] rather than a
 /// truncated [`RpcError::TransactionsNotFound`].
-fn parse_missed_tx(missed: &[Value]) -> Result<Option<Vec<[u8; 32]>>, RpcError> {
+pub(crate) fn parse_missed_tx(missed: &[Value]) -> Result<Option<Vec<[u8; 32]>>, RpcError> {
     if missed.is_empty() {
         return Ok(None);
     }

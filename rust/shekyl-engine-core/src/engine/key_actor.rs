@@ -430,7 +430,6 @@ impl KeyEngineHandle {
     /// abstract over — widening the trait would force a dead
     /// `LocalKeys` impl. Reopen if a second `KeyEngine` implementor
     /// (hardware signer) needs to serve proofs.
-    #[allow(dead_code)] // Consumed by the WI-RPC-3 proofs workflow, next commit in this PR.
     pub(crate) async fn generate_inbound_proof(
         &self,
         req: InboundProofRequest,
@@ -443,7 +442,6 @@ impl KeyEngineHandle {
 
     /// Generate a reserve proof inside the actor (WI-RPC-3). Same
     /// inherent-method disposition as [`Self::generate_inbound_proof`].
-    #[allow(dead_code)] // Consumed by the WI-RPC-3 proofs workflow, next commit in this PR.
     pub(crate) async fn generate_reserve_proof(
         &self,
         req: ReserveProofRequest,
