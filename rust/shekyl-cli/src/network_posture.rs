@@ -253,7 +253,7 @@ pub fn warning_for_dns_leak(label: &str, host: &str, proxy: &str) -> String {
 ///
 /// `resolution` names how the dialing transport resolves hostnames under a
 /// proxy: the DNS-leak warning is only *true* for a transport that honors a
-/// local-resolving scheme, so an [`ProxyResolution::AlwaysRemote`] transport
+/// local-resolving scheme, so a [`ProxyResolution::AlwaysRemote`] transport
 /// never draws it (the clear-network warning is unaffected — it is about
 /// having no proxy at all).
 ///

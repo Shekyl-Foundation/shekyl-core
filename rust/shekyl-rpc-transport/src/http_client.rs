@@ -285,7 +285,8 @@ impl HttpClient {
 /// (`client error (Connect)`); the actionable cause — "Connection refused",
 /// the TLS failure, the SOCKS refusal — lives down the chain, and dropping it
 /// makes a down node, a bad proxy, and a broken TLS setup indistinguishable.
-fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
+/// (`pub(crate)`: `lib.rs` renders hyper body errors through the same chain.)
+pub(crate) fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
     let mut rendered = e.to_string();
     let mut source = e.source();
     while let Some(cause) = source {

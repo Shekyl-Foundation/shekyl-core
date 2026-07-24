@@ -23,7 +23,7 @@ use zeroize::Zeroizing;
 use shekyl_rpc_client::{Rpc, RpcError};
 
 mod http_client;
-use http_client::HttpClient;
+use http_client::{error_chain, HttpClient};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -122,9 +122,12 @@ fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
     let parsed: hyper::Uri = url
         .parse()
         .map_err(|e| RpcError::ConnectionError(format!("invalid daemon URL: {e}")))?;
+    // The port is optional: an absent port dials the scheme's standard port
+    // (80/443), which is the reverse-proxied hosted-daemon shape the path
+    // prefix above exists for — not a shape to refuse.
     if !matches!(parsed.scheme_str(), Some("http" | "https")) || parsed.authority().is_none() {
         return Err(RpcError::ConnectionError(
-            "daemon URL must be http(s)://host:port[/path]".to_string(),
+            "daemon URL must be http(s)://host[:port][/path]".to_string(),
         ));
     }
     // `Uri` keeps a query but silently *drops* a fragment, so the fragment
@@ -257,7 +260,7 @@ impl HttpRpc {
                         Request::post(url.clone())
                             .body(Full::new(Bytes::new()))
                             .map_err(|e| {
-                                RpcError::ConnectionError(format!("couldn't make request: {e:?}"))
+                                RpcError::ConnectionError(format!("couldn't make request: {e}"))
                             })?,
                     )
                     .await
@@ -292,7 +295,7 @@ impl HttpRpc {
             Request::post(uri)
                 .header("content-type", content_type)
                 .body(Full::new(Bytes::from(body.clone())))
-                .map_err(|e| RpcError::ConnectionError(format!("couldn't make request: {e:?}")))
+                .map_err(|e| RpcError::ConnectionError(format!("couldn't make request: {e}")))
         };
 
         async fn body_from_response(
@@ -304,7 +307,7 @@ impl HttpRpc {
                 .into_body()
                 .collect()
                 .await
-                .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?;
+                .map_err(|e| RpcError::ConnectionError(error_chain(&e)))?;
             Ok(collected.to_bytes().to_vec())
         }
 
@@ -315,7 +318,7 @@ impl HttpRpc {
                         client
                             .request(request_fn(self.request_target(route))?)
                             .await
-                            .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?,
+                            .map_err(|e| RpcError::ConnectionError(format!("{e}")))?,
                     )
                     .await?
                 }
@@ -337,7 +340,7 @@ impl HttpRpc {
                             .1
                             .request(request)
                             .await
-                            .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?;
+                            .map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
                         connection_lock.0 = Self::digest_auth_challenge(response).await?;
                         request = request_fn(self.request_target(route))?;
                     }
@@ -381,7 +384,7 @@ impl HttpRpc {
                         .1
                         .request(request)
                         .await
-                        .map_err(|e| RpcError::ConnectionError(format!("{e:?}")));
+                        .map_err(|e| RpcError::ConnectionError(format!("{e}")));
 
                     let (error, is_stale) = match &response {
                         Err(e) => (Some(e.clone()), false),
@@ -447,7 +450,14 @@ impl Rpc for HttpRpc {
         async move {
             tokio::time::timeout(self.request_timeout, self.inner_post(route, body))
                 .await
-                .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?
+                // `Elapsed`'s Debug is the unreadable `Elapsed(())`; say what
+                // actually happened, with the bound that was exceeded.
+                .map_err(|_| {
+                    RpcError::ConnectionError(format!(
+                        "request timed out after {:?}",
+                        self.request_timeout
+                    ))
+                })?
         }
     }
 }
