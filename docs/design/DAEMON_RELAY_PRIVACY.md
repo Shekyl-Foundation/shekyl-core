@@ -670,10 +670,26 @@ Two properties, both load-bearing for Round 3:
   falls with the embargo mean (`P(preempt)` scaled down). So a correctly
   provisioned embargo *reduces* this channel — unlike the mean-invariant
   black-hole. **This is what makes `ε` (correct provisioning) a live lever on
-  clearnet.** It is also why the RD-1/RD-4 corrections helped here as a side
-  effect: raising the embargo 31 s → 144 s already cut the passive leak ~4×.
+  clearnet.**
 - **It is structurally zero on Tor.** Fluff never traverses the supernode's
   inbound edges (§6.3), so there is no early fluff to catch.
+
+**Method-evidence (not just a nice consequence).** RD-1 and RD-4 were derived
+*purely* against the black-hole backstop — the return-trip disarm and the
+stem-support bug — with no thought to the passive clearnet channel, and raising
+the embargo 31 s → 144 s cut that channel **~4× anyway**. When a correction made
+for one adversary protects a different adversary you were not modelling, that is
+usually a sign the correction is aligned with the mechanism's *actual structure*
+rather than fitted to a single threat; the failure signature we kept hunting is
+the reverse — a fix that helps one channel and quietly worsens another. This is
+its opposite, and it is evidence about the method, not the parameter. The reason
+is that the embargo length is a **shared parameter** across both channels:
+getting it right for the mean-invariant channel moved the mean-dependent one in
+the same direction. That coupling is a reason to trust the provisioning — and a
+standing obligation on the eventual `ε` derivation: it must check that its chosen
+embargo does not *pull the two channels apart* (shorten the passive leak while
+under-provisioning the black-hole backstop, or vice versa), because the value's
+trustworthiness rests on the two moving together.
 
 So the two channels bind different origins and answer to different levers, and
 **neither substitutes for the other**:
@@ -792,16 +808,29 @@ instruments for both are built or scoped. What remains is the *arguments*:
   the two timers when the embargo cut lands — a black-holed origin's first
   MIN_RELAY_TIME re-relay and its embargo recovery can now cross.
 
-- **Q-9 (standing Round-3 obligation) — `ε` must be derived before any sweep.**
-  `simulate_passive_neighbor_leak` turns any `(δ, f, β, π₀)` into a leak number
-  instantly, but it cannot choose `δ` — the adversary-advantage we refuse to
-  grant — and choosing `δ` *is* the privacy decision. Per the project's GF-7
-  discipline, `δ` (and the `w(i)` it is stated in) must come from an a-priori
-  adversary-advantage bound, not from reading the instrument's output back as a
-  target. This is the one place in the whole arc where the source-anchoring
-  reflex does not help: the anchor is an argument about what advantage we deny an
-  adversary, not a fact in the tree. The instrument is the calculator; the
-  argument is the input, and it is owed before the calculator is run.
+- **Q-9 (standing Round-3 obligation) — `ε` must be derived before any sweep,
+  and in increment-form.** `simulate_passive_neighbor_leak` turns any
+  `(δ, f, β, π₀)` into a leak number instantly, but it cannot choose `δ` — the
+  adversary-advantage we refuse to grant — and choosing `δ` *is* the privacy
+  decision. Per the project's GF-7 discipline, `δ` (and the `w(i)` it is stated
+  in) must come from an a-priori adversary-advantage bound, not from reading the
+  instrument's output back as a target. This is the one place in the whole arc
+  where the source-anchoring reflex does not help: the anchor is an argument
+  about what advantage we deny an adversary, not a fact in the tree.
+
+  **The guard that keeps this from being satisfied lazily:** `δ` must be argued
+  in the *same units the instrument reports*, so the derivation and the
+  measurement meet at a defined seam. The **amplification-bound form** does this
+  — *the embargo channel must not raise the attribution advantage a stem-spy
+  sighting already grants by more than `δ`* — because it discounts what the spy
+  knew anyway (its predecessor) and prices only the new information (the
+  late-fluff classification and the prefix-membership of the fluff source).
+  Stated that way `δ` is a decision about **incremental advantage**, which is
+  arguable a priori. Stated as a bare precision *level* it collapses back into
+  something one is tempted to read off a sweep. So the obligation is not just
+  "derive before sweeping" — it is **"derive in a form that names the increment,
+  not the level,"** or the seam will not hold. The instrument is the calculator;
+  the argument is the input, owed before the calculator is run.
 
 **Closed in Rounds 1–2:**
 
