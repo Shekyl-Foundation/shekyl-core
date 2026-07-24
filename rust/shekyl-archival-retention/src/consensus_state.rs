@@ -638,6 +638,103 @@ mod tests {
         assert_eq!(out.sigma_work_milli, 1_000);
     }
 
+    /// `work_P(E)` for one bond that credits `n_shards` **fresh** shards
+    /// (`has_segment == false` ⇒ age 0 ⇒ `g_milli == 1000`), each also credited
+    /// by `crowd` other market members so `r_market == crowd + 1`. The victim is
+    /// bond 0; the crowd is bonds `1..=crowd`. Every bond is a member
+    /// (`join_epoch 0`, no bad intervals, not Foundation).
+    fn victim_work_over_crowded_shards(n_shards: usize, crowd: usize) -> u64 {
+        let bonds: Vec<EpochCloseBond<'_>> = (0..=crowd)
+            .map(|_| EpochCloseBond {
+                join_settlement_epoch: 0,
+                is_foundation_complete_tree: false,
+                bad_intervals: &[],
+            })
+            .collect();
+        let shards: Vec<EpochCloseShard> = (0..n_shards)
+            .map(|i| EpochCloseShard {
+                shard_id: i as u64,
+                has_segment: false,
+                freeze_height: 0,
+            })
+            .collect();
+        // Every bond credits every shard ⇒ r_market[s] = crowd + 1.
+        let mut pairs = Vec::with_capacity((crowd + 1) * n_shards);
+        for bond_idx in 0..=crowd {
+            for shard_idx in 0..n_shards {
+                pairs.push(CreditPair {
+                    bond_idx,
+                    shard_idx,
+                });
+            }
+        }
+        let inputs = EpochCloseInputs {
+            settlement_epoch: 5,
+            close_block_height: 60_000,
+            settlement_epoch_blocks: 10_000,
+            // The real age weight; irrelevant here since fresh shards have age 0
+            // (g_milli = 1000 regardless), but faithful to production params.
+            age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+            curve: BandedCurveParams::from_sim_cap_milli(8_000),
+            bonds: &bonds,
+            shards: &shards,
+            credit_pairs: &pairs,
+        };
+        let served = as_of_e_served_work(&inputs).expect("crowded gather is well-formed");
+        assert_eq!(served.r_market_by_shard[0], (crowd + 1) as u64);
+        assert!(served.member[0], "victim must be a market member");
+        served.work_by_bond[0]
+    }
+
+    /// RED (Stage-1 acceptance gate for D1): a bulk holder whose shards are each
+    /// past the co-holder cliff (`r_market > g_milli`) must earn `work_P > 0` and
+    /// proportional to how many shards they serve — **not zero**.
+    ///
+    /// Today `as_of_e_served_work` sums `floor(g_milli / r_market)` PER SHARD
+    /// before aggregating (`Σ floor(1000 / 1001) = Σ 0`), so a holder of any
+    /// number of common shards scores exactly 0 — 13.6 GB served, every
+    /// challenge passed, no reward
+    /// (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` D1). The honest score sums
+    /// first (at bounded precision) and floors once, giving a positive value
+    /// that grows with the shard count.
+    ///
+    /// This asserts only the **fix-shape-agnostic** property (non-zero +
+    /// proportional), so it does not prejudge micro-vs-nano-vs-aggregate — any
+    /// correct single-floor fix satisfies it. Kept `#[ignore]` so CI stays green
+    /// on the (broken) current code; **un-ignoring this is Stage 1's acceptance
+    /// gate.**
+    #[test]
+    #[ignore = "RED: documents the D1 aggregate-truncation defect (Σ floor(g/r) zeroes bulk holders \
+                past the co-holder cliff). Un-ignore as the Stage-1 acceptance gate when the \
+                single-floor micro fix lands — ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §7."]
+    fn bulk_holder_past_cliff_earns_proportional_not_zero() {
+        // crowd = 1000 ⇒ r_market = 1001 > g_milli = 1000 ⇒ per-shard floor is 0
+        // under the current truncate-then-sum. This is the real fresh-shard cliff.
+        const CROWD: usize = 1000;
+        let work_10 = victim_work_over_crowded_shards(10, CROWD);
+        let work_20 = victim_work_over_crowded_shards(20, CROWD);
+
+        assert!(
+            work_10 > 0,
+            "a bulk holder of 10 common shards (r_market=1001) must earn > 0, got {work_10} milli"
+        );
+        assert!(
+            work_20 > 0,
+            "a bulk holder of 20 common shards must earn > 0, got {work_20} milli"
+        );
+        // Proportional to shard count: 2x the shards ⇒ ~2x the work (integer
+        // floor slack of a few milli is fine — the property is proportionality,
+        // not exact doubling).
+        assert!(
+            work_20 > work_10,
+            "work must grow with shard count: 20-shard {work_20} !> 10-shard {work_10}"
+        );
+        assert!(
+            work_20.abs_diff(2 * work_10) <= 2,
+            "work should be ~proportional to shard count: 2 x (10-shard {work_10}) vs 20-shard {work_20}"
+        );
+    }
+
     #[test]
     fn epoch_close_complete_tree_excluded_from_market_and_sigma() {
         let bonds = [EpochCloseBond {
