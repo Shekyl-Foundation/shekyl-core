@@ -593,3 +593,122 @@ nothing to adjudicate). No governance-settable economic knob (Curve gauge wars).
 No asymmetric adjustment on a reversible input (BCH's EDA oscillated because its
 input could swing; our operand cannot). Tail emission retained against fee-only
 security instability (Carlsten).
+
+---
+
+## 12. Stage 2 — the sim arm (design round, for ratification)
+
+Stage 1/1b landed (`699876d89` / `725696210`); the work model is now honest and
+sim/production burn parity holds. Stage 2 is the **evidence** D2's escalation
+shape is ratified against. Before building six sim arms, this section pins their
+structure, their pass/fail criteria, and the two genuinely open calibration
+decisions — the same design-round-first discipline that made Stage 0 → 1 clean.
+Nothing here touches consensus code; the output is a recommendation Stage 3
+freezes.
+
+### 12.0 What Stage 2 decides, and the Stage-2 → Stage-3 boundary
+
+**Stage 2 measures; Stage 3 freezes.** Stage 2 answers *"does a 25%-floor +
+shard-indexed lift, drawn from a decaying budget, clear the archival burden — and
+if so, in which regimes and under which storage-cost assumption?"* Its output is
+a **recommended (shape, asymptote) envelope** over the §6.1-conformant family,
+plus the wargame verdicts (W6/W9/W10). Stage 3 picks the number from the
+survivors under the §11.4 ceremony and implements it in `compute_burn_split`.
+Stage 2 does **not** pin the asymptote number, and does **not** write consensus
+code — if it writes any Rust, it is `shekyl-economics-sim` only.
+
+**Why the sequence is forced (already argued §5):** D1 corrupted the exact
+denominator the burden model measures against, and 1b removed the stake-keyed
+burn multiplier that would have double-counted. Both landed, so the sim now runs
+on the shipping formulas — evidence validity, not convenience.
+
+### 12.1 What the harness already has, and what is new
+
+Grounded in `shekyl-economics-sim`:
+
+- **Funding side — exists.** `budget.rs` already models `budget(E) =
+  emission_leg + fee_leg` per the `blockchain.cpp:6081` accrual: the emission leg
+  decays at `staker_emission_decay = 0.90/yr` off a `staker_emission_share = 15%`
+  base (release-modulated, floored at `release_min = 0.8×`), and the fee leg is
+  `compute_burn_split(...).staker_pool_amount` at the frozen `staker_pool_share =
+  25%`. Scenarios 1–8 (`scenarios.rs`) drive it; the F-B1c-c2 disposition-(a/b)
+  swing machinery is reusable.
+- **Burden side — new, the bulk of Stage 2.** The harness has **no** shard-count
+  trajectory and **no** storage-cost model. New: `frozen_segment_count(E)` driven
+  by each scenario's output volume (`SEGMENT_LEAF_COUNT = 25,992` outputs/shard,
+  ~3.33 MB, §2), a storage-cost curve with the Kryder parameter (DQ-2B), and a
+  per-archiver reward/cost model (DQ-2H) so W6 and stranding are expressible.
+- **Escalation family — new.** A §6.1-conformant candidate generator (banded-PL,
+  floor 25%, monotone in `n`, asymptote `A`), evaluated in the integer
+  `curve_milli` form so the recommended shape is bit-implementable (DQ-2G).
+
+### 12.2 The arms and their criteria
+
+| Arm | Question | Metric | Pass / report criterion (DQ-2E) |
+| --- | --- | --- | --- |
+| **A1 burden clearance** | Does the escalated pool fund the burden through the fee era? | `budget(E)` vs `burden_cost(E)` over the trajectory, ∀ Kryder in the band | **Report** the (Kryder, shape, scenario) region where `budget ≥ burden_cost` sustained; a shape "clears" iff it holds under the **pessimistic (0%/yr)** Kryder floor |
+| **A2 distributional shift (W6)** | The D1 fix moves ex-zero bulk holders into `Σwork`, diluting scarce-holders' shares of a fixed budget | Scarce-holder share pre- vs post-D1 across the archiver distribution | **Descriptive** — quantify the redistribution; **flag** if it strands scarce holders below their marginal cost |
+| **A3 stranding** | What fraction of diverted budget goes unminted? | Σ unclaimed `reward_P` past `MAX_CLAIM_AGE_W = 26` epochs ÷ Σ budget | **Report** the stranded fraction; joint with A1 (stranded budget is not burden-clearing) |
+| **A4 output-stuffing (W9)** | Is there an early-chain regime where marginal Δshare outruns marginal Δburden? | cost-per-shard (25,992 outputs of weight-fee + burn) vs permanent Δshare captured, on `scenario_4`(output-variant) × `scenario_7`(bootstrap) | **Pass** iff `Δshare/Δburden ≤ 1` everywhere in the sweep; calibrated to the March-2024 profile (DQ-2C). Fail → the §11.3 rule-21 per-output fee-floor reopen, **not** a D2 redesign |
+| **A5 proxy free-riding (W10)** | Does the §7.4 fetch-cost-vs-deadline margin still bind after D1 restores bulk pay and D2 escalates the pool? | proxy cost (fetch-within-grace, gate-4 window) vs honest cost (~13.6 GB held) vs **post-D1/D2** reward | **Pass** iff margin `> 0`. Fail → tighten gate-4 grace or accelerate PoRep reopen (§11.1), **not** a D2 redesign |
+| **A6 swing / band width (§6.0)** | Is the lift a wide-but-slow band, not a cliff? | `d(share)/d(n)` across the sweep | **Report** the rate; **flag** any cliff (bounded-slope is the §6.1 requirement) |
+
+**Scenario 9 (new, §11.2):** high-history / low-activity — large `n`, low current
+volume, the post-boom settled chain none of scenarios 1–8 cover (`scenario_8` is
+high-history but *busy*, 180–300 tx/block vs 50 baseline). This is the quadrant
+where a 25%-floor-plus-escalation either saves the archival layer or demonstrably
+cannot; A1 runs on it as the binding case.
+
+### 12.3 Design questions (recommended dispositions; ratify or correct)
+
+- **DQ-2A — burden cost model + "clears".** *Recommend:* `burden_cost(E) = n(E) ·
+  shard_bytes · storage_$per_byte(E)` (Kryder-declining) as the dominant term,
+  with serve-bandwidth cost as a **secondary sensitivity** (a challenge answers a
+  bounded slice, not the whole shard). "Clears" = per-archiver `reward_P(E) ≥` that
+  archiver's marginal cost of the shards they hold, sustained. *Open:* whether to
+  price serve-bandwidth at all in the primary arm (recommend storage-dominant).
+- **DQ-2B — Kryder band.** *Recommend* sweeping **{0%/yr flat, 10%/yr, 25%/yr}** —
+  0% is the Arweave failure face and the **binding** clearance case; 25% is
+  historical-moderate; 10% the recent-decade conservative. The conclusion must
+  *state* which band members it holds under, never embed one (§11.2). This is the
+  single most assumption-laden input.
+- **DQ-2C — March-2024 W9 calibration (genuinely open; needs external data).** The
+  W9 stuffer must be calibrated to the incident's *actual* cost profile, not an
+  abstract stuffer (§11.3). *Recommend:* derive cost-per-output from public
+  March-2024 Monero data (output-count spike, fees paid, weeks-long duration) →
+  translate to Shekyl cost-per-shard at the `TX_WEIGHT_LIMIT` weight-fee. **Flag:**
+  I cannot fabricate those numbers; the data pull is a Stage-2 task, and if precise
+  figures are unavailable the fallback is a **parameterized stuffer swept over a
+  range** anchored to the incident's known shape (low per-output marginal cost,
+  sustained for weeks). Ratify the fallback or point me at a data source.
+- **DQ-2D — escalation-family parameterization.** *Recommend:* banded-PL, floor
+  25%, monotone in `n`, saturating to asymptote `A ∈ {50%, 75%, 90%}`, swept over
+  knee position `n_k` and initial slope. Integer `curve_milli` form. Stage 3 picks
+  from survivors; Stage 2 never emits a single "answer" curve, only the envelope.
+- **DQ-2E — per-arm criteria.** As tabled in §12.2. Ratify the A1 "binding case =
+  0%/yr Kryder" and A4 "`Δshare/Δburden ≤ 1`" thresholds in particular.
+- **DQ-2F — Stage-2 → 3 boundary.** §12.0. Stage 2 recommends; Stage 3 freezes the
+  number under §11.4 ceremony and writes consensus.
+- **DQ-2G — float sim, integer escalation.** *Recommend:* measure in `f64` (the
+  `budget.rs` pattern), but evaluate escalation candidates in the integer
+  `curve_milli` form so the recommended shape is consensus-implementable; report
+  float for readability.
+- **DQ-2H — archiver population model (needed for W6 + stranding).** *Recommend:* a
+  parameterized distribution — some bulk holders (all shards), some scarce holders
+  (few shards) — anchored to the GF-7 measured floor `N ≈ 10/20` (M1 §4 founder
+  schedule). W6 *is* the redistribution across this distribution, so its shape is a
+  first-class input, not a detail. *Open:* the exact distribution.
+
+### 12.4 Output artifact
+
+A sim report (render in `main.rs` per the debug-macro CI gate,
+[`fb1c-c2` precedent]) carrying: the A1 clearance region as a (Kryder × shape ×
+scenario) table; the A2 redistribution and A3 stranding fractions; the A4/A5
+pass/fail with their margins; the A6 rate-of-change curve; and the **recommended
+(shape, asymptote) envelope** — the survivors that clear under the pessimistic
+Kryder floor without failing W9/W10 — that Stage 3 ratifies. Where an arm cannot
+clear, it names the disposition its own §11 caution already fixed (rule-21
+per-output fee-floor for W9; gate-4/PoRep for W10), never a D2 redesign.
+
+Registration: the Stage-2 sim build gets an `IMPLEMENTATION_INDEX.md` row at
+birth (rule 94); this design round does not (it lives in this doc).
