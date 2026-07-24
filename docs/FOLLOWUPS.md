@@ -47,32 +47,6 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **CLI `--proxy socks5://` leaks the daemon hostname to the local resolver —
-  warn (surfaced 2026-07-23, #360; confirmed at source).** `ureq::Proxy::new`
-  maps a `socks5://` / `socks4://` URL to a protocol whose
-  `default_resolve_target()` is `true` — ureq resolves the target **locally** and
-  hands the proxy an IP (`ureq-3.3.0/src/unversioned/transport/socks.rs`:
-  `if proxy.resolve_target() { /* locally-resolved addrs */ } else { /* pass
-  (host,port) to the proxy */ }`); only `socks5h://` sets `resolve_target =
-  false`. Both CLI ureq sites — `daemon::DaemonClient::new` (pre-existing) and
-  `rpc_client::build_http_agent` (added in #360) — do `ureq::Proxy::new(proxy)`
-  verbatim, so `--proxy socks5://…` against a **hostname** daemon-address leaks
-  that hostname in cleartext DNS, defeating the proxy (moot for a bare-IP
-  address). **Fix — warn, do not override (§15-pure, decided 2026-07-23):** when
-  the proxy scheme is a local-resolving `socks5`/`socks4` (not `socks5h`/
-  `socks4a`), emit a `network_posture`-style warning ("`--proxy socks5://`
-  resolves the daemon hostname locally — a DNS leak; use `socks5h://` for remote
-  resolution") and proceed as asked — the operator's principal daemon connection
-  is their informed choice. *Tier distinction:* `shekyl-p-transport` **forces**
-  `resolve_target(false)` for the persona/`P` path (there deanonymization is
-  fatal — privacy is non-negotiable); the principal path is warn-not-force by the
-  same persona-vs-principal asymmetry (`p-is-public-firewall-protects-one-edge`).
-  **Its own small PR off `dev`** (touches `daemon.rs` + `rpc_client.rs` via a
-  shared `--proxy` scheme check); **target: V3.0** — a confirmed privacy leak on
-  a shipped surface, and privacy is the product. Related: the transport-proxy
-  fork in *V3.1.x — dependency migrations* (the self-hosted scan can't proxy at
-  all yet).
-
 - **WI-RPC-2b deferrals — CLI RESERVED commands awaiting their RPC
   surfaces** (added 2026-07-22; WI-RPC-2b, `feat/cli-rpc-client-surface`;
   the `reserved()` refusals in `rust/shekyl-cli/src/commands/mod.rs` point
@@ -7080,8 +7054,11 @@ sustainability is unaffected by the recalibration.
   resolves the daemon hostname *locally* before dialing the proxy leaks the host
   to the local resolver — the leak we refused to introduce in `is_loopback_host`.
   `shekyl-p-transport` already gets this right (`resolve_target(false)`); the
-  CLI's own ureq `--proxy` paths do **not** — a confirmed shipped bug tracked as
-  its own V3.0 item below.
+  CLI's own ureq `--proxy` paths do **not**, which #360 addressed at the
+  disclosure layer — `network_posture::disclose` warns on a local-resolving
+  `socks5://`/`socks4://` scheme against a hostname endpoint (covering both ureq
+  paths at once), `socks5h://` silent (668b0b0bb; see the audit trail). This
+  option would go further and *force* remote resolution, retiring the warn.
 
   **Target: V3.1+ (post-genesis).** The warn-only disclosure is honest and
   shipped, so nothing here gates genesis — a user who needs the self-hosted scan
@@ -12780,6 +12757,20 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **CLI `--proxy socks5://` local-DNS-leak warning (resolved 2026-07-23 in #360,
+  `668b0b0bb`).** `ureq::Proxy::new` maps `socks5://`/`socks4://` to a protocol
+  whose `resolve_target` defaults to *true* — ureq resolves the target hostname
+  locally and hands the proxy an IP, leaking the name to the system resolver
+  before the proxy is involved (only `socks5h://`/`socks4a://` resolve remotely).
+  Fixed §15-pure (warn, not force) at the **disclosure** layer rather than the
+  transport constructors: `network_posture::disclose` warns when a local-resolving
+  SOCKS scheme meets a *hostname* endpoint (IP-literal → silent, no false
+  positive), covering both CLI ureq paths (`daemon.rs`,
+  `rpc_client::build_http_agent`) at once; the message names the scheme and the
+  `socks5h://` remedy. The persona/`P` path *forces* `resolve_target(false)`
+  (deanonymization is fatal there); the principal path is warn-not-force by the
+  same asymmetry. Canonical: `rust/shekyl-cli/src/network_posture.rs`.
 
 - **epee HTTP listener + `--no-rust-rpc` deleted (closed 2026-07-10,
   `chore/delete-epee-http-listener`).** Phase 1 transport cutover:
