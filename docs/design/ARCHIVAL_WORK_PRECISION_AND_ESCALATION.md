@@ -460,8 +460,8 @@ decision.
 | --- | --- | --- | --- |
 | W1 | Bulk-holder sybil via `max(1,·)` tail | No tail; micro preserves the hyperbola; multi-bond fan-out pays the true marginal sum (F-A: ≥ 4 bonds to plateau) | ✅ by construction |
 | W2 | Sub-micro truncation harvesting | Error ≤ 4,096 micro/bond ≈ 0.026% plateau (F-B) | ✅ (bounded) |
-| W3 | Per-shard/total scale split weakening `WorkTotalMismatch` | Single floor-site shared by close + verify; aggregate compare in micro-space (F-E) | ⏳ arms when F-E lands (Stage 1) |
-| W4 | Old-format (milli) entries valid under new rules | Zero-tolerance recompute rejects; `-v2` separator adds belt (F-E) | ✅ (recompute) + belt |
+| W3 | Per-shard/total scale split weakening `WorkTotalMismatch` | Single floor-site shared by close + verify; aggregate compare in micro-space (F-E) | ✅ landed (Stage 1) — `work_milli_from_micro` is the sole floor; `emission_verify` compares `entry_sum` vs `work_micro_p` pre-floor |
+| W4 | Old-format (milli) entries valid under new rules | Zero-tolerance recompute rejects; `-v2` separator adds belt (F-E) | ✅ landed (Stage 1) — recompute + `-v2` belt (auth customizations bumped; `EMISSION_AUTH_MSG_V1` regenerated) |
 | W5 | Stacked stake-responsive multipliers on `staker_pool_amount` | Delete `stake_factor` (F-D) | ⏳ arms when the F-D delete lands (Stage 1b) |
 | W6 | Distributional dilution: D1 fix moves ex-zero archivers into `Σwork`, shrinking scarce-holders' shares of fixed budget | Stage-2 sim models the shift, not just aggregate lift | ⏳ sim-arm scope |
 | W7 | Cached `frozen_segment_count` drift at the D2 read-point | Pinned read through frontier-check (M1 §11.8 M3-1) | ✅ carried |
