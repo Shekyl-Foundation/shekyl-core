@@ -1610,3 +1610,91 @@ pub fn simulate_passive_neighbor_leak<R: RelayRng + ?Sized>(
         origin_share_of_leaks,
     }
 }
+
+/// Origin exposure to a **whole-prefix** supernode — the worst-case passive
+/// leak, with the reshape (re-stem-on-embargo) lever.
+///
+/// **Round 3 — the composed leak, worst case.** `simulate_passive_neighbor_leak`
+/// uses independent per-position neighbouring (each prefix node observed with
+/// probability φ) — the *lower* reading. A single supernode that makes enough
+/// inbound edges to cover the whole prefix observes **every** origin fluff, so
+/// its origin-exposure is the full `P(origin fires) × 1`, not φ-scaled. That is
+/// the upper bound an exposure-*risk* target must be measured against.
+///
+/// Two levers act here without touching the embargo mean:
+/// - **F** (`fluff_return_ms`): the origin's disarm window is `h·hop + F`, so a
+///   larger F lengthens the window and raises exposure. F is downstream of F-4
+///   (the memoryless fix made the return flood ~7× faster, §10.6), so F-4 was a
+///   *second* independent correction to this channel.
+/// - **Reshape** (`retry_cap`): re-stem-on-embargo emits a stem forward (unicast
+///   to one outbound successor, invisible to the passive inbound supernode)
+///   instead of a fluff. The origin becomes observable only after exhausting
+///   `retry_cap` re-stems, so each retry multiplies the residual exposure by
+///   roughly the per-window fire probability — a geometric drop in `retry_cap`
+///   with **no** embargo-length (liveness) cost.
+///
+/// The origin's embargo is modelled as a renewal process over its disarm window
+/// `[0, h·hop + F)`: it fires whenever a memoryless interval elapses inside the
+/// window, and fluffs observably iff it fires more than `retry_cap` times.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OriginExposure {
+    /// Reshape retry cap (0 = fluff on first embargo fire, the current design).
+    pub retry_cap: u32,
+    /// P(the origin emits an observable fluff to a whole-prefix supernode).
+    pub exposure_rate: f64,
+}
+
+/// Measure [`OriginExposure`] at a reshape `retry_cap`.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero.
+#[must_use]
+pub fn simulate_origin_exposure<R: RelayRng + ?Sized>(
+    params: &DandelionParams,
+    embargo: &EmbargoTimer,
+    retry_cap: u32,
+    trials: usize,
+    rng: &mut R,
+) -> OriginExposure {
+    assert!(trials > 0, "need at least one trial");
+    let hop_ms = u64::from(params.time_between_hop_ms);
+    let q = u64::from(params.fluff_probability_pct);
+    let return_ms = u64::from(params.fluff_return_ms);
+
+    let mut exposed = 0_u64;
+    for _ in 0..trials {
+        // Stem length h (RD-4: origin always stems; geometric on {1,2,…}).
+        let mut h = 1_u64;
+        while !bernoulli(rng, q, 100) {
+            h += 1;
+            if h >= MAX_SIMULATED_HOPS as u64 {
+                break;
+            }
+        }
+        let window = h.saturating_mul(hop_ms).saturating_add(return_ms);
+
+        // Renewal count of embargo fires inside the origin's disarm window.
+        let mut elapsed = 0_u64;
+        let mut fires = 0_u32;
+        loop {
+            let interval = embargo.deadline(0, rng); // one memoryless interval, ms
+            if elapsed.saturating_add(interval) >= window {
+                break;
+            }
+            elapsed = elapsed.saturating_add(interval);
+            fires += 1;
+            if fires > retry_cap {
+                break; // already observable; no need to keep counting
+            }
+        }
+        if fires > retry_cap {
+            exposed += 1;
+        }
+    }
+
+    OriginExposure {
+        retry_cap,
+        exposure_rate: exposed as f64 / trials as f64,
+    }
+}

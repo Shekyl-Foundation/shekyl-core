@@ -1448,3 +1448,109 @@ fn passive_clearnet_leak_is_mean_dependent_and_zero_on_tor() {
          the privacy decision."
     );
 }
+
+/// **Round 3 — can we reach ≤0.3% exposure by tuning the levers together, and
+/// which lever does it efficiently?** The passive leak decomposes as
+/// `P(preempt) × neighbour × origin-attribution`, and every term is a separate
+/// lever: the embargo mean (moved), the fluff-return `F` (F-4's second, unspotted
+/// correction), `q` (deferred), and the reshape mechanism (Q-8a). This measures
+/// the worst-case (whole-prefix supernode) origin exposure and shows reshape is
+/// the efficient lever — it hits the target without the liveness cost of a
+/// longer embargo.
+#[test]
+fn origin_exposure_meets_target_via_reshape_not_embargo() {
+    use shekyl_relay_privacy::conformance::simulate_origin_exposure;
+
+    const TARGET: f64 = 0.003; // ≤ 0.3% exposure = ≥ 99.7% protected
+    let base = DandelionParams::inherited();
+    let e144 = EmbargoTimer::geometric_from_ticks(576, DEFAULT_EMBARGO_TICK_MILLIS);
+
+    // (1) Reshape retry cap — the efficient lever, no embargo lengthening.
+    println!(
+        "\nWorst-case origin exposure vs reshape retry cap (embargo 144s, whole-prefix supernode)"
+    );
+    let r0 =
+        simulate_origin_exposure(&base, &e144, 0, 400_000, &mut SplitMix64::new(1)).exposure_rate;
+    let r1 =
+        simulate_origin_exposure(&base, &e144, 1, 400_000, &mut SplitMix64::new(2)).exposure_rate;
+    let r2 =
+        simulate_origin_exposure(&base, &e144, 2, 400_000, &mut SplitMix64::new(3)).exposure_rate;
+    println!("  retry_cap=0 (current): {r0:.5}  ({:.2}%)", r0 * 100.0);
+    println!("  retry_cap=1 (reshape): {r1:.5}  ({:.3}%)", r1 * 100.0);
+    println!("  retry_cap=2 (reshape): {r2:.5}  ({:.3}%)", r2 * 100.0);
+    assert!(
+        r0 > TARGET,
+        "current design should be above target worst-case: {r0:.5}"
+    );
+    assert!(
+        r1 < TARGET,
+        "one reshape retry should meet the target: {r1:.5}"
+    );
+    assert!(
+        r1 < r0 / 10.0,
+        "reshape should drop exposure by an order of magnitude+"
+    );
+
+    // (2) F is a lever, and F-4 already moved it (memoryless flood ≪ Poisson).
+    println!("\nExposure vs fluff-return F (embargo 144s, no reshape) — F-4's second correction");
+    let f_lo = {
+        let p = DandelionParams {
+            fluff_return_ms: 2_250,
+            ..base
+        };
+        simulate_origin_exposure(&p, &e144, 0, 300_000, &mut SplitMix64::new(4)).exposure_rate
+    };
+    let f_hi = {
+        let p = DandelionParams {
+            fluff_return_ms: 13_750,
+            ..base
+        };
+        simulate_origin_exposure(&p, &e144, 0, 300_000, &mut SplitMix64::new(5)).exposure_rate
+    };
+    println!("  F=2250ms  (memoryless, F-4 fixed): {f_lo:.5}");
+    println!("  F=13750ms (inherited Poisson flood): {f_hi:.5}");
+    assert!(
+        f_hi > f_lo * 3.0,
+        "F is a lever: the inherited Poisson flood exposed several-fold more ({f_hi:.5} vs {f_lo:.5})"
+    );
+
+    // (3) The embargo-only path to the target is a liveness disaster — the
+    // inefficient lever, for contrast.
+    println!("\nEmbargo-only path to the target (no reshape) — the INEFFICIENT lever");
+    let mut embargo_only_secs = 0_u32;
+    for secs in [144_u32, 300, 600, 1050] {
+        let ticks = u32::try_from(u64::from(secs) * 1000 / DEFAULT_EMBARGO_TICK_MILLIS).unwrap();
+        let e = EmbargoTimer::geometric_from_ticks(ticks, DEFAULT_EMBARGO_TICK_MILLIS);
+        let x =
+            simulate_origin_exposure(&base, &e, 0, 300_000, &mut SplitMix64::new(u64::from(secs)))
+                .exposure_rate;
+        let p90_recovery = f64::from(ticks) * 2.302 * DEFAULT_EMBARGO_TICK_MILLIS as f64 / 1000.0;
+        println!("  embargo={secs:>4}s: exposure {x:.5}, p90 origin recovery ~{p90_recovery:.0}s");
+        if x < TARGET && embargo_only_secs == 0 {
+            embargo_only_secs = secs;
+        }
+    }
+    assert!(
+        embargo_only_secs >= 600,
+        "the embargo-only path to the target should require a liveness-breaking mean, got {embargo_only_secs}s"
+    );
+
+    println!(
+        "\n  Answer: ≤0.3% worst-case exposure is reachable, and reshape (Q-8a)\n  \
+         reaches it EFFICIENTLY — one retry takes {r0:.4} → {r1:.5} with NO\n  \
+         embargo lengthening (cost is ~1 extra stem hop of latency). The\n  \
+         embargo-only path needs ~{embargo_only_secs}s (p90 recovery ~{:.0}s,\n  \
+         several× MIN_RELAY_TIME) and would break the P2P liveness the mechanism\n  \
+         depends on. So the levers tune together as: keep the embargo at 144s\n  \
+         (the black-hole backstop), F already handled by F-4, reshape carries\n  \
+         the origin-exposure target. ε is a target on the COMPOSED leak with\n  \
+         freedom in (embargo, F, reshape) — it must not over-constrain the\n  \
+         embargo to carry the whole burden.",
+        f64::from(
+            u32::try_from(u64::from(embargo_only_secs) * 1000 / DEFAULT_EMBARGO_TICK_MILLIS)
+                .unwrap()
+        ) * 2.302
+            * DEFAULT_EMBARGO_TICK_MILLIS as f64
+            / 1000.0
+    );
+}

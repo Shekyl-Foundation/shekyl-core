@@ -1,7 +1,7 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
 **Status:** ROUND 2 applied. The measurement that motivates this document
-landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 88 tests), so
+landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 89 tests), so
 every number below is reproducible rather than asserted. Rounds 1–2 raised
 findings RD-1…RD-4; **all are accepted and dispositioned in §10**, and their
 consequences are folded into the body rather than appended as errata.
@@ -500,6 +500,7 @@ comparison, the existing daemon-submit boundary is 754 lines of C++ shim plus
 | First-spy diffusion precision π₀ | `first_spy_precision_rises_with_spy_fraction` | Round 2 ✅ |
 | Clearnet↔Tor delta: supernode observer collapses on Tor | `tor_collapses_the_supernode_diffusion_observer` | Round 2 (transport) ✅ |
 | Clearnet passive channel is real, mean-dependent, zero on Tor | `passive_clearnet_leak_is_mean_dependent_and_zero_on_tor` | Round 3 (ε lever) ✅ |
+| ≤0.3% worst-case exposure reachable via reshape, not embargo-lengthening | `origin_exposure_meets_target_via_reshape_not_embargo` | Round 3 (levers) ✅ |
 | Origin always stems (unit stem at q=100%) | `always_fluffing_gives_a_unit_stem_the_origin_still_holds` | Round 2 (RD-4) ✅ |
 | Frozen reference vectors, cross-architecture | `tests/golden_vector.rs` | RP-1 ✅ |
 | 33 `levin_notify` gtests pass unchanged after the cut | `tests/unit_tests/levin.cpp` | RP-3 |
@@ -705,6 +706,66 @@ with both live — and it opens on the clearnet floor because
 [`00-mission`](../../.cursor/rules/00-mission.mdc)'s "same guarantees for
 everyone" does not let a supported configuration go undefended.
 
+### 6.7 Can we reach ≤0.3% exposure, and which lever does it efficiently?
+
+The leak event decomposes as a product, and **every term is a separate lever**:
+
+```text
+leak = P(preempt)  ×  neighbour(supernode reach)  ×  origin-attribution
+```
+
+- **Embargo mean** sets `P(preempt)` — mean-dependent, the lever moved by RD-1/RD-4.
+- **Fluff-return `F`** sets the disarm window `h·hop + F`
+  ([`tx_pool.cpp` `now + embargo_duration()`](../../src/cryptonote_core/tx_pool.cpp#L1053)):
+  a larger `F` gives every prefix embargo longer to fire, so it pushes the leak
+  **opposite** to the embargo mean. And `F` is downstream of F-4 — the memoryless
+  fix made the return flood ~7× faster (F-5) — so **F-4 was a second, independent
+  correction to this channel**, one we made against the black-hole backstop
+  without knowing it touched clearnet exposure. *Two* fixes protected clearnet
+  origins, not one.
+- **`q`** sets the stem-length distribution — how many prefix positions exist and
+  how much mass sits at the origin. Deferred (Q-3, D-6) as out of scope for the
+  embargo work; that deferral rationale should now note `q` is *also* a lever on
+  this channel.
+- **Reshape (Q-8a)** does not reduce `P(preempt)`; it changes what a preemption
+  *emits* — a stem forward (unicast, invisible to the passive inbound supernode)
+  instead of an origin-attributed fluff. So it drives the origin-attribution term
+  toward zero without touching the embargo mean.
+
+**Measured, worst case** (`origin_exposure_meets_target_via_reshape_not_embargo`,
+a *whole-prefix* supernode — the upper bound, not the independent-neighbour lower
+reading of §6.6):
+
+| lever setting | worst-case origin exposure | note |
+| --- | --- | --- |
+| current (144 s, no reshape) | **2.24 %** | above the ≤0.3% target |
+| + reshape, 1 retry | **0.026 %** | **target met**, ~86× drop, *no embargo change* |
+| + reshape, 2 retries | ~0.000 % | — |
+| F = 13.75 s (inherited Poisson flood) | 9.75 % | what F-4 fixed (→ 2.2 % at F = 2.25 s) |
+| embargo-only path to target | needs **~1050 s** | p90 recovery ~2400 s, ~8× `MIN_RELAY_TIME` |
+
+**Answer: yes — and reshape is the efficient lever.** One re-stem retry takes the
+worst-case origin exposure from 2.24 % to 0.026 % (≥ 99.97 % protected) with **no
+embargo lengthening** — its cost is ~1 extra stem hop of latency, not
+embargo-scale liveness. The embargo-only path to the same target needs ~1050 s (7×
+the adopted mean), whose p90 black-hole recovery (~2400 s) would break the P2P
+liveness the whole mechanism exists to preserve. So the levers tune together as:
+**keep the embargo at 144 s** (the black-hole backstop; longer is a liveness
+disaster), **`F` already handled by F-4**, **reshape carries the origin-exposure
+target**, `q` held in reserve.
+
+This is why the `ε` derivation (Q-9) must treat `ε` as a target on the *composed*
+leak with freedom across `(embargo, F, reshape)` — over-constraining the embargo
+to carry the whole burden buys the exposure target at a liveness cost the other
+levers supply for free.
+
+*Model honesty:* the reshape figure uses a first-order renewal model (the disarm
+window is held fixed across re-stems; in reality a re-stem also advances the tx
+toward completion, so the true reduction is at least this large). The
+whole-prefix reading is the conservative upper bound; the independent-neighbour
+reading (§6.6) is lower. The geometric drop in retry count and the direction of
+every lever hold under both.
+
 ---
 
 ## 7. Open questions (the Round-3 agenda)
@@ -725,7 +786,11 @@ instruments for both are built or scoped. What remains is the *arguments*:
 - **Q-3 — is `q = 20%` right for Shekyl?** D-6 defers deliberately; the trade
   curve is measured and on file. Round 1 notes that RD-1's correction lengthens
   the required embargo, which *strengthens* the case for not simultaneously
-  lengthening stems. **Carried.**
+  lengthening stems. **Round 3 amendment:** the D-6 deferral rationale scoped `q`
+  out as an *embargo-work* question, but §6.7 shows `q` is also a lever on the
+  passive clearnet channel (it sets the prefix length and origin mass). The
+  deferral stands, but on the corrected basis that `q` is held *in reserve*
+  behind reshape and `F`, not that it is irrelevant to this channel. **Carried.**
 - **Q-4 — is 250 ms the right tick?** The derivation absorbs it, so this is
   fidelity and table size, not correctness. Round 1 position: fine as is.
   **Effectively closed; reopen only on a table-size or timer-resolution
@@ -831,6 +896,15 @@ instruments for both are built or scoped. What remains is the *arguments*:
   "derive before sweeping" — it is **"derive in a form that names the increment,
   not the level,"** or the seam will not hold. The instrument is the calculator;
   the argument is the input, owed before the calculator is run.
+
+  **And `δ` is a target on the *composed* leak, not on the embargo mean.** §6.7
+  shows the leak has at least four levers — embargo, `F`, `q`, reshape — and that
+  reshape reaches a ≤0.3% worst-case target at ~1 stem-hop of cost while the
+  embargo-only path costs ~1050 s of mean (a liveness break). So the derivation
+  has freedom across `(embargo, F, reshape)` to meet `δ`, and it **must not
+  over-constrain the embargo** to carry the whole burden — the embargo is fixed
+  by the black-hole backstop (D-2), and pushing it further to chase the passive
+  target trades away liveness the other levers supply for free.
 
 **Closed in Rounds 1–2:**
 
