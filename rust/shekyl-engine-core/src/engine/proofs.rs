@@ -47,7 +47,7 @@
 //! otherwise admits four billion tx fetches against the verifier's
 //! daemon off one hostile string.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
@@ -769,6 +769,24 @@ pub async fn check_reserve_proof<R: Rpc>(
         Err(ProofError::InvalidFormat(m)) => return Err(ProofsError::Malformed(m)),
         Err(_) => return Ok(CheckedReserveProof::Invalid),
     };
+
+    // Cross-entry key-image uniqueness: each entry verifies
+    // independently, so a proof listing the same output N times would
+    // sum its amount N times — for an UNSPENT output the spent-set
+    // subtraction never corrects it, and the proven reserve inflates
+    // N-fold, which is exactly the claim a reserve proof exists to
+    // refute. The key image is the dedup key (it is what makes an
+    // entry economically distinct and what the spent set is keyed
+    // on); a duplicate-bearing proof is malformed by construction —
+    // the honest generator selects each output at most once.
+    let mut seen_key_images = BTreeSet::new();
+    for v in &verified {
+        if !seen_key_images.insert(*v.key_image.as_bytes()) {
+            return Err(ProofsError::Malformed(
+                "reserve proof lists the same output (key image) more than once".into(),
+            ));
+        }
+    }
 
     // Spent-set query: a proof over spent outputs verifies
     // cryptographically, but the spent portion is reported so the
@@ -1712,6 +1730,42 @@ mod tests {
             let err = check_reserve_proof(&fx.rpc, &fx.address, MSG, &proof)
                 .await
                 .expect_err("out-of-range locator refuses");
+            assert!(matches!(err, ProofsError::Malformed(_)));
+        }
+
+        #[tokio::test]
+        async fn check_reserve_proof_duplicated_output_is_malformed_not_doubled() {
+            // F-13 regression: a proof listing the SAME unspent output
+            // twice — every entry verifies (same output key, same DLEQ,
+            // same x), the spent set reports both copies unspent, and
+            // without the key-image uniqueness guard the proven reserve
+            // would be 2x the real balance. The verifier must refuse
+            // (Malformed), not double `total`.
+            let fx = make_fixture(vec![]);
+            let dup = |vout: u64| {
+                let od = &fx.outputs[usize::try_from(vout).unwrap()];
+                ReserveProofOutput {
+                    vout_index: vout,
+                    ciphertext: ciphertext_of(od),
+                    key_image: key_image_of(&fx, vout),
+                    output_key: od.output_key,
+                }
+            };
+            let bytes = proof_bridge::generate_reserve_proof(
+                &fx.local,
+                &ReserveProofRequest {
+                    address_bytes: canonical_address_bytes(&fx.address),
+                    message: MSG.as_bytes().to_vec(),
+                    outputs: vec![dup(0), dup(0)],
+                },
+            )
+            .expect("generation is per-entry and does not itself dedup");
+            let payload = locator_payload(&[(fx.txid, 0), (fx.txid, 0)], &bytes);
+            let proof = encode_blob(HRP_RESERVE_PROOF, &payload).expect("bech32m encode");
+
+            let err = check_reserve_proof(&fx.rpc, &fx.address, MSG, &proof)
+                .await
+                .expect_err("duplicated output refuses instead of inflating the reserve");
             assert!(matches!(err, ProofsError::Malformed(_)));
         }
     }

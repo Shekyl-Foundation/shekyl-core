@@ -364,14 +364,19 @@ components:
           -29300 PROOF_MALFORMED          check_*: proof string failed
                                           Bech32m decode, carried the wrong
                                           HRP, its wire framing did not
-                                          parse, or it exceeds the size caps
+                                          parse, it exceeds the size caps
                                           pinned in the Proofs section
                                           (locator count / decoded payload
                                           bytes — refused before any daemon
-                                          fetch). Distinct from a VALID
-                                          framing that fails cryptographic
-                                          verification — that is result
-                                          {"valid": false}, not an error
+                                          fetch), or a reserve proof's
+                                          entries repeat a key image
+                                          (duplicate-output inflation —
+                                          malformed by construction, see
+                                          CheckReserveProofParams). Distinct
+                                          from a VALID framing that fails
+                                          cryptographic verification — that
+                                          is result {"valid": false}, not an
+                                          error
           -29301 PROOF_TX_SECRET_UNAVAILABLE
                                           get_tx_proof (outbound): the
                                           wallet holds no per-tx secret for
@@ -1610,8 +1615,13 @@ components:
         (-29303 when any is unknown), extracts the named outputs'
         on-chain data, verifies the
         proof's per-output DLEQ content and spend-key signature against
-        `address` and `message`, and queries the daemon's spent set for
-        the proof's key images — a proof over spent outputs verifies
+        `address` and `message`, REJECTS any proof whose entries repeat
+        a key image (-29300 — entries verify independently, so a
+        duplicated UNSPENT output would otherwise inflate the proven
+        reserve N-fold with `spent` staying zero; the key image is the
+        dedup key because it is what makes an entry economically
+        distinct and what the spent set is keyed on), and queries the
+        daemon's spent set for the proof's key images — a proof over spent outputs verifies
         cryptographically but the spent portion is reported so the
         verifier can subtract it. Note the spent-set query forwards the
         proof's key-image list to the VERIFIER'S daemon
