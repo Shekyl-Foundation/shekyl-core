@@ -847,6 +847,18 @@ pub(crate) enum KeyEngineError {
     /// Non-crypto structural failure during signing (address decode, wire encode, …).
     #[error("key engine primitive failure: {detail}")]
     Primitive { detail: &'static str },
+
+    /// Proof generation failed inside the key actor (WI-RPC-3 inbound
+    /// tx proofs / reserve proofs). Wraps [`shekyl_proofs::error::ProofError`]
+    /// so the proofs workflow (and the RPC error mapping behind it) can
+    /// discriminate structural rejections (empty output set,
+    /// non-increasing vout indices) from crypto failures without
+    /// stringifying. The generation inputs are the wallet's own
+    /// persisted state, so — as with
+    /// [`Self::SourceCiphertextDecapsulationFailed`] — the expected
+    /// operational frequency is zero; the variant is loud, not silent.
+    #[error("proof generation failure: {0}")]
+    Proof(#[from] shekyl_proofs::error::ProofError),
 }
 
 // --- IO --------------------------------------------------------------------
@@ -1396,6 +1408,11 @@ impl From<KeyEngineError> for SignerError {
             },
             KeyEngineError::SourceCiphertextDecapsulationFailed(_) => Self::RemoteFailure {
                 reason: "source ciphertext re-decapsulation failed",
+            },
+            // Unreachable on the signing path (proofs never route through
+            // `Signer`), but the conversion must stay total.
+            KeyEngineError::Proof(_) => Self::RemoteFailure {
+                reason: "proof generation failure",
             },
         }
     }

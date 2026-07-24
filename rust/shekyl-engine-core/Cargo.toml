@@ -66,6 +66,12 @@ shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# WI-RPC-3 (Phase 2c proofs): DLEQ tx-proof / reserve-proof primitives the
+# proofs workflow orchestrates, and the Bech32m codec for proof strings
+# (`shekyltxproof…` / `shekylreserveproof…`). Both first-party path crates —
+# no new third-party edge (`17-dependency-discipline.mdc`).
+shekyl-proofs = { path = "../shekyl-proofs" }
+shekyl-encoding = { path = "../shekyl-encoding" }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 # SP-T2: the per-P Tor transport primitive (PTorClient). engine-core wraps it in
 # `PRpc` (an `Rpc` impl); it does NOT depend on `ureq` — all agent construction
