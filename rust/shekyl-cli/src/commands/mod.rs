@@ -15,6 +15,7 @@ mod balance;
 mod chain;
 mod fees;
 mod lifecycle;
+mod proofs;
 mod receiving;
 pub mod scripted;
 mod staking;
@@ -62,16 +63,30 @@ Staking:
   staking_info                        Show staking state and scan height
   chain_health                        Show daemon/chain health (separate conn)
 
+Proofs (multi-word [message] binds into the proof; the verifier must
+supply the identical string — repeated spaces are collapsed to one):
+  get_tx_proof <txid> <address> [message]
+                                      Prove a payment to <address> (sent
+                                      or received; open wallet required)
+  check_tx_proof <txid> <address> <proof> [message]
+                                      Verify a tx proof (no wallet needed)
+  get_reserve_proof [amount] [message]
+                                      Prove unspent reserve (FULL wallet;
+                                      omit amount to prove full balance —
+                                      see the disclosure warning it prints)
+  check_reserve_proof <address> <proof> [message]
+                                      Verify a reserve proof (no wallet
+                                      needed)
+
 Meta:
   version                             Show CLI and wallet-RPC versions
   help                                Show this help
   exit / quit                         Exit shekyl-cli
 
 Not yet available (the RPC surface is designed but has not landed; see
-docs/FOLLOWUPS.md): rescan, transaction proofs (get/check_tx_key,
-get/check_tx_proof, get/check_reserve_proof), message signing
-(sign/verify), and the offline cold-signing workflow
-(describe/sign/submit_transfer, transfer --do-not-relay).";
+docs/FOLLOWUPS.md): rescan, message signing (sign/verify), and the
+offline cold-signing workflow (describe/sign/submit_transfer,
+transfer --do-not-relay).";
 
 /// RESERVED-surface refusal: the command is part of the target set, but the
 /// wallet-RPC method that would back it has not landed. Names the gate so
@@ -211,14 +226,37 @@ pub fn repl(
                         chain::cmd_chain_health(daemon_client.as_ref());
                     }
 
-                    // Proofs (RESERVED)
-                    ResolvedCommand::GetTxKey { .. }
-                    | ResolvedCommand::CheckTxKey { .. }
-                    | ResolvedCommand::GetTxProof { .. }
-                    | ResolvedCommand::CheckTxProof { .. }
-                    | ResolvedCommand::GetReserveProof { .. }
-                    | ResolvedCommand::CheckReserveProof { .. } => {
-                        reserved(first_token, "the transaction-proof RPC surface");
+                    // Proofs (WI-RPC-3 surface)
+                    ResolvedCommand::GetTxProof {
+                        txid,
+                        address,
+                        message,
+                    } => {
+                        proofs::cmd_get_tx_proof(&rpc, &txid, &address, message.as_deref());
+                    }
+                    ResolvedCommand::CheckTxProof {
+                        txid,
+                        address,
+                        proof,
+                        message,
+                    } => {
+                        proofs::cmd_check_tx_proof(
+                            &rpc,
+                            &txid,
+                            &address,
+                            &proof,
+                            message.as_deref(),
+                        );
+                    }
+                    ResolvedCommand::GetReserveProof { amount, message } => {
+                        proofs::cmd_get_reserve_proof(&rpc, amount, message.as_deref());
+                    }
+                    ResolvedCommand::CheckReserveProof {
+                        address,
+                        proof,
+                        message,
+                    } => {
+                        proofs::cmd_check_reserve_proof(&rpc, &address, &proof, message.as_deref());
                     }
 
                     // Signing (RESERVED)

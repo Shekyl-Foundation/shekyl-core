@@ -60,12 +60,12 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 15 | `spendkey` | N/A | Out of scope | Deleted-by-design: no secret-egress RPC |
 | 16 | `export_key_images` | N/A | Out of scope | Deleted-by-design: Phase 2d `UnsignedTxBundle`/`SignedTxBundle` bundles replace the key-image workflow (locked) |
 | 17 | `import_key_images` | N/A | Out of scope | Deleted-by-design: as row 16 |
-| 18 | `get_tx_key` | RESERVED | Planned | Gated on the transaction-proof RPC surface (Phase 2c) |
-| 19 | `check_tx_key` | RESERVED | Planned | As row 18 |
-| 20 | `get_tx_proof` | RESERVED | Planned | As row 18 |
-| 21 | `check_tx_proof` | RESERVED | Planned | As row 18 |
-| 22 | `get_reserve_proof` | RESERVED | Planned | As row 18 |
-| 23 | `check_reserve_proof` | RESERVED | Planned | As row 18 |
+| 18 | `get_tx_key` | N/A | Out of scope | Deleted-by-design (WI-RPC-3): raw per-tx-key export is REJECTED in the proofs contract (`docs/api/wallet_rpc.yaml` method registry) — the key is a bearer credential over the whole tx; refuses at parse time pointing at `get_tx_proof`/`check_tx_proof` |
+| 19 | `check_tx_key` | N/A | Out of scope | As row 18 |
+| 20 | `get_tx_proof` | `get_tx_proof` | Covered | Native DLEQ tx proof, direction auto-selected (OUTBOUND/INBOUND) by decoded-address comparison (WI-RPC-3); prints the contract's disclosure warnings at generation |
+| 21 | `check_tx_proof` | `check_tx_proof` | Covered | Wallet-less verification against the chain (WI-RPC-3); proof strings are kept out of readline history |
+| 22 | `get_reserve_proof` | `get_reserve_proof` | Covered | All-balance or amount-bounded (WI-RPC-3, FULL wallet); prints the key-image-beacon warning |
+| 23 | `check_reserve_proof` | `check_reserve_proof` | Covered | Wallet-less verification with daemon spent-status reporting (WI-RPC-3) |
 | 24 | `sign` | RESERVED | Planned | Gated on the message-signing RPC surface (Phase 2c) |
 | 25 | `verify` | RESERVED | Planned | As row 24 |
 | 26 | `sign_transfer` | RESERVED | Planned | Gated on the Phase 2d offline cold-signing workflow (with `describe_transfer`, `submit_transfer`, `transfer --do-not-relay`) |

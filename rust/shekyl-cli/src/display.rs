@@ -111,12 +111,15 @@ fn multiplexer_warning() -> Option<&'static str> {
 }
 
 /// Returns true if the given command's input line carries secret material
-/// and must NOT be added to readline history. `restore` is the one such
-/// command: its arguments are the BIP-39 mnemonic itself. (The wallet2-era
-/// secret-*display* commands — seed/viewkey/spendkey — were removed in
-/// WI-RPC-2b; their input lines carried no secret.)
+/// and must NOT be added to readline history. `restore`'s arguments are the
+/// BIP-39 mnemonic itself. The proof-check commands carry someone's proof
+/// string, a bearer artifact: an OUTBOUND tx proof embeds the raw per-tx
+/// key, and a reserve proof is a permanent spend-detection beacon (contract
+/// DISCLOSURE SEMANTICS) — neither belongs in a plaintext history file.
+/// (The wallet2-era secret-*display* commands — seed/viewkey/spendkey —
+/// were removed in WI-RPC-2b; their input lines carried no secret.)
 pub fn is_secret_command(cmd: &str) -> bool {
-    cmd == "restore"
+    matches!(cmd, "restore" | "check_tx_proof" | "check_reserve_proof")
 }
 
 /// Neutralize control characters in free-form, externally-supplied text before

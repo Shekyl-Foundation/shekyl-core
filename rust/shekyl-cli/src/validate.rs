@@ -181,19 +181,14 @@ mod tests {
 
     #[test]
     fn test_proof_arg_counts() {
-        // check_tx_key requires exactly 3 positional args
-        let input = "check_tx_key txid123 key456 addr789";
+        // get_tx_proof requires 2+ args (txid, address, optional message)
+        let input = "get_tx_proof txid123 addr456";
         let parts: Vec<&str> = input.split_whitespace().collect();
-        assert_eq!(parts.len(), 4); // cmd + 3 args
+        assert_eq!(parts.len(), 3); // cmd + 2 args
 
-        // get_tx_proof requires 2-3 args
-        let input2 = "get_tx_proof txid123 addr456";
+        // check_tx_proof requires 3+ args (txid, address, proof, optional msg)
+        let input2 = "check_tx_proof txid addr proofstr msg";
         let parts2: Vec<&str> = input2.split_whitespace().collect();
-        assert_eq!(parts2.len(), 3); // cmd + 2 args
-
-        // check_tx_proof requires 3-4 args
-        let input3 = "check_tx_proof txid addr sig msg";
-        let parts3: Vec<&str> = input3.split_whitespace().collect();
-        assert_eq!(parts3.len(), 5); // cmd + 4 args
+        assert_eq!(parts2.len(), 5); // cmd + 4 args
     }
 }

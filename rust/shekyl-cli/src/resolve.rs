@@ -88,15 +88,7 @@ pub enum ResolvedCommand {
 
     ChainHealth,
 
-    // -- Proofs (RESERVED: proofs engine not landed) --
-    GetTxKey {
-        txid: String,
-    },
-    CheckTxKey {
-        txid: String,
-        tx_key: String,
-        address: String,
-    },
+    // -- Proofs (WI-RPC-3 surface) --
     GetTxProof {
         txid: String,
         address: String,
@@ -105,7 +97,7 @@ pub enum ResolvedCommand {
     CheckTxProof {
         txid: String,
         address: String,
-        signature: String,
+        proof: String,
         message: Option<String>,
     },
     GetReserveProof {
@@ -114,7 +106,7 @@ pub enum ResolvedCommand {
     },
     CheckReserveProof {
         address: String,
-        signature: String,
+        proof: String,
         message: Option<String>,
     },
 
@@ -371,32 +363,12 @@ pub fn parse(input: &str) -> ResolvedCommand {
             }
         }
         "chain_health" => ResolvedCommand::ChainHealth,
-        "get_tx_key" => {
-            if let Some(txid) = args.first() {
-                ResolvedCommand::GetTxKey {
-                    txid: txid.to_string(),
-                }
-            } else {
-                diag("get_tx_key: need <txid>")
-            }
-        }
-        "check_tx_key" => {
-            if args.len() >= 3 {
-                ResolvedCommand::CheckTxKey {
-                    txid: args[0].to_string(),
-                    tx_key: args[1].to_string(),
-                    address: args[2].to_string(),
-                }
-            } else {
-                diag("check_tx_key: need <txid> <tx_key> <address>")
-            }
-        }
         "get_tx_proof" => {
             if args.len() >= 2 {
                 ResolvedCommand::GetTxProof {
                     txid: args[0].to_string(),
                     address: args[1].to_string(),
-                    message: args.get(2).map(|s| s.to_string()),
+                    message: trailing_message(args, 2),
                 }
             } else {
                 diag("get_tx_proof: need <txid> <address> [message]")
@@ -407,34 +379,42 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 ResolvedCommand::CheckTxProof {
                     txid: args[0].to_string(),
                     address: args[1].to_string(),
-                    signature: args[2].to_string(),
-                    message: args.get(3).map(|s| s.to_string()),
+                    proof: args[2].to_string(),
+                    message: trailing_message(args, 3),
                 }
             } else {
-                diag("check_tx_proof: need <txid> <address> <sig> [msg]")
+                diag("check_tx_proof: need <txid> <address> <proof> [message]")
             }
         }
         "get_reserve_proof" => {
-            let filtered: Vec<&str> = args
-                .iter()
-                .filter(|a| !a.starts_with("--"))
-                .copied()
-                .collect();
-            let amount = filtered
-                .first()
-                .and_then(|s| crate::commands::parse_amount(s));
-            let message = filtered.get(1).map(|s| s.to_string());
-            ResolvedCommand::GetReserveProof { amount, message }
+            // `get_reserve_proof [amount] [message...]` — an amount-shaped
+            // first token bounds the proof; otherwise everything is message.
+            match args.first() {
+                Some(first) => match crate::commands::parse_amount(first) {
+                    Some(amount) => ResolvedCommand::GetReserveProof {
+                        amount: Some(amount),
+                        message: trailing_message(args, 1),
+                    },
+                    None => ResolvedCommand::GetReserveProof {
+                        amount: None,
+                        message: trailing_message(args, 0),
+                    },
+                },
+                None => ResolvedCommand::GetReserveProof {
+                    amount: None,
+                    message: None,
+                },
+            }
         }
         "check_reserve_proof" => {
             if args.len() >= 2 {
                 ResolvedCommand::CheckReserveProof {
                     address: args[0].to_string(),
-                    signature: args[1].to_string(),
-                    message: args.get(2).map(|s| s.to_string()),
+                    proof: args[1].to_string(),
+                    message: trailing_message(args, 2),
                 }
             } else {
-                diag("check_reserve_proof: need <address> <sig> [msg]")
+                diag("check_reserve_proof: need <address> <proof> [message]")
             }
         }
         "sign" => {
@@ -517,6 +497,20 @@ pub fn parse(input: &str) -> ResolvedCommand {
     }
 }
 
+/// Join the trailing tokens from `start` into a proof challenge message.
+///
+/// The REPL tokenizes on whitespace, so a multi-word message is re-joined
+/// with single spaces. The message binds byte-exact into the proof challenge:
+/// the verifier must supply the identical string, so runs of whitespace are
+/// not preserved — a caveat the help text carries.
+fn trailing_message(args: &[&str], start: usize) -> Option<String> {
+    if args.len() > start {
+        Some(args[start..].join(" "))
+    } else {
+        None
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Removed-surface rejection (rule 60 / rule 82: fail loud with guidance)
 // ---------------------------------------------------------------------------
@@ -570,6 +564,12 @@ fn reject_removed_command(cmd: &str, args: &[&str]) -> Option<String> {
         "export_key_images" | "import_key_images" => Some(
             "key-image export/import was removed; Phase 2d sync bundles \
              replace the wallet2-era key-image workflow.",
+        ),
+        "get_tx_key" | "check_tx_key" => Some(
+            "raw per-transaction-key export was rejected in the proofs \
+             contract: the key is a bearer credential over the whole \
+             transaction. Use \"get_tx_proof\" / \"check_tx_proof\" — the \
+             DLEQ proof proves the same payment with scoped disclosure.",
         ),
         "sweep_all" => Some(
             "sweep_all was removed: no native sweep surface exists yet \
@@ -805,6 +805,81 @@ mod tests {
                 assert_eq!(amount, Some(1_000_000_000));
             }
             other => panic!("expected MakeUri, got {other:?}"),
+        }
+    }
+
+    /// WI-RPC-3 proof commands parse, with trailing tokens joined into the
+    /// challenge message and the amount/message ambiguity in
+    /// `get_reserve_proof` resolved by amount-shape.
+    #[test]
+    fn proof_commands_parse() {
+        match parse("get_tx_proof deadbeef skl1abc for the auditor") {
+            ResolvedCommand::GetTxProof {
+                txid,
+                address,
+                message,
+            } => {
+                assert_eq!(txid, "deadbeef");
+                assert_eq!(address, "skl1abc");
+                assert_eq!(message.as_deref(), Some("for the auditor"));
+            }
+            other => panic!("expected GetTxProof, got {other:?}"),
+        }
+        match parse("check_tx_proof deadbeef skl1abc shekyltxproof1qqq challenge msg") {
+            ResolvedCommand::CheckTxProof { proof, message, .. } => {
+                assert_eq!(proof, "shekyltxproof1qqq");
+                assert_eq!(message.as_deref(), Some("challenge msg"));
+            }
+            other => panic!("expected CheckTxProof, got {other:?}"),
+        }
+        // Amount-shaped first token bounds the proof; the rest is message.
+        match parse("get_reserve_proof 2.5 quarterly audit") {
+            ResolvedCommand::GetReserveProof { amount, message } => {
+                assert_eq!(amount, Some(2_500_000_000));
+                assert_eq!(message.as_deref(), Some("quarterly audit"));
+            }
+            other => panic!("expected GetReserveProof, got {other:?}"),
+        }
+        // Non-amount first token: everything is message, nothing dropped.
+        match parse("get_reserve_proof quarterly audit") {
+            ResolvedCommand::GetReserveProof { amount, message } => {
+                assert_eq!(amount, None);
+                assert_eq!(message.as_deref(), Some("quarterly audit"));
+            }
+            other => panic!("expected GetReserveProof, got {other:?}"),
+        }
+        assert!(matches!(
+            parse("get_reserve_proof"),
+            ResolvedCommand::GetReserveProof {
+                amount: None,
+                message: None,
+            }
+        ));
+        // Missing required args are diagnostics.
+        assert!(matches!(
+            parse("get_tx_proof onlytxid"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+        assert!(matches!(
+            parse("check_reserve_proof onlyaddr"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+    }
+
+    /// The raw tx-key pair is deleted-with-guidance (rejected in the proofs
+    /// contract), not Unknown and not RESERVED.
+    #[test]
+    fn tx_key_commands_are_removed_with_guidance() {
+        for line in ["get_tx_key deadbeef", "check_tx_key a b c"] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(
+                        message.contains("get_tx_proof"),
+                        "{line:?} guidance must name the replacement: {message}"
+                    );
+                }
+                other => panic!("expected Diagnostic for {line:?}, got {other:?}"),
+            }
         }
     }
 
