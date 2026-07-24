@@ -650,12 +650,17 @@ pub struct Engine<
     /// [`LedgerEngine`]: traits::LedgerEngine
     ledger: Arc<L>,
 
-    /// [`PendingTxEngine`] implementor for the build / submit / discard
-    /// lifecycle. Shares the same [`Arc`] ledger handle as
-    /// [`Engine::ledger`] at assembly time (C6).
+    /// **Transfer workflow handle** — the production default is
+    /// [`LocalPendingTx`](local_pending_tx::LocalPendingTx) in
+    /// [`transfer`](transfer). Multi-step send (build / submit / discard /
+    /// re-anchor) is owned by that implementor, not by inherent methods on
+    /// `Engine`. Prefer `self.pending.…` / `PendingTxEngine` over growing
+    /// send bodies here (`ENGINE_COMPOSITION_DECOMPOSITION.md` §Transfer
+    /// workflow ownership).
     ///
-    /// `Engine::close` consults `outstanding_pending_txs()` and refuses
-    /// with
+    /// Shares the same [`Arc`] ledger handle as [`Engine::ledger`] at
+    /// assembly time (C6). `Engine::close` consults
+    /// `outstanding_pending_txs()` and refuses with
     /// [`OpenError::OutstandingPendingTx`](error::OpenError::OutstandingPendingTx)
     /// when any reservation is in flight.
     pub(crate) pending: P,
