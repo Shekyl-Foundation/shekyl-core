@@ -13,7 +13,14 @@
 //!   far end: an observer on that network path learns the operator runs a Shekyl
 //!   wallet and when it is active. This is *metadata* exposure — it holds even
 //!   if the link is encrypted (TLS) — not a claim that the payload is cleartext.
-//! - **Loopback, unix socket, or any configured proxy → silence.**
+//! - **A local-resolving SOCKS scheme (`socks5://`, `socks4://`) with a
+//!   *hostname* endpoint → warn.** Those schemes resolve the target locally and
+//!   connect the proxy to the resulting IP, so the hostname reaches the system
+//!   resolver in cleartext *before* the proxy is involved. This is a documented
+//!   property of the scheme, not a guess about the far end — and it is why
+//!   `socks5h://` / `socks4a://` exist. An IP-literal endpoint has no name to
+//!   leak and is silent.
+//! - **Loopback, unix socket, or a remote-resolving proxy → silence.**
 //! - **No configuration ever draws an assurance.** This is the load-bearing
 //!   half. A positive "your connection is private" claim derived from an
 //!   endpoint check asserts a property the check cannot measure: the check sees
@@ -166,13 +173,16 @@ pub fn classify(endpoint: &str, proxy: Option<&str>) -> Exposure {
 /// implies any other configuration is "safe".
 #[must_use]
 pub fn warning_for(label: &str, host: &str) -> String {
+    // Endpoint-neutral wording: this text serves both the wallet-RPC endpoint
+    // (`--rpc-url`) and the REPL's direct daemon client, so it must not say
+    // "node" — `label` already names which endpoint is being reported.
     format!(
         "Warning: {label} '{host}' is not loopback and no proxy is configured. \
          An observer on the network path can see that you connect to a remote \
-         node — that you run a Shekyl wallet, and when it is active — which \
+         endpoint — that you run a Shekyl wallet, and when it is active — which \
          holds regardless of who operates the far end and even if the link is \
-         encrypted. Route it through a proxy (--proxy), or point it at a node \
-         on this machine."
+         encrypted. Route it through a proxy (--proxy), or point it at an \
+         endpoint on this machine."
     )
 }
 
@@ -192,12 +202,63 @@ pub fn warning_for_direct(label: &str, host: &str) -> String {
     )
 }
 
+/// `true` for SOCKS schemes that resolve the target hostname **locally** and
+/// then connect the proxy to the resulting IP — leaking the hostname to the
+/// system resolver in cleartext before the proxy is ever involved.
+///
+/// `socks5` / `socks4` resolve locally; `socks5h` / `socks4a` hand the hostname
+/// to the proxy (the `h`/`a` variants exist precisely for this). HTTP proxies
+/// pass the host in the request line / `CONNECT`, so they also resolve remotely.
+/// An absent or unrecognized scheme is **not** reported: silence is this
+/// module's answer for anything it cannot establish, and claiming a leak we
+/// have not established is the mirror of claiming a safety we cannot measure.
+fn proxy_resolves_locally(proxy: &str) -> bool {
+    let scheme = proxy.split("://").next().unwrap_or_default();
+    scheme.eq_ignore_ascii_case("socks5") || scheme.eq_ignore_ascii_case("socks4")
+}
+
+/// The warning text for a proxy that will resolve the target hostname locally.
+///
+/// Fires only when there is actually a name to leak — an IP-literal endpoint
+/// involves no lookup, so warning on it would be a false positive of exactly the
+/// kind §15 rejected.
+#[must_use]
+pub fn warning_for_dns_leak(label: &str, host: &str, proxy: &str) -> String {
+    let scheme = proxy.split("://").next().unwrap_or_default();
+    format!(
+        "Warning: --proxy uses '{scheme}://', which resolves target hostnames \
+         locally, so connecting to {label} '{host}' leaks that hostname to your \
+         system resolver in cleartext before the proxy is involved — defeating \
+         much of what the proxy is for. (A .onion address cannot be resolved \
+         this way at all.) Use 'socks5h://' (or 'socks4a://') so the proxy \
+         resolves the hostname instead."
+    )
+}
+
 /// Emit the disclosure for one endpoint. Returns the warning that was printed,
-/// if any — `None` means silence, which is the correct output for every
-/// non-clear-network case (there is deliberately no "looks good" message).
+/// if any — `None` means silence, which is the correct output for every case
+/// this module cannot establish a weakness for (there is deliberately no
+/// "looks good" message).
+///
+/// The two warnings are mutually exclusive by construction: `ClearNetwork` means
+/// no proxy is configured, `Proxied` means one is.
 pub fn disclose(label: &str, endpoint: &str, proxy: Option<&str>) -> Option<String> {
     match classify(endpoint, proxy) {
-        Exposure::Local | Exposure::Proxied => None,
+        Exposure::Local => None,
+        // A proxy is in use — we still say nothing about whether it is
+        // trustworthy. But a local-resolving SOCKS scheme hands the hostname to
+        // the system resolver *before* the proxy sees anything, and that is a
+        // property of the scheme itself, not a guess about the far end.
+        Exposure::Proxied => {
+            let proxy = proxy?;
+            let host = host_of(endpoint);
+            if proxy_resolves_locally(proxy) && host.parse::<std::net::IpAddr>().is_err() {
+                let msg = warning_for_dns_leak(label, host, proxy);
+                eprintln!("{msg}");
+                return Some(msg);
+            }
+            None
+        }
         Exposure::ClearNetwork { host } => {
             let msg = warning_for(label, &host);
             eprintln!("{msg}");
@@ -281,8 +342,12 @@ mod tests {
     }
 
     #[test]
-    fn any_proxy_silences_a_remote_endpoint() {
-        // We do not grade the proxy — only that one is configured.
+    fn any_proxy_classifies_a_remote_endpoint_as_proxied() {
+        // `classify` reports only *that* a proxy is configured — it does not
+        // grade it, and it is deliberately blind to the scheme. The scheme's
+        // resolution behavior is a separate, reportable fact handled in
+        // `disclose` (see `local_resolving_proxy_warns_only_when_there_is_a_
+        // name_to_leak`), so `Proxied` here does not imply silence there.
         assert_eq!(
             classify("node.example.com:11028", Some("socks5://127.0.0.1:9050")),
             Exposure::Proxied
@@ -302,10 +367,50 @@ mod tests {
     }
 
     #[test]
-    fn only_clear_network_speaks() {
+    fn only_establishable_weaknesses_speak() {
+        // Local: nothing to disclose.
         assert!(disclose("daemon", "127.0.0.1:11028", None).is_none());
-        assert!(disclose("daemon", "node.example.com:11028", Some("socks5://x")).is_none());
+        // Remote, no proxy: clear-network warning.
         assert!(disclose("daemon", "node.example.com:11028", None).is_some());
+        // Remote behind a remote-resolving proxy: silence — we do not grade it.
+        assert!(disclose("daemon", "node.example.com:11028", Some("socks5h://x")).is_none());
+    }
+
+    /// A local-resolving SOCKS scheme leaks the hostname to the system resolver
+    /// before the proxy is involved. That is a property of the scheme, not a
+    /// guess about the far end, so it is reportable.
+    #[test]
+    fn local_resolving_proxy_warns_only_when_there_is_a_name_to_leak() {
+        // socks5:// + hostname → the leak exists.
+        let leaked = disclose(
+            "daemon address",
+            "node.example.com:11028",
+            Some("socks5://x"),
+        );
+        let msg = leaked.expect("socks5:// with a hostname must warn");
+        assert!(
+            msg.contains("socks5://"),
+            "names the offending scheme: {msg}"
+        );
+        assert!(msg.contains("socks5h://"), "names the remedy: {msg}");
+        assert!(msg.contains("node.example.com"));
+
+        // socks4:// resolves locally too.
+        assert!(disclose("daemon", "node.example.com:11028", Some("socks4://x")).is_some());
+
+        // The remote-resolving variants are the fix, not the problem.
+        assert!(disclose("daemon", "node.example.com:11028", Some("socks5h://x")).is_none());
+        assert!(disclose("daemon", "node.example.com:11028", Some("socks4a://x")).is_none());
+
+        // An IP-literal endpoint involves no lookup — warning would be a false
+        // positive of exactly the kind §15 rejected.
+        assert!(disclose("daemon", "203.0.113.7:11028", Some("socks5://x")).is_none());
+        assert!(disclose("daemon", "[2001:db8::1]:11028", Some("socks5://x")).is_none());
+
+        // An HTTP proxy passes the host in the request; it does not resolve
+        // locally. An unrecognized/absent scheme is not an established leak.
+        assert!(disclose("daemon", "node.example.com:11028", Some("http://x")).is_none());
+        assert!(disclose("daemon", "node.example.com:11028", Some("127.0.0.1:9050")).is_none());
     }
 
     /// The load-bearing property: no configuration produces an assurance. The
@@ -318,7 +423,9 @@ mod tests {
             disclose("daemon", "127.0.0.1:11028", None),
             disclose("daemon", "uds:///run/w.sock", None),
             disclose("daemon", "node.example.com:11028", Some("socks5://x")),
+            disclose("daemon", "node.example.com:11028", Some("socks5h://x")),
             disclose("daemon", "node.example.com:11028", None),
+            disclose_unproxyable("daemon", "node.example.com:11028"),
         ];
         for out in outputs.into_iter().flatten() {
             assert!(
@@ -326,6 +433,19 @@ mod tests {
                 "the only emitted message may be a warning, got: {out}"
             );
         }
+    }
+
+    /// `warning_for` serves both the wallet-RPC endpoint and the daemon client,
+    /// so it must not name one of them. `label` carries that.
+    #[test]
+    fn shared_warning_text_is_endpoint_neutral() {
+        let w = warning_for("wallet-RPC endpoint", "rpc.example.com");
+        assert!(w.contains("wallet-RPC endpoint"));
+        assert!(
+            !w.contains("node"),
+            "shared text must not say 'node' — it also serves the wallet-RPC \
+             endpoint, where that is wrong: {w}"
+        );
     }
 
     #[test]
