@@ -81,7 +81,10 @@ sustainability is unaffected by the recalibration.
   scalar that would make key-image computation fail if ownership ever
   hit). **Target: V3.0 pre-genesis (blocking — wallets lose sight of all
   change until this lands; on-chain data is intact, a post-fix rescan
-  recovers).**
+  recovers).** Index-anchored 2026-07-24 (WI-RPC-3 review F-14): the
+  genesis gate carries a row in `IMPLEMENTATION_INDEX.md` §5
+  ("Scanner KEM-ciphertext extra packing"), so the seal condition is
+  not join-only between this entry and a reader remembering it.
 
 - **WI-RPC-2b deferrals — CLI RESERVED commands awaiting their RPC
   surfaces** (added 2026-07-22; WI-RPC-2b, `feat/cli-rpc-client-surface`;
