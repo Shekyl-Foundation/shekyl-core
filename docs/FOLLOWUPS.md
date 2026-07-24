@@ -98,6 +98,16 @@ sustainability is unaffected by the recalibration.
   - **Transaction proofs** (`get/check_tx_key`, `get/check_tx_proof`,
     `get/check_reserve_proof`) — blocked on Phase 2c (addresses/proofs)
     landing the proof surfaces in the Engine and the contract.
+    **CLOSED 2026-07-24 (WI-RPC-3, `feat/wallet-rpc-proofs`)** per the
+    reopen shape below: the surface PR un-stubbed the CLI commands in
+    the same change. `get_tx_proof`/`check_tx_proof`/
+    `get_reserve_proof`/`check_reserve_proof` are real commands over the
+    new `wallet_rpc.yaml` methods; `get_tx_key`/`check_tx_key` were
+    **deleted, not implemented** — exporting the raw per-tx secret is
+    the wallet2-era mechanism the DLEQ tx proof supersedes (ratified
+    rule-21 rejection in the contract's spec round; parse-time guidance
+    names the replacement; reopen only if an interop consumer emerges
+    that verifiably cannot use the proof surface).
   - **`sign`/`verify` message signing** — blocked on the same Phase 2c
     surface decision (domain-separated message signing under hybrid keys).
   - **Offline cold-signing** (`describe_transfer`, `sign_transfer`,

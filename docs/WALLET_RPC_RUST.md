@@ -280,7 +280,7 @@ FROST multisig is handled by native Rust handlers, see below):
 > **legacy `wallet2_ffi_json_rpc` dispatcher** (this crate,
 > `shekyl-engine-rpc`). The native Rust wallet RPC —
 > `rust/shekyl-wallet-rpc`, contract in
-> [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml) — now serves three of
+> [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml) — now serves four of
 > these families natively, projected from the Engine with no wallet2
 > involvement:
 >
@@ -296,6 +296,13 @@ FROST multisig is handled by native Rust handlers, see below):
 >   `staking_info` (authoritative staking read view; the action surface —
 >   `unstake`, `claim_rewards` — remains engine-gated and RESERVED in the
 >   contract).
+> - **Proofs (2026-07-24, WI-RPC-3):** `get_tx_proof`, `check_tx_proof`,
+>   `get_reserve_proof`, `check_reserve_proof` — DLEQ-based transaction
+>   and reserve proofs over `rust/shekyl-proofs/`, Bech32m proof strings.
+>   The `check_*` pair is wallet-less (daemon-only verification). The
+>   dispatcher's `get_tx_key`/`check_tx_key` rows above have no
+>   Shekyl-native equivalent by design: the proof surface supersedes
+>   raw tx-secret export.
 
 ## Scanner Integration (`rust-scanner` feature)
 
