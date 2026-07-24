@@ -19,8 +19,8 @@
 #![allow(clippy::cast_precision_loss)]
 
 use shekyl_relay_privacy::conformance::{
-    coefficient_of_variation, inference_precision, simulate_propagation,
-    solve_embargo_secs_for_target, PropagationSummary,
+    coefficient_of_variation, inference_precision, residual_masses, simulate_fluff_return,
+    simulate_propagation, solve_embargo_secs_for_target, FloodParams, PropagationSummary,
 };
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
@@ -30,8 +30,12 @@ use shekyl_relay_privacy::{EmbargoDistribution, EmbargoTimer, SplitMix64};
 const TRIALS: usize = 200_000;
 
 fn row(label: &str, embargo_secs: u32, s: &PropagationSummary) {
+    row_ticked(label, embargo_secs, DEFAULT_EMBARGO_TICK_MILLIS, s);
+}
+
+fn row_ticked(label: &str, embargo_secs: u32, tick_ms: u64, s: &PropagationSummary) {
     println!(
-        "{label:<28} {embargo_secs:>7}s {:>9.2} {:>12.0}ms {:>12}ms {:>13.4} {:>12.4}",
+        "{label:<28} {embargo_secs:>7}s {tick_ms:>6}ms {:>9.2} {:>12.0}ms {:>12}ms {:>13.4} {:>12.4}",
         s.mean_stem_hops,
         s.mean_natural_fluff_ms,
         s.p99_natural_fluff_ms,
@@ -43,10 +47,17 @@ fn row(label: &str, embargo_secs: u32, s: &PropagationSummary) {
 fn header(title: &str) {
     println!("\n{title}");
     println!(
-        "{:<28} {:>8} {:>9} {:>14} {:>14} {:>13} {:>12}",
-        "parameter set", "embargo", "hops", "mean fluff", "p99 fluff", "full-travel", "preempted"
+        "{:<28} {:>8} {:>8} {:>9} {:>14} {:>14} {:>13} {:>12}",
+        "parameter set",
+        "embargo",
+        "tick",
+        "hops",
+        "mean fluff",
+        "p99 fluff",
+        "full-travel",
+        "preempted"
     );
-    println!("{}", "-".repeat(104));
+    println!("{}", "-".repeat(112));
 }
 
 /// The headline comparison, three configurations:
@@ -65,18 +76,39 @@ fn inherited_versus_derived_versus_paper_faithful_embargo() {
 
     header("Dandelion++ embargo, three configurations (q=20%, hop=175ms)");
 
+    // RD-3: every row states its tick. The Poisson rows run at the whole
+    // second `crypto::random_poisson_seconds` gives; the memoryless rows are
+    // shown at BOTH one second and 250ms so the distribution fix (D-1) is
+    // never conflated with the granularity fix (D-4).
     let mut rng = SplitMix64::new(0xD11D_2026);
     let inherited = simulate_propagation(&params, &EmbargoTimer::inherited(), TRIALS, &mut rng);
-    row(
+    row_ticked(
         "shipped: 39s Poisson",
         DandelionParams::INHERITED_EMBARGO_SECS,
+        1_000,
         &inherited,
     );
 
     let mut rng = SplitMix64::new(0xD11D_2026);
     let derived = simulate_propagation(&params, &EmbargoTimer::derived(&params), TRIALS, &mut rng);
-    row("constant fixed: 17s Poisson", derived_secs, &derived);
+    row_ticked("constant fixed: 17s Poisson", derived_secs, 1_000, &derived);
 
+    // Distribution changed, granularity held at the inherited whole second.
+    let mut rng = SplitMix64::new(0xD11D_2026);
+    let memoryless_1s = simulate_propagation(
+        &params,
+        &EmbargoTimer::geometric_with_tick(derived_secs, 1_000),
+        TRIALS,
+        &mut rng,
+    );
+    row_ticked(
+        "17s memoryless (tick held)",
+        derived_secs,
+        1_000,
+        &memoryless_1s,
+    );
+
+    // Then, additionally, the granularity fix.
     let mut rng = SplitMix64::new(0xD11D_2026);
     let faithful = simulate_propagation(
         &params,
@@ -84,13 +116,19 @@ fn inherited_versus_derived_versus_paper_faithful_embargo() {
         TRIALS,
         &mut rng,
     );
-    row("as derived: 17s memoryless", derived_secs, &faithful);
+    row_ticked(
+        "17s memoryless + fine tick",
+        derived_secs,
+        DEFAULT_EMBARGO_TICK_MILLIS,
+        &faithful,
+    );
 
     println!("\n  target full-travel probability (1 - ep): {EMBARGO_FULL_TRAVEL_PROBABILITY:.4}");
     for (label, s) in [
-        ("shipped        ", &inherited),
-        ("constant fixed ", &derived),
-        ("as derived     ", &faithful),
+        ("shipped                   ", &inherited),
+        ("constant fixed            ", &derived),
+        ("memoryless, tick held     ", &memoryless_1s),
+        ("memoryless + fine tick    ", &faithful),
     ] {
         println!(
             "  {label} full-travel {:.4}  (target {:+.4})",
@@ -99,15 +137,25 @@ fn inherited_versus_derived_versus_paper_faithful_embargo() {
         );
     }
     println!(
-        "\n  Both Poisson rows sit at 1.0000 — the embargo effectively never\n  \
+        "\n  Both Poisson rows sit at ~1.0000 — the embargo effectively never\n  \
          fires. It is dimensioned against a stem that finishes in {:.0}ms on\n  \
          average and {}ms at p99, so a near-deterministic {}s or {}s timer is\n  \
-         not a backstop, it is a formality. The memoryless row is the only one\n  \
-         that lands near the {:.2} the parameter was solved for.",
+         not a backstop, it is a formality.\n\n  \
+         Rows three and four separate the two fixes (RD-3). Changing the\n  \
+         distribution alone, at the inherited whole-second tick, moves\n  \
+         full-travel {:.4} -> {:.4}: that is D-1 doing essentially all the\n  \
+         work. Adding the finer tick moves it a further {:+.4}, which is D-4\n  \
+         being a fidelity refinement rather than a mechanism change.\n\n  \
+         All three corrected rows sit below the {:.2} target because the\n  \
+         embargo is still at the closed form's 17s — see the RD-1 and exact\n  \
+         derivation tables for what the mean actually needs to be.",
         derived.mean_natural_fluff_ms,
         derived.p99_natural_fluff_ms,
         derived_secs,
         DandelionParams::INHERITED_EMBARGO_SECS,
+        derived.full_travel_rate,
+        memoryless_1s.full_travel_rate,
+        faithful.full_travel_rate - memoryless_1s.full_travel_rate,
         EMBARGO_FULL_TRAVEL_PROBABILITY,
     );
 
@@ -176,11 +224,25 @@ fn analytic_derivation_agrees_with_the_simulator() {
     println!("\nAnalytic survival equation vs. simulator (q=20%, hop=175ms, tick=250ms)");
     println!(
         "{:<16} {:>14} {:>14} {:>12}",
-        "mean (ticks)", "analytic", "simulated", "delta"
+        "mean @ tick", "analytic", "simulated", "delta"
     );
     println!("{}", "-".repeat(60));
 
-    for mean_secs in [10_u32, 17, 24, 30, 40, 60] {
+    // RD-3: sweep the tick as well as the mean. The original cross-check only
+    // asserted at 250ms, so a tick-dependent divergence — exactly where a
+    // fire-vs-disarm boundary convention would surface — had nothing watching
+    // it. Verified at 6M trials: agreement holds within +/-1 sigma at every
+    // tick from 1000ms down to 50ms.
+    for (mean_secs, tick) in [
+        (10_u32, tick),
+        (17, tick),
+        (30, tick),
+        (60, tick),
+        (17, 1_000_u64),
+        (17, 500),
+        (17, 125),
+        (17, 50),
+    ] {
         let mean_ticks = u32::try_from(u64::from(mean_secs) * 1_000 / tick).expect("fits");
         let analytic = full_travel_probability(&params, mean_ticks, tick);
 
@@ -189,13 +251,16 @@ fn analytic_derivation_agrees_with_the_simulator() {
         let simulated = simulate_propagation(&params, &embargo, TRIALS, &mut rng).full_travel_rate;
 
         let delta = (analytic - simulated).abs();
-        println!("{mean_ticks:<16} {analytic:>14.4} {simulated:>14.4} {delta:>12.4}");
+        println!(
+            "{:<16} {analytic:>14.4} {simulated:>14.4} {delta:>12.4}",
+            format!("{mean_secs}s @ {tick}ms")
+        );
 
         // Monte-Carlo standard error at this trial count is ~0.0008; 0.01 is a
         // generous band that still catches a structural disagreement.
         assert!(
             delta < 0.01,
-            "analytic {analytic:.4} and simulated {simulated:.4} disagree at {mean_secs}s"
+            "analytic {analytic:.4} and simulated {simulated:.4} disagree at {mean_secs}s @ {tick}ms"
         );
     }
 }
@@ -261,11 +326,14 @@ fn derived_embargo_replaces_the_closed_form() {
         "exact derivation {}s did not exceed the closed form {closed_form}s",
         derived.mean_secs()
     );
-    // Two independent solvers must land within a second or two of each other.
-    let gap = i64::from(derived.mean_secs()) - i64::from(simulated);
+    // Two independent solvers must agree proportionally. An absolute band
+    // would be wrong at both ends: the simulator bisects on a Monte-Carlo
+    // estimate, so its resolution scales with the answer.
+    let gap = (f64::from(derived.mean_secs()) - f64::from(simulated)).abs();
+    let tolerance = f64::from(derived.mean_secs()) * 0.05;
     assert!(
-        gap.abs() <= 2,
-        "exact derivation {}s and simulator {simulated}s disagree by {gap}s",
+        gap <= tolerance,
+        "exact derivation {}s and simulator {simulated}s disagree by {gap}s (>{tolerance:.1}s)",
         derived.mean_secs()
     );
 }
@@ -399,8 +467,8 @@ fn fluff_probability_trade_curve() {
     }
 
     // Finding 3, as a regression guard: the closed form under-provisions at
-    // every q, by a roughly constant margin. If someone later "fixes" this by
-    // loosening the target, this is what tells them they deleted the evidence.
+    // every q. If someone later "fixes" this by loosening the target, this is
+    // what tells them they deleted the evidence.
     let shortfalls: Vec<f64> = rows
         .iter()
         .map(|(_, _, g)| EMBARGO_FULL_TRAVEL_PROBABILITY - g.full_travel_rate)
@@ -409,12 +477,18 @@ fn fluff_probability_trade_curve() {
         shortfalls.iter().all(|s| *s > 0.0),
         "expected the closed form to under-provision at every q; shortfalls {shortfalls:?}"
     );
+    // Before RD-1 this shortfall was near-constant in q, because the F-3 error
+    // is a fixed factor. Counting the fluff-return term breaks that: the
+    // return trip is a *fixed time* added to every node's window, so it costs
+    // proportionally more when stems are short. The direction is the invariant
+    // worth pinning; the magnitude is reported rather than bounded tightly.
     let spread = shortfalls.iter().copied().fold(f64::MIN, f64::max)
         - shortfalls.iter().copied().fold(f64::MAX, f64::min);
     assert!(
-        spread < 0.03,
-        "shortfall should be near-constant across q, spread was {spread:.4}"
+        spread < 0.40,
+        "shortfall spread {spread:.4} is implausibly wide — check the model"
     );
+    println!("  (shortfall is now q-dependent, spread {spread:.4} — RD-1 effect)");
     println!(
         "\n  Memoryless shortfall below target across the sweep: {:.4} .. {:.4}",
         shortfalls.iter().copied().fold(f64::MAX, f64::min),
@@ -565,5 +639,257 @@ fn fluff_delay_inference_resistance() {
         geometric_p[1] < 0.25,
         "memoryless draw: +/-0.5s inversion still {:.4}",
         geometric_p[1]
+    );
+}
+
+/// **RD-1.** The fluff flood's return trip, and what counting it does to the
+/// embargo.
+///
+/// The survival equation originally ended a stem node's exposure when the
+/// terminal node *emitted* the fluff. The mechanism ends it when that fluff
+/// *reaches* the node: `tx_pool.cpp` clears the embargo via
+/// `upgrade_relay_method` on receipt, not on remote emission. Every edge of
+/// the return flood carries a fluff delay, so the correction is not a detail.
+///
+/// It also exposes an interaction worth stating plainly: the return time
+/// depends on the *fluff* distribution, so fixing F-4 substantially repairs
+/// the gap that counting the return trip opens. First passage is a minimum
+/// over parallel paths, and a minimum only helps when the paths differ.
+#[test]
+fn fluff_return_dominates_the_embargo_derivation() {
+    println!("\nFluff-flood first passage back to an arbitrary node (512 nodes)");
+    println!(
+        "{:<34} {:>8} {:>10} {:>10}",
+        "fluff delay on each edge", "peers", "mean", "p90"
+    );
+    println!("{}", "-".repeat(66));
+
+    let mut inherited_p90 = 0_u64;
+    let mut memoryless_p90 = 0_u64;
+    for (label, dist) in [
+        ("inherited: Poisson lambda=20", EmbargoDistribution::Poisson),
+        (
+            "memoryless: geometric mean=20",
+            EmbargoDistribution::Geometric,
+        ),
+    ] {
+        for peers in [4_usize, 8] {
+            let mut rng = SplitMix64::new(0xF100_D000 + peers as u64);
+            let s =
+                simulate_fluff_return(FloodParams { nodes: 512, peers }, 20, dist, 24, &mut rng);
+            println!(
+                "{label:<34} {peers:>8} {:>9.0}ms {:>9}ms",
+                s.mean_ms, s.p90_ms
+            );
+            if peers == 8 {
+                match dist {
+                    EmbargoDistribution::Poisson => inherited_p90 = s.p90_ms,
+                    EmbargoDistribution::Geometric => memoryless_p90 = s.p90_ms,
+                }
+            }
+        }
+    }
+
+    println!(
+        "\n  F-5: the inherited Poisson makes the whole network's diffusion ~{:.1}x\n  \
+         slower. First passage is a minimum over parallel paths, and under a\n  \
+         near-deterministic delay every path costs the same, so the minimum\n  \
+         buys nothing. This is a throughput consequence of the same defect as\n  \
+         F-4, and it feeds straight back into the embargo below.",
+        inherited_p90 as f64 / memoryless_p90 as f64
+    );
+    assert!(
+        inherited_p90 > memoryless_p90 * 3,
+        "expected the inherited draw to flood far slower: {inherited_p90}ms vs {memoryless_p90}ms"
+    );
+
+    println!("\nEmbargo required at the 0.90 target, as a function of the return term");
+    println!(
+        "{:<32} {:>10} {:>26}",
+        "fluff return F", "embargo", "what 31s actually achieves"
+    );
+    println!("{}", "-".repeat(70));
+
+    let uncorrected = DandelionParams {
+        fluff_return_ms: 0,
+        ..DandelionParams::inherited()
+    };
+    let base = derive_embargo(
+        &uncorrected,
+        DEFAULT_EMBARGO_TICK_MILLIS,
+        EMBARGO_FULL_TRAVEL_PROBABILITY,
+    )
+    .expect("reachable");
+    println!(
+        "{:<32} {:>9}s {:>26}",
+        "0ms (RD-1 uncorrected)",
+        base.mean_secs(),
+        "-"
+    );
+
+    let mut corrected = None;
+    for f in [500_u32, 1_500, 2_250, 4_250, 13_750] {
+        let p = DandelionParams {
+            fluff_return_ms: f,
+            ..DandelionParams::inherited()
+        };
+        let d = derive_embargo(
+            &p,
+            DEFAULT_EMBARGO_TICK_MILLIS,
+            EMBARGO_FULL_TRAVEL_PROBABILITY,
+        )
+        .expect("reachable");
+        let at_old = full_travel_probability(&p, base.mean_ticks, DEFAULT_EMBARGO_TICK_MILLIS);
+        println!(
+            "{:<32} {:>9}s {:>26.4}",
+            format!("{f}ms"),
+            d.mean_secs(),
+            at_old
+        );
+        if f == 2_250 {
+            corrected = Some((d, at_old));
+        }
+    }
+    let (adopted, old_achieves) = corrected.expect("2250ms row was measured");
+
+    println!(
+        "\n  At the measured p90 return of 2250ms the requirement moves {}s -> {}s,\n  \
+         and the previously-derived {}s delivers only {old_achieves:.4} rather than\n  \
+         0.9002. The old figure was a lower bound, and a loose one.\n\n  \
+         This is a large liveness cost -- a black-holed transaction now sits\n  \
+         undiffused for ~{}s -- which makes the 0.90-on-ANY-preemption target\n  \
+         the binding assumption to re-examine, not the derivation. A preemption\n  \
+         by the last stem node leaks far less than one by the first, and the\n  \
+         equation currently weights them equally.",
+        base.mean_secs(),
+        adopted.mean_secs(),
+        base.mean_secs(),
+        adopted.mean_secs()
+    );
+
+    // The correction must be large and in the conservative direction.
+    assert!(
+        adopted.mean_secs() > base.mean_secs() * 3,
+        "expected the return term to lengthen the embargo substantially: {}s -> {}s",
+        base.mean_secs(),
+        adopted.mean_secs()
+    );
+    assert!(
+        (0.61..0.85).contains(&old_achieves),
+        "the uncorrected embargo should land in the sketched 0.61..0.85 band, got {old_achieves:.4}"
+    );
+}
+
+/// **RD-2.** Which delay *shape* to use, decided by the metric that can
+/// actually distinguish them.
+///
+/// Raw inversion precision cannot: it is a maximum over sliding windows, so it
+/// is shift-invariant by construction, and every "add a floor" variant scores
+/// identically to its unshifted twin. Conditioning on arrival phase can,
+/// because the inherited fluff timer is a re-armed batching flush and a
+/// transaction arriving mid-window experiences the *residual* of a draw that
+/// already survived that long.
+#[test]
+fn residual_inversion_decides_the_distribution_shape() {
+    fn uniform_masses(max_ticks: usize) -> Vec<u64> {
+        vec![u64::MAX / (max_ticks as u64 + 1); max_ticks + 1]
+    }
+    fn with_floor(masses: &[u64], floor: usize) -> Vec<u64> {
+        let mut v = vec![0_u64; floor];
+        v.extend_from_slice(masses);
+        v
+    }
+
+    let geometric = GeometricTable::new(20).masses();
+    let poisson = PoissonTable::new(20).masses();
+    let uniform = uniform_masses(40); // U[0,40] ticks, same mean 20
+    let pure_shift = with_floor(&GeometricTable::new(20).masses(), 8); // mean 28
+    let budgeted = with_floor(&GeometricTable::new(12).masses(), 8); // mean 20
+
+    println!("\nInversion precision (+/-0.5s) vs. arrival phase into the flush window");
+    println!(
+        "{:<40} {:>9} {:>9} {:>9} {:>9}",
+        "delay draw", "phase 0", "phase 10", "phase 20", "phase 30"
+    );
+    println!("{}", "-".repeat(80));
+    let at = |m: &[u64], phase: u64| inference_precision(&residual_masses(m, phase), 2);
+    let row = |label: &str, m: &[u64]| {
+        println!(
+            "{label:<40} {:>9.4} {:>9.4} {:>9.4} {:>9.4}",
+            at(m, 0),
+            at(m, 10),
+            at(m, 20),
+            at(m, 30)
+        );
+    };
+    row("memoryless geometric (mean 20)", &geometric);
+    row("inherited Poisson (lambda 20)", &poisson);
+    row("uniform U[0,40] (mean 20)", &uniform);
+    row("floor 8 + geo20, PURE SHIFT (mean 28)", &pure_shift);
+    row("floor 8 + geo12, FIXED BUDGET (mean 20)", &budgeted);
+
+    println!(
+        "\n  Read three things off this table.\n\n  \
+         (1) Only the memoryless row is flat. That is the actual argument for\n  \
+         D-3, and it is not 'geometric inverts worst' -- uniform beats it at\n  \
+         phase 0 ({:.4} vs {:.4}). It is that the flush is re-armed, so a\n  \
+         transaction's delay is the residual of an in-flight draw, and only the\n  \
+         memoryless family makes the residual identical to the full draw. The\n  \
+         headline number then describes every transaction rather than only one\n  \
+         that arrived exactly at window start.\n\n  \
+         (2) The inherited Poisson degrades catastrophically with phase --\n  \
+         {:.4} at phase 30. A transaction arriving late in a Poisson window is\n  \
+         almost perfectly invertible. F-4 is worse than its phase-0 number said.\n\n  \
+         (3) A floor is dominated in both framings. As a pure shift it scores\n  \
+         identically ({:.4}) and costs 8 ticks of latency for nothing -- every\n  \
+         inversion metric is shift-invariant, so no measurement can prefer it.\n  \
+         Held to the same mean budget it is measurably worse ({:.4} vs {:.4}),\n  \
+         because the floor buys its offset by narrowing the random part.",
+        at(&uniform, 0),
+        at(&geometric, 0),
+        at(&poisson, 30),
+        at(&pure_shift, 0),
+        at(&budgeted, 0),
+        at(&geometric, 0),
+    );
+
+    // (1) Memorylessness: flat across every phase.
+    let g0 = at(&geometric, 0);
+    for phase in [5_u64, 10, 20, 30, 50] {
+        assert!(
+            (at(&geometric, phase) - g0).abs() < 1e-9,
+            "geometric residual moved at phase {phase}: {} vs {g0}",
+            at(&geometric, phase)
+        );
+    }
+    // Uniform wins at phase 0 and loses by phase 30 -- the adversarial reading
+    // of D-3, and its refutation, both pinned.
+    assert!(
+        at(&uniform, 0) < g0,
+        "uniform should invert better at phase 0"
+    );
+    assert!(
+        at(&uniform, 30) > g0 * 2.0,
+        "uniform should degrade past geometric by phase 30: {:.4} vs {g0:.4}",
+        at(&uniform, 30)
+    );
+
+    // (2) Poisson collapses with phase.
+    assert!(
+        at(&poisson, 30) > 0.9,
+        "inherited Poisson at phase 30 should be near-fully invertible, got {:.4}",
+        at(&poisson, 30)
+    );
+
+    // (3) A floor is dominated either way.
+    assert!(
+        (at(&pure_shift, 0) - g0).abs() < 1e-9,
+        "a pure shift must be invisible to this metric: {:.4} vs {g0:.4}",
+        at(&pure_shift, 0)
+    );
+    assert!(
+        at(&budgeted, 0) > g0,
+        "a floor at fixed mean must score worse: {:.4} vs {g0:.4}",
+        at(&budgeted, 0)
     );
 }

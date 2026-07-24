@@ -26,7 +26,9 @@
 //!
 //! # The findings
 //!
-//! Four, all asserted in code rather than left as prose.
+//! Five, all asserted in code rather than left as prose. Findings 1-4 came from
+//! the initial measurement; finding 5 and the corrected embargo came out of the
+//! Round-1 review (`DAEMON_RELAY_PRIVACY.md` §10).
 //!
 //! 1. **The embargo constant does not follow from its own derivation.**
 //!    [`params`] has the detail. The inherited comment states inputs `k = 5`,
@@ -44,19 +46,31 @@
 //! 3. **The closed form under-provisions.** [`derive`] has the detail. It
 //!    substitutes `E[K]` into an expression in `K(K-1)`, and stem length is
 //!    geometric, where `E[K(K-1)] = 2·E[K](E[K]-1)` exactly. No constant
-//!    correction factor recovers it; the exact solve in [`derive`] does, and
-//!    yields **31 s** at the inherited inputs.
+//!    correction factor recovers it; the exact solve in [`derive`] does. On an
+//!    emission-terminated model that gives 31 s — see finding 5 for why the
+//!    adopted value is 112 s.
 //! 4. **The fluff delay has the same defect as (2), on the timer that runs on
 //!    every transaction.** [`schedule::FluffScheduler`] has the detail. The
 //!    inherited comment cites Bitcoin Core, whose `PoissonNextSend` draws
 //!    `-ln(U)·mean` — an *exponential* inter-arrival. The inherited code
 //!    implements `std::poisson_distribution`, the discrete *count*. Measured,
 //!    the inherited draw is ~1.96x more invertible: an adversary subtracting a
-//!    fixed offset pins receipt time to within ±0.5 s 42% of the time.
+//!    fixed offset pins receipt time to within ±0.5 s 42% of the time — and
+//!    for a transaction arriving *late* in a flush window, 93%.
+//! 5. **The fluff flood is ~7x slower than it needs to be**, as a direct
+//!    consequence of (4). [`conformance::simulate_fluff_return`] measures first
+//!    passage to an arbitrary node at 13.75 s (p90) under the inherited draw
+//!    versus 2.25 s memoryless. First passage is a minimum over parallel paths,
+//!    and a minimum only helps when the paths differ.
 //!
 //! Findings 2 and 4 are the consequential ones, and neither is fixed by
 //! correcting finding 1 — a Poisson at 17 s has exactly the defect a Poisson
 //! at 39 s has.
+//!
+//! Finding 5 feeds straight back into the embargo: a stem node's embargo is
+//! disarmed when the fluff *reaches* it, so the flood's return time is part of
+//! every node's exposure window. [`derive`] counts it, which is why the adopted
+//! embargo is 112 s rather than the 31 s an emission-terminated model gives.
 //!
 //! # Why the distributions are re-implemented rather than bound
 //!

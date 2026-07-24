@@ -130,6 +130,11 @@ pub fn full_travel_probability(params: &DandelionParams, mean_ticks: u32, tick_m
 
     let hop_ms = u64::from(params.time_between_hop_ms);
 
+    // RD-1: every stem node except the emitter must also outlast the fluff
+    // flood's return trip, because that is when its embargo is actually
+    // disarmed. See `DandelionParams::fluff_return_ms`.
+    let return_ms = u64::from(params.fluff_return_ms);
+
     let mut total = 0.0_f64;
     // (1-q)^h, by running product.
     let mut stem_mass = 1.0_f64;
@@ -145,11 +150,15 @@ pub fn full_travel_probability(params: &DandelionParams, mean_ticks: u32, tick_m
 
         // Advance to h+1. The stem gains one node, and *every* node's required
         // slack grows by one hop, so the new cumulative exponent is
-        // S(h+1) = S(h) + ceil((h+1)·hop/τ) — an addition, not a difference.
-        // (Getting this wrong understates the exponent and silently inflates
-        // the survival probability, which is the failure this comment exists
-        // to prevent recurring.)
-        let slack_ticks = div_ceil(u64::from(h + 1) * hop_ms, tick_millis);
+        // S(h+1) = S(h) + ceil(((h+1)·hop + F) / τ) — an addition, not a
+        // difference. (Getting this wrong understates the exponent and
+        // silently inflates the survival probability, which is the failure
+        // this comment exists to prevent recurring.)
+        //
+        // The `j = 0` term stays zero and is never added: that is the terminal
+        // node, which disarms its own embargo at the moment it fluffs and so
+        // has neither stem slack nor a return trip to outlast.
+        let slack_ticks = div_ceil(u64::from(h + 1) * hop_ms + return_ms, tick_millis);
         timer_mass *= pow_exact(timer_survives, slack_ticks);
         stem_mass *= stem_survives;
     }

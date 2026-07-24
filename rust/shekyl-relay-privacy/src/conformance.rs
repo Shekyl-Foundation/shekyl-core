@@ -303,6 +303,11 @@ pub fn simulate_propagation<R: RelayRng + ?Sized>(
     let hop_ms = u64::from(params.time_between_hop_ms);
     let q = u64::from(params.fluff_probability_pct);
 
+    // RD-1: a stem node's embargo is disarmed when the fluff *reaches it*, not
+    // when the terminal node emits it. The terminal node is the exception --
+    // it disarms at emission, because it is the one fluffing.
+    let return_ms = u64::from(params.fluff_return_ms);
+
     let mut outcomes = Vec::with_capacity(trials);
     for _ in 0..trials {
         let mut t = 0_u64;
@@ -312,11 +317,15 @@ pub fn simulate_propagation<R: RelayRng + ?Sized>(
         loop {
             // The node currently holding the transaction arms its embargo.
             let deadline = embargo.deadline(t, rng);
-            earliest_embargo = earliest_embargo.min(deadline);
 
             if bernoulli(rng, q, 100) {
-                break; // this node fluffs
+                // This node fluffs. Its own embargo is discarded rather than
+                // recorded: `upgrade_relay_method` clears it at the moment of
+                // emission, so it can never preempt.
+                break;
             }
+            earliest_embargo = earliest_embargo.min(deadline);
+
             hops += 1;
             if hops >= MAX_SIMULATED_HOPS {
                 break;
@@ -324,11 +333,12 @@ pub fn simulate_propagation<R: RelayRng + ?Sized>(
             t = t.saturating_add(hop_ms);
         }
 
+        let disarm_ms = t.saturating_add(return_ms);
         outcomes.push(Propagation {
             stem_hops: hops,
             natural_fluff_ms: t,
             earliest_embargo_ms: earliest_embargo,
-            embargo_preempted: earliest_embargo < t,
+            embargo_preempted: earliest_embargo < disarm_ms,
         });
     }
 
@@ -523,4 +533,188 @@ pub fn sample_poisson<R: RelayRng + ?Sized>(
 /// Convenience: draw `n` uniform samples over `[0, max]`.
 pub fn sample_uniform<R: RelayRng + ?Sized>(max: u64, n: usize, rng: &mut R) -> Vec<u64> {
     (0..n).map(|_| bounded_uniform(rng, max)).collect()
+}
+
+/// Topology inputs for the fluff-flood first-passage measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FloodParams {
+    /// Nodes in the simulated network.
+    pub nodes: usize,
+    /// Fluff peers each node relays to.
+    pub peers: usize,
+}
+
+impl Default for FloodParams {
+    fn default() -> Self {
+        // A small network is the conservative choice: fewer parallel paths
+        // means a slower flood and a longer return term. Peer count matches
+        // the daemon's default outbound target.
+        Self {
+            nodes: 512,
+            peers: 8,
+        }
+    }
+}
+
+/// First-passage statistics for a fluff flood, in milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloodSummary {
+    /// Node-reachings observed.
+    pub samples: usize,
+    /// Mean time for the flood to reach an arbitrary node.
+    pub mean_ms: f64,
+    /// Median.
+    pub p50_ms: u64,
+    /// 90th percentile — the conservative choice for a derivation input.
+    pub p90_ms: u64,
+}
+
+/// Measure how long a fluff flood takes to travel back to an arbitrary node.
+///
+/// This is the quantity **RD-1** identified as missing from the embargo
+/// derivation. A stem node's embargo is not disarmed when the terminal node
+/// *emits* the fluff — it is disarmed when that fluff *reaches it* and
+/// `upgrade_relay_method` transitions the transaction out of stem state
+/// (`tx_pool.cpp` `set_relayed` / `add_tx`). Every edge of the return flood
+/// carries a fluff delay, so the stem node's true exposure window is
+/// `(h-i)·hop + F_i`, not `(h-i)·hop`.
+///
+/// The flood is modelled as a first-passage problem on a random graph: each
+/// node relays to `peers` others, and the delay on each edge is an independent
+/// draw from the fluff distribution — which is what the daemon does, since a
+/// node draws one flush deadline per peer connection.
+///
+/// The distribution choice matters enormously here, and in the *helpful*
+/// direction. First passage is a minimum over many parallel paths. Under a
+/// memoryless delay the minimum of `n` draws collapses toward `mean/n`, so the
+/// flood is fast; under the inherited near-deterministic Poisson every path
+/// costs about the same, so the minimum buys nothing and the flood is slow.
+/// **Fixing F-4 substantially repairs the gap that counting `F_i` opens.**
+///
+/// # Panics
+///
+/// Panics if `trials` is zero, if `nodes` is under two, or if `peers` is zero.
+#[must_use]
+pub fn simulate_fluff_return<R: RelayRng + ?Sized>(
+    flood: FloodParams,
+    mean_quarter_secs: u32,
+    distribution: crate::schedule::EmbargoDistribution,
+    trials: usize,
+    rng: &mut R,
+) -> FloodSummary {
+    assert!(trials > 0, "simulation needs at least one trial");
+    assert!(flood.nodes >= 2, "a flood needs at least two nodes");
+    assert!(flood.peers >= 1, "a flood needs at least one peer per node");
+
+    let poisson = matches!(distribution, crate::schedule::EmbargoDistribution::Poisson)
+        .then(|| PoissonTable::new(mean_quarter_secs));
+    let geometric = matches!(
+        distribution,
+        crate::schedule::EmbargoDistribution::Geometric
+    )
+    .then(|| crate::geometric::GeometricTable::new(mean_quarter_secs));
+    let draw_ms = |rng: &mut R| -> u64 {
+        let quarter_secs = match (&poisson, &geometric) {
+            (Some(t), _) => t.draw(rng),
+            (_, Some(t)) => t.draw(rng),
+            _ => unreachable!("exactly one table is built"),
+        };
+        quarter_secs.saturating_mul(250)
+    };
+
+    let peers = flood.peers.min(flood.nodes - 1);
+    let mut arrivals: Vec<u64> = Vec::with_capacity(trials * flood.nodes);
+
+    for _ in 0..trials {
+        // Adjacency drawn fresh per trial: peer sets rotate, and averaging over
+        // topologies is more honest than pinning one lucky graph.
+        let mut adjacency: Vec<Vec<usize>> = vec![Vec::with_capacity(peers); flood.nodes];
+        for node in 0..flood.nodes {
+            for _ in 0..peers {
+                let other = usize_from(bounded_uniform(rng, (flood.nodes - 1) as u64));
+                if other != node {
+                    adjacency[node].push(other);
+                    adjacency[other].push(node); // fluff travels both ways
+                }
+            }
+        }
+
+        // Dijkstra from the fluffing node, edge weights drawn lazily.
+        let mut best = vec![u64::MAX; flood.nodes];
+        let mut frontier = std::collections::BinaryHeap::new();
+        best[0] = 0;
+        frontier.push(std::cmp::Reverse((0_u64, 0_usize)));
+        while let Some(std::cmp::Reverse((at, node))) = frontier.pop() {
+            if at > best[node] {
+                continue;
+            }
+            // Each outgoing edge draws its own delay: a node arms one flush
+            // deadline per peer connection, which is what the daemon does.
+            let neighbours = adjacency[node].clone();
+            for next in neighbours {
+                let arrival = at.saturating_add(draw_ms(rng));
+                if arrival < best[next] {
+                    best[next] = arrival;
+                    frontier.push(std::cmp::Reverse((arrival, next)));
+                }
+            }
+        }
+
+        // Node 0 is the source; every other reached node is a sample.
+        arrivals.extend(best.iter().skip(1).filter(|t| **t != u64::MAX));
+    }
+
+    arrivals.sort_unstable();
+    let samples = arrivals.len();
+    assert!(
+        samples > 0,
+        "flood reached no node — check the topology inputs"
+    );
+    let mean_ms = arrivals.iter().map(|t| *t as f64).sum::<f64>() / samples as f64;
+    let idx = |q: f64| arrivals[(((samples as f64) * q) as usize).min(samples - 1)];
+
+    FloodSummary {
+        samples,
+        mean_ms,
+        p50_ms: idx(0.50),
+        p90_ms: idx(0.90),
+    }
+}
+
+fn usize_from(v: u64) -> usize {
+    usize::try_from(v).expect("draw was bounded by a usize-derived range")
+}
+
+/// Condition a delay distribution on having already survived `phase` ticks,
+/// and re-express it as the *residual* delay from that point.
+///
+/// **RD-2.** This is the instrument that makes D-3's real argument measurable,
+/// and it exists because the inherited fluff timer is a **re-armed batching
+/// flush**, not a per-transaction delay. `levin_notify.cpp`'s `fluff_notify`
+/// draws a deadline only when a peer's batch is *empty*; a transaction
+/// arriving mid-window joins the pending batch and goes out at the
+/// already-drawn deadline. What such a transaction actually experiences is the
+/// **residual** of a draw that has already survived `phase` ticks — not a
+/// fresh draw.
+///
+/// Only the memoryless family has residual ≡ full. For any other shape the
+/// inversion analysis is arrival-phase-dependent, so a headline inversion
+/// number computed at phase 0 does not describe most transactions. That, and
+/// not raw inversion precision, is why D-3 chooses memorylessness: a uniform
+/// delay scores *better* at phase 0 and falls apart everywhere else.
+///
+/// # Panics
+///
+/// Panics if `masses` is empty.
+#[must_use]
+pub fn residual_masses(masses: &[u64], phase: u64) -> Vec<u64> {
+    assert!(!masses.is_empty(), "cannot condition an empty distribution");
+    let start = usize::try_from(phase).unwrap_or(usize::MAX);
+    if start >= masses.len() {
+        // The window always elapses before this phase; nothing survives to
+        // condition on. An empty residual is reported as a single certain
+        // zero-delay outcome, which is the honest reading.
+        return vec![u64::MAX];
+    }
+    masses[start..].to_vec()
 }

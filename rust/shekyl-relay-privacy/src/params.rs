@@ -98,6 +98,22 @@ pub struct DandelionParams {
     /// state, as a percentage. The paper recommends a small value; smaller
     /// means longer stems (better anonymity) and higher broadcast latency.
     pub fluff_probability_pct: u32,
+    /// Time for the fluff flood to travel *back* from the terminal stem node
+    /// to an arbitrary stem node, in milliseconds.
+    ///
+    /// **RD-1.** A stem node's embargo is not disarmed when the terminal node
+    /// emits the fluff — it is disarmed when that fluff *reaches it* and
+    /// `upgrade_relay_method` transitions the transaction out of stem state
+    /// (`tx_pool.cpp` `add_tx` / `set_relayed`). Every stem node's exposure
+    /// window therefore carries a diffusion-return term on top of its stem
+    /// slack, and the closed form has no place to put it.
+    ///
+    /// Measured by [`crate::conformance::simulate_fluff_return`], not assumed.
+    /// Like [`Self::time_between_hop_ms`] this is a topology input with a
+    /// testnet reopening trigger, and it is set from a high quantile rather
+    /// than a mean because over-estimating lengthens the embargo (safe) while
+    /// under-estimating shortens it (a privacy loss).
+    pub fluff_return_ms: u32,
     /// Stem-graph shape.
     pub graph: StemGraph,
 }
@@ -121,6 +137,10 @@ impl DandelionParams {
             epoch_jitter_secs: 30,
             // CRYPTONOTE_DANDELIONPP_FLUFF_PROBABILITY = 20, out of 100.
             fluff_probability_pct: 20,
+            // Measured p90 first-passage for a memoryless fluff flood at 8
+            // peers (`simulate_fluff_return`). Under the *inherited* Poisson
+            // delay the same measurement gives ~13.75 s — see F-5.
+            fluff_return_ms: 2_250,
             // CRYPTONOTE_DANDELIONPP_STEMS = 2.
             graph: StemGraph::QuasiFourRegular,
         }
