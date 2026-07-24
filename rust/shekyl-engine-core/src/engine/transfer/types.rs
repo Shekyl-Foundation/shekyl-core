@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use shekyl_curve_tree::ReferenceBlock;
-use shekyl_engine_state::LedgerBlock;
+use shekyl_engine_state::{LedgerBlock, WalletLedger};
 use shekyl_units::AtomicUnits;
 
 use super::super::error::{SendError, TerminalErrorKind};
@@ -126,7 +126,13 @@ impl ContentFingerprint {
 /// against (`reference`), and the consent state (`content_gen` + `fingerprint`).
 /// `PendingTxState` is a runtime `Mutex` (not persisted — F-F, [`docs/design/CT5D_REANCHOR.md`]
 /// §7), so these are runtime-only fields with no schema-migration cost.
-#[derive(Debug, Clone)]
+///
+/// **Not `Clone`** (WI-RPC-3 retention): `tx_key_secret` is
+/// deliberately non-`Clone`, keeping the per-tx secret single-copy
+/// while the entry moves `consumer_held → in_flight → finalize`.
+/// Nothing needed the whole-entry clone anyway — the flip moves the
+/// entry, and the watchdog retains only `tx_bytes`.
+#[derive(Debug)]
 pub(crate) struct ConsumerHeldEntry {
     /// Build-time [`Instant`] for the R8 TTL safety-net.
     //
@@ -158,6 +164,15 @@ pub(crate) struct ConsumerHeldEntry {
     /// CT-5d: the materialized content fingerprint `content_gen` advances
     /// against (§4 F-G/F-G′).
     pub fingerprint: ContentFingerprint,
+    /// WI-RPC-3 retention: the per-tx secret scalar minted at signing,
+    /// carried alongside `tx_bytes` so `finalize_submit_accept` /
+    /// `finalize_submit_already_in_chain` can persist it into
+    /// `TxMetaBlock.tx_keys` at submit-ACCEPTED
+    /// (`docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE pin 1).
+    /// Zeroize-on-drop — a discard wipes it structurally with the
+    /// entry, matching pin 1's "not at build" lifecycle (a never-
+    /// submitted build leaves no orphan in the store).
+    pub tx_key_secret: shekyl_engine_state::TxSecretKey,
 }
 
 #[cfg(test)]
@@ -184,6 +199,9 @@ impl ConsumerHeldEntry {
             },
             content_gen: 0,
             fingerprint: ContentFingerprint::from_parts(AtomicUnits::ZERO, &[], AtomicUnits::ZERO),
+            tx_key_secret: shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
+                [0u8; 32],
+            )),
         }
     }
 }
@@ -197,7 +215,16 @@ impl ConsumerHeldEntry {
 pub(super) trait Stage1LedgerSpendableAccess: LedgerEngine {
     fn with_ledger_block<R>(&self, f: impl FnOnce(&LedgerBlock) -> R) -> R;
 
-    fn with_ledger_block_mut<R>(&self, f: impl FnOnce(&mut LedgerBlock) -> R) -> R;
+    /// Whole-`WalletLedger` mutable access, for writes that span blocks
+    /// (WI-RPC-3 retention: `tx_meta.tx_keys` + `sync_state.
+    /// pending_tx_hashes` + the ledger-block F14 locks in one guard,
+    /// so the I-2 invariant holds atomically under the write lock).
+    ///
+    /// Replaced the former ledger-block-only mutable accessor
+    /// (`with_ledger_block_mut`): every mutating call site (the two
+    /// finalize paths, the watchdog release) now writes across blocks,
+    /// so the narrower method lost its last caller.
+    fn with_wallet_ledger_mut<R>(&self, f: impl FnOnce(&mut WalletLedger) -> R) -> R;
 }
 
 impl Stage1LedgerSpendableAccess for LocalLedger {
@@ -206,9 +233,9 @@ impl Stage1LedgerSpendableAccess for LocalLedger {
         f(&guard.ledger.ledger)
     }
 
-    fn with_ledger_block_mut<R>(&self, f: impl FnOnce(&mut LedgerBlock) -> R) -> R {
+    fn with_wallet_ledger_mut<R>(&self, f: impl FnOnce(&mut WalletLedger) -> R) -> R {
         let mut guard = self.write();
-        f(&mut guard.ledger.ledger)
+        f(&mut guard.ledger)
     }
 }
 
@@ -220,8 +247,8 @@ where
         self.as_ref().with_ledger_block(f)
     }
 
-    fn with_ledger_block_mut<R>(&self, f: impl FnOnce(&mut LedgerBlock) -> R) -> R {
-        self.as_ref().with_ledger_block_mut(f)
+    fn with_wallet_ledger_mut<R>(&self, f: impl FnOnce(&mut WalletLedger) -> R) -> R {
+        self.as_ref().with_wallet_ledger_mut(f)
     }
 }
 

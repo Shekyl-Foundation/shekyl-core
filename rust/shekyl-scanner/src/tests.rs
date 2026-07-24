@@ -117,8 +117,8 @@ pub(crate) mod ledger_ops {
         let ki_0 = ledger.transfers()[0].key_image.unwrap();
         let ki_1 = ledger.transfers()[1].key_image.unwrap();
 
-        assert!(indexes.mark_spent(&mut ledger, &ki_0, 200));
-        assert!(indexes.mark_spent(&mut ledger, &ki_1, 200));
+        assert!(indexes.mark_spent(&mut ledger, &ki_0, 200, shekyl_types::TxHash::from_bytes([0xEE; 32])));
+        assert!(indexes.mark_spent(&mut ledger, &ki_1, 200, shekyl_types::TxHash::from_bytes([0xEE; 32])));
         assert!(ledger.transfers()[0].spent);
         assert!(ledger.transfers()[1].spent);
 
@@ -193,9 +193,9 @@ pub(crate) mod ledger_ops {
         let ki_1 = ledger.transfers()[1].key_image.unwrap();
         let ki_2 = ledger.transfers()[2].key_image.unwrap();
 
-        indexes.mark_spent(&mut ledger, &ki_0, 200);
-        indexes.mark_spent(&mut ledger, &ki_1, 200);
-        indexes.mark_spent(&mut ledger, &ki_2, 200);
+        indexes.mark_spent(&mut ledger, &ki_0, 200, shekyl_types::TxHash::from_bytes([0xEE; 32]));
+        indexes.mark_spent(&mut ledger, &ki_1, 200, shekyl_types::TxHash::from_bytes([0xEE; 32]));
+        indexes.mark_spent(&mut ledger, &ki_2, 200, shekyl_types::TxHash::from_bytes([0xEE; 32]));
 
         let unmarked = indexes.unmark_spent(&mut ledger, &[ki_1]);
         assert_eq!(unmarked, 1);
@@ -226,8 +226,8 @@ pub(crate) mod ledger_ops {
         let ki_0 = ledger.transfers()[0].key_image.unwrap();
         let ki_1 = ledger.transfers()[1].key_image.unwrap();
 
-        indexes.mark_spent(&mut ledger, &ki_0, 200);
-        indexes.mark_spent(&mut ledger, &ki_1, 200);
+        indexes.mark_spent(&mut ledger, &ki_0, 200, shekyl_types::TxHash::from_bytes([0xEE; 32]));
+        indexes.mark_spent(&mut ledger, &ki_1, 200, shekyl_types::TxHash::from_bytes([0xEE; 32]));
         indexes
             .check_invariants(&ledger)
             .expect("invariants after mark_spent");
@@ -289,7 +289,7 @@ pub(crate) mod ledger_ops {
         indexes.check_invariants(&ledger).expect("after process");
 
         let ki = ledger.transfers()[0].key_image.unwrap();
-        indexes.mark_spent(&mut ledger, &ki, 200);
+        indexes.mark_spent(&mut ledger, &ki, 200, shekyl_types::TxHash::from_bytes([0xEE; 32]));
         indexes.check_invariants(&ledger).expect("after mark_spent");
 
         indexes.unmark_spent(&mut ledger, &[ki]);
@@ -492,7 +492,7 @@ mod ledger_proptest {
                         if count > 0 {
                             let idx = ((*frac * count as f64) as usize).min(count - 1);
                             if let Some(ki) = ledger.transfers()[idx].key_image {
-                                indexes.mark_spent(&mut ledger, &ki, next_height);
+                                indexes.mark_spent(&mut ledger, &ki, next_height, shekyl_types::TxHash::from_bytes([0xEE; 32]));
                             }
                         }
                     }
@@ -711,7 +711,11 @@ mod sync_bookkeeping {
         assert_eq!(ledger.transfers().len(), 2);
         assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(8000));
 
-        indexes.detect_spends(&mut ledger, 20, &[ki_100]);
+        indexes.detect_spends(
+            &mut ledger,
+            20,
+            &[(ki_100, shekyl_types::TxHash::from_bytes([0xEE; 32]))],
+        );
         assert!(ledger.transfers()[0].spent);
         assert!(!ledger.transfers()[1].spent);
         assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(3000));
@@ -793,7 +797,11 @@ mod sync_bookkeeping {
         let ki = o.key_image;
         indexes.process_scanned_outputs(&mut ledger, 10, block_hash(10), Timelocked(vec![o]));
 
-        let spent = indexes.detect_spends(&mut ledger, 20, &[ki]);
+        let spent = indexes.detect_spends(
+            &mut ledger,
+            20,
+            &[(ki, shekyl_types::TxHash::from_bytes([0xEE; 32]))],
+        );
         assert_eq!(spent, 1);
         assert_eq!(ledger.balance(100).total, AtomicUnits::ZERO);
 

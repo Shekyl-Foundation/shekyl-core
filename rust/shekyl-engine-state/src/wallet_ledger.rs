@@ -88,6 +88,10 @@ use crate::{
 /// Version `11` deletes `TxSecretKeys::additional`
 /// (`TX_META_BLOCK_VERSION` 2, WI-RPC-3 rule-15 dead-store removal —
 /// single tx secret scalar per tx, no subaddresses, no producer).
+/// Version `12` adds `TransferDetails::spending_tx_hash`
+/// (`LEDGER_BLOCK_VERSION` 9, WI-RPC-3 F-9 spend-quadruple leg:
+/// confirmed spending txid so `tx_meta.tx_keys` retention stays
+/// I-2-live for no-change outbound txs).
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -99,7 +103,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 11;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 12;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.
@@ -212,6 +216,81 @@ impl WalletLedger {
         self.sync_state.check_version()?;
         self.staking.check_version()?;
         Ok(())
+    }
+
+    /// WI-RPC-3 retention reconciliation (`docs/api/wallet_rpc.yaml`
+    /// OUTBOUND PREREQUISITE, lifecycle pin 2: "DEATH follows I-2 with
+    /// the reference set closed by the spend-quadruple").
+    ///
+    /// Called by the orchestrator after every refresh merge (once the
+    /// scan result — including spend detection, which writes
+    /// `TransferDetails::spending_tx_hash` — has been applied). Two
+    /// directions:
+    ///
+    /// 1. **Pending → confirmed.** A txid in
+    ///    `sync_state.pending_tx_hashes` that now has a chain reference
+    ///    (a transfer row's own `tx_hash`, or a spent row's
+    ///    `spending_tx_hash`) has been mined; the pending record's job
+    ///    is done and it is removed. The retained secret's liveness
+    ///    transfers seamlessly to the chain reference (I-2 holds before
+    ///    and after).
+    /// 2. **Orphan collection.** A `tx_meta.tx_keys` entry with *no*
+    ///    remaining live reference — not chain-referenced, not locked
+    ///    (`awaiting_confirmation`), not in the scanned pool, not
+    ///    pending — is a permanently-dead tx (e.g. reorged out with no
+    ///    re-confirmation). Its secret dies with it, per the pinned
+    ///    lifecycle: retaining a secret for a tx the wallet no longer
+    ///    tracks is the exact leak shape I-2 exists to refuse.
+    ///
+    /// The confirmed-absent path (watchdog horizon) performs its own
+    /// targeted cleanup at release time; this method is the
+    /// refresh-driven safety net that keeps the bundle I-2-consistent
+    /// regardless of event ordering.
+    ///
+    /// Returns `(pending_confirmed, secrets_collected)` for the
+    /// caller's diagnostics.
+    pub fn reconcile_tx_key_retention(&mut self) -> (usize, usize) {
+        use std::collections::HashSet;
+
+        // Chain references: rebuilt from chain data by any rescan, so
+        // retention keyed on them is rescan-coherent by construction.
+        let mut chain_referenced: HashSet<[u8; 32]> =
+            HashSet::with_capacity(self.ledger.transfers.len() * 2);
+        for t in &self.ledger.transfers {
+            chain_referenced.insert(t.tx_hash.to_bytes());
+            if let Some(spending) = &t.spending_tx_hash {
+                chain_referenced.insert(spending.to_bytes());
+            }
+        }
+
+        // Direction 1: confirmed txids leave the pending list.
+        let before = self.sync_state.pending_tx_hashes.len();
+        self.sync_state
+            .pending_tx_hashes
+            .retain(|h| !chain_referenced.contains(h));
+        let pending_confirmed = before - self.sync_state.pending_tx_hashes.len();
+
+        // Direction 2: collect orphaned secrets. The live set mirrors
+        // I-2's exactly (invariants::check_tx_keys_no_orphans).
+        let mut live = chain_referenced;
+        for t in &self.ledger.transfers {
+            if let Some(lock) = &t.awaiting_confirmation {
+                live.insert(lock.tx_hash.to_bytes());
+            }
+        }
+        for h in self.tx_meta.scanned_pool_txs.keys() {
+            live.insert(*h);
+        }
+        for h in &self.sync_state.pending_tx_hashes {
+            live.insert(*h);
+        }
+
+        let before = self.tx_meta.tx_keys.len();
+        // `TxSecretKey` zeroizes on drop; removal is the wipe.
+        self.tx_meta.tx_keys.retain(|h, _| live.contains(h));
+        let secrets_collected = before - self.tx_meta.tx_keys.len();
+
+        (pending_confirmed, secrets_collected)
     }
 }
 
@@ -404,5 +483,114 @@ mod tests {
             WalletLedgerError::Postcard(_),
         );
         assert!(is_postcard, "truncated input must hit the postcard branch");
+    }
+
+    // ── WI-RPC-3 retention reconciliation ─────────────────────────────
+
+    fn mk_transfer(seed: u8, block_height: u64) -> crate::transfer::TransferDetails {
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+        crate::transfer::TransferDetails {
+            tx_hash: shekyl_types::TxHash::from_bytes([seed; 32]),
+            internal_output_index: u64::from(seed),
+            global_output_index: u64::from(seed),
+            block_height,
+            key: ED25519_BASEPOINT_POINT,
+            key_offset: Scalar::ONE,
+            commitment: shekyl_curve_primitives::Commitment::new(Scalar::ONE, 1_000),
+            payment_id: None,
+            spent: false,
+            spent_height: None,
+            key_image: None,
+            awaiting_confirmation: None,
+            spending_tx_hash: None,
+            source_ciphertext: None,
+            output_handle: None,
+            eligible_height: block_height + crate::transfer::SPENDABLE_AGE,
+            frozen: false,
+            fcmp_precomputed_path: None,
+            receive_attribution: crate::ReceiveAttribution::default(),
+        }
+    }
+
+    fn insert_secret(w: &mut WalletLedger, txid: [u8; 32]) {
+        w.tx_meta.tx_keys.insert(
+            txid,
+            crate::tx_meta_block::TxSecretKeys {
+                primary: crate::tx_meta_block::TxSecretKey::new(zeroize::Zeroizing::new(
+                    [0x5A; 32],
+                )),
+            },
+        );
+    }
+
+    /// Direction 1: a pending txid whose spend was confirmed on-chain
+    /// (spent row records `spending_tx_hash`) leaves the pending list;
+    /// the secret survives, now chain-referenced. I-2 holds throughout.
+    #[test]
+    fn reconcile_moves_confirmed_pending_to_chain_reference() {
+        let txid = [0x77; 32];
+        let mut w = WalletLedger::empty();
+        insert_secret(&mut w, txid);
+        w.sync_state.pending_tx_hashes.push(txid);
+        w.check_invariants().expect("pending ref keeps I-2");
+
+        // Refresh observes the spend: the consumed output's row records
+        // the spending txid (the no-change case — no owned output row
+        // for `txid` itself).
+        let mut spent_row = mk_transfer(0x11, 10);
+        spent_row.spent = true;
+        spent_row.spent_height = Some(20);
+        spent_row.key_image = Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+            [0x33; 32],
+        ));
+        spent_row.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
+        w.ledger.transfers.push(spent_row);
+        w.ledger.tip.synced_height = 30;
+
+        let (confirmed, collected) = w.reconcile_tx_key_retention();
+        assert_eq!(confirmed, 1, "pending record retired at confirmation");
+        assert_eq!(collected, 0, "secret stays chain-referenced");
+        assert!(w.sync_state.pending_tx_hashes.is_empty());
+        assert!(w.tx_meta.tx_keys.contains_key(&txid));
+        w.check_invariants().expect("I-2 after reconcile");
+    }
+
+    /// Direction 2: a secret with no remaining reference (permanently
+    /// reorged-out tx) is collected — removal is the zeroizing drop.
+    #[test]
+    fn reconcile_collects_orphaned_secret() {
+        let txid = [0x77; 32];
+        let mut w = WalletLedger::empty();
+        insert_secret(&mut w, txid);
+        // No transfers, no pool entry, no pending record: the tx has
+        // lost every live reference.
+        let (confirmed, collected) = w.reconcile_tx_key_retention();
+        assert_eq!(confirmed, 0);
+        assert_eq!(collected, 1, "orphaned secret is collected");
+        assert!(w.tx_meta.tx_keys.is_empty());
+        w.check_invariants().expect("I-2 after collection");
+    }
+
+    /// A secret held live only by an `awaiting_confirmation` lock is
+    /// not collected: the spend is network-exposed but unconfirmed, and
+    /// the pending record may already be gone.
+    #[test]
+    fn reconcile_keeps_secret_under_awaiting_confirmation_lock() {
+        let txid = [0x77; 32];
+        let mut w = WalletLedger::empty();
+        insert_secret(&mut w, txid);
+        let mut locked_row = mk_transfer(0x11, 10);
+        locked_row.awaiting_confirmation = Some(crate::transfer::AwaitingConfirmation {
+            tx_hash: shekyl_types::TxHash::from_bytes(txid),
+            accepted_at_height: 25,
+        });
+        w.ledger.transfers.push(locked_row);
+        w.ledger.tip.synced_height = 30;
+
+        let (confirmed, collected) = w.reconcile_tx_key_retention();
+        assert_eq!(confirmed, 0);
+        assert_eq!(collected, 0, "F14-locked secret survives");
+        assert!(w.tx_meta.tx_keys.contains_key(&txid));
+        w.check_invariants().expect("I-2 with lock leg");
     }
 }

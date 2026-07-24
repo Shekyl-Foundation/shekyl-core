@@ -83,8 +83,25 @@ where
     }
 
     fn release_awaiting_confirmation(&self, tx_hashes: &HashSet<TxHash>) -> usize {
-        self.ledger.with_ledger_block_mut(|ledger| {
-            submit_watchdog::release_awaiting_confirmation(ledger, tx_hashes)
+        // Whole-`WalletLedger` guard: the confirmed-absent verdict
+        // releases the F14 locks *and* retires the WI-RPC-3 retention
+        // record in the same atomic write — the tx provably never
+        // confirmed, so its `tx_meta.tx_keys` secret has no future
+        // OUTBOUND proof to serve and its `pending_tx_hashes` entry
+        // has no confirmation to await (retention lifecycle pin 2,
+        // `docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE).
+        self.ledger.with_wallet_ledger_mut(|wallet| {
+            let released =
+                submit_watchdog::release_awaiting_confirmation(&mut wallet.ledger, tx_hashes);
+            for tx_hash in tx_hashes {
+                let hash_bytes = tx_hash.to_bytes();
+                wallet.tx_meta.tx_keys.remove(&hash_bytes);
+                wallet
+                    .sync_state
+                    .pending_tx_hashes
+                    .retain(|h| *h != hash_bytes);
+            }
+            released
         })
     }
 
@@ -294,8 +311,7 @@ where
                 let signer_err: SignerError = err.into();
                 fail_build_after_attempted(self.sink.as_ref(), map_signer_error(&signer_err))
             })?;
-        let tx_bytes = signed.tx_bytes().to_vec();
-        let pending = self.commit_built_sync(&request, &meta, reference, tx_bytes)?;
+        let pending = self.commit_built_sync(&request, &meta, reference, signed)?;
         reservation_cleanup.disarm();
         Ok(pending)
     }

@@ -13,7 +13,7 @@ use shekyl_curve_tree::{
     select_reference_height, should_reanchor, two_sided_reference_height, AssembleInput,
     BlockHeight, Gindex, ReferenceBlock, TwoSidedRefusal, REF_ANCHOR_AGE,
 };
-use shekyl_engine_state::{AwaitingConfirmation, LedgerBlock};
+use shekyl_engine_state::{AwaitingConfirmation, LedgerBlock, TxSecretKeys};
 use shekyl_units::AtomicUnits;
 
 use super::super::curve_tree_actor::CurveTreeHandle;
@@ -34,7 +34,7 @@ use super::super::pending::{
     TxRequest,
 };
 use super::super::refresh::{derive_snapshot_id, LedgerSnapshot};
-use super::super::signer::{Signer, TransferSigningContext};
+use super::super::signer::{SignedTransfer, Signer, TransferSigningContext};
 use super::super::signing_assembly::assemble_tx_to_sign;
 use super::super::traits::LedgerEngine;
 use super::super::transaction_submitter::canonical_tx_id;
@@ -314,8 +314,16 @@ where
         // watchdog's rung-1 resubmit-same-bytes probe before the in-flight
         // record (their only holder) is dropped. Ephemeral — a restart
         // drops the map and the probe rung degrades to the operator alarm.
+        //
+        // WI-RPC-3 retention: the per-tx secret leaves the in-flight
+        // entry here too, to be persisted below — this is the
+        // submit-ACCEPTED write of the OUTBOUND PREREQUISITE lifecycle
+        // (`docs/api/wallet_rpc.yaml` pin 1: write on accept, never at
+        // build).
+        let mut tx_key_secret = None;
         if let Some(flight) = state.in_flight.remove(&id) {
             state.held_bytes.insert(tx_hash, flight.entry.tx_bytes);
+            tx_key_secret = Some(flight.entry.tx_key_secret);
         }
         release_output_locks_for(state, id);
         // F28/F37: a definite accept ends any consecutive-rejection streak
@@ -330,10 +338,15 @@ where
         // §7.1) until refresh observes the spend on-chain
         // (confirmed-present release, `mark_spent`) or the watchdog horizon
         // resolves the tx as confirmed-absent.
-        self.ledger.with_ledger_block_mut(|ledger| {
-            let accepted_at_height = ledger.height();
+        //
+        // Whole-`WalletLedger` guard (not just the ledger block): the
+        // WI-RPC-3 retention write spans `tx_meta` + `sync_state`, and
+        // I-2 requires the secret and its live reference to appear
+        // atomically.
+        self.ledger.with_wallet_ledger_mut(|wallet| {
+            let accepted_at_height = wallet.ledger.height();
             for index in selected_indices {
-                if let Some(td) = ledger.transfer_mut(index) {
+                if let Some(td) = wallet.ledger.transfer_mut(index) {
                     // Race guard: if the tx mined during the submit round-trip,
                     // a refresh may already have observed the spend and run
                     // `mark_spent` (spent = true, lock cleared). The
@@ -348,6 +361,22 @@ where
                             accepted_at_height,
                         });
                     }
+                }
+            }
+            // WI-RPC-3 retention write: persist the per-tx secret for
+            // OUTBOUND tx proofs, and record the txid in
+            // `pending_tx_hashes` so I-2 holds from the moment of the
+            // write until refresh observes the tx on-chain (the
+            // reconciler then retires the pending entry; a
+            // confirmed-absent watchdog verdict deletes both).
+            if let Some(secret) = tx_key_secret {
+                wallet
+                    .tx_meta
+                    .tx_keys
+                    .insert(tx_hash.to_bytes(), TxSecretKeys { primary: secret });
+                let hash_bytes = tx_hash.to_bytes();
+                if !wallet.sync_state.pending_tx_hashes.contains(&hash_bytes) {
+                    wallet.sync_state.pending_tx_hashes.push(hash_bytes);
                 }
             }
         });
@@ -408,18 +437,25 @@ where
         // watchdog probe (see the accept path). The AlreadyInChain arm
         // holds too, so a fruitless-re-scan escalation can fall through to
         // the F31 resubmit-as-status-query with the original bytes.
+        //
+        // WI-RPC-3 retention: same submit-ACCEPTED write as the accept
+        // path — an AlreadyInChain verdict is an identity-bearing
+        // accept (the tx is network-exposed *and* claimed confirmed),
+        // so the per-tx secret is persisted here too.
+        let mut tx_key_secret = None;
         if let Some(flight) = state.in_flight.remove(&id) {
             state.held_bytes.insert(tx_hash, flight.entry.tx_bytes);
+            tx_key_secret = Some(flight.entry.tx_key_secret);
         }
         release_output_locks_for(state, id);
         // F28/F37: a definite identity-bearing verdict ends any
         // consecutive-rejection streak, same as a fresh accept.
         state.loop_breaker.record_accept();
 
-        let synced_height = self.ledger.with_ledger_block_mut(|ledger| {
-            let synced_height = ledger.height();
+        let synced_height = self.ledger.with_wallet_ledger_mut(|wallet| {
+            let synced_height = wallet.ledger.height();
             for index in selected_indices {
-                if let Some(td) = ledger.transfer_mut(index) {
+                if let Some(td) = wallet.ledger.transfer_mut(index) {
                     // Same race guard as the accept path: if refresh already
                     // observed the spend and ran `mark_spent`, the
                     // confirmed-present state is authoritative — re-locking
@@ -434,6 +470,21 @@ where
                             accepted_at_height: height,
                         });
                     }
+                }
+            }
+            // WI-RPC-3 retention write — see the accept path. The
+            // pending entry is still recorded even though the daemon
+            // claims confirmation: refresh remains the settlement
+            // authority, and the reconciler retires the entry when the
+            // spend is actually observed on-chain.
+            if let Some(secret) = tx_key_secret {
+                wallet
+                    .tx_meta
+                    .tx_keys
+                    .insert(tx_hash.to_bytes(), TxSecretKeys { primary: secret });
+                let hash_bytes = tx_hash.to_bytes();
+                if !wallet.sync_state.pending_tx_hashes.contains(&hash_bytes) {
+                    wallet.sync_state.pending_tx_hashes.push(hash_bytes);
                 }
             }
             synced_height
@@ -1075,8 +1126,16 @@ where
         request: &TxRequest,
         meta: &BuiltPendingMeta,
         reference: ReferenceBlock,
-        tx_bytes: Vec<u8>,
+        signed: SignedTransfer,
     ) -> Result<PendingTx, SendError> {
+        // WI-RPC-3 retention: take the whole `SignedTransfer` so the
+        // per-tx secret rides into `consumer_held` alongside the bytes
+        // (persisted at submit-ACCEPTED, wiped with the entry on
+        // discard). Destructure once; the secret moves, never copies.
+        let SignedTransfer {
+            tx_bytes,
+            tx_key_secret,
+        } = signed;
         let mut state = self.state.lock().map_err(|_| {
             fail_build_after_attempted(
                 self.sink.as_ref(),
@@ -1121,6 +1180,7 @@ where
                 // A fresh build is generation 0; re-anchor bumps it (§4).
                 content_gen: 0,
                 fingerprint,
+                tx_key_secret,
             },
         );
 
@@ -1397,7 +1457,15 @@ where
                     let signer_err: SignerError = err.into();
                     ReanchorError::Failed(map_signer_error(&signer_err))
                 })?;
-            let tx_bytes = signed.tx_bytes().to_vec();
+            // WI-RPC-3 retention: a reprove re-mints the per-tx secret
+            // (fresh scalar → fresh output derivations → fresh bytes),
+            // so the swap below replaces the entry's held secret too;
+            // the superseded secret zeroizes on drop. A `continue`
+            // retry drops this pair the same way — no residue.
+            let SignedTransfer {
+                tx_bytes,
+                tx_key_secret,
+            } = signed;
             // Checked + single-sourced with the fresh-build path (§4 F-G); the
             // fee-coverage check above guarantees this succeeds here.
             let new_fingerprint = ContentFingerprint::from_build(fee, &summary, total_covered)
@@ -1470,6 +1538,7 @@ where
             };
 
             entry.tx_bytes = tx_bytes;
+            entry.tx_key_secret = tx_key_secret;
             entry.reference = reference;
             entry.fingerprint = new_fingerprint;
             entry.content_gen = content_gen;

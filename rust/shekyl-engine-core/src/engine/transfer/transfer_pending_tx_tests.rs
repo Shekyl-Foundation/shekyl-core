@@ -5,6 +5,7 @@
 
 //! Unit tests for the transfer / pending-tx implementor.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -1052,6 +1053,145 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
             "locked output must be excluded from selection"
         );
     }
+}
+
+/// WI-RPC-3 retention (`docs/api/wallet_rpc.yaml` OUTBOUND
+/// PREREQUISITE pin 1): submit-ACCEPTED persists the per-tx secret
+/// into `tx_meta.tx_keys` keyed by the canonical txid, and records the
+/// txid in `sync_state.pending_tx_hashes` so I-2 holds from the moment
+/// of the write.
+#[tokio::test]
+async fn submit_accept_persists_tx_key_and_pending_hash() {
+    let (ledger, _tree_dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+
+    // Pin 1's "not at build": a built-but-unsubmitted tx leaves no
+    // entry in the persistent store — the secret rides the runtime
+    // `consumer_held` entry only.
+    {
+        let guard = pending.ledger.read();
+        assert!(
+            guard.ledger.tx_meta.tx_keys.is_empty(),
+            "no tx_keys write at build time"
+        );
+        assert!(
+            guard.ledger.sync_state.pending_tx_hashes.is_empty(),
+            "no pending_tx_hashes write at build time"
+        );
+    }
+
+    let tx_hash = pending
+        .submit(built.id, built.content_gen)
+        .await
+        .expect("submit ok");
+
+    let guard = pending.ledger.read();
+    let stored = guard
+        .ledger
+        .tx_meta
+        .tx_keys
+        .get(&tx_hash.to_bytes())
+        .expect("submit-accept persists the per-tx secret keyed by canonical txid");
+    assert_ne!(
+        *stored.primary.as_bytes(),
+        [0u8; 32],
+        "the persisted secret is the minted scalar, not a placeholder"
+    );
+    assert!(
+        guard
+            .ledger
+            .sync_state
+            .pending_tx_hashes
+            .contains(&tx_hash.to_bytes()),
+        "submit-accept records the txid as pending (I-2 live reference)"
+    );
+}
+
+/// WI-RPC-3 retention pin 1's discard side: a discarded reservation's
+/// per-tx secret dies with the runtime entry (structural zeroize on
+/// drop) and never reaches the persistent store.
+#[tokio::test]
+async fn discard_never_persists_tx_key() {
+    let (ledger, _tree_dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    pending
+        .discard(built.id, DiscardReason::ConsumerExplicit)
+        .expect("discard ok");
+
+    let guard = pending.ledger.read();
+    assert!(
+        guard.ledger.tx_meta.tx_keys.is_empty(),
+        "a discarded build leaves no orphan secret in tx_keys"
+    );
+    assert!(
+        guard.ledger.sync_state.pending_tx_hashes.is_empty(),
+        "a discarded build leaves no pending-tx record"
+    );
+}
+
+/// WI-RPC-3 retention pin 2 (death follows I-2): the watchdog's
+/// confirmed-absent verdict retires the retention record — the tx
+/// provably never confirmed, so its secret has no OUTBOUND proof to
+/// serve. Exercises the `WatchdogHost::release_awaiting_confirmation`
+/// seam the §2.6 release path 2 drives.
+#[tokio::test]
+async fn confirmed_absent_release_retires_retention_record() {
+    use crate::engine::submit_lifecycle::WatchdogHost;
+
+    let (ledger, _tree_dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    let tx_hash = pending
+        .submit(built.id, built.content_gen)
+        .await
+        .expect("submit ok");
+
+    let released = WatchdogHost::release_awaiting_confirmation(&pending, &HashSet::from([tx_hash]));
+    assert!(released > 0, "the F14 lock is released");
+
+    let guard = pending.ledger.read();
+    assert!(
+        !guard
+            .ledger
+            .tx_meta
+            .tx_keys
+            .contains_key(&tx_hash.to_bytes()),
+        "confirmed-absent deletes the retained secret"
+    );
+    assert!(
+        !guard
+            .ledger
+            .sync_state
+            .pending_tx_hashes
+            .contains(&tx_hash.to_bytes()),
+        "confirmed-absent deletes the pending-tx record"
+    );
+    assert!(
+        guard
+            .ledger
+            .ledger
+            .transfers()
+            .iter()
+            .all(|td| td.awaiting_confirmation.is_none()),
+        "all F14 locks for the confirmed-absent tx are cleared"
+    );
 }
 
 /// F40 §2.5 case (a) — `AlreadyInChain { height }` with the confirming
