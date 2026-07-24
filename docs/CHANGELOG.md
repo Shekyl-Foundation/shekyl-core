@@ -21,6 +21,10 @@
   spend-quadruple (`TransferDetails.spending_tx_hash`,
   `KeyImageObserved.containing_tx_hash`) and reconciliation keeping the
   I-2 no-orphans invariant through confirmation, reorg, and rescan.
+  Review hardening (F-13): `check_reserve_proof` rejects any proof
+  whose entries repeat a key image (`-29300` malformed) — entries
+  verify independently, so a duplicated unspent output would otherwise
+  inflate the proven reserve N-fold.
 - **cli: receiving, staking, and fee commands over the WI-RPC-1 surface**
   (WI-RPC-2b). `request new` / `requests list` (payment requests — the
   Shekyl-native receive-attribution primitive, un-deadening the FA-8
