@@ -185,6 +185,16 @@ impl PoissonTable {
         hi.saturating_sub(lo)
     }
 
+    /// Per-outcome quantized masses, indexed by `k`. The distribution as the
+    /// draw actually realizes it, for instruments that need the whole shape
+    /// rather than one point.
+    #[must_use]
+    pub fn masses(&self) -> Vec<u64> {
+        (0..=self.max_support())
+            .map(|k| self.quantized_mass(k))
+            .collect()
+    }
+
     /// FNV-1a fingerprint over the threshold table.
     ///
     /// The golden vector freezes this instead of 100+ lines of hex: any change

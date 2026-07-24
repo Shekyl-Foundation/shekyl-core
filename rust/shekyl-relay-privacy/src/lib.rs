@@ -19,35 +19,44 @@
 //! observes a delay. The randomized timing that *is* the privacy mechanism has
 //! no test at all.
 //!
-//! This crate is the measurement instrument, built before any port so the
-//! design round has numbers instead of inherited literals. It is deliberately
-//! standalone: it links nothing, replaces nothing, and changes no daemon
-//! behaviour. Its findings are meant to inform whether the values are worth
-//! keeping before anyone spends a review cycle moving them.
+//! This crate is the measurement instrument and the corrected primitives. It
+//! is deliberately standalone: it links nothing, replaces nothing, and changes
+//! no daemon behaviour. The design it feeds is
+//! `docs/design/DAEMON_RELAY_PRIVACY.md`, which landed with it.
 //!
 //! # The findings
 //!
-//! Two, both about the stem embargo, both asserted in code rather than left as
-//! prose.
+//! Four, all asserted in code rather than left as prose.
 //!
-//! 1. **The constant does not follow from its own derivation.** [`params`] has
-//!    the detail. The inherited comment states inputs `k = 5`, `ep = 0.10`,
-//!    `hop = 175 ms` and an answer of 39 s. Those inputs yield **16.61 s**
-//!    under the Dandelion++ formula; 39 s is what you get by substituting a
-//!    base-10 logarithm for the natural logarithm the formula specifies. The
-//!    parameter is 2.3x its own justification.
-//! 2. **The distribution family is wrong.** [`geometric`] has the detail. The
-//!    formula's `ln(1 - ep)` term comes from an *exponential* survival
-//!    function — the derivation models memoryless timers. The daemon draws
-//!    from `crypto::random_poisson_seconds`, and a Poisson at these means is
-//!    nearly deterministic (`CV ≈ 0.16` at λ = 39). The measured consequence
-//!    is in `tests/propagation_measurement.rs`: the embargo almost never fires
-//!    early enough to serve as the black-hole backstop it exists to be, and
-//!    when it does fire it does so at a predictable offset from broadcast.
+//! 1. **The embargo constant does not follow from its own derivation.**
+//!    [`params`] has the detail. The inherited comment states inputs `k = 5`,
+//!    `ep = 0.10`, `hop = 175 ms` and an answer of 39 s. Those inputs yield
+//!    **16.61 s** under the Dandelion++ formula; 39 s is what you get by
+//!    substituting a base-10 logarithm for the natural logarithm the formula
+//!    specifies.
+//! 2. **The embargo's distribution family is wrong.** [`geometric`] has the
+//!    detail. The formula's `ln(1 - ep)` term comes from an *exponential*
+//!    survival function — the derivation models memoryless timers. The daemon
+//!    draws from `crypto::random_poisson_seconds`, and a Poisson at these
+//!    means is nearly deterministic (`CV ≈ 0.16` at λ = 39). Measured, the
+//!    backstop **never fires**: full-travel 1.0000 at both 39 s and a
+//!    corrected 17 s, against a stem completing in ~700 ms.
+//! 3. **The closed form under-provisions.** [`derive`] has the detail. It
+//!    substitutes `E[K]` into an expression in `K(K-1)`, and stem length is
+//!    geometric, where `E[K(K-1)] = 2·E[K](E[K]-1)` exactly. No constant
+//!    correction factor recovers it; the exact solve in [`derive`] does, and
+//!    yields **31 s** at the inherited inputs.
+//! 4. **The fluff delay has the same defect as (2), on the timer that runs on
+//!    every transaction.** [`schedule::FluffScheduler`] has the detail. The
+//!    inherited comment cites Bitcoin Core, whose `PoissonNextSend` draws
+//!    `-ln(U)·mean` — an *exponential* inter-arrival. The inherited code
+//!    implements `std::poisson_distribution`, the discrete *count*. Measured,
+//!    the inherited draw is ~1.96x more invertible: an adversary subtracting a
+//!    fixed offset pins receipt time to within ±0.5 s 42% of the time.
 //!
-//! Finding 2 is the more consequential of the two, and it is not fixed by
-//! correcting finding 1 — a Poisson at 17 s has the same defect as a Poisson
-//! at 39 s.
+//! Findings 2 and 4 are the consequential ones, and neither is fixed by
+//! correcting finding 1 — a Poisson at 17 s has exactly the defect a Poisson
+//! at 39 s has.
 //!
 //! # Why the distributions are re-implemented rather than bound
 //!
@@ -95,6 +104,7 @@
 //! `shekyl-stats` and the float-bearing goodness-of-fit machinery. The default
 //! build is the draws and the state machines only.
 
+pub mod derive;
 pub mod geometric;
 pub mod params;
 pub mod poisson;
@@ -105,6 +115,7 @@ pub mod stem_map;
 #[cfg(feature = "conformance")]
 pub mod conformance;
 
+pub use derive::{derive_embargo, full_travel_probability, EmbargoDerivation};
 pub use geometric::GeometricTable;
 pub use params::{DandelionParams, StemGraph, EMBARGO_FULL_TRAVEL_PROBABILITY};
 pub use poisson::PoissonTable;

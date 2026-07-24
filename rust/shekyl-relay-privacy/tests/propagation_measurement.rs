@@ -19,9 +19,12 @@
 #![allow(clippy::cast_precision_loss)]
 
 use shekyl_relay_privacy::conformance::{
-    simulate_propagation, solve_embargo_secs_for_target, PropagationSummary,
+    coefficient_of_variation, inference_precision, simulate_propagation,
+    solve_embargo_secs_for_target, PropagationSummary,
 };
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
+use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
+use shekyl_relay_privacy::{derive_embargo, full_travel_probability, GeometricTable, PoissonTable};
 use shekyl_relay_privacy::{EmbargoDistribution, EmbargoTimer, SplitMix64};
 
 const TRIALS: usize = 200_000;
@@ -155,17 +158,66 @@ fn inherited_versus_derived_versus_paper_faithful_embargo() {
     );
 }
 
-/// The number the design round actually needs: search for the embargo that
-/// delivers the target, instead of trusting a closed form that plugs a mean
-/// into a nonlinear expression.
+/// The analytic derivation and the Monte-Carlo simulator are two independent
+/// implementations of the same quantity. Agreement is the strongest evidence
+/// either is right; disagreement means one of them is lying and the design
+/// round is being fed a number nobody checked.
+///
+/// This caught a real bug during development: the survival sum accumulates
+/// `S(h) = S(h-1) + ceil(h*hop/tick)`, and a first draft *differenced* the
+/// slack instead of accumulating it. That understated the exponent and
+/// inflated the derived survival — invisible against the closed form it was
+/// replacing, obvious against the simulator.
 #[test]
-fn measured_embargo_requirement() {
+fn analytic_derivation_agrees_with_the_simulator() {
+    let params = DandelionParams::inherited();
+    let tick = DEFAULT_EMBARGO_TICK_MILLIS;
+
+    println!("\nAnalytic survival equation vs. simulator (q=20%, hop=175ms, tick=250ms)");
+    println!(
+        "{:<16} {:>14} {:>14} {:>12}",
+        "mean (ticks)", "analytic", "simulated", "delta"
+    );
+    println!("{}", "-".repeat(60));
+
+    for mean_secs in [10_u32, 17, 24, 30, 40, 60] {
+        let mean_ticks = u32::try_from(u64::from(mean_secs) * 1_000 / tick).expect("fits");
+        let analytic = full_travel_probability(&params, mean_ticks, tick);
+
+        let embargo = EmbargoTimer::geometric_with_tick(mean_secs, tick);
+        let mut rng = SplitMix64::new(0xA11A_0000 + u64::from(mean_secs));
+        let simulated = simulate_propagation(&params, &embargo, TRIALS, &mut rng).full_travel_rate;
+
+        let delta = (analytic - simulated).abs();
+        println!("{mean_ticks:<16} {analytic:>14.4} {simulated:>14.4} {delta:>12.4}");
+
+        // Monte-Carlo standard error at this trial count is ~0.0008; 0.01 is a
+        // generous band that still catches a structural disagreement.
+        assert!(
+            delta < 0.01,
+            "analytic {analytic:.4} and simulated {simulated:.4} disagree at {mean_secs}s"
+        );
+    }
+}
+
+/// The number the design adopts: solved exactly from the survival equation
+/// rather than taken from a closed form that does not describe the system.
+#[test]
+fn derived_embargo_replaces_the_closed_form() {
     let params = DandelionParams::inherited();
 
-    println!("\nEmbargo required to hit the design target, measured vs. derived");
-    println!("{}", "-".repeat(104));
+    println!("\nEmbargo: closed form vs. exact derivation vs. the inherited constant");
+    println!("{}", "-".repeat(72));
 
-    let solved = solve_embargo_secs_for_target(
+    let closed_form = params.average_embargo_secs();
+    let derived = derive_embargo(
+        &params,
+        DEFAULT_EMBARGO_TICK_MILLIS,
+        EMBARGO_FULL_TRAVEL_PROBABILITY,
+    )
+    .expect("target is reachable");
+
+    let simulated = solve_embargo_secs_for_target(
         &params,
         EMBARGO_FULL_TRAVEL_PROBABILITY,
         EmbargoDistribution::Geometric,
@@ -174,37 +226,47 @@ fn measured_embargo_requirement() {
     )
     .expect("target is reachable");
 
+    println!("  closed form (paper, plug-in k)     : {closed_form:>5}s");
     println!(
-        "  closed-form derivation (paper formula) : {:>4}s",
-        params.average_embargo_secs()
+        "  exact derivation (adopted)         : {:>5}s  ({} ticks @ {}ms, achieves {:.4})",
+        derived.mean_secs(),
+        derived.mean_ticks,
+        derived.tick_millis,
+        derived.achieved
     );
-    println!("  measured requirement (memoryless draw) : {solved:>4}s");
+    println!("  simulator cross-check              : {simulated:>5}s");
     println!(
-        "  inherited #define                      : {:>4}s",
+        "  inherited #define                  : {:>5}s",
         DandelionParams::INHERITED_EMBARGO_SECS
     );
     println!(
-        "\n  The closed form under-provisions because it substitutes E[K] into an\n  \
-         expression in K(K-1); the realized stem length is geometric, and\n  \
-         E[K(K-1)] = 2*E[K]*(E[K]-1) for that distribution. The inherited 39s\n  \
-         lands near the measured requirement — but by way of a logarithm-base\n  \
-         error, not this correction, and paired with a distribution under which\n  \
-         the timer barely fires at all. Two wrongs approximately cancelling is\n  \
-         not a derivation."
+        "\n  The closed form under-provisions: it substitutes E[K] into an\n  \
+         expression in K(K-1), and for a geometric stem length\n  \
+         E[K(K-1)] = 2*E[K]*(E[K]-1) exactly — before Jensen is even reached,\n  \
+         since the quantity wanted is E[exp(-c*K(K-1))], not exp(-c*E[K(K-1)]).\n  \
+         No constant correction factor fixes that; the exact solve does.\n\n  \
+         The inherited 39s lands near the right answer by way of a\n  \
+         logarithm-base error rather than this correction, and is paired with a\n  \
+         distribution under which the timer barely fires at all. Two wrongs\n  \
+         approximately cancelling is not a derivation."
     );
 
-    // The measured requirement must exceed the closed form — that is the
-    // under-provisioning claim, stated as a guard.
     assert!(
-        solved > params.average_embargo_secs(),
-        "measured requirement {solved}s did not exceed the closed form {}s",
-        params.average_embargo_secs()
+        derived.achieved >= EMBARGO_FULL_TRAVEL_PROBABILITY,
+        "derived embargo achieves only {:.4}",
+        derived.achieved
     );
-    // And it must be in the same neighbourhood as the accidental 39 s, which
-    // is the observation worth recording.
     assert!(
-        (20..=45).contains(&solved),
-        "measured requirement {solved}s outside the expected band"
+        derived.mean_secs() > closed_form,
+        "exact derivation {}s did not exceed the closed form {closed_form}s",
+        derived.mean_secs()
+    );
+    // Two independent solvers must land within a second or two of each other.
+    let gap = i64::from(derived.mean_secs()) - i64::from(simulated);
+    assert!(
+        gap.abs() <= 2,
+        "exact derivation {}s and simulator {simulated}s disagree by {gap}s",
+        derived.mean_secs()
     );
 }
 
@@ -405,4 +467,103 @@ fn embargo_sensitivity_to_hop_latency_assumption() {
     }
     // At the assumed latency the design target must hold.
     assert!(degraded[0].1.full_travel_rate >= EMBARGO_FULL_TRAVEL_PROBABILITY);
+}
+
+/// The fluff-delay defect, measured as the attack it enables.
+///
+/// The embargo is a rare backstop. *This* delay is applied by every node to
+/// every transaction, and its whole job is to break the link between when a
+/// node received a transaction and when it relayed it. The inherited draw is
+/// `std::poisson_distribution`; the Bitcoin Core timer its comment cites
+/// (`PoissonNextSend`) is an exponential inter-arrival. Same name, different
+/// distribution, and the difference is the entire cover.
+#[test]
+fn fluff_delay_inference_resistance() {
+    println!("\nFluff-delay inversion: P(adversary pins receipt time to within ±w)");
+    println!(
+        "{:<34} {:>7} {:>12} {:>12} {:>12}",
+        "delay draw", "CV", "±0.25s", "±0.5s", "±1s"
+    );
+    println!("{}", "-".repeat(82));
+
+    let lambda = shekyl_relay_privacy::params::inherited::FLUFF_AVERAGE_IN_QUARTER_SECS;
+    let poisson = PoissonTable::new(lambda).masses();
+    let geometric = GeometricTable::new(lambda).masses();
+
+    // Windows in quarter-second ticks.
+    let windows = [1_u64, 2, 4];
+    let row = |label: &str, masses: &[u64]| {
+        let cv = coefficient_of_variation(masses);
+        let p: Vec<f64> = windows
+            .iter()
+            .map(|w| inference_precision(masses, *w))
+            .collect();
+        println!(
+            "{label:<34} {cv:>7.3} {:>12.4} {:>12.4} {:>12.4}",
+            p[0], p[1], p[2]
+        );
+        (cv, p)
+    };
+
+    let (poisson_cv, poisson_p) = row("inherited: Poisson lambda=20", &poisson);
+    let (geometric_cv, geometric_p) = row("memoryless: geometric mean=20", &geometric);
+
+    println!(
+        "\n  Both draws have the same 5s mean. Under the inherited Poisson an\n  \
+         adversary who subtracts a fixed offset lands within half a second of\n  \
+         the true receipt time {:.0}% of the time; under a memoryless delay of\n  \
+         the same mean, {:.0}%. The ratio is a near-constant ~{:.2}x across\n  \
+         every tolerance an adversary might pick, which is what you expect when\n  \
+         the difference is the width of the distribution rather than an artifact\n  \
+         of one window.\n\n  \
+         This is not a tuning preference. The mechanism is randomized delay; a\n  \
+         distribution with CV {:.2} is not providing randomized delay.\n\n  \
+         Honest counterweight for the design round: the memoryless draw has its\n  \
+         mode at zero, so a real share of relays go out almost immediately —\n  \
+         the adversary's best single guess against it is \"barely delayed at\n  \
+         all\". That is inherent to an exponential and Bitcoin Core accepts it,\n  \
+         but a shifted/floored variant is a live option and this instrument is\n  \
+         what should decide it.",
+        poisson_p[1] * 100.0,
+        geometric_p[1] * 100.0,
+        poisson_p[1] / geometric_p[1],
+        poisson_cv,
+    );
+
+    // The inherited Poisson is near-deterministic: 1/sqrt(20) ~ 0.224.
+    assert!(
+        (0.20..0.25).contains(&poisson_cv),
+        "Poisson CV at lambda=20 should be ~0.22, got {poisson_cv}"
+    );
+    // The memoryless delay is genuinely dispersed.
+    assert!(
+        geometric_cv > 0.9,
+        "geometric CV should be ~1, got {geometric_cv}"
+    );
+
+    // The attack is materially harder under the memoryless draw at every
+    // tolerance, by a ratio that barely moves with the window. Bands are set
+    // from the measurement, not from a guess about it.
+    for (i, w) in windows.iter().enumerate() {
+        let ratio = poisson_p[i] / geometric_p[i];
+        assert!(
+            (1.8..2.2).contains(&ratio),
+            "window +/-{w} ticks: Poisson {:.4} vs geometric {:.4} (ratio {ratio:.2}) \
+             outside the measured band",
+            poisson_p[i],
+            geometric_p[i]
+        );
+    }
+    // Concretely: under the inherited draw, a half-second inversion succeeds
+    // more than 40% of the time.
+    assert!(
+        poisson_p[1] > 0.40,
+        "inherited draw: +/-0.5s inversion only {:.4}",
+        poisson_p[1]
+    );
+    assert!(
+        geometric_p[1] < 0.25,
+        "memoryless draw: +/-0.5s inversion still {:.4}",
+        geometric_p[1]
+    );
 }

@@ -121,39 +121,103 @@ impl EpochScheduler {
 /// caller: batching *content* is transport, batching *time* is privacy.
 #[derive(Debug, Clone)]
 pub struct FluffScheduler {
-    inbound: PoissonTable,
-    outbound: PoissonTable,
+    inbound: DelayTable,
+    outbound: DelayTable,
+    distribution: EmbargoDistribution,
     /// Peers with a batch in flight, and when it flushes.
     pending: BTreeMap<ConnectionId, Millis>,
 }
 
+/// One of the two delay tables, chosen at construction.
+#[derive(Debug, Clone)]
+enum DelayTable {
+    Poisson(PoissonTable),
+    Geometric(GeometricTable),
+}
+
+impl DelayTable {
+    fn build(mean_quarter_secs: u32, distribution: EmbargoDistribution) -> Self {
+        match distribution {
+            EmbargoDistribution::Poisson => Self::Poisson(PoissonTable::new(mean_quarter_secs)),
+            EmbargoDistribution::Geometric => {
+                Self::Geometric(GeometricTable::new(mean_quarter_secs))
+            }
+        }
+    }
+
+    fn draw<R: RelayRng + ?Sized>(&self, rng: &mut R) -> u64 {
+        match self {
+            Self::Poisson(t) => t.draw(rng),
+            Self::Geometric(t) => t.draw(rng),
+        }
+    }
+}
+
 impl FluffScheduler {
-    /// Construct with the inherited fluff averages: λ = 20 quarter-seconds
-    /// inbound (5 s), λ = 10 quarter-seconds outbound (2.5 s).
+    /// Construct exactly what the daemon ships: `std::poisson_distribution` at
+    /// λ = 20 quarter-seconds inbound (5 s) and λ = 10 outbound (2.5 s).
     ///
-    /// Quarter-seconds are not an implementation detail, they are the design:
-    /// a Poisson in whole seconds is too coarse (95% of draws land in a 1 s
-    /// grid) and one in milliseconds is too tight (95% within ±141 ms of the
-    /// mean, which is no jitter at all). Quarter-seconds put 95% of draws
-    /// across a 3-7.25 s spread. The inherited comment at
-    /// `levin_notify.cpp:75-80` gets this exactly right — it is the one
-    /// parameter in the subsystem with a derivation that survives checking.
+    /// **This carries the same defect as the inherited embargo, and it matters
+    /// more.** The `levin_notify.cpp:84-88` comment names Bitcoin Core as the
+    /// reference for the outbound/inbound asymmetry. Bitcoin Core's send timer
+    /// (`PoissonNextSend`) draws `-ln(U)·mean` — the *inter-arrival time of a
+    /// Poisson process*, which is an **exponential**. The inherited code
+    /// implements `std::poisson_distribution` instead, which is the discrete
+    /// *count* of a Poisson process, not its inter-arrival time. The names
+    /// coincide; the distributions do not.
+    ///
+    /// The consequence is worse here than for the embargo. The embargo is a
+    /// rare backstop; the fluff delay is applied by every node to every
+    /// transaction, and its entire purpose is to stop an observer inferring
+    /// *when a node received a transaction* from *when it relayed it*. A
+    /// Poisson at λ = 20 has a coefficient of variation of 0.22 — relay lands
+    /// at receipt + 5 s ± 1.1 s, which inverts almost perfectly. An exponential
+    /// at the same mean has CV = 1 and does not. See
+    /// `conformance::fluff_timing_inference` for the measured attack.
+    ///
+    /// The quarter-second granularity, by contrast, is sound and its comment at
+    /// `levin_notify.cpp:75-80` is the one derivation in this subsystem that
+    /// survives checking.
     #[must_use]
     pub fn inherited() -> Self {
         Self::new(
             inherited::FLUFF_AVERAGE_IN_QUARTER_SECS,
             inherited::FLUFF_AVERAGE_OUT_QUARTER_SECS,
+            EmbargoDistribution::Poisson,
         )
     }
 
-    /// Construct with explicit means, both in quarter-seconds.
+    /// Construct with the memoryless delay Bitcoin Core actually uses and the
+    /// Dandelion++ diffusion phase assumes, at the inherited means.
     #[must_use]
-    pub fn new(inbound_quarter_secs: u32, outbound_quarter_secs: u32) -> Self {
+    pub fn memoryless() -> Self {
+        Self::new(
+            inherited::FLUFF_AVERAGE_IN_QUARTER_SECS,
+            inherited::FLUFF_AVERAGE_OUT_QUARTER_SECS,
+            EmbargoDistribution::Geometric,
+        )
+    }
+
+    /// Construct with explicit means (both in quarter-seconds) and an explicit
+    /// distribution.
+    #[must_use]
+    pub fn new(
+        inbound_quarter_secs: u32,
+        outbound_quarter_secs: u32,
+        distribution: EmbargoDistribution,
+    ) -> Self {
         Self {
-            inbound: PoissonTable::new(inbound_quarter_secs),
-            outbound: PoissonTable::new(outbound_quarter_secs),
+            inbound: DelayTable::build(inbound_quarter_secs, distribution),
+            outbound: DelayTable::build(outbound_quarter_secs, distribution),
+            distribution,
             pending: BTreeMap::new(),
         }
+    }
+
+    /// Distribution in force.
+    #[must_use]
+    pub const fn distribution(&self) -> EmbargoDistribution {
+        self.distribution
     }
 
     /// Queue a peer for fluffing at `now`, returning the earliest pending

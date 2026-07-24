@@ -167,6 +167,33 @@ impl GeometricTable {
         (self.thresholds.len() - 1) as u64
     }
 
+    /// Exact probability mass the table assigns to `k`, as a fraction of
+    /// `2^64` — the quantized mass the draw actually realizes.
+    #[must_use]
+    pub fn quantized_mass(&self, k: u64) -> u64 {
+        let Ok(idx) = usize::try_from(k) else {
+            return 0;
+        };
+        if idx >= self.thresholds.len() {
+            return 0;
+        }
+        let hi = self.thresholds[idx];
+        let lo = if idx == 0 {
+            0
+        } else {
+            self.thresholds[idx - 1]
+        };
+        hi.saturating_sub(lo)
+    }
+
+    /// Per-outcome quantized masses, indexed by `k`.
+    #[must_use]
+    pub fn masses(&self) -> Vec<u64> {
+        (0..=self.max_support())
+            .map(|k| self.quantized_mass(k))
+            .collect()
+    }
+
     /// FNV-1a fingerprint over the threshold table, for golden-vector pinning.
     #[must_use]
     pub fn fingerprint(&self) -> u64 {
