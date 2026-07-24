@@ -1344,6 +1344,33 @@ components:
     #     address for recipiency. Disclosure is tx-wide, not bound to
     #     the address in the proof. Sharing an outbound proof = sharing
     #     the tx key, in signed form.
+    #     WHY the scalar is revealed at all (forcing constraint — do
+    #     not "fix" this into a DLEQ): Monero's OutProofV2 reveals
+    #     per-output shared-secret points under DLEQ, never the
+    #     scalar. Shekyl cannot — the verifier must re-derive the
+    #     HYBRID combined secret, and there is no DLEQ over the
+    #     ML-KEM half: deterministic re-encapsulation needs the
+    #     encapsulation coins, which derive from tx_key_secret
+    #     (crypto-pq output.rs rederive_combined_ss: per-output seed
+    #     = derive_kem_seed(tx_key_secret, …); bytes 32..64 feed
+    #     encaps_from_seed). An X25519-half-only DLEQ would silently
+    #     degrade outbound verification to classical-only, breaking
+    #     the hybrid posture (00-mission priority 1). The tradeoff is
+    #     deliberate: tx-wide disclosure bought PQ-complete
+    #     verification.
+    #     RE-MINT COROLLARY: because the signing key travels inside
+    #     the proof, any holder of an OUTBOUND string can re-sign a
+    #     fresh proof for the SAME tx under a DIFFERENT challenge
+    #     message (re-binding to an unpaid address fails output
+    #     derivation, but the message is free). Outbound
+    #     challenge-binding therefore attests KNOWLEDGE OF THE TX
+    #     KEY, not first-party identity — a holder of the sender's
+    #     proof for challenge C1 can answer a third party's C2 as if
+    #     they were the sender. Freshness is exactly as strong as
+    #     tx-key secrecy, which the proof destroys on first share.
+    #     Verifiers must scope conclusions accordingly. INBOUND does
+    #     not have this property (the view scalar never travels;
+    #     only per-output projections do).
     #   INBOUND tx proof — carries per-output view-side secrets
     #     (ho/y/z/k_amount) for the DISCLOSED outputs only. Holder
     #     decrypts those outputs' amounts and links them to the
