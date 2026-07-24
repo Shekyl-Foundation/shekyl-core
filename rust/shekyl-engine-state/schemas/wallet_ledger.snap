@@ -2122,28 +2122,6 @@
                                   }
                                 }
                               }
-                            },
-                            {
-                              "name": "additional",
-                              "ty": {
-                                "name": "Vec<T>",
-                                "ty": {
-                                  "Seq": {
-                                    "name": "TxSecretKey",
-                                    "ty": {
-                                      "NewtypeStruct": {
-                                        "name": "Vec<T>",
-                                        "ty": {
-                                          "Seq": {
-                                            "name": "u8",
-                                            "ty": "U8"
-                                          }
-                                        }
-                                      }
-                                    }
-                                  }
-                                }
-                              }
                             }
                           ]
                         }

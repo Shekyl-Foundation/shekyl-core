@@ -431,7 +431,6 @@ mod tests {
             [0x77; 32],
             TxSecretKeys {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
-                additional: Vec::new(),
             },
         );
         let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
@@ -453,7 +452,6 @@ mod tests {
             txid,
             TxSecretKeys {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
-                additional: Vec::new(),
             },
         );
         let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
@@ -477,7 +475,6 @@ mod tests {
             txid,
             TxSecretKeys {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
-                additional: Vec::new(),
             },
         );
         let mut pool = BTreeMap::new();

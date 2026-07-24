@@ -85,6 +85,9 @@ use crate::{
 /// Version `10` adds `TransferDetails::awaiting_confirmation` — the F14
 /// persisted awaiting-confirmation lock (`LEDGER_BLOCK_VERSION` 8,
 /// `DAEMON_SUBMIT_VERDICT.md` §2.6).
+/// Version `11` deletes `TxSecretKeys::additional`
+/// (`TX_META_BLOCK_VERSION` 2, WI-RPC-3 rule-15 dead-store removal —
+/// single tx secret scalar per tx, no subaddresses, no producer).
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -96,7 +99,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 10;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 11;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.

@@ -11,7 +11,7 @@
 //! [`BookkeepingBlock`](crate::bookkeeping_block::BookkeepingBlock)). This one
 //! holds the "per-transaction side-channel" state:
 //!
-//! * **Per-tx secret keys** — the ephemeral tx secret scalar(s) the wallet
+//! * **Per-tx secret keys** — the ephemeral tx secret scalar the wallet
 //!   generated when it *constructed* a tx. Kept so the user can later prove a
 //!   payment to a third party without re-deriving from the seed.
 //! * **User notes** — free-text notes the user attached to specific txids.
@@ -59,10 +59,19 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{error::WalletLedgerError, serde_helpers::zeroizing_bytes_32};
 
-/// Schema version of the tx-meta block. V3.0 ships version `1`.
+/// Schema version of the tx-meta block. V3.0 ships version `2`.
 /// Any field addition / removal / renaming inside the block bumps this;
 /// loads that see a different version refuse rather than migrate.
-pub const TX_META_BLOCK_VERSION: u32 = 1;
+///
+/// Version history:
+/// - `1` — initial shape; `TxSecretKeys` carried a per-output
+///   `additional: Vec<TxSecretKey>`.
+/// - `2` — `TxSecretKeys.additional` deleted (WI-RPC-3 pre-commit,
+///   rule-15 dead-store removal): Shekyl's tx construction uses a
+///   single tx secret scalar for every output including change
+///   (`sign_bridge::sign_tx`), it has no subaddresses, and the field
+///   had no producer whole-tree.
+pub const TX_META_BLOCK_VERSION: u32 = 2;
 
 /// A single 32-byte tx secret scalar, wrapped so both its in-memory
 /// representation and its deserialization path zeroize on drop.
@@ -119,23 +128,21 @@ impl Zeroize for TxSecretKey {
     }
 }
 
-/// Per-txid secret keys: the primary tx secret scalar plus any additional
-/// per-output scalars that were emitted in the same transaction.
+/// Per-txid secret keys: the single tx secret scalar the wallet generated
+/// when it constructed the transaction.
 ///
-/// Shekyl's tx construction occasionally needs more than one scalar per tx
-/// (e.g. a tx with multiple outputs destined to different subaddresses
-/// derives a dedicated per-output key for each). The shape mirrors that
-/// invariant: one required `primary`, zero or more `additional`.
+/// Shekyl's tx construction uses **one** scalar per transaction for every
+/// output including change (`sign_bridge::sign_tx` mints one
+/// `tx_key_secret` and derives every output from it); Shekyl has no
+/// subaddresses, so the wallet2-era per-output `additional` keys are
+/// unrepresentable by design (deleted at `TX_META_BLOCK_VERSION` 2). The
+/// struct wrapper is retained rather than flattened to a bare
+/// [`TxSecretKey`] map value so a future additive field (e.g. a
+/// retention-policy timestamp) is a version bump, not a map-shape change.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct TxSecretKeys {
     /// Primary tx secret key — always present.
     pub primary: TxSecretKey,
-
-    /// Per-output additional tx secret keys, in the same order they were
-    /// emitted at tx-construction time. Empty for the common single-output
-    /// case.
-    #[serde(default)]
-    pub additional: Vec<TxSecretKey>,
 }
 
 /// One observed pool (mempool) transaction. Short-lived state; the
@@ -169,7 +176,7 @@ pub struct TxMetaBlock {
     /// construction; rejected on load if it does not match.
     pub block_version: u32,
 
-    /// Per-txid secret keys (primary + optional per-output additional).
+    /// Per-txid secret keys (one primary scalar per tx).
     #[serde(default = "BTreeMap::new")]
     pub tx_keys: BTreeMap<[u8; 32], TxSecretKeys>,
 
@@ -281,14 +288,12 @@ mod tests {
             key(0x01, 0),
             TxSecretKeys {
                 primary: secret(0x11),
-                additional: vec![secret(0x12), secret(0x13)],
             },
         );
         tx_keys.insert(
             key(0x02, 0),
             TxSecretKeys {
                 primary: secret(0x21),
-                additional: Vec::new(),
             },
         );
 
