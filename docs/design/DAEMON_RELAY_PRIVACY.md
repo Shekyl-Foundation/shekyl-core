@@ -1404,3 +1404,132 @@ tx. A near-deterministic timer makes the first-fluffer predictable by stem
 position, which would deanonymize black-hole recovery — the very event the
 embargo exists to serve. This is an independent argument for D-1 beyond the
 inversion analysis.
+
+---
+
+## 12. Q-8a reshape wargame — re-stem-on-embargo (Round 3, design only)
+
+**Scope.** Design-and-adversarial-analysis, not implementation: this section is a
+mechanism spec, a failure-mode table, and rule-21 reopen/halt criteria. No
+production code lands with it. It is kept in this document rather than a sibling
+so the spec sits beside the measured analysis (§6.6–6.8, §10.6) that justifies
+it — a separate doc would re-create the true-seal-in-the-join split, where a spec
+drifts from the evidence it rests on.
+
+### 12.1 Decision, and why (a) two-class embargo is rejected
+
+**Adopt (b) re-stem-on-embargo. Reject (a) two-class embargo.** Two measured
+reasons — *and a refuted one I record so it is not re-argued*:
+
+- **Liveness (the killer for (a)).** A two-class embargo cuts the origin's
+  exposure only by lengthening the origin's own embargo, so it hits the 0.3 %
+  target at an origin mean of ~1050 s (§6.7) — origin first-hop black-hole
+  recovery p90 ~2400 s, ~8× `MIN_RELAY_TIME`. Same liveness cost as global
+  embargo-lengthening, merely concentrated on the origin.
+- **Incompleteness.** (a) only touches position 0. Relay-position preemptions
+  (separations 1, 2, 3 …) still emit forced fluffs that reveal prefix members, so
+  the passive channel stays open for every non-origin position. (b) is
+  position-blind: every node re-stems on *its own* embargo fire.
+- **Refuted non-finding — (a) does *not* self-label.** I hypothesised that a
+  longer origin embargo would make origin forced-fluffs *later* and so labelable
+  by their lateness, and measured it: false. A forced fluff exists only if it
+  fires *before* disarm (`fire < natural_fluff + F`), so it is disarm-window
+  bounded (~seconds) regardless of the embargo *mean*. A longer origin embargo
+  lowers the origin's leak *rate*, not its lateness (origin and relay
+  forced-fluff median lateness both ~575 ms across origin means 144 s→1050 s).
+  So the case against (a) is liveness + incompleteness, not distinguishability;
+  the distinguishability argument does not exist and should not be leaned on.
+
+(b) reaches 0.026 % worst-case origin exposure (§6.7) at **no embargo change**
+(144 s), which is why it is the efficient lever and the adopted one.
+
+### 12.2 Mechanism spec, pinned to `get_stem` / `connection_map`
+
+1. **Trigger.** A stem holder's embargo fires before disarm (the preemption
+   event of the survival model).
+2. **Response.** Instead of `fluff_notify`, forward the transaction on the
+   *alternate* stem successor.
+3. **Selecting the alternate — not via `get_stem` again.** `get_stem(source)`
+   returns the cached `in_mapping_[source]` entry
+   ([dandelionpp.cpp:192,209](../../src/net/dandelionpp.cpp#L192)); calling it
+   again re-selects the *same* successor and the re-stem is a no-op (question ii).
+   The alternate must be taken explicitly as the *other* live `out_mapping_`
+   index. `out_mapping_` holds exactly `CRYPTONOTE_DANDELIONPP_STEMS = 2` entries
+   ([config](../../src/cryptonote_config.h#L101),
+   [ctor](../../src/net/dandelionpp.cpp#L113)), so "the other index" is
+   well-defined: the primary is `out_mapping_[in_mapping_[source].second]`, the
+   alternate is the remaining index.
+4. **Retry cap = `STEMS − 1 = 1`** (derived, §12.3). After the alternate is used,
+   fluff.
+5. **Retry state is local, keyed on tx hash, never on the wire.** A hop/retry
+   counter on the wire is a position leak (an observer counts re-stems → infers
+   separation). The count lives in node-local state keyed on the tx hash and is
+   never serialized.
+6. **Fan-out (question i).** Re-stemming the origin's own transaction routes it
+   on the *second* of its two stem successors. The origin's `connection_map`
+   already holds both (`STEMS = 2`); its `nil`-keyed mapping normally uses one.
+   So the change is "the origin's own traffic reaches 2 of its 2 stem peers
+   instead of 1" — reuse of an existing `out_mapping_` entry, **not a new edge**.
+   That distinction is a rule-21 halt criterion (§12.5): reshape must never widen
+   the origin's peer set beyond `STEMS`.
+7. **Degenerate case.** If `out_mapping_` has fewer than 2 live entries (a
+   successor disconnected and is `nil`), there is no alternate; the node fluffs
+   on embargo fire (the current R=0 behaviour). Reshape is a best-effort overlay
+   on the existing map, never a reason to hold a transaction.
+
+### 12.3 The retry cap is derived, not a magic constant
+
+The question was: derive the cap here, or fix it at 1 provisionally? **Derive it
+— and it derives to 1 structurally, not provisionally.**
+
+```text
+cap = min( STEMS − 1 ,  smallest R meeting δ )
+    = min( 1 ,  1 )   =  1
+```
+
+- `STEMS − 1 = 1`: there is one primary and exactly one alternate successor; no
+  third exists to try, so the mechanism fluffs after a single re-stem regardless
+  of `δ`. The stem graph itself bounds the cap.
+- `smallest R meeting δ = 1`: R=1 delivers 0.026 % worst-case (§6.7), inside the
+  0.3 % target. So one retry is also *sufficient*.
+
+The cap is therefore neither inherited (like the 39 s) nor swept — it is forced
+by `CRYPTONOTE_DANDELIONPP_STEMS` and independently sufficient for the target.
+Per Q-9, the cap is *netted*, not counted separately: its fan-out cost (§12.2.6)
+lands in the same §6.8 passive-supernode metric as its leak benefit, and because
+the fan-out change is *which* of the origin's already-two stem peers see its
+traffic (not a new peer), the net is dominated by the ~86× rate reduction.
+
+### 12.4 Failure-mode table
+
+| # | Failure mode | Adversary / trigger | Mechanism response | Residual | Status |
+| --- | --- | --- | --- | --- | --- |
+| W1 | `get_stem(nil)` no-op (ii) | design bug | select the alternate `out_mapping_` index explicitly, never re-call `get_stem` | none | **closed by spec** |
+| W2 | Fan-out 1→2 (i) | passive inbound supernode (§6.8) | reuse the existing 2nd `out_mapping_` entry; net against leak benefit in the §6.8 metric | fan-out cost sub-dominant to the ~86× rate cut | **closed (netted)** |
+| W3 | Both-successors-black-hole | adversary controls *both* of the origin's 2 stem successors | re-stem to the 2nd is also dropped → fluff after the cap; the fluff recovers liveness | origin exposed iff both successors are spies ≈ (on-path spy share)²; worst-case recovery ~doubles | **residual named** — reopen if measured material (§12.5) |
+| W4 | Loop (revisited node) | topology | once-per-tx local cap bounds re-stemming; matches the paper's "fluff on loop" | bounded by the cap | **closed by cap + local state** |
+| W5 | Epoch-boundary straddle | timing | a re-stem after `change_channels` uses the fresh map; D++ already tolerates map turnover mid-flight ([levin_notify.cpp:711](../../src/cryptonote_protocol/levin_notify.cpp#L711)) | tx may re-stem into a rebuilt map | **low — within existing D++ tolerance** |
+| W6 | Wire position leak | on-path observer counting re-stems | retry state local, tx-hash-keyed, never serialized | none | **closed by spec (the wire rule)** |
+| W7 | Degenerate map (<2 live stems) | churn | fall back to fluff (R=0) | equals the no-reshape rate for those txs | **accepted** — reshape is best-effort, never holds a tx |
+
+### 12.5 Reopen / halt criteria (rule 21)
+
+- **Cap (W-cap).** Re-derive if `CRYPTONOTE_DANDELIONPP_STEMS` changes (more
+  alternates raise the achievable cap) or if `δ` is set tighter than the 0.026 %
+  R=1 already delivers.
+- **W3 both-successors-black-hole.** Reopen the mechanism if a measurement of
+  `P(both of an origin's stem successors are adversarial)` at expected topology,
+  or of the doubled worst-case recovery, shows either is material. Until then the
+  residual is `(spy-share)²`, named and small.
+- **W2 fan-out.** Reopen if the netted §6.8 metric shows the fan-out cost exceeds
+  the leak benefit at any *supported* topology (clearnet included, per the frozen
+  default).
+- **HALT.** If any implementation of "the alternate successor" is found to create
+  a **new** stem edge — widening the origin's peer set beyond `STEMS` rather than
+  reusing an existing `out_mapping_` entry — halt. That is an anonymity
+  regression the spec forbids (§12.2.6), not a tuning question.
+
+**Deferred to implementation (RP-2+, with its own design round per rule 20):**
+the actual re-stem wiring in `levin_notify` / `tx_pool`, the tx-hash-keyed retry
+store, and the `out_mapping_` alternate-selection helper. This section specifies
+*what* must hold; the *how* is a later PR, and W1/W3/W6 are its acceptance gates.
