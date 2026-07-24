@@ -485,7 +485,7 @@ fn fluff_probability_trade_curve() {
     let spread = shortfalls.iter().copied().fold(f64::MIN, f64::max)
         - shortfalls.iter().copied().fold(f64::MAX, f64::min);
     assert!(
-        spread < 0.40,
+        spread < 0.60,
         "shortfall spread {spread:.4} is implausibly wide — check the model"
     );
     println!("  (shortfall is now q-dependent, spread {spread:.4} — RD-1 effect)");
@@ -1069,15 +1069,160 @@ fn black_hole_recovery_scales_with_holder_count() {
             let p90_s = p90_ticks as f64 * tick_ms as f64 / 1000.0;
             println!("  origin-alone (j=0) recovery p90 = {p90_s:.1}s (MIN_RELAY_TIME = 300s)");
             assert!(
-                (245.0..270.0).contains(&p90_s),
+                (315.0..350.0).contains(&p90_s),
                 "origin-alone p90 {p90_s:.1}s outside the reproduced band"
+            );
+            // RD-4 pushed the embargo to 144 s, so the worst-case recovery p90
+            // now *exceeds* MIN_RELAY_TIME rather than approaching it.
+            assert!(
+                p90_s > 300.0,
+                "under RD-4 the origin-alone p90 should exceed MIN_RELAY_TIME"
             );
         }
     }
     println!(
-        "\n  Typical recovery is several-fold faster than the 112s headline —\n  \
+        "\n  Typical recovery is several-fold faster than the 144s headline —\n  \
          only a first-hop black hole leaves the origin holding alone. The p90\n  \
-         of that worst case (~258s) approaches MIN_RELAY_TIME (300s), so RP-4\n  \
-         should glance at the two timers together when the embargo cut lands."
+         of that worst case (~331s) now *exceeds* MIN_RELAY_TIME (300s) after\n  \
+         RD-4 lengthened the embargo, so RP-4 must reconcile the two timers when\n  \
+         the embargo cut lands — a black-holed origin's first re-relay and its\n  \
+         embargo recovery can now cross."
+    );
+}
+
+/// **Round 2 — the binding channel is the black-hole attack, and the embargo
+/// mean does not defend it.**
+///
+/// Building the passive-spy Δ instrument surfaced a correction to the review's
+/// composition table: absent an actual black hole, an embargo fire that becomes
+/// the first fluff must be a *small* draw (it has to beat the sub-second natural
+/// completion), so C3 preemptions are redundant races at seconds scale, not
+/// 112 s-late leaks. The genuinely leaky C3 is the adversary-triggered
+/// black-hole attack — and there the decisive result is that the source
+/// attribution is *mean-invariant*: lengthening the embargo raises only the
+/// adversary's wait, never how often the forced fluff reveals the origin.
+#[test]
+fn black_hole_attack_leak_is_mean_invariant() {
+    use shekyl_relay_privacy::conformance::{
+        simulate_blackhole_attack, simulate_sighting_separability,
+    };
+
+    let params = DandelionParams::inherited();
+
+    println!("\nBlack-hole attack: forced-fluff source attribution vs embargo mean (f=0.10)");
+    println!(
+        "{:<14} {:>18} {:>16}",
+        "embargo (s)", "P(source=origin)", "adversary wait (s)"
+    );
+    println!("{}", "-".repeat(50));
+
+    let mut origin_shares = Vec::new();
+    let mut waits = Vec::new();
+    for secs in [50_u32, 144, 300, 500] {
+        let ticks = u32::try_from(u64::from(secs) * 1000 / DEFAULT_EMBARGO_TICK_MILLIS).unwrap();
+        let embargo = EmbargoTimer::geometric_from_ticks(ticks, DEFAULT_EMBARGO_TICK_MILLIS);
+        let mut rng = SplitMix64::new(0xB1AC_0000 + u64::from(secs));
+        let o = simulate_blackhole_attack(&params, &embargo, 0.10, 200_000, &mut rng);
+        println!(
+            "{secs:<14} {:>18.4} {:>16.1}",
+            o.source_is_origin,
+            o.mean_wait_ms / 1000.0
+        );
+        origin_shares.push(o.source_is_origin);
+        waits.push(o.mean_wait_ms);
+    }
+
+    // The leak is flat across a 10x embargo range: lengthening the embargo does
+    // not defend the binding channel.
+    let leak_spread = origin_shares.iter().copied().fold(f64::MIN, f64::max)
+        - origin_shares.iter().copied().fold(f64::MAX, f64::min);
+    assert!(
+        leak_spread < 0.02,
+        "black-hole attribution should be mean-invariant; spread was {leak_spread:.4}"
+    );
+    assert!(
+        origin_shares[0] > 0.4,
+        "the forced fluff should reveal the origin ~half the time, got {:.3}",
+        origin_shares[0]
+    );
+    // The adversary's wait, by contrast, scales with the mean — it is the only
+    // thing lengthening the embargo buys against this attack.
+    assert!(
+        waits[3] > waits[0] * 3.0,
+        "adversary wait should scale with the embargo mean: {waits:?}"
+    );
+
+    println!(
+        "\n  The attribution leak is flat (spread {leak_spread:.4}) across a 10x\n  \
+         embargo range while the adversary's wait scales ~linearly. Lengthening\n  \
+         the embargo does not defend C1×C3 — only a mechanism that stops\n  \
+         producing a forced fluff (re-stem-on-embargo, Q-8a) reshapes this."
+    );
+
+    // The correction to the review's C3 magnitude: absent a black hole, the
+    // preemptions are non-leaky races, not 112 s-late fluffs.
+    let d = derive_embargo(
+        &params,
+        DEFAULT_EMBARGO_TICK_MILLIS,
+        EMBARGO_FULL_TRAVEL_PROBABILITY,
+    )
+    .expect("reachable");
+    let embargo = EmbargoTimer::geometric_from_ticks(d.mean_ticks, DEFAULT_EMBARGO_TICK_MILLIS);
+    let mut rng = SplitMix64::new(0xC1C3);
+    let sep = simulate_sighting_separability(&params, &embargo, 0.10, 200_000, &mut rng);
+    println!(
+        "\n  Passive-spy Δ (no black hole): natural p50 {}ms / p99 {}ms, embargo\n  \
+         p50 {}ms — the two bands OVERLAP (misclass {:.3}), because a first-fluff\n  \
+         embargo fire is a small draw, not a 112s-late one. C3 is a leak only\n  \
+         when black-holed.",
+        sep.natural_p50_ms, sep.natural_p99_ms, sep.embargo_p50_ms, sep.misclassification_rate
+    );
+    assert!(
+        sep.embargo_p50_ms < 10_000,
+        "absent a black hole, embargo fluffs are seconds-scale races, not late leaks"
+    );
+}
+
+/// **Round 2 — π₀, the first-spy diffusion precision** the stem phase exists to
+/// defend against, and the baseline the ε argument's leakage weights reference.
+#[test]
+fn first_spy_precision_rises_with_spy_fraction() {
+    use shekyl_relay_privacy::conformance::{simulate_diffusion_first_spy, FloodParams};
+
+    println!("\nπ₀: first-spy source-attribution precision (memoryless flood, 512 nodes, 8 peers)");
+    println!("{:>6} {:>12} {:>18}", "f", "precision", "mean hops to spy");
+    println!("{}", "-".repeat(38));
+
+    let mut precisions = Vec::new();
+    for (seed, f) in [(1_u64, 0.05_f64), (2, 0.10), (3, 0.20)] {
+        let mut rng = SplitMix64::new(0x9100_0000 + seed);
+        let p = simulate_diffusion_first_spy(
+            FloodParams {
+                nodes: 512,
+                peers: 8,
+            },
+            20,
+            EmbargoDistribution::Geometric,
+            f,
+            40_000,
+            &mut rng,
+        );
+        println!(
+            "{f:>6.2} {:>12.4} {:>18.2}",
+            p.precision, p.mean_first_spy_hops
+        );
+        precisions.push(p.precision);
+    }
+    // More spies ⇒ the first spy is closer to the source ⇒ higher precision.
+    for w in precisions.windows(2) {
+        assert!(
+            w[1] > w[0],
+            "π₀ should rise with the spy fraction: {precisions:?}"
+        );
+    }
+    println!(
+        "\n  π₀ traces to the paper's ~0.3 accuracy under 30%-spy attacks; it is\n  \
+         the diffusion-phase leakage the STEM exists to reduce, and it prices\n  \
+         the source attribution of any fluff — natural, q-role, or forced."
     );
 }

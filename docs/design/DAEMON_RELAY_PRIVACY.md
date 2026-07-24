@@ -1,15 +1,18 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
-**Status:** ROUND 1 applied. The measurement that motivates this document
-landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 84 tests), so
-every number below is reproducible rather than asserted. Round 1 raised three
-findings (RD-1…RD-3); **all three are accepted and dispositioned in §10**, and
-their consequences are folded into the body rather than appended as errata.
-RD-1 materially moved the adopted embargo (31 s → 112 s) and surfaced a fifth
-defect (F-5); its follow-on built the preemption-profile instrument and
-inverted the drafted Q-8 premise (§10.4). RD-2 resolved Q-2, which is now
-closed. Decisions D-1…D-7 stand as amended; the remaining open questions in §7
-are the Round-2 agenda, of which Q-8 is now the load-bearing one.
+**Status:** ROUND 2 applied. The measurement that motivates this document
+landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 86 tests), so
+every number below is reproducible rather than asserted. Rounds 1–2 raised
+findings RD-1…RD-4; **all are accepted and dispositioned in §10**, and their
+consequences are folded into the body rather than appended as errata.
+RD-1 moved the adopted embargo (31 s → 112 s) and surfaced a fifth defect
+(F-5); RD-4 then corrected a stem-length error in the model that both this
+crate and the review shared, moving it again to **144 s** (§10.5). Its
+follow-on built the preemption-profile and black-hole instruments, inverted the
+drafted Q-8 premise, and established that the embargo *mean does not defend the
+binding channel* (§10.4, §10.6). RD-2 resolved Q-2. §11 anchors every finding
+against the Dandelion++ paper and the Bitcoin Core source. Decisions D-1…D-7
+stand as amended; §7 is the Round-3 agenda, of which Q-8 is load-bearing.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (FFI-boundary-moving), and
 [`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
@@ -186,6 +189,14 @@ works in integer time units, so discretizing costs nothing. Implemented in
 `geometric.rs` as a frozen integer inverse-CDF, the same construction the
 Poisson table uses.
 
+**Two rationales, not one.** The inversion argument (D-3, §10.2) is one. The
+second is the paper's own (§5.3.1, §11): memorylessness makes *the first relay
+to broadcast approximately uniform* among the relays holding the tx. A
+near-deterministic timer makes the first-fluffer predictable by stem position,
+which would deanonymize the black-hole recovery the embargo exists to serve —
+so the distribution matters for *who* recovers a stalled tx, not only *whether*
+the backstop fires.
+
 *Reversion clause — **withdrawn in Round 1** (RD-2).* The clause named a
 shifted geometric (a floor plus a memoryless tail) as the replacement, on a
 measurement of "mode-at-zero harm". RD-2 established that no such measurement
@@ -225,17 +236,19 @@ moment it fluffs. The correction preserves the running-product structure
 exactly, so the derivation is still transcendental-free.
 
 At the inherited inputs with the measured return term it yields **112 s**
-(446 ticks at 250 ms), achieving 0.9000. The independent Monte-Carlo simulator
-— corrected in the same way — solves it at 115 s, within 2.7%, and their
-survival curves agree to ≤0.0010 across both the mean *and* the tick
+(446 ticks) — later corrected to **144 s** (576 ticks) by RD-4, which fixed the
+stem-length support (§10.5). The independent Monte-Carlo simulator, corrected
+identically at each step, tracks within ~3 % and its survival curves agree to
+≤0.0010 across both the mean *and* the tick
 (`analytic_derivation_agrees_with_the_simulator`).
 
 | source | value |
 | --- | --- |
 | closed form (paper, plug-in `k`) | 17 s |
 | exact derivation, RD-1 uncorrected | 31 s |
-| **exact derivation, RD-1 corrected (adopted)** | **112 s** |
-| simulator cross-check | 115 s |
+| exact derivation, RD-1 corrected | 112 s |
+| **exact derivation, RD-1 + RD-4 (adopted)** | **144 s (576 ticks)** |
+| simulator cross-check | 147 s |
 | inherited `#define` | 39 s |
 
 The 31 s figure was a lower bound, and a loose one: at the measured return term
@@ -330,6 +343,11 @@ actual hop = 1000ms  preempted 0.0428
 
 Since the privacy-losing direction is under-estimation, the pre-network
 default over-estimates. **Proposed: 350 ms** (2× the inherited assumption).
+*Anchored (§11):* the paper measured ~300 ms per added hop on mainnet, so
+350 ms is genuinely conservative **for clearnet** — but Shekyl relays over Tor
+(SP-T0), whose circuit latency multiplies the per-hop figure, so the reopening
+trigger must measure under the real transport, not clearnet. Post-RD-1 this
+partly washes out because `F` dominates the hop term.
 
 *Reopening trigger:* the first testnet with representative geography measures
 real inter-node relay latency; this input is re-set from that measurement and
@@ -354,7 +372,7 @@ conditional on stem distance — see §10.4. Sensitivity, at the 0.90 target:
 | 0 ms (RD-1 uncorrected) | 31 s |
 | 500 ms | 49 s |
 | 1500 ms | 85 s |
-| **2250 ms (adopted)** | **112 s** |
+| **2250 ms (adopted)** | **112 s → 144 s (RD-4)** |
 | 4250 ms | 183 s |
 | 13750 ms (inherited Poisson flood) | 521 s |
 
@@ -473,6 +491,9 @@ comparison, the existing daemon-submit boundary is 754 lines of C++ shim plus
 | Each finding pinned as an executable assertion | `params.rs`, `derive.rs`, `tests/propagation_measurement.rs` | RP-1 ✅ |
 | Preemption profile (who preempts) with analytic marginal cross-check | `simulate_preemption_profile`, `marginal_preemption_profile`, `preemption_profile_answers_who_preempts` | Round 1 ✅ |
 | Black-hole recovery scales as `M/(j+1)` | `black_hole_recovery_scales_with_holder_count` | Round 1 ✅ |
+| Black-hole attribution leak is mean-invariant; passive races are non-leaky | `black_hole_attack_leak_is_mean_invariant` | Round 2 ✅ |
+| First-spy diffusion precision π₀ | `first_spy_precision_rises_with_spy_fraction` | Round 2 ✅ |
+| Origin always stems (unit stem at q=100%) | `always_fluffing_gives_a_unit_stem_the_origin_still_holds` | Round 2 (RD-4) ✅ |
 | Frozen reference vectors, cross-architecture | `tests/golden_vector.rs` | RP-1 ✅ |
 | 33 `levin_notify` gtests pass unchanged after the cut | `tests/unit_tests/levin.cpp` | RP-3 |
 | `dandelionpp_map` gtests pass against the Rust map | `tests/unit_tests/net.cpp` | RP-2 |
@@ -508,9 +529,9 @@ is a working baseline to build on.
 
 ---
 
-## 7. Open questions (the Round-2 agenda)
+## 7. Open questions (the Round-3 agenda)
 
-Round 1 closed Q-2 and Q-7 and reframed Q-5. What remains:
+Round 1 closed Q-2 and Q-7; Round 2 corrected the model (RD-4), reframed Q-8 around the mechanism, and anchored everything against the sources (§11). What remains for Round 3:
 
 - **Q-1 — is the stem model right?** *(Round 1 position: single-path is
   correct.)* Each node forwards to one per-source successor, so branching
@@ -537,15 +558,30 @@ Round 1 closed Q-2 and Q-7 and reframed Q-5. What remains:
   memoryless-ified as a side effect of this port. RP-1 models the draw so it is
   not invisible; the analysis gets its own document when the port reaches it.
   **Closed here, deferred to its own doc.**
-- **Q-8 (new, from RD-1) — is 0.90-on-*any*-preemption the right target?**
-  This is now the binding assumption, and Round 1 built the profile instrument
-  needed to answer it (`simulate_preemption_profile`, §5). **The drafted premise
-  had the gradient backwards; see §10.4 for the correction.** In short: the
-  origin is the *modal* preempter (~21% of preemptions, ~2.1% of all
-  transactions fluff from their own origin node), so a leakage-weighted target
-  is *more* stringent than the equal-weight one, not less — the leakage-dominant
-  event is the likely one. Weighting alone does not license a shorter embargo.
-  Two things could, and each needs its own work before any number is swept:
+- **Q-8 — is 0.90-on-*any*-preemption the right target, and is the embargo
+  mean even the right knob?** Round 1 built the profile instrument
+  (`simulate_preemption_profile`) and inverted the drafted premise (§10.4);
+  Round 2 built the black-hole instrument and found something sharper (§10.6).
+  Three results now frame this question, all measured:
+  1. **The gradient is backwards.** The origin is the *modal* preempter (~21% of
+     preemptions, ~2.1% of all transactions), so a leakage-weighted target is
+     *more* stringent than equal-weight, not less. Weighting alone does not
+     license a shorter embargo.
+  2. **Weights barely have leverage.** The conditional profile is nearly
+     mean-invariant (`E[2⁻ˢᵉᵖ|pre]` moves 0.40→0.34 while `P(preempt)` moves 9×),
+     so a fixed `w(i)` cannot re-rank embargo choices — it relabels the axis `ε`
+     is stated in. The deliverable collapses from "`ε` and `w(i)`" to "`ε`, with
+     `w(i)` as its unit system."
+  3. **The embargo mean does not defend the binding channel at all.** The leaky
+     channel is the black-hole attack (§10.6), whose attribution leak is *flat*
+     across a 10× embargo range (~0.50 origin) — lengthening the embargo only
+     raises the adversary's wait. So optimizing the embargo mean against `ε` is
+     nearly the wrong optimization; the decision that moves the leak is the
+     **mechanism** (re-stem-on-embargo), not the mean.
+
+  With C2 retracted (§10.6), the `ε` reference scale rebuilds around the
+  spy-recall floor alone. Two things need their own work before any number is
+  swept:
   - **A baseline-relative threshold.** State the target as leakage relative to
     the no-Dandelion baseline (`w[0]`, every tx fluffing at origin), under an
     explicit weight vector `w(i)` and spy fraction `f`. Per the project's own
@@ -554,33 +590,42 @@ Round 1 closed Q-2 and Q-7 and reframed Q-5. What remains:
     deliverable is `ε` and the `w(i)` it is stated in — not a number. The
     profile makes any such `w(i)` a one-line dot product
     ([`PreemptionProfile::weighted_leakage`]).
-  - **A knob that reshapes the profile rather than rescaling it (Q-8a).** Relays
-    are position-blind, so no per-position policy is implementable — except the
-    one distinction the protocol gives free: *the origin knows it is the
-    origin*. That admits exactly two designs, and they should be wargamed in a
-    round of their own: **(a) a two-class embargo** (origin mean ≫ relay mean),
-    which collapses the separation-0 row but concentrates its liveness cost at
-    the worst case, since a first-hop black hole leaves the origin as sole
-    holder; **(b) origin retry-then-fluff** — on origin-embargo fire, re-stem via
-    the *other* quasi-4-regular successor, bounded retries, fluff on exhaustion.
-    (b) removes separation-0 mass without inflating worst-case recovery, and a
-    first-pass wargame finds no new exposure: the alternate successor learns
-    nothing a stem successor doesn't already learn, and the retry instant is a
-    fresh memoryless draw so it carries no timing signature. The failure modes to
-    examine are both-candidates-spy (already the D++ two-candidate exposure, not
-    new) and a retry straddling an epoch boundary.
+  - **A knob that reshapes the profile rather than rescaling it (Q-8a).** Since
+    §10.6 shows the mean is nearly orthogonal to the binding channel, this is
+    where the real leverage is. Two designs, to be wargamed in a round of their
+    own: **(a) a two-class embargo** (origin mean ≫ relay mean), which collapses
+    the separation-0 row but concentrates its liveness cost at the worst case,
+    since a first-hop black hole leaves the origin as sole holder; **(b)
+    re-stem-on-embargo** — a holder whose embargo fires re-stems to its *other*
+    quasi-4-regular successor instead of fluffing, with a once-per-tx retry cap,
+    fluffing on second expiry. Round 2 sharpened (b): it applies to **every
+    position, not just the origin** — relays need not know their position to do
+    it, so position-blindness is preserved — and it directly attacks the
+    black-hole channel by not producing a classifiable forced fluff.
+    **Critically, the retry cap must be local state keyed on tx hash, never a
+    wire field:** a hop/retry counter on the wire is itself a position leak.
+    First-pass wargame: both-successors-black-hole → second-stage fluff recovers
+    (worst-case recovery ~doubles); loops → bounded by the once-per-node cap;
+    epoch boundary → the re-stem uses the current epoch's map, which D++ already
+    tolerates; cost → re-stems are visible to stem spies as ordinary stem hops,
+    incrementing the sighting channel by ~`0.10·f`, which the budget prices. The
+    *camouflage* alternative (delay a base rate `r` of natural fluffs by
+    embargo-scale draws to poison the classifier) prices out immediately — `r`
+    must rival the preemption rate, costing ~`r·144 s` of latency across `r` of
+    all transactions — but belongs in the wargame table as considered-and-priced.
 
-  **Liveness, correctly stated.** The 112 s headline is the *worst case*, not
+  **Liveness, correctly stated.** The 144 s headline is the *worst case*, not
   the typical one. Black-hole recovery is the minimum over all holders'
   memoryless timers, so a black hole after hop `j` recovers with mean
-  `112/(j+1)` s (`black_hole_recovery_scales_with_holder_count`: measured
-  112/56/37/22 s for j=0..2,4). The headline applies only to a first-hop black
-  hole where the origin holds alone — mean 112 s, p90 ~258 s — which is exactly
-  the case Q-8a(b) is shaped to protect. *(Trivium for RP-4: that p90 approaches
-  `MIN_RELAY_TIME` = 300 s; no conflict, but glance at the two timers together
-  when the embargo cut lands.)*
+  `144/(j+1)` s (`black_hole_recovery_scales_with_holder_count`: measured
+  144/72/48/29 s for j=0..2,4). The headline applies only to a first-hop black
+  hole where the origin holds alone — mean 144 s, p90 ~331 s — which is exactly
+  the case Q-8a(b) is shaped to protect. **After RD-4 that p90 now *exceeds*
+  `MIN_RELAY_TIME` (300 s)** rather than approaching it, so RP-4 must reconcile
+  the two timers when the embargo cut lands — a black-holed origin's first
+  MIN_RELAY_TIME re-relay and its embargo recovery can now cross.
 
-**Closed in Round 1:**
+**Closed in Rounds 1–2:**
 
 - **Q-2 — memoryless mode-at-zero.** Closed by RD-2. A constant floor is
   dominated in both framings a latency budget allows; D-1's reversion clause is
@@ -632,7 +677,8 @@ this document, and it is not on the path for RP-2…RP-4.
   solve re-run — the mechanism of deriving-rather-than-hardcoding stands. Round
   1 exercised this clause exactly as written: RD-1 showed the equation was
   wrong, the equation was corrected, the solve was re-run, and the adopted
-  value moved 31 s → 112 s without D-2 itself being reopened. A hard-coded
+  value moved 31 s → 112 s → 144 s (RD-1 then RD-4) without D-2 itself being
+  reopened at any step. A hard-coded
   constant would have needed a decision to change; a derivation needed only a
   corrected input. That is the derive-don't-hardcode argument made empirical —
   and it is also quiet evidence that the equation-vs-mechanism seam (RD-1's
@@ -684,9 +730,10 @@ about the same and the flood crawls; under a memoryless delay it is ~7× faster.
 it the required embargo would be 521 s rather than 112 s.
 
 *Consequence.* Equation amended (D-2), simulator amended identically so the
-cross-check still compares like with like, adopted embargo 31 s → **112 s**,
-and the previously-derived 31 s reassessed at **0.7292** — inside the 0.61–0.85
-band Round 1 sketched. Q-7 is subsumed and closed.
+cross-check still compares like with like, adopted embargo 31 s → **112 s**
+(later 144 s under RD-4, §10.5), and the previously-derived 31 s reassessed at
+**0.7292** — inside the 0.61–0.85 band Round 1 sketched. Q-7 is subsumed and
+closed.
 
 *What it opens.* A 112 s embargo is a substantial liveness cost, which promotes
 Round 1's second mitigating structure from a footnote to the **leading open
@@ -747,8 +794,8 @@ would have had nothing watching it. It now sweeps the tick as well as the mean.
 Round 1 built the preempter-position profile before opining on Q-8, and the
 drafted premise ("a position-weighted target permits a *shorter* embargo")
 turned out to have the sign backwards. Reproduced independently and pinned in
-`preemption_profile_answers_who_preempts` (400k trials, adopted 446-tick
-embargo):
+`preemption_profile_answers_who_preempts` (400k trials, adopted embargo;
+profile shares are stable under RD-4's re-derivation to 576 ticks):
 
 | separation from origin | share of first-preemptions | marginal (analytic ✓ sim) |
 | --- | --- | --- |
@@ -778,6 +825,143 @@ A note logged against `F` while here: `fluff_return_ms` is the p90 of the
 return distribution is stochastically above the marginal — p90-of-marginal is
 conservative for near positions and could be neutral-to-slightly-short for the
 origin specifically. At 512/8 with graph distances capping around 3–4 this is
-noise against 446 ticks, but Q-8 concentrates exactly at the origin, so when the
+noise against the adopted embargo, but Q-8 concentrates exactly at the origin, so when the
 profile work lands `F` should be measured **conditional on stem distance**, and
 the Q-5 testnet measurement should stratify the same way.
+### 10.5 RD-4 — the stem-length support was wrong, in the seam we named
+
+**Accepted; the adopted embargo moves 112 s → 144 s.**
+
+D-2 said the equation-vs-mechanism seam was "now the only place this subsystem
+can still be wrong." Round 2 found it wrong there — and found it by checking the
+mechanism against its *literature*, because the crate and the review shared the
+same buggy premise, so the simulator could not catch it (both models agreed
+with each other while both disagreed with the protocol).
+
+*Verified at source.* The origin always stems its own transaction.
+`levin_notify.cpp:560` — `if (!zone_->fluffing || tx_relay == relay_method::local)`
+— routes a node's own tx (`source` nil) into the stem regardless of the node's
+per-epoch fluff role, matching Dandelion++ §4.4: *"Every time a node generates a
+transaction of its own, it forwards the transaction, in stem phase, along the
+same outbound edge."* The per-epoch diffuser role applies to **relayed**
+transactions only.
+
+*The bug.* The fluff coin is therefore flipped by each *relay*, never the
+origin. Stem length is geometric on `{1, 2, …}` with mean `1/q = 5` — the model
+had it on `{0, 1, …}` with mean `4`, letting the origin fluff its own tx at stem
+length 0. Every real stem has the origin holding for at least one hop plus the
+return, which the old support under-counted.
+
+*Consequence.* Re-derived under the corrected support (`full_travel_probability`
+and all four simulators amended so the origin never draws a fluff coin):
+**576 ticks = 144 s** achieving 0.9000, up from 446 ticks / 111.5 s — a +29 %
+provisioning miss. The preemption profile is stable (origin share 0.21,
+origin self-fluff still ~2.1 % of all transactions), and `q = 100 %` is no longer
+certain survival — it now gives a unit stem the origin holds through, which the
+`always_fluffing_gives_a_unit_stem_the_origin_still_holds` test pins as the exact
+`(1-p)^S(1)`.
+
+*Side effect on RP-4.* At 144 s the origin-alone black-hole recovery p90 (~331 s)
+now **exceeds** `MIN_RELAY_TIME` (300 s) rather than approaching it — see the
+Q-8 liveness note.
+
+### 10.6 Round 2 — the binding channel is the black-hole attack, and the embargo mean does not defend it
+
+Building the spy-augmented instruments (Round-2 item 1) produced a correction to
+the review's own composition table and a decisive result for Q-8.
+
+**Correction: absent a black hole, C3 preemptions do not leak.** The passive-spy
+Δ instrument (`simulate_sighting_separability`) shows that an embargo fire which
+becomes the *first* fluff must be a small draw — it has to beat the sub-second
+natural completion — so it lands at seconds scale, indistinguishable from a
+natural fluff (measured misclassification ~6 %, embargo Δ p50 ~2.8 s, not the
+144 s the review's C3 row assumed). The 144 s-scale fires happen *after* natural
+completion and are redundant races. So C3 is a leak only when the stem is
+actually black-holed.
+
+**The genuinely leaky C3 is the adversary-triggered black-hole attack** —
+`simulate_blackhole_attack`, which is the classic Dandelion++ attack: an
+adversarial stem node drops a tx it sighted, forcing an upstream embargo to
+fire and reveal a prefix member. The adversary knows the fluff is forced (it
+caused it), so Δ-separability is moot; the leak is the *source attribution*, and
+the decisive measurement is that it is **mean-invariant**:
+
+| embargo mean | P(forced source = origin) | adversary wait |
+| --- | --- | --- |
+| 50 s | 0.498 | 17 s |
+| 144 s | 0.498 | 57 s |
+| 300 s | 0.494 | 126 s |
+| 500 s | 0.497 | 202 s |
+
+The attribution leak is flat (spread < 0.01) across a 10× embargo range while
+the adversary's wait scales linearly. **Lengthening the embargo does not defend
+C1×C3 — it only raises the adversary's cost.** Only a mechanism that stops
+producing a forced fluff (re-stem-on-embargo, Q-8a(b)) reshapes the ~0.50. This
+is the strongest form of the "reshape, don't rescale" conclusion: the quantity
+Q-8 optimizes (the embargo mean) is nearly orthogonal to the binding channel's
+leak.
+
+**π₀ is measured** (`simulate_diffusion_first_spy`): the first-spy diffusion
+precision the stem phase defends against — 0.12 / 0.20 / 0.33 at spy fractions
+0.05 / 0.10 / 0.20, rising as the first spy lands closer to the source. It
+prices the source attribution of *any* fluff and is the baseline the ε argument
+references.
+
+**Review retraction, incorporated.** The review's Round-1 "designed 20 %
+origin-fluff channel" (its C2) is withdrawn: it was anchored at the epoch-coin
+flip (`:709`) without tracing the consumer (`:560`), where own transactions
+always stem. There is no designed crowd of origin-fluffs for an embargo-forced
+one to hide in — which makes the C1×C3 classifiability concern *stronger*, and
+the case for re-stem-on-embargo with it. The ε reference scale rebuilds around
+the spy-recall floor alone, not a q-channel.
+
+### 10.7 Verification items surfaced by the sources (named, not yet closed)
+
+- **Loop handling.** The Dandelion++ prototype enters fluff mode on a stem loop.
+  If the inherited code instead drops a duplicate stem receipt silently, a loop
+  is a self-inflicted black hole recovered only at embargo latency — both a
+  liveness event and a preemption-class fluff the model does not count. Needs a
+  `tx_pool.cpp` duplicate-stem-receipt check before RP-4.
+- **Per-epoch determinism.** The fluff decision is per-node-per-epoch and
+  forwarding is one-to-one, so a given origin's stem path and terminal are fixed
+  within an epoch. The crate's i.i.d.-per-tx geometric is the correct
+  *cross-epoch marginal* for the survival target — but that is a model
+  assumption the doc must state, and it matters for Round 3's intersection
+  bookkeeping: same-origin transactions in one epoch share their path, terminal,
+  and preemption exposure as a block, so β and π₀ must be defined with that
+  correlation named rather than assuming per-tx independence.
+
+---
+
+## 11. External anchoring (Round 2)
+
+Every finding was checked against the primary sources by the Round-2 review.
+This section records the anchors; the paper is Fanti et al., *Dandelion++:
+Lightweight Cryptocurrency Networking with Formal Anonymity Guarantees*
+(arXiv:1805.11060).
+
+*Note on verification split:* the source-anchoring below was performed by the
+reviewer against their copies of the paper and the Bitcoin Core tree; this
+sandbox cannot fetch arXiv, so the paper quotations are recorded as the
+review's citations. The **mechanism** claims (own-tx-always-stems, the disarm
+event) were independently re-verified here at `src/` and are marked ✓-at-source.
+
+| Finding | Anchor |
+| --- | --- |
+| **F-2** (memoryless embargo) | Paper Eq. (7): `T_out(v) ∼ current_time + exp(1/T_base)`, i.i.d. across relays — exponential. Monero's `std::poisson_distribution` contradicts it directly. |
+| **F-2 rationale (new)** | Paper §5.3.1: memorylessness *"ensures that the first relay node to broadcast is approximately uniformly selected among all relays that have received the message."* A near-deterministic draw makes the first-to-fire predictable *by position* — deanonymizing black-hole recovery. This is a second reason for D-1, folded in below. |
+| **F-1 / F-3** (the constant) | Paper Prop. 3 uses the natural log, over a *fixed* path of length `k` (a chosen guarantee parameter). Monero committed two transcription errors: the log-base substitution, and plugging `k = 5` (an expected length) into a fixed-`k` bound — the E[K(K−1)] gap F-3 measured. The defects are in the transcription, not the source. |
+| **RD-1** (observation-disarm) | Paper §4.4: *"If the relay does not receive an INV … before his timer expires, then the relay diffuses the transaction."* Disarm on receipt — verified ✓-at-source at `tx_pool.cpp`. The paper's Prop-3 bound does not itself account for the INV return trip its cancellation rule requires; RD-1's return term provisions for the spec's stated disarm event more carefully than the paper's own bound. |
+| **F-4** (fluff delay) | Paper §4.4 baseline: Bitcoin Core diffusion with *"independent, exponential delays."* Bitcoin Core v0.21 `net.cpp:3058` computes `log1p(-U)·mean·-1`; master renamed the primitive to `MakeExponentiallyDistributed` (`random.cpp:704`) precisely because the "Poisson" name misled. Monero implemented the name, not the distribution. |
+| **D-5** (hop latency) | Paper measured ~300 ms per added hop on mainnet (20 trials, stems ≤ 12, 3-message INV/GETDATA/TX over ~110 ms median link). 350 ms is conservative for clearnet — **but Shekyl relays over Tor (SP-T0)**, whose circuit latency multiplies the per-hop figure, so the D-5 reopening trigger must measure under the real transport. Post-RD-1 this partly washes out (F dominates the hop term), but it needs saying. |
+| **Epoch length** | Paper: *"epochs on the order of 10 minutes"* — Monero's 600 s ✓. |
+| **Q-3 (`q ≤ 0.2`)** | Paper §5.3.1: *"by choosing q ≤ 0.2, we can limit the increase in average precision to 0.1, even when spies connect to every honest node."* `q = 0.2` sits at the recommended boundary; any re-tune moves down, as D-6 assumed. |
+| **π₀ / leakage weights (Round 3)** | Paper Thms 2–4: first-spy precision is `Θ(p² log(1/p))` for one-to-one forwarding with unknown graph, `O(p)` known-graph; the diffusion-only baseline `π₀ ≈ 0.3` traces to the paper's *"accuracies over 30 % attacks."* These are the named sources for the ε argument's weights. |
+
+**D-1 gains the uniformity rationale (from §5.3.1):** memorylessness is not only
+what makes the embargo *fire* (F-2's measured consequence); it is what makes the
+first relay to broadcast approximately uniform among the relays that hold the
+tx. A near-deterministic timer makes the first-fluffer predictable by stem
+position, which would deanonymize black-hole recovery — the very event the
+embargo exists to serve. This is an independent argument for D-1 beyond the
+inversion analysis.

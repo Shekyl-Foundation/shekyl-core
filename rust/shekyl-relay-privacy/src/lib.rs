@@ -47,8 +47,9 @@
 //!    substitutes `E[K]` into an expression in `K(K-1)`, and stem length is
 //!    geometric, where `E[K(K-1)] = 2·E[K](E[K]-1)` exactly. No constant
 //!    correction factor recovers it; the exact solve in [`derive`] does. On an
-//!    emission-terminated model that gives 31 s — see finding 5 for why the
-//!    adopted value is 112 s.
+//!    emission-terminated model that gives 31 s — see finding 5 (the return
+//!    trip) and RD-4 (the origin always stems) for why the adopted value is
+//!    144 s.
 //! 4. **The fluff delay has the same defect as (2), on the timer that runs on
 //!    every transaction.** [`schedule::FluffScheduler`] has the detail. The
 //!    inherited comment cites Bitcoin Core, whose `PoissonNextSend` draws
@@ -70,7 +71,8 @@
 //! Finding 5 feeds straight back into the embargo: a stem node's embargo is
 //! disarmed when the fluff *reaches* it, so the flood's return time is part of
 //! every node's exposure window. [`derive`] counts it, which is why the adopted
-//! embargo is 112 s rather than the 31 s an emission-terminated model gives.
+//! embargo is 144 s (RD-4-corrected) rather than the 31 s an emission-terminated,
+//! origin-may-fluff model gives.
 //!
 //! # Why the distributions are re-implemented rather than bound
 //!

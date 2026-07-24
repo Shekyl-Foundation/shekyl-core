@@ -318,10 +318,11 @@ pub fn simulate_propagation<R: RelayRng + ?Sized>(
             // The node currently holding the transaction arms its embargo.
             let deadline = embargo.deadline(t, rng);
 
-            if bernoulli(rng, q, 100) {
-                // This node fluffs. Its own embargo is discarded rather than
-                // recorded: `upgrade_relay_method` clears it at the moment of
-                // emission, so it can never preempt.
+            // RD-4: the origin (hops == 0) always stems its own transaction, so
+            // the fluff coin is flipped only from the first relay onward. A node
+            // that fluffs discards its own embargo — `upgrade_relay_method`
+            // clears it at emission, so the terminal node can never preempt.
+            if hops >= 1 && bernoulli(rng, q, 100) {
                 break;
             }
             earliest_embargo = earliest_embargo.min(deadline);
@@ -818,9 +819,10 @@ pub fn simulate_preemption_profile<R: RelayRng + ?Sized>(
         let mut t = 0_u64;
         loop {
             let deadline = embargo.deadline(t, rng);
-            if bernoulli(rng, q, 100) {
-                // Terminal node fluffs; it disarms its own embargo at emission,
-                // so its deadline is never recorded.
+            // RD-4: the origin always stems; the fluff coin applies from the
+            // first relay. `deadlines.len()` is the position about to be armed,
+            // so 0 is the origin. A fluffing node discards its own embargo.
+            if !deadlines.is_empty() && bernoulli(rng, q, 100) {
                 break;
             }
             deadlines.push(deadline);
@@ -870,5 +872,427 @@ pub fn simulate_preemption_profile<R: RelayRng + ?Sized>(
         p_preempt,
         first,
         marginal,
+    }
+}
+
+/// The gap an adversary with an earlier sighting sees between that sighting and
+/// the fluff, split by whether the fluff was natural or embargo-induced.
+///
+/// **The C1×C3 crux (Round 2).** A fluff-only observer has no reference time,
+/// so an embargo fluff's lateness is invisible to it and the preemption channel
+/// pools into the ~20% per-epoch q-channel's deniability. But an adversary with
+/// *any* earlier sighting — a single stem spy anywhere on the path — sees the
+/// gap Δ between its sighting and the fluff. A natural fluff puts Δ at
+/// stem-completion scale (sub-second to a few seconds); an embargo fluff puts Δ
+/// at the embargo mean (~112 s). If the two are separable, a classified embargo
+/// fluff has *no* q-channel deniability, and its source is a stem-prefix member
+/// — the origin with the profile's conditional probability. This measures the
+/// separation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SightingSeparation {
+    /// Trials in which at least one stem node was a spy (Δ observable).
+    pub observed: usize,
+    /// Median natural-fluff gap, in ms.
+    pub natural_p50_ms: u64,
+    /// 99th-percentile natural-fluff gap, in ms — the upper edge of the
+    /// natural band.
+    pub natural_p99_ms: u64,
+    /// 1st-percentile embargo-fluff gap, in ms — the lower edge of the embargo
+    /// band.
+    pub embargo_p01_ms: u64,
+    /// Median embargo-fluff gap, in ms.
+    pub embargo_p50_ms: u64,
+    /// Fraction of observed trials the adversary misclassifies at the optimal
+    /// single threshold between the two bands. Near zero ⇒ the channel is
+    /// separable and C3 loses its deniability.
+    pub misclassification_rate: f64,
+}
+
+/// Measure [`SightingSeparation`] at a spy fraction `f`.
+///
+/// Each stem node is an independent spy with probability `f`; the relevant
+/// sighting is the earliest (lowest-position) spy, matching "one stem spy
+/// anywhere on the path". The gap is from that spy's sighting to the
+/// stem-ending fluff; a fixed marginal return term is added for realism but is
+/// negligible against the embargo scale.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero or `spy_fraction` is not in `(0, 1]`.
+#[must_use]
+pub fn simulate_sighting_separability<R: RelayRng + ?Sized>(
+    params: &DandelionParams,
+    embargo: &EmbargoTimer,
+    spy_fraction: f64,
+    trials: usize,
+    rng: &mut R,
+) -> SightingSeparation {
+    assert!(trials > 0, "need at least one trial");
+    assert!(
+        spy_fraction > 0.0 && spy_fraction <= 1.0,
+        "spy fraction must be in (0, 1]"
+    );
+    let hop_ms = u64::from(params.time_between_hop_ms);
+    let q = u64::from(params.fluff_probability_pct);
+    // A stem spy observes the fluff after one flood-return hop; use the
+    // marginal return, which is ~1.5 s and immaterial against the embargo.
+    let return_ms = u64::from(params.fluff_return_ms);
+    let spy_threshold = (spy_fraction * f64::from(u32::MAX)) as u32;
+    let is_spy = |rng: &mut R| (rng.next_u64() as u32) < spy_threshold;
+
+    let mut natural: Vec<u64> = Vec::new();
+    let mut embargo_gaps: Vec<u64> = Vec::new();
+
+    for _ in 0..trials {
+        // Walk the stem, recording per-position embargo deadlines and the
+        // lowest spy position.
+        let mut deadlines: Vec<u64> = Vec::new();
+        let mut first_spy: Option<u64> = None; // absolute sighting time
+        let mut t = 0_u64;
+        loop {
+            if first_spy.is_none() && is_spy(rng) {
+                first_spy = Some(t);
+            }
+            let deadline = embargo.deadline(t, rng);
+            // RD-4: the origin always stems; fluff coin from the first relay.
+            if !deadlines.is_empty() && bernoulli(rng, q, 100) {
+                break; // terminal fluffer
+            }
+            deadlines.push(deadline);
+            if deadlines.len() >= MAX_SIMULATED_HOPS {
+                break;
+            }
+            t = t.saturating_add(hop_ms);
+        }
+
+        let Some(sighting) = first_spy else {
+            continue; // no spy on this stem; Δ unobservable
+        };
+
+        let natural_fluff = deadlines.len() as u64 * hop_ms;
+        let disarm = natural_fluff.saturating_add(return_ms);
+        let earliest_embargo = deadlines.iter().copied().filter(|d| *d < disarm).min();
+
+        // The stem-ending fluff is the earlier of the terminal's natural fluff
+        // and the first embargo fire; the spy sees it one return hop later.
+        let (fluff_time, is_embargo) = match earliest_embargo {
+            Some(e) if e < natural_fluff => (e, true),
+            _ => (natural_fluff, false),
+        };
+        let observed_at = fluff_time.saturating_add(return_ms);
+        let gap = observed_at.saturating_sub(sighting);
+        if is_embargo {
+            embargo_gaps.push(gap);
+        } else {
+            natural.push(gap);
+        }
+    }
+
+    let observed = natural.len() + embargo_gaps.len();
+    assert!(
+        observed > 0,
+        "no spy ever landed on a stem — raise f or trials"
+    );
+    natural.sort_unstable();
+    embargo_gaps.sort_unstable();
+
+    let pct = |v: &[u64], p: f64| -> u64 {
+        if v.is_empty() {
+            return 0;
+        }
+        v[(((v.len() as f64) * p) as usize).min(v.len() - 1)]
+    };
+    let natural_p99 = pct(&natural, 0.99);
+    let embargo_p01 = pct(&embargo_gaps, 0.01);
+
+    // Optimal threshold sits between the bands; misclassification counts
+    // natural gaps above it plus embargo gaps below it.
+    let threshold = natural_p99
+        .max(1)
+        .midpoint(embargo_p01.max(natural_p99 + 1));
+    let mis_natural = natural.iter().filter(|g| **g >= threshold).count();
+    let mis_embargo = embargo_gaps.iter().filter(|g| **g < threshold).count();
+    let misclassification_rate = (mis_natural + mis_embargo) as f64 / observed as f64;
+
+    SightingSeparation {
+        observed,
+        natural_p50_ms: pct(&natural, 0.50),
+        natural_p99_ms: natural_p99,
+        embargo_p01_ms: embargo_p01,
+        embargo_p50_ms: pct(&embargo_gaps, 0.50),
+        misclassification_rate,
+    }
+}
+
+/// First-spy source-attribution precision in the fluff (diffusion) phase.
+///
+/// **π₀ (Round 2).** When a transaction fluffs, it floods; the first spy to
+/// receive it guesses the source is the peer it received from (its
+/// predecessor). This is the Fanti et al. first-spy estimator. π₀ is the
+/// probability that guess is correct, and it is the precision the *stem* phase
+/// exists to defend against — it also prices the q-channel and any classified
+/// embargo fluff, whose source is attacked by exactly this estimator. Measured
+/// under our memoryless flood so the number reflects the fixed distribution,
+/// not the inherited near-deterministic one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FirstSpyPrecision {
+    /// Floods in which at least one spy received the fluff.
+    pub observed: usize,
+    /// P(the first spy's predecessor is the true source | a spy saw it).
+    pub precision: f64,
+    /// Mean hop distance from source to the first spy.
+    pub mean_first_spy_hops: f64,
+}
+
+/// Measure [`FirstSpyPrecision`] on a random graph with spy fraction `f`.
+///
+/// The source is node 0; each node relays to `peers` others with independent
+/// memoryless edge delays (the flood [`simulate_fluff_return`] already models),
+/// and each non-source node is a spy with probability `f`. The first spy to
+/// receive the fluff is the one whose arrival time is least.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero, `spy_fraction` is not in `(0, 1]`, or the
+/// topology is degenerate.
+#[must_use]
+pub fn simulate_diffusion_first_spy<R: RelayRng + ?Sized>(
+    flood: FloodParams,
+    mean_quarter_secs: u32,
+    distribution: crate::schedule::EmbargoDistribution,
+    spy_fraction: f64,
+    trials: usize,
+    rng: &mut R,
+) -> FirstSpyPrecision {
+    assert!(trials > 0, "need at least one trial");
+    assert!(flood.nodes >= 2 && flood.peers >= 1, "degenerate topology");
+    assert!(
+        spy_fraction > 0.0 && spy_fraction <= 1.0,
+        "spy fraction must be in (0, 1]"
+    );
+
+    let poisson = matches!(distribution, crate::schedule::EmbargoDistribution::Poisson)
+        .then(|| PoissonTable::new(mean_quarter_secs));
+    let geometric = matches!(
+        distribution,
+        crate::schedule::EmbargoDistribution::Geometric
+    )
+    .then(|| crate::geometric::GeometricTable::new(mean_quarter_secs));
+    let draw_ms = |rng: &mut R| -> u64 {
+        match (&poisson, &geometric) {
+            (Some(t), _) => t.draw(rng),
+            (_, Some(t)) => t.draw(rng),
+            _ => unreachable!("exactly one table"),
+        }
+        .saturating_mul(250)
+    };
+
+    let peers = flood.peers.min(flood.nodes - 1);
+    let spy_threshold = (spy_fraction * f64::from(u32::MAX)) as u32;
+
+    let mut correct = 0_usize;
+    let mut observed = 0_usize;
+    let mut first_spy_hops_total = 0_u64;
+
+    for _ in 0..trials {
+        let mut adjacency: Vec<Vec<usize>> = vec![Vec::with_capacity(peers); flood.nodes];
+        for node in 0..flood.nodes {
+            for _ in 0..peers {
+                let other = usize::try_from(bounded_uniform(rng, (flood.nodes - 1) as u64))
+                    .expect("bounded");
+                if other != node {
+                    adjacency[node].push(other);
+                    adjacency[other].push(node);
+                }
+            }
+        }
+        let spies: Vec<bool> = (0..flood.nodes)
+            .map(|n| n != 0 && (rng.next_u64() as u32) < spy_threshold)
+            .collect();
+
+        // Dijkstra from source, tracking predecessor and hop count.
+        let mut best = vec![u64::MAX; flood.nodes];
+        let mut pred = vec![usize::MAX; flood.nodes];
+        let mut hops = vec![0_u64; flood.nodes];
+        let mut heap = std::collections::BinaryHeap::new();
+        best[0] = 0;
+        heap.push(std::cmp::Reverse((0_u64, 0_usize)));
+        let mut first_spy: Option<(u64, usize)> = None;
+        while let Some(std::cmp::Reverse((at, node))) = heap.pop() {
+            if at > best[node] {
+                continue;
+            }
+            if spies[node] {
+                first_spy = Some((at, node));
+                break; // Dijkstra pops in time order, so this is the first spy
+            }
+            for next in adjacency[node].clone() {
+                let arrival = at.saturating_add(draw_ms(rng));
+                if arrival < best[next] {
+                    best[next] = arrival;
+                    pred[next] = node;
+                    hops[next] = hops[node] + 1;
+                    heap.push(std::cmp::Reverse((arrival, next)));
+                }
+            }
+        }
+
+        if let Some((_, spy)) = first_spy {
+            observed += 1;
+            first_spy_hops_total += hops[spy];
+            // The spy guesses its predecessor is the source; correct iff the
+            // predecessor is node 0.
+            if pred[spy] == 0 {
+                correct += 1;
+            }
+        }
+    }
+
+    assert!(
+        observed > 0,
+        "no spy ever received the flood — raise f or trials"
+    );
+    FirstSpyPrecision {
+        observed,
+        precision: correct as f64 / observed as f64,
+        mean_first_spy_hops: first_spy_hops_total as f64 / observed as f64,
+    }
+}
+
+/// The Dandelion++ black-hole attack: an adversarial stem node drops a
+/// transaction it has sighted, forcing an upstream embargo to fire and reveal
+/// a stem-prefix member.
+///
+/// **The corrected C1×C3 (Round 2).** Building the passive-spy Δ instrument
+/// ([`simulate_sighting_separability`]) surfaced a correction to the review's
+/// framing: absent a black hole, an embargo fire that becomes the *first* fluff
+/// must be a small draw (it has to beat the ~0.7 s natural completion), so it
+/// lands at seconds scale and is a redundant race, not a 112 s-late leak. The
+/// genuinely leaky C3 event needs an actual black hole — which is
+/// *adversary-triggered*, and the adversary that drops the tx is the same one
+/// with the sighting. So C1×C3 is not a coincidental composition; it is the
+/// classic black-hole attack.
+///
+/// Here the adversary knows the fluff is forced (it caused it), so
+/// Δ-separability is moot — the leak is the *source attribution*: the forced
+/// fluff comes from `argmin` over the honest prefix's timers, which by the
+/// preemption profile is origin-dominant. The instrument measures that profile,
+/// and (the payoff) how it moves with the embargo mean.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlackHoleOutcome {
+    /// Trials in which an adversary sighted the tx on the stem before it fluffed
+    /// naturally (i.e. the attack was possible).
+    pub attacks: usize,
+    /// P(the forced fluff's source is the origin | an attack occurred). The
+    /// attribution leak: the adversary learns the source is a prefix member,
+    /// and this is how often that member is the origin.
+    pub source_is_origin: f64,
+    /// Full source-separation profile of the forced fluff (share by separation
+    /// from origin), conditional on an attack.
+    pub source_profile: Vec<f64>,
+    /// Mean time the adversary waits from its sighting to the forced fluff, in
+    /// ms — the adversary's cost, which *does* scale with the embargo mean.
+    pub mean_wait_ms: f64,
+}
+
+/// Measure [`BlackHoleOutcome`] at spy fraction `f`.
+///
+/// The first spy on the stem is the adversary; it black-holes at its position
+/// `b`. The honest prefix `0..b` arms embargoes and the earliest fires, flooding
+/// the forced fluff. The attack requires `b >= 1` (a prefix to reveal); a spy at
+/// the origin is the source itself, not an adversary, and is skipped.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero or `spy_fraction` is not in `(0, 1]`.
+#[must_use]
+pub fn simulate_blackhole_attack<R: RelayRng + ?Sized>(
+    params: &DandelionParams,
+    embargo: &EmbargoTimer,
+    spy_fraction: f64,
+    trials: usize,
+    rng: &mut R,
+) -> BlackHoleOutcome {
+    assert!(trials > 0, "need at least one trial");
+    assert!(
+        spy_fraction > 0.0 && spy_fraction <= 1.0,
+        "spy fraction must be in (0, 1]"
+    );
+    let hop_ms = u64::from(params.time_between_hop_ms);
+    let q = u64::from(params.fluff_probability_pct);
+    let return_ms = u64::from(params.fluff_return_ms);
+    let spy_threshold = (spy_fraction * f64::from(u32::MAX)) as u32;
+
+    let mut source_counts: Vec<u64> = Vec::new();
+    let mut attacks = 0_u64;
+    let mut wait_total = 0_u64;
+
+    for _ in 0..trials {
+        // Walk the stem, recording each honest node's absolute embargo
+        // deadline, until a spy is reached (the adversary) or the tx fluffs.
+        let mut deadlines: Vec<u64> = Vec::new(); // deadlines[i] = position i's fire time
+        let mut adversary: Option<usize> = None;
+        let mut t = 0_u64;
+        let mut position = 0_usize;
+        loop {
+            let spy = (rng.next_u64() as u32) < spy_threshold;
+            let deadline = embargo.deadline(t, rng);
+            // RD-4: the origin always stems, so the natural fluff coin applies
+            // from the first relay (position >= 1) onward.
+            let fluffs = position >= 1 && bernoulli(rng, q, 100);
+            if spy && position >= 1 {
+                // The adversary sits here and black-holes. Positions 0..position
+                // are the honest prefix that armed embargoes.
+                adversary = Some(position);
+                break;
+            }
+            if fluffs {
+                break; // escaped: natural fluff before any adversary
+            }
+            deadlines.push(deadline); // honest node keeps its embargo
+            if deadlines.len() >= MAX_SIMULATED_HOPS {
+                break;
+            }
+            position += 1;
+            t = t.saturating_add(hop_ms);
+        }
+
+        let Some(b) = adversary else {
+            continue; // no attack this trial
+        };
+        // Honest prefix is positions 0..b; the earliest embargo fires and is the
+        // forced fluff source. (deadlines has an entry per honest node passed,
+        // i.e. positions 0..b.)
+        let prefix = &deadlines[..b.min(deadlines.len())];
+        let Some((fire_time, source)) = prefix
+            .iter()
+            .enumerate()
+            .map(|(i, d)| (*d, i))
+            .min_by_key(|(d, _)| *d)
+        else {
+            continue;
+        };
+
+        attacks += 1;
+        if source >= source_counts.len() {
+            source_counts.resize(source + 1, 0);
+        }
+        source_counts[source] += 1;
+        // Adversary sighted at b*hop; forced fluff reaches it one return later.
+        let sighting = b as u64 * hop_ms;
+        let observed = fire_time.saturating_add(return_ms);
+        wait_total += observed.saturating_sub(sighting);
+    }
+
+    assert!(attacks > 0, "no attack ever occurred — raise f or trials");
+    let source_profile = source_counts
+        .iter()
+        .map(|c| *c as f64 / attacks as f64)
+        .collect::<Vec<_>>();
+    BlackHoleOutcome {
+        attacks: attacks as usize,
+        source_is_origin: source_profile.first().copied().unwrap_or(0.0),
+        source_profile,
+        mean_wait_ms: wait_total as f64 / attacks as f64,
     }
 }

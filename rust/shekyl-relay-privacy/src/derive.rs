@@ -36,14 +36,16 @@
 //! # The exact survival equation
 //!
 //! Take the discrete memoryless embargo this design uses ([`crate::geometric`])
-//! at tick `τ` and success probability `p`. A stem of `h` hops has nodes
-//! `0..=h`; node `i` armed its timer at `i·hop` and the natural fluff happens
-//! at `h·hop`, so node `i`'s timer must exceed a slack of `(h - i)·hop`. For a
-//! geometric timer that survival probability is `(1-p)^ceil(slack/τ)`, and the
-//! timers are independent, so
+//! at tick `τ` and success probability `p`. The origin always stems its own
+//! transaction (RD-4), so stem length is geometric on `{1, 2, …}`:
+//! `P(stem = h) = (1-q)^{h-1}·q`. A stem of length `h` has relay nodes
+//! `0..=h-1`; node `i` armed its timer at `i·hop` and is disarmed only when the
+//! fluff reaches it, so its slack is `(h-i)·hop + F` (RD-1). For a geometric
+//! timer that survival probability is `(1-p)^ceil(slack/τ)`, and the timers are
+//! independent, so
 //!
 //! ```text
-//! P(full travel) = Σ_h  (1-q)^h · q · (1-p)^S(h),   S(h) = Σ_{j=0}^{h} ceil(j·hop/τ)
+//! P(full travel) = Σ_{h≥1} (1-q)^{h-1}·q · (1-p)^S(h),   S(h) = Σ_{k=1}^{h} ceil((k·hop + F)/τ)
 //! ```
 //!
 //! Every term is a product of powers of `(1-q)` and `(1-p)`. Computed by
@@ -135,31 +137,38 @@ pub fn full_travel_probability(params: &DandelionParams, mean_ticks: u32, tick_m
     // disarmed. See `DandelionParams::fluff_return_ms`.
     let return_ms = u64::from(params.fluff_return_ms);
 
+    // RD-4: the origin always stems its own transaction (`levin_notify.cpp:560`
+    // routes a node's own tx into the stem regardless of its epoch fluff role;
+    // Dandelion++ §4.4). So the fluff coin is flipped by each *relay*, never the
+    // origin: stem length is geometric on {1, 2, …} with mean 1/q, and the
+    // origin is present in *every* stem, holding for at least one hop plus the
+    // return. The earlier model let the origin fluff at length 0 (geometric on
+    // {0, 1, …}, mean (1-q)/q), which under-counted the origin's own slack and
+    // under-provisioned the embargo by ~29 %.
     let mut total = 0.0_f64;
-    // (1-q)^h, by running product.
+    // (1-q)^{h-1}, by running product; h starts at 1, so this starts at 1.
     let mut stem_mass = 1.0_f64;
-    // (1-p)^S(h), by running product. S(0) = 0, so this starts at 1.
+    // (1-p)^S(h), by running product; S(0) = 0, so this starts at 1.
     let mut timer_mass = 1.0_f64;
 
-    for h in 0..MAX_STEM_TERMS {
+    for h in 1..=MAX_STEM_TERMS {
+        // Advance to S(h) *before* adding the term: a stem of length h has
+        // relays at positions 0..=h-1, at distances h..=1 from the terminal, so
+        // the relay at distance h — the origin, when h is the full stem — must
+        // also outlast its slack. S(h) = Σ_{k=1..h} ceil((k·hop + F)/τ), an
+        // addition, not a difference. (Getting this wrong understates the
+        // exponent and silently inflates survival; this comment exists to
+        // prevent that recurring.) The terminal node itself contributes no
+        // slack — it disarms its own embargo the moment it fluffs.
+        let slack_ticks = div_ceil(u64::from(h) * hop_ms + return_ms, tick_millis);
+        timer_mass *= pow_exact(timer_survives, slack_ticks);
+
+        // P(stem length = h) = (1-q)^{h-1} · q, on {1, 2, …}.
         total += stem_mass * q * timer_mass;
 
         if stem_mass < TAIL_MASS_CUTOFF {
             break;
         }
-
-        // Advance to h+1. The stem gains one node, and *every* node's required
-        // slack grows by one hop, so the new cumulative exponent is
-        // S(h+1) = S(h) + ceil(((h+1)·hop + F) / τ) — an addition, not a
-        // difference. (Getting this wrong understates the exponent and
-        // silently inflates the survival probability, which is the failure
-        // this comment exists to prevent recurring.)
-        //
-        // The `j = 0` term stays zero and is never added: that is the terminal
-        // node, which disarms its own embargo at the moment it fluffs and so
-        // has neither stem slack nor a return trip to outlast.
-        let slack_ticks = div_ceil(u64::from(h + 1) * hop_ms + return_ms, tick_millis);
-        timer_mass *= pow_exact(timer_survives, slack_ticks);
         stem_mass *= stem_survives;
     }
 
@@ -280,18 +289,18 @@ pub fn marginal_preemption_profile(
     let hop_ms = u64::from(params.time_between_hop_ms);
     let return_ms = u64::from(params.fluff_return_ms);
 
-    // Determine how many separations carry non-negligible mass: (1-q)^{i+1} is
-    // the probability the origin's stem is at least i+1 long, i.e. that
-    // separation i exists at all.
+    // RD-4: stem length is geometric on {1, 2, …} (the origin always stems), so
+    // P(stem = h) = (1-q)^{h-1} · q and separation `i` exists iff h ≥ i+1, with
+    // existence probability (1-q)^i. The origin (i = 0) exists in every stem.
     let mut profile: Vec<f64> = Vec::new();
-    let mut exists_mass = 1.0_f64; // (1-q)^i, probability the stem reaches i
+    let mut exists_mass = 1.0_f64; // (1-q)^i = P(separation i exists)
     for i in 0..MAX_STEM_TERMS as usize {
         if exists_mass < TAIL_MASS_CUTOFF {
             break;
         }
-        // marginal[i] = Σ_{h>i} (1-q)^h q (1 - timer_survives^slack)
+        // marginal[i] = Σ_{h≥i+1} (1-q)^{h-1} q (1 - timer_survives^slack)
         let mut acc = 0.0_f64;
-        let mut stem_mass = exists_mass * stem_survives; // (1-q)^{i+1}, first h = i+1
+        let mut stem_mass = exists_mass; // (1-q)^{h-1} for the first h = i+1
         let mut h = i + 1;
         while stem_mass >= TAIL_MASS_CUTOFF && h < MAX_STEM_TERMS as usize {
             let k = (h - i) as u64; // distance from terminal
@@ -487,15 +496,32 @@ mod tests {
     }
 
     #[test]
-    fn always_fluffing_is_a_degenerate_but_valid_input() {
-        // q = 100%: every node fluffs immediately, the stem is one node long
-        // and there is no slack for any embargo to preempt. Survival is
-        // certain, and the derivation must not loop or divide by zero.
+    fn always_fluffing_gives_a_unit_stem_the_origin_still_holds() {
+        // q = 100%: every *relay* fluffs immediately. But the origin always
+        // stems its own tx (RD-4), so the stem is always length 1 — origin →
+        // first relay, which fluffs. The origin therefore holds for exactly one
+        // hop plus the return and *can* preempt: survival is (1-p)^S(1), not
+        // certainty. (Under the pre-RD-4 model the origin could fluff at length
+        // 0 and this was 1.0 — the change is the finding.)
         let params = DandelionParams {
             fluff_probability_pct: 100,
             ..DandelionParams::inherited()
         };
-        let p = full_travel_probability(&params, 4, DEFAULT_EMBARGO_TICK_MILLIS);
-        assert!((p - 1.0).abs() < 1e-12, "expected certainty, got {p}");
+        let mean = 4_u32;
+        let tick = DEFAULT_EMBARGO_TICK_MILLIS;
+        let p_hazard = 1.0 / (f64::from(mean) + 1.0);
+        // S(1) = ceil((hop + F)/tick), the origin's only slack.
+        let slack = (u64::from(params.time_between_hop_ms) + u64::from(params.fluff_return_ms))
+            .div_ceil(tick);
+        let expected = (1.0 - p_hazard).powi(i32::try_from(slack).unwrap());
+        let got = full_travel_probability(&params, mean, tick);
+        assert!(
+            (got - expected).abs() < 1e-9,
+            "q=100% unit stem: got {got}, expected {expected}"
+        );
+        assert!(
+            got < 0.5,
+            "the origin holds a unit stem — survival is not certain"
+        );
     }
 }
