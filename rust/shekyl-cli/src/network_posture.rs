@@ -74,7 +74,13 @@ pub enum Exposure {
 /// The bracket handling is the part worth getting right: a naive
 /// `rsplit_once(':')` on `[::1]:11028` yields `[::1]` (fine) but on a bare
 /// `::1` yields `::` — silently misclassifying a loopback address as remote.
-fn host_of(endpoint: &str) -> &str {
+///
+/// Public because `rpc_client`'s `--rpc-url` acceptance check uses the *same*
+/// extractor: a hostless `http://` must be rejected there rather than reaching
+/// this module and producing a warning about an empty host. Two parsers could
+/// disagree about what a host is; one cannot.
+#[must_use]
+pub fn host_of(endpoint: &str) -> &str {
     // Strip any scheme.
     let after_scheme = endpoint
         .split_once("://")
