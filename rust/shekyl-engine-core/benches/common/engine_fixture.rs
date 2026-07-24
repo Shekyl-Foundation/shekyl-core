@@ -136,10 +136,13 @@
 //!
 //! # Daemon URL is an unreachable sentinel
 //!
-//! `HttpRpc::new("http://127.0.0.1:1")` does not connect —
-//! `new` only configures the HTTP agent and records the URL. The
-//! workload measured at Stage 0 PR-2 (`synced_height`) does not
-//! trigger a daemon RPC, so the URL is never contacted. A future
+//! `HttpRpc::new("http://127.0.0.1:1")` does not connect — for a
+//! **credential-free** URL like this sentinel, `new` only validates
+//! the URL shape, configures the HTTP client, and records the URL (a
+//! `user:pass@` URL would issue a digest-auth preflight, which this
+//! fixture must never do). The workload measured at Stage 0 PR-2
+//! (`synced_height`) does not trigger a daemon RPC, so the URL is
+//! never contacted. A future
 //! bench whose workload **does** trigger an RPC must swap the
 //! `DaemonClient` for a real test double — `TestDaemon`, arriving
 //! with Stage 1 PR 1 per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.1.
@@ -384,10 +387,12 @@ fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
 
 /// Build a `DaemonClient` against an unreachable URL.
 ///
-/// `HttpRpc::new` does not connect — it only configures the
-/// HTTP agent and records the URL. The runtime is local to this
-/// function and dropped before return; the returned `DaemonClient`
-/// owns an Arc-wrapped HTTP agent with no background tasks.
+/// `HttpRpc::new` does not connect for the credential-free sentinel
+/// used here — it only validates the URL shape, configures the HTTP
+/// client, and records the URL (a `user:pass@` URL would preflight).
+/// The runtime is local to this function and dropped before return;
+/// the returned `DaemonClient` owns an Arc-wrapped HTTP agent with no
+/// background tasks.
 fn construct_dummy_daemon() -> DaemonClient {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

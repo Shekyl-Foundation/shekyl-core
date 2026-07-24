@@ -268,39 +268,44 @@ impl HttpRpc {
             userpass,
         } = parse_endpoint(url)?;
 
-        let authentication =
-            if let Some(userpass) = userpass {
-                let split_userpass = userpass.split(':').collect::<Vec<_>>();
-                if split_userpass.len() > 2 {
-                    Err(RpcError::ConnectionError(
-                        "invalid amount of passwords".to_string(),
-                    ))?;
-                }
+        let authentication = if let Some(userpass) = userpass {
+            let split_userpass = userpass.split(':').collect::<Vec<_>>();
+            if split_userpass.len() > 2 {
+                Err(RpcError::ConnectionError(
+                    "invalid amount of passwords".to_string(),
+                ))?;
+            }
 
-                let client = HttpClient::new(proxy.as_deref())
-                    .map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
-                // Obtain the initial challenge, which also somewhat validates this connection
-                let response = client
-                    .request(
-                        Request::post(url.clone())
-                            .body(Full::new(Bytes::new()))
-                            .map_err(|e| {
-                                RpcError::ConnectionError(format!("couldn't make request: {e}"))
-                            })?,
-                    )
-                    .await
-                    .map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
-                let challenge = Self::digest_auth_challenge(response).await?;
-                Authentication::Authenticated {
-                    username: Zeroizing::new(split_userpass[0].to_string()),
-                    password: Zeroizing::new((*split_userpass.get(1).unwrap_or(&"")).to_string()),
-                    connection: Arc::new(Mutex::new((challenge, client))),
-                }
-            } else {
-                Authentication::Unauthenticated(HttpClient::new(proxy.as_deref()).map_err(|e| {
-                    RpcError::InternalError(format!("couldn't create a client: {e}"))
-                })?)
-            };
+            let client = HttpClient::new(proxy.as_deref())
+                .map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
+            // Obtain the initial challenge, which also somewhat validates this connection
+            let response = client
+                .request(
+                    Request::post(url.clone())
+                        .body(Full::new(Bytes::new()))
+                        .map_err(|e| {
+                            RpcError::ConnectionError(format!("couldn't make request: {e}"))
+                        })?,
+                )
+                .await
+                .map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
+            let challenge = Self::digest_auth_challenge(response).await?;
+            Authentication::Authenticated {
+                username: Zeroizing::new(split_userpass[0].to_string()),
+                password: Zeroizing::new((*split_userpass.get(1).unwrap_or(&"")).to_string()),
+                connection: Arc::new(Mutex::new((challenge, client))),
+            }
+        } else {
+            // Same mapping as the authenticated arm and `validate_endpoint`:
+            // a client-construction failure is a config/environment fault
+            // (bad --proxy, missing TLS roots), never an internal bug, and
+            // its classification must not depend on whether the daemon URL
+            // happened to carry credentials.
+            Authentication::Unauthenticated(
+                HttpClient::new(proxy.as_deref())
+                    .map_err(|e| RpcError::ConnectionError(format!("{e}")))?,
+            )
+        };
 
         Ok(HttpRpc {
             authentication,
