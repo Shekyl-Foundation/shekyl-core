@@ -398,17 +398,36 @@ mod tests {
             s.read_exact(&mut request).await.expect("request head");
             assert_eq!(request[1], 1, "CONNECT");
             let atyp = request[3];
-            let mut len = [0u8; 1];
-            s.read_exact(&mut len).await.expect("domain length");
-            let mut name = vec![0u8; usize::from(len[0])];
-            s.read_exact(&mut name).await.expect("domain");
-            let mut port = [0u8; 2];
-            s.read_exact(&mut port).await.expect("port");
+            // Read the destination per ATYP so every form terminates: were a
+            // regression to send IPv4/IPv6 here, misreading its first address
+            // byte as a domain length would block this acceptor — and hang
+            // the test — on bytes that never come. Completing the handshake
+            // instead lets the main body's `atyp == 3` assert fire with its
+            // diagnostic.
+            let name = match atyp {
+                // DOMAIN: length-prefixed name.
+                3 => {
+                    let mut len = [0u8; 1];
+                    s.read_exact(&mut len).await.expect("domain length");
+                    let mut name = vec![0u8; usize::from(len[0])];
+                    s.read_exact(&mut name).await.expect("domain");
+                    name
+                }
+                // IPv4 / IPv6: fixed-width address.
+                1 | 4 => {
+                    let mut addr = vec![0u8; if atyp == 1 { 4 } else { 16 }];
+                    s.read_exact(&mut addr).await.expect("address");
+                    addr
+                }
+                other => panic!("unknown SOCKS5 ATYP {other:#04x}"),
+            };
+            let mut port_bytes = [0u8; 2];
+            s.read_exact(&mut port_bytes).await.expect("port");
             // Success, bound to 0.0.0.0:0.
             s.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
                 .await
                 .expect("reply");
-            (atyp, name, u16::from_be_bytes(port))
+            (atyp, name, u16::from_be_bytes(port_bytes))
         });
 
         let mut connector =
