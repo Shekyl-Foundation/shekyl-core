@@ -78,23 +78,48 @@ struct ParsedEndpoint {
     userpass: Option<Zeroizing<String>>,
 }
 
-fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
-    // Credentials live only in the URL's AUTHORITY
-    // (`scheme://user:pass@host:port/...`), which RFC 3986 terminates at
-    // the first of `/`, `?`, or `#`; an '@' anywhere later (path, query,
-    // or fragment — e.g. `?tag=user@host`, with or without a path) is
-    // ordinary content. Splitting on a whole-URL '@' would misparse such
-    // a URL as credentials and issue a digest-auth preflight against
-    // garbage, so the split happens at the authority's own '@' (userinfo
-    // cannot contain a raw '@', so the authority holds at most one) and
-    // the rest of the URL is never consulted.
+/// Locate a URL's authority userinfo '@' — the credential terminator:
+/// `(scheme-end offset, absolute '@' index if present)`.
+///
+/// Credentials live only in the URL's AUTHORITY
+/// (`scheme://user:pass@host:port/...`), which RFC 3986 terminates at the
+/// first of `/`, `?`, or `#`; an '@' anywhere later (path, query, or
+/// fragment — e.g. `?tag=user@host`, with or without a path) is ordinary
+/// content. Consulting a whole-URL '@' would misread such a URL as
+/// credentialed, so only the authority's own '@' counts (userinfo cannot
+/// contain a raw '@', so the authority holds at most one). One grammar, one
+/// place: `parse_endpoint` splits credentials with it and
+/// [`redacted_endpoint`] redacts with it, so the two can never disagree
+/// about what is a credential.
+fn authority_at(url: &str) -> (usize, Option<usize>) {
     let after_scheme = url.find("://").map_or(0, |i| i + 3);
     let authority_end = url[after_scheme..]
         .find(['/', '?', '#'])
         .map_or(url.len(), |i| after_scheme + i);
-    let at_in_authority = url[after_scheme..authority_end]
+    let at = url[after_scheme..authority_end]
         .find('@')
         .map(|i| after_scheme + i);
+    (after_scheme, at)
+}
+
+/// Render an endpoint URL with any authority userinfo replaced by
+/// `<redacted>`, for logs and `Debug` output: digest credentials may ride
+/// in a daemon URL's authority (`user:pass@host`), and no diagnostic path
+/// may print them (rule 30). An '@' beyond the authority is ordinary
+/// content and is left alone.
+#[must_use]
+pub fn redacted_endpoint(url: &str) -> String {
+    let (after_scheme, at) = authority_at(url);
+    match at {
+        Some(at) => format!("{}<redacted>{}", &url[..after_scheme], &url[at..]),
+        None => url.to_string(),
+    }
+}
+
+fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
+    // See `authority_at`: only the authority's '@' selects the credential
+    // split; the rest of the URL is never consulted.
+    let (after_scheme, at_in_authority) = authority_at(&url);
 
     let (mut url, userpass) = if let Some(at) = at_in_authority {
         // Split at the authority's '@': userinfo before it, everything
@@ -546,6 +571,28 @@ mod tests {
             "http://127.0.0.1:1/prefix/json_rpc"
         );
         assert_eq!(rpc.digest_uri("json_rpc"), "/prefix/json_rpc");
+    }
+
+    /// Redaction is authority-scoped like the credential split itself: the
+    /// userinfo disappears, an '@' beyond the authority is untouched, and a
+    /// credential-free URL round-trips unchanged.
+    #[test]
+    fn redacted_endpoint_strips_exactly_the_authority_userinfo() {
+        assert_eq!(
+            redacted_endpoint("http://user:hunter2@127.0.0.1:1/x"),
+            "http://<redacted>@127.0.0.1:1/x"
+        );
+        assert_eq!(
+            redacted_endpoint("socks5h://user:hunter2@127.0.0.1:9050"),
+            "socks5h://<redacted>@127.0.0.1:9050"
+        );
+        for unchanged in [
+            "http://127.0.0.1:1",
+            "http://127.0.0.1:1/route?tag=user@host",
+            "127.0.0.1:9050",
+        ] {
+            assert_eq!(redacted_endpoint(unchanged), unchanged);
+        }
     }
 
     /// `validate_endpoint` is the offline startup gate: well-formed

@@ -60,7 +60,7 @@ impl ListenAddr {
 }
 
 /// Server configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ServerConfig {
     /// Bind address (TCP or UDS).
     pub listen: ListenAddr,
@@ -77,6 +77,32 @@ pub struct ServerConfig {
     /// Argon2id cost for `create_wallet` / password rotation.
     /// Production uses [`KdfParams::default`]; tests may clamp.
     pub kdf: KdfParams,
+}
+
+/// Manual (not derived): `daemon_address` may carry digest credentials in
+/// its authority, so it renders through the transport's `redacted_endpoint`
+/// (`AuthConfig` redacts its own password; the remaining fields are inert).
+impl std::fmt::Debug for ServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerConfig")
+            .field("listen", &self.listen)
+            .field("wallet_dir", &self.wallet_dir)
+            .field("network", &self.network)
+            .field(
+                "daemon_address",
+                &shekyl_rpc_transport::redacted_endpoint(&self.daemon_address),
+            )
+            .field(
+                "proxy",
+                &self
+                    .proxy
+                    .as_deref()
+                    .map(shekyl_rpc_transport::redacted_endpoint),
+            )
+            .field("auth", &self.auth)
+            .field("kdf", &self.kdf)
+            .finish()
+    }
 }
 
 /// Shared application state.
@@ -403,5 +429,50 @@ pub async fn spawn_in_process_with(
                 socket_dir: None,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tenant::DaemonEndpoint;
+
+    /// The credential-redaction pin: no `Debug` of server configuration —
+    /// the shapes that reach logs and panic output — renders the digest
+    /// credentials a daemon address may carry, a proxy userinfo, or the
+    /// `--rpc-login` password (rules 30/35).
+    #[test]
+    fn debug_of_server_state_never_renders_credentials() {
+        let endpoint = DaemonEndpoint {
+            address: "http://user:hunter2@127.0.0.1:28581/prefix".into(),
+            proxy: Some("socks5h://puser:swordfish@127.0.0.1:9050".into()),
+        };
+        let config = ServerConfig {
+            listen: ListenAddr::Tcp(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
+            wallet_dir: std::path::PathBuf::from("."),
+            network: Network::Stagenet,
+            daemon_address: endpoint.address.clone(),
+            proxy: endpoint.proxy.clone(),
+            auth: AuthConfig::from_rpc_login(Some("rpcuser:opensesame")),
+            kdf: KdfParams::default(),
+        };
+
+        for rendered in [
+            format!("{endpoint:?}"),
+            format!("{config:?}"),
+            format!("{:?}", config.auth),
+        ] {
+            for secret in ["hunter2", "swordfish", "opensesame"] {
+                assert!(
+                    !rendered.contains(secret),
+                    "a Debug render leaked {secret:?}: {rendered}"
+                );
+            }
+        }
+        // The redaction is visible (not silently dropping the field), and
+        // the non-secret parts survive for diagnostics.
+        assert!(format!("{endpoint:?}").contains("<redacted>"));
+        assert!(format!("{endpoint:?}").contains("127.0.0.1:28581"));
+        assert!(format!("{:?}", config.auth).contains("rpcuser"));
     }
 }

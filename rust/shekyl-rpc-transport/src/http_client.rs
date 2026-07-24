@@ -129,7 +129,15 @@ impl SocksConnector {
         // at the network instead of the flag.
         let hostport = match proxy.split_once("://") {
             None => proxy,
-            Some(("socks5" | "socks5h", rest)) => rest,
+            // Scheme comparison is case-insensitive (RFC 3986 §3.1) — the
+            // canonical form is lowercase, but `SOCKS5H://` is the same
+            // scheme and refusing it would be grammar pedantry, not safety.
+            Some((scheme, rest))
+                if scheme.eq_ignore_ascii_case("socks5")
+                    || scheme.eq_ignore_ascii_case("socks5h") =>
+            {
+                rest
+            }
             Some((scheme, _)) => {
                 return Err(HttpError::InvalidProxy(format!(
                     "unsupported scheme {scheme:?} — this transport speaks SOCKS5 only \
@@ -315,6 +323,11 @@ mod tests {
         // Bracketed IPv6 keeps its brackets (what a `host:port` dial needs).
         let c = SocksConnector::new("socks5h://[::1]:9050").expect("IPv6 proxy");
         assert_eq!(&*c.proxy, "[::1]:9050");
+        // Schemes are case-insensitive (RFC 3986 §3.1).
+        for input in ["SOCKS5H://127.0.0.1:9050", "Socks5://127.0.0.1:9050"] {
+            let c = SocksConnector::new(input).expect("uppercase scheme");
+            assert_eq!(&*c.proxy, "127.0.0.1:9050");
+        }
     }
 
     #[test]
