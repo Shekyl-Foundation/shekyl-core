@@ -1,7 +1,7 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
 **Status:** ROUND 2 applied. The measurement that motivates this document
-landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 86 tests), so
+landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 87 tests), so
 every number below is reproducible rather than asserted. Rounds 1–2 raised
 findings RD-1…RD-4; **all are accepted and dispositioned in §10**, and their
 consequences are folded into the body rather than appended as errata.
@@ -14,7 +14,9 @@ binding channel* (§10.4, §10.6). RD-2 resolved Q-2. A later pass anchored the 
 (§6): the origin is the submitting daemon, the wallet↔daemon boundary is out of
 scope, and fluff visibility is transport-gated — which makes the passive
 adversary **clearnet-only** and the black-hole adversary transport-independent
-(§10.8). §11 anchors every finding against the Dandelion++ paper and the Bitcoin
+(§10.8). §6.5 then *quantifies* the Tor benefit — the paper's supernode observer
+collapses from π₀≈0.45 (clearnet, 30 % attack) to 0.000 (Tor) — so the Tor
+recommendation rests on a measurement, not on reasoning. §11 anchors every finding against the Dandelion++ paper and the Bitcoin
 Core source. Decisions D-1…D-7 stand as amended; §7 is the Round-3 agenda.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (FFI-boundary-moving), and
@@ -496,6 +498,7 @@ comparison, the existing daemon-submit boundary is 754 lines of C++ shim plus
 | Black-hole recovery scales as `M/(j+1)` | `black_hole_recovery_scales_with_holder_count` | Round 1 ✅ |
 | Black-hole attribution leak is mean-invariant; passive races are non-leaky | `black_hole_attack_leak_is_mean_invariant` | Round 2 ✅ |
 | First-spy diffusion precision π₀ | `first_spy_precision_rises_with_spy_fraction` | Round 2 ✅ |
+| Clearnet↔Tor delta: supernode observer collapses on Tor | `tor_collapses_the_supernode_diffusion_observer` | Round 2 (transport) ✅ |
 | Origin always stems (unit stem at q=100%) | `always_fluffing_gives_a_unit_stem_the_origin_still_holds` | Round 2 (RD-4) ✅ |
 | Frozen reference vectors, cross-architecture | `tests/golden_vector.rs` | RP-1 ✅ |
 | 33 `levin_notify` gtests pass unchanged after the cut | `tests/unit_tests/levin.cpp` | RP-3 |
@@ -596,6 +599,51 @@ broadcast — "a Dandelion++-equivalent stem/fluff phase under the anonymity
 network" — depend on this layer being correct, and now on §6.3's transport
 gating: a claim broadcast from a Tor origin faces a different (smaller) adversary
 than one from a clearnet origin.
+
+### 6.5 The clearnet↔Tor delta, quantified (testing posture)
+
+Tor is **not** frozen as the principal default: a pending decision — embed
+[Arti](https://gitlab.torproject.org/tpo/core/arti) vs. drive an external Tor
+gateway, and how either is surfaced in the wallet UI/UX — is deliberately not
+being taken lightly. So the design cannot lean on "the origin is on Tor." What
+it can do is **measure both configurations** and let the recommendation rest on
+a number:
+
+- **Clearnet is the weakest allowable configuration** — the floor the mechanism
+  must defend, and what a user who declines Tor actually runs.
+- **Tor is the likely recommended configuration**, and its additional security
+  should be *demonstrable*, not asserted.
+
+`simulate_transport_observation` measures exactly the delta the §6.3 source fact
+produces, for the paper's primary adversary — a supernode that opens cheap
+*inbound* edges to a fraction of honest nodes and runs the first-spy estimator
+(256 nodes, 8 peers, `tor_collapses_the_supernode_diffusion_observer`):
+
+| supernode reach | transport | fluff observed | first-spy π₀ |
+| --- | --- | --- | --- |
+| dials 5 % | clearnet | 1.0000 | 0.113 |
+| dials 5 % | **Tor/I2P** | **0.0000** | **0.000** |
+| dials 10 % | clearnet | 1.0000 | 0.198 |
+| dials 10 % | **Tor/I2P** | **0.0000** | **0.000** |
+| dials 30 % | clearnet | 1.0000 | 0.451 |
+| dials 30 % | **Tor/I2P** | **0.0000** | **0.000** |
+
+The delta is stark and structural: a clearnet supernode observes **every** fluff
+and attributes the source with the paper's first-spy precision (rising with its
+reach to ~0.45 at a 30 % attack); the same supernode over Tor observes
+**nothing**, because fluff never traverses its inbound edges
+([`levin_notify.cpp:448`](../../src/cryptonote_protocol/levin_notify.cpp#L448)).
+That collapse is the measured additional security of the Tor configuration.
+
+**Honest scope of the Tor benefit.** It collapses the *passive*
+supernode/diffusion observer — the cheap-inbound adversary the paper is built
+against. It does **not** change the *active* black-hole attack, which needs an
+on-path stem-*successor* (outbound) position that honest peer selection makes
+roughly equiprobable on both transports, and whose leak is mean-invariant
+(§10.6). So the story is precise, not "Tor is more private": **Tor eliminates
+the cheap inbound supernode; the black-hole channel is unchanged, and remains
+the reason the mechanism itself (embargo distribution + Q-8a reshape) must be
+correct regardless of transport.**
 
 ---
 
@@ -1042,17 +1090,17 @@ SP-T0), not a parameter to sweep.
    could as easily have been a phantom on the transport that matters most. The
    source check should have come first — the standing "name T and its channel,
    or no threat model" rule. It now has.
-2. **RD-5 is not built in code.** There is no `simulate_passive_neighbor_leak`
-   instrument, and its mean-*dependent* leak magnitude is a claim, not a
-   measurement, in this document. Re-scoping it as clearnet-only is a
-   *structural* result from §6.3 and needs no simulation; *quantifying* it (if
-   Round 3 decides clearnet `ε` matters) is a build item that must carry a
-   transport flag zeroing the inbound-spy channel on the Tor path. Relatedly,
-   the existing reaching-instruments (`simulate_fluff_return`,
-   `simulate_sighting_separability`, `simulate_diffusion_first_spy`) model the
-   **public zone** (fluff reaches inbound peers); a Tor variant would change the
-   return term `F` and remove the inbound-spy path. The black-hole instrument is
-   transport-independent and unaffected.
+2. **The transport-aware instrument is now built** (`simulate_transport_observation`,
+   §6.5), carrying a `Transport` flag that zeroes the inbound-spy channel on the
+   Tor path exactly as §6.3 requires — so the clearnet↔Tor delta for the paper's
+   supernode observer is a *measurement* (π₀ 0.45 → 0.000). What remains unbuilt
+   is the narrower `simulate_passive_neighbor_leak` — the *mean-dependent*
+   magnitude of the clearnet passive channel as a function of the embargo mean —
+   which is only worth building if Round 3 decides clearnet `ε` is a live lever
+   (i.e. if the origin may be on clearnet). The other reaching-instruments
+   (`simulate_fluff_return`, `simulate_sighting_separability`,
+   `simulate_diffusion_first_spy`) still model the **public zone**; their rustdoc
+   says so. The black-hole instrument is transport-independent and unaffected.
 
 ---
 
