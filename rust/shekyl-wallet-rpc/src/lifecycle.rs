@@ -601,7 +601,10 @@ fn validate_wallet_name(name: &str) -> Result<(), WalletRpcError> {
     Ok(())
 }
 
-async fn make_daemon(daemon_address: &str) -> Result<DaemonClient, WalletRpcError> {
+/// Build a [`DaemonClient`] for `daemon_address`. Shared with the
+/// wallet-less proof-check handlers (`proofs.rs`), which dial the
+/// verifier's daemon without any open wallet.
+pub(crate) async fn make_daemon(daemon_address: &str) -> Result<DaemonClient, WalletRpcError> {
     let rpc = SimpleRequestRpc::new(daemon_address.to_owned())
         .await
         .map_err(|_e| WalletRpcError::DaemonUnreachable)?;

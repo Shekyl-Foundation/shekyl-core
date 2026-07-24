@@ -544,6 +544,85 @@ pub struct StakingInfoResult {
     pub pscan_synced_height: Option<i64>,
 }
 
+/// `get_tx_proof` result (WI-RPC-3 proofs).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetTxProofResult {
+    /// Bech32m proof string, HRP `shekyltxproof`. A disclosure artifact —
+    /// OUTBOUND strings carry the tx key in signed plaintext (contract
+    /// DISCLOSURE SEMANTICS); share only with the intended verifier.
+    pub proof: String,
+    /// `OUTBOUND` / `INBOUND`, selected by decoded-address ownership.
+    pub direction: String,
+}
+
+/// One verified output in a valid `check_tx_proof` (WI-RPC-3 proofs).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TxProofOutputView {
+    /// The output's vout position in the proven transaction.
+    pub output_index: u64,
+    /// The output's decrypted amount.
+    pub amount: AtomicUnitsString,
+}
+
+/// `check_tx_proof` result (WI-RPC-3 proofs). `valid: false` means the
+/// proof parsed but its cryptographic content does not verify against
+/// this (txid, address, message) — all other fields are present only
+/// when `valid` is true (contract `CheckTxProofResult`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckTxProofResult {
+    /// Whether the proof verifies.
+    pub valid: bool,
+    /// `OUTBOUND` / `INBOUND`, read from the proof payload (never guessed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
+    /// Sum of the verified outputs' decrypted amounts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub received: Option<AtomicUnitsString>,
+    /// Per-output verification detail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<Vec<TxProofOutputView>>,
+    /// Whether the tx is still in the mempool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_pool: Option<bool>,
+    /// Daemon chain height (block COUNT) minus the tx's block height
+    /// (0-based index): a tip-block tx reports 1; 0 only while pool-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmations: Option<u64>,
+}
+
+/// `get_reserve_proof` result (WI-RPC-3 proofs).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetReserveProofResult {
+    /// Bech32m proof string, HRP `shekylreserveproof`. A disclosure
+    /// artifact — holders learn amounts and gain permanent
+    /// spend-detection on the disclosed outputs (contract DISCLOSURE
+    /// SEMANTICS); prefer amount-bounded proofs.
+    pub proof: String,
+    /// Sum of the amounts the proof actually discloses.
+    pub total: AtomicUnitsString,
+    /// Number of outputs disclosed.
+    pub output_count: u64,
+}
+
+/// `check_reserve_proof` result (WI-RPC-3 proofs). Same valid/invalid
+/// contract as [`CheckTxProofResult`]; the provable live reserve is
+/// `total - spent`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckReserveProofResult {
+    /// Whether the proof verifies.
+    pub valid: bool,
+    /// Sum of all verified outputs in the proof.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<AtomicUnitsString>,
+    /// Portion of `total` whose key images the daemon reports spent at
+    /// verification time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spent: Option<AtomicUnitsString>,
+    /// Number of outputs the proof discloses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_count: Option<u64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
