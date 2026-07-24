@@ -12,7 +12,7 @@
 //! There is no wallet2 / FFI path.
 
 use clap::{Parser, Subcommand};
-use shekyl_cli::{commands, daemon, prompt_password, rpc_client};
+use shekyl_cli::{commands, daemon, network_posture, prompt_password, rpc_client};
 use shekyl_wallet_rpc::Network;
 
 #[derive(Parser)]
@@ -95,11 +95,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+/// Disclose network exposure for every endpoint this invocation will actually
+/// use — the §15 asymmetric warn-only rule (WI-4 §15, 2026-07-23). Warns on a
+/// clear-network endpoint, silent otherwise, and **never** emits an assurance;
+/// see `network_posture` for why the asymmetry is load-bearing.
+///
+/// Both endpoints are checked because they are separately configurable and
+/// carry different exposure: `--rpc-url` reaches a wallet-RPC server (which
+/// sees balances, addresses, and commands), `--daemon-address` reaches a node.
+/// `opens_direct_daemon` is `true` for the REPL, which builds its own
+/// `DaemonClient` from `--daemon-address` **in addition to** the RPC session —
+/// so with `--rpc-url` set the REPL has two distinct live endpoints, and both
+/// must be disclosed. (The flag's "ignored with --rpc-url" note covers only the
+/// self-hosted server's daemon connection, not the REPL's direct client.)
+fn disclose_network_posture(cli: &ReplArgs, opens_direct_daemon: bool) {
+    let proxy = cli.proxy.as_deref();
+    match &cli.rpc_url {
+        Some(url) => {
+            // Only disclose a --rpc-url that connect() will accept: an
+            // unsupported scheme is rejected before any endpoint is opened, so
+            // warning about it would contradict "endpoints actually used".
+            if rpc_client::is_supported_rpc_url(url) {
+                network_posture::disclose("wallet-RPC endpoint", url, proxy);
+            }
+            if opens_direct_daemon {
+                network_posture::disclose("daemon address", &cli.daemon_address, proxy);
+            }
+        }
+        // Self-hosted: the in-process wallet server does the bulk block scan to
+        // the daemon, and its transport cannot honor --proxy. Disclose it as an
+        // unproxyable connection so a non-loopback daemon warns regardless of
+        // --proxy (the REPL's own DaemonClient does honor --proxy, but it is not
+        // the dominant exposure — the scan is). Disclosed once for both.
+        None => {
+            network_posture::disclose_unproxyable("daemon address", &cli.daemon_address);
+        }
+    }
+}
+
 /// Build the wallet-RPC session from the shared connection flags: an external
 /// daemon when `--rpc-url` is set, otherwise a self-hosted in-process server.
 fn build_session(cli: &ReplArgs) -> Result<rpc_client::RpcSession, Box<dyn std::error::Error>> {
     match &cli.rpc_url {
-        Some(url) => Ok(rpc_client::RpcSession::connect(url, cli.debug)?),
+        Some(url) => Ok(rpc_client::RpcSession::connect(
+            url,
+            cli.proxy.as_deref(),
+            cli.debug,
+        )?),
         None => {
             let network = parse_network(&cli.network)?;
             Ok(rpc_client::RpcSession::host_in_process(
@@ -120,6 +162,7 @@ where
     F: FnOnce(&rpc_client::RpcSession) -> Result<(), Box<dyn std::error::Error>>,
 {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
+    disclose_network_posture(conn, false);
     let rpc = build_session(conn)?;
     let outcome = run(&rpc);
     rpc.shutdown();
@@ -167,6 +210,8 @@ fn daemon_url(daemon_address: &str) -> String {
 
 fn run_repl(cli: ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
+
+    disclose_network_posture(&cli, true);
 
     let rpc = build_session(&cli)?;
 

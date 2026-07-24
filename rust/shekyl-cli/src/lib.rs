@@ -9,6 +9,7 @@
 pub mod commands;
 pub mod daemon;
 pub mod display;
+pub mod network_posture;
 pub mod resolve;
 pub mod rpc_client;
 pub mod session;

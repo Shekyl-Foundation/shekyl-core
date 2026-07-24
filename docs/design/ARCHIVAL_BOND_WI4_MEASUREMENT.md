@@ -1921,10 +1921,83 @@ section** — the same spec-first checkpoint the main gate ran on.
 > (founder anchor visible at cumulative ≈ 1.0). Out of this slice per
 > the round's scope: leg-(b) wall-clock emission, M4/M5/M7, GF-4.
 
-## 15. Addendum (2026-07-06): the remote-daemon posture — refuse, not accept
+## 15. Addendum (2026-07-06): the remote-daemon posture — ⛔ REJECTED at review 2026-07-23 (was: refuse, not accept; warn-only ratified instead — disclosure BUILT, Tor default flip still open)
 
-**Status: proposed disposition, review checkpoint required before any
-implementation.** Same spec-first ordering as §14.
+**Status: ⛔ REJECTED (2026-07-23, maintainer review, GF-7 retirement arc)
+— the structural refusal does not ship.** The review ran the checkpoint
+this section's own status line required, and rejected the proposal on four
+grounds, any one sufficient:
+
+1. **The endpoint check measures socket locality, not control, and errs
+   in both directions.** §15.3 itself concedes the false negative (a
+   tunneled remote daemon presents as loopback and passes). The review
+   adds the false positive: a user's own daemon on their own LAN or VPS
+   is refused a configuration that is fine, because the wallet cannot
+   tell. A check with false negatives on the attack and false positives
+   on the safe case is not structure — it is a mitigation wearing
+   structural clothes.
+2. **Refusal removes user choice on a proxy signal.** The ratified
+   replacement is the **asymmetric warn-only rule**: a non-loopback endpoint draws a
+   warning — true regardless of who controls the daemon, even the user's
+   own, if the network path is not isolated — and a loopback endpoint
+   draws **silence**. No configuration ever draws an assurance: a
+   positive "secure" claim derived from an endpoint check asserts a
+   property the check cannot measure (identity is not non-observation —
+   the Monero HTTPS-autodetect failure, exactly). ③ remains a named,
+   informed choice under the engine's no-silent-③ invariant
+   (`posture.rs`: never inferred, never a silent fallback); the choice
+   site surfaces the residuals at the point of selection.
+3. **The pricing's evidentiary basis is withdrawn.** §15.2 priced
+   remote-daemon exclusion against "a posture the gate measures at
+   `r ≈ 5`" — a number from the withdrawn instrument (§13.1 banner,
+   2026-07-23). No measurement basis remains for pricing exclusion, and
+   none is derivable (the instrument's channel was never on the chain).
+4. **What carries the weight is transport isolation, and §15.4's own
+   reversion clause pointed at it.** The clause reopened the refusal "if
+   the wallet↔daemon transport gains … an isolated-circuit RPC
+   transport" — that transport was built (`shekyl-p-transport`: per-`P`
+   circuit isolation, "`P` rides the principal's circuit"
+   *unrepresentable*, persona side mandatory-by-construction). Isolation
+   denies the daemon the correlation regardless of who controls it —
+   structure, where the endpoint check was detection. The clause's
+   prescribed re-grade shape (a new GF-7 round under `r < 2`) is void
+   with the instrument; the reopening criterion is dispositioned
+   **absorbed**: the path it named was taken structurally, with the
+   **principal-side default flip** (§18.13's named work item) as the
+   remaining open front.
+
+**The ratified replacement**, in two parts with different build states:
+
+**(a) The asymmetric warn-only disclosure — BUILT (2026-07-23, post-#358).**
+`shekyl-cli`'s `network_posture` module classifies each endpoint the process
+actually opens and emits *at most* a warning: non-loopback with no proxy
+warns; loopback, unix socket, or any configured proxy is silent; **no
+configuration ever draws an assurance** (the load-bearing half — a positive
+claim from an endpoint check asserts a property the check cannot measure, and
+a test pins that the only emissible message is a warning). It does not grade
+the operator's proxy: a user on their own hardened Tor or VPN may be better
+protected than any default we ship, and warning them would repeat this
+section's rejected false-positive error.
+
+**(b) The principal-side Tor default flip — NOT YET BUILT; design open.**
+Two forks are unresolved and are deliberately not being decided by
+implementation: the **embedded-Arti-vs-external-Tor** source question
+(FOLLOWUPS), and the **transport-selection knob**, whose axis is *who provides
+the primary transport* (ours / the operator's / none) rather than "Tor or
+not" — a user pointing at their own Tor instance has not opted out of Tor, so
+an anti-Tor toggle would misname the common case. Two constraints are already
+settled: **Tor is the default**, and the opt-out is **first-class and
+explicit**, never an ambient side effect of setting some other flag. The
+loud-failure rule extends to the operator's own proxy — a configured proxy
+that is down must fail loudly, never silently fall back to clear
+(`posture.rs`'s no-silent-③ shape); believing you are proxied when you are
+not is worse than knowingly running clear.
+
+Historical note on (a)'s deferral: it was blocked on the WI-RPC-2b CLI
+surface rework (PR #358, merged 2026-07-23), which owned the files.
+
+The text below is the rejected proposal, preserved as the record of what
+was considered and why it was rejected. Same spec-first ordering as §14.
 
 ### 15.1 The question "named residual" was carrying implicitly
 
@@ -1938,7 +2011,7 @@ found a structural refusal (no early reward, shard-gated availability).
 The analogous question here has an analogous answer, because the wallet
 is Shekyl's own software and it knows its daemon endpoint.
 
-### 15.2 Proposed disposition: structural refusal at the dispatch driver
+### 15.2 ⛔ REJECTED proposal (2026-07-23): structural refusal at the dispatch driver
 
 The archival-bond dispatch driver (the WI-2/WI-3 surface that arms
 funding, bond-post, and drain dispatch) **refuses to arm when the wallet's
@@ -1976,7 +2049,11 @@ the number: the gate certifies the local posture; a tunneled-remote
 configuration silently re-enters the `r ≈ 5` regime the refusal exists to
 prevent.
 
-### 15.4 What this does to the verdict, and the reversion clause
+### 15.4 What this would have done to the verdict, and the reversion clause (⛔ never accepted — rejected 2026-07-23, §15 head)
+
+*(The acceptance below never occurred; the reversion clause's
+transport-isolation criterion is dispositioned **absorbed** — see ground 4
+in the §15 rejection banner.)*
 
 On acceptance at review, the §13 verdict's "remote-daemon posture unmet,
 named residual" line becomes "remote-daemon posture **structurally

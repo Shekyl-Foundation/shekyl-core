@@ -17,7 +17,9 @@
 //!   ([`shekyl_wallet_rpc::spawn_in_process`]) and speaks HTTP/1.1 over that
 //!   socket. One-shot commands and the REPL both use this mode.
 //! - **Remote (`--rpc-url`):** the CLI connects to an externally managed
-//!   `shekyl-wallet-rpc` daemon over HTTP (or a `uds://` socket path).
+//!   `shekyl-wallet-rpc` **server** over HTTP (or a `uds://` socket path).
+//!   "Server" throughout, never "daemon" — in this codebase the daemon is the
+//!   *node* (`daemon::DaemonClient`), and the CLI talks to both at once.
 //!
 //! The session also tracks which wallet the CLI believes is open. That flag
 //! is presentation state (prompt text, "no wallet open" preflights) — the
@@ -83,8 +85,12 @@ impl RpcError {
 enum Transport {
     /// HTTP/1.1 over a Unix domain socket.
     Uds(PathBuf),
-    /// HTTP(S) over TCP to an external daemon.
-    Http(String),
+    /// HTTP(S) over TCP to an external `shekyl-wallet-rpc` server (the
+    /// `--rpc-url` target — not the node daemon; cf. `daemon::DaemonClient`),
+    /// through a ureq agent that carries the `--proxy` SOCKS config (if any) —
+    /// so a proxied `--rpc-url` is genuinely proxied, which the network-posture
+    /// disclosure relies on.
+    Http { url: String, agent: ureq::Agent },
 }
 
 /// The runtime and server handle backing a self-hosted session.
@@ -142,23 +148,20 @@ impl RpcSession {
         })
     }
 
-    /// Connect to an externally managed `shekyl-wallet-rpc` daemon.
+    /// Connect to an externally managed `shekyl-wallet-rpc` **server** (not the
+    /// node daemon — cf. [`crate::daemon::DaemonClient`]).
     ///
-    /// Accepts `http://…` / `https://…` URLs or a `uds:///path/to.sock`
-    /// socket path.
-    pub fn connect(rpc_url: &str, debug: bool) -> Result<Self, String> {
-        let transport = if let Some(path) = rpc_url.strip_prefix("uds://") {
-            if path.is_empty() {
-                return Err("--rpc-url uds:// path must not be empty".into());
-            }
-            Transport::Uds(PathBuf::from(path))
-        } else if rpc_url.starts_with("http://") || rpc_url.starts_with("https://") {
-            Transport::Http(rpc_url.trim_end_matches('/').to_owned())
-        } else {
-            return Err(format!(
-                "invalid --rpc-url '{rpc_url}': expected http://host:port, \
-                 https://host:port, or uds:///path/to.sock"
-            ));
+    /// Accepts `http://…` / `https://…` URLs or a `uds:///path/to.sock` socket
+    /// path. `proxy` (a SOCKS address) applies **only** to the HTTP(S)
+    /// transport; a `uds://` session is a local socket with no network path to
+    /// route, so the argument is ignored for it.
+    pub fn connect(rpc_url: &str, proxy: Option<&str>, debug: bool) -> Result<Self, String> {
+        let transport = match parse_rpc_url(rpc_url)? {
+            RpcUrlForm::Uds(path) => Transport::Uds(PathBuf::from(path)),
+            RpcUrlForm::Http => Transport::Http {
+                url: rpc_url.trim_end_matches('/').to_owned(),
+                agent: build_http_agent(proxy)?,
+            },
         };
         let session = Self {
             transport,
@@ -186,7 +189,7 @@ impl RpcSession {
     pub fn socket_path(&self) -> Option<&Path> {
         match &self.transport {
             Transport::Uds(path) => Some(path),
-            Transport::Http(_) => None,
+            Transport::Http { .. } => None,
         }
     }
 
@@ -222,7 +225,7 @@ impl RpcSession {
         // request-side serialization is wiped inside the transport helpers.
         let raw = Zeroizing::new(match &self.transport {
             Transport::Uds(path) => http_post_uds(path, &body)?,
-            Transport::Http(url) => http_post_tcp(url, &body)?,
+            Transport::Http { url, agent } => http_post_tcp(agent, url, &body)?,
         });
 
         let parsed: Value = serde_json::from_str(&raw)
@@ -324,10 +327,79 @@ fn http_post_uds(path: &Path, body: &Value) -> Result<String, RpcError> {
 /// POST the JSON-RPC body to an HTTP(S) endpoint and return the response
 /// body. JSON-RPC application errors ride back as HTTP 200 with an `error`
 /// object, which the caller decodes.
-fn http_post_tcp(url: &str, body: &Value) -> Result<String, RpcError> {
+/// The accepted `--rpc-url` forms.
+enum RpcUrlForm<'a> {
+    /// A `uds://` socket path, guaranteed non-empty.
+    Uds(&'a str),
+    /// An `http(s)://` URL with a non-empty host.
+    Http,
+}
+
+/// Parse `--rpc-url` into an accepted form, or explain why it is rejected.
+///
+/// **Single source of acceptance.** [`RpcSession::connect`] and
+/// [`is_supported_rpc_url`] both route through this, so the two cannot disagree
+/// about what is acceptable — previously they were only kept in step by a
+/// comment and a test name. That gap was reachable: a hostless `http://`,
+/// `http:///`, or `http://:29500` passed both the prefix check and `connect`,
+/// which then returned `Ok` (the post-connect probe is best-effort and swallows
+/// the failure) and left the operator to hit a confusing error later — while the
+/// network-posture disclosure, parsing the same string properly, warned about an
+/// endpoint with an empty host.
+///
+/// The host check reuses [`crate::network_posture::host_of`] rather than a
+/// second parser, for the same reason: one extractor cannot disagree with
+/// itself about what a host is.
+fn parse_rpc_url(rpc_url: &str) -> Result<RpcUrlForm<'_>, String> {
+    if let Some(path) = rpc_url.strip_prefix("uds://") {
+        if path.is_empty() {
+            return Err("--rpc-url uds:// path must not be empty".into());
+        }
+        return Ok(RpcUrlForm::Uds(path));
+    }
+    if rpc_url.starts_with("http://") || rpc_url.starts_with("https://") {
+        if crate::network_posture::host_of(rpc_url).is_empty() {
+            return Err(format!(
+                "invalid --rpc-url '{rpc_url}': missing host \
+                 (expected http://host:port or https://host:port)"
+            ));
+        }
+        return Ok(RpcUrlForm::Http);
+    }
+    Err(format!(
+        "invalid --rpc-url '{rpc_url}': expected http://host:port, \
+         https://host:port, or uds:///path/to.sock"
+    ))
+}
+
+/// Whether `rpc_url` is a form [`RpcSession::connect`] accepts. The
+/// network-posture disclosure gates on this so it never warns about an endpoint
+/// `connect` will immediately reject — no connection is opened, so there is
+/// nothing to disclose.
+#[must_use]
+pub fn is_supported_rpc_url(rpc_url: &str) -> bool {
+    parse_rpc_url(rpc_url).is_ok()
+}
+
+/// Build the ureq agent for the `--rpc-url` HTTP transport, applying the
+/// operator's `--proxy` SOCKS config when set. This is what makes a proxied
+/// `--rpc-url` actually route through the proxy — mirrors `daemon::DaemonClient`
+/// so both CLI HTTP paths honor `--proxy` identically.
+fn build_http_agent(proxy: Option<&str>) -> Result<ureq::Agent, String> {
+    let mut config = ureq::Agent::config_builder();
+    if let Some(proxy_addr) = proxy {
+        let proxy_obj = ureq::Proxy::new(proxy_addr)
+            .map_err(|e| format!("invalid --proxy '{proxy_addr}': {e}"))?;
+        config = config.proxy(Some(proxy_obj));
+    }
+    Ok(config.build().new_agent())
+}
+
+fn http_post_tcp(agent: &ureq::Agent, url: &str, body: &Value) -> Result<String, RpcError> {
     // Serialized request holds cleartext secrets; wipe on drop (rule 35).
     let payload = Zeroizing::new(body.to_string().into_bytes());
-    let mut response = ureq::post(url)
+    let mut response = agent
+        .post(url)
         .header("Content-Type", "application/json")
         .send(payload.as_slice())
         .map_err(|e| RpcError::Transport(e.to_string()))?;
@@ -450,9 +522,49 @@ mod tests {
 
     #[test]
     fn connect_rejects_unknown_scheme() {
-        assert!(RpcSession::connect("ftp://host", false).is_err());
-        assert!(RpcSession::connect("uds://", false).is_err());
-        assert!(RpcSession::connect("http://127.0.0.1:29500", false).is_ok());
-        assert!(RpcSession::connect("uds:///tmp/x.sock", false).is_ok());
+        assert!(RpcSession::connect("ftp://host", None, false).is_err());
+        assert!(RpcSession::connect("uds://", None, false).is_err());
+        // Hostless HTTP(S) forms are rejected up front rather than returning
+        // Ok and failing later: the post-connect probe is best-effort and
+        // swallows the failure, so a malformed URL would otherwise surface as
+        // a confusing error at the first real command — and would reach the
+        // network-posture disclosure as an empty host.
+        for bad in ["http://", "https://", "http:///", "http://:29500"] {
+            let err = RpcSession::connect(bad, None, false)
+                .err()
+                .unwrap_or_else(|| panic!("hostless '{bad}' must be rejected"));
+            assert!(err.contains("missing host"), "{bad}: {err}");
+        }
+        assert!(RpcSession::connect("http://127.0.0.1:29500", None, false).is_ok());
+        assert!(RpcSession::connect("uds:///tmp/x.sock", None, false).is_ok());
+        // A well-formed SOCKS proxy builds the agent (reachability is not
+        // checked at connect time — the open-state probe is best-effort).
+        assert!(RpcSession::connect(
+            "http://127.0.0.1:29500",
+            Some("socks5://127.0.0.1:9050"),
+            false
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn is_supported_rpc_url_tracks_connect_accepted_forms() {
+        // Accepted forms match connect_rejects_unknown_scheme above.
+        assert!(is_supported_rpc_url("http://host:1"));
+        assert!(is_supported_rpc_url("https://host:1"));
+        assert!(is_supported_rpc_url("uds:///tmp/x.sock"));
+        // Rejected: empty uds path, unknown scheme, bare host:port, and any
+        // hostless HTTP(S) form. This tracks `connect` by construction now —
+        // both route through `parse_rpc_url` — so this test documents the rule
+        // rather than being the thing that keeps the two in step.
+        assert!(!is_supported_rpc_url("uds://"));
+        assert!(!is_supported_rpc_url("ftp://host"));
+        for bad in ["http://", "https://", "http:///", "http://:29500"] {
+            assert!(
+                !is_supported_rpc_url(bad),
+                "hostless '{bad}' must be rejected"
+            );
+        }
+        assert!(!is_supported_rpc_url("host:11028"));
     }
 }

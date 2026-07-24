@@ -167,6 +167,38 @@
 
 ### Changed
 
+- **wallet design: the §15 remote-daemon structural refusal is REJECTED
+  at review** (WI-4 §15 head banner, 2026-07-23; the GF-7 retirement
+  arc's fourth surface). The proposed dispatch-driver refusal does not
+  ship: the endpoint check measures socket locality, not control, and
+  errs in both directions (tunnel false-negative — §15.3's own concession
+  — and own-LAN/VPS false-positive); refusal removes user choice on a
+  proxy signal; and the pricing's `r ≈ 5` basis is from the withdrawn
+  instrument. The ratified replacement: the **asymmetric warn-only rule**
+  (non-loopback draws a warning true regardless of daemon control;
+  loopback draws silence; *no configuration ever draws an assurance* —
+  the anti-autodetect rule) and the structural defense of **circuit
+  isolation** (persona side already built — `shekyl-p-transport`,
+  unrepresentable-otherwise), with the principal-side Tor **default
+  flip** as the open front. §15.4's transport-isolation reopening criterion is
+  dispositioned absorbed — the path it named was built. **The warn-only
+  disclosure is BUILT** (`shekyl-cli::network_posture`: warns on a
+  non-loopback endpoint that no configured proxy actually reaches, silent on
+  loopback / unix socket / a genuinely proxied connection. `--proxy` is wired
+  into the `--rpc-url` client (ureq) and the REPL's direct daemon client, so
+  those are proxied and stay silent; the self-hosted server's block-scanning
+  connection to the daemon has no proxy support in its transport, so a
+  non-loopback daemon warns regardless of `--proxy` — the warning reflects what
+  is actually proxied, never a global `--proxy is set` guess. A test pins that
+  the only emissible message is a warning — never an assurance; it does not
+  grade the operator's own proxy). **The principal-side Tor default flip is not yet built** — Tor
+  as default and a first-class, never-ambient opt-out are settled, but the
+  embedded-Arti-vs-external-Tor source fork and the transport-selection
+  knob (whose axis is *who provides the transport*, not "Tor or not")
+  remain open and are deliberately not being decided by implementation. The broadcast-③ type-level refusal
+  (SP-T4a `BroadcastPosture`, no ThirdParty variant) is untouched — that
+  one is structure, not detection.
+
 - **consensus design: the M1 `K_COVER` reward gate is RETIRED**
   (`ARCHIVAL_REWARD_GATE_M1.md` §13 — the record; spec preserved, code
   removal tracked in FOLLOWUPS as the implementation half). Ruling:
