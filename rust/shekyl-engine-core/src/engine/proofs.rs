@@ -1253,4 +1253,466 @@ mod tests {
             Err(ProofsError::NoProvableOutputs(_))
         ));
     }
+
+    // ── wallet-less check workflows over a mock daemon ───────────────
+    //
+    // End-to-end round trips for `check_tx_proof` / `check_reserve_proof`:
+    // real key material (`LocalKeys::from_test_seed`), real constructed
+    // outputs, a real serialized pruned wire transaction served by a mock
+    // `Rpc`, and the full Bech32m + locator framing in between. This is
+    // the WI-RPC-3 generate→check gate at the workflow layer (the RPC
+    // handler above it is a thin parameter mapper with its own tests).
+    mod check_workflows {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        use super::*;
+
+        use shekyl_crypto_pq::output::{
+            compute_output_key_image, construct_output, recover_combined_ss, OutputData,
+        };
+        use shekyl_curve_generators::biased_hash_to_point;
+        use shekyl_scanner::extra::ExtraField;
+        use shekyl_wire::{CtBase, Input, Output, TxPrefix};
+
+        use crate::engine::local_keys::LocalKeys;
+        use crate::engine::proof_bridge;
+
+        /// Deterministic wallet under test (testnet raw-seed derivation).
+        const TEST_SEED: [u8; 32] = [0xA7; 32];
+        /// Sender-side tx key for `construct_output` — the retained
+        /// secret an OUTBOUND proof signs with.
+        const TX_KEY_SECRET: [u8; 32] = [11u8; 32];
+        /// Challenge message bound into every generated proof.
+        const MSG: &str = "WI-RPC-3 check round trip";
+        /// Mock daemon chain height (block COUNT, per `get_height`).
+        const CHAIN_HEIGHT: usize = 108;
+        /// The fixture tx's 0-based block height; with the height above
+        /// the contract pin yields 8 confirmations.
+        const TX_BLOCK_HEIGHT: u64 = 100;
+        /// Amounts paid to the wallet at vout 0 and vout 1.
+        const AMOUNTS: [u64; 2] = [5_000, 7_500];
+
+        /// Canned daemon: serves `get_transactions` (pruned bodies by
+        /// txid hex, `missed_tx` for anything else), `get_height`, and
+        /// `is_key_image_spent` from fixed tables.
+        #[derive(Clone)]
+        struct MockRpc {
+            /// txid hex → pruned body hex.
+            txs: Arc<BTreeMap<String, String>>,
+            /// `is_key_image_spent` reply, positional (0 = unspent).
+            spent_status: Arc<Vec<u64>>,
+            height: usize,
+        }
+
+        impl Rpc for MockRpc {
+            async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+                let reply = match route {
+                    "get_transactions" => {
+                        let req: Value =
+                            serde_json::from_slice(&body).expect("request body is JSON");
+                        let hashes = req["txs_hashes"]
+                            .as_array()
+                            .expect("txs_hashes is an array");
+                        let mut txs = Vec::new();
+                        let mut missed = Vec::new();
+                        for h in hashes {
+                            let h = h.as_str().expect("txid is a hex string");
+                            match self.txs.get(h) {
+                                Some(body_hex) => txs.push(json!({
+                                    "tx_hash": h,
+                                    "pruned_as_hex": body_hex,
+                                    "in_pool": false,
+                                    "block_height": TX_BLOCK_HEIGHT,
+                                })),
+                                None => missed.push(h.to_string()),
+                            }
+                        }
+                        json!({ "txs": txs, "missed_tx": missed })
+                    }
+                    "get_height" => json!({ "height": self.height }),
+                    "is_key_image_spent" => {
+                        let req: Value =
+                            serde_json::from_slice(&body).expect("request body is JSON");
+                        let n = req["key_images"]
+                            .as_array()
+                            .expect("key_images is an array")
+                            .len();
+                        let statuses: Vec<u64> = (0..n)
+                            .map(|i| self.spent_status.get(i).copied().unwrap_or(0))
+                            .collect();
+                        json!({ "spent_status": statuses })
+                    }
+                    other => panic!("mock daemon received unexpected route {other}"),
+                };
+                Ok(reply.to_string().into_bytes())
+            }
+        }
+
+        struct CheckFixture {
+            local: LocalKeys,
+            address: ShekylAddress,
+            txid: [u8; 32],
+            outputs: Vec<OutputData>,
+            rpc: MockRpc,
+        }
+
+        /// `value[8] ‖ tag[1]` — the wire's 9-byte encrypted-amount /
+        /// encrypted-label form over `construct_output`'s split fields.
+        fn join9(value: [u8; 8], tag: u8) -> [u8; 9] {
+            let mut out = [0u8; 9];
+            out[..8].copy_from_slice(&value);
+            out[8] = tag;
+            out
+        }
+
+        fn ciphertext_of(od: &OutputData) -> HybridCiphertext {
+            HybridCiphertext {
+                x25519: od.kem_ciphertext_x25519,
+                ml_kem: od.kem_ciphertext_ml_kem.clone(),
+            }
+        }
+
+        /// Build the wallet, a canonical 2-output pruned spend paying it
+        /// at vout 0 and 1, and a mock daemon serving that tx.
+        fn make_fixture(spent_status: Vec<u64>) -> CheckFixture {
+            let local = LocalKeys::from_test_seed(TEST_SEED);
+            let keys = &local.keys;
+
+            let outputs: Vec<OutputData> = AMOUNTS
+                .iter()
+                .enumerate()
+                .map(|(i, &amount)| {
+                    construct_output(
+                        &TX_KEY_SECRET,
+                        &keys.x25519_pk,
+                        &keys.ml_kem_ek,
+                        keys.spend_pk.as_canonical_bytes(),
+                        amount,
+                        u64::try_from(i).unwrap(),
+                    )
+                    .expect("construct_output succeeds for synthetic outputs")
+                })
+                .collect();
+
+            // One concatenated hybrid KEM blob (x25519 ‖ ml_kem per
+            // output, vout order) in a single 0x06 extra field — the
+            // layout `on_chain_outputs_of` slices at the scanner's
+            // offsets.
+            let mut kem_blob = Vec::new();
+            for od in &outputs {
+                kem_blob.extend_from_slice(&od.kem_ciphertext_x25519);
+                kem_blob.extend_from_slice(&od.kem_ciphertext_ml_kem);
+            }
+            let extra = ExtraField::PqcKemCiphertext(kem_blob).serialize();
+
+            let tx = Transaction {
+                prefix: TxPrefix {
+                    unlock_time: 0,
+                    inputs: vec![Input::ToKey {
+                        amount: 0,
+                        key_offsets: vec![],
+                        key_image: [0x42u8; 32],
+                    }],
+                    outputs: outputs
+                        .iter()
+                        .map(|od| Output {
+                            amount: 0,
+                            key: od.output_key,
+                            view_tag: od.view_tag_prefilter,
+                        })
+                        .collect(),
+                    extra,
+                },
+                ct: Ct::Fcmp {
+                    fee: 0,
+                    reference_block: [0u8; 32],
+                    base: CtBase {
+                        enc_amounts: outputs
+                            .iter()
+                            .map(|od| join9(od.enc_amount, od.amount_tag))
+                            .collect(),
+                        enc_labels: outputs
+                            .iter()
+                            .map(|od| join9(od.enc_label, od.label_tag))
+                            .collect(),
+                        commitments: outputs.iter().map(|od| od.commitment).collect(),
+                    },
+                    pqc_auths: vec![],
+                    prunable: None,
+                },
+            };
+
+            // The pruned form is associated by the daemon's `tx_hash`
+            // label, not by re-hashing (`parse_tx_batch`'s contract), so
+            // a fixed txid keeps the fixture simple.
+            let txid = [0x77u8; 32];
+            let mut txs = BTreeMap::new();
+            txs.insert(hex::encode(txid), hex::encode(tx.serialize()));
+
+            let address = ShekylAddress::new(
+                Network::Testnet,
+                *keys.spend_pk.as_canonical_bytes(),
+                *keys.view_pk.as_canonical_bytes(),
+                keys.ml_kem_ek.to_vec(),
+            );
+
+            CheckFixture {
+                address,
+                txid,
+                outputs,
+                rpc: MockRpc {
+                    txs: Arc::new(txs),
+                    spent_status: Arc::new(spent_status),
+                    height: CHAIN_HEIGHT,
+                },
+                local,
+            }
+        }
+
+        /// Generate the wallet's INBOUND proof over both fixture outputs
+        /// and frame it exactly as the workflow does.
+        fn inbound_proof_string(fx: &CheckFixture) -> String {
+            let bytes = proof_bridge::generate_inbound_proof(
+                &fx.local,
+                &InboundProofRequest {
+                    txid: fx.txid,
+                    address_bytes: canonical_address_bytes(&fx.address),
+                    message: MSG.as_bytes().to_vec(),
+                    outputs: fx
+                        .outputs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, od)| InboundProofOutput {
+                            vout_index: u32::try_from(i).unwrap(),
+                            ciphertext: ciphertext_of(od),
+                        })
+                        .collect(),
+                },
+            )
+            .expect("inbound generation succeeds");
+            encode_tx_proof(TxProofDirection::Inbound, &bytes).expect("bech32m encode")
+        }
+
+        /// The wallet's canonical key image for a fixture output —
+        /// recipient-side decap + `x = ho + b` key-image computation,
+        /// the same chain the claim path runs.
+        fn key_image_of(fx: &CheckFixture, vout: u64) -> KeyImage {
+            let od = &fx.outputs[usize::try_from(vout).unwrap()];
+            let keys = &fx.local.keys;
+            let ss = recover_combined_ss(
+                keys.view_sk.as_canonical_bytes(),
+                keys.ml_kem_dk.as_canonical_bytes(),
+                &od.kem_ciphertext_x25519,
+                &od.kem_ciphertext_ml_kem,
+            )
+            .expect("decap of a self-paid ciphertext succeeds");
+            let hp = biased_hash_to_point(od.output_key).compress().to_bytes();
+            compute_output_key_image(&ss.0, vout, keys.spend_sk.as_canonical_bytes(), &hp)
+                .expect("key image computes")
+                .key_image
+        }
+
+        /// Generate a reserve proof over both fixture outputs and frame
+        /// it (locator section + Bech32m) exactly as the workflow does.
+        fn reserve_proof_string(fx: &CheckFixture) -> String {
+            let bytes = proof_bridge::generate_reserve_proof(
+                &fx.local,
+                &ReserveProofRequest {
+                    address_bytes: canonical_address_bytes(&fx.address),
+                    message: MSG.as_bytes().to_vec(),
+                    outputs: fx
+                        .outputs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, od)| {
+                            let vout = u64::try_from(i).unwrap();
+                            ReserveProofOutput {
+                                vout_index: vout,
+                                ciphertext: ciphertext_of(od),
+                                key_image: key_image_of(fx, vout),
+                                output_key: od.output_key,
+                            }
+                        })
+                        .collect(),
+                },
+            )
+            .expect("reserve generation succeeds");
+            let payload = locator_payload(&[(fx.txid, 0), (fx.txid, 1)], &bytes);
+            encode_blob(HRP_RESERVE_PROOF, &payload).expect("bech32m encode")
+        }
+
+        #[tokio::test]
+        async fn check_inbound_tx_proof_round_trips_over_the_mock_daemon() {
+            let fx = make_fixture(vec![]);
+            let proof = inbound_proof_string(&fx);
+
+            let checked = check_tx_proof(&fx.rpc, fx.txid, &fx.address, MSG, &proof)
+                .await
+                .expect("check succeeds");
+            let CheckedTxProof::Valid {
+                direction,
+                received,
+                outputs,
+                in_pool,
+                confirmations,
+            } = checked
+            else {
+                panic!("expected Valid, got Invalid");
+            };
+            assert_eq!(direction, TxProofDirection::Inbound);
+            assert_eq!(received, AtomicUnits::from_raw(12_500));
+            assert_eq!(outputs.len(), 2);
+            assert_eq!(outputs[0].output_index, 0);
+            assert_eq!(outputs[0].amount, AtomicUnits::from_raw(5_000));
+            assert_eq!(outputs[1].output_index, 1);
+            assert_eq!(outputs[1].amount, AtomicUnits::from_raw(7_500));
+            assert!(!in_pool);
+            // Contract pin: chain height (block count) minus 0-based
+            // block height — 108 - 100 = 8.
+            assert_eq!(confirmations, CHAIN_HEIGHT as u64 - TX_BLOCK_HEIGHT);
+        }
+
+        #[tokio::test]
+        async fn check_outbound_tx_proof_round_trips_over_the_mock_daemon() {
+            let fx = make_fixture(vec![]);
+            let keys = &fx.local.keys;
+            // The sender's side: sign with the (retained) tx key over
+            // both outputs, exactly what `generate_outbound` produces
+            // after vout discovery.
+            let bytes = generate_outbound_proof(
+                &TX_KEY_SECRET,
+                &fx.txid,
+                &canonical_address_bytes(&fx.address),
+                MSG.as_bytes(),
+                &keys.x25519_pk,
+                &keys.ml_kem_ek,
+                &[0, 1],
+            )
+            .expect("outbound generation succeeds");
+            let proof =
+                encode_tx_proof(TxProofDirection::Outbound, &bytes).expect("bech32m encode");
+
+            let checked = check_tx_proof(&fx.rpc, fx.txid, &fx.address, MSG, &proof)
+                .await
+                .expect("check succeeds");
+            let CheckedTxProof::Valid {
+                direction,
+                received,
+                outputs,
+                ..
+            } = checked
+            else {
+                panic!("expected Valid, got Invalid");
+            };
+            assert_eq!(direction, TxProofDirection::Outbound);
+            assert_eq!(received, AtomicUnits::from_raw(12_500));
+            assert_eq!(outputs.len(), 2);
+        }
+
+        #[tokio::test]
+        async fn check_tx_proof_with_a_tampered_message_is_invalid_not_error() {
+            let fx = make_fixture(vec![]);
+            let proof = inbound_proof_string(&fx);
+
+            let checked =
+                check_tx_proof(&fx.rpc, fx.txid, &fx.address, "a different message", &proof)
+                    .await
+                    .expect("the method answers the question rather than erroring");
+            assert!(matches!(checked, CheckedTxProof::Invalid));
+        }
+
+        #[tokio::test]
+        async fn check_tx_proof_against_the_wrong_address_is_invalid() {
+            let fx = make_fixture(vec![]);
+            let proof = inbound_proof_string(&fx);
+
+            // A different wallet's address: same network, wrong keys.
+            let other = LocalKeys::from_test_seed([0x5C; 32]);
+            let wrong = ShekylAddress::new(
+                Network::Testnet,
+                *other.keys.spend_pk.as_canonical_bytes(),
+                *other.keys.view_pk.as_canonical_bytes(),
+                other.keys.ml_kem_ek.to_vec(),
+            );
+
+            let checked = check_tx_proof(&fx.rpc, fx.txid, &wrong, MSG, &proof)
+                .await
+                .expect("check succeeds");
+            assert!(matches!(checked, CheckedTxProof::Invalid));
+        }
+
+        #[tokio::test]
+        async fn check_tx_proof_for_an_unknown_txid_is_tx_not_found() {
+            let fx = make_fixture(vec![]);
+            let proof = inbound_proof_string(&fx);
+
+            let err = check_tx_proof(&fx.rpc, [0x99; 32], &fx.address, MSG, &proof)
+                .await
+                .expect_err("unknown txid refuses");
+            assert!(matches!(err, ProofsError::TxNotFound(_)));
+        }
+
+        #[tokio::test]
+        async fn check_tx_proof_with_a_corrupted_string_is_malformed() {
+            let fx = make_fixture(vec![]);
+            let mut proof = inbound_proof_string(&fx);
+            // Flip the final data character: Bech32m's checksum refuses.
+            let last = proof.pop().expect("proof string is non-empty");
+            proof.push(if last == 'q' { 'p' } else { 'q' });
+
+            let err = check_tx_proof(&fx.rpc, fx.txid, &fx.address, MSG, &proof)
+                .await
+                .expect_err("corrupted string refuses");
+            assert!(matches!(err, ProofsError::Malformed(_)));
+        }
+
+        #[tokio::test]
+        async fn check_reserve_proof_round_trips_and_reports_the_spent_portion() {
+            // The daemon reports vout 1 (7,500) spent: the proof still
+            // verifies, and the spent portion is reported for
+            // subtraction (the contract's live-reserve semantics).
+            let fx = make_fixture(vec![0, 1]);
+            let proof = reserve_proof_string(&fx);
+
+            let checked = check_reserve_proof(&fx.rpc, &fx.address, MSG, &proof)
+                .await
+                .expect("check succeeds");
+            let CheckedReserveProof::Valid {
+                total,
+                spent,
+                output_count,
+            } = checked
+            else {
+                panic!("expected Valid, got Invalid");
+            };
+            assert_eq!(total, AtomicUnits::from_raw(12_500));
+            assert_eq!(spent, AtomicUnits::from_raw(7_500));
+            assert_eq!(output_count, 2);
+
+            // Message binding: a tampered challenge is Invalid, not an
+            // error.
+            let tampered = check_reserve_proof(&fx.rpc, &fx.address, "not the message", &proof)
+                .await
+                .expect("the method answers the question rather than erroring");
+            assert!(matches!(tampered, CheckedReserveProof::Invalid));
+        }
+
+        #[tokio::test]
+        async fn check_reserve_proof_locator_out_of_range_is_malformed() {
+            let fx = make_fixture(vec![]);
+            // Valid proof bytes, but the second locator names vout 7 of
+            // a 2-output tx.
+            let decoded = decode_proof_payload(&reserve_proof_string(&fx), HRP_RESERVE_PROOF)
+                .expect("fixture proof decodes");
+            let (_, proof_bytes) = parse_reserve_locators(&decoded).expect("fixture parses");
+            let payload = locator_payload(&[(fx.txid, 0), (fx.txid, 7)], proof_bytes);
+            let proof = encode_blob(HRP_RESERVE_PROOF, &payload).expect("bech32m encode");
+
+            let err = check_reserve_proof(&fx.rpc, &fx.address, MSG, &proof)
+                .await
+                .expect_err("out-of-range locator refuses");
+            assert!(matches!(err, ProofsError::Malformed(_)));
+        }
+    }
 }
