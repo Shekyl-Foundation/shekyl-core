@@ -112,7 +112,12 @@ fn disclose_network_posture(cli: &ReplArgs, opens_direct_daemon: bool) {
     let proxy = cli.proxy.as_deref();
     match &cli.rpc_url {
         Some(url) => {
-            network_posture::disclose("wallet-RPC endpoint", url, proxy);
+            // Only disclose a --rpc-url that connect() will accept: an
+            // unsupported scheme is rejected before any endpoint is opened, so
+            // warning about it would contradict "endpoints actually used".
+            if rpc_client::is_supported_rpc_url(url) {
+                network_posture::disclose("wallet-RPC endpoint", url, proxy);
+            }
             if opens_direct_daemon {
                 network_posture::disclose("daemon address", &cli.daemon_address, proxy);
             }

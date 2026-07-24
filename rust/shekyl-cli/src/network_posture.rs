@@ -47,12 +47,13 @@
 pub enum Exposure {
     /// Loopback host or a unix-domain socket: no network path to observe.
     Local,
-    /// A proxy is configured, so the connection does not leave in the clear.
-    /// This says **nothing** about whether the proxy is trustworthy — only that
-    /// one is in use. We cannot assess it and do not try.
+    /// A proxy is configured, so the connection is routed through it rather than
+    /// dialed directly. This says **nothing** about whether the proxy is
+    /// trustworthy — only that one is in use. We cannot assess it and do not try.
     Proxied,
-    /// A non-loopback endpoint with no proxy: the connection crosses a network
-    /// path in the clear.
+    /// A non-loopback endpoint with no proxy: the connection is dialed directly
+    /// across a network path a passive observer can see (metadata exposure —
+    /// this holds even if the link is TLS-encrypted, not a claim about payload).
     ClearNetwork {
         /// The host as parsed, for the warning text.
         host: String,

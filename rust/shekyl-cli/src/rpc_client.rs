@@ -83,9 +83,11 @@ impl RpcError {
 enum Transport {
     /// HTTP/1.1 over a Unix domain socket.
     Uds(PathBuf),
-    /// HTTP(S) over TCP to an external daemon, through a ureq agent that
-    /// carries the `--proxy` SOCKS config (if any) — so a proxied `--rpc-url`
-    /// is genuinely proxied, which the network-posture disclosure relies on.
+    /// HTTP(S) over TCP to an external `shekyl-wallet-rpc` server (the
+    /// `--rpc-url` target — not the node daemon; cf. `daemon::DaemonClient`),
+    /// through a ureq agent that carries the `--proxy` SOCKS config (if any) —
+    /// so a proxied `--rpc-url` is genuinely proxied, which the network-posture
+    /// disclosure relies on.
     Http { url: String, agent: ureq::Agent },
 }
 
@@ -331,6 +333,19 @@ fn http_post_uds(path: &Path, body: &Value) -> Result<String, RpcError> {
 /// POST the JSON-RPC body to an HTTP(S) endpoint and return the response
 /// body. JSON-RPC application errors ride back as HTTP 200 with an `error`
 /// object, which the caller decodes.
+/// Whether `rpc_url` is a form [`RpcSession::connect`] accepts (non-empty
+/// `uds://`, `http://`, or `https://`). The network-posture disclosure gates on
+/// this so it never warns about an endpoint `connect` will immediately reject —
+/// no connection is opened for an unsupported scheme, so there is nothing to
+/// disclose. Kept beside `connect` so the two cannot drift.
+pub fn is_supported_rpc_url(rpc_url: &str) -> bool {
+    rpc_url
+        .strip_prefix("uds://")
+        .is_some_and(|path| !path.is_empty())
+        || rpc_url.starts_with("http://")
+        || rpc_url.starts_with("https://")
+}
+
 /// Build the ureq agent for the `--rpc-url` HTTP transport, applying the
 /// operator's `--proxy` SOCKS config when set. This is what makes a proxied
 /// `--rpc-url` actually route through the proxy — mirrors `daemon::DaemonClient`
@@ -484,5 +499,17 @@ mod tests {
             false
         )
         .is_ok());
+    }
+
+    #[test]
+    fn is_supported_rpc_url_tracks_connect_accepted_forms() {
+        // Accepted forms match connect_rejects_unknown_scheme above.
+        assert!(is_supported_rpc_url("http://host:1"));
+        assert!(is_supported_rpc_url("https://host:1"));
+        assert!(is_supported_rpc_url("uds:///tmp/x.sock"));
+        // Rejected: empty uds path, unknown scheme, bare host:port.
+        assert!(!is_supported_rpc_url("uds://"));
+        assert!(!is_supported_rpc_url("ftp://host"));
+        assert!(!is_supported_rpc_url("host:11028"));
     }
 }
