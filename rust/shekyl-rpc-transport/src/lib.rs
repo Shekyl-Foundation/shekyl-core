@@ -74,8 +74,10 @@ struct ParsedEndpoint {
     url: String,
     /// Path component of `url` (`""` when it has none).
     path_prefix: String,
-    /// `user:pass` from the URL's authority, if present.
-    userpass: Option<Zeroizing<String>>,
+    /// `(username, password)` from the URL's authority, if present —
+    /// already split and shape-checked, so the offline validator and the
+    /// constructor share one credential grammar structurally.
+    credentials: Option<(Zeroizing<String>, Zeroizing<String>)>,
 }
 
 /// Locate a URL's authority userinfo '@' — the credential terminator:
@@ -121,7 +123,7 @@ fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
     // split; the rest of the URL is never consulted.
     let (after_scheme, at_in_authority) = authority_at(&url);
 
-    let (mut url, userpass) = if let Some(at) = at_in_authority {
+    let (mut url, credentials) = if let Some(at) = at_in_authority {
         // Split at the authority's '@': userinfo before it, everything
         // else (scheme included) is the credential-free daemon URL.
         let url_with_credentials = Zeroizing::new(url);
@@ -131,7 +133,20 @@ fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
             &url_with_credentials[..after_scheme],
             &url_with_credentials[at + 1..]
         );
-        (url, Some(userpass))
+        // The userinfo grammar is `user[:pass]` — a second ':' has no
+        // reading, so it refuses HERE (the offline half): deferred to the
+        // dialing constructor it would surface as a misdiagnosed "daemon
+        // unreachable" at first use. The error never echoes the userinfo.
+        let mut parts = userpass.split(':');
+        let username = Zeroizing::new(parts.next().unwrap_or("").to_string());
+        let password = Zeroizing::new(parts.next().unwrap_or("").to_string());
+        if parts.next().is_some() {
+            return Err(RpcError::ConnectionError(
+                "daemon URL credentials must be user[:pass] — the userinfo holds more than                  one ':'"
+                    .to_string(),
+            ));
+        }
+        (url, Some((username, password)))
     } else {
         (url, None)
     };
@@ -171,7 +186,7 @@ fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
     Ok(ParsedEndpoint {
         url,
         path_prefix,
-        userpass,
+        credentials,
     })
 }
 
@@ -265,17 +280,10 @@ impl HttpRpc {
         let ParsedEndpoint {
             url,
             path_prefix,
-            userpass,
+            credentials,
         } = parse_endpoint(url)?;
 
-        let authentication = if let Some(userpass) = userpass {
-            let split_userpass = userpass.split(':').collect::<Vec<_>>();
-            if split_userpass.len() > 2 {
-                Err(RpcError::ConnectionError(
-                    "invalid amount of passwords".to_string(),
-                ))?;
-            }
-
+        let authentication = if let Some((username, password)) = credentials {
             let client = HttpClient::new(proxy.as_deref())
                 .map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
             // Obtain the initial challenge, which also somewhat validates this connection
@@ -291,8 +299,8 @@ impl HttpRpc {
                 .map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
             let challenge = Self::digest_auth_challenge(response).await?;
             Authentication::Authenticated {
-                username: Zeroizing::new(split_userpass[0].to_string()),
-                password: Zeroizing::new((*split_userpass.get(1).unwrap_or(&"")).to_string()),
+                username,
+                password,
                 connection: Arc::new(Mutex::new((challenge, client))),
             }
         } else {
@@ -627,5 +635,18 @@ mod tests {
                 "{url}: names the input: {err}"
             );
         }
+
+        // The credential grammar is part of the offline gate: a userinfo
+        // with a second ':' refuses here — not at first use as a
+        // misdiagnosed "daemon unreachable" — and the refusal never echoes
+        // the credential.
+        let err = validate_endpoint("http://user:pa:ss@127.0.0.1:1", None)
+            .expect_err("malformed userinfo refuses offline");
+        let rendered = format!("{err}");
+        assert!(rendered.contains("user[:pass]"), "names the grammar: {err}");
+        assert!(
+            !rendered.contains("pa:ss"),
+            "must not echo the credential: {err}"
+        );
     }
 }
