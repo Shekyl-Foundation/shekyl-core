@@ -41,19 +41,20 @@ contribution into `work_by_bond` via `shard_contribution_milli`
 `floor(g(age) / r_market)` in **milli**, **floored before summation**:
 
 ```text
-work_P = Σ_s  floor( g(age_s) / r_market_s )        // truncate-then-sum
+work_P = Σ_s  floor( g_milli(age_s) / r_market_s )   // truncate-then-sum, milli
 ```
 
-`g(age) = 1 + age_weight · age`, with `age_milli ∈ [0, 1000]` by construction
+`g_milli = 1000 + floor(age_weight_milli · age_milli / 1000)` (milli scale, per
+`g_age_milli`), with `age_milli ∈ [0, 1000]` by construction
 (`shard_age_milli`, `:229–246`) and `age_weight_milli = 2000`
-(`consensus_constants.json:36`, band `[1500, 2500]`), so `g ∈ [1000, 3000]`
-today. Therefore any shard with `r_market > g` contributes **exactly 0**.
+(`consensus_constants.json:36`, band `[1500, 2500]`), so `g_milli ∈ [1000, 3000]`
+today. Therefore any shard with `r_market > g_milli` contributes **exactly 0**.
 
 **Consequence.** An archiver whose shards each exceed the co-holder cliff scores
 `work_P = 0` — no reward, permanently — regardless of how much correctly-served
 data they hold. Worst *representable* case (see F-A): **4,096 shards ≈ 13.6 GB**
 of served data, every challenge passed, `work_P = 0`. The cliff sits at
-`r_market > g`: **1,000 for a fresh shard, up to 3,000 at max age.**
+`r_market > g_milli`: **1,000 for a fresh shard, up to 3,000 at max age.**
 
 This is truncate-then-sum error. Under a single floor over the (precision-bounded)
 sum, 4,096 shards at `r ≈ 2,000` yield `4,096 × 0.5 = 2,048` milli, not 0.
@@ -246,14 +247,26 @@ measures the wrong thing — this is evidence validity.
   dispositions above. Output: this doc, reviewed.
 - **Stage 1 — the precision fix (D1).** `scarcity_micro (u32)`; single floor-site
   shared by close + verify; aggregate compare in micro-space; the `-v2`
-  separator bump; delete `stake_factor` (F-D); fix the `:1663` comment.
-  Surfaces: `reward_arithmetic.rs`, `consensus_state.rs`, `emission_wire.rs`
-  (field + varint codec), `emission_verify.rs` (both compares),
-  `shekyl-ffi/archival_ffi.rs` epoch-close, C++ callers if the FFI signature
-  moves; auth-msg binding. Fixture regen (expected to dominate the diff):
-  `emission_verify_kat`, `emission_connect_kat`, `consensus_state_kat`,
+  separator bump. Surfaces: `reward_arithmetic.rs`, `consensus_state.rs`,
+  `emission_wire.rs` (field + varint codec), `emission_verify.rs` (both
+  compares), `shekyl-ffi/archival_ffi.rs` epoch-close, C++ callers if the FFI
+  signature moves; auth-msg binding. Fixture regen (expected to dominate the
+  diff): `emission_verify_kat`, `emission_connect_kat`, `consensus_state_kat`,
   `kat_emission_auth_msg`, `EMISSION_KAT_SHAPE`; rule-42 snapshot check.
   Acceptance gate: the §7 red test un-ignores and passes.
+- **Stage 1b — the `stake_factor` delete (F-D), its own atomic commit.** The
+  FOLLOWUPS item this round supersedes says *"not a ride-along edit"* — the
+  **review** requirement is met (this round is that review), but the **edit** is
+  a distinct burn-math change and must not be blended into the emission-wire
+  precision diff (the F-11 own-adjacent-commit pattern, applied with more force
+  here since this is consensus burn math). It lands as its **own commit** within
+  the Stage-1 PR (promote to its own PR if it grows), carrying: the
+  `stake_factor` removal from `calc_burn_pct` (`economics/burn.rs`) and its
+  signature change, the three `blockchain.cpp` call sites, the FFI wrapper, the
+  **`shekyl-economics-sim`** consumer (compile-time ripple — parity is
+  self-enforcing, and Stage 2's evidence-validity argument *depends* on
+  sim/production formula parity), and the `:1663` stale-comment fix. Numerically
+  inert at genesis (`stake_ratio = 0 ⇒ ×1`).
 - **Stage 2 — the sim arm (needs Stage 1).** `shekyl-economics-sim` budget arm:
   sweep shard-count trajectories against both decay curves (emission `>>21`,
   staker share `×0.9/yr`) and answer whether a 25%-floor + shard-indexed lift
@@ -296,8 +309,10 @@ argument for it over a participation-derived signal:
   share ratchets one way; there is no down-swing to manipulate.
 - **Slow** — it advances with *output volume* (frozen segments of 25,992
   outputs), not with a price or a poll, so it cannot be moved in a burst.
-- **Unmanipulable by acting** — a chain-state fact, not participation-derived
-  (sybil-splitting shard-holding does not move `frozen_segment_count`).
+- **Not participation-derived** — holding, sybil-splitting, and staking do not
+  move `frozen_segment_count`; it is a chain-state fact. (The *one* action that
+  does move it is output creation — the durable channel W9 prices, §6.2 — not a
+  "swing" lever.)
 - **Predictable** — a slow monotone ratchet is *visible in advance*, which
   directly defeats the "unpredictable churn" vector; operators can see the share
   drift coming rather than being whipsawed by it.
@@ -382,7 +397,7 @@ Written **red** against current code, asserting **only** the fix-shape-agnostic
 property so it cannot prejudge micro-vs-nano-vs-aggregate (that is the round's
 call):
 
-> An archiver holding `N` shards all at `r_market > g` scores `work_P > 0` and
+> An archiver holding `N` shards all at `r_market > g_milli` scores `work_P > 0` and
 > proportional to `N`.
 
 Mechanics: `#[ignore = "RED: documents D1 aggregate-truncation; un-ignores when
@@ -416,7 +431,7 @@ decision.
 | W2 | Sub-micro truncation harvesting | Error ≤ 4,096 micro/bond ≈ 0.026% plateau (F-B) | ✅ (bounded) |
 | W3 | Per-shard/total scale split weakening `WorkTotalMismatch` | Single floor-site shared by close + verify; aggregate compare in micro-space (F-E) | ⏳ arms when F-E lands (Stage 1) |
 | W4 | Old-format (milli) entries valid under new rules | Zero-tolerance recompute rejects; `-v2` separator adds belt (F-E) | ✅ (recompute) + belt |
-| W5 | Stacked stake-responsive multipliers on `staker_pool_amount` | Delete `stake_factor` in Stage 0 (F-D) | ✅ by disposition |
+| W5 | Stacked stake-responsive multipliers on `staker_pool_amount` | Delete `stake_factor` (F-D) | ⏳ arms when the F-D delete lands (Stage 1b) |
 | W6 | Distributional dilution: D1 fix moves ex-zero archivers into `Σwork`, shrinking scarce-holders' shares of fixed budget | Stage-2 sim models the shift, not just aggregate lift | ⏳ sim-arm scope |
 | W7 | Cached `frozen_segment_count` drift at the D2 read-point | Pinned read through frontier-check (M1 §11.8 M3-1) | ✅ carried |
 | W8 | **Fast-swing** manipulation of the staker share (pump-and-dump, whale dive, reflexive feedback) | The operand is monotone + slow + predictable (§6.0) and the function is a pure map of `n` with no controller (§6.1) — pump/dump/whale have **no lever** on a monotone chain-state operand; the only lever is the durable one (W9) | ✅ by operand (fast-swing has no lever) |
@@ -431,6 +446,9 @@ work-claim wire (`emission_wire.rs` — field rename + width + varint codec); ve
 (`emission_verify.rs` — both compares, in micro-space); the auth-msg digest
 binding (`-v2`); the FFI epoch-close boundary (`archival_ffi.rs`) and its C++
 callers if the contribution crosses in micro; `economics/burn.rs` +
-`blockchain.cpp` (F-D delete; D2 escalation at Stage 3); the KAT fixtures listed
-in §5; a rule-42 persisted-schema snapshot check. Pre-genesis: **no fork
-surface**; genesis-freeze-class throughout.
+`blockchain.cpp` + the FFI wrapper + **`shekyl-economics-sim`** (F-D delete —
+the `calc_burn_pct` signature change ripples into the sim at compile time, which
+is *good*: it makes sim/production formula parity self-enforcing, and Stage 2's
+evidence validity depends on that parity; D2 escalation at Stage 3); the KAT
+fixtures listed in §5; a rule-42 persisted-schema snapshot check. Pre-genesis:
+**no fork surface**; genesis-freeze-class throughout.
