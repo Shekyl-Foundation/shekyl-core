@@ -10,9 +10,12 @@ RD-1 moved the adopted embargo (31 s → 112 s) and surfaced a fifth defect
 crate and the review shared, moving it again to **144 s** (§10.5). Its
 follow-on built the preemption-profile and black-hole instruments, inverted the
 drafted Q-8 premise, and established that the embargo *mean does not defend the
-binding channel* (§10.4, §10.6). RD-2 resolved Q-2. §11 anchors every finding
-against the Dandelion++ paper and the Bitcoin Core source. Decisions D-1…D-7
-stand as amended; §7 is the Round-3 agenda, of which Q-8 is load-bearing.
+binding channel* (§10.4, §10.6). RD-2 resolved Q-2. A later pass anchored the *adversary's position* at source
+(§6): the origin is the submitting daemon, the wallet↔daemon boundary is out of
+scope, and fluff visibility is transport-gated — which makes the passive
+adversary **clearnet-only** and the black-hole adversary transport-independent
+(§10.8). §11 anchors every finding against the Dandelion++ paper and the Bitcoin
+Core source. Decisions D-1…D-7 stand as amended; §7 is the Round-3 agenda.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (FFI-boundary-moving), and
 [`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
@@ -68,7 +71,7 @@ the **hop-latency** input the whole derivation rests on (O-2).
 **Round 1 correction to the model itself.** The survival equation as first
 written ended a stem node's exposure when the terminal node *emitted* the
 fluff. The mechanism ends it when that fluff *reaches* the node. See
-[RD-1](#101-rd-1-the-survival-equation-ended-exposure-at-the-wrong-event) — it
+RD-1 (§10.1) — it
 is the largest single correction in this document and it changed the adopted
 embargo by a factor of 3.6.
 
@@ -505,33 +508,100 @@ corrupted one that **must** fail.
 
 ---
 
-## 6. Threat model note
+## 6. Adversary position and threat model (anchored at source)
 
-The mechanism being repaired protects **transaction-origin attribution at the
-network layer** against an observer who sees relay timing — a peer, a set of
-sybil peers, or a passive network observer. It is independent of, and
-complementary to, the FCMP++ membership privacy that protects on-chain
-linkage: a transaction can be perfectly unlinkable on-chain and still have its
-origin node identified by timing.
+Rounds 1–2 modelled *what a passive adversary can do* across several rounds
+before pinning *where that adversary sits in Shekyl's topology* or verifying its
+observable exists in code rather than in the paper's abstraction. That was the
+wrong order. This section anchors position first, at `file:line`; §10.8 records
+the correction and re-scopes the adversary it resized.
+
+### 6.1 Where a transaction becomes a Dandelion++ origin
+
+A wallet-submitted transaction enters this fork's Rust-FFI submit path and is
+relayed with `relay_method::local`
+([`daemon_submit_ffi.cpp:618`](../../src/rpc/daemon_submit_ffi.cpp#L618): *"relay_method::local
+arms the Dandelion++ embargo machinery"*). `local` always stems and is kept out
+of the per-epoch fluff coin
+([`levin_notify.cpp:560`](../../src/cryptonote_protocol/levin_notify.cpp#L560):
+`if (!zone_->fluffing || tx_relay == relay_method::local)`). So **the
+Dandelion++ origin is the daemon that accepts the submission**, and it never
+self-fluffs by role — the anchored consumer of the C2 retraction (§10.6). The
+mechanism protects the origin *daemon's* IP-to-tx link at the P2P layer.
+
+### 6.2 The wallet↔daemon boundary is out of scope, and the code already fought this
+
+**T does not sit between the wallet and the daemon.** The submission FFI is
+explicit that the RPC boundary must not leak stem state
+([`daemon_submit_ffi.cpp:178-189`](../../src/rpc/daemon_submit_ffi.cpp#L178-L189)):
+`in_pool` (internal truth, sees embargoed insertions) is disclosed only to the
+owner; `in_pool_broadcast` (post-fluff, carries no embargo secret) to foreign
+callers — *"so `POST /submit_transaction` is not a stem-presence oracle."* The
+boundary splits into two regimes, **neither of which is this document's job**:
+
+- **Own daemon (the design's assumption):** the wallet↔daemon hop is
+  loopback/local. The origin daemon knows its own tx trivially; there is no
+  network-layer adversary *there*. The stem mechanism exists to protect that
+  daemon's identity from its *peers* onward. Correct scope.
+- **Remote/public RPC daemon (light-wallet):** the RPC node *is* the origin and
+  learns the submitter's IP from the TCP connection directly. Dandelion++ gives
+  that user **nothing** against the RPC node itself — it only obscures the origin
+  from downstream peers. That is a real, different threat, and it is the Tor
+  transport's job (SP-T0), not the relay-timing channel's. It must not be
+  conflated with this mechanism.
+
+### 6.3 The P2P observer, and the constraint that makes it transport-gated
+
+The relay-privacy adversary is a **P2P-network-layer observer of the origin
+daemon's peer traffic** — a peer, a set of sybil peers, or a passive network
+observer — reached only through the P2P interface, never the RPC one. Its
+visibility of a node's *fluff* is gated by transport, at
+[`levin_notify.cpp:448-449`](../../src/cryptonote_protocol/levin_notify.cpp#L448-L449):
+
+```text
+// When i2p/tor, only fluff to outbound connections
+if (source != id && (zone->nzone == public_ || !context.m_is_income))
+```
+
+- **Public (clearnet) zone:** `nzone == public_` is true, so a node fluffs to
+  **all** peers, inbound and outbound. A spy that opens an *inbound* connection
+  to a node — the cheap, unlimited direction; the supernode attack the paper is
+  built against — receives that node's fluff with a first-spy timestamp.
+- **I2P/Tor zone:** `nzone == public_` is false, so the gate reduces to
+  `!context.m_is_income`: fluff goes to **outbound connections only**. A spy
+  cannot receive a node's fluff by connecting *in*. Reinforced by the noise/Tor
+  path, which *"only send[s] to outgoing connections"*
+  ([`levin_notify.cpp:831-832`](../../src/cryptonote_protocol/levin_notify.cpp#L831-L832)).
+
+**This makes an entire adversary class transport-conditional, not universal**
+(§10.8): the passive inbound-spy observable is real on clearnet and structurally
+absent on the SP-T0 transport, while the active on-path black-hole adversary
+(§10.6) needs a stem-*successor* position, which the outbound-only topology does
+not prevent and is therefore transport-independent.
+
+### 6.4 Mission framing
 
 Per [`00-mission`](../../.cursor/rules/00-mission.mdc), the binding commitment
 is **privacy is the product** — the same guarantees for everyone, never a
 setting. F-2 and F-4 are failures of that commitment: the mechanism is
 advertised (by its own comments) and structurally present, but measurably not
-functioning. That is why this is being fixed before ship despite not being
-consensus and not being genesis-blocking.
+functioning. That is why this is fixed before ship despite not being consensus
+and not genesis-blocking. It is independent of, and complementary to, the
+FCMP++ membership privacy that protects on-chain linkage — a transaction can be
+perfectly unlinkable on-chain and still have its origin node identified by
+timing.
 
 The [`FOLLOWUPS.md`](../FOLLOWUPS.md) §5289 acceptance criteria for claim
 broadcast — "a Dandelion++-equivalent stem/fluff phase under the anonymity
-network" — depend on this layer being correct. That entry should be re-read
-once this document converges; it currently assumes the inherited implementation
-is a working baseline to build on.
+network" — depend on this layer being correct, and now on §6.3's transport
+gating: a claim broadcast from a Tor origin faces a different (smaller) adversary
+than one from a clearnet origin.
 
 ---
 
 ## 7. Open questions (the Round-3 agenda)
 
-Round 1 closed Q-2 and Q-7; Round 2 corrected the model (RD-4), reframed Q-8 around the mechanism, and anchored everything against the sources (§11). What remains for Round 3:
+Round 1 closed Q-2 and Q-7; Round 2 corrected the model (RD-4), reframed Q-8 around the mechanism, and anchored everything against the sources (§11); the position-anchoring pass (§6, §10.8) then made the passive adversary transport-conditional. What remains for Round 3:
 
 - **Q-1 — is the stem model right?** *(Round 1 position: single-path is
   correct.)* Each node forwards to one per-source successor, so branching
@@ -690,7 +760,6 @@ this document, and it is not on the path for RP-2…RP-4.
   term dominates, so the measurement that matters most is the one nobody had
   thought to ask for.
 - **D-6** reopens on a threat-model round, not on preference.
-
 
 ---
 
@@ -930,6 +999,60 @@ the spy-recall floor alone, not a q-channel.
   bookkeeping: same-origin transactions in one epoch share their path, terminal,
   and preemption exposure as a block, so β and π₀ must be defined with that
   correlation named rather than assuming per-tx independence.
+
+### 10.8 Anchor position before attack — and the adversary class it resized
+
+**Methodological correction, accepted.** Rounds 1–2 ran two rounds of "what can
+the passive adversary do" before pinning *where* that adversary sits in Shekyl's
+topology or verifying its observable existed in code. The right order is
+position first. §6 now anchors it at `file:line`; this records what the
+anchoring changed.
+
+**A proposed passive adversary (call it RD-5) is clearnet-only, verified
+structurally — not by simulation.** The candidate was a passive out-neighbour: a
+spy that receives a prefix node's *forced fluff* by neighbouring it, whose leak
+(unlike the black-hole's) would *scale down* with the embargo mean and so reopen
+`ε` as a live lever. Whether that observable exists is decided entirely by who a
+fluff reaches, and [`levin_notify.cpp:448-449`](../../src/cryptonote_protocol/levin_notify.cpp#L448-L449)
+settles it (§6.3): on the public zone fluff reaches inbound peers, so an
+inbound sybil *does* see it — the observable is **real on clearnet**; on I2P/Tor
+fluff is outbound-only, so an inbound sybil sees nothing — the observable is
+**structurally absent on the SP-T0 transport**. This is a source fact, not a
+measurement.
+
+**Consequence — which adversary binds is a function of transport:**
+
+| adversary | needs | transport dependence |
+| --- | --- | --- |
+| passive inbound-spy (RD-5) | an inbound edge to a prefix node | **clearnet only** — absent on Tor/I2P |
+| active black-hole (§10.6) | an on-path stem-*successor* position | **transport-independent** — outbound-only topology does not prevent it |
+
+So for a **Tor-transport origin**, the passive channel vanishes and the
+black-hole / mean-invariant result governs → **reshape (Q-8a); `ε` is nearly
+inert.** For a **clearnet origin**, the passive channel binds and is
+mean-dependent → **`ε` is a live second lever.** The Round-3 ordering question
+("`ε` or Q-8a first?") therefore resolves to *which transport is the origin
+on?* — a policy anchor the project already holds (own-node / Tor posture,
+SP-T0), not a parameter to sweep.
+
+**Honesty flags (two, both mine to own):**
+
+1. RD-5 was asserted from the paper's abstract topology *before* checking
+   `fluff_notify`'s income gate. It happened to be real on clearnet, but it
+   could as easily have been a phantom on the transport that matters most. The
+   source check should have come first — the standing "name T and its channel,
+   or no threat model" rule. It now has.
+2. **RD-5 is not built in code.** There is no `simulate_passive_neighbor_leak`
+   instrument, and its mean-*dependent* leak magnitude is a claim, not a
+   measurement, in this document. Re-scoping it as clearnet-only is a
+   *structural* result from §6.3 and needs no simulation; *quantifying* it (if
+   Round 3 decides clearnet `ε` matters) is a build item that must carry a
+   transport flag zeroing the inbound-spy channel on the Tor path. Relatedly,
+   the existing reaching-instruments (`simulate_fluff_return`,
+   `simulate_sighting_separability`, `simulate_diffusion_first_spy`) model the
+   **public zone** (fluff reaches inbound peers); a Tor variant would change the
+   return term `F` and remove the inbound-spy path. The black-hole instrument is
+   transport-independent and unaffected.
 
 ---
 

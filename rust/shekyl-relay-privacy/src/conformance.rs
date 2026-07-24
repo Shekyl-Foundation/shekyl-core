@@ -592,6 +592,11 @@ pub struct FloodSummary {
 /// costs about the same, so the minimum buys nothing and the flood is slow.
 /// **Fixing F-4 substantially repairs the gap that counting `F_i` opens.**
 ///
+/// **Zone:** models the public (clearnet) zone, where fluff reaches inbound and
+/// outbound peers (`levin_notify.cpp:448`). On I2P/Tor fluff is outbound-only, so
+/// the return flood is sparser and `F` larger — a Tor variant is a build item
+/// (design §6.3, §10.8).
+///
 /// # Panics
 ///
 /// Panics if `trials` is zero, if `nodes` is under two, or if `peers` is zero.
@@ -916,6 +921,9 @@ pub struct SightingSeparation {
 /// stem-ending fluff; a fixed marginal return term is added for realism but is
 /// negligible against the embargo scale.
 ///
+/// **Zone:** public-zone only — the inbound-spy sighting it models does not
+/// exist on the outbound-only Tor topology (design §6.3, §10.8).
+///
 /// # Panics
 ///
 /// Panics if `trials` is zero or `spy_fraction` is not in `(0, 1]`.
@@ -1034,6 +1042,9 @@ pub fn simulate_sighting_separability<R: RelayRng + ?Sized>(
 /// embargo fluff, whose source is attacked by exactly this estimator. Measured
 /// under our memoryless flood so the number reflects the fixed distribution,
 /// not the inherited near-deterministic one.
+///
+/// **Zone:** public-zone flood (fluff reaches inbound peers). On Tor the spy
+/// must be an outbound successor, a different and costlier position (§6.3).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FirstSpyPrecision {
     /// Floods in which at least one spy received the fluff.
