@@ -15,7 +15,7 @@
 //! |------|--------|
 //! | Production implementor | [`LocalPendingTx`] in this module |
 //! | Trait surface | [`PendingTxEngine`](super::traits::PendingTxEngine) |
-//! | Engine ownership | [`Engine::pending`](super::Engine) holds `P: PendingTxEngine` |
+//! | Engine ownership | [`Engine`](super::Engine) holds `pending: P` (`P: PendingTxEngine`) |
 //! | Compat import path | [`crate::engine::local_pending_tx`] re-exports |
 //!
 //! **Do not re-inflate send orchestration onto `Engine` or `lifecycle`.**

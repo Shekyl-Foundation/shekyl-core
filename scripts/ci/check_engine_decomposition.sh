@@ -156,28 +156,52 @@ done
 # those orchestration methods onto Engine / lifecycle / top-level monofiles is
 # the failure mode this tripwire catches. Pure grep (no ripgrep) so this script
 # stays dependency-free for CI.
-TRANSFER_ENGINE_RS="${ENGINE_DIR}/transfer/engine.rs"
-TRANSFER_MOD_RS="${ENGINE_DIR}/transfer/mod.rs"
+#
+# Invariants (semantic, not filename-brittle):
+#   - engine/transfer/ exists with a module root (mod.rs)
+#   - `pub struct LocalPendingTx` is defined *somewhere* under transfer/
+#     (may move between transfer/*.rs on later file-splits)
+#   - local_pending_tx.rs is a re-export shim from transfer, not a second
+#     implementor (no local struct; `pub use` path mentions transfer + type)
+TRANSFER_DIR="${ENGINE_DIR}/transfer"
+TRANSFER_MOD_RS="${TRANSFER_DIR}/mod.rs"
 SHIM_RS="${ENGINE_DIR}/local_pending_tx.rs"
 
-if [ ! -d "${ENGINE_DIR}/transfer" ] || [ ! -f "${TRANSFER_ENGINE_RS}" ] || [ ! -f "${TRANSFER_MOD_RS}" ]; then
-  echo "FAIL: engine/transfer/ workflow tree is missing (expected transfer/mod.rs + transfer/engine.rs)."
+if [ ! -d "${TRANSFER_DIR}" ] || [ ! -f "${TRANSFER_MOD_RS}" ]; then
+  echo "FAIL: engine/transfer/ workflow tree is missing (expected transfer/mod.rs)."
   note "Transfer ownership is engine/transfer/ — restore it, do not move send logic onto Engine."
   fail=1
-elif ! grep -q 'pub struct LocalPendingTx' "${TRANSFER_ENGINE_RS}"; then
-  echo "FAIL: LocalPendingTx is not defined in engine/transfer/engine.rs."
-  note "Production transfer implementor must live under engine/transfer/."
-  fail=1
+else
+  # Definition may live in transfer/engine.rs today or another transfer/*.rs later.
+  lpt_def_hits="$(grep -RsnE '^[[:space:]]*pub[[:space:]]+struct[[:space:]]+LocalPendingTx\b' "${TRANSFER_DIR}" --include='*.rs' 2>/dev/null || true)"
+  if [ -z "${lpt_def_hits}" ]; then
+    echo "FAIL: LocalPendingTx is not defined under engine/transfer/."
+    note "Production transfer implementor must live under engine/transfer/ (any .rs in that tree)."
+    fail=1
+  fi
 fi
 
 if [ ! -f "${SHIM_RS}" ]; then
   echo "FAIL: engine/local_pending_tx.rs shim is missing."
   note "Keep the re-export shim so historical import paths keep working."
   fail=1
-elif ! grep -q 'pub use super::transfer::LocalPendingTx' "${SHIM_RS}"; then
-  echo "FAIL: local_pending_tx.rs does not re-export transfer::LocalPendingTx."
-  note "Shim must stay a re-export path, not a second implementor."
-  fail=1
+else
+  # Reject a second implementor in the shim (struct body / type alias as home).
+  if grep -nE '^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?(struct|type)[[:space:]]+LocalPendingTx\b' "${SHIM_RS}" >/dev/null; then
+    echo "FAIL: local_pending_tx.rs defines LocalPendingTx (struct/type) — must re-export only."
+    note "Shim must stay a re-export path, not a second implementor."
+    fail=1
+  fi
+  # Accept equivalent re-export forms:
+  #   pub use super::transfer::LocalPendingTx;
+  #   pub use crate::engine::transfer::LocalPendingTx;
+  #   pub use super::transfer::{LocalPendingTx, …};
+  # Require both `transfer` and `LocalPendingTx` on a `pub use` line.
+  if ! grep -qE '^[[:space:]]*pub[[:space:]]+use[[:space:]]+[^;]*\btransfer\b[^;]*\bLocalPendingTx\b' "${SHIM_RS}"; then
+    echo "FAIL: local_pending_tx.rs does not re-export LocalPendingTx from transfer/."
+    note "Shim must pub-use LocalPendingTx via a path that includes transfer (super::transfer::… or crate::…::transfer::…)."
+    fail=1
+  fi
 fi
 
 # Method *definitions* that belong only under transfer/. Mentions in comments

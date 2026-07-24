@@ -217,12 +217,12 @@ Do **not** invent a second framework. Do invent **stable trait methods + service
 | **Engine's role** | Owns `pending: P` (default `LocalPendingTx`); may expose **thin** delegates that only call `self.pending.…` |
 | **Compat path** | `engine/local_pending_tx.rs` re-exports only — no multi-step bodies |
 | **Do not** | Re-inflate select/assemble/sign/reserve/submit/re-anchor logic into `Engine`, `lifecycle.rs`, or a new top-level monofile |
-| **Mechanical pin** | `scripts/ci/check_engine_decomposition.sh` §Transfer workflow ownership: `transfer/` must exist; `LocalPendingTx` defined there; shim re-exports; named orchestration methods must not be *defined* outside `transfer/` |
+| **Mechanical pin** | `scripts/ci/check_engine_decomposition.sh` §Transfer workflow ownership: `transfer/` must exist; `LocalPendingTx` defined under that tree; shim re-exports from transfer; named orchestration methods must not be *defined* outside `transfer/` |
 
 **Deferred (not blocked on this pin):** a `TransferCtx` struct, `engine.transfer()` façades, renaming `LocalPendingTx` → `TransferWorkflow`. Those are optional API polish once a product surface needs them.
 
 **Tests:** construct `LocalPendingTx` under `transfer/` (see
-`transfer_pending_tx_tests.rs`); do not require `Engine::open` for unit
+`engine/transfer/transfer_pending_tx_tests.rs`); do not require `Engine::open` for unit
 coverage of the send pipeline.
 
 ---
@@ -232,7 +232,7 @@ coverage of the send pipeline.
 1. **Type alias the production engine** so most of the tree never writes the 7-param form.
 2. **Group Engine fields** into `identity` / `caps` / `runtime` (structural, low risk).
 3. **Extract `transfer/` from `local_pending_tx`**; `Engine` methods become delegates. No behavior change.
-   **Done** (`chore/transfer-from-local-pending-tx`): monofile → `engine/transfer/{types,support,engine,trait_impl}.rs` + `transfer_pending_tx_tests.rs`; thin `local_pending_tx` re-export shim; decomposition ratchet drops the 5420-line baseline and scans `engine/transfer/`.
+   **Done** (`chore/transfer-from-local-pending-tx`): monofile → `engine/transfer/{types,support,engine,trait_impl}.rs` + `engine/transfer/transfer_pending_tx_tests.rs`; thin `local_pending_tx` re-export shim; decomposition ratchet drops the 5420-line baseline and scans `engine/transfer/`.
 3b. **Pin transfer workflow ownership** (docs + CI tripwire; no new types).
    **Done** (`chore/transfer-workflow-ownership-pin`): this section + decomposition-check ownership invariants.
 4. **Introduce `TransferCtx`** only when a new feature needs it — stop new send-path code from taking `&Engine` as a habit, not as a big-bang rename.
