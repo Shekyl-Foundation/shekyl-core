@@ -796,10 +796,25 @@ detection  =  L (a leak occurs)  ×  labelable (Δ-separability)  ×  linkable (
 
 **The intersection attack** (the dangerous amplifier, paper Fig. 5) needs `≥2`
 leaks in **distinct epochs** — same-epoch leaks re-confirm the same fixed stem
-path (per-epoch determinism), while two cross-epoch `5`-sets share only the
-origin, so they intersect to `~{origin}`. Assuming the label and link gates are
-*fully* open (the adversary's best case), the raw math — `P(≥2 leaks)` as the
-upper-bound detection probability:
+path, while two cross-epoch `5`-sets share only the origin, so they intersect to
+`~{origin}`. This distinct-epoch requirement is the load-bearing assumption of
+the whole section, and it is anchored at source:
+[`get_stem` caches `source → out-index` in `in_mapping_`](../../src/net/dandelionpp.cpp#L192)
+and returns it thereafter, so a source egresses on one fixed stem successor for
+the life of a `connection_map`; the per-epoch
+[`change_channels` rebuild](../../src/cryptonote_protocol/levin_notify.cpp#L711)
+(on the ~10-min timer) is what turns the map over and gives distinct epochs.
+**Sharper still for the origin:** a node's *own* transactions carry
+`source = nil_uuid` ([local submission has no inbound peer](../../src/rpc/daemon_submit_ffi.cpp#L618)),
+so they all resolve through the single `in_mapping_[nil]` entry — an origin's
+transactions in one epoch do not merely share a `5`-set, they take the
+*identical* stem path node-for-node. So same-epoch same-origin leaks carry
+**zero** intersection information (they are the same set, not overlapping ones),
+and the `≤1`-distinct-epoch count for a bursty origin is conservative in the
+right direction.
+
+Assuming the label and link gates are *fully* open (the adversary's best case),
+the raw math — `P(≥2 leaks)` as the upper-bound detection probability:
 
 | origin volume | no reshape (2.24 %) | 0.3 % target | reshape R=1 (0.026 %) |
 | --- | --- | --- | --- |
@@ -825,7 +840,13 @@ Three things this says, none of them "the leak is harmless":
    *distinct* epochs, so a bursty sender clusters its leaks: 100 000 txs in a
    single-epoch burst yields ≤1 distinct-epoch leak — **not intersectable**. The
    exposed profile is the *steady, low-rate* sender over months, not the busy
-   service.
+   service. **The same mechanism cuts both ways, and this must not be read as
+   unconditional:** per-epoch path stability is what collapses the bursty origin's
+   leaks to one set, *and* it is exactly what makes the steady origin's
+   cross-epoch leaks intersect cleanly — each epoch is an independent `5`-set
+   draw sharing only the true origin. "Path stability protects origins" is
+   therefore conditional on burstiness; the mechanism that saves the heavy sender
+   is the one that exposes the slow one.
 3. **A heavy steady origin still composes under reshape *if* the amplifiers hold**
    (100 000 steady txs → ~26 distinct-epoch leaks). So reshape is the primary
    *rate* reducer, and the **Δ-separability and unlinkability gates are the
@@ -933,6 +954,19 @@ instruments for both are built or scoped. What remains is the *arguments*:
     embargo-scale draws to poison the classifier) prices out immediately — `r`
     must rival the preemption rate, costing ~`r·144 s` of latency across `r` of
     all transactions — but belongs in the wargame table as considered-and-priced.
+
+    **Two source-anchored questions the reshape design must answer against
+    `get_stem`, not against the abstraction "forward to another successor"**
+    (surfaced by §6.8's `in_mapping_[nil]` reading): (i) an origin's own tx
+    resolves through the *single* nil-keyed local mapping, so "the other
+    quasi-4-regular successor" must be drawn explicitly from the remaining
+    `out_mapping_` entries — re-stemming self-originated traffic then makes a
+    *second* stem successor see origin-sourced stem hops, widening the origin's
+    per-epoch stem fan-out from 1 to 2, itself a small anonymity change to price;
+    and (ii) the retry must **not** re-enter `get_stem(nil)`, which returns the
+    *same* cached successor and makes the re-stem a no-op. Neither breaks reshape,
+    but both are RD-1/RD-4-class seams — the design must be checked against what
+    `get_stem` does for `source = nil`, not against an abstract second successor.
 
   **Liveness, correctly stated.** The 144 s headline is the *worst case*, not
   the typical one. Black-hole recovery is the minimum over all holders'
