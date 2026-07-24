@@ -766,6 +766,78 @@ whole-prefix reading is the conservative upper bound; the independent-neighbour
 reading (§6.6) is lower. The geometric drop in retry count and the direction of
 every lever hold under both.
 
+### 6.8 What a leak rate means for *detection* (the intersection math)
+
+A per-transaction leak rate is not a detection probability. A single forced-fluff
+sighting is a tuple `(tx, received-from N, timestamp)` that localizes the source
+to `N`'s stem prefix — a `~1/q ≈ 5`-node set — and names the *actual origin* only
+with the origin-share (`~0.20`). Four times in five the observed node is a relay
+and the creator is upstream, unseen. That sighting is also **indistinguishable in
+kind** from an ordinary stem-to-spy sighting (C1): it hands the adversary one more
+sample of the ambiguous type it already gets, not a new certainty. So on a
+*single* event the marginal origin-attribution advantage over the stem channel is
+~zero.
+
+The exposure that matters is **joint**, and it passes three independent gates:
+
+```text
+detection  =  L (a leak occurs)  ×  labelable (Δ-separability)  ×  linkable (same-origin correlator)
+```
+
+- **`L`** — measured (§6.7): 2.24 % current worst-case, 0.3 % target, 0.026 % with
+  reshape.
+- **labelable** — can the adversary tell a *forced* fluff (early, pre-diffusion)
+  from a natural one? Only if the lead over pool-appearance is Δ-separable (§10.6);
+  an unlabelable sighting cannot be promoted from "ambiguous first-spy" to
+  "confirmed prefix-member."
+- **linkable** — can the adversary group sightings as *same-origin*? **FCMP++
+  already shuts the on-chain linker**; absent an external side-channel the
+  adversary holds a pile of ungrouped `(tx, node)` tuples.
+
+**The intersection attack** (the dangerous amplifier, paper Fig. 5) needs `≥2`
+leaks in **distinct epochs** — same-epoch leaks re-confirm the same fixed stem
+path (per-epoch determinism), while two cross-epoch `5`-sets share only the
+origin, so they intersect to `~{origin}`. Assuming the label and link gates are
+*fully* open (the adversary's best case), the raw math — `P(≥2 leaks)` as the
+upper-bound detection probability:
+
+| origin volume | no reshape (2.24 %) | 0.3 % target | reshape R=1 (0.026 %) |
+| --- | --- | --- | --- |
+| 10 txs | 0.02 | 0.0004 | ~0 |
+| 1 000 txs | ~1.0 | **0.80** | 0.03 |
+| 100 000 txs | ~1.0 | ~1.0 | ~1.0 |
+
+Steady txs (1/epoch, the *exposed* profile) to reach the 2-leak floor, at a
+10-minute epoch:
+
+| | txs for 2-leak floor | time |
+| --- | --- | --- |
+| no reshape | ~89 | ~1 day |
+| 0.3 % target | ~667 | ~5 days |
+| reshape R=1 | **~7 700** | **~53 days** |
+
+Three things this says, none of them "the leak is harmless":
+
+1. **Reshape moves the medium origin out of reach.** At the 0.3 % target *without*
+   reshape a 1 000-tx origin is 80 % detectable by a perfect-amplifier adversary;
+   reshape drops that to 3 %. That is the case reshape exists for.
+2. **Velocity matters, and it protects the heavy origin.** The intersection needs
+   *distinct* epochs, so a bursty sender clusters its leaks: 100 000 txs in a
+   single-epoch burst yields ≤1 distinct-epoch leak — **not intersectable**. The
+   exposed profile is the *steady, low-rate* sender over months, not the busy
+   service.
+3. **A heavy steady origin still composes under reshape *if* the amplifiers hold**
+   (100 000 steady txs → ~26 distinct-epoch leaks). So reshape is the primary
+   *rate* reducer, and the **Δ-separability and unlinkability gates are the
+   backstop** — which is why Q-9's quantity is the *increment to joint precision*,
+   not the leak rate: a sighting the adversary can neither label nor link adds
+   zero, and reshape removes the sighting entirely (a re-stemmed hop produces
+   nothing to label or intersect).
+
+So `<0.3 %` is not a detection figure; it is the top gate of a three-gate product
+whose other two gates FCMP++ and Δ-separability already narrow, and whose whole
+product reshape zeroes at the source for the transactions it re-stems.
+
 ---
 
 ## 7. Open questions (the Round-3 agenda)
