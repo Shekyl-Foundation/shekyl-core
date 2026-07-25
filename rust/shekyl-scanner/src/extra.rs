@@ -232,14 +232,33 @@ impl Extra {
         None
     }
 
-    /// Transaction extra for a hybrid-PQC transfer: tx pubkey plus per-output KEM blobs.
+    /// Transaction extra for a hybrid-PQC transfer: tx pubkey plus ONE
+    /// `0x06` field carrying every output's KEM ciphertext concatenated
+    /// in output order (`n_out × HYBRID_KEM_CT_LEN` bytes).
+    ///
+    /// The single-field packing is the read-side contract everywhere:
+    /// [`Extra::pqc_kem_ciphertext`] is first-match and every consumer
+    /// slices output `o`'s ciphertext at `o * HYBRID_KEM_CT_LEN` within
+    /// that one blob (`shekyl-scanner`'s scan path, the engine
+    /// proof-check path, `shekyl-wire::tx_extra::pqc_kem_per_output`,
+    /// and the C++ `wallet2` reader) — and the C++ writers
+    /// (`cryptonote_tx_utils.cpp` coinbase/genesis/transfer) emit the
+    /// same single concatenated field. This writer's pre-fix
+    /// one-field-per-output packing was the sole deviant and made
+    /// every output at vout ≥ 1 — including all change — silently
+    /// unscannable (`FOLLOWUPS.md` "KEM-ciphertext extra packing
+    /// mismatch", 2026-07-24).
     pub fn for_hybrid_transfer(
         tx_pubkey: EdwardsPoint,
         kem_ciphertexts: impl IntoIterator<Item = Vec<u8>>,
     ) -> Extra {
-        let mut fields = vec![ExtraField::PublicKey(tx_pubkey)];
+        let mut blob = Vec::new();
         for kem in kem_ciphertexts {
-            fields.push(ExtraField::PqcKemCiphertext(kem));
+            blob.extend_from_slice(&kem);
+        }
+        let mut fields = vec![ExtraField::PublicKey(tx_pubkey)];
+        if !blob.is_empty() {
+            fields.push(ExtraField::PqcKemCiphertext(blob));
         }
         Extra(fields)
     }
