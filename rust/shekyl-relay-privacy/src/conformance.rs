@@ -1698,3 +1698,131 @@ pub fn simulate_origin_exposure<R: RelayRng + ?Sized>(
         exposure_rate: exposed as f64 / trials as f64,
     }
 }
+
+/// The δ increment-form adopt-criterion (§13), measured end-to-end rather than
+/// composed by hand.
+///
+/// `δ := Precision_joint(C1 + C3) − Precision_joint(C1)`, where a
+/// `Precision_joint` is `P(the adversary's single best origin-guess is correct,
+/// per transaction)`:
+///
+/// - **C1** — the stem-spy channel: the origin's stem successor (position 1) is
+///   a spy, so it received the tx directly from the origin and names it
+///   correctly. `Precision(C1) = P(position 1 is a spy) = f`.
+/// - **C3** — the forced-fluff channel our embargo adds: the origin's own
+///   embargo fires before disarm (a preemption) *and* a spy observes the
+///   resulting fluff. Independent-neighbour model (the §6.6 lower reading, and
+///   the reviewer's): a spy neighbours the origin with probability `f`. Under
+///   the whole-prefix / supernode enrichment (W3, §12) this rises — this
+///   instrument is the lower bound the two-slot instrument tightens.
+///
+/// `retry_cap > 0` models reshape: the origin re-stems on embargo fire (up to
+/// `STEMS − 1 = 1` alternates) instead of fluffing, so its forced fluff — and
+/// thus the C3 term — is emitted only if it exhausts the cap. Reshape drives
+/// `δ → 0` (§13.4).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PrecisionIncrement {
+    /// Spy fraction the measurement was taken at.
+    pub spy_fraction: f64,
+    /// `Precision(C1)` — stem channel alone.
+    pub precision_c1: f64,
+    /// `Precision(C1 + C3)` — stem OR forced-fluff.
+    pub precision_c1_c3: f64,
+    /// `δ` — the increment the embargo mechanism adds.
+    pub delta: f64,
+}
+
+/// Measure [`PrecisionIncrement`] at spy fraction `f`, with an optional reshape
+/// `retry_cap`.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero or `spy_fraction` is outside `(0, 1)`.
+#[must_use]
+pub fn simulate_precision_increment<R: RelayRng + ?Sized>(
+    params: &DandelionParams,
+    embargo: &EmbargoTimer,
+    spy_fraction: f64,
+    retry_cap: u32,
+    trials: usize,
+    rng: &mut R,
+) -> PrecisionIncrement {
+    assert!(trials > 0, "need at least one trial");
+    assert!(
+        spy_fraction > 0.0 && spy_fraction < 1.0,
+        "spy fraction must be in (0, 1)"
+    );
+    let hop_ms = u64::from(params.time_between_hop_ms);
+    let q = u64::from(params.fluff_probability_pct);
+    let return_ms = u64::from(params.fluff_return_ms);
+    let spy_threshold = (spy_fraction * f64::from(u32::MAX)) as u32;
+    let is_spy = |rng: &mut R| (rng.next_u64() as u32) < spy_threshold;
+
+    let mut c1_correct = 0_u64;
+    let mut joint_correct = 0_u64;
+
+    for _ in 0..trials {
+        // Stem walk (RD-4): the origin (position 0) always stems; relays flip
+        // the fluff coin from position 1.
+        let mut deadlines: Vec<u64> = Vec::new();
+        let mut t = 0_u64;
+        loop {
+            let d = embargo.deadline(t, rng);
+            if !deadlines.is_empty() && bernoulli(rng, q, 100) {
+                break;
+            }
+            deadlines.push(d);
+            if deadlines.len() >= MAX_SIMULATED_HOPS {
+                break;
+            }
+            t = t.saturating_add(hop_ms);
+        }
+        let natural_fluff = deadlines.len() as u64 * hop_ms;
+        let disarm = natural_fluff.saturating_add(return_ms);
+
+        // C1: the origin's successor (position 1) is a spy → it saw the tx from
+        // the origin and names it correctly. Position 1 always exists (the
+        // origin always has a stem successor). P = f.
+        let c1 = is_spy(rng);
+        if c1 {
+            c1_correct += 1;
+        }
+
+        // C3: the origin's own embargo fires before disarm (a preemption). Under
+        // reshape it re-stems up to `retry_cap` alternates and fluffs only if it
+        // exhausts them — modelled by requiring `retry_cap + 1` independent fires
+        // within the window (a renewal, as in `simulate_origin_exposure`), then
+        // observed by a spy neighbour (independent, w.p. f).
+        let origin_fluffs = {
+            let mut elapsed = 0_u64;
+            let mut fires = 0_u32;
+            loop {
+                let interval = embargo.deadline(0, rng);
+                if elapsed.saturating_add(interval) >= disarm {
+                    break;
+                }
+                elapsed = elapsed.saturating_add(interval);
+                fires += 1;
+                if fires > retry_cap {
+                    break;
+                }
+            }
+            fires > retry_cap
+        };
+        let c3_origin = origin_fluffs && is_spy(rng); // a spy neighbours the origin
+
+        if c1 || c3_origin {
+            joint_correct += 1;
+        }
+    }
+
+    let n = trials as f64;
+    let precision_c1 = c1_correct as f64 / n;
+    let precision_c1_c3 = joint_correct as f64 / n;
+    PrecisionIncrement {
+        spy_fraction,
+        precision_c1,
+        precision_c1_c3,
+        delta: precision_c1_c3 - precision_c1,
+    }
+}

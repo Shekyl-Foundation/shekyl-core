@@ -1554,3 +1554,60 @@ fn origin_exposure_meets_target_via_reshape_not_embargo() {
             / 1000.0
     );
 }
+
+/// **§13 verified by re-run.** The δ increment-form adopt-criterion, measured
+/// end-to-end (RD-4 stem support, STEMS=2, 144 s embargo) rather than composed by
+/// hand. Reproduces the review's table and confirms reshape drives δ→0.
+#[test]
+fn precision_increment_reproduces_delta_table() {
+    use shekyl_relay_privacy::conformance::simulate_precision_increment;
+
+    let base = DandelionParams::inherited();
+    let e = EmbargoTimer::geometric_from_ticks(576, DEFAULT_EMBARGO_TICK_MILLIS);
+
+    println!("\nδ increment re-run (independent-neighbour lower bound, 144s embargo)");
+    println!(
+        "{:>6} {:>12} {:>14} {:>12} {:>12}",
+        "f", "Prec(C1)", "Prec(C1+C3)", "δ", "review"
+    );
+    println!("{}", "-".repeat(60));
+
+    // (f, review's δ) — the §13 table this re-run must reproduce.
+    let cases = [(0.05_f64, 0.0010), (0.10, 0.0019), (0.30, 0.0045)];
+    for (i, (f, review_delta)) in cases.iter().enumerate() {
+        let mut rng = SplitMix64::new(0xD17A + i as u64);
+        let p = simulate_precision_increment(&base, &e, *f, 0, 1_000_000, &mut rng);
+        println!(
+            "{f:>6.2} {:>12.4} {:>14.4} {:>12.4} {review_delta:>12.4}",
+            p.precision_c1, p.precision_c1_c3, p.delta
+        );
+
+        // Precision(C1) ≈ f, by construction (the origin's successor is a spy).
+        assert!(
+            (p.precision_c1 - f).abs() < 0.003,
+            "Precision(C1) should be ~f: {:.4} vs {f}",
+            p.precision_c1
+        );
+        // δ reproduces the review's value (Monte-Carlo band).
+        assert!(
+            (p.delta - review_delta).abs() < 0.0005,
+            "δ at f={f} was {:.4}, review has {review_delta}",
+            p.delta
+        );
+    }
+
+    // §13.4: reshape (retry_cap=1) drives δ toward zero — the residual is only
+    // the both-slots-adversarial cases (W3), which this independent model does
+    // not include, so it collapses to near-zero here.
+    let mut rng = SplitMix64::new(0xBEEF);
+    let reshaped = simulate_precision_increment(&base, &e, 0.30, 1, 1_000_000, &mut rng);
+    println!(
+        "\n  reshape (cap=1) at f=0.30: δ = {:.5} (was 0.0047 without) — reshape drives δ→0",
+        reshaped.delta
+    );
+    assert!(
+        reshaped.delta < 0.0003,
+        "reshape should collapse δ toward zero, got {:.5}",
+        reshaped.delta
+    );
+}

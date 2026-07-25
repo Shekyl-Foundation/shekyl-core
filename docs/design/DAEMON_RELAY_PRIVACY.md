@@ -1600,7 +1600,8 @@ adopt the mechanism parameters   iff   δ ≤ δ_max
 ### 13.2 The computed left side (lower bound)
 
 At the adopted 144 s embargo, RD-4 stem support, `STEMS = 2`, independent-neighbour
-assumptions:
+assumptions — **re-run end-to-end by `simulate_precision_increment`
+(`precision_increment_reproduces_delta_table`), not composed by hand:**
 
 | `f` | `Precision(C1)` | `Precision(C1+C3)` | `δ` |
 | --- | --- | --- | --- |
@@ -1656,17 +1657,22 @@ placeholder, not a decision.
 **Verification status (honest):**
 - *Form* — verified: increment-form, in precision units, meeting the measurement
   at a defined seam. This is the Q-9 deliverable and it is complete.
-- *Left-side magnitude* — cross-checked, not re-run: `Precision(C1) ≈ f` holds by
-  construction, and at `f = 0.10` the `δ = 0.0019` sits just under the measured
-  raw `C3` origin-attribution (`leak 0.0114 × origin-share 0.198 = 0.0023`), the
-  gap being the `C1` overlap (a forced fluff whose origin the stem channel already
-  caught adds no increment). Right magnitude, right direction.
-- *Enriched value* — **gated on the two-slot instrument.** The table is the
-  independent-neighbour *lower* bound; the `f = 0.30` row rises under the
-  supernode's outbound enrichment (W3, §12), and the two-slot occupancy instrument
-  is what turns `0.0045` into its honest enriched value. Until then, `δ` at high
-  `f` is a floor, not the figure a `ρ` decision should be taken against.
+- *Left side* — **re-run and reproduced.** `simulate_precision_increment` measures
+  it end-to-end under RD-4/STEMS=2/144 s, and returns δ = 0.0011 / 0.0020 / 0.0047
+  at f = 0.05 / 0.10 / 0.30 — the review's 0.0010 / 0.0019 / 0.0045 to within
+  Monte-Carlo noise, with `Precision(C1) ≈ f` by construction. Reshape
+  (`retry_cap = 1`) collapses δ to ~0.00006, confirming §13.4. The test pins both.
+  (The earlier "cross-checked, not re-run" caveat is discharged.)
+- *Enriched value* — **gated on the two-slot instrument.** The re-run confirms the
+  *independent-neighbour lower bound*; the `f = 0.30` row rises under the
+  supernode's outbound enrichment (W3, §12), because `simulate_precision_increment`
+  draws the origin's spy-neighbour independently at rate `f` rather than from the
+  enriched outbound pool. The two-slot occupancy instrument is what turns `0.0047`
+  into its honest enriched value. Until then, `δ` at high `f` is a floor, not the
+  figure a `ρ` decision should be taken against.
 
-So Q-9 is **resolved in form**: `δ` is a per-transaction precision increment,
-bounded by a ratio target `ρ` the human names, driven toward zero by reshape, with
-its high-`f` value the acceptance threshold of the instrument Round 3 opens with.
+So Q-9 is **resolved in form, with the left side re-run and reproduced**: `δ` is a
+per-transaction precision increment (measured, not composed), bounded by a ratio
+target `ρ` the human names, driven toward zero by reshape, with its high-`f`
+enriched value the acceptance threshold of the two-slot instrument Round 3 opens
+with.
