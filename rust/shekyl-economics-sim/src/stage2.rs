@@ -38,8 +38,11 @@ use crate::calibration::{
 };
 use crate::engine::{ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve};
+use crate::population::{attacker_capped_work_milli, honest_sigma_work_milli, DQ2H_TAIL};
 use crate::scenarios::all_scenarios;
-use shekyl_archival_retention::SEGMENT_LEAF_COUNT;
+use shekyl_archival_retention::{
+    reward_share_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, SEGMENT_LEAF_COUNT,
+};
 
 /// Atomic units per SKL (mirrors `engine.rs`).
 const COIN: f64 = 1_000_000_000.0;
@@ -512,9 +515,274 @@ fn print_stuffer_cost_curve() {
     }
     eprintln!(
         "  -> cost/shard rises with chain depth (deeper tree = larger FCMP proof).\n\
-         cp4b weighs this against the escalation Delta-pool a stuffing staker captures\n\
-         (ROI < 1 gate): a survivor of A1 must ALSO price the stuffer out here."
+         The A4 ROI gate below weighs this against the escalation Delta-pool a\n\
+         stuffing staker captures: a survivor of A1 must ALSO price the stuffer out."
     );
+}
+
+// ── A4 (W9) ROI gate — cp4b (served-work capture + coupled burden) ───────────
+
+/// Attacker horizon band, **years** the inflated corpus persists (the ratchet is
+/// permanent, §6.2). Revenue AND the coupled bond burden both accrue per year, so
+/// horizon is swept, not simply maximised (DQ-2E / D-1..D-5).
+const A4_HORIZON_BAND: [u64; 3] = [1, 5, 10];
+
+/// Shards the attacker stuffs in one campaign (the leverage axis they optimise).
+/// The gate takes the **max ROI** over this sweep — the attacker picks the block.
+const A4_DELTA_SWEEP: [u64; 5] = [100, 1_000, 10_000, 50_000, 100_000];
+
+/// Honest-archiver holdings per bond — the **concentration axis** the verdict is
+/// sensitive to (`population.rs`): small bonds dodge the `curve_milli` plateau
+/// (large `Σwork`, small attacker slice); large bonds are capped (small `Σwork`,
+/// large attacker slice). Swept, and the gate takes the worst (most concentrated,
+/// = most attacker-favouring) — so a pass is robust to however honest archivers
+/// actually group holdings.
+const A4_HONEST_HOLDINGS_BAND: [u64; 3] = [4, 64, 512];
+
+/// The stuffer groups its fresh shards **small** (4/bond) to stay under the
+/// plateau knee — full work credit, attacker-favouring (`population.rs`).
+const A4_ATTACKER_HOLDINGS: u64 = 4;
+
+/// Opportunity-cost rate on the attacker's locked bond capital — the **minimum**
+/// band member (2%), the cheapest hold and so the highest ROI (attacker-favouring;
+/// F-G). Storage (~100× smaller, F-G) is omitted from cost — also attacker-
+/// favouring. The single float boundary in the cost.
+const A4_OPP_RATE: f64 = 0.02;
+
+/// One attacker configuration's ROI (§12.2 A4, DQ-2C) — the **manipulation
+/// premium**, served-work channel. The base archiver return (does serving `Δn`
+/// shards pay at the *un-manipulated* share) is A1's question, not W9's; W9 asks
+/// only whether **gaming the escalation share** adds profit. So revenue is the
+/// attacker's served-work slice of the **Δpool the share increase creates** — not
+/// the whole captured pool (which would conflate "archiving is profitable" with
+/// "stuffing pays"). A flat share has no lever, so flat-25 reads exactly 0.
+///
+/// - **revenue** = `capture · Δpool · horizon`, where `Δpool = mul_scale(whole_burn,
+///   share(n+Δn)) − mul_scale(whole_burn, share(n))` (share gates only the fee
+///   leg; emission is share-independent, so it drops out of the *delta*), and
+///   `capture = reward_share_floor(Δpool, their_work, Σwork)` — the attacker's
+///   served-work slice via the production distribution. They serve the `Δn` fresh
+///   shards at `r = 1` (sole first-mover), grouped small to dodge the cap.
+/// - **cost** = one-time stuffing weight-fees **+ the §6.2 coupled burden**: to
+///   capture, the attacker must bond `ARCHIVAL_BOND_FLOOR` per fresh shard (r=1,
+///   sole replica) and hold it every year. That coupling is the defense.
+///
+/// Attacker-favouring: min opp-rate, storage omitted, small (uncapped) attacker
+/// grouping, age-0 (no incumbency). Integer through Δpool + the reward chain; f64
+/// only at the reported ratio and the opp-rate boundary (DQ-2G).
+#[must_use]
+fn a4_stuffing_roi(
+    whole_burn_atomic: u64,
+    n: u64,
+    sigma_honest_milli: u64,
+    candidate: &EscalationCurve,
+    delta: u64,
+    horizon_years: u64,
+) -> f64 {
+    let n2 = n.saturating_add(delta);
+    // The share-manipulation Δpool on the honest burn — the production op. Only the
+    // fee leg is share-gated, so the emission leg cancels in the delta.
+    let dpool_atomic = mul_scale(whole_burn_atomic, candidate.share(n2))
+        .saturating_sub(mul_scale(whole_burn_atomic, candidate.share(n)));
+    // Served-work capture of that Δpool: Δn fresh shards at r=1, grouped small.
+    let capped_att = attacker_capped_work_milli(delta, A4_ATTACKER_HOLDINGS);
+    let sigma_total = sigma_honest_milli.saturating_add(capped_att);
+    let revenue_atomic = reward_share_floor(dpool_atomic, capped_att, sigma_total);
+    let revenue_skl = (u128::from(revenue_atomic) * u128::from(horizon_years)) as f64 / COIN;
+
+    // Cost: one-time stuffing weight-fees + the coupled bond opportunity cost.
+    let chain_leaves = n2.saturating_mul(SEGMENT_LEAF_COUNT);
+    let fee_skl =
+        (leaf_stuffer_cost_per_shard_atomic(chain_leaves) * u128::from(delta)) as f64 / COIN;
+    let bond_opp_skl_per_year =
+        (u128::from(ARCHIVAL_BOND_FLOOR_ATOMIC) * u128::from(delta)) as f64 / COIN * A4_OPP_RATE;
+    let cost_skl = fee_skl + bond_opp_skl_per_year * horizon_years as f64;
+    if cost_skl <= 0.0 {
+        return f64::INFINITY;
+    }
+    revenue_skl / cost_skl
+}
+
+/// A4 verdict for one candidate: the **max attacker ROI** over years × `Δn` ×
+/// horizon, reported **separately per honest-holdings environment** so the
+/// escalation's own manipulation effect (at the rational small-bond equilibrium,
+/// `hHold = 4`) is distinguishable from the curve-cap amplification (at the
+/// pathological fully-capped `hHold = 512`, a separate concern — the cap
+/// under-rewards naive big-bond archivers and inflates the stuffer's slice).
+///
+/// The gate binds on the **realistic** end (index 0, rational honest archivers
+/// dodge the cap): `passes` = `roi_by_hholdings[0] < 1`. The capped end is
+/// reported for visibility, not as the escalation's verdict.
+#[derive(Debug, Clone, Serialize)]
+pub struct A4CandidateResult {
+    /// `None` for the flat-25 status-quo baseline.
+    pub asymptote_pct: Option<f64>,
+    pub knee_shards: Option<u64>,
+    /// Max attacker ROI per [`A4_HONEST_HOLDINGS_BAND`] member (realistic →
+    /// capped). Index 0 is the rational small-bond environment the gate binds on.
+    pub roi_by_hholdings: [f64; A4_HONEST_HOLDINGS_BAND.len()],
+    /// The `(n, Δn, horizon_years)` achieving the realistic-end (index 0) max.
+    pub worst_at: (u64, u64, u64),
+    pub passes: bool,
+}
+
+/// A4 verdict for one scenario.
+#[derive(Debug, Clone, Serialize)]
+pub struct A4ScenarioResult {
+    pub scenario: String,
+    pub flat25: A4CandidateResult,
+    pub candidates: Vec<A4CandidateResult>,
+}
+
+/// Precomputed honest `Σwork` per sustained year, one value per
+/// [`A4_HONEST_HOLDINGS_BAND`] member. Built once per scenario (independent of the
+/// escalation candidate) since `Σwork_honest` depends only on `n` + holdings.
+struct SigmaCache {
+    /// `(year, n, [Σwork per honest-holdings band member])`.
+    rows: Vec<(u64, u64, [u64; A4_HONEST_HOLDINGS_BAND.len()])>,
+}
+
+impl SigmaCache {
+    fn build(aggs: &[A1YearAgg]) -> Self {
+        let rows = aggs
+            .iter()
+            .filter(|a| a.year > A1_RAMP_YEARS && a.n > 0)
+            .map(|a| {
+                let mut sig = [0u64; A4_HONEST_HOLDINGS_BAND.len()];
+                for (k, &h) in A4_HONEST_HOLDINGS_BAND.iter().enumerate() {
+                    sig[k] = honest_sigma_work_milli(a.n, DQ2H_TAIL, h);
+                }
+                (a.year, a.n, sig)
+            })
+            .collect();
+        Self { rows }
+    }
+}
+
+fn a4_candidate_result(
+    aggs: &[A1YearAgg],
+    sigma: &SigmaCache,
+    curve: &EscalationCurve,
+    is_flat: bool,
+) -> A4CandidateResult {
+    let mut roi_by_hholdings = [0.0_f64; A4_HONEST_HOLDINGS_BAND.len()];
+    let mut worst_at = (0u64, 0u64, 0u64);
+    for &(_year, n, ref sig) in &sigma.rows {
+        let agg = aggs.iter().find(|a| a.n == n);
+        let Some(agg) = agg else { continue };
+        for &delta in &A4_DELTA_SWEEP {
+            for &h in &A4_HORIZON_BAND {
+                for k in 0..A4_HONEST_HOLDINGS_BAND.len() {
+                    let roi = a4_stuffing_roi(agg.whole_burn_atomic, n, sig[k], curve, delta, h);
+                    if roi > roi_by_hholdings[k] {
+                        roi_by_hholdings[k] = roi;
+                        // Track the config at the realistic (index-0) end, the gate.
+                        if k == 0 {
+                            worst_at = (n, delta, h);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    A4CandidateResult {
+        asymptote_pct: if is_flat {
+            None
+        } else {
+            Some(curve.asymptote as f64 / 10_000.0)
+        },
+        knee_shards: if is_flat {
+            None
+        } else {
+            Some(curve.knee_shards)
+        },
+        roi_by_hholdings,
+        worst_at,
+        passes: roi_by_hholdings[0] < 1.0,
+    }
+}
+
+/// A4 (W9) attacker-ROI gate across the scenario set (§12.2). Served-work capture
+/// with the §6.2 bond coupling; the gate is **ROI < 1 everywhere** — the
+/// executable form of "stuffing it funds it".
+fn a4_stuffing_report(params: &SimParams) -> Vec<A4ScenarioResult> {
+    eprintln!(
+        "\nA4 — W9 output-stuffing ROI (§12.2, DQ-2C): SERVED-WORK capture (the D2 pool\n\
+         is distributed by served work per bond, NOT by stake). Attacker serves the Δn\n\
+         stuffed shards at r=1 and captures reward_share_floor(pool(n+Δn), their work,\n\
+         Σwork) each year; cost = stuffing fees + the §6.2 coupled bond (0.75 SKL/shard\n\
+         held forever). Best over [years x Δn{DELTAS:?} x horizon{H:?}yr], shown at BOTH\n\
+         honest-holdings ends: hHold=4 (rational small bonds — the gate) and hHold=512\n\
+         (pathological fully-capped — a curve-cap concern, not the escalation's).\n\
+         Flat-25 has no share lever ⇒ 0. Attacker-favouring: min opp-rate {RATE}, storage\n\
+         omitted, age-0. PASS iff realistic-end (hHold=4) ROI < 1 everywhere.",
+        DELTAS = A4_DELTA_SWEEP,
+        H = A4_HORIZON_BAND,
+        RATE = A4_OPP_RATE,
+    );
+    eprintln!(
+        "{:<20} {:>10} {:>14} {:>14} {:>18}",
+        "scenario", "flat-25", "best@hHold4", "best@hHold512", "worst (n/Δn/H)"
+    );
+
+    let mut results = Vec::new();
+    for config in all_scenarios(params) {
+        let aggs = a1_year_aggs(params, &config);
+        let sigma = SigmaCache::build(&aggs);
+        let flat25 = a4_candidate_result(&aggs, &sigma, &flat_25(), true);
+        let candidates: Vec<A4CandidateResult> = family()
+            .iter()
+            .map(|c| a4_candidate_result(&aggs, &sigma, c, false))
+            .collect();
+        let last = A4_HONEST_HOLDINGS_BAND.len() - 1;
+        // Worst candidate at the realistic (index-0) end — the gate binds here.
+        let worst_real = candidates
+            .iter()
+            .max_by(|a, b| {
+                a.roi_by_hholdings[0]
+                    .partial_cmp(&b.roi_by_hholdings[0])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .cloned()
+            .unwrap_or_else(|| flat25.clone());
+        let worst_capped_roi = candidates
+            .iter()
+            .map(|c| c.roi_by_hholdings[last])
+            .fold(0.0_f64, f64::max);
+        let (wn, wd, whz) = worst_real.worst_at;
+        eprintln!(
+            "{:<20} {:>10.4} {:>14.4} {:>14.4} {:>10}/{:>5}/{:>2}",
+            trunc(&config.name, 20),
+            flat25.roi_by_hholdings[0],
+            worst_real.roi_by_hholdings[0],
+            worst_capped_roi,
+            wn,
+            wd,
+            whz,
+        );
+        results.push(A4ScenarioResult {
+            scenario: config.name.clone(),
+            flat25,
+            candidates,
+        });
+    }
+    let any_fail = results
+        .iter()
+        .any(|r| !r.flat25.passes || r.candidates.iter().any(|c| !c.passes));
+    eprintln!(
+        "  -> W9 gate (realistic hHold=4 end): {}. Flat-25 = 0 (no share lever): the\n\
+         premium is purely the escalation's. A steeper share (higher asymptote /\n\
+         tighter knee) lets the marginal stuffed shard's Δpool slice out-earn its\n\
+         coupled bond — so the gate, not just A1, bounds escalation aggressiveness.\n\
+         The hHold=512 column is far worse but reflects a SEPARATE curve-cap\n\
+         dodgeability concern (naive big-bond archivers self-capped), not D2.",
+        if any_fail {
+            "FAIL — rule-21 per-output fee-floor reopen (§11.3), NOT a D2 redesign (§8)"
+        } else {
+            "PASS"
+        }
+    );
+    results
 }
 
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
@@ -561,16 +829,20 @@ pub fn run_stage2(params: &SimParams) {
     print_escalation_family();
     print_stuffer_cost_curve();
     let a1 = a1_clearance_report(params);
+    let a4 = a4_stuffing_report(params);
 
     let report = Stage2Report {
         burden_trajectories: trajectories,
         a1_clearance: a1,
+        a4_stuffing: a4,
     };
     let json = serde_json::to_string_pretty(&report).expect("JSON serialization failed");
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(json.as_bytes()).expect("write failed");
     stdout.write_all(b"\n").expect("write failed");
-    eprintln!("\nStage-2 (burden trajectory + escalation family + A1 clearance) complete.");
+    eprintln!(
+        "\nStage-2 (burden trajectory + escalation family + A1 clearance + A4 W9 ROI) complete."
+    );
 }
 
 /// The combined `--stage2` JSON payload (grows as arms land).
@@ -578,6 +850,7 @@ pub fn run_stage2(params: &SimParams) {
 pub struct Stage2Report {
     pub burden_trajectories: Vec<BurdenTrajectory>,
     pub a1_clearance: Vec<A1ScenarioResult>,
+    pub a4_stuffing: Vec<A4ScenarioResult>,
 }
 
 #[cfg(test)]
@@ -649,5 +922,49 @@ mod tests {
                 assert!(row.burden_fiat_slowdown >= row.burden_fiat_historical);
             }
         }
+    }
+
+    #[test]
+    fn a4_served_work_roi_responds_to_steepness_and_concentration() {
+        // The served-work ROI must move correctly with its levers: (a) a steeper
+        // escalation (higher asymptote, same knee) raises the pool the marginal
+        // stuffed shard is paid from, and (b) more-concentrated (capped) honest
+        // holdings shrink Σwork, enlarging the attacker's captured slice. Neither
+        // may lower ROI, else the gate measures nothing.
+        let params = SimParams::default();
+        let aggs = a1_year_aggs(&params, &all_scenarios(&params)[0]);
+        let a = aggs
+            .iter()
+            .find(|a| a.year > A1_RAMP_YEARS && a.n > 0)
+            .unwrap();
+        // Same knee, different asymptote — a controlled steepness comparison.
+        let knee = crate::escalation::KNEE_BAND[1];
+        let steep = EscalationCurve {
+            asymptote: crate::escalation::ASYMPTOTE_BAND[2],
+            knee_shards: knee,
+        };
+        let shallow = EscalationCurve {
+            asymptote: crate::escalation::ASYMPTOTE_BAND[0],
+            knee_shards: knee,
+        };
+        let sigma = honest_sigma_work_milli(a.n, DQ2H_TAIL, 64);
+        let roi_steep = a4_stuffing_roi(a.whole_burn_atomic, a.n, sigma, &steep, 10_000, 10);
+        let roi_shallow = a4_stuffing_roi(a.whole_burn_atomic, a.n, sigma, &shallow, 10_000, 10);
+        assert!(
+            roi_steep >= roi_shallow,
+            "steeper share must not lower served-work ROI: {roi_steep} < {roi_shallow}"
+        );
+        // Concentrated honest holdings (512, capped) → smaller Σwork → larger slice.
+        let sigma_capped = honest_sigma_work_milli(a.n, DQ2H_TAIL, 512);
+        let sigma_spread = honest_sigma_work_milli(a.n, DQ2H_TAIL, 4);
+        assert!(sigma_capped < sigma_spread, "capping must shrink Σwork");
+        let roi_capped =
+            a4_stuffing_roi(a.whole_burn_atomic, a.n, sigma_capped, &steep, 10_000, 10);
+        let roi_spread =
+            a4_stuffing_roi(a.whole_burn_atomic, a.n, sigma_spread, &steep, 10_000, 10);
+        assert!(
+            roi_capped >= roi_spread,
+            "capped honest holdings must not lower attacker ROI: {roi_capped} < {roi_spread}"
+        );
     }
 }
