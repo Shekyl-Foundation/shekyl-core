@@ -17,7 +17,7 @@ use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
 use shekyl_wallet_rpc::auth::AuthConfig;
 use shekyl_wallet_rpc::server::{build_router, AppState, ListenAddr, ServerConfig};
-use shekyl_wallet_rpc::tenant::TenantState;
+use shekyl_wallet_rpc::tenant::{DaemonEndpoint, TenantState};
 use shekyl_wallet_rpc::{API_VERSION, VERSION};
 use tempfile::TempDir;
 use tokio::sync::Notify;
@@ -37,7 +37,10 @@ fn test_state(auth: AuthConfig) -> Arc<AppState> {
         tenants: tokio::sync::Mutex::new(TenantState::new(
             std::env::temp_dir(),
             Network::Stagenet,
-            "http://127.0.0.1:1".into(),
+            DaemonEndpoint {
+                address: "http://127.0.0.1:1".into(),
+                proxy: None,
+            },
         )),
         auth,
         kdf: test_kdf(),
@@ -50,7 +53,10 @@ fn lifecycle_state(dir: &TempDir) -> Arc<AppState> {
         tenants: tokio::sync::Mutex::new(TenantState::new(
             dir.path().to_path_buf(),
             Network::Stagenet,
-            "http://127.0.0.1:1".into(),
+            DaemonEndpoint {
+                address: "http://127.0.0.1:1".into(),
+                proxy: None,
+            },
         )),
         auth: AuthConfig::Disabled,
         kdf: test_kdf(),
@@ -306,6 +312,7 @@ async fn spawn_in_process_serves_get_version_over_private_uds() {
         std::env::temp_dir(),
         Network::Stagenet,
         "http://127.0.0.1:1".into(),
+        None,
     )
     .await
     .expect("spawn");
@@ -705,6 +712,60 @@ async fn create_wallet_file_exists() {
     assert_eq!(second["error"]["code"], -29002);
 }
 
+/// Startup refuses a malformed daemon endpoint (here: a port-less --proxy)
+/// with an error naming the flag — deferred to first use it would surface on
+/// `open_wallet` as a misdiagnosed "daemon unreachable" (rule 82).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_refuses_a_malformed_proxy_at_startup() {
+    let dir = TempDir::new().expect("tempdir");
+    let err = shekyl_wallet_rpc::spawn_in_process_with(ServerConfig {
+        listen: ListenAddr::Tcp(SocketAddr::from(([127, 0, 0, 1], 0))),
+        wallet_dir: dir.path().to_path_buf(),
+        network: Network::Stagenet,
+        daemon_address: "http://127.0.0.1:1".into(),
+        proxy: Some("socks5://127.0.0.1".into()),
+        auth: AuthConfig::Disabled,
+        kdf: test_kdf(),
+    })
+    .await
+    .err()
+    .expect("a port-less proxy must refuse at startup");
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("--proxy"),
+        "the startup error names the flag to fix: {rendered}"
+    );
+}
+
+/// The daemon-address half of the same gate: a URL shape the transport
+/// cannot dial refuses at startup with the flag named and the shape cause
+/// carried.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_refuses_a_malformed_daemon_address_at_startup() {
+    let dir = TempDir::new().expect("tempdir");
+    let err = shekyl_wallet_rpc::spawn_in_process_with(ServerConfig {
+        listen: ListenAddr::Tcp(SocketAddr::from(([127, 0, 0, 1], 0))),
+        wallet_dir: dir.path().to_path_buf(),
+        network: Network::Stagenet,
+        daemon_address: "ftp://127.0.0.1:28581".into(),
+        proxy: None,
+        auth: AuthConfig::Disabled,
+        kdf: test_kdf(),
+    })
+    .await
+    .err()
+    .expect("a non-http(s) daemon URL must refuse at startup");
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("--daemon-address"),
+        "the startup error names the flag to fix: {rendered}"
+    );
+    assert!(
+        rendered.contains("daemon URL"),
+        "the startup error carries the shape cause: {rendered}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawn_in_process_with_lifecycle() {
     let dir = TempDir::new().expect("tempdir");
@@ -713,6 +774,7 @@ async fn spawn_in_process_with_lifecycle() {
         wallet_dir: dir.path().to_path_buf(),
         network: Network::Stagenet,
         daemon_address: "http://127.0.0.1:1".into(),
+        proxy: None,
         auth: AuthConfig::Disabled,
         kdf: test_kdf(),
     })

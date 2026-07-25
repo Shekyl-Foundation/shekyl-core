@@ -109,7 +109,7 @@
 //! | `reservations`        | `BTreeMap<ReservationId, Reservation>`               | runtime-only `PendingTx` tracker        |
 //! | `next_reservation_id` | `u64`                                                | process-local monotonic counter         |
 //! | `prefs`               | [`shekyl_engine_prefs::WalletPrefs`]                 | plaintext-with-HMAC layer 2             |
-//! | `daemon`              | [`DaemonClient`]                                     | thin wrapper around `SimpleRequestRpc`  |
+//! | `daemon`              | [`DaemonClient`]                                     | thin wrapper around `HttpRpc`  |
 //! | `network`             | [`Network`]                                          | cached from `file.network()`            |
 //! | `capability`          | [`Capability`]                                       | cached from `file.capability()`         |
 //! | `_signer`             | `PhantomData<S>`                                     | compile-time signer dispatch            |
@@ -654,12 +654,17 @@ pub struct Engine<
     /// [`LedgerEngine`]: traits::LedgerEngine
     ledger: Arc<L>,
 
-    /// [`PendingTxEngine`] implementor for the build / submit / discard
-    /// lifecycle. Shares the same [`Arc`] ledger handle as
-    /// [`Engine::ledger`] at assembly time (C6).
+    /// **Transfer workflow handle** — the production default is
+    /// [`LocalPendingTx`](local_pending_tx::LocalPendingTx) in
+    /// [`transfer`](transfer). Multi-step send (build / submit / discard /
+    /// re-anchor) is owned by that implementor, not by inherent methods on
+    /// `Engine`. Prefer `self.pending.…` / `PendingTxEngine` over growing
+    /// send bodies here (`ENGINE_COMPOSITION_DECOMPOSITION.md` §Transfer
+    /// workflow ownership).
     ///
-    /// `Engine::close` consults `outstanding_pending_txs()` and refuses
-    /// with
+    /// Shares the same [`Arc`] ledger handle as [`Engine::ledger`] at
+    /// assembly time (C6). `Engine::close` consults
+    /// `outstanding_pending_txs()` and refuses with
     /// [`OpenError::OutstandingPendingTx`](error::OpenError::OutstandingPendingTx)
     /// when any reservation is in flight.
     pub(crate) pending: P,
@@ -690,7 +695,7 @@ pub struct Engine<
     ///
     /// Generic over `D: DaemonEngine`. Production code defaults `D` to
     /// [`DaemonClient`] (a thin wrapper over
-    /// `shekyl_rpc_transport::SimpleRequestRpc`); crate-internal
+    /// `shekyl_rpc_transport::HttpRpc`); crate-internal
     /// tests substitute `TestDaemon` to drive failure-injection and
     /// deduplication scenarios against the same orchestration logic.
     /// See `crate::engine::traits::daemon` for the trait contract.
@@ -890,7 +895,7 @@ impl<
     ///   accessors.
     /// - `daemon` — passes through to [`DaemonClient`]'s `Debug`, which
     ///   includes the daemon URL but no auth credentials (see
-    ///   [`shekyl_rpc_transport::SimpleRequestRpc`]).
+    ///   [`shekyl_rpc_transport::HttpRpc`]).
     /// - `network`, `capability` — printed verbatim; these are cached
     ///   public values from region 1 of the wallet file.
     /// - `pending` — printed as an outstanding-count via

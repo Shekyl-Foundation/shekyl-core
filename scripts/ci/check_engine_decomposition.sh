@@ -149,6 +149,102 @@ for key in "${!FILE_CEIL[@]}"; do
   }
 done
 
+# --- 5. Transfer workflow ownership pin --------------------------------------
+# docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md §"Transfer workflow ownership"
+#
+# Multi-step send lives under engine/transfer/ as LocalPendingTx. Re-inflating
+# those orchestration methods onto Engine / lifecycle / top-level monofiles is
+# the failure mode this tripwire catches. Pure grep (no ripgrep) so this script
+# stays dependency-free for CI.
+#
+# Invariants (semantic, not filename-brittle):
+#   - engine/transfer/ exists with a module root (mod.rs)
+#   - `pub struct LocalPendingTx` is defined *somewhere* under transfer/
+#     (may move between transfer/*.rs on later file-splits)
+#   - local_pending_tx.rs is a re-export shim from transfer, not a second
+#     implementor (no local struct; `pub use` path mentions transfer + type)
+TRANSFER_DIR="${ENGINE_DIR}/transfer"
+TRANSFER_MOD_RS="${TRANSFER_DIR}/mod.rs"
+SHIM_RS="${ENGINE_DIR}/local_pending_tx.rs"
+
+if [ ! -d "${TRANSFER_DIR}" ] || [ ! -f "${TRANSFER_MOD_RS}" ]; then
+  echo "FAIL: engine/transfer/ workflow tree is missing (expected transfer/mod.rs)."
+  note "Transfer ownership is engine/transfer/ — restore it, do not move send logic onto Engine."
+  fail=1
+else
+  # Definition may live in transfer/engine.rs today or another transfer/*.rs later.
+  # Use find + per-file grep (same style as the method-def loop below) so we do
+  # not depend on recursive-grep option ordering (`--include` must precede paths
+  # on some greps, and a misordered flag is easy to treat as a path).
+  lpt_def_hits=""
+  while IFS= read -r transfer_rs; do
+    if hits="$(grep -nE '^[[:space:]]*pub[[:space:]]+struct[[:space:]]+LocalPendingTx\b' "${transfer_rs}" 2>/dev/null)"; then
+      while IFS= read -r hit; do
+        lpt_def_hits+="${transfer_rs}:${hit}"$'\n'
+      done <<<"${hits}"
+    fi
+  done < <(find "${TRANSFER_DIR}" -name '*.rs' | sort)
+  if [ -z "${lpt_def_hits}" ]; then
+    echo "FAIL: LocalPendingTx is not defined under engine/transfer/."
+    note "Production transfer implementor must live under engine/transfer/ (any .rs in that tree)."
+    fail=1
+  fi
+fi
+
+if [ ! -f "${SHIM_RS}" ]; then
+  echo "FAIL: engine/local_pending_tx.rs shim is missing."
+  note "Keep the re-export shim so historical import paths keep working."
+  fail=1
+else
+  # Reject a second implementor in the shim (struct body / type alias as home).
+  if grep -nE '^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?(struct|type)[[:space:]]+LocalPendingTx\b' "${SHIM_RS}" >/dev/null; then
+    echo "FAIL: local_pending_tx.rs defines LocalPendingTx (struct/type) — must re-export only."
+    note "Shim must stay a re-export path, not a second implementor."
+    fail=1
+  fi
+  # Accept equivalent re-export forms:
+  #   pub use super::transfer::LocalPendingTx;
+  #   pub use crate::engine::transfer::LocalPendingTx;
+  #   pub use super::transfer::{LocalPendingTx, …};
+  # Require both `transfer` and `LocalPendingTx` on a `pub use` line.
+  if ! grep -qE '^[[:space:]]*pub[[:space:]]+use[[:space:]]+[^;]*\btransfer\b[^;]*\bLocalPendingTx\b' "${SHIM_RS}"; then
+    echo "FAIL: local_pending_tx.rs does not re-export LocalPendingTx from transfer/."
+    note "Shim must pub-use LocalPendingTx via a path that includes transfer (super::transfer::… or crate::…::transfer::…)."
+    fail=1
+  fi
+fi
+
+# Method *definitions* that belong only under transfer/. Mentions in comments
+# or call sites elsewhere are fine; a second `fn build_select_sync` body is not.
+TRANSFER_OWNED_FNS=(
+  build_select_sync
+  reanchor_consumer_held
+  finalize_submit_accept
+  finalize_submit_terminal
+  finalize_submit_retryable
+  finalize_submit_ambiguous
+  finalize_submit_already_in_chain
+  commit_built_sync
+  signal_mempool_evicted_sync
+)
+while IFS= read -r path; do
+  case "${path}" in
+    "${ENGINE_DIR}/transfer"/*) continue ;;
+  esac
+  for sym in "${TRANSFER_OWNED_FNS[@]}"; do
+    # Match inherent/method defs only (optional pub / pub(crate) / pub(super) / async).
+    # Pattern anchors at line start so doc comments naming the symbol do not trip.
+    if hits="$(grep -nE "^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+${sym}[[:space:]]*\(" "${path}" 2>/dev/null)"; then
+      echo "FAIL: transfer orchestration method '${sym}' is defined outside engine/transfer/:"
+      echo "${hits}" | while IFS= read -r hit; do
+        echo "  ${path}:${hit}"
+      done
+      note "Move the body into engine/transfer/ (or delete the duplicate). See ENGINE_COMPOSITION_DECOMPOSITION.md §Transfer workflow ownership."
+      fail=1
+    fi
+  done
+done < <(find "${ENGINE_DIR}" -name '*.rs' | sort)
+
 if [ "${fail}" -ne 0 ]; then
   echo "check_engine_decomposition: FAILED"
   exit 1

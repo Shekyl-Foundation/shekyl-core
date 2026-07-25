@@ -44,7 +44,7 @@ pub use server::{
 // Re-exported so in-process hosts (shekyl-cli) can name the network a
 // spawned server binds to without a direct shekyl-engine-core dependency.
 pub use shekyl_engine_core::Network;
-pub use tenant::{SharedEngine, Tenant, TenantState};
+pub use tenant::{DaemonEndpoint, SharedEngine, Tenant, TenantState};
 pub use types::{GetVersionResult, JsonRpcRequest, JsonRpcResponse, WalletHandle, API_VERSION};
 
 /// Crate / binary semver (`CARGO_PKG_VERSION`).

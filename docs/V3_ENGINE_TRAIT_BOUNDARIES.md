@@ -1886,7 +1886,7 @@ the canary tracked in [`docs/CI_BASELINE.md`](CI_BASELINE.md)) or
 be defined as an extension trait — which *is* the two-trait shape
 under a different name.
 
-**Ownership.** The RPC client (today: `SimpleRequestRpc` wrapped
+**Ownership.** The RPC client (today: `HttpRpc` wrapped
 in `DaemonClient`), connection state, retry policy.
 
 **Stage 1 surface.**
@@ -1910,7 +1910,7 @@ code that uses `Rpc` methods (`get_height`,
 without re-importing. The wallet-specific methods
 (`get_fee_estimates`, `submit_transaction`) live on `DaemonEngine`
 itself, never on `Rpc`. The test-support mock implements `Rpc`
-directly (rather than wrapping `SimpleRequestRpc`) and carries an
+directly (rather than wrapping `HttpRpc`) and carries an
 `impl DaemonEngine for MockDaemon` that satisfies the trait
 contract — including the `submit_transaction` per-tx-hash dedup
 clause from §6.1 and the fee-estimate / submit error-queue surface
@@ -1923,7 +1923,7 @@ is `MockDaemon` in
 **Why `Clone + Send + Sync + 'static`** — same as Round 1: the
 daemon handle is shared by clone with the producer task in
 `run_refresh_task`'s `tokio::spawn`'d future. Bound holds for
-`DaemonClient`/`SimpleRequestRpc` already; Stage-4-actor-compatible
+`DaemonClient`/`HttpRpc` already; Stage-4-actor-compatible
 (`ActorRef<DaemonActor>` satisfies the bound).
 
 **Stage 4 framing (per §1.4).** At Stage 4, `DaemonEngine` is
@@ -4372,7 +4372,7 @@ Today's test coverage:
   cover the linear-scan / reorg / RPC-failure / cancellation paths.
 - **Driver-only with partial mocking:** the driver-side tests in
   `engine/refresh.rs` build a real `Engine<SoloSigner>` against an
-  unreachable `SimpleRequestRpc` URL and assert error-path
+  unreachable `HttpRpc` URL and assert error-path
   behavior. Stage 1 PR 1 (`DaemonEngine`) closes the
   end-to-end-against-synthetic-chain gap that previously existed:
   with `MockDaemon: DaemonEngine` and `Engine<S, D: DaemonEngine =

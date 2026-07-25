@@ -249,6 +249,44 @@ pub(crate) async fn require_open_engine(
     state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)
 }
 
+/// The daemon endpoint every wallet on this server connects to. The address
+/// and its proxy are only ever meaningful together — threading them as two
+/// loose values is how a call site ends up proxying one connection and not
+/// another — so they snapshot, clone, and travel as one value.
+#[derive(Clone)]
+pub struct DaemonEndpoint {
+    /// Daemon JSON-RPC base URL (CLI `--daemon-address`).
+    pub address: String,
+    /// SOCKS5h proxy for the daemon transport (CLI `--proxy`); `None` =
+    /// direct. Server-level constant, applied to every wallet's daemon
+    /// connection.
+    pub proxy: Option<String>,
+}
+
+/// Manual (not derived): the address may carry digest credentials in its
+/// authority (`user:pass@host`), so every rendering goes through the
+/// transport's [`redacted_endpoint`] — the same authority grammar the
+/// credential split uses, so redaction and split cannot disagree. The proxy
+/// gets the same treatment (userinfo there is refused at startup, but
+/// refusal errors and logs run before that).
+impl std::fmt::Debug for DaemonEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DaemonEndpoint")
+            .field(
+                "address",
+                &shekyl_rpc_transport::redacted_endpoint(&self.address),
+            )
+            .field(
+                "proxy",
+                &self
+                    .proxy
+                    .as_deref()
+                    .map(shekyl_rpc_transport::redacted_endpoint),
+            )
+            .finish()
+    }
+}
+
 /// Process-level wallet directory + tenant slot + daemon/network binding.
 #[derive(Debug)]
 pub struct TenantState {
@@ -256,8 +294,8 @@ pub struct TenantState {
     pub wallet_dir: PathBuf,
     /// Network every create/open binds to (CLI `--network`).
     pub network: shekyl_engine_core::Network,
-    /// Daemon JSON-RPC base URL (CLI `--daemon-address`).
-    pub daemon_address: String,
+    /// The daemon endpoint (address + proxy) every wallet connects to.
+    pub daemon: DaemonEndpoint,
     /// The single tenant (Phase 4b).
     pub tenant: Tenant,
 }
@@ -267,12 +305,12 @@ impl TenantState {
     pub fn new(
         wallet_dir: PathBuf,
         network: shekyl_engine_core::Network,
-        daemon_address: String,
+        daemon: DaemonEndpoint,
     ) -> Self {
         Self {
             wallet_dir,
             network,
-            daemon_address,
+            daemon,
             tenant: Tenant::new(),
         }
     }

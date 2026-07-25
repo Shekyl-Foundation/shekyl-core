@@ -7034,89 +7034,41 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1.x — dependency migrations
 
-- **Self-hosted daemon scan cannot honor `--proxy`; keep the minimal transport,
-  do not adopt `reqwest` (surfaced 2026-07-23, #360 §15 network-posture review).**
-  The in-process wallet server dials the daemon for block scanning via
-  `shekyl-rpc-transport::SimpleRequestRpc` → `simple_request::Client`, whose
-  connection stack is a bare hyper `HttpsConnector<HttpConnector>` (a direct TCP
-  dialer, optional rustls TLS) with **no proxy layer and no proxy API** — only
-  `with/without_connection_pool`. So `--proxy` (which the CLI's own
-  `DaemonClient` and the `--rpc-url` ureq client honor) cannot reach that scan
-  connection. #360 shipped the honest posture rather than pretending otherwise:
-  `network_posture::disclose_unproxyable` warns on a non-loopback daemon
-  **regardless of `--proxy`**, remedy = a local node (the `(b)` fallback; the
-  `(a)` proxy wiring landed only for `--rpc-url`, which is ureq and proxies
-  trivially).
+- **RESOLVED (Option B executed) — self-hosted daemon scan now honors `--proxy`
+  via SOCKS5h (surfaced 2026-07-23 #360; closed 2026-07-24, `feat/daemon-transport-socks`).**
+  #360 shipped the honest posture (`disclose_unproxyable` warned on a non-loopback
+  daemon regardless of `--proxy`, because `simple_request::Client`'s connector was
+  a bare `HttpsConnector<HttpConnector>` with no proxy API). The follow-up PR closed
+  the gap. **Option B** (own async SOCKS5h connector) was chosen over the two
+  alternatives recorded here for lineage:
+  - *Option C — `ureq` for the daemon transport (was leading candidate) — rejected.*
+    Reusing `shekyl-p-transport`'s `spawn_blocking` ureq pattern would have relaxed
+    §2b invariant 1 (engine-core has no ureq), and grounding found `simple_request`
+    is engine-core's *pervasive* daemon transport (~30 call sites) — the ureq blast
+    radius plus the guard machinery it would have required (type wall + dep-graph
+    containment + grep-gate) outweighed the "reuse an audited dep" pull.
+  - *Option A — `reqwest` — rejected* (large transitive tree into the daemon
+    transport; against [`17`](../.cursor/rules/17-dependency-discipline.mdc)).
 
-  **Closing the gap — three shapes, weighted (keep it simple, reuse what we have):**
-  - *Option C — `ureq` for the daemon transport (leading candidate).* ureq is
-    already a first-party dependency **and already a daemon transport in-tree**:
-    `shekyl-p-transport::PTorClient` is a `ureq::Agent`-backed `Rpc` impl for the
-    per-`P` Tor path — it bridges blocking ureq into the async `Rpc` trait via
-    `spawn_blocking` and configures **SOCKS5h with `resolve_target(false)`** (no
-    DNS leak) through ureq's typed `Proxy` builder. Reusing that pattern for the
-    principal daemon transport reuses an **already-audited** dep (no new tree),
-    gets first-class proxy + remote DNS for free, and could **unify** engine and
-    CLI on one client (retire `simple-request`). *Cost:* ureq is blocking, so
-    each daemon call runs on a `spawn_blocking` pool — a thread hop per RPC on the
-    scan hot path, and (per `shekyl-p-transport`'s own doc) a `spawn_blocking`
-    ureq call is **not a cancellation point**, so shutdown semantics need care.
-    Still a `SimpleRequestRpc` rewrite, but onto a proven in-tree pattern rather
-    than a novel connector or a heavyweight new dep. **Condition — this option
-    relaxes §2b invariant 1 (engine-core has no ureq; ureq confined to
-    shekyl-p-transport), so it may only ship WITH a guard that keeps the
-    persona/principal swap unrepresentable *and* un-regressable** (perf is a
-    non-issue — `spawn_blocking` overhead is µs against a ms network round-trip
-    on a single pooled connection; the real cost is this blast-radius, not
-    throughput). Co-equal deliverables, weakest→strongest: **(1) type wall** —
-    persona-request construction bound to the persona transport's concrete type
-    (never `impl Rpc`, or a sealed marker), agents private with no getter/Deref/
-    pub field, so the swap is a *compile* error; **(2) dep-graph containment**
-    (reuse the existing `GF-7 hooks: dependency-graph + feature containment` CI
-    check) — only `shekyl-p-transport`, the principal-transport crate, and
-    `shekyl-cli` may depend on `ureq`, so a crate that does not depend on ureq
-    *cannot* name `ureq::Agent`; a new dependent is a reviewed manifest change,
-    un-evadable by `use as`/re-export/macro; **(3) grep-gate** — catch a stray
-    `ureq::Agent` construction or raw-agent exposure *inside* an allowlisted
-    crate. Each guard fails loud with a banner naming the stakes (a deanonymized
-    persona is silent + irreversible), so "just add it to the allowlist" is a
-    conscious, reviewed act. Keep the persona type's `tor-socks` `compile_error!`
-    untouched. The invariant then *evolves* from "there is one ureq" to "there is
-    one *isolated* ureq, and nothing can route persona traffic through any other"
-    — a legitimately stronger statement that earns the client unification.
-  - *Option B — SOCKS5h connector on the existing hyper transport.* Add a small
-    `tower`/hyper `Connect` service (e.g. over `tokio-socks`) that does the
-    SOCKS5h handshake and wraps the rustls TLS, threaded through `ServerConfig →
-    TenantState → make_daemon → SimpleRequestRpc`. Keeps the async-native
-    transport and the minimal-transport philosophy, at the cost of a connector we
-    own; no client unification.
-  - *Option A — `reqwest`.* First-class async `Proxy` (incl. `socks5h`), but it
-    drags a large transitive tree (h2, tower, http, url, cookie/mime, its own TLS
-    plumbing) into the *daemon transport* — a material `cargo audit` / audit-surface
-    expansion for an auditable, long-lived money wallet, against
-    [`17-dependency-discipline`](../.cursor/rules/17-dependency-discipline.mdc).
-    **Rejected as the default;** its only pull was stack-wide consolidation, and
-    Option C already unifies on the client we *have* — so reqwest is weaker than
-    it first appears.
-
-  **Correctness bar for all of these — SOCKS5h (remote DNS).** A client that
-  resolves the daemon hostname *locally* before dialing the proxy leaks the host
-  to the local resolver — the leak we refused to introduce in `is_loopback_host`.
-  `shekyl-p-transport` already gets this right (`resolve_target(false)`); the
-  CLI's own ureq `--proxy` paths do **not**, which #360 addressed at the
-  disclosure layer — `network_posture::disclose` warns on a local-resolving
-  `socks5://`/`socks4://` scheme against a hostname endpoint (covering both ureq
-  paths at once), `socks5h://` silent (668b0b0bb; see the audit trail). This
-  option would go further and *force* remote resolution, retiring the warn.
-
-  **Target: V3.1+ (post-genesis).** The warn-only disclosure is honest and
-  shipped, so nothing here gates genesis — a user who needs the self-hosted scan
-  proxied points `--daemon-address` at a local node today (the recommended
-  own-node default; SP-T2, `own-node-default-remote-discouraged`). *Reopen when:*
-  real demand to route the self-hosted scan over a proxy (e.g. a Tor-by-default
-  posture that also covers the scan), at which point weigh C (reuse ureq +
-  `spawn_blocking`) vs B (own async connector); reqwest only if a stack-wide
-  client consolidation is separately on the table.
+  **What shipped.** `shekyl-rpc-transport` re-absorbed `simple-request`'s ~180-line
+  client into `http_client` (the external crate's connector was private and
+  un-injectable, so proxy support could not be added to it) over the `hyper`/
+  `hyper-util` stack already in-tree via axum, and added a `tower` `SocksConnector`
+  (`tokio-socks`) that hands the proxy a `TargetAddr::Domain` — **always remote DNS
+  (SOCKS5h)**, the correctness bar, so a `socks5://` label cannot leak the daemon
+  hostname on the scan. `simple-request` was dropped; `+tokio-socks` (verified at
+  source, rule 17: no `unsafe`, `+thiserror` only). Proxy threads `ServerConfig →
+  TenantState → make_daemon → HttpRpc::with_proxy`; the CLI/wallet-rpc
+  daemon both take `--proxy`. `network_posture::disclose_unproxyable` +
+  `warning_for_direct` were **deleted** (their reason to exist — an unproxyable
+  scan — is gone); the self-hosted daemon is now disclosed with the proxy-aware
+  `disclose`, same as `--rpc-url`. Engine-core stays ureq-free (§2b intact); the
+  `PersonaIsolatedTransport` wall is untouched (this connector does no per-persona
+  SOCKS auth and `DaemonClient` still cannot carry persona traffic). The CLI's own
+  ureq `--proxy` paths (`DaemonClient`, `--rpc-url`) keep #360's behavior: they
+  honor the scheme, so `disclose` still warns on a local-resolving `socks5://`
+  (668b0b0bb) — correct, since those paths *do* leak on `socks5://` even though the
+  scan does not.
 
 - **Retire the iai-callgrind→gungraun bench-flake bisect harness once gungraun
   proves out (spawned by the gungraun 0.19 migration, 2026-06-16).** The
@@ -8848,7 +8800,7 @@ one place to confirm each item's relationship to the wallet stack.
   inherit; a post-genesis flip re-partitions the population into before/after cohorts).**
 - **Principal-side `IsolateSOCKSAuth` — give the principal's `DaemonClient`s isolated circuits
   (2d-2 Round 0, deliberately a separate ticket).** Today the principal's two daemon surfaces
-  (`cli/daemon.rs::DaemonClient` ureq/SOCKS + `engine-core::DaemonClient` over `SimpleRequestRpc`)
+  (`cli/daemon.rs::DaemonClient` ureq/SOCKS + `engine-core::DaemonClient` over `HttpRpc`)
   share **one no-auth circuit** — *within-principal* correlation, not a firewall leak (both
   endpoints are already principal-side), so it was kept out of the firewall round. **Implementation
   precondition (load-bearing — this is *why* it was deferred, not a nice-to-have):** giving the

@@ -7,7 +7,7 @@
 //!
 //! These tests spawn a real `shekyld --regtest` daemon and drive the production
 //! [`Engine`] against it over the real RPC transport ([`DaemonClient`] /
-//! [`SimpleRequestRpc`]). Unlike the rest of the engine test suite (which uses
+//! [`HttpRpc`]). Unlike the rest of the engine test suite (which uses
 //! the in-memory `TestDaemon` mock), the point here is the **submit/verify
 //! direction**: a wallet-built FCMP++ proof, serialized into a tx and sent over
 //! the wire, must be accepted by the daemon's consensus `shekyl_fcmp_verify`
@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use serde_json::json;
 use shekyl_rpc_client::Rpc;
-use shekyl_rpc_transport::SimpleRequestRpc;
+use shekyl_rpc_transport::HttpRpc;
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 /// `cargo test` runs tests in parallel; spawning multiple daemons concurrently
@@ -75,7 +75,7 @@ pub(super) struct RegtestDaemon {
     child: Child,
     data_dir: PathBuf,
     rpc_port: u16,
-    rpc: SimpleRequestRpc,
+    rpc: HttpRpc,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
     _serial: OwnedMutexGuard<()>,
 }
@@ -197,7 +197,7 @@ impl RegtestDaemon {
         // Base URL only — `Rpc::json_rpc_call` appends the `json_rpc` route itself.
         // Long timeout: `generate_blocks` late in a deep-tree mine takes well over
         // the 30s default (each block ~2.5s; the depth-3 mine is ~750 blocks).
-        let rpc = SimpleRequestRpc::with_custom_timeout(
+        let rpc = HttpRpc::with_custom_timeout(
             format!("http://127.0.0.1:{rpc_port}"),
             Duration::from_secs(180),
         )
@@ -342,7 +342,7 @@ impl Drop for RegtestDaemon {
 /// [`RegtestDaemon::generate_blocks`] rather than hand-rolling a copy that
 /// drifts.
 pub(super) async fn try_generate_blocks(
-    rpc: &SimpleRequestRpc,
+    rpc: &HttpRpc,
     n: u64,
     address: &str,
 ) -> Result<GenerateBlocksResp, shekyl_rpc_client::RpcError> {
@@ -373,7 +373,7 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     use shekyl_engine_prefs::WalletPrefs;
 
     let daemon = RegtestDaemon::start().await;
-    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
         .expect("wallet rpc");
     let daemon_client = DaemonClient::new(rpc);
@@ -456,7 +456,7 @@ async fn e2e_get_curve_tree_path_returns_valid_path() {
     eprintln!("curve_tree_info (fresh): {info}");
 
     // Mine enough for early coinbase outputs to mature + drain into the reference tree.
-    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
         .expect("wallet rpc");
     let tmp = tempfile::tempdir().expect("wallet tempdir");
@@ -598,7 +598,7 @@ async fn e2e_refresh_scans_coinbase_balance() {
     let daemon = RegtestDaemon::start().await;
 
     // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree test).
-    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
         .expect("wallet rpc");
     let tmp = tempfile::tempdir().expect("wallet tempdir");
@@ -691,7 +691,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     let daemon = RegtestDaemon::start().await;
 
     // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree test).
-    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
         .expect("wallet rpc");
     let tmp = tempfile::tempdir().expect("wallet tempdir");
@@ -867,7 +867,7 @@ async fn create_wallet(
     seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
     password: &'static [u8],
 ) -> (super::Engine<super::SoloSigner>, tempfile::TempDir) {
-    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{rpc_port}"))
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
         .await
         .expect("wallet rpc");
     let tmp = tempfile::tempdir().expect("wallet tempdir");
@@ -1393,7 +1393,7 @@ pub(super) async fn staker_wallet(
         .expect("persist bond record");
     engine.close(&creds).expect("close created wallet");
 
-    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{rpc_port}"))
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
         .await
         .expect("wallet rpc (reopen)");
     let opened = super::Engine::<super::SoloSigner>::open_full(
@@ -2962,7 +2962,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     lock.into_inner()
         .close(&creds)
         .expect("close phantom staker");
-    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
         .expect("wallet rpc (reopen)");
     let reopened = super::Engine::<super::SoloSigner>::open_full(

@@ -204,7 +204,7 @@ pub use shekyl_rpc_types::{RejectCause, SubmitTransactionRequest, SubmitVerdict}
 ///
 /// This is a **protocol invariant** — which routes are EPEE-binary — so it lives
 /// once here (the `Rpc` trait's home) and is shared by every transport
-/// (`shekyl-rpc-transport`'s `SimpleRequestRpc`, the per-`P` `PRpc`) rather than
+/// (`shekyl-rpc-transport`'s `HttpRpc`, the per-`P` `PRpc`) rather than
 /// re-derived per impl, where the copies could drift.
 pub fn content_type_for(route: &str) -> &'static str {
     if route.ends_with(".bin") {
@@ -220,7 +220,7 @@ pub fn content_type_for(route: &str) -> &'static str {
 /// Tor/i2p-based transport, or even a memory buffer an external service somehow routes.
 ///
 /// While no implementors are directly provided here, the first-party
-/// `shekyl-rpc-transport` crate (the simple-request/hyper transport) is recommended.
+/// `shekyl-rpc-transport` crate (a hyper transport with optional SOCKS5h) is recommended.
 pub trait Rpc: Sync + Clone {
     /// Perform a POST request to the specified route with the specified body.
     ///

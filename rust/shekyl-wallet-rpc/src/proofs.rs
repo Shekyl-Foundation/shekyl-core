@@ -37,7 +37,7 @@ use crate::error::WalletRpcError;
 use crate::lifecycle::make_daemon;
 use crate::params::{parse_atomic_units, parse_optional_object, parse_required_object};
 use crate::project::atomic_units_string;
-use crate::tenant::{require_open_engine, TenantState};
+use crate::tenant::{require_open_engine, DaemonEndpoint, TenantState};
 use crate::types::{
     capability_mode_str, CheckReserveProofResult, CheckTxProofResult, GetReserveProofResult,
     GetTxProofResult, TxProofOutputView,
@@ -142,9 +142,9 @@ pub(crate) async fn check_tx_proof(
     let txid = parse_txid(&p.txid)?;
 
     // Wallet-less: only the tenant's network / daemon binding is read.
-    let (network, daemon_address) = network_and_daemon(tenants).await;
+    let (network, endpoint) = network_and_daemon(tenants).await;
     let address = decode_proof_address(&p.address, network)?;
-    let daemon = make_daemon(&daemon_address).await?;
+    let daemon = make_daemon(&endpoint).await?;
 
     let checked = proofs::check_tx_proof(&daemon, txid, &address, &p.message, &p.proof)
         .await
@@ -192,9 +192,9 @@ pub(crate) async fn check_reserve_proof(
 ) -> Result<Value, WalletRpcError> {
     let p: CheckReserveProofParams = parse_required_object(params, "check_reserve_proof")?;
 
-    let (network, daemon_address) = network_and_daemon(tenants).await;
+    let (network, endpoint) = network_and_daemon(tenants).await;
     let address = decode_proof_address(&p.address, network)?;
-    let daemon = make_daemon(&daemon_address).await?;
+    let daemon = make_daemon(&endpoint).await?;
 
     let checked = proofs::check_reserve_proof(&daemon, &address, &p.message, &p.proof)
         .await
@@ -225,10 +225,14 @@ pub(crate) async fn check_reserve_proof(
 // ── Helpers ──────────────────────────────────────────────────────────
 
 /// Read the tenant's network / daemon binding without requiring an open
-/// wallet (the `check_*` methods are wallet-less by contract).
-async fn network_and_daemon(tenants: &tokio::sync::Mutex<TenantState>) -> (Network, String) {
+/// wallet (the `check_*` methods are wallet-less by contract). The full
+/// [`DaemonEndpoint`] (address + proxy) travels together so the check
+/// dial keeps the server's proxy posture.
+async fn network_and_daemon(
+    tenants: &tokio::sync::Mutex<TenantState>,
+) -> (Network, DaemonEndpoint) {
     let state = tenants.lock().await;
-    (state.network, state.daemon_address.clone())
+    (state.network, state.daemon.clone())
 }
 
 /// Parse a contract `Hex32` txid (64 lowercase hex chars → 32 bytes).

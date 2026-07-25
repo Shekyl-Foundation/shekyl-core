@@ -46,6 +46,12 @@ struct Cli {
     #[arg(long = "daemon-address", default_value = "http://127.0.0.1:28581")]
     daemon_address: String,
 
+    /// SOCKS5h proxy for the daemon connection (e.g. socks5h://127.0.0.1:9050).
+    /// The proxy resolves the daemon hostname, so it never reaches the local
+    /// resolver. Omit for a direct connection.
+    #[arg(long = "proxy")]
+    proxy: Option<String>,
+
     /// Network every create/open binds to: mainnet | testnet | stagenet.
     #[arg(long = "network", default_value = "mainnet")]
     network: String,
@@ -101,6 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         wallet_dir: cli.wallet_dir,
         network,
         daemon_address: cli.daemon_address,
+        proxy: cli.proxy,
         auth,
         kdf: KdfParams::default(),
     };

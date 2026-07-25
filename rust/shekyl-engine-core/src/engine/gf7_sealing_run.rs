@@ -553,12 +553,10 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
     // panics the task, which the run loop's `is_finished` health check
     // converts into a loud session failure — a silently frozen chain must
     // never grade.
-    let miner_rpc = shekyl_rpc_transport::SimpleRequestRpc::new(format!(
-        "http://127.0.0.1:{}",
-        daemon.rpc_port()
-    ))
-    .await
-    .expect("miner rpc");
+    let miner_rpc =
+        shekyl_rpc_transport::HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
+            .await
+            .expect("miner rpc");
     let miner_addr_bg = miner_address.clone();
     let miner = tokio::spawn(async move {
         let mut consecutive_failures = 0u32;

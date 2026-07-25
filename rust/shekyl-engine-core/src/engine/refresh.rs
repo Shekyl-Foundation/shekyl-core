@@ -1761,7 +1761,7 @@ mod refresh_driver_tests {
     use std::cell::RefCell;
     use std::sync::{Mutex, OnceLock};
 
-    use shekyl_rpc_transport::SimpleRequestRpc;
+    use shekyl_rpc_transport::HttpRpc;
     use tempfile::TempDir;
     use tokio::runtime::Runtime;
 
@@ -1787,7 +1787,7 @@ mod refresh_driver_tests {
     /// leaked to live for the duration of the test binary.
     ///
     /// Why a shared, never-dropped runtime: hyper's connection pool
-    /// (used by `SimpleRequestRpc`) spawns background tasks onto the
+    /// (used by `HttpRpc`) spawns background tasks onto the
     /// runtime that constructed it. Building the RPC on a one-shot
     /// runtime that gets dropped at the end of `dummy_daemon` leaves
     /// the pool's tasks orphaned; subsequent requests hang waiting
@@ -1814,8 +1814,8 @@ mod refresh_driver_tests {
     fn dummy_daemon() -> DaemonClient {
         let rt = shared_runtime();
         let rpc = rt
-            .block_on(SimpleRequestRpc::new("http://127.0.0.1:1".to_string()))
-            .expect("construct SimpleRequestRpc against unreachable URL (no connect attempt yet)");
+            .block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
+            .expect("construct HttpRpc against unreachable URL (no connect attempt yet)");
         DaemonClient::new(rpc)
     }
 
@@ -2820,7 +2820,7 @@ mod start_refresh_integration_tests {
     //!   impl, the `derive_seed` master-seed helper) are what makes
     //!   this coverage possible — Stage 0 had no path for a synthetic
     //!   chain to drive `start_refresh` because `DaemonClient`
-    //!   wrapped a concrete `SimpleRequestRpc`.
+    //!   wrapped a concrete `HttpRpc`.
     //!
     //! Hybrid fixtures use the §6.2 master-seed-derivation contract:
     //! each test owns a single literal `master_seed` recorded in the
@@ -2837,7 +2837,7 @@ mod start_refresh_integration_tests {
     use shekyl_crypto_pq::account::{
         rederive_account, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
     };
-    use shekyl_rpc_transport::SimpleRequestRpc;
+    use shekyl_rpc_transport::HttpRpc;
     use tempfile::TempDir;
     use tokio::sync::{watch, RwLock};
     use tokio_util::sync::CancellationToken;
@@ -2857,16 +2857,16 @@ mod start_refresh_integration_tests {
 
     /// Build a `DaemonClient` whose underlying RPC points at an
     /// unreachable URL, on the *current* tokio runtime. Async
-    /// because [`SimpleRequestRpc::new`] is async; safe to call
+    /// because [`HttpRpc::new`] is async; safe to call
     /// from inside `#[tokio::test]` because we await it directly
     /// rather than driving a separate runtime via `block_on`.
     /// Hyper's connection-pool background tasks live on the test's
     /// runtime; the test awaits all work before returning so
     /// nothing is orphaned at runtime drop.
     async fn unreachable_daemon() -> DaemonClient {
-        let rpc = SimpleRequestRpc::new("http://127.0.0.1:1".to_string())
+        let rpc = HttpRpc::new("http://127.0.0.1:1".to_string())
             .await
-            .expect("construct SimpleRequestRpc against unreachable URL (no connect attempt yet)");
+            .expect("construct HttpRpc against unreachable URL (no connect attempt yet)");
         DaemonClient::new(rpc)
     }
 
@@ -3076,9 +3076,9 @@ mod start_refresh_integration_tests {
         let wallet_seed = HYBRID_WALLET_SEED;
         let params = EngineCreateParams::for_test_full(&base_path, &creds, &wallet_seed);
 
-        let dummy_rpc = SimpleRequestRpc::new("http://127.0.0.1:1".to_string())
+        let dummy_rpc = HttpRpc::new("http://127.0.0.1:1".to_string())
             .await
-            .expect("construct SimpleRequestRpc against unreachable URL (no connect attempt yet)");
+            .expect("construct HttpRpc against unreachable URL (no connect attempt yet)");
         let dummy_daemon = DaemonClient::new(dummy_rpc);
 
         let real = Engine::<SoloSigner>::create(params, dummy_daemon)

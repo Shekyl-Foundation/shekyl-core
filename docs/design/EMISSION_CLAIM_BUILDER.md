@@ -1168,7 +1168,7 @@ outcomes, recorded here because each changed a §8 surface:
    cause and remedy when a split body is exactly a canonical pruned
    spend (rule 82 — previously a generic "invalid transaction" against
    the operator's own node).
-5. **URL grammar fixed at the source.** `SimpleRequestRpc` scopes its
+5. **URL grammar fixed at the source.** `HttpRpc` scopes its
    credential parse to the URL *authority* (a whole-URL `@` split
    misparsed path/query content as credentials); `LocalNodeRpc`'s
    refusal is likewise authority-scoped and its loopback pin is

@@ -829,11 +829,11 @@ mod tests {
     /// Never-connecting daemon (no eager RPC before the guards under test).
     fn dummy_daemon() -> DaemonClient {
         let rpc = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(shekyl_rpc_transport::SimpleRequestRpc::new(
+            tokio::runtime::Handle::current().block_on(shekyl_rpc_transport::HttpRpc::new(
                 "http://127.0.0.1:1".to_string(),
             ))
         })
-        .expect("construct SimpleRequestRpc (no connection attempted)");
+        .expect("construct HttpRpc (no connection attempted)");
         DaemonClient::new(rpc)
     }
 

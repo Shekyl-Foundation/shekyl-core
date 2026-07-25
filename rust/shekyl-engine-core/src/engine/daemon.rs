@@ -7,7 +7,7 @@
 //!
 //! [`DaemonClient`] is the [`Engine`](super::Engine)-facing type for
 //! reaching `shekyld` over HTTP(S). It is a thin wrapper around
-//! [`shekyl_rpc_transport::SimpleRequestRpc`], chosen as the
+//! [`shekyl_rpc_transport::HttpRpc`], chosen as the
 //! default transport because it is the only daemon-RPC client crate
 //! already in the workspace and it implements
 //! [`shekyl_rpc_client::Rpc`].
@@ -28,7 +28,7 @@
 //!    network-mismatch detection without touching every call site.
 //! 3. **Keeps the cross-cutting lock 1 contract local.** The
 //!    "caller-provided multi-threaded `tokio` runtime" requirement
-//!    sits on a [`SimpleRequestRpc`] field rather than radiating through
+//!    sits on a [`HttpRpc`] field rather than radiating through
 //!    the wallet API.
 //!
 //! # Network verification (Phase 2a)
@@ -43,7 +43,7 @@ use std::future::Future;
 
 use serde_json::{json, Value};
 use shekyl_rpc_client::{FeeRate, RejectCause, Rpc, RpcError};
-use shekyl_rpc_transport::SimpleRequestRpc;
+use shekyl_rpc_transport::HttpRpc;
 use shekyl_scanner::ScannableBlock;
 use shekyl_wire::Transaction;
 
@@ -144,7 +144,7 @@ fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
 ///
 /// Held on [`Engine`](super::Engine) and shared, by clone, with
 /// `shekyl-scanner` and the tx-submission path. The underlying
-/// [`SimpleRequestRpc`] is `Clone + Send + Sync`; cloning it is cheap
+/// [`HttpRpc`] is `Clone + Send + Sync`; cloning it is cheap
 /// (an `Arc`-wrapped HTTP client + URL string).
 ///
 /// `DaemonClient` implements [`shekyl_rpc_client::Rpc`] (delegating `post` to
@@ -155,18 +155,18 @@ fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
 /// underlying transport directly.
 #[derive(Clone, Debug)]
 pub struct DaemonClient {
-    inner: SimpleRequestRpc,
+    inner: HttpRpc,
 }
 
 impl DaemonClient {
-    /// Wrap an existing [`SimpleRequestRpc`] connection.
+    /// Wrap an existing [`HttpRpc`] connection.
     ///
     /// The caller has already constructed the connection (with whatever
     /// authentication / URL / timeout policy is appropriate); this
     /// wrapper does no additional handshake on construction. Daemon
     /// network verification is performed by `Engine::open_*` against
     /// the on-disk wallet file's network declaration.
-    pub fn new(inner: SimpleRequestRpc) -> Self {
+    pub fn new(inner: HttpRpc) -> Self {
         Self { inner }
     }
 
