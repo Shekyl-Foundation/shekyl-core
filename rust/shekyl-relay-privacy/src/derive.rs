@@ -60,6 +60,23 @@
 //! survival equation for the actual distribution at the actual timer
 //! granularity — recomputed whenever any input moves, so it cannot drift from
 //! its justification the way a `#define` did.
+//!
+//! # The block-time boundary (a stated non-binding term)
+//!
+//! This survival equation has no block-time term, and it should be read knowing
+//! that. The adopted embargo (144 s, RD-4) **exceeds one 120 s block interval**
+//! (`consensus_constants.json:daa_target_seconds`). That is deliberate, not an
+//! oversight: the embargo is memoryless, so first-hop black-hole recovery is a
+//! distribution, and crossing the boundary costs ~9 pp of "recover within one
+//! block interval" (0.657 → 0.565) on the rarest, worst case — a cost the
+//! privacy requirement dominates, and one the recovery distribution still clears
+//! against `MIN_RELAY_TIME` and the mempool lifetime with margin. The full
+//! accounting is `DAEMON_RELAY_PRIVACY.md` §15. The point of recording it here:
+//! block time is a **non-binding but named** constraint on this derivation, so
+//! any future re-derivation (shorter block time, longer embargo) re-evaluates it
+//! instead of crossing it silently the way the inherited 39 s constant crossed
+//! its own inputs. FTL (540 s) is *not* a term here — it validates block
+//! timestamps, not tx recovery latency (§15.4).
 #![allow(clippy::cast_precision_loss)]
 // ^ Small integer parameters widen to `f64` for the survival sum. Every value
 //   involved is far below 2^53.

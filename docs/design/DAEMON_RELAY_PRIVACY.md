@@ -1803,3 +1803,103 @@ say the performance cost is zero. So the recovery-latency profile must be
 embargo-cycle bound — not to re-litigate adoption, but to confirm the cost stays a
 cost. That is the RD-1 discipline applied to this section's own claim: `§14.5` is
 where "reshape dominates" could still be wrong.
+
+---
+
+## 15. The block-time seam — the embargo crossed a consensus timescale the derivation wasn't watching (Round 3)
+
+The 39 s pattern, turned on our own number: a value that satisfies the one
+constraint someone was watching (preemption probability) sitting near a boundary
+nobody put in the formula (block time). The survival equation (§ derive) has no
+block-time term, so when RD-4 moved the embargo 112 s → 144 s for correct privacy
+provisioning, it silently crossed one block interval — and the derivation could
+not articulate whether that was a choice.
+
+### 15.1 The stacked timescales (anchored)
+
+| timescale | value | source |
+| --- | --- | --- |
+| block target `T` | **120 s** | [`consensus_constants.json`](../../config/consensus_constants.json#L10) `daa_target_seconds` |
+| FTL | 540 s | `daa_ftl_seconds` |
+| MTP window / `N` | 11 / 90 | `daa_mtp_window` / `daa_window_n` |
+| derived embargo | 112 s → **144 s** | §13 (RD-4) |
+| `MIN_RELAY_TIME` / `MAX_RELAY_TIME` | 300 s / 4 h | `tx_pool.cpp:94-95` |
+
+At 144 s the embargo **exceeds** the block interval — the three sub-10-minute
+timescales are stacked in a narrow band.
+
+### 15.2 The block-inclusion path is clean (verified)
+
+A mined tx is dropped from the pool via `remove_txpool_tx`
+([blockchain.cpp:7053](../../src/cryptonote_core/blockchain.cpp#L7053), the
+block-connect path), and the embargo lives in that pool entry's
+`meta.last_relayed_time`, which `get_relayable_transactions` only reads for
+pool-resident txes — so a mined tx **cannot** fire a stale embargo. And the margin
+is wide, not close: a tx fluffs in <1 s (F-2's 699 ms mean), is mined, and every
+prefix embargo (144 s) disarms via fluff-observation or block-arrival 140+ s
+before it could fire. The "cut it close" worry does not bite the happy path — the
+embargo is *much longer* than block propagation, not near it.
+
+### 15.3 The seam is black-hole recovery, and it is a distribution, not a cliff
+
+A black-holed tx (dropped by its stem successor, never propagated, so unminable)
+sits invisible until an upstream embargo fires and fluffs it. That recovery time
+*is* the embargo — which is **memoryless** (geometric, mean 144 s), so recovery is
+a wide distribution, not a deterministic 144 s. `P(first-hop recovery within one
+120 s block interval)`, from the memoryless CDF over the (tested) geometric
+embargo:
+
+| embargo mean | P(recover < 120 s) |
+| --- | --- |
+| 112 s (pre-RD-4) | 0.657 |
+| **144 s (RD-4)** | **0.565** |
+
+RD-4 shifted the "makes the next block interval" probability by **~9 points
+(66 % → 56 %)** — *not* to a guaranteed miss; ~56 % still make it. And deeper
+black holes recover far faster (`min` over `j+1` holders, `M_eff = 144/(j+1)`):
+j=1 → 0.81, j=2 → 0.92 within one block interval. So the seam bites only the
+**first-hop** black hole (origin holding alone) — the rarest, worst case — and
+even there roughly half still make the next block interval. The failure mode is
+"confirms one block later," bounded and minor, and strictly better than the
+pre-Dandelion alternative of "censored entirely."
+
+### 15.4 FTL and MIN_RELAY are *not* in this seam (a correction)
+
+FTL (540 s) bounds how far ahead a block's **timestamp** may be relative to the
+node's median time — block-timestamp validation, not a tx-propagation or recovery
+deadline. Nothing about a black-holed tx's recovery latency "races the FTL
+machinery"; they are unrelated timescales. `MIN_RELAY_TIME` (300 s) governs
+re-broadcast of an **already-fluffed** tx; during the embargo (and any re-stem)
+the tx is stem-governed — a different state — so there is no race there either.
+The only consensus timescale this seam actually touches is **block time (120 s)**,
+for "which block does recovery make."
+
+### 15.5 Reshape pushes recovery deeper — bounded, and RP-2 gets a specific gate
+
+Reshape (§14) lengthens recovery (a re-stem hop before the eventual fluff). W3
+(both successors black-holed, `cap+1 = 2` embargo cycles) recovery, from the
+Gamma(2, 144 s) CDF: `P(<120 s) = 0.20`, `P(<300 s) = 0.62`. So a *doubly*
+black-holed tx under reshape has a real tail past one block interval — but that is
+the rarest case (W3), it stays stem-governed until it fluffs (no `MIN_RELAY`
+race), and it is still << the 3-day mempool lifetime (§14.5). §14.8's RP-2
+recovery re-measurement now has a specific reference: **does recovery make the
+next-block-but-one**, measured against block time — *not* FTL.
+
+### 15.6 The change: the derivation gets a block-time-awareness term
+
+**The number does not move.** 144 s is right for privacy, and the one-block-late
+cost on the rare first-hop black hole is dominated by the privacy requirement.
+What changes is that the derivation must **know** about the 120 s boundary and
+state that it crosses it *deliberately*:
+
+> 144 s, derived against preemption, knowingly exceeds one 120 s block interval,
+> because the privacy requirement dominates the ~9 pp one-block-latency cost on the
+> rare first-hop black-hole case, and the recovery distribution clears
+> `MIN_RELAY_TIME` and the mempool lifetime with margin (§15.3–15.5).
+
+That is the difference from the 39 s ghost: a boundary the derivation **names and
+chooses to cross**, versus one it crosses without noticing. The block-time
+constraint is now a *stated non-binding term* of the embargo derivation — it does
+not move 144 s, but any future re-derivation must re-evaluate it, and if a shorter
+block time or a longer embargo ever pushed first-hop recovery materially past one
+interval, this is the term that would make that visible instead of silent.
