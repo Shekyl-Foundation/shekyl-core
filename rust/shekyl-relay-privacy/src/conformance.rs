@@ -1526,6 +1526,14 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
 /// slot via induced churn) is a *cheaper*, capability-gated case bounded above by
 /// the single-slot occupancy reported here; it needs an eviction capability this
 /// instrument does not grant for free.
+///
+/// **Single-draw occupancy — a lower bound under churn.** This measures one stable
+/// epoch map. Mid-epoch, `connection_map::update()` re-rolls a churned slot with a
+/// *fresh* draw (`dandelionpp.cpp:160`), so an adversary who induces churn re-rolls
+/// the enriched draw repeatedly (W3c, `DAEMON_RELAY_PRIVACY.md` §12.6). The
+/// effective per-epoch occupancy under adversary-induced churn is therefore
+/// *higher* than this single-draw number, and Q-10's `g`-bound must hold under
+/// repeated refills — this instrument does not model churn.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TwoSlotOccupancy {
     /// `g` — the adversary's share of the origin's outbound pool.

@@ -1016,20 +1016,36 @@ instruments for both are built or scoped. What remains is the *arguments*:
   zero by reshape, with the irreducible W3 residual now measured directly (§12.6).
 
 - **Q-10 (opened Round 3, and `ρ` is *blocked* on it) — the outbound-selection
-  eclipse bound on `g`.** §12.6 measures the W3 residual as `W3(g)`, where `g` is
-  the adversary's share of the origin's *outbound* pool. `g` is **not** the
-  network fraction `f`: the pool is 70 % white-list + 2 anchors
+  eclipse bound on `g`, under repeated adversary-induced refills.** §12.6 measures
+  the W3 residual as `W3(g)`, where `g` is the adversary's share of the origin's
+  *outbound* pool. `g` is **not** the network fraction `f`: the pool is 70 %
+  white-list + 2 anchors
   ([cryptonote_config.h:144](../../src/cryptonote_config.h#L144)) and the white
   list is gossip-fed, so an eclipse-capable adversary drives `g` above `f` by
   cheap peerlist poisoning. So the W3 gate's real seal-condition is *how tightly
   the outbound peer-selection / anti-eclipse posture bounds `g`* — a p2p-subsystem
   question (anchor count, white/gray discipline, IP-group diversity), not a
-  relay-timing one, and one no artefact in the tree answers today. **`ρ` cannot be
-  honestly chosen until `g` is bounded**: it must be decided against the largest
-  `g` the anti-eclipse posture can *rule out*, and against `g = f` never. This is
-  a real blocker (its own grounding, likely its own design round), not a deferral
-  of convenience — the honest Round-3 output on `ρ` is "blocked on Q-10," which is
-  worth more than a `ρ` resting on `g = f`, an assumption the source refutes.
+  relay-timing one, and one no artefact in the tree answers today.
+
+  **The churn path (§12.6, W3c) tightens what Q-10 must deliver.** `connection_map::update()`
+  refills a churned stem slot with a *fresh* draw
+  ([dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160)) mid-epoch, and an
+  adversary who induces churn re-rolls that draw repeatedly. So the bound Q-10 owes
+  is not "`g` in a single initial draw" but **`g` under repeated adversary-induced
+  refills** — each induced disconnect is another `~g` chance at the slot, strictly
+  more capability than one-shot poisoning. The likely defense lives in the same
+  subsystem and is worth naming as the candidate mechanism: **anchor slots**
+  ([`P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`](../../src/cryptonote_config.h#L145)),
+  which are *not* fresh gossip-fed draws, so they resist the re-roll — a bound of
+  the form "≥ `k` of the `STEMS` slots are anchor-backed and thus not re-rollable"
+  is the shape of answer that would unblock `ρ`.
+
+  **`ρ` cannot be honestly chosen until this bound exists**: it must be decided
+  against the largest `g` the anti-eclipse posture can *rule out* under repeated
+  refills, and against `g = f` never. This is a real blocker (its own grounding,
+  likely its own design round), not a deferral of convenience — the honest Round-3
+  output on `ρ` is "blocked on Q-10," worth more than a `ρ` resting on `g = f`, an
+  assumption the source refutes.
 
 **Closed in Rounds 1–2:**
 
@@ -1534,6 +1550,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 | W2 | Fan-out 1→2 (i) | passive inbound supernode (§6.8) | reuse the existing 2nd `out_mapping_` entry; net against leak benefit in the §6.8 metric | fan-out cost sub-dominant to the ~86× rate cut | **closed (netted)** |
 | W3 | Both-successors-black-hole | adversary occupies *both* of the origin's 2 stem successors | re-stem to the 2nd is also dropped → fluff after the cap; the fluff recovers liveness | origin exposed iff **both** stem slots are adversarial. The two slots are drawn **without replacement** from the origin's *outbound* pool of `D_out = 12` ([`out_mapping_`](../../src/net/dandelionpp.cpp#L103), [`!m_is_income`](../../src/cryptonote_protocol/levin_notify.cpp#L152)); an adversary enters that pool only by being *selected* as an outbound peer (the costly direction). Measured (§12.6): **≈ 0 at baseline `g = f`** (~1 of 12 peers cannot fill two slots), **bounded *above* by the independent draw `(a/D)²`** (no-replacement is anti-correlated, not "worse than independence"), rising only under genuine outbound enrichment `g ≫ f` — ≈ 0.08 even at `g = 0.30`, well under the inbound `π₀ = 0.45`. | **measured (build 1)** — small, gated on the costly outbound-selection capability |
 | W3b | Single-live-stem fallback | adversary holds the origin at *one* live stem peer (induced churn / partial eclipse) | no alternate exists → fluff on embargo fire (the §12.2.7 fallback) | **every** embargo fire becomes an origin fluff for that origin — cheaper than W3 (one slot, not two), same lever (shaping the 2-slot stem set). Uncounted by §6.8. | **ceiling measured** — the single-slot occupancy the same instrument reports (§12.6) bounds it; the realized rate is gated on an induced-churn capability |
+| W3c | Churn-refilled alternate | adversary induces churn on the origin's stem peer (or *is* the dropping successor), forcing `update()` to refill the slot | `update()` fresh-draws the churned slot from the outbound pool ([dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160)) mid-epoch; reshape may then forward to a fresh draw | `≈ g` per re-stem, and **churn correlates with the reshape trigger** (a dark successor is why the embargo fires), so it is the operative case, not the edge case. Repeated induced churn re-rolls the draw. | **spec gap named** — RP-2 must make the alternate stable across churn refill (§12.5); the `g`-bound Q-10 owes must hold under *repeated* refills |
 | W4 | Loop (revisited node) | topology | once-per-tx local cap bounds re-stemming; matches the paper's "fluff on loop" | bounded by the cap | **closed by cap + local state** |
 | W5 | Epoch-boundary straddle | timing | a re-stem after `change_channels` uses the fresh map; D++ already tolerates map turnover mid-flight ([levin_notify.cpp:711](../../src/cryptonote_protocol/levin_notify.cpp#L711)) | tx may re-stem into a rebuilt map | **low — within existing D++ tolerance** |
 | W6 | Wire position leak | on-path observer counting re-stems | retry state local, tx-hash-keyed, never serialized | none | **closed by spec (the wire rule)** |
@@ -1584,15 +1601,24 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 - **HALT.** If any implementation of "the alternate successor" is found to create
   a **new** stem edge — widening the origin's peer set beyond `STEMS` rather than
   reusing an existing `out_mapping_` entry — halt. That is an anonymity
-  regression the spec forbids (§12.2.6), not a tuning question.
+  regression the spec forbids (§12.2.6), not a tuning question. **This HALT must
+  bind on the churn-refill path too (§12.6, W3c):** `connection_map::update()`
+  already fresh-draws to refill a churned slot
+  ([dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160)) mid-epoch, so an
+  alternate that was a stable peer at arming can silently become a fresh
+  g-enriched draw before reshape forwards to it. Reusing "`out_mapping_[other]`"
+  is not sufficient if the peer *in* that slot was re-rolled by churn.
 
 **Deferred to implementation (RP-2+, with its own design round per rule 20):**
 the actual re-stem wiring in `levin_notify` / `tx_pool`, the tx-hash-keyed retry
 store, and the `out_mapping_` alternate-selection helper. This section specifies
 *what* must hold; the *how* is a later PR. Acceptance gates: W1 and W6 (closed by
 spec — the PR must not reintroduce a `get_stem(nil)` re-entry or a wire retry
-counter), and **W3/W3b, whose two-slot occupancy instrument is now built and
-green (§12.6)** — RP-2 must not regress it. *Superseded framing (§14):* the
+counter); **W3/W3b, whose two-slot occupancy instrument is now built and green
+(§12.6)** — RP-2 must not regress it; and **W3c (§12.6): reshape's alternate must
+be stable across a mid-epoch churn refill, or a refilled slot must be ineligible as
+a reshape target within the epoch** — so the re-stem never lands on a fresh
+`update()` draw. *Superseded framing (§14):* the
 instrument no longer gates *adopting* reshape — §14 adopts it unconditionally as a
 strict priority-order improvement — it only quantifies the irreducible W3
 residual, which is the sole `δ` left to bound.
@@ -1662,19 +1688,45 @@ output; a `ρ` chosen against `g = f` would rest on an assumption the source sho
 to be false. The measured `W3(g)` table stands; what is deferred is *which row we
 live on*, and the peerlist subsystem gates that, not this instrument.
 
-**W3c — does reshape's re-stem target add a separate term? Not under the spec.** A
-natural worry (the same `g` that threatens W3 also enriches reshape's re-stem
-target): does the two-slot count *undercount* by ignoring the re-stem target?
-Under the current spec it does not, and the reason is load-bearing. The alternate
-is the **fixed second `out_mapping_` slot** (§12.2.3), not a fresh draw, and there
-are exactly `STEMS = 2` slots. So "re-stem lands on a spy" *is* "the second slot is
-a spy" — already one of the two slots §12.6 counts; reshape leaks iff **both**
-slots are adversarial (W3), with no third peer to add a separate
-`P(re-stem target adversarial) ≈ g`. But the completeness of the two-slot residual
-**depends on** the no-fresh-draw rule: a fresh-draw re-stem *would* resurrect W3c
-as a real g-driven term. So W3c is the named consequence of the §12.2.6 / §12.5
-HALT, and an **RP-2 acceptance check**: the re-stem target must be the existing
-alternate index, never a new draw.
+**W3c — reshape's re-stem target: zero under a *stable* map, `≈ g` under churn
+refill, and the churn case is the reshape case.** A natural worry (the same `g`
+that threatens W3 also enriches reshape's re-stem target): does the two-slot count
+*undercount* by ignoring the re-stem target? **On a stable epoch map it does not** —
+the alternate is the fixed second `out_mapping_` slot (§12.2.3), one of the two
+slots §12.6 already counts, so reshape leaks iff **both** slots are adversarial (W3),
+with no third peer to add a separate `P(re-stem target adversarial) ≈ g`.
+
+**But "the fixed second slot" is fixed only while the map is stable, and the tree
+already fresh-draws on churn.** [`connection_map::update()`](../../src/net/dandelionpp.cpp#L134)
+nils a churned slot ([:144](../../src/net/dandelionpp.cpp#L144)) and refills it with
+a fresh `crypto::rand_idx` draw from the current outbound pool
+([:160](../../src/net/dandelionpp.cpp#L160)); it runs **mid-epoch**, dispatched from
+[`new_out_connection` → `update_channels`](../../src/cryptonote_protocol/levin_notify.cpp#L762)
+when a replacement outbound peer connects. (`get_stem`'s nil branch
+[:195](../../src/net/dandelionpp.cpp#L195) additionally re-maps a source onto the
+*other* existing slot via `select_stem` — no fresh peer, but it too breaks slot
+stability.) So on churn the alternate can be a **fresh g-enriched draw** — exactly
+the fresh-draw case that resurrects `W3c ≈ g`.
+
+**And this is the operative case, not the edge case, because churn correlates with
+the reshape trigger.** The embargo fires because a successor went dark; a
+disconnected successor is precisely what `update()` nils and refills. An adversary
+who *is* the dropping successor, or who induces churn on the origin's stem peer,
+forces a fresh g-enriched refill — and can do so *repeatedly*, re-rolling the
+enriched draw within an epoch, which is strictly more capability than one-shot
+peerlist poisoning. So `W3c ≈ g` reappears in exactly the adversary-triggered
+black-hole scenario reshape exists to handle.
+
+**Disposition and the RP-2 checks this adds.** The no-fresh-draw rule is still
+correct, but it must bind on the **churn-refill path (`update()`), not only the
+reshape-forward path** — the tree fresh-draws where the §12.2.6 HALT was not
+looking. So the RP-2 acceptance gains a **sibling** to "reshape forwards to the
+fixed alternate index": *reshape's alternate must be stable across a mid-epoch
+churn refill — or a refilled slot must not be eligible as a reshape target within
+the same epoch* — because an implementation can otherwise satisfy the letter of
+"forward to `out_mapping_[other]`" while `out_mapping_[other]` is silently a fresh
+draw. This also tightens Q-10: the `g`-bound it owes is a bound under *repeated
+adversary-induced refills*, not a single draw (see §7).
 
 ---
 
