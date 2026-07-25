@@ -1,8 +1,16 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
-**Status:** ROUND 2 applied. The measurement that motivates this document
-landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 89 tests), so
-every number below is reproducible rather than asserted. Rounds 1–2 raised
+**Status:** ROUND 3 dispositioned — clean break. The measurement that motivates
+this document landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 19
+measurement tests + the suite), so every number below is reproducible rather than
+asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
+priority-order improvement (§14); the embargo derivation is held block-time-*unaware*
+by construction, with the block-time boundary reconciled at the integration layer
+(§15); the W3 residual is measured as `W3(g)` (§12.6); and **`ρ` is
+*underspecified*, blocked on Q-10 — the outbound-selection eclipse bound `g_max`**,
+which is a **p2p-subsystem** grounding (anchors, white/gray discipline, IP-group
+diversity, churn resistance), not a relay-timing one (§7, §13.5). The seal is in the
+open where the p2p round owns it. Rounds 1–2 raised
 findings RD-1…RD-4; **all are accepted and dispositioned in §10**, and their
 consequences are folded into the body rather than appended as errata.
 RD-1 moved the adopted embargo (31 s → 112 s) and surfaced a fifth defect
@@ -1047,6 +1055,46 @@ instruments for both are built or scoped. What remains is the *arguments*:
   output on `ρ` is "blocked on Q-10," worth more than a `ρ` resting on `g = f`, an
   assumption the source refutes.
 
+  **The deliverable, stated so it cannot drift — `g_max`.** Q-10 terminates on
+  *one number*: `g_max`, the **maximum outbound-selection share an adversary can
+  achieve *and hold* under repeated induced churn** against the origin's
+  `out_mapping_` pool, given the anchor connections, the white/gray discipline, and
+  whatever IP-group diversity peer selection enforces. Not a network-average
+  fraction, not a single-draw occupancy — the *sustained, churn-resilient* share,
+  because the churn re-roll (`update()`, §12.6/W3c) makes it a "hold" question, not
+  a "draw" question. The whole `ρ` chain terminates on it:
+
+  ```text
+  ρ  ←  reshape residual δ  ←  W3(g) + W3c(g)  ←  g_max  ←  the anti-eclipse posture
+  ```
+
+  Everything left of `g_max` is specified and waiting (§12.6, §13); `g_max` is the
+  only unowned link. Three things for the p2p round so it does not restart cold:
+
+  1. **The churn coupling is the non-obvious constraint.** `g_max` is not a static
+     peerlist property. `update()`'s fresh `rand_idx` refill
+     ([dandelionpp.cpp:144,160](../../src/net/dandelionpp.cpp#L144)) re-rolls the
+     slot on every disconnect, and the reshape trigger correlates with exactly that
+     disconnect. So the round cannot answer with "the white list is N %
+     poisonable"; it must answer "an adversary who can force `k` disconnects gets
+     `k+1` draws at the slot, and here is what bounds `k` and the per-draw share."
+     The load-bearing question is therefore **how much of the origin's
+     stem-eligible outbound is anchor-backed versus fresh-drawable** — point the
+     round there first.
+  2. **The seal-location finding travels with it.** W3's residual moved from
+     relay-timing to p2p over three corrections because it was a *peer-selection*
+     quantity the whole time. The p2p round should expect the pattern to continue
+     inward: if `g_max` turns out to depend on address-manager behaviour or
+     seed-node trust, the seal moves *again*, and the round should follow that
+     dependency rather than sealing at the first plausible layer. The method-test:
+     **a bound that depends on a parameter owned further down is not a bound — it is
+     a lower bound wearing a costume.**
+  3. **The honest status line, unchanged: `ρ` is *underspecified*, not
+     *undecided-pending-judgment*.** Reshape's residual `δ` has no upper *value*
+     until `g_max` exists, so there is nothing for a `ρ` judgment to bind against
+     yet. This is the distinction that stops someone picking a `ρ` against an
+     assumed `g` and calling the chain closed.
+
 **Closed in Rounds 1–2:**
 
 - **Q-2 — memoryless mode-at-zero.** Closed by RD-2. A constant floor is
@@ -1826,16 +1874,20 @@ named, the design has its adopt-criterion and the two-slot instrument has its
 acceptance threshold, both in the same units, meeting at the seam the formula
 defines.
 
-**But `ρ` is *blocked*, not merely un-named (Q-10).** Naming `ρ` is only half the
-input; the other half is the `g` its acceptance is evaluated at, and §12.6 shows
-`g` is the adversarially-shapeable outbound-selection share, unbounded from what is
-in the tree today. So even a named `ρ` cannot be *checked* until the
-outbound-selection eclipse bound on `g` exists — the acceptance threshold and the
-residual it is compared against are stated at different `g`, and the `g` that
-matters is the one the anti-eclipse posture can rule out. A provisional `ρ ≈ 2 %`
-is met before reshape *at `g = f`*, but that is exactly the assumption Q-10
-refutes, so it is a placeholder squared: not a decision, and not even a
-defensible-`g` evaluation of one.
+**`ρ` is *underspecified*, not *undecided-pending-judgment* (Q-10).** This is the
+precise status, and the distinction is load-bearing. It is not that a human has yet
+to exercise judgment on a well-posed `ρ`; it is that **reshape's residual `δ` has no
+upper *value* until `g_max` exists** (§7, Q-10), so there is nothing for a `ρ`
+judgment to bind against. Naming `ρ` is only half the input; the other half is the
+`g` its acceptance is evaluated at, and §12.6 shows `g` is the adversarially-
+shapeable outbound-selection share, unbounded from what is in the tree today — and
+under churn it is a *sustained-share* question, not a single-draw one. So even a
+named `ρ` cannot be *checked*: the acceptance threshold and the residual it is
+compared against are stated at different `g`. A provisional `ρ ≈ 2 %` is met before
+reshape *at `g = f`*, but that is exactly the assumption Q-10 refutes — a
+placeholder squared: not a decision, and not even a defensible-`g` evaluation of
+one. The distinction is what stops a `ρ` being picked next month against an assumed
+`g` and the chain being called closed.
 
 **Verification status (honest):**
 - *Form* — verified: increment-form, in precision units, meeting the measurement
