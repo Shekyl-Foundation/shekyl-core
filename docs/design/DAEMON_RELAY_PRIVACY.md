@@ -1015,6 +1015,22 @@ instruments for both are built or scoped. What remains is the *arguments*:
   bounded by a ratio target `ρ` (the one input the human supplies), driven toward
   zero by reshape, with the irreducible W3 residual now measured directly (§12.6).
 
+- **Q-10 (opened Round 3, and `ρ` is *blocked* on it) — the outbound-selection
+  eclipse bound on `g`.** §12.6 measures the W3 residual as `W3(g)`, where `g` is
+  the adversary's share of the origin's *outbound* pool. `g` is **not** the
+  network fraction `f`: the pool is 70 % white-list + 2 anchors
+  ([cryptonote_config.h:144](../../src/cryptonote_config.h#L144)) and the white
+  list is gossip-fed, so an eclipse-capable adversary drives `g` above `f` by
+  cheap peerlist poisoning. So the W3 gate's real seal-condition is *how tightly
+  the outbound peer-selection / anti-eclipse posture bounds `g`* — a p2p-subsystem
+  question (anchor count, white/gray discipline, IP-group diversity), not a
+  relay-timing one, and one no artefact in the tree answers today. **`ρ` cannot be
+  honestly chosen until `g` is bounded**: it must be decided against the largest
+  `g` the anti-eclipse posture can *rule out*, and against `g = f` never. This is
+  a real blocker (its own grounding, likely its own design round), not a deferral
+  of convenience — the honest Round-3 output on `ρ` is "blocked on Q-10," which is
+  worth more than a `ρ` resting on `g = f`, an assumption the source refutes.
+
 **Closed in Rounds 1–2:**
 
 - **Q-2 — memoryless mode-at-zero.** Closed by RD-2. A constant floor is
@@ -1604,19 +1620,61 @@ Three results, each against the argued framing this section previously carried:
 2. **W3 is bounded *above* by the independent draw, not below it.** Selecting two
    *distinct* slots without replacement is anti-correlated, so `W3 < (a/D)²` at
    every `g` — the "worse than independence" reading was backwards.
-3. **The residual is small and gated on the costly capability.** Lifting W3 even
-   to ~0.08 needs `g = 0.30` — control of 4 of the origin's 12 outbound peers via
-   outbound-selection enrichment (the hard direction the node resists) — and even
-   then it is well under the cheap inbound supernode's `π₀ = 0.45` at the same
-   reach. W3b's ceiling is the `P(≥1 slot)` column, itself gated on an additional
-   induced-churn capability.
+3. **W3 rises with `g`, and `g` is the outbound-selection share — not `f`.**
+   Lifting W3 to ~0.08 needs `g = 0.30` (4 of 12 outbound peers); to ~0.19 needs
+   `g = 0.50`. W3b's ceiling is the `P(≥1 slot)` column, itself gated on an
+   additional induced-churn capability. The magnitude of `g` is the whole
+   question — see below.
 
-So the `δ` a `ρ` decision is taken against is **small and capability-gated**:
-reshape's irreducible residual is the both-slots case, which honest outbound
-selection makes ≈ 0 and which only an adversary who can heavily bias the origin's
-outbound peer set can raise — an adversary who pays far more, for far less, than
-the inbound observer Tor already removes. `ρ` is now read against *this* measured
-residual, not the demoted §13 table.
+**The reading, not the table, is where the honesty gap is — and it is the
+phantom one level up.** The table is a function of `g`, the adversary's share of
+the origin's *outbound* pool, and **`g` is not bounded by `f`**, the network-wide
+adversary fraction. The outbound pool of 12 is filled **70 % from the white list
+plus 2 anchors** (`P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT = 70`,
+`P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`,
+[cryptonote_config.h:144](../../src/cryptonote_config.h#L144)), and the white list
+is populated by gossiped / handshaked addresses — the adversarially-shapeable
+surface the anchor and white/gray machinery *exist to resist*. So `g` is an
+*outcome* of peerlist composition, and an eclipse-capable adversary who poisons
+the origin's white list drives `g` **above** `f` by cheap address-gossip flooding.
+Reading `g ≈ f` here repeats, one level up, the phantom §12.5 just corrected:
+treating a *selected*, adversarially-fed pool's occupancy as its network average.
+
+**So W3's "small" verdict is conditional, and the condition is not settled here.**
+W3 ≈ 0 holds under *honest* peer selection (`g ≈ f`); the `g = 0.30 → 0.077` and
+`g = 0.50 → 0.192` rows are what an eclipse-capable adversary *buys*. W3's residual
+is therefore **inherited from the eclipse-resistance of outbound peer selection**
+(the anchor count, the white/gray discipline, IP-group diversity), and this
+instrument measures `W3(g)` **without bounding `g`**. That bound is a *separate
+grounding owed by the peer-selection / anti-eclipse posture* — a p2p-subsystem
+question, not a relay-timing one — and it does not yet exist. Until it does, **W3's
+operative value is unknown above `g = f`**: the true seal-condition of the W3 gate
+lives partly in the peerlist subsystem, and §12.6 must not pretend it lives
+entirely here (the true-seal-in-the-join guard).
+
+**Consequence for `ρ` — it is blocked, not decided.** `ρ` must be taken against the
+largest `g` the anti-eclipse posture can *rule out*, not against `g = f` by
+default. If a grounding bounds a non-Sybil adversary to some `g_max`, `ρ` is
+decided against `W3(g_max)` with margin. **It cannot bound `g` from what is in the
+tree today, so `ρ` is not decided this round — it is blocked on the
+outbound-selection eclipse bound (Q-10, §7).** That blocked state is the honest
+output; a `ρ` chosen against `g = f` would rest on an assumption the source shows
+to be false. The measured `W3(g)` table stands; what is deferred is *which row we
+live on*, and the peerlist subsystem gates that, not this instrument.
+
+**W3c — does reshape's re-stem target add a separate term? Not under the spec.** A
+natural worry (the same `g` that threatens W3 also enriches reshape's re-stem
+target): does the two-slot count *undercount* by ignoring the re-stem target?
+Under the current spec it does not, and the reason is load-bearing. The alternate
+is the **fixed second `out_mapping_` slot** (§12.2.3), not a fresh draw, and there
+are exactly `STEMS = 2` slots. So "re-stem lands on a spy" *is* "the second slot is
+a spy" — already one of the two slots §12.6 counts; reshape leaks iff **both**
+slots are adversarial (W3), with no third peer to add a separate
+`P(re-stem target adversarial) ≈ g`. But the completeness of the two-slot residual
+**depends on** the no-fresh-draw rule: a fresh-draw re-stem *would* resurrect W3c
+as a real g-driven term. So W3c is the named consequence of the §12.2.6 / §12.5
+HALT, and an **RP-2 acceptance check**: the re-stem target must be the existing
+alternate index, never a new draw.
 
 ---
 
@@ -1714,8 +1772,18 @@ computation supplies, exactly as Q-9 said it would be. The *form* is resolved an
 the left side is computed; the *number* is not owed by the calculator. If `ρ` is
 named, the design has its adopt-criterion and the two-slot instrument has its
 acceptance threshold, both in the same units, meeting at the seam the formula
-defines. A provisional `ρ ≈ 2 %` is met even before reshape, but it is a
-placeholder, not a decision.
+defines.
+
+**But `ρ` is *blocked*, not merely un-named (Q-10).** Naming `ρ` is only half the
+input; the other half is the `g` its acceptance is evaluated at, and §12.6 shows
+`g` is the adversarially-shapeable outbound-selection share, unbounded from what is
+in the tree today. So even a named `ρ` cannot be *checked* until the
+outbound-selection eclipse bound on `g` exists — the acceptance threshold and the
+residual it is compared against are stated at different `g`, and the `g` that
+matters is the one the anti-eclipse posture can rule out. A provisional `ρ ≈ 2 %`
+is met before reshape *at `g = f`*, but that is exactly the assumption Q-10
+refutes, so it is a placeholder squared: not a decision, and not even a
+defensible-`g` evaluation of one.
 
 **Verification status (honest):**
 - *Form* — verified: increment-form, in precision units, meeting the measurement

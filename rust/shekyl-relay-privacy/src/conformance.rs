@@ -1508,13 +1508,17 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
 /// [`dandelionpp.cpp:103-122`] builds `out_mapping_` by selecting `STEMS = 2`
 /// distinct peers, *without replacement*, from the origin's **outbound** pool
 /// (`P2P_DEFAULT_CONNECTIONS_COUNT = 12`, `cryptonote_config.h:134`). An adversary
-/// enters that pool only by being *selected* as an outbound peer — address-manager
-/// / sybil bias — which is the costly direction the origin's own peer selection
-/// resists, *not* the cheap inbound dialing that gives
-/// [`simulate_transport_observation`]'s `dial_fraction`. Importing that inbound
-/// reach here would measure a phantom (a channel the capability cannot reach), so
-/// this instrument's only adversary parameter is `outbound_share` `g` — the
-/// adversary's share of the origin's *outbound* peers.
+/// enters that pool only by being *selected* as an outbound peer — a *different*
+/// capability than the cheap inbound dialing that gives
+/// [`simulate_transport_observation`]'s `dial_fraction`, so importing that inbound
+/// reach here would measure a phantom (a channel the capability cannot reach). But
+/// this capability is **not** necessarily costly: the outbound pool is 70 %
+/// white-list + 2 anchors (`P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT`,
+/// `P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT`), and the white list is gossip-fed, so an
+/// eclipse-capable adversary drives `g` **above** the network fraction `f` by cheap
+/// peerlist poisoning. This instrument measures `W3(g)` but does **not** bound `g`
+/// — that bound is owed by the anti-eclipse peer-selection grounding (§12.6, Q-10),
+/// and `ρ` is blocked on it, not decidable against `g = f`.
 ///
 /// Reshape (`retry_cap = STEMS − 1 = 1`) routes around an adversarial primary
 /// *iff* the alternate slot is honest, so the residual it cannot remove is exactly

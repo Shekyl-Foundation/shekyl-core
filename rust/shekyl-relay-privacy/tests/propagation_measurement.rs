@@ -1757,18 +1757,21 @@ fn two_slot_occupancy_is_the_reshape_residual() {
     assert!(
         results[3].1.both_slots > results[2].1.both_slots
             && results[2].1.both_slots > results[1].1.both_slots,
-        "W3 must rise with outbound enrichment g (it is monotone in the hard capability)"
+        "W3 must rise with outbound share g (monotone in g; g itself is not bounded here)"
     );
 
     println!(
         "\n  W3 (both outbound stem slots adversarial) is the ONLY delta reshape\n  \
          cannot route around, so it is the number a rho decision is taken against.\n  \
-         At baseline (g = f = 0.10, honest outbound selection) it is ~0: the\n  \
-         adversary holds ~1 of 12 outbound peers and cannot fill two slots. Lifting\n  \
-         it requires OUTBOUND enrichment (g >> f) via peer-selection/sybil bias --\n  \
-         the direction the node's own selection resists -- and even at g=0.30\n  \
-         (4 of 12 peers) W3 ~= 0.09, well under the cheap inbound supernode's\n  \
-         pi0 ~= 0.45 at the same reach. The residual is small AND gated on the\n  \
-         costly capability; that is the honest input to the rho decision."
+         It is a function of g = the adversary's OUTBOUND-selection share -- and g\n  \
+         is NOT f. The outbound pool is 70% white-list + 2 anchors\n  \
+         (cryptonote_config.h:144); the white list is gossip-fed, so an eclipse-\n  \
+         capable adversary poisons it and drives g ABOVE f cheaply. So W3 ~= 0\n  \
+         holds only under HONEST selection (g ~= f); the g=0.30->0.077 and\n  \
+         g=0.50->0.192 rows are what an eclipse attacker buys. This instrument\n  \
+         measures W3(g) but does NOT bound g -- that bound is owed by the anti-\n  \
+         eclipse peer-selection grounding (Q-10, sec 12.6), which does not exist\n  \
+         yet. So rho is BLOCKED on the g bound, not decidable against g=f. The\n  \
+         table is sound; which row we live on is what is deferred."
     );
 }
