@@ -18,13 +18,31 @@
 use serde::Serialize;
 use std::io::Write;
 
+use shekyl_economics::{
+    base_block_reward,
+    burn::{calc_burn_pct, compute_burn_split},
+    calc_effective_emission_share, calc_release_multiplier,
+    params::{EconomicParams, SCALE},
+    release::apply_release_multiplier,
+    split_block_emission,
+};
+
 use crate::burden::{
-    burden_cost_fiat_per_year, frozen_shards, KryderRate, BASE_STORAGE_FIAT_PER_BYTE_YEAR,
-    OUTPUTS_PER_TX_NORMAL,
+    burden_cost_fiat_per_year, frozen_shards, skl_to_fiat, KryderRate,
+    BASE_STORAGE_FIAT_PER_BYTE_YEAR, OUTPUTS_PER_TX_NORMAL, REPLICAS_PER_SHARD,
+    SKL_FIAT_PRICE_BAND,
 };
 use crate::engine::{ScenarioConfig, SimParams};
-use crate::escalation::{family, flat_25};
+use crate::escalation::{family, flat_25, EscalationCurve};
 use crate::scenarios::all_scenarios;
+
+/// Atomic units per SKL (mirrors `engine.rs`).
+const COIN: f64 = 1_000_000_000.0;
+
+/// Ramp years excluded from the A1 clearance verdict: the first two years, where
+/// the corpus is tiny and any share trivially "clears". Clearance is judged on
+/// the sustained trajectory.
+const A1_RAMP_YEARS: u64 = 2;
 
 /// `frozen_segment_count` sample points for the escalation-candidate preview,
 /// spanning the [`crate::escalation::KNEE_BAND`].
@@ -119,6 +137,274 @@ pub fn burden_trajectory(params: &SimParams, config: &ScenarioConfig) -> BurdenT
     }
 }
 
+/// One year's funding + burden inputs for A1, computed once per scenario on the
+/// **flat-ledger** trajectory (shipped 25% split), independent of the escalation
+/// candidate. The candidate is applied downstream only to the fee leg
+/// (`total_burn_skl · share(n)`); the second-order ledger feedback from
+/// redistributing the burn (`actually_destroyed` shifts `circulating`, nudging
+/// future `burn_pct`/emission) is deliberately not modeled here — it is small
+/// against the first-order clearance question, and a full-feedback refinement
+/// can follow if a verdict sits on the margin.
+#[derive(Debug, Clone, Serialize)]
+pub struct A1YearAgg {
+    pub year: u64,
+    /// `frozen_segment_count` at year end (the D2 operand `n`).
+    pub n: u64,
+    /// Staker emission leg accrued over the year, SKL.
+    pub emission_leg_skl: f64,
+    /// Whole fee burn over the year (pre-share), SKL — the fee leg is
+    /// `this · share(n)`.
+    pub total_burn_skl: f64,
+}
+
+/// Accumulate the per-year A1 inputs over a scenario's blocks (one flat-ledger
+/// pass). Mirrors `budget.rs`'s per-block economics.
+#[must_use]
+pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAgg> {
+    let economic = EconomicParams {
+        release_min: params.release_min,
+        release_max: params.release_max,
+        tx_volume_baseline: params.tx_volume_baseline,
+        burn_base_rate: params.burn_base_rate,
+        burn_cap: params.burn_cap,
+        staker_pool_share: params.staker_pool_share,
+        money_supply: params.money_supply,
+        emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
+        final_subsidy_per_minute: params.final_subsidy_per_minute,
+        daa_target_seconds: EconomicParams::default().daa_target_seconds,
+    };
+    let total_blocks = params.blocks_per_year * config.sim_years;
+    let money_supply = u128::from(params.money_supply);
+    let mut already_generated: u128 =
+        (config.initial_emitted_fraction * params.money_supply as f64) as u128;
+    let mut total_burned: u128 = 0;
+    let mut cumulative_outputs: f64 = 0.0;
+    let mut year_emission_skl = 0.0;
+    let mut year_burn_skl = 0.0;
+    let mut aggs = Vec::with_capacity(config.sim_years as usize);
+
+    for block in 0..total_blocks {
+        let abs_height = block + config.genesis_height_offset;
+        let base_reward = base_block_reward(
+            already_generated.min(u128::from(u64::MAX)) as u64,
+            &economic,
+        )
+        .unwrap_or(0);
+        let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
+        cumulative_outputs += tx_volume as f64 * OUTPUTS_PER_TX_NORMAL;
+
+        let mult = calc_release_multiplier(
+            tx_volume,
+            params.tx_volume_baseline,
+            params.release_min,
+            params.release_max,
+        );
+        let remaining = money_supply.saturating_sub(already_generated);
+        let remaining_u64 = remaining.min(u128::from(u64::MAX)) as u64;
+        let effective = apply_release_multiplier(base_reward, mult).min(remaining_u64);
+
+        let emission_share = calc_effective_emission_share(
+            abs_height,
+            0,
+            params.staker_emission_share,
+            params.staker_emission_decay,
+            params.blocks_per_year,
+        );
+        let (_miner, staker_emission) = split_block_emission(effective, emission_share);
+
+        let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
+        let burn_pct = calc_burn_pct(
+            tx_volume,
+            params.tx_volume_baseline,
+            circulating,
+            params.money_supply,
+            params.burn_base_rate,
+            params.burn_cap,
+        );
+        let total_fees = (u128::from(tx_volume) * u128::from(config.fee_per_tx))
+            .min(u128::from(u64::MAX)) as u64;
+        // share = SCALE → the whole burn (pre-split); the candidate re-splits it.
+        let whole_burn = compute_burn_split(total_fees, burn_pct, SCALE).staker_pool_amount;
+        // Flat-ledger advance: destroy at the shipped 25% split.
+        let flat = compute_burn_split(total_fees, burn_pct, params.staker_pool_share);
+
+        year_emission_skl += staker_emission as f64 / COIN;
+        year_burn_skl += whole_burn as f64 / COIN;
+        already_generated = (already_generated + u128::from(effective)).min(money_supply);
+        total_burned += u128::from(flat.actually_destroyed);
+
+        if (block + 1) % params.blocks_per_year == 0 {
+            let year = (block + 1) / params.blocks_per_year;
+            aggs.push(A1YearAgg {
+                year,
+                n: frozen_shards(cumulative_outputs as u64),
+                emission_leg_skl: year_emission_skl,
+                total_burn_skl: year_burn_skl,
+            });
+            year_emission_skl = 0.0;
+            year_burn_skl = 0.0;
+        }
+    }
+    aggs
+}
+
+/// The **minimum** clearance ratio `budget_fiat / burden_fiat` across the
+/// sustained years (past the ramp) for a candidate at a given price and Kryder
+/// rate. `≥ 1` ⇒ the candidate funds the whole-network burden every sustained
+/// year. `budget = emission_leg + total_burn · share(n)`; `burden = n · R ·
+/// SHARD_BYTES · storage(year, kryder)`.
+#[must_use]
+pub fn a1_min_clearance_ratio(
+    aggs: &[A1YearAgg],
+    candidate: &EscalationCurve,
+    fiat_per_skl: f64,
+    kryder: KryderRate,
+) -> f64 {
+    aggs.iter()
+        .filter(|a| a.year > A1_RAMP_YEARS && a.n > 0)
+        .map(|a| {
+            let share = candidate.share_fraction(a.n);
+            let budget_skl = a.emission_leg_skl + a.total_burn_skl * share;
+            let budget_fiat = skl_to_fiat(budget_skl, fiat_per_skl);
+            let burden_fiat = burden_cost_fiat_per_year(
+                a.n * REPLICAS_PER_SHARD,
+                a.year as f64,
+                BASE_STORAGE_FIAT_PER_BYTE_YEAR,
+                kryder,
+            );
+            if burden_fiat <= 0.0 {
+                f64::INFINITY
+            } else {
+                budget_fiat / burden_fiat
+            }
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// A1 clearance for one candidate (or the flat baseline): the min clearance
+/// ratio at each `SKL_FIAT_PRICE_BAND` member, all at the **binding 0%/yr
+/// Kryder** case.
+#[derive(Debug, Clone, Serialize)]
+pub struct A1CandidateResult {
+    /// `None` for the flat-25 status-quo baseline.
+    pub asymptote_pct: Option<f64>,
+    pub knee_shards: Option<u64>,
+    /// Min `budget/burden` ratio across sustained years, per price-band member
+    /// (`≥ 1` clears). Parallel to [`SKL_FIAT_PRICE_BAND`].
+    pub min_ratio_by_price: Vec<f64>,
+}
+
+/// A1 clearance for one scenario.
+#[derive(Debug, Clone, Serialize)]
+pub struct A1ScenarioResult {
+    pub scenario: String,
+    pub final_n: u64,
+    pub flat25: A1CandidateResult,
+    pub candidates: Vec<A1CandidateResult>,
+}
+
+fn a1_candidate_result(
+    aggs: &[A1YearAgg],
+    curve: &EscalationCurve,
+    is_flat: bool,
+) -> A1CandidateResult {
+    let min_ratio_by_price = SKL_FIAT_PRICE_BAND
+        .iter()
+        .map(|&price| a1_min_clearance_ratio(aggs, curve, price, KryderRate::Stall))
+        .collect();
+    A1CandidateResult {
+        asymptote_pct: if is_flat {
+            None
+        } else {
+            Some(curve.asymptote as f64 / 10_000.0)
+        },
+        knee_shards: if is_flat {
+            None
+        } else {
+            Some(curve.knee_shards)
+        },
+        min_ratio_by_price,
+    }
+}
+
+/// A1 — burden clearance (§12.2). For each scenario, the min `budget/burden`
+/// ratio (0%/yr Kryder binding) of the flat-25 baseline and every candidate,
+/// across the SKL/fiat price band. Prints a stderr table, returns the data.
+fn a1_clearance_report(params: &SimParams) -> Vec<A1ScenarioResult> {
+    eprintln!(
+        "\nA1 — burden clearance (§12.2): min budget/burden ratio, BINDING 0%/yr Kryder.\n\
+         budget = emission_leg + fee_burn x share(n); burden = n x {R} replicas x {SHARD:.2} MB x storage.\n\
+         >=1.0 clears every sustained year. Columns = SKL/fiat price {PRICES:?} (N-1, least-knowable).\n\
+         Absolute ratios are price-conditional; the robust signal is escalation-vs-flat and cross-scenario.",
+        R = REPLICAS_PER_SHARD,
+        SHARD = crate::burden::SHARD_BYTES / 1.0e6,
+        PRICES = SKL_FIAT_PRICE_BAND,
+    );
+    eprintln!(
+        "{:<20} {:>12} {:>26} {:>26}",
+        "scenario", "candidate", "flat-25 ratio @price", "best-cand ratio @price"
+    );
+
+    let mut results = Vec::new();
+    for config in all_scenarios(params) {
+        let aggs = a1_year_aggs(params, &config);
+        let final_n = aggs.last().map_or(0, |a| a.n);
+        let flat25 = a1_candidate_result(&aggs, &flat_25(), true);
+        let candidates: Vec<A1CandidateResult> = family()
+            .iter()
+            .map(|c| a1_candidate_result(&aggs, c, false))
+            .collect();
+
+        // Report the flat baseline and the strongest candidate (max min-ratio at
+        // the mid price) as the headline; the JSON carries all nine.
+        let mid = 1; // $0.10 index
+        let best = candidates
+            .iter()
+            .max_by(|a, b| {
+                a.min_ratio_by_price[mid]
+                    .partial_cmp(&b.min_ratio_by_price[mid])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .cloned()
+            .unwrap_or_else(|| flat25.clone());
+        eprintln!(
+            "{:<20} {:>12} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>8.2}",
+            trunc(&config.name, 20),
+            best.asymptote_pct
+                .map(|a| format!("{a:.0}%/{}", best.knee_shards.unwrap_or(0)))
+                .unwrap_or_default(),
+            flat25.min_ratio_by_price[0],
+            flat25.min_ratio_by_price[1],
+            flat25.min_ratio_by_price[2],
+            best.min_ratio_by_price[0],
+            best.min_ratio_by_price[1],
+            best.min_ratio_by_price[2],
+        );
+
+        results.push(A1ScenarioResult {
+            scenario: config.name.clone(),
+            final_n,
+            flat25,
+            candidates,
+        });
+    }
+    eprintln!(
+        "  -> price cols each = [{:?}]. escalation clears where flat does not iff the\n\
+         best-cand ratio crosses 1.0 while flat's stays below — the D2 case. A4/A5\n\
+         then drop any winner that fails W9/W10.",
+        SKL_FIAT_PRICE_BAND
+    );
+    results
+}
+
+fn trunc(s: &str, n: usize) -> String {
+    if s.len() <= n {
+        s.to_string()
+    } else {
+        s.chars().take(n).collect()
+    }
+}
+
 /// Preview the §6.1 escalation candidate family (DQ-2D): the staker-share `%`
 /// each `(asymptote, knee)` candidate produces across a span of
 /// `frozen_segment_count`. Shows the shapes A1 will measure for clearance; the
@@ -202,12 +488,24 @@ pub fn run_stage2(params: &SimParams) {
     );
 
     print_escalation_family();
+    let a1 = a1_clearance_report(params);
 
-    let json = serde_json::to_string_pretty(&trajectories).expect("JSON serialization failed");
+    let report = Stage2Report {
+        burden_trajectories: trajectories,
+        a1_clearance: a1,
+    };
+    let json = serde_json::to_string_pretty(&report).expect("JSON serialization failed");
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(json.as_bytes()).expect("write failed");
     stdout.write_all(b"\n").expect("write failed");
-    eprintln!("\nStage-2 burden trajectory complete. Per-year JSON written to stdout.");
+    eprintln!("\nStage-2 (burden trajectory + escalation family + A1 clearance) complete.");
+}
+
+/// The combined `--stage2` JSON payload (grows as arms land).
+#[derive(Debug, Clone, Serialize)]
+pub struct Stage2Report {
+    pub burden_trajectories: Vec<BurdenTrajectory>,
+    pub a1_clearance: Vec<A1ScenarioResult>,
 }
 
 #[cfg(test)]
@@ -231,6 +529,39 @@ mod tests {
                 prev = row.frozen_shards;
             }
             assert_eq!(traj.final_frozen_shards, prev);
+        }
+    }
+
+    #[test]
+    fn a1_aggs_positive_and_emission_decays() {
+        let params = SimParams::default();
+        let cfg = &all_scenarios(&params)[0]; // baseline
+        let aggs = a1_year_aggs(&params, cfg);
+        assert!(!aggs.is_empty());
+        for a in &aggs {
+            assert!(a.emission_leg_skl > 0.0, "emission leg positive");
+            assert!(a.total_burn_skl > 0.0, "fee burn positive");
+        }
+        // Emission decays ×0.90/yr, so the last year's leg is below the first's.
+        assert!(aggs.last().unwrap().emission_leg_skl < aggs[0].emission_leg_skl);
+    }
+
+    #[test]
+    fn a1_escalation_never_below_flat() {
+        // share(n) >= FLOOR (25%) always, so any candidate's fee leg — and thus
+        // its clearance ratio — is >= the flat-25 baseline's, at any price.
+        let params = SimParams::default();
+        for cfg in all_scenarios(&params) {
+            let aggs = a1_year_aggs(&params, &cfg);
+            let flat_ratio = a1_min_clearance_ratio(&aggs, &flat_25(), 0.10, KryderRate::Stall);
+            for c in family() {
+                let r = a1_min_clearance_ratio(&aggs, &c, 0.10, KryderRate::Stall);
+                assert!(
+                    r >= flat_ratio - 1e-6,
+                    "escalation ratio {r} < flat {flat_ratio} in {}",
+                    cfg.name
+                );
+            }
         }
     }
 

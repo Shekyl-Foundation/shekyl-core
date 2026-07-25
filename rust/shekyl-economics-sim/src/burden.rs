@@ -48,6 +48,20 @@ pub const OUTPUTS_PER_TX_NORMAL: f64 = 2.0;
 /// point claim (N-1 corollary).
 pub const BASE_STORAGE_FIAT_PER_BYTE_YEAR: f64 = 1.0e-11;
 
+/// Exogenous `SKL/fiat` price band (DQ-2A / N-1): fiat per 1 SKL. The
+/// **least-knowable** input — swept, never embedded (A1 consumes it). A wide
+/// spread on purpose: `$0.01` (bear / token-price collapse — the Filecoin
+/// exodus face), `$0.10` (mid), `$1.00` (bull). Absolute clearance is reported
+/// *conditional* on which member holds; the robust outputs are the trend
+/// comparisons.
+pub const SKL_FIAT_PRICE_BAND: [f64; 3] = [0.01, 0.10, 1.00];
+
+/// Seated replicas per deep shard (`R_target`; L15 lean ≈ 6). The **network**
+/// stores this many copies of every frozen shard, so the whole-network storage
+/// burden is `n · R · SHARD_BYTES`. (`engine.rs`'s `ArchivalLockModel` uses the
+/// same 6.)
+pub const REPLICAS_PER_SHARD: u64 = 6;
+
 /// The DQ-2B storage-cost-decline band. Annual fractional decline in fiat
 /// `$/byte`; the report states the provenance, never bare numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +143,13 @@ pub fn burden_cost_fiat_per_year(
     (shards as f64)
         * SHARD_BYTES
         * storage_fiat_per_byte_year(year, base_fiat_per_byte_year, kryder)
+}
+
+/// Convert an SKL amount to fiat at the exogenous price (DQ-2A / N-1) so a
+/// SKL-denominated reward and a fiat-denominated burden are commensurable.
+#[must_use]
+pub fn skl_to_fiat(skl: f64, fiat_per_skl: f64) -> f64 {
+    skl * fiat_per_skl
 }
 
 #[cfg(test)]
