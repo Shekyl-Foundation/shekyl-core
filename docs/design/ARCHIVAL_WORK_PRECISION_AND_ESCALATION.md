@@ -820,10 +820,44 @@ cannot; A1 runs on it as the binding case.
   L14 exposure).
 - **DQ-2F — Stage-2 → 3 boundary. ✅ ratified.** §12.0. Stage 2 recommends; Stage 3
   freezes the number under §11.4 ceremony and writes consensus.
-- **DQ-2G — float sim, integer escalation. ✅ ratified.** Measure in `f64` (the
-  `budget.rs` pattern), but evaluate escalation candidates in the integer
-  `curve_milli` form so the recommended shape is consensus-implementable (not a
-  float sketch Stage 3 must re-derive); report float for readability.
+- **DQ-2G — the integer-seam rule (STRENGTHENED from preference to rule).** This
+  is the D1 lesson pointed the other way: D1 was integer arithmetic diverging
+  from the intended math; a float mid-`budget→share→reward→clearance` is **sim
+  math diverging from the integer arithmetic that ships** — "the margin you
+  proved is not the margin you deployed." The rule, in the form the sim enforces:
+  - **Three zones, one conversion each way.** Float lives only in the **scenario
+    layer** (demand trajectories, Kryder decline, `SKL/fiat` price, opp-cost
+    rate, population weights, horizon-in-years) and the **report layer**
+    (clearance ratios, margins, tables). Everything between — every quantity that
+    mirrors something Shekyl computes or will compute — runs in the **same
+    integer arithmetic as production**; floats cross in **exactly once**, at a
+    named input boundary (a volume curve → integer tx count/epoch; a Kryder curve
+    → integer cost/byte/epoch), never mid-chain.
+  - **Strongest form — dep, don't mirror.** Where a production implementation
+    exists, the sim **depends on it** rather than re-expressing it: burn
+    (`calc_burn_pct_from_activity`/`compute_burn_split`, parity secured by the
+    Stage-1b delete), tx weights (`shekyl-tx-weight`, hoisted D-1), the
+    escalation candidates (`curve_milli`-exact family), and — **required for
+    A2/A3** — the work/scarcity/curve arithmetic (`scarcity_micro`,
+    `work_milli_from_micro`, `curve_milli`, the plateau caps in
+    `shekyl-archival-retention`): the sim deps that crate and calls those
+    functions for the distributional and stranding arms, not a re-expression. We
+    made that arithmetic honest at micro precision in Stage 1; A2's redistribution
+    verdict is computed by the exact functions whose behaviour it predicts.
+  - **Compiler-enforced, not conventional.** The sim's core-loop functions take
+    and return the **integer types** (atomic `u64`/`u128`, milli/micro); scenario
+    structs hold the `f64` parameters; the conversion lives at the named
+    boundary. A float cannot drift into the algorithm zone if the signatures
+    won't accept one — the unrepresentable-state pattern applied to the sim, which
+    is fitting since it is about to become evidence a genesis freeze cites.
+  - **Retro-audit (done):** A1's algorithm zone had two f64 seams — the
+    emission/burn legs summed in `f64` SKL, and the escalation share applied as
+    `total_burn_skl × share_fraction` instead of the integer
+    `mul_scale(whole_burn_atomic, share_milli)` production runs. Re-run through the
+    integer path (`u128` accumulation; `mul_scale` share; f64 only at the reported
+    ratio and the rate/price boundaries): **the verdict held exactly** — scenario 9
+    flat-25 `0.66×`, escalation `2.36×`. The margin was wide enough the seam
+    didn't flip it, but "wide enough" is the phrase this rule exists to eliminate.
 - **DQ-2H — archiver population model (needed for W6 + stranding). ✅ ratified,
   two amendments.** A parameterized distribution anchored to the GF-7 measured
   floor `N ≈ 10/20` (M1 §4 founder schedule); W6 *is* the redistribution across it,

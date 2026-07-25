@@ -26,7 +26,10 @@
 //! mapping is **not** re-derived — it calls the consensus
 //! [`frozen_segment_count`] so the sim cannot drift from the freeze rule.
 
-use shekyl_archival_retention::frozen_segment_count;
+use shekyl_archival_retention::{frozen_segment_count, ARCHIVAL_BOND_FLOOR_ATOMIC};
+
+/// Atomic units per SKL — the SKL/atomic conversion factor.
+pub const COIN: u64 = 1_000_000_000;
 
 /// Bytes an archiver stores per frozen shard. Design-doc §2 corpus figure:
 /// `SEGMENT_LEAF_COUNT` (25,992) leaves ≈ **3.33 MB** (~128 B/leaf; the whole
@@ -62,32 +65,31 @@ pub const SKL_FIAT_PRICE_BAND: [f64; 3] = [0.01, 0.10, 1.00];
 /// same 6.)
 pub const REPLICAS_PER_SHARD: u64 = 6;
 
-/// Bond-floor collateral per shard-replica, SKL (= `ARCHIVAL_BOND_FLOOR_ATOMIC`
-/// `750_000_000` / `COIN 1e9`). Locked and **returned on unbond**, so its cost
-/// to the staker is the **opportunity cost** of the lock, not the principal
-/// (Stage-2 finding F-G — the binding staker burden, ~100× storage).
-pub const BOND_FLOOR_SKL: f64 = 0.75;
-
 /// Exogenous opportunity-cost-rate band (F-G, ratified): annual yield foregone
 /// on locked bond capital. `2%` risk-free / `5%` moderate-alt / `10%` high;
 /// **10% is the binding case** (highest bar for staking to clear). Another
-/// least-knowable exogenous, swept like Kryder/price.
+/// least-knowable exogenous, swept like Kryder/price. Float: it lives in the
+/// scenario/boundary layer (DQ-2G), applied at the single conversion below.
 pub const OPP_COST_RATE_BAND: [f64; 3] = [0.02, 0.05, 0.10];
 
-/// Whole-network locked bond capital at `n` frozen shards, SKL:
-/// `bond_floor · R · n`.
+/// Whole-network locked bond capital at `n` frozen shards, in **atomic units**
+/// — the binding staker burden's principal (F-G). Integer, single-sourced from
+/// the consensus `ARCHIVAL_BOND_FLOOR_ATOMIC` (`750_000_000` = 0.75 SKL) ·
+/// `R` · `n`, so the algorithm zone stays integer (DQ-2G seam rule). The
+/// exogenous opportunity-cost rate is the *only* float, applied once in
+/// [`bond_opp_cost_skl`].
 #[must_use]
-pub fn locked_bond_skl(n: u64) -> f64 {
-    BOND_FLOOR_SKL * REPLICAS_PER_SHARD as f64 * n as f64
+pub fn locked_bond_atomic(n: u64) -> u128 {
+    u128::from(ARCHIVAL_BOND_FLOOR_ATOMIC) * u128::from(REPLICAS_PER_SHARD) * u128::from(n)
 }
 
-/// Annual opportunity cost of the locked bond capital, SKL — the **binding**
-/// staker burden (F-G). Price-**independent**: it is SKL yield foregone on SKL
-/// capital, so the exogenous `SKL/fiat` price cancels against the SKL-denominated
-/// reward in the dominant clearance term (only the minor storage term keeps it).
+/// Annual opportunity cost of the locked bond capital, SKL (F-G). The locked
+/// principal is integer atomic; the **single float boundary** is the exogenous
+/// rate multiply — the SKL result is a reporting/comparison quantity, not an
+/// algorithm-zone intermediate (DQ-2G).
 #[must_use]
 pub fn bond_opp_cost_skl(n: u64, opp_cost_rate: f64) -> f64 {
-    locked_bond_skl(n) * opp_cost_rate
+    (locked_bond_atomic(n) as f64 / COIN as f64) * opp_cost_rate
 }
 
 /// The DQ-2B storage-cost-decline band. Annual fractional decline in fiat

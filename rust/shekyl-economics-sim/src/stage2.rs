@@ -22,7 +22,7 @@ use shekyl_economics::{
     base_block_reward,
     burn::{calc_burn_pct, compute_burn_split},
     calc_effective_emission_share, calc_release_multiplier,
-    params::{EconomicParams, SCALE},
+    params::{mul_scale, EconomicParams, SCALE},
     release::apply_release_multiplier,
     split_block_emission,
 };
@@ -140,7 +140,7 @@ pub fn burden_trajectory(params: &SimParams, config: &ScenarioConfig) -> BurdenT
 /// One year's funding + burden inputs for A1, computed once per scenario on the
 /// **flat-ledger** trajectory (shipped 25% split), independent of the escalation
 /// candidate. The candidate is applied downstream only to the fee leg
-/// (`total_burn_skl · share(n)`); the second-order ledger feedback from
+/// (`mul_scale(whole_burn_atomic, share_milli(n))`); the second-order ledger feedback from
 /// redistributing the burn (`actually_destroyed` shifts `circulating`, nudging
 /// future `burn_pct`/emission) is deliberately not modeled here — it is small
 /// against the first-order clearance question, and a full-feedback refinement
@@ -150,11 +150,14 @@ pub struct A1YearAgg {
     pub year: u64,
     /// `frozen_segment_count` at year end (the D2 operand `n`).
     pub n: u64,
-    /// Staker emission leg accrued over the year, SKL.
-    pub emission_leg_skl: f64,
-    /// Whole fee burn over the year (pre-share), SKL — the fee leg is
-    /// `this · share(n)`.
-    pub total_burn_skl: f64,
+    /// Staker emission leg accrued over the year, **atomic units** (integer —
+    /// the DQ-2G algorithm zone; SKL/f64 conversion is deferred to the reported
+    /// clearance ratio). Sum of the production `split_block_emission` staker leg.
+    pub emission_leg_atomic: u64,
+    /// Whole fee burn over the year (pre-share), **atomic units**. The fee leg
+    /// is `mul_scale(this, share_milli(n))` — the same integer op production runs
+    /// (`compute_burn_split`), never an f64 `× share_fraction`.
+    pub whole_burn_atomic: u64,
 }
 
 /// Accumulate the per-year A1 inputs over a scenario's blocks (one flat-ledger
@@ -179,8 +182,9 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         (config.initial_emitted_fraction * params.money_supply as f64) as u128;
     let mut total_burned: u128 = 0;
     let mut cumulative_outputs: f64 = 0.0;
-    let mut year_emission_skl = 0.0;
-    let mut year_burn_skl = 0.0;
+    // Integer atomic accumulators (DQ-2G: the budget quantities never touch f64).
+    let mut year_emission_atomic: u128 = 0;
+    let mut year_burn_atomic: u128 = 0;
     let mut aggs = Vec::with_capacity(config.sim_years as usize);
 
     for block in 0..total_blocks {
@@ -228,8 +232,8 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         // Flat-ledger advance: destroy at the shipped 25% split.
         let flat = compute_burn_split(total_fees, burn_pct, params.staker_pool_share);
 
-        year_emission_skl += staker_emission as f64 / COIN;
-        year_burn_skl += whole_burn as f64 / COIN;
+        year_emission_atomic += u128::from(staker_emission);
+        year_burn_atomic += u128::from(whole_burn);
         already_generated = (already_generated + u128::from(effective)).min(money_supply);
         total_burned += u128::from(flat.actually_destroyed);
 
@@ -238,11 +242,11 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             aggs.push(A1YearAgg {
                 year,
                 n: frozen_shards(cumulative_outputs as u64),
-                emission_leg_skl: year_emission_skl,
-                total_burn_skl: year_burn_skl,
+                emission_leg_atomic: year_emission_atomic.min(u128::from(u64::MAX)) as u64,
+                whole_burn_atomic: year_burn_atomic.min(u128::from(u64::MAX)) as u64,
             });
-            year_emission_skl = 0.0;
-            year_burn_skl = 0.0;
+            year_emission_atomic = 0;
+            year_burn_atomic = 0;
         }
     }
     aggs
@@ -252,11 +256,14 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 /// sustained years (past the ramp) for a candidate, at a given opportunity-cost
 /// rate. `≥ 1` ⇒ the candidate keeps the staker whole every sustained year.
 ///
-/// `budget = emission_leg + total_burn · share(n)` (SKL). Burden (F-G) is the
-/// **locked-bond opportunity cost** (the binding term) plus a minor storage
-/// term: `burden = bond_opp_cost_skl(n, rate) + storage_fiat / price`. The
-/// dominant term is **price-independent** (SKL vs SKL), so `price` and `kryder`
-/// touch only the minor storage remainder.
+/// **Algorithm zone is integer** (DQ-2G): `budget_atomic = emission_leg +
+/// mul_scale(whole_burn, share_milli(n))` — the escalation share is applied by
+/// the SAME `mul_scale` production runs (`compute_burn_split`), never an f64
+/// `× share_fraction`. Burden (F-G) is the integer locked-bond opportunity cost
+/// (principal atomic; the exogenous rate is the single float boundary) plus the
+/// minor fiat storage term. f64 appears **only** in the returned ratio (report)
+/// and at the two named exogenous boundaries (rate, `SKL/fiat` price). The
+/// dominant term is price-independent (SKL vs SKL).
 #[must_use]
 pub fn a1_min_clearance_ratio(
     aggs: &[A1YearAgg],
@@ -268,8 +275,12 @@ pub fn a1_min_clearance_ratio(
     aggs.iter()
         .filter(|a| a.year > A1_RAMP_YEARS && a.n > 0)
         .map(|a| {
-            let share = candidate.share_fraction(a.n);
-            let budget_skl = a.emission_leg_skl + a.total_burn_skl * share;
+            // Integer share application — production's exact op, not f64.
+            let share_milli = candidate.share(a.n);
+            let fee_leg_atomic = mul_scale(a.whole_burn_atomic, share_milli);
+            let budget_atomic = u128::from(a.emission_leg_atomic) + u128::from(fee_leg_atomic);
+            let budget_skl = budget_atomic as f64 / COIN; // report/comparison boundary
+
             let opp_cost_skl = bond_opp_cost_skl(a.n, opp_cost_rate);
             let storage_fiat = burden_cost_fiat_per_year(
                 a.n * REPLICAS_PER_SHARD,
@@ -551,11 +562,11 @@ mod tests {
         let aggs = a1_year_aggs(&params, cfg);
         assert!(!aggs.is_empty());
         for a in &aggs {
-            assert!(a.emission_leg_skl > 0.0, "emission leg positive");
-            assert!(a.total_burn_skl > 0.0, "fee burn positive");
+            assert!(a.emission_leg_atomic > 0, "emission leg positive");
+            assert!(a.whole_burn_atomic > 0, "fee burn positive");
         }
         // Emission decays ×0.90/yr, so the last year's leg is below the first's.
-        assert!(aggs.last().unwrap().emission_leg_skl < aggs[0].emission_leg_skl);
+        assert!(aggs.last().unwrap().emission_leg_atomic < aggs[0].emission_leg_atomic);
     }
 
     #[test]
