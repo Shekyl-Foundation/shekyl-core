@@ -106,10 +106,11 @@
 #       per-output secrets only). A naked-key export method adds a second,
 #       weaker surface for a disclosure the proof already carries in
 #       bound form. Storage side: the wallet schema retains per-tx
-#       secrets (shekyl-engine-state TxMetaBlock.tx_keys) but as of
-#       2026-07-24 the send path does not yet WRITE them — the retention
-#       writer is an in-scope WI-RPC-3 prerequisite of the OUTBOUND
-#       proof, not a deferral (see GetTxProofParams). Reopen when: an
+#       secrets (shekyl-engine-state TxMetaBlock.tx_keys), and the
+#       send path persists them at dispatch — that retention writer
+#       landed in this same WI-RPC-3 tranche as an in-scope
+#       prerequisite of the OUTBOUND proof, not a deferral (see
+#       GetTxProofParams). Reopen when: an
 #       external verifier/tool emerges that structurally cannot consume a
 #       DLEQ proof string and requires the raw scalar (named consumer,
 #       threat-model review); the re-evaluation shape is a fresh contract
@@ -1434,10 +1435,21 @@ components:
         but has no production writer as of 2026-07-24; without that
         retention commit every OUTBOUND request truthfully answers
         -29301. The retention write's lifecycle pins: (1) WRITE at
-        submit-ACCEPTED, not at build — a built-then-discarded tx must
-        leave no secret residue (keeps the engine-state I-2 no-orphans
-        invariant); (2) DEATH follows I-2 with the reference set CLOSED
-        BY THE SPEND-QUADRUPLE — spent transfer rows record their
+        DISPATCH, not at build and not at the accept verdict
+        (review-hardened 2026-07-24 from the original submit-ACCEPTED
+        form): the record — secret plus its pending-record reference —
+        is persisted atomically immediately before the bytes can leave
+        for the daemon, because the verdict is an observation about
+        network exposure, not its start; a crash or dropped connection
+        between dispatch and verdict must not orphan the secret of a
+        tx the network may still mine. A built-then-discarded tx still
+        leaves no secret residue (keeps the engine-state I-2
+        no-orphans invariant), and the definite refusal verdicts
+        (terminal / retryable — provably unrelayed under
+        single-egress) retire the record in their finalizers so a
+        daemon-refused build leaves none either; (2) DEATH follows I-2
+        with the reference set CLOSED BY THE SPEND-QUADRUPLE — spent
+        transfer rows record their
         spending_tx_hash (TransferDetails grows the field; written at
         spend detection, where the scanner holds the containing tx —
         KeyImageObserved grows the hash alongside block_height), and
@@ -1447,9 +1459,22 @@ components:
         orphans its secret the moment post-confirmation cleanup drops
         the transient references — a steady-state hole, not a rescan
         corner; with it, the send stays referenced by the spent rows it
-        consumed for as long as the wallet retains its history. A
-        permanently reorged-out tx loses all references and its secret
-        dies with them; (3) RESCAN-SURVIVING, coherently — tx_keys is
+        consumed for as long as the wallet retains its history. Death
+        is RECONCILIATION-ONLY (review-hardened 2026-07-24): a reorg
+        rewind re-pends entries it unreferences instead of collecting
+        them — the references died with the orphaned blocks, not the
+        tx, and re-confirmation on the new chain is the common
+        outcome, which a deleted secret could never serve; and the
+        watchdog's confirmed-absent release clears F14 locks only,
+        never the retention record, because its trigger is a local
+        relay verdict (fee policy / unmapped reject cause at the
+        wallet's own daemon), not a proof of network-wide absence. A
+        tx that never re-confirms therefore leaves a bounded
+        safe-direction residue (a retained secret with no proof to
+        serve) — the deliberate trade under the indefinite-retention
+        policy below; reopen a supersession-driven collector (keyed on
+        persisted input linkage) only if pending-record growth is
+        observed in practice; (3) RESCAN-SURVIVING, coherently — tx_keys is
         send-derived state that cannot be rebuilt from chain data, so
         it survives rescan; rescan's spend re-detection rebuilds the
         spending-hash references from chain data, so I-2 holds through
@@ -1581,7 +1606,12 @@ components:
       properties:
         amount:
           $ref: "#/components/schemas/AtomicUnits"
-          description: Minimum reserve to prove. Omitted = full balance.
+          description: >
+            Minimum reserve to prove. Omitted = full balance. Must be
+            positive when present: `"0"` selects no outputs and proves
+            nothing, so it is refused as invalid params (-32602,
+            "amount must be positive") — omit the field to prove the
+            full balance.
         message:
           type: string
           default: ""
