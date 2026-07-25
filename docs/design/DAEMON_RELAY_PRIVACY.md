@@ -14,7 +14,11 @@ open where the p2p round owns it. **Scope boundary (§6.9, settled):** this mech
 defends the *active* adversary (must misbehave or actively position); the *passive,
 correctly-behaving* observer is explicitly **not defended** — a known limitation
 shared with Dandelion++ and Tor, closable only by p2p redesign (mixnet / cover
-traffic / cryptographic sender-anonymity), deliberately out of scope. Rounds 1–2 raised
+traffic / cryptographic sender-anonymity), deliberately out of scope. §6.10 records
+the one thing that reaches it: an *economic* deterrent (behaviour-floor + pinning
+taxes the observer into being infrastructure, un-budgetable for most covert
+institutional adversaries) — effective-population, not theoretical; economics, not
+protocol; carve-outs (unconstrained tier, overt participant) intact. Rounds 1–2 raised
 findings RD-1…RD-4; **all are accepted and dispositioned in §10**, and their
 consequences are folded into the body rather than appended as errata.
 RD-1 moved the adopted embargo (31 s → 112 s) and surfaced a fifth defect
@@ -938,6 +942,104 @@ touch ([`82-failure-mode-ux`](../../.cursor/rules/82-failure-mode-ux.mdc)).
 **Settled boundary:** active in, passive-honest out, redesign explicitly declined.
 The remaining in-scope work is Q-10 (`g_max`, §7) — bounded p2p, not a redesign.
 
+### 6.10 The economic deterrent on the passive observer — effective population, not theoretical
+
+§6.9 concedes the passive observer *structurally*. This section records the one
+thing in the arc that reaches it at all — and it reaches it not at the protocol
+layer but at the adversary's own institutional accounting. It is a **different kind
+of argument** (economic / institutional, not a protocol property), and it is
+scoped and flagged as such so no reader upgrades it into a structural defense. It
+is attributed to operational experience and **cannot be sourced in the tree**.
+
+**The occupancy defense is scoped to behaviour + pinning; address diversity is
+ruled out.** Q-10's defence cannot be built on *who* peers are (address, subnet,
+ASN): that family is broken on both transports for opposite reasons — on Tor the
+variable does not exist (no meaningful address/subnet/ASN behind circuits), on
+clearnet it *lies* (Sybils spread across subnets cheaply, and subnet-diversity
+heuristics quietly punish legitimate home users behind shared NAT/CGNAT). So the
+defence scopes to *how* peers have behaved (a **behavioural floor**: eviction on
+dropping/misbehaviour) and *whether* they have been stably known (**guard-pinning**:
+tenure for stably-known peers, of which the existing anchor connections
+[`ANCHOR_CONNECTIONS_COUNT = 2`](../../src/cryptonote_config.h#L145) are the seed).
+Ruling out the address family is itself useful output: nobody burns a Q-10 round
+building subnet-tracking that would punish home users. *(Behavioural floor and
+guard-pinning are the Q-10 design **direction**, not existing mechanisms; anchors
+exist.)*
+
+**What pinning + floor cost the passive observer.** To hold a pinned stem slot the
+adversary must relay honestly — propagate every tx, stay up, never drop —
+*continuously*, for the whole duration it wants the vantage, because the floor
+evicts it the moment it lapses. So the passive observer is not sneaking in with a
+brief good-behaviour costume (the cheap rotate-in/observe/rotate-out of the
+un-pinned case); it must be a fully functional high-reliability relay for as long
+as it watches. The pin **converts a one-time infiltration into a standing,
+non-refundable tax** — observational access made directly proportional to ongoing
+contribution to network health, revoked the instant it stops paying.
+
+**Load-bearing premise (state it or the reach evaporates).** This taxes the
+*diffuse* passive observer — not only the targeted occupier — *only if
+stem-eligibility is itself gated on pinned tenure*: to be a stem successor for any
+origin at all, a peer must be a stably-known, well-behaved pin of that origin.
+Under that gating even passive sampling at rate `≈ f` requires paying the toll. A
+Q-10 design that pins slots *without* gating stem-eligibility on pinned tenure
+collapses the deterrent back to targeted-occupancy only, and the diffuse sampler
+rotates in free. So this gating is a **design constraint on the Q-10 round**, not a
+free property.
+
+**The health axis — conscription, not defense.** This does not stop observation
+(conceded). It reframes the passive observer from parasite to *subsidized
+participant*: its transactions propagate, its uptime adds capacity, its honest
+relaying strengthens exactly the propagation health the black-hole attack
+degrades. On a privacy-maximalist chain still short of nodes, an adversary forced
+to run a flawless relay to keep watching contributes capacity, redundancy, and
+reach it would otherwise not provide. And it raises the floor for everyone: the
+pinned set — adversarial and honest alike — all meet the same high behavioural bar,
+because that is the price of tenure. The network gets a tier of reliably-behaving
+nodes as a structural consequence of the vantage being worth paying for.
+
+**The institutional-legibility deterrent — the part that reaches the passive
+observer.** Forced good-citizenship is also a *legibility* problem for the
+adversary's own institution. An intelligence line-item that reads "we ran
+high-reliability infrastructure that propagated every transaction flawlessly for
+eighteen months" must survive an auditor / comptroller / inspector-general / budget
+committee asking: *what did we get, and how is this distinguishable from materially
+operating the network we are surveilling?* The mechanism need not defeat the
+agency; it makes the agency's activity hard to justify in the agency's **own**
+accounting — the honest-relay work is real, ongoing, resource-consuming, and from
+outside and inside looks like **support**. "Run a surveillance node" becomes
+"sponsor the target," and sponsorship of the thing you are countering is a finding
+that ends programs regardless of the SIGINT's value.
+
+**Discipline 1 — economic deterrent, not structural defense.** Everything else
+load-bearing in this arc is *structural* (outbound-only fluff cannot reach an
+inbound spy; `STEMS = 2` is the expander-minimum; the floor demonstrably evicts).
+This is different *in kind*: "most adversaries will not pay this cost" is a
+statement about adversary economics and institutional behaviour, not a protocol
+property. It shrinks the **effective** passive-adversary population; it is **zero**
+narrowing of the **theoretical** one. Two distinct claims, both true, and a future
+reader must not collapse them: **we deter the *budget-constrained* passive observer,
+by economics; we do *not* defend against the *unconstrained* one (NSA /
+Five-Eyes-tier), by protocol.**
+
+**Discipline 2 — it binds on *covert* presence specifically.** The deterrent's
+double-edge from the institution's side: an adversary willing to be *seen*
+reinforcing the network pays the justification cost happily — for a state actor
+positioning as a "responsible participant," the reinforcement *is* the cover story
+that satisfies the auditor. So it binds hardest on the adversary that needs its
+presence **secret** (cannot justify visible support of an anonymity coin) and
+barely at all on the overtly-present participant. That is a fine place to land: the
+covert budget-constrained observer is deterred; the overt participant is *just a
+participant* — and a known participant is far less threatening than a covert one,
+because its presence can be reasoned about. But the claim is bounded: **strongest
+against covert budget-constrained presence; not the unconstrained tier, and not the
+adversary content to be overtly present.**
+
+**The "almost" is load-bearing.** "Almost no one can justify it" is not "no one."
+This is the first thing in the arc that reaches the passive adversary at all, and
+it reaches it not in what the adversary can *do* but in what it can *explain to its
+own auditors* — a reasoned economic argument, flagged as non-protocol and
+non-sourceable, with its carve-outs (unconstrained tier, overt participant) intact.
+
 ---
 
 ## 7. Open questions (the Round-3 agenda)
@@ -1165,6 +1267,21 @@ instruments for both are built or scoped. What remains is the *arguments*:
      until `g_max` exists, so there is nothing for a `ρ` judgment to bind against
      yet. This is the distinction that stops someone picking a `ρ` against an
      assumed `g` and calling the chain closed.
+
+  **The defence shape is already narrowed — behaviour + pinning, not addresses.**
+  The Q-10 round does not start from a blank space: the entire *address-diversity*
+  family (address / subnet / ASN) is ruled out for both transports with concrete
+  failure modes (§6.10) — it does not exist on Tor and lies on clearnet. So `g_max`
+  is bounded by a **behavioural floor** (eviction on dropping) and **guard-pinning**
+  (tenure for stably-known peers, seeded by the existing anchors). Two constraints
+  the round inherits: (a) pinning carries the **persistence double-edge** we keep
+  hitting — a pinned honest peer is the defence, a pinned adversary is durable, so
+  pinning trades some eclipse-exposure for occupancy-resistance and must be scoped
+  active-vs-passive like reputation (pin to resist active *re-rolling*; it does
+  nothing structural against a patient peer that behaved well enough to get pinned
+  — the §6.9 concession, not a new caveat); and (b) the economic deterrent §6.10
+  builds on pinning reaches the diffuse passive observer **only if stem-eligibility
+  is gated on pinned tenure** — a design constraint, not a free property.
 
 **Closed in Rounds 1–2:**
 
