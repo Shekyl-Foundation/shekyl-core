@@ -570,6 +570,131 @@ const A4_OPP_RATE: f64 = 0.02;
 /// Attacker-favouring: min opp-rate, storage omitted, small (uncapped) attacker
 /// grouping, age-0 (no incumbency). Integer through Δpool + the reward chain; f64
 /// only at the reported ratio and the opp-rate boundary (DQ-2G).
+/// Lag, **years**, before honest replicas respond to the stuffer's fresh r=1
+/// shards (the replication-response sensitivity). NOT gating — a freeze decision
+/// cannot rely on market-response speed — but reported so Stage 3 sees how much
+/// of the r=1 multiplier is "market never responds" vs "fails robustly".
+const A4_RESPONSE_LAG_YEARS: u64 = 2;
+
+/// Decomposed A4 attack economics — the components the fee-floor must be sized
+/// against, not the bare ratio (revenue rides fee-flow *volume*; the per-output
+/// fee rides *rate*, so a floor cannot close a volume-driven gap in every regime).
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct A4Decomp {
+    /// Δshare-attributable pool flow per year, SKL — the **volume** term (scales
+    /// with the network's fee burn, which the attacker does not pay for).
+    pub dpool_skl_per_year: f64,
+    /// The attacker's served-work slice of that Δpool (0..1).
+    pub capture_frac: f64,
+    /// `Δn/(n+Δn)` — the slice a non-premium (proportional) capture would take.
+    pub proportional_frac: f64,
+    /// `capture_frac / proportional_frac` — the **first-mover work premium** (>1
+    /// means r=1 density + honest capping let the attacker grab more than its
+    /// shard share).
+    pub premium: f64,
+    pub revenue_skl: f64,
+    /// Cost split: one-time stuffing weight-fees …
+    pub fee_skl: f64,
+    /// … and the §6.2 coupled bond opportunity cost over the horizon.
+    pub bond_skl: f64,
+    pub roi: f64,
+    /// ROI once honest replicas respond (r: 1→R after [`A4_RESPONSE_LAG_YEARS`]);
+    /// a first-order sensitivity, not the gate.
+    pub roi_market_responds: f64,
+    /// Per-output fee **multiplier** that would drive this config's ROI to 1
+    /// (≈ ROI while cost is fee-dominated) — the size of the fee-floor lever *this
+    /// regime* demands. Wide variation across regimes ⇒ no single floor closes all.
+    pub fee_mult_to_close: f64,
+}
+
+/// Decompose one attacker configuration (§12.2 A4, DQ-2C) — the manipulation
+/// premium, served-work channel. See [`A4Decomp`]; revenue is `capture · Δpool ·
+/// horizon`, cost is stuffing fees + the coupled bond.
+#[must_use]
+fn a4_decompose(
+    whole_burn_atomic: u64,
+    n: u64,
+    sigma_honest_milli: u64,
+    candidate: &EscalationCurve,
+    delta: u64,
+    horizon_years: u64,
+) -> A4Decomp {
+    let n2 = n.saturating_add(delta);
+    // The share-manipulation Δpool on the honest burn — the production op. Only the
+    // fee leg is share-gated, so the emission leg cancels in the delta.
+    let dpool_atomic = mul_scale(whole_burn_atomic, candidate.share(n2))
+        .saturating_sub(mul_scale(whole_burn_atomic, candidate.share(n)));
+    let dpool_skl_per_year = dpool_atomic as f64 / COIN;
+    // Served-work capture of that Δpool: Δn fresh shards at r=1, grouped small.
+    let capped_att = attacker_capped_work_milli(delta, A4_ATTACKER_HOLDINGS);
+    let sigma_total = sigma_honest_milli.saturating_add(capped_att);
+    let capture_frac = if sigma_total == 0 {
+        0.0
+    } else {
+        capped_att as f64 / sigma_total as f64
+    };
+    let proportional_frac = if n2 == 0 {
+        0.0
+    } else {
+        delta as f64 / n2 as f64
+    };
+    let premium = if proportional_frac > 0.0 {
+        capture_frac / proportional_frac
+    } else {
+        0.0
+    };
+    let revenue_atomic = reward_share_floor(dpool_atomic, capped_att, sigma_total);
+    let revenue_skl = (u128::from(revenue_atomic) * u128::from(horizon_years)) as f64 / COIN;
+
+    // Cost: one-time stuffing weight-fees + the coupled bond opportunity cost.
+    let chain_leaves = n2.saturating_mul(SEGMENT_LEAF_COUNT);
+    let fee_skl =
+        (leaf_stuffer_cost_per_shard_atomic(chain_leaves) * u128::from(delta)) as f64 / COIN;
+    let bond_skl = (u128::from(ARCHIVAL_BOND_FLOOR_ATOMIC) * u128::from(delta)) as f64 / COIN
+        * A4_OPP_RATE
+        * horizon_years as f64;
+    let cost_skl = fee_skl + bond_skl;
+    let roi = if cost_skl <= 0.0 {
+        f64::INFINITY
+    } else {
+        revenue_skl / cost_skl
+    };
+
+    // Replication response (first-order): for the first LAG years the attacker is
+    // sole server (full capture); after, honest replicas raise r to R, so the
+    // attacker becomes 1-of-R and their slice of each shard's (r-independent) work
+    // falls by ~R. Fraction of the r=1 revenue that survives over the horizon:
+    let r = REPLICAS_PER_SHARD.max(1) as f64;
+    let h = horizon_years.max(1) as f64;
+    let lag = A4_RESPONSE_LAG_YEARS.min(horizon_years) as f64;
+    let survive = (lag + (h - lag) / r) / h;
+    let roi_market_responds = if cost_skl <= 0.0 {
+        f64::INFINITY
+    } else {
+        revenue_skl * survive / cost_skl
+    };
+    // Fee multiplier to drive ROI→1: raise the fee leg until fee' + bond = revenue.
+    let fee_mult_to_close = if fee_skl > 0.0 {
+        ((revenue_skl - bond_skl).max(0.0)) / fee_skl
+    } else {
+        f64::INFINITY
+    };
+
+    A4Decomp {
+        dpool_skl_per_year,
+        capture_frac,
+        proportional_frac,
+        premium,
+        revenue_skl,
+        fee_skl,
+        bond_skl,
+        roi,
+        roi_market_responds,
+        fee_mult_to_close,
+    }
+}
+
+/// The scalar ROI (the gate quantity) — a thin projection of [`a4_decompose`].
 #[must_use]
 fn a4_stuffing_roi(
     whole_burn_atomic: u64,
@@ -579,28 +704,15 @@ fn a4_stuffing_roi(
     delta: u64,
     horizon_years: u64,
 ) -> f64 {
-    let n2 = n.saturating_add(delta);
-    // The share-manipulation Δpool on the honest burn — the production op. Only the
-    // fee leg is share-gated, so the emission leg cancels in the delta.
-    let dpool_atomic = mul_scale(whole_burn_atomic, candidate.share(n2))
-        .saturating_sub(mul_scale(whole_burn_atomic, candidate.share(n)));
-    // Served-work capture of that Δpool: Δn fresh shards at r=1, grouped small.
-    let capped_att = attacker_capped_work_milli(delta, A4_ATTACKER_HOLDINGS);
-    let sigma_total = sigma_honest_milli.saturating_add(capped_att);
-    let revenue_atomic = reward_share_floor(dpool_atomic, capped_att, sigma_total);
-    let revenue_skl = (u128::from(revenue_atomic) * u128::from(horizon_years)) as f64 / COIN;
-
-    // Cost: one-time stuffing weight-fees + the coupled bond opportunity cost.
-    let chain_leaves = n2.saturating_mul(SEGMENT_LEAF_COUNT);
-    let fee_skl =
-        (leaf_stuffer_cost_per_shard_atomic(chain_leaves) * u128::from(delta)) as f64 / COIN;
-    let bond_opp_skl_per_year =
-        (u128::from(ARCHIVAL_BOND_FLOOR_ATOMIC) * u128::from(delta)) as f64 / COIN * A4_OPP_RATE;
-    let cost_skl = fee_skl + bond_opp_skl_per_year * horizon_years as f64;
-    if cost_skl <= 0.0 {
-        return f64::INFINITY;
-    }
-    revenue_skl / cost_skl
+    a4_decompose(
+        whole_burn_atomic,
+        n,
+        sigma_honest_milli,
+        candidate,
+        delta,
+        horizon_years,
+    )
+    .roi
 }
 
 /// A4 verdict for one candidate: the **max attacker ROI** over years × `Δn` ×
@@ -623,6 +735,10 @@ pub struct A4CandidateResult {
     pub roi_by_hholdings: [f64; A4_HONEST_HOLDINGS_BAND.len()],
     /// The `(n, Δn, horizon_years)` achieving the realistic-end (index 0) max.
     pub worst_at: (u64, u64, u64),
+    /// Decomposition at the realistic-end worst config (the row the fee-floor and
+    /// replication-response analysis reads). `None` only if no sustained year had
+    /// a positive-Δpool config (e.g. flat-25, where every Δpool is 0).
+    pub worst_decomp: Option<A4Decomp>,
     pub passes: bool,
 }
 
@@ -667,6 +783,7 @@ fn a4_candidate_result(
 ) -> A4CandidateResult {
     let mut roi_by_hholdings = [0.0_f64; A4_HONEST_HOLDINGS_BAND.len()];
     let mut worst_at = (0u64, 0u64, 0u64);
+    let mut worst_decomp: Option<A4Decomp> = None;
     for &(_year, n, ref sig) in &sigma.rows {
         let agg = aggs.iter().find(|a| a.n == n);
         let Some(agg) = agg else { continue };
@@ -676,9 +793,18 @@ fn a4_candidate_result(
                     let roi = a4_stuffing_roi(agg.whole_burn_atomic, n, sig[k], curve, delta, h);
                     if roi > roi_by_hholdings[k] {
                         roi_by_hholdings[k] = roi;
-                        // Track the config at the realistic (index-0) end, the gate.
+                        // Track config + decomposition at the realistic (index-0)
+                        // end, the gate the fee-floor/response analysis reads.
                         if k == 0 {
                             worst_at = (n, delta, h);
+                            worst_decomp = Some(a4_decompose(
+                                agg.whole_burn_atomic,
+                                n,
+                                sig[k],
+                                curve,
+                                delta,
+                                h,
+                            ));
                         }
                     }
                 }
@@ -698,6 +824,7 @@ fn a4_candidate_result(
         },
         roi_by_hholdings,
         worst_at,
+        worst_decomp,
         passes: roi_by_hholdings[0] < 1.0,
     }
 }
@@ -726,6 +853,7 @@ fn a4_stuffing_report(params: &SimParams) -> Vec<A4ScenarioResult> {
     );
 
     let mut results = Vec::new();
+    let mut decomp_rows: Vec<(String, A4Decomp)> = Vec::new();
     for config in all_scenarios(params) {
         let aggs = a1_year_aggs(params, &config);
         let sigma = SigmaCache::build(&aggs);
@@ -760,6 +888,9 @@ fn a4_stuffing_report(params: &SimParams) -> Vec<A4ScenarioResult> {
             wd,
             whz,
         );
+        if let Some(d) = worst_real.worst_decomp {
+            decomp_rows.push((config.name.clone(), d));
+        }
         results.push(A4ScenarioResult {
             scenario: config.name.clone(),
             flat25,
@@ -782,7 +913,67 @@ fn a4_stuffing_report(params: &SimParams) -> Vec<A4ScenarioResult> {
             "PASS"
         }
     );
+    a4_print_decomposition(&decomp_rows);
     results
+}
+
+/// Decompose the realistic-end worst config per scenario (the row the fee-floor
+/// must be sized against). Separates **revenue** into the Δpool *flow* (rides
+/// network fee-volume, which the attacker does not pay for) and the first-mover
+/// *premium* (capture > proportional), and **cost** into fees vs the coupled
+/// bond — then reports the fee-multiplier each regime would need to reach ROI 1.
+/// The multiplier's wide spread across scenarios is the evidence that a per-
+/// output fee-floor alone cannot close every regime: revenue rides volume, the
+/// fee rides rate. The `ROI(respond)` column strips the r=1-forever assumption.
+fn a4_print_decomposition(rows: &[(String, A4Decomp)]) {
+    eprintln!(
+        "\nA4 decomposition — realistic-end (hHold=4) worst config per scenario. Size the\n\
+         remedy against the DOMINANT term, not the ratio (§12.2, per the D-2 retraction):\n\
+         revenue = Δpool-flow x capture; cost = fees + coupled bond. 'prem' = capture /\n\
+         proportional (first-mover premium); 'fee×→1' = the per-output fee multiplier that\n\
+         would drive ROI to 1 in THIS regime; 'ROI(resp)' = ROI once honest replicas answer\n\
+         (r:1→{R} after {LAG}y lag; first-order, NOT gating).",
+        R = REPLICAS_PER_SHARD,
+        LAG = A4_RESPONSE_LAG_YEARS,
+    );
+    eprintln!(
+        "{:<20} {:>13} {:>7} {:>5} {:>11} {:>9} {:>7} {:>8} {:>9}",
+        "scenario",
+        "Δpool/yr SKL",
+        "capt%",
+        "prem",
+        "revenue",
+        "fees",
+        "bond",
+        "fee×→1",
+        "ROI(resp)"
+    );
+    for (name, d) in rows {
+        eprintln!(
+            "{:<20} {:>13.1} {:>6.2}% {:>5.1} {:>11.1} {:>9.1} {:>7.2} {:>8.1} {:>9.2}",
+            trunc(name, 20),
+            d.dpool_skl_per_year,
+            d.capture_frac * 100.0,
+            d.premium,
+            d.revenue_skl,
+            d.fee_skl,
+            d.bond_skl,
+            d.fee_mult_to_close,
+            d.roi_market_responds,
+        );
+    }
+    eprintln!(
+        "  -> Read: prem≈1.0 at the realistic end ⇒ NO concentration premium — the attack is\n\
+         pure fee-flow-volume leverage (cheap stuffing unlocks a large Δpool; the attacker\n\
+         takes only their proportional slice, but the pool dwarfs the stuffing cost). The\n\
+         fee-RATE cancels in fee×→1, so its 2.8→17.8x spread is volume/share-slope variation:\n\
+         one per-output floor sized for late-tail over-charges benign multi-output txs ~6x —\n\
+         the remedy's real cost. Denominate it in WEIGHT (a virtual-weight surcharge rides\n\
+         the fee market over time; an atomic constant rots) — but weight alone can't erase\n\
+         the cross-regime spread. The D3 dodge is load-bearing at the CAPPED-honest end\n\
+         (prem>1, ROI ~2x higher); its undodgeable-cap fix prices concentration in bonded\n\
+         capital THERE. So the pair: fee-floor for the fee-flow regime, D3 for the capped one."
+    );
 }
 
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
