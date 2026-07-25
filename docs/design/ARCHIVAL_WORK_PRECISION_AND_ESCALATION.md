@@ -726,6 +726,21 @@ cannot; A1 runs on it as the binding case.
 
   Shekyl's fee schedule differs, so calibrate to a **point + range**: the derived
   per-output cost is the anchor, the parameterized sweep is a band around it.
+
+  **Scope guardrail — the *cost* half only; the ring model does not transfer.** The
+  Black-Marble report has two separable halves. Its **privacy-damage** half
+  (decoy poisoning, effective-ring-size collapse, the OSPEAD-adjacent
+  decoy-distribution attack) is a **ring-signature artifact FCMP++ eliminates** —
+  no ring, nothing to poison — and is **out of scope**: the W9 sim must not model
+  it. Only its **incident-forensics** half (how cheaply, at what fee tier, for how
+  long a real adversary sustains a mass-output flood) is used, and that is
+  anonymity-scheme-independent. Consequently the calibration module **must
+  re-derive the per-output cost from Shekyl's own `predict_weight`** over the
+  FCMP++ tx layout — the expensive per-input object is a curve-tree membership
+  proof, not a 16-decoy ring, so the outputs-per-byte optimum (directive 2) and
+  the per-output cost differ from Monero's. The Monero figures are an
+  **order-of-magnitude anchor + proof-of-willingness**, never a number to
+  hard-code; no ring-sig byte economics enter the sim.
 - **DQ-2D — escalation-family parameterization. ✅ ratified.** Banded-PL, floor
   25%, monotone in `n`, saturating to asymptote `A ∈ {50%, 75%, 90%}` (all `<
   100%`), swept over knee position `n_k` and initial slope. Integer `curve_milli`
