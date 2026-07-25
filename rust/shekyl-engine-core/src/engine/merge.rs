@@ -247,12 +247,16 @@ impl<
         // OUTBOUND PREREQUISITE pins 2–3): after the merge and the
         // post-passes, retire `pending_tx_hashes` entries the chain
         // now references (a `TransferDetails.tx_hash` or
-        // `spending_tx_hash` observed by this scan) and collect
-        // `tx_meta.tx_keys` orphans left with no live reference —
-        // e.g. a submitted tx reorged out permanently, whose F14
-        // locks the watchdog already released. Runs under the same
+        // `spending_tx_hash` observed by this scan). A merge that
+        // performed a reorg rewind re-pends entries the rewind
+        // unreferenced instead of collecting them — the references
+        // died with the orphaned blocks, not with the tx, and the
+        // common outcome is re-confirmation on the new chain, which
+        // a deleted secret could never serve. Runs under the same
         // write guard as the merge, so I-2 holds atomically.
-        state.ledger.reconcile_tx_key_retention();
+        state
+            .ledger
+            .reconcile_tx_key_retention(reorg_fork_height.is_some());
         Ok(())
     }
 

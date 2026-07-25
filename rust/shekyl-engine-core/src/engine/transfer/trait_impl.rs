@@ -83,25 +83,22 @@ where
     }
 
     fn release_awaiting_confirmation(&self, tx_hashes: &HashSet<TxHash>) -> usize {
-        // Whole-`WalletLedger` guard: the confirmed-absent verdict
-        // releases the F14 locks *and* retires the WI-RPC-3 retention
-        // record in the same atomic write — the tx provably never
-        // confirmed, so its `tx_meta.tx_keys` secret has no future
-        // OUTBOUND proof to serve and its `pending_tx_hashes` entry
-        // has no confirmation to await (retention lifecycle pin 2,
-        // `docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE).
+        // The confirmed-absent verdict releases the F14 locks ONLY. It
+        // deliberately does NOT touch the WI-RPC-3 retention record:
+        // the release trigger — a terminal reject when the held bytes
+        // are re-offered to the wallet's own daemon — is a *local
+        // relay verdict* (fee policy, an unmapped reject cause), not a
+        // proof of network-wide absence. Remote pools can still carry
+        // and mine the tx, and a deleted secret would permanently
+        // disable the OUTBOUND proof for a payment that late-settles.
+        // The record stays on its `pending_tx_hashes` reference:
+        // re-confirmation retires it through the reconciler like any
+        // pending tx, and a truly-dead tx leaves a bounded
+        // safe-direction residue — the retention policy's deliberate
+        // trade (`docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE
+        // death rule).
         self.ledger.with_wallet_ledger_mut(|wallet| {
-            let released =
-                submit_watchdog::release_awaiting_confirmation(&mut wallet.ledger, tx_hashes);
-            for tx_hash in tx_hashes {
-                let hash_bytes = tx_hash.to_bytes();
-                wallet.tx_meta.tx_keys.remove(&hash_bytes);
-                wallet
-                    .sync_state
-                    .pending_tx_hashes
-                    .retain(|h| *h != hash_bytes);
-            }
-            released
+            submit_watchdog::release_awaiting_confirmation(&mut wallet.ledger, tx_hashes)
         })
     }
 

@@ -165,10 +165,13 @@ pub(crate) struct ConsumerHeldEntry {
     /// against (§4 F-G/F-G′).
     pub fingerprint: ContentFingerprint,
     /// WI-RPC-3 retention: the per-tx secret scalar minted at signing,
-    /// carried alongside `tx_bytes` so `finalize_submit_accept` /
-    /// `finalize_submit_already_in_chain` can persist it into
-    /// `TxMetaBlock.tx_keys` at submit-ACCEPTED
-    /// (`docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE pin 1).
+    /// carried alongside `tx_bytes` to the dispatch-persist point in
+    /// `submit_async`, which copies it into `TxMetaBlock.tx_keys`
+    /// atomically with the `in_flight` flip — before the bytes can
+    /// leave for the daemon (`docs/api/wallet_rpc.yaml` OUTBOUND
+    /// PREREQUISITE pin 1, dispatch form). After that flip the
+    /// persisted record is the durable holder; this runtime copy
+    /// exists only so a §2.5 retryable restoration can re-dispatch.
     /// Zeroize-on-drop — a discard wipes it structurally with the
     /// entry, matching pin 1's "not at build" lifecycle (a never-
     /// submitted build leaves no orphan in the store).

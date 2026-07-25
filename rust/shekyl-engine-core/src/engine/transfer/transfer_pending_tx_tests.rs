@@ -1056,12 +1056,13 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
 }
 
 /// WI-RPC-3 retention (`docs/api/wallet_rpc.yaml` OUTBOUND
-/// PREREQUISITE pin 1): submit-ACCEPTED persists the per-tx secret
-/// into `tx_meta.tx_keys` keyed by the canonical txid, and records the
+/// PREREQUISITE pin 1, dispatch form): submit persists the per-tx
+/// secret into `tx_meta.tx_keys` keyed by the canonical txid — at
+/// dispatch, before the bytes can reach the daemon — and records the
 /// txid in `sync_state.pending_tx_hashes` so I-2 holds from the moment
 /// of the write.
 #[tokio::test]
-async fn submit_accept_persists_tx_key_and_pending_hash() {
+async fn submit_persists_tx_key_and_pending_hash() {
     let (ledger, _tree_dir, tree) =
         funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
     let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
@@ -1097,7 +1098,7 @@ async fn submit_accept_persists_tx_key_and_pending_hash() {
         .tx_meta
         .tx_keys
         .get(&tx_hash.to_bytes())
-        .expect("submit-accept persists the per-tx secret keyed by canonical txid");
+        .expect("dispatch persists the per-tx secret keyed by canonical txid");
     assert_ne!(
         *stored.primary.as_bytes(),
         [0u8; 32],
@@ -1109,7 +1110,7 @@ async fn submit_accept_persists_tx_key_and_pending_hash() {
             .sync_state
             .pending_tx_hashes
             .contains(&tx_hash.to_bytes()),
-        "submit-accept records the txid as pending (I-2 live reference)"
+        "dispatch records the txid as pending (I-2 live reference)"
     );
 }
 
@@ -1141,13 +1142,16 @@ async fn discard_never_persists_tx_key() {
     );
 }
 
-/// WI-RPC-3 retention pin 2 (death follows I-2): the watchdog's
-/// confirmed-absent verdict retires the retention record — the tx
-/// provably never confirmed, so its secret has no OUTBOUND proof to
-/// serve. Exercises the `WatchdogHost::release_awaiting_confirmation`
-/// seam the §2.6 release path 2 drives.
+/// WI-RPC-3 retention death rule: the watchdog's confirmed-absent
+/// release clears the F14 locks but KEEPS the retention record. Its
+/// trigger is a terminal reject when the held bytes are re-offered to
+/// the wallet's own daemon — a local relay verdict, not a proof of
+/// network-wide absence — and a tx that late-settles from a remote
+/// pool must still be able to serve its OUTBOUND proof. Exercises the
+/// `WatchdogHost::release_awaiting_confirmation` seam the §2.6 release
+/// path 2 drives.
 #[tokio::test]
-async fn confirmed_absent_release_retires_retention_record() {
+async fn confirmed_absent_release_keeps_retention_record() {
     use crate::engine::submit_lifecycle::WatchdogHost;
 
     let (ledger, _tree_dir, tree) =
@@ -1168,20 +1172,20 @@ async fn confirmed_absent_release_retires_retention_record() {
 
     let guard = pending.ledger.read();
     assert!(
-        !guard
+        guard
             .ledger
             .tx_meta
             .tx_keys
             .contains_key(&tx_hash.to_bytes()),
-        "confirmed-absent deletes the retained secret"
+        "the retained secret survives a local confirmed-absent verdict"
     );
     assert!(
-        !guard
+        guard
             .ledger
             .sync_state
             .pending_tx_hashes
             .contains(&tx_hash.to_bytes()),
-        "confirmed-absent deletes the pending-tx record"
+        "the pending record stays as the secret's I-2 live reference"
     );
     assert!(
         guard
@@ -1192,6 +1196,111 @@ async fn confirmed_absent_release_retires_retention_record() {
             .all(|td| td.awaiting_confirmation.is_none()),
         "all F14 locks for the confirmed-absent tx are cleared"
     );
+    guard.ledger.check_invariants().expect("I-2 after release");
+}
+
+/// WI-RPC-3 retention pin 1's refusal side: a terminal submit verdict
+/// is a definite, provably-unrelayed refusal — the dispatch-persisted
+/// record is retired, so a refused build leaves no residue.
+#[tokio::test]
+async fn terminal_reject_retires_dispatch_persisted_record() {
+    let (ledger, _tree_dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedTerminal {
+        kind: TerminalErrorKind::DoubleSpend,
+    }));
+    pending
+        .submit(built.id, built.content_gen)
+        .await
+        .expect_err("terminal reject");
+
+    let guard = pending.ledger.read();
+    assert!(
+        guard.ledger.tx_meta.tx_keys.is_empty(),
+        "a daemon-refused build leaves no retained secret"
+    );
+    assert!(
+        guard.ledger.sync_state.pending_tx_hashes.is_empty(),
+        "a daemon-refused build leaves no pending record"
+    );
+}
+
+/// The §2.5 retryable arm retires the record the same way — the next
+/// submit re-persists at its own dispatch (possibly under a new
+/// canonical txid after a re-anchor rebuild).
+#[tokio::test]
+async fn retryable_reject_retires_dispatch_persisted_record() {
+    let (ledger, _tree_dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedRetryable {
+        cause: RetryableRejectCause::StaleRoot,
+    }));
+    pending
+        .submit(built.id, built.content_gen)
+        .await
+        .expect_err("retryable reject");
+
+    let guard = pending.ledger.read();
+    assert!(
+        guard.ledger.tx_meta.tx_keys.is_empty(),
+        "a provably-unrelayed build leaves no retained secret"
+    );
+    assert!(
+        guard.ledger.sync_state.pending_tx_hashes.is_empty(),
+        "a provably-unrelayed build leaves no pending record"
+    );
+}
+
+/// The crash-window shape pin 1's dispatch form exists for: an
+/// ambiguous verdict (daemon timeout — the tx may or may not be
+/// relayed) keeps the dispatch-persisted record, exactly as a crash
+/// between dispatch and verdict would. The secret must outlive every
+/// state where the network might still mine the tx.
+#[tokio::test]
+async fn ambiguous_verdict_keeps_dispatch_persisted_record() {
+    let (ledger, _tree_dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    pending.queue_submit_daemon_outcome(Err(SubmitterError::Ambiguous {
+        kind: AmbiguousErrorKind::DaemonTimeout,
+    }));
+    pending
+        .submit(built.id, built.content_gen)
+        .await
+        .expect_err("ambiguous verdict");
+
+    let guard = pending.ledger.read();
+    assert_eq!(
+        guard.ledger.tx_meta.tx_keys.len(),
+        1,
+        "the maybe-exposed tx keeps its retained secret"
+    );
+    assert_eq!(
+        guard.ledger.sync_state.pending_tx_hashes.len(),
+        1,
+        "the maybe-exposed tx keeps its pending record"
+    );
+    guard
+        .ledger
+        .check_invariants()
+        .expect("I-2 across the ambiguity window");
 }
 
 /// F40 §2.5 case (a) — `AlreadyInChain { height }` with the confirming
