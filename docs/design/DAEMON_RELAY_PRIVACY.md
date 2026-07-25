@@ -10,7 +10,11 @@ by construction, with the block-time boundary reconciled at the integration laye
 *underspecified*, blocked on Q-10 — the outbound-selection eclipse bound `g_max`**,
 which is a **p2p-subsystem** grounding (anchors, white/gray discipline, IP-group
 diversity, churn resistance), not a relay-timing one (§7, §13.5). The seal is in the
-open where the p2p round owns it. Rounds 1–2 raised
+open where the p2p round owns it. **Scope boundary (§6.9, settled):** this mechanism
+defends the *active* adversary (must misbehave or actively position); the *passive,
+correctly-behaving* observer is explicitly **not defended** — a known limitation
+shared with Dandelion++ and Tor, closable only by p2p redesign (mixnet / cover
+traffic / cryptographic sender-anonymity), deliberately out of scope. Rounds 1–2 raised
 findings RD-1…RD-4; **all are accepted and dispositioned in §10**, and their
 consequences are folded into the body rather than appended as errata.
 RD-1 moved the adopted embargo (31 s → 112 s) and surfaced a fifth defect
@@ -866,6 +870,73 @@ Three things this says, none of them "the leak is harmless":
 So `<0.3 %` is not a detection figure; it is the top gate of a three-gate product
 whose other two gates FCMP++ and Δ-separability already narrow, and whose whole
 product reshape zeroes at the source for the transactions it re-stems.
+
+### 6.9 NOT DEFENDED — the passive, correctly-behaving observer (an explicit scope boundary)
+
+This clause is written down, not merely agreed, because an unstated scope boundary
+is how the review cycle regenerates: without it, every fresh look at reputation or
+at the ProxyMark paper re-opens "what about the passive observer?" as if it were an
+unsolved bug. It is not a bug. It is a **scope decision**, it is the same boundary
+the Dandelion++ paper and Tor draw, and the answer is now recorded so it is not
+re-derived each cycle.
+
+**In scope — the active adversary, any size.** The adversary who must *misbehave or
+actively position* to gain advantage: black-holing, stem-severing, dropping, or
+occupying the origin's outbound stem slots. This is what stem-and-fluff was designed
+to defeat and what this arc made actually work (correct memoryless embargo, exact
+derivation, reshape). The demonstrated real-world attack — ProxyMark occupancy (W3,
+§12) — is active *in the sense that matters here*: it requires the adversary to
+position itself into the target's outbound slots. Its defence lives at the
+selection / anti-eclipse layer (Q-10, `g_max`), which is **bounded, specified p2p
+work with a named deliverable — a design round, not a redesign**.
+
+**Out of scope — the passive, rule-following observer**, and everything downstream
+of trying to defeat it. Three independent arguments confirm no mechanism in this
+class reaches it:
+
+- **Topological.** The origin's first stem successor, if it is an observer,
+  attributes the origin with precision `≈ f` (`Precision(C1)`, §13) — set on the
+  *first stem edge, before any timing mechanism engages*. Embargo distribution,
+  exact derivation, reshape, granularity: none of them touch `C1`. The passive floor
+  is baked into the stem existing at all.
+- **Empirical.** The demonstrated mainnet attack is occupancy/active; the
+  passive-majority global observer is only ever *modelled*, never the deployed
+  attack — because the passive observer's advantage does not require deployment, it
+  is already there at `≈ f`.
+- **Mechanism-recruitment.** Every selection-layer knob that helps against the
+  active adversary *feeds* the passive one. Reputation-as-retention **recruits** the
+  patient well-behaved observer (it never misbehaves, so it scores perfectly);
+  selection bias toward "good" peers **promotes** it. So even the Q-10 / `g_max`
+  work — which correctly defends the active occupancy attacker — does nothing
+  against the passive observer, and a naive reputation layer would make it worse.
+
+**Why out of scope is the correct verdict, not a conceded weakness.** Defeating the
+passive rule-following observer requires changing *what the network is*: cover
+traffic / mixnet-class latency (a different dissemination protocol) or cryptographic
+sender-anonymity at the p2p layer (a different network). Both are **P2P redesigns
+that trade away the latency budget Dandelion++ exists to preserve**. Declaring the
+passive observer out of scope is not conceding a gap — it is refusing to smuggle a
+redesign in under a bug-fix's banner, which is the discipline this project runs on
+([`05-system-thinking`](../../.cursor/rules/05-system-thinking.mdc)). What *does*
+narrow the passive channel is orthogonal to this mechanism class and already
+recorded: **transport** collapses the cheap-inbound-supernode variant (Tor, §6.5),
+and correct provisioning (`ε`) reduces the mean-dependent variant (§6.6) — but the
+floor `C1 ≈ f` is untouchable by stem-and-fluff, and closing it is redesign
+territory.
+
+**The one sentence that keeps this boundary from being mistaken for a bug.**
+Stem-and-fluff displaces the fluff point from the origin *against an adversary who
+must actively position or misbehave*; **it does not hide the origin from a passive
+observer that already sees the first stem edge, and it never claimed to.** The
+failure mode this clause exists to prevent is the LocalMonero-style writeup —
+"Dandelion++ hides your origin," full stop — which is true against the active
+minority and *dangerously incomplete* against the passive observer. A privacy
+system that names the adversary it does not defend against is more trustworthy than
+one that lets a reader assume it hides them from a global passive observer it cannot
+touch ([`82-failure-mode-ux`](../../.cursor/rules/82-failure-mode-ux.mdc)).
+
+**Settled boundary:** active in, passive-honest out, redesign explicitly declined.
+The remaining in-scope work is Q-10 (`g_max`, §7) — bounded p2p, not a redesign.
 
 ---
 
