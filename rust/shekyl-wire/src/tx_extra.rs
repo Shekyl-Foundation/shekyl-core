@@ -58,6 +58,22 @@ pub const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_BYTES;
 /// PQC leaf-hash bytes per output.
 pub const PQC_LEAF_HASH_BYTES: usize = 32;
 
+// The three KEM sizes above are WIRE-FREEZE pins: they must never
+// silently track a crypto-library change (that would be an unversioned
+// format change, rule 42) — but they must also never silently diverge
+// from what the KEM actually emits (`shekyl-crypto-pq`, the
+// cryptographic source of truth). `shekyl-crypto-pq` is deliberately a
+// dev-only dependency (the serializer's runtime dep surface stays
+// minimal), so the pins are asserted in the test build: divergence
+// fails `cargo test -p shekyl-wire` at compile time, forcing an
+// explicit wire-version decision instead of a corrupt parse.
+#[cfg(test)]
+mod kem_layout_pins {
+    const _: () = assert!(super::X25519_CT_BYTES == shekyl_crypto_pq::kem::X25519_KEM_CT_LEN);
+    const _: () = assert!(super::ML_KEM_768_CT_BYTES == shekyl_crypto_pq::kem::ML_KEM_768_CT_LEN);
+    const _: () = assert!(super::HYBRID_KEM_CT_BYTES == shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN);
+}
+
 /// Max padding run in bytes, **including** the tag byte (`TX_EXTRA_PADDING_MAX_COUNT`,
 /// `tx_extra.h`). The C++ oracle rejects longer padding; matched here for parity.
 pub const TX_EXTRA_PADDING_MAX_COUNT: usize = 255;

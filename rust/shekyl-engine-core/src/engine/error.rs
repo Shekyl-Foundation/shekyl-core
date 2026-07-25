@@ -850,11 +850,13 @@ pub(crate) enum KeyEngineError {
 
     /// Proof generation failed inside the key actor (WI-RPC-3 inbound
     /// tx proofs / reserve proofs). Wraps [`shekyl_proofs::error::ProofError`]
-    /// so the proofs workflow (and the RPC error mapping behind it) can
-    /// discriminate structural rejections (empty output set,
-    /// non-increasing vout indices) from crypto failures without
-    /// stringifying. The generation inputs are the wallet's own
-    /// persisted state, so — as with
+    /// so the proofs workflow keeps the typed proof failure: its
+    /// `From<KeyEngineError> for ProofsError` maps this variant to
+    /// `ProofsError::Generate` — the proof-generation error class,
+    /// which the RPC layer reports as a generation failure — instead
+    /// of flattening it into the stringified key-engine class like
+    /// every other actor failure. The generation inputs are the
+    /// wallet's own persisted state, so — as with
     /// [`Self::SourceCiphertextDecapsulationFailed`] — the expected
     /// operational frequency is zero; the variant is loud, not silent.
     #[error("proof generation failure: {0}")]

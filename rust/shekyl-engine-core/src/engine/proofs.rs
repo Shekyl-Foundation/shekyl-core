@@ -53,7 +53,7 @@ use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
 use shekyl_address::ShekylAddress;
-use shekyl_crypto_pq::kem::{HybridCiphertext, ML_KEM_768_CT_LEN};
+use shekyl_crypto_pq::kem::{HybridCiphertext, SharedSecret, HYBRID_KEM_CT_LEN, X25519_KEM_CT_LEN};
 use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::output::rederive_combined_ss;
@@ -61,7 +61,8 @@ use shekyl_encoding::{decode_blob, encode_blob, HRP_RESERVE_PROOF, HRP_TX_PROOF}
 use shekyl_proofs::error::ProofError;
 use shekyl_proofs::reserve_proof::{verify_reserve_proof, ReserveOnChainOutput};
 use shekyl_proofs::tx_proof::{
-    generate_outbound_proof, verify_inbound_proof, verify_outbound_proof, OnChainOutput,
+    generate_outbound_proof_with_secrets, verify_inbound_proof, verify_outbound_proof,
+    OnChainOutput,
 };
 use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_scanner::extra::Extra;
@@ -69,7 +70,7 @@ use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Transaction};
 
-use super::block_fetch::{parse_missed_tx, parse_tx_batch, TxBodyForm};
+use super::block_fetch::{parse_missed_tx, parse_tx_batch, TxBodyForm, TXS_PER_REQUEST};
 use super::error::KeyEngineError;
 use super::key_actor::KeyEngineHandle;
 use super::local_ledger::LocalLedger;
@@ -99,12 +100,6 @@ pub const MAX_DECODED_PROOF_BYTES: usize = 1_048_576;
 
 /// One reserve-proof locator on the wire: `txid[32] ‖ vout_index[u32 LE]`.
 const LOCATOR_BYTES: usize = 32 + 4;
-
-/// Per-output hybrid KEM ciphertext layout in `tx_extra`
-/// (`X25519_pubkey ‖ ML-KEM-768_ciphertext`), mirroring the scanner's
-/// module-private constants (`shekyl-scanner/src/scan.rs`).
-const X25519_CT_BYTES: usize = 32;
-const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
 
 // ── Errors ───────────────────────────────────────────────────────────
 
@@ -177,8 +172,17 @@ pub enum ProofsError {
 }
 
 impl From<KeyEngineError> for ProofsError {
+    /// Actor-side proof generation keeps its typed [`ProofError`]
+    /// (mapped to [`ProofsError::Generate`], the proof-generation error
+    /// class) so structural rejections stay discriminable from crypto
+    /// failures — the promise documented on `KeyEngineError::Proof`.
+    /// Every other key-engine failure is rendered into the opaque
+    /// [`ProofsError::Key`] string (that type is crate-private).
     fn from(e: KeyEngineError) -> Self {
-        ProofsError::Key(e.to_string())
+        match e {
+            KeyEngineError::Proof(p) => ProofsError::Generate(p),
+            other => ProofsError::Key(other.to_string()),
+        }
     }
 }
 
@@ -448,27 +452,25 @@ async fn generate_outbound<D: Rpc>(
     let on_chain = on_chain_outputs_of(&fetched.tx)?;
 
     let recipient_x25519 = address_x25519_pk(counterparty)?;
-    let vouts = discover_recipient_vouts(
+    let recipient_outputs = discover_recipient_outputs(
         &tx_key,
         &recipient_x25519,
         &counterparty.ml_kem_encap_key,
         &on_chain,
     );
-    if vouts.is_empty() {
+    if recipient_outputs.is_empty() {
         return Err(ProofsError::NoProvableOutputs(
             "no output of the named transaction pays the given address under the retained tx key"
                 .into(),
         ));
     }
 
-    let proof_bytes = generate_outbound_proof(
+    let proof_bytes = generate_outbound_proof_with_secrets(
         &tx_key,
         &txid.to_bytes(),
         &canonical_address_bytes(counterparty),
         message.as_bytes(),
-        &recipient_x25519,
-        &counterparty.ml_kem_encap_key,
-        &vouts,
+        &recipient_outputs,
     )?;
 
     Ok(GeneratedTxProof {
@@ -477,30 +479,37 @@ async fn generate_outbound<D: Rpc>(
     })
 }
 
-/// Which vout indices of `on_chain` derive to the recipient under
-/// `tx_key` — exactly the verifier's KEM re-derivation check
+/// Which outputs of `on_chain` derive to the recipient under `tx_key` —
+/// exactly the verifier's KEM re-derivation check
 /// (`verify_outbound_proof` compares the re-derived ephemeral key and
 /// ML-KEM ciphertext against chain data), run generator-side so the
 /// proof names precisely the outputs that will verify.
-fn discover_recipient_vouts(
+///
+/// Returns `(vout_index, combined_ss)` pairs (strictly increasing by
+/// index, by construction) so generation can reuse the derived shared
+/// secrets via [`generate_outbound_proof_with_secrets`] instead of
+/// running the hybrid KEM a second time per output. Each returned
+/// `SharedSecret` is `ZeroizeOnDrop`; non-matching derivations drop —
+/// and wipe — inside the loop.
+fn discover_recipient_outputs(
     tx_key: &[u8; 32],
     recipient_x25519_pk: &[u8; 32],
     recipient_ml_kem_ek: &[u8],
     on_chain: &[OnChainOutput],
-) -> Vec<u64> {
-    let mut vouts = Vec::new();
+) -> Vec<(u64, SharedSecret)> {
+    let mut recipient_outputs = Vec::new();
     for (i, out) in on_chain.iter().enumerate() {
         let idx = i as u64;
-        let Ok((_ss, eph_pk, ml_kem_ct)) =
+        let Ok((ss, eph_pk, ml_kem_ct)) =
             rederive_combined_ss(tx_key, recipient_x25519_pk, recipient_ml_kem_ek, idx)
         else {
             continue;
         };
         if eph_pk == out.x25519_eph_pk && ml_kem_ct == out.ml_kem_ct {
-            vouts.push(idx);
+            recipient_outputs.push((idx, ss));
         }
     }
-    vouts
+    recipient_outputs
 }
 
 fn encode_tx_proof(direction: TxProofDirection, proof_bytes: &[u8]) -> Result<String, ProofsError> {
@@ -640,6 +649,16 @@ fn select_reserve_outputs(
             ));
         }
     }
+    // A zero target is "covered" before anything is selected. An empty
+    // selection proves nothing and the key actor would reject the empty
+    // entry set as an internal error, so refuse with the contract's
+    // no-provable-outputs shape here regardless of caller-side
+    // validation (the RPC params surface refuses `amount = "0"` too).
+    if selected.is_empty() {
+        return Err(ProofsError::NoProvableOutputs(
+            "a zero requested amount selects no outputs".into(),
+        ));
+    }
     Ok((selected, total))
 }
 
@@ -734,15 +753,26 @@ pub async fn check_reserve_proof<R: Rpc>(
     let payload = decode_proof_payload(proof, HRP_RESERVE_PROOF)?;
     let (locators, proof_bytes) = parse_reserve_locators(&payload)?;
 
-    // Fetch each locator-named tx once (pruned bodies carry everything
-    // a reserve verification needs) and resolve the named outputs.
+    // Fetch each locator-named tx once, in chunked batched calls
+    // (pruned bodies carry everything a reserve verification needs),
+    // then resolve the named outputs per locator from the map. Unique
+    // txids are collected in first-seen locator order so error
+    // surfacing tracks the proof's own ordering.
+    let unique_txids: Vec<[u8; 32]> = {
+        let mut seen = BTreeSet::new();
+        locators
+            .iter()
+            .filter_map(|&(txid, _)| seen.insert(txid).then_some(txid))
+            .collect()
+    };
+    let bodies = fetch_proof_txs(rpc, &unique_txids).await?;
     let mut tx_outputs: BTreeMap<[u8; 32], Vec<OnChainOutput>> = BTreeMap::new();
+    for (txid, tx) in unique_txids.iter().zip(&bodies) {
+        tx_outputs.insert(*txid, on_chain_outputs_of(tx)?);
+    }
+
     let mut on_chain = Vec::with_capacity(locators.len());
     for &(txid, vout) in &locators {
-        if let std::collections::btree_map::Entry::Vacant(e) = tx_outputs.entry(txid) {
-            let fetched = fetch_proof_tx(rpc, txid).await?;
-            e.insert(on_chain_outputs_of(&fetched.tx)?);
-        }
         let outputs = &tx_outputs[&txid];
         let out = outputs.get(vout as usize).ok_or_else(|| {
             ProofsError::Malformed(format!(
@@ -966,6 +996,63 @@ async fn fetch_proof_tx<R: Rpc>(rpc: &R, txid: [u8; 32]) -> Result<FetchedTx, Pr
     })
 }
 
+/// Fetch the pruned bodies of `txids` (unique, in first-seen order) in
+/// batched `get_transactions` calls of [`TXS_PER_REQUEST`] hashes — the
+/// daemon's restricted-RPC cap, the same chunking `block_fetch` uses —
+/// rather than one round trip per txid (a 4096-locator reserve proof
+/// would otherwise cost up to 4096 sequential daemon calls). Returns
+/// the parsed bodies positionally aligned with `txids`.
+///
+/// Error semantics match [`fetch_proof_tx`]: a txid the daemon does not
+/// know is [`ProofsError::TxNotFound`] carrying the first missing txid
+/// in request order; a malformed body or batch is
+/// [`ProofsError::Daemon`].
+async fn fetch_proof_txs<R: Rpc>(
+    rpc: &R,
+    txids: &[[u8; 32]],
+) -> Result<Vec<Transaction>, ProofsError> {
+    let mut bodies = Vec::with_capacity(txids.len());
+    for batch in txids.chunks(TXS_PER_REQUEST) {
+        let hashes_hex: Vec<String> = batch.iter().map(hex::encode).collect();
+        let resp: Value = rpc
+            .rpc_call(
+                "get_transactions",
+                Some(json!({ "txs_hashes": hashes_hex, "prune": true })),
+            )
+            .await
+            .map_err(|e| match e {
+                RpcError::TransactionsNotFound(missed) => {
+                    tx_not_found_in_request_order(batch, &missed)
+                }
+                other => ProofsError::Daemon(other),
+            })?;
+
+        if let Some(missed) = resp.get("missed_tx").and_then(Value::as_array) {
+            if let Some(missed_hashes) = parse_missed_tx(missed).map_err(ProofsError::Daemon)? {
+                return Err(tx_not_found_in_request_order(batch, &missed_hashes));
+            }
+        }
+
+        let txs = resp.get("txs").and_then(Value::as_array).ok_or_else(|| {
+            RpcError::InvalidNode("get_transactions response missing txs".to_string())
+        })?;
+        bodies.extend(parse_tx_batch(batch, txs, TxBodyForm::Pruned).map_err(ProofsError::Daemon)?);
+    }
+    Ok(bodies)
+}
+
+/// [`ProofsError::TxNotFound`] for the first txid of `batch` (request
+/// order) that the daemon reported missing — the same txid the
+/// sequential per-tx fetch this batching replaced would have named.
+fn tx_not_found_in_request_order(batch: &[[u8; 32]], missed: &[[u8; 32]]) -> ProofsError {
+    let first = batch
+        .iter()
+        .find(|txid| missed.contains(txid))
+        .or_else(|| missed.first())
+        .expect("callers pass a non-empty missed set");
+    ProofsError::TxNotFound(hex::encode(first))
+}
+
 /// The contract's confirmations pin: daemon chain height (block COUNT)
 /// minus the tx's block height (0-based index) — tip block reports 1;
 /// 0 only while pool-only.
@@ -1015,11 +1102,11 @@ fn on_chain_outputs_of(tx: &Transaction) -> Result<Vec<OnChainOutput>, ProofsErr
         // output; tolerate absence with zeroed fields — only OUTBOUND
         // verification consumes them, and it will (correctly) refuse.
         let (x25519_eph_pk, ml_kem_ct) = match kem_ct_blob {
-            Some(blob) if blob.len() >= (o + 1) * HYBRID_KEM_CT_BYTES => {
-                let ct = &blob[o * HYBRID_KEM_CT_BYTES..(o + 1) * HYBRID_KEM_CT_BYTES];
+            Some(blob) if blob.len() >= (o + 1) * HYBRID_KEM_CT_LEN => {
+                let ct = &blob[o * HYBRID_KEM_CT_LEN..(o + 1) * HYBRID_KEM_CT_LEN];
                 let mut eph = [0u8; 32];
-                eph.copy_from_slice(&ct[..X25519_CT_BYTES]);
-                (eph, ct[X25519_CT_BYTES..].to_vec())
+                eph.copy_from_slice(&ct[..X25519_KEM_CT_LEN]);
+                (eph, ct[X25519_KEM_CT_LEN..].to_vec())
             }
             _ => ([0u8; 32], Vec::new()),
         };
@@ -1272,6 +1359,38 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn selection_refuses_zero_amount_target() {
+        // A zero target is "covered" before anything is selected; the
+        // empty selection must refuse as NoProvableOutputs here rather
+        // than reach the key actor with zero entries and surface as an
+        // internal key-engine error.
+        let candidates = vec![candidate(1, 100)];
+        assert!(matches!(
+            select_reserve_outputs(candidates, Some(AtomicUnits::ZERO)),
+            Err(ProofsError::NoProvableOutputs(_))
+        ));
+    }
+
+    // ── KeyEngineError → ProofsError mapping ─────────────────────────
+
+    #[test]
+    fn key_engine_proof_errors_keep_their_typed_class() {
+        // The KeyEngineError::Proof wrap exists so structural proof
+        // rejections stay discriminable from crypto failures: it must
+        // map to the typed Generate arm, not stringify into Key.
+        let structural =
+            KeyEngineError::Proof(ProofError::InvalidFormat("no outputs specified".into()));
+        assert!(matches!(
+            ProofsError::from(structural),
+            ProofsError::Generate(ProofError::InvalidFormat(_))
+        ));
+
+        // Every other actor failure stays in the rendered Key class.
+        let stopped = KeyEngineError::KeyActorUnavailable;
+        assert!(matches!(ProofsError::from(stopped), ProofsError::Key(_)));
+    }
+
     // ── wallet-less check workflows over a mock daemon ───────────────
     //
     // End-to-end round trips for `check_tx_proof` / `check_reserve_proof`:
@@ -1282,9 +1401,12 @@ mod tests {
     // handler above it is a thin parameter mapper with its own tests).
     mod check_workflows {
         use std::collections::BTreeMap;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
 
         use super::*;
+
+        use shekyl_proofs::tx_proof::generate_outbound_proof;
 
         use shekyl_crypto_pq::output::{
             compute_output_key_image, construct_output, recover_combined_ss, OutputData,
@@ -1313,7 +1435,9 @@ mod tests {
 
         /// Canned daemon: serves `get_transactions` (pruned bodies by
         /// txid hex, `missed_tx` for anything else), `get_height`, and
-        /// `is_key_image_spent` from fixed tables.
+        /// `is_key_image_spent` from fixed tables. Counts
+        /// `get_transactions` calls so tests can pin the batching
+        /// behavior (one chunked call, not one call per txid).
         #[derive(Clone)]
         struct MockRpc {
             /// txid hex → pruned body hex.
@@ -1321,12 +1445,15 @@ mod tests {
             /// `is_key_image_spent` reply, positional (0 = unspent).
             spent_status: Arc<Vec<u64>>,
             height: usize,
+            /// Number of `get_transactions` requests served.
+            get_transactions_calls: Arc<AtomicUsize>,
         }
 
         impl Rpc for MockRpc {
             async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
                 let reply = match route {
                     "get_transactions" => {
+                        self.get_transactions_calls.fetch_add(1, Ordering::SeqCst);
                         let req: Value =
                             serde_json::from_slice(&body).expect("request body is JSON");
                         let hashes = req["txs_hashes"]
@@ -1483,6 +1610,7 @@ mod tests {
                     txs: Arc::new(txs),
                     spent_status: Arc::new(spent_status),
                     height: CHAIN_HEIGHT,
+                    get_transactions_calls: Arc::new(AtomicUsize::new(0)),
                 },
                 local,
             }
@@ -1767,6 +1895,147 @@ mod tests {
                 .await
                 .expect_err("duplicated output refuses instead of inflating the reserve");
             assert!(matches!(err, ProofsError::Malformed(_)));
+        }
+
+        #[tokio::test]
+        async fn check_reserve_proof_batches_unique_tx_fetches_into_one_call() {
+            // F2 regression: locators spanning multiple txids must
+            // resolve in chunked batched get_transactions calls, not
+            // one awaited call per unique txid.
+            let mut fx = make_fixture(vec![]);
+            // Serve the same pruned body under a second txid (the
+            // pruned form is associated by the daemon's tx_hash label,
+            // not by re-hashing) so the locators span two txids whose
+            // on-chain outputs still match the proof entries.
+            let txid2 = [0x78u8; 32];
+            let body = fx.rpc.txs[&hex::encode(fx.txid)].clone();
+            let mut txs = (*fx.rpc.txs).clone();
+            txs.insert(hex::encode(txid2), body);
+            fx.rpc.txs = Arc::new(txs);
+
+            let decoded = decode_proof_payload(&reserve_proof_string(&fx), HRP_RESERVE_PROOF)
+                .expect("fixture proof decodes");
+            let (_, proof_bytes) = parse_reserve_locators(&decoded).expect("fixture parses");
+            let payload = locator_payload(&[(fx.txid, 0), (txid2, 1)], proof_bytes);
+            let proof = encode_blob(HRP_RESERVE_PROOF, &payload).expect("bech32m encode");
+
+            let checked = check_reserve_proof(&fx.rpc, &fx.address, MSG, &proof)
+                .await
+                .expect("check succeeds");
+            assert!(matches!(checked, CheckedReserveProof::Valid { .. }));
+            // Two unique txids fit one TXS_PER_REQUEST chunk: exactly
+            // one get_transactions round trip.
+            assert_eq!(fx.rpc.get_transactions_calls.load(Ordering::SeqCst), 1);
+        }
+
+        #[tokio::test]
+        async fn fetch_proof_txs_chunks_at_the_daemon_batch_cap() {
+            // 250 unique txids must resolve in ceil(250 / 100) = 3
+            // batched calls (TXS_PER_REQUEST = 100), not 250.
+            let fx = make_fixture(vec![]);
+            let body = fx.rpc.txs[&hex::encode(fx.txid)].clone();
+            let mut txs = BTreeMap::new();
+            let mut ids: Vec<[u8; 32]> = Vec::with_capacity(250);
+            for i in 0..250u32 {
+                let mut id = [0u8; 32];
+                id[..4].copy_from_slice(&i.to_le_bytes());
+                ids.push(id);
+                txs.insert(hex::encode(id), body.clone());
+            }
+            let rpc = MockRpc {
+                txs: Arc::new(txs),
+                spent_status: Arc::new(vec![]),
+                height: CHAIN_HEIGHT,
+                get_transactions_calls: Arc::new(AtomicUsize::new(0)),
+            };
+
+            let bodies = fetch_proof_txs(&rpc, &ids).await.expect("all txs served");
+            assert_eq!(bodies.len(), 250);
+            assert_eq!(rpc.get_transactions_calls.load(Ordering::SeqCst), 3);
+        }
+
+        #[tokio::test]
+        async fn check_reserve_proof_unknown_locator_txid_is_tx_not_found() {
+            // Batched fetching must preserve the per-tx error
+            // semantics: a locator naming a txid the daemon does not
+            // know refuses TxNotFound carrying that txid.
+            let fx = make_fixture(vec![]);
+            let decoded = decode_proof_payload(&reserve_proof_string(&fx), HRP_RESERVE_PROOF)
+                .expect("fixture proof decodes");
+            let (_, proof_bytes) = parse_reserve_locators(&decoded).expect("fixture parses");
+            let unknown = [0x99u8; 32];
+            let payload = locator_payload(&[(unknown, 0), (fx.txid, 1)], proof_bytes);
+            let proof = encode_blob(HRP_RESERVE_PROOF, &payload).expect("bech32m encode");
+
+            let err = check_reserve_proof(&fx.rpc, &fx.address, MSG, &proof)
+                .await
+                .expect_err("unknown locator txid refuses");
+            match err {
+                ProofsError::TxNotFound(hex) => assert_eq!(hex, hex::encode(unknown)),
+                other => panic!("expected TxNotFound, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn discovered_secrets_generate_a_verifying_outbound_proof() {
+            // F3 regression: the OUTBOUND generation path reuses the
+            // shared secrets derived during recipient-output discovery
+            // (one hybrid-KEM run per output, not two). The
+            // with-secrets proof must be byte-identical to the
+            // derive-again entry point outside the randomized 64-byte
+            // Schnorr signature at [33..97), and must verify.
+            let fx = make_fixture(vec![]);
+            let keys = &fx.local.keys;
+            let fetched = fetch_proof_tx(&fx.rpc, fx.txid)
+                .await
+                .expect("fixture tx fetches");
+            let on_chain = on_chain_outputs_of(&fetched.tx).expect("outputs project");
+
+            let discovered = discover_recipient_outputs(
+                &TX_KEY_SECRET,
+                &keys.x25519_pk,
+                &keys.ml_kem_ek,
+                &on_chain,
+            );
+            let vouts: Vec<u64> = discovered.iter().map(|(i, _)| *i).collect();
+            assert_eq!(vouts, vec![0, 1], "both fixture outputs pay the wallet");
+
+            let address_bytes = canonical_address_bytes(&fx.address);
+            let with_secrets = generate_outbound_proof_with_secrets(
+                &TX_KEY_SECRET,
+                &fx.txid,
+                &address_bytes,
+                MSG.as_bytes(),
+                &discovered,
+            )
+            .expect("with-secrets generation succeeds");
+            let rederived = generate_outbound_proof(
+                &TX_KEY_SECRET,
+                &fx.txid,
+                &address_bytes,
+                MSG.as_bytes(),
+                &keys.x25519_pk,
+                &keys.ml_kem_ek,
+                &vouts,
+            )
+            .expect("derive-again generation succeeds");
+
+            assert_eq!(with_secrets.len(), rederived.len());
+            assert_eq!(with_secrets[..33], rederived[..33]);
+            assert_eq!(with_secrets[97..], rederived[97..]);
+
+            let verified = verify_outbound_proof(
+                &with_secrets,
+                &fx.txid,
+                &address_bytes,
+                MSG.as_bytes(),
+                keys.spend_pk.as_canonical_bytes(),
+                &keys.x25519_pk,
+                &keys.ml_kem_ek,
+                &on_chain,
+            )
+            .expect("with-secrets proof verifies");
+            assert_eq!(verified.len(), 2);
         }
     }
 }

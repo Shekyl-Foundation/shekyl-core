@@ -69,8 +69,9 @@ use shekyl_scanner::ScannableBlock;
 use shekyl_wire::{block::MAX_BLOCK_BLOB_SIZE, transaction::MAX_TX_SIZE, Block, Transaction};
 
 /// Monero restricts `get_transactions` to 100 hashes per call on the
-/// restricted RPC (`core_rpc_server.cpp`); batch accordingly.
-const TXS_PER_REQUEST: usize = 100;
+/// restricted RPC (`core_rpc_server.cpp`); batch accordingly. Shared
+/// with the proofs workflow's batched locator-tx fetch.
+pub(crate) const TXS_PER_REQUEST: usize = 100;
 
 /// Which transaction-body form a scannable-block fetch requests from the
 /// daemon, and therefore which parse/validation path each body takes.

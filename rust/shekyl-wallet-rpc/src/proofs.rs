@@ -33,9 +33,13 @@ use shekyl_engine_core::engine::proofs::{self, CheckedReserveProof, CheckedTxPro
 use shekyl_engine_core::Network;
 use shekyl_types::TxHash;
 
+use shekyl_units::AtomicUnits;
+
 use crate::error::WalletRpcError;
 use crate::lifecycle::make_daemon;
-use crate::params::{parse_atomic_units, parse_optional_object, parse_required_object};
+use crate::params::{
+    parse_atomic_units, parse_hex32, parse_optional_object, parse_required_object,
+};
 use crate::project::atomic_units_string;
 use crate::tenant::{require_open_engine, DaemonEndpoint, TenantState};
 use crate::types::{
@@ -115,6 +119,16 @@ pub(crate) async fn get_reserve_proof(
 ) -> Result<Value, WalletRpcError> {
     let p: GetReserveProofParams = parse_optional_object(params, "get_reserve_proof")?;
     let amount = p.amount.as_deref().map(parse_atomic_units).transpose()?;
+    // `amount = "0"` is a caller error, not a reserve question: a zero
+    // bound selects no outputs and proves nothing (omit `amount` to
+    // prove the full balance). Refused at the params surface with a
+    // stable message; the engine's selection refuses independently
+    // (`-29302`) should any other caller pass zero through.
+    if amount == Some(AtomicUnits::ZERO) {
+        return Err(WalletRpcError::InvalidParams(
+            "amount must be positive".into(),
+        ));
+    }
 
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
@@ -235,19 +249,14 @@ async fn network_and_daemon(
     (state.network, state.daemon.clone())
 }
 
-/// Parse a contract `Hex32` txid (64 lowercase hex chars → 32 bytes).
+/// Parse a contract `Hex32` txid (64 lowercase hex chars → 32 bytes) via
+/// the crate's shared [`parse_hex32`] rule.
 ///
 /// The error message is stable and never echoes the client string.
 fn parse_txid(s: &str) -> Result<[u8; 32], WalletRpcError> {
-    if s.len() != 64 || !s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
-        return Err(WalletRpcError::InvalidParams(
-            "txid must be 64 lowercase hex characters".into(),
-        ));
-    }
-    let mut bytes = [0u8; 32];
-    hex::decode_to_slice(s, &mut bytes)
-        .map_err(|_| WalletRpcError::InvalidParams("txid must be valid hex".into()))?;
-    Ok(bytes)
+    parse_hex32(s).ok_or_else(|| {
+        WalletRpcError::InvalidParams("txid must be 64 lowercase hex characters".into())
+    })
 }
 
 /// Decode a proof-bound address against the tenant's network.
@@ -461,5 +470,39 @@ mod tests {
             "wrong HRP 'attacker-controlled'".into(),
         ));
         assert_eq!(err.message(), "proof string malformed");
+    }
+
+    // ── get_reserve_proof params surface ─────────────────────────────
+
+    #[tokio::test]
+    async fn get_reserve_proof_refuses_zero_amount_at_the_params_surface() {
+        // `amount = "0"` selects no outputs and proves nothing; it must
+        // refuse as InvalidParams with a stable message — not surface
+        // downstream as an internal key-engine error. The refusal fires
+        // during params validation, before the open-wallet gate: the
+        // tenant here has no wallet open, so any later surface would
+        // answer differently.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = tokio::sync::Mutex::new(TenantState::new(
+            dir.path().to_path_buf(),
+            Network::Testnet,
+            DaemonEndpoint {
+                address: "http://127.0.0.1:1".to_string(),
+                proxy: None,
+            },
+        ));
+
+        let err = get_reserve_proof(&tenants, &serde_json::json!({ "amount": "0" }))
+            .await
+            .expect_err("zero amount must refuse");
+        assert_eq!(err.code(), WalletRpcErrorCode::InvalidParams);
+        assert_eq!(err.message(), "invalid params: amount must be positive");
+
+        // A positive amount passes the params surface and reaches the
+        // open-wallet gate instead (no wallet is open on this tenant).
+        let err = get_reserve_proof(&tenants, &serde_json::json!({ "amount": "1" }))
+            .await
+            .expect_err("no wallet open");
+        assert_ne!(err.code(), WalletRpcErrorCode::InvalidParams);
     }
 }

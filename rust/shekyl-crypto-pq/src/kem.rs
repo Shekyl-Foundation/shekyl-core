@@ -32,6 +32,17 @@ pub const ML_KEM_768_CT_LEN: usize = 1088;
 /// ML-KEM-768 shared secret size (FIPS 203).
 pub const ML_KEM_768_SS_LEN: usize = 32;
 
+/// X25519 component size of a per-output hybrid KEM ciphertext: the
+/// ephemeral public key that plays the "ciphertext" role of the
+/// classical half (the KEM view of Diffie-Hellman).
+pub const X25519_KEM_CT_LEN: usize = 32;
+
+/// Per-output hybrid KEM ciphertext size as laid out in `tx_extra`
+/// (tag 0x06): `X25519 ephemeral pubkey ‖ ML-KEM-768 ciphertext`.
+/// Single source of truth for that layout — the scanner and the proof
+/// workflows slice per-output ciphertexts at multiples of this length.
+pub const HYBRID_KEM_CT_LEN: usize = X25519_KEM_CT_LEN + ML_KEM_768_CT_LEN;
+
 /// Domain separator for KEM shared-secret combination.
 pub const KEM_DOMAIN_SALT: &[u8] = b"shekyl-kem-v1";
 

@@ -90,7 +90,10 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
 use zeroize::Zeroizing;
 
 use shekyl_crypto_pq::{
-    kem::{HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation, ML_KEM_768_CT_LEN},
+    kem::{
+        HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation, HYBRID_KEM_CT_LEN,
+        ML_KEM_768_CT_LEN,
+    },
     output::construct_output,
 };
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
@@ -100,16 +103,6 @@ use crate::{
     view_pair::ViewPair,
     ScannableBlock,
 };
-
-/// Bytes per X25519 ephemeral public key on the wire. Mirrors the
-/// module-private constant in [`crate::scan`] so this module compiles
-/// without coupling to scanner internals.
-const X25519_CT_BYTES: usize = 32;
-
-/// Bytes per per-output hybrid KEM ciphertext on the wire
-/// (`X25519_pubkey || ML-KEM-768_ciphertext`). Mirrors the
-/// module-private constant in [`crate::scan`].
-const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
 
 /// Fixed per-transaction key for deterministic fixture construction.
 /// Real transactions use a fresh random `tx_key`; here we pin a
@@ -281,7 +274,7 @@ fn assemble_scannable_block(
     let mut commitments: Vec<[u8; 32]> = Vec::with_capacity(n_outputs);
     let mut enc_amounts: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
     let mut enc_labels: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
-    let mut kem_ct_blob: Vec<u8> = Vec::with_capacity(n_outputs * HYBRID_KEM_CT_BYTES);
+    let mut kem_ct_blob: Vec<u8> = Vec::with_capacity(n_outputs * HYBRID_KEM_CT_LEN);
 
     for output_index in 0..n_outputs {
         let out = construct_output(
@@ -307,8 +300,8 @@ fn assemble_scannable_block(
         enc_amounts.push(join_enc9(&out.enc_amount, out.amount_tag));
         enc_labels.push(join_enc9(&out.enc_label, out.label_tag));
         // Per `scan.rs::scan_transaction`, the KEM ciphertext blob
-        // for output `o` is read at offset `o * HYBRID_KEM_CT_BYTES`
-        // and consists of `X25519_CT_BYTES || ML_KEM_768_CT_LEN`.
+        // for output `o` is read at offset `o * HYBRID_KEM_CT_LEN`
+        // and consists of `X25519_KEM_CT_LEN || ML_KEM_768_CT_LEN`.
         kem_ct_blob.extend_from_slice(&out.kem_ciphertext_x25519);
         debug_assert_eq!(
             out.kem_ciphertext_ml_kem.len(),
@@ -320,7 +313,7 @@ fn assemble_scannable_block(
 
     debug_assert_eq!(
         kem_ct_blob.len(),
-        n_outputs * HYBRID_KEM_CT_BYTES,
+        n_outputs * HYBRID_KEM_CT_LEN,
         "KEM ciphertext blob length must match scanner's read-offset arithmetic"
     );
 
@@ -514,7 +507,7 @@ mod tests {
 
         // Sanity-check the KEM ciphertext length matches the offset
         // arithmetic in `scan.rs::scan_transaction` (which slices the
-        // extra blob into `[X25519_CT_BYTES..HYBRID_KEM_CT_BYTES]`).
+        // extra blob into `[X25519_KEM_CT_LEN..HYBRID_KEM_CT_LEN]`).
         // A length mismatch here would propagate into the bench as
         // an unrelated parse error rather than a clean fast/slow-
         // path classification.

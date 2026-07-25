@@ -49,6 +49,7 @@ use zeroize::Zeroize;
 use shekyl_curve_generators::{H as H_POINT_LAZY, T as T_LAZY};
 
 use crate::error::ProofError;
+use shekyl_crypto_pq::kem::SharedSecret;
 use shekyl_crypto_pq::output::{derive_proof_secrets, rederive_combined_ss, ProofSecrets};
 
 pub const CURRENT_PROOF_VERSION: u8 = 1;
@@ -200,7 +201,6 @@ pub struct VerifiedOutput {
 /// - `output_indices`: which transaction-level output indices (vout) to
 ///   include; must be strictly increasing (each is carried in the proof
 ///   so the verifier knows which on-chain outputs the entries name)
-#[allow(clippy::cast_possible_truncation)]
 pub fn generate_outbound_proof(
     tx_key_secret: &[u8; 32],
     txid: &[u8; 32],
@@ -214,24 +214,63 @@ pub fn generate_outbound_proof(
         return Err(ProofError::InvalidFormat("no outputs specified".into()));
     }
 
-    let n = output_indices.len();
+    // `SharedSecret` is `ZeroizeOnDrop`, so the derived secrets wipe when
+    // this Vec drops at the end of the delegation below.
+    let mut per_output_secrets: Vec<(u64, SharedSecret)> = Vec::with_capacity(output_indices.len());
+    for &idx in output_indices {
+        let (combined_ss, _x25519_eph_pk, _ml_kem_ct) =
+            rederive_combined_ss(tx_key_secret, recipient_x25519_pk, recipient_ml_kem_ek, idx)?;
+        per_output_secrets.push((idx, combined_ss));
+    }
+
+    generate_outbound_proof_with_secrets(
+        tx_key_secret,
+        txid,
+        address_bytes,
+        user_message,
+        &per_output_secrets,
+    )
+}
+
+/// As [`generate_outbound_proof`], but over **pre-derived** per-output
+/// shared secrets: `(vout_index, combined_ss)` pairs, strictly increasing
+/// by index, where each `combined_ss` is the
+/// [`rederive_combined_ss`]`(tx_key_secret, …, vout_index)` result the
+/// caller already holds (a generator that discovered the recipient's
+/// outputs by KEM re-derivation has run the hybrid KEM once per output
+/// and need not run it again here).
+///
+/// The wire format is byte-identical to [`generate_outbound_proof`] —
+/// that entry point derives the same pairs and delegates to this one, so
+/// there is exactly one serializer. The caller is responsible for the
+/// pairs actually matching `tx_key_secret` (a mismatched secret produces
+/// a proof that fails the verifier's KEM re-derivation check).
+#[allow(clippy::cast_possible_truncation)]
+pub fn generate_outbound_proof_with_secrets(
+    tx_key_secret: &[u8; 32],
+    txid: &[u8; 32],
+    address_bytes: &[u8],
+    user_message: &[u8],
+    per_output_secrets: &[(u64, SharedSecret)],
+) -> Result<Vec<u8>, ProofError> {
+    if per_output_secrets.is_empty() {
+        return Err(ProofError::InvalidFormat("no outputs specified".into()));
+    }
+
+    let n = per_output_secrets.len();
     let mut per_output_blob = Vec::with_capacity(n * PER_OUTPUT_SIZE);
-    let mut secrets_for_signing: Vec<ProofSecrets> = Vec::with_capacity(n);
 
     let mut prev: Option<u32> = None;
-    for &idx in output_indices {
-        let vout: u32 = idx
+    for (idx, combined_ss) in per_output_secrets {
+        let vout: u32 = (*idx)
             .try_into()
             .map_err(|_| ProofError::InvalidFormat(format!("output index {idx} exceeds u32")))?;
         check_strictly_increasing(prev, vout)?;
         prev = Some(vout);
 
-        let (combined_ss, _x25519_eph_pk, _ml_kem_ct) =
-            rederive_combined_ss(tx_key_secret, recipient_x25519_pk, recipient_ml_kem_ek, idx)?;
-
-        let ps = derive_proof_secrets(&combined_ss.0, idx);
+        let ps = derive_proof_secrets(&combined_ss.0, *idx);
         write_per_output(vout, &ps, &mut per_output_blob);
-        secrets_for_signing.push(ps);
+        // `ps` drops here; `ProofSecrets` is `ZeroizeOnDrop`.
     }
 
     let msg = assemble_proof_message(txid, address_bytes, user_message, &per_output_blob);
@@ -249,13 +288,6 @@ pub fn generate_outbound_proof(
     proof.extend_from_slice(&sig);
     proof.extend_from_slice(&(n as u32).to_le_bytes());
     proof.extend_from_slice(&per_output_blob);
-
-    for mut s in secrets_for_signing {
-        s.ho.zeroize();
-        s.y.zeroize();
-        s.z.zeroize();
-        s.k_amount.zeroize();
-    }
 
     Ok(proof)
 }

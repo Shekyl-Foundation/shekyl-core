@@ -11,7 +11,7 @@
 //! build-path cross-checks and `predict_weight_matches_wire_weight`. The
 //! `fcmp_proof_size` term reads the measured 2a-3 KAT table.
 
-use shekyl_crypto_pq::kem::ML_KEM_768_CT_LEN;
+use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
 use shekyl_curve_io::varint_len;
 use shekyl_rpc_client::{tx_fee, FeeRate};
 use shekyl_tx_builder::{MAX_INPUTS, MAX_TREE_DEPTH};
@@ -29,10 +29,6 @@ use super::tx_counts::{InputCount, OutputCount};
 // cross-checks + `predict_weight_matches_wire_weight`). Sizes that have a canonical
 // home are imported, not re-typed: the hybrid PQC pk/sig lengths
 // (`PQC_HYBRID_SINGLE_KEY_LEN` / `PQC_HYBRID_SINGLE_SIG_LEN`) come from `shekyl_wire`.
-
-/// Hybrid KEM ciphertext per output in `tx_extra`: the 32-byte x25519 component ‖ the
-/// ML-KEM-768 ciphertext (canonical length from `shekyl-crypto-pq`).
-const KEM_CIPHERTEXT_LEN: usize = 32 + ML_KEM_768_CT_LEN;
 
 /// `Input::ToKey`: tag + varint(amount=0) + varint(key_offsets=0) + key_image.
 const INPUT_TO_KEY_WEIGHT: usize = 1 + 1 + 1 + 32;
@@ -143,7 +139,7 @@ fn fcmp_proof_size(n_in: InputCount, tree_depth: u8) -> usize {
 
 /// `ExtraField::PqcKemCiphertext`: tag + varint(len) + ciphertext.
 fn extra_kem_field_weight() -> usize {
-    1 + varint_len(KEM_CIPHERTEXT_LEN as u64) + KEM_CIPHERTEXT_LEN
+    1 + varint_len(HYBRID_KEM_CT_LEN as u64) + HYBRID_KEM_CT_LEN
 }
 
 /// `ExtraField::PqcLeafHashes` (`0x07`): tag + varint(len) + `n_out × 32`
@@ -516,7 +512,7 @@ mod tests {
             let extra = {
                 let mut e = Extra::for_hybrid_transfer(
                     ED25519_BASEPOINT_POINT,
-                    (0..n_out).map(|_| vec![0u8; KEM_CIPHERTEXT_LEN]),
+                    (0..n_out).map(|_| vec![0u8; HYBRID_KEM_CT_LEN]),
                 );
                 // The 0x07 leaf-hash blob the transfer path appends
                 // (sign_bridge.rs) — real serializer, same as the KEM term.

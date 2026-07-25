@@ -28,8 +28,9 @@ use shekyl_proofs::{
         ReserveOutputEntry,
     },
     tx_proof::{
-        self, generate_inbound_proof, generate_outbound_proof, verify_inbound_proof,
-        verify_outbound_proof, OnChainOutput,
+        self, generate_inbound_proof, generate_outbound_proof,
+        generate_outbound_proof_with_secrets, verify_inbound_proof, verify_outbound_proof,
+        OnChainOutput,
     },
 };
 
@@ -796,4 +797,91 @@ fn test_gate4_signing_round_trip_100() {
         );
     }
     eprintln!("[Gate 4] 100-iteration outbound prove+verify passed");
+}
+
+// --------------------------------------------------------------------------
+// F3: pre-derived-secrets outbound generation matches the rederiving path.
+// --------------------------------------------------------------------------
+#[test]
+fn test_outbound_with_secrets_matches_rederiving_path() {
+    let ctx = setup(3, 10_000);
+    // Non-prefix subset so the carried vout indices are load-bearing.
+    let indices: Vec<u64> = vec![1, 2];
+
+    let rederived = generate_outbound_proof(
+        &ctx.tx_key_secret,
+        &ctx.txid,
+        &ctx.address_bytes,
+        &ctx.user_message,
+        &ctx.kem_pk_x25519,
+        &ctx.kem_pk_ml_kem,
+        &indices,
+    )
+    .expect("derive-again generation succeeds");
+
+    let secrets: Vec<(u64, shekyl_crypto_pq::kem::SharedSecret)> = indices
+        .iter()
+        .map(|&idx| {
+            let (ss, _eph_pk, _ml_kem_ct) = rederive_combined_ss(
+                &ctx.tx_key_secret,
+                &ctx.kem_pk_x25519,
+                &ctx.kem_pk_ml_kem,
+                idx,
+            )
+            .expect("rederive succeeds");
+            (idx, ss)
+        })
+        .collect();
+    let with_secrets = generate_outbound_proof_with_secrets(
+        &ctx.tx_key_secret,
+        &ctx.txid,
+        &ctx.address_bytes,
+        &ctx.user_message,
+        &secrets,
+    )
+    .expect("with-secrets generation succeeds");
+
+    // Byte-identical wire format outside the 64-byte Schnorr signature
+    // at [33..97) (fresh random nonce per signing): version +
+    // tx_key_secret prefix, output count, and every per-output entry
+    // agree exactly.
+    assert_eq!(with_secrets.len(), rederived.len());
+    assert_eq!(with_secrets[..33], rederived[..33]);
+    assert_eq!(with_secrets[97..], rederived[97..]);
+
+    // And both entry points produce proofs that verify against the same
+    // on-chain outputs.
+    for proof in [&rederived, &with_secrets] {
+        let verified = verify_outbound_proof(
+            proof,
+            &ctx.txid,
+            &ctx.address_bytes,
+            &ctx.user_message,
+            &ctx.spend_pubkey,
+            &ctx.kem_pk_x25519,
+            &ctx.kem_pk_ml_kem,
+            &ctx.on_chain,
+        )
+        .expect("proof verifies");
+        assert_eq!(verified.len(), 2);
+        assert_eq!(verified[0].output_index, 1);
+        assert_eq!(verified[1].output_index, 2);
+    }
+}
+
+#[test]
+fn test_outbound_with_secrets_refuses_empty_set() {
+    let ctx = setup(1, 5_000);
+    let err = generate_outbound_proof_with_secrets(
+        &ctx.tx_key_secret,
+        &ctx.txid,
+        &ctx.address_bytes,
+        &ctx.user_message,
+        &[],
+    )
+    .expect_err("empty output set refuses");
+    assert!(matches!(
+        err,
+        shekyl_proofs::error::ProofError::InvalidFormat(_)
+    ));
 }
