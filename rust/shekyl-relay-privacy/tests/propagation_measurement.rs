@@ -1611,3 +1611,65 @@ fn precision_increment_reproduces_delta_table() {
         reshaped.delta
     );
 }
+
+/// **§14 — reshape's recovery latency is a cost, not a break.** The one place
+/// "reshape strictly dominates fluff-on-expiry under the priority order" can
+/// fail: if re-stem recovery is *catastrophic* (not merely worse), it becomes a
+/// liveness problem that outranks performance. It is not — the cap bounds it.
+#[test]
+fn reshape_recovery_is_a_cost_not_a_break() {
+    use shekyl_relay_privacy::conformance::simulate_reshape_recovery;
+
+    let e = EmbargoTimer::geometric_from_ticks(576, DEFAULT_EMBARGO_TICK_MILLIS); // 144 s
+    let mut rng = SplitMix64::new(0x5EC0);
+    let r = simulate_reshape_recovery(&e, 1, 300_000, &mut rng);
+
+    const MEMPOOL_LIVETIME_S: f64 = 86_400.0 * 3.0; // CRYPTONOTE_MEMPOOL_TX_LIVETIME
+    const MIN_RELAY_S: f64 = 300.0;
+
+    println!("\nRecovery latency for a black-holed tx (embargo 144s, cap=1)");
+    println!(
+        "  fluff-on-expiry (1 cycle):    p50 {:.0}s  p90 {:.0}s  p99 {:.0}s",
+        r.fluff_p50_s, r.fluff_p90_s, r.fluff_p99_s
+    );
+    println!(
+        "  reshape worst case (W3, 2c):  p50 {:.0}s  p90 {:.0}s  p99 {:.0}s",
+        r.reshape_worst_p50_s, r.reshape_worst_p90_s, r.reshape_worst_p99_s
+    );
+    println!(
+        "  reshape worst p99 = {:.2}% of the 3-day mempool lifetime",
+        r.reshape_worst_p99_s / MEMPOOL_LIVETIME_S * 100.0
+    );
+
+    // It IS a cost: reshape's worst case exceeds fluff (an extra embargo cycle).
+    assert!(
+        r.reshape_worst_p99_s > r.fluff_p99_s,
+        "reshape worst-case should exceed fluff (it is a real cost)"
+    );
+    // It is NOT a break: the worst case is a tiny fraction of the tx's lifetime,
+    // so the tx always propagates well within its mempool residence.
+    assert!(
+        r.reshape_worst_p99_s < MEMPOOL_LIVETIME_S * 0.01,
+        "reshape worst-case recovery {:.0}s must be << mempool lifetime (a cost, not a break)",
+        r.reshape_worst_p99_s
+    );
+    // And it is bounded by ~(cap+1) embargo means, not unbounded — the whole
+    // point of the retry cap.
+    assert!(
+        r.reshape_worst_p50_s < 4.0 * MIN_RELAY_S,
+        "reshape median recovery should stay within a few relay cycles, got {:.0}s",
+        r.reshape_worst_p50_s
+    );
+
+    println!(
+        "\n  Reshape's worst-case recovery (~{:.0}s p99) is {:.2}% of the tx's 3-day\n  \
+         mempool lifetime — a cost (a slower recovery, bounded by the retry cap),\n  \
+         not a break (the tx never fails to propagate). Fluff-on-expiry already\n  \
+         recovers slowly (p99 {:.0}s, the 144s memoryless embargo); reshape's\n  \
+         marginal cost is the rare W3 second cycle. The priority order lets us pay\n  \
+         this to stop spending privacy on recovery speed.",
+        r.reshape_worst_p99_s,
+        r.reshape_worst_p99_s / MEMPOOL_LIVETIME_S * 100.0,
+        r.fluff_p99_s
+    );
+}

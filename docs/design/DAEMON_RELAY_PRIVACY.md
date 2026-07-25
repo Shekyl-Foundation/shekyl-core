@@ -1566,9 +1566,10 @@ store, and the `out_mapping_` alternate-selection helper. This section specifies
 *what* must hold; the *how* is a later PR. Acceptance gates: W1 and W6 (closed by
 spec — the PR must not reintroduce a `get_stem(nil)` re-entry or a wire retry
 counter), and **W3/W3b, which are gated on the two-slot occupancy instrument
-being built and green first** — right now they rest on an argument that assumes
-away the supernode's outbound enrichment, which is the one place §12 still leans
-on a hopeful bound rather than a measurement.
+being built and green first**. *Superseded framing (§14):* the instrument no
+longer gates *adopting* reshape — §14 adopts it unconditionally as a strict
+priority-order improvement — it only quantifies the irreducible W3 residual, which
+is the sole `δ` left to bound.
 
 ---
 
@@ -1673,6 +1674,132 @@ placeholder, not a decision.
 
 So Q-9 is **resolved in form, with the left side re-run and reproduced**: `δ` is a
 per-transaction precision increment (measured, not composed), bounded by a ratio
-target `ρ` the human names, driven toward zero by reshape, with its high-`f`
-enriched value the acceptance threshold of the two-slot instrument Round 3 opens
-with.
+target `ρ` the human names, driven toward zero by reshape.
+
+**Superseded scope (§14).** The *general* `ρ` this section derives toward is
+dissolved by §14: fluff-on-expiry's leak buys recovery latency (performance), which
+the priority order forbids preferring over privacy, so reshape is adopted
+unconditionally and the general `δ` (this table) is what reshape drives to ~0. The
+formula stands, but the only `δ` left to *price* is the **W3 residual** — the
+both-slots-adversarial fallback where the fluff is genuine last-resort availability
+— and that is what the two-slot instrument measures.
+
+---
+
+## 14. Reframe — fluff-on-expiry spends privacy for performance (Round 3)
+
+Stepping back from the `ρ` exercise (§13): the question "how much amplification
+do we tolerate" prices a mechanism as if it were load-bearing. It is not. When
+you look at what the embargo's fluff *does*, the δ-bounding dissolves, and
+reshape stops being a lever we weigh and becomes the mechanism.
+
+### 14.1 What the embargo does on expiry, at source
+
+On embargo expiry the stem transaction is **promoted to fluff**.
+`get_relayable_transactions` returns the expired tx tagged with its own relay
+method — `stem` ([tx_pool.cpp:998](../../src/cryptonote_core/tx_pool.cpp#L998)) —
+and `cryptonote_core` then buckets `stem` into `public_req`
+([:1075-1076](../../src/cryptonote_core/cryptonote_core.cpp#L1075)) and relays
+`public_req` with **`relay_method::fluff`**
+([:1087](../../src/cryptonote_core/cryptonote_core.cpp#L1087)). The loop-detection
+twin does the same on receiving a stemmed tx back
+([tx_pool.cpp:296](../../src/cryptonote_core/tx_pool.cpp#L296)). So the mechanism's
+answer to "I didn't see my tx return" is **fluff it** — and that fluff *is* C3.
+(This also confirms the crate's instruments modelled the right event: preemption
+= a fluff, not a silent re-stem.)
+
+### 14.2 The embargo defends a different adversary than C3 leaks to
+
+- The embargo defends against the **black-hole / dropping adversary**: your stem
+  successor receives your tx and silently drops it, censoring you. Fluff-on-expiry
+  is the backstop — get the tx out despite the drop.
+- C3 leaks to the **passive deanonymising adversary** (§6.8) — the fluff is
+  observable.
+- So fluff-on-expiry trades **privacy** (C3) to buy **censorship resistance** (the
+  tx propagates despite the drop).
+
+### 14.3 Reshape buys the same censorship resistance without the privacy cost
+
+On embargo fire, reshape re-stems to the *alternate* successor instead of
+fluffing — routing *around* the black hole while staying in stem phase. It
+provides the **same censorship resistance** (the tx gets out, via successor 2)
+with **no C3** (it stayed in stem). Fluff and re-stem defeat the dropping
+adversary equally; they differ only in cost:
+
+- **Fluff-on-expiry** recovers *fast* (immediate diffusion) but *leaks* (C3).
+- **Reshape** recovers *slower* (another stem hop, or another embargo cycle in
+  W3) but stays *private*.
+
+### 14.4 So fluff-on-expiry is backwards from our priority order
+
+Fluff-on-expiry's C3 leak buys **recovery latency** — performance — at the cost of
+**privacy**. [`00-mission`](../../.cursor/rules/00-mission.mdc) orders
+privacy > security > correctness > performance. A mechanism that spends privacy to
+buy performance inverts the top and bottom of the hierarchy. Framed that way, the
+`ρ` question was implicitly asking "how much privacy will we spend on faster
+recovery," and the priority order's answer is **as little as physically possible,
+and we do not tune it — we replace the mechanism that spends it.** Bounding a
+general `δ` prices a performance optimisation we are not allowed to prefer over
+privacy.
+
+### 14.5 The performance cost is a cost, not a break (measured)
+
+`simulate_reshape_recovery` (`reshape_recovery_is_a_cost_not_a_break`), embargo
+144 s, cap = 1:
+
+| recovery of a black-holed tx | p50 | p90 | p99 |
+| --- | --- | --- | --- |
+| fluff-on-expiry (1 embargo cycle) | 100 s | 331 s | 662 s |
+| reshape worst case (W3, 2 cycles) | 241 s | 560 s | **954 s** |
+
+`CRYPTONOTE_MEMPOOL_TX_LIVETIME` is **3 days**. Reshape's worst-case p99 is
+**0.37 %** of it, and the re-relay loop retries to `MAX_RELAY_TIME` (4 h)
+regardless, so the tx *always* propagates. The cost is real — reshape's worst
+case is ~double fluff's, bounded by the cap at `(cap+1)` embargo means — but it is
+a **cost** (a slower recovery), not a **break** (a failure to propagate).
+Fluff-on-expiry *already* recovers slowly (p99 662 s, because the embargo is a
+144 s memoryless timer); reshape's marginal cost is only the rare W3 second cycle.
+
+### 14.6 The one residual where C3 buys something real: W3
+
+When **both** stem successors are black holes (W3, §12), reshape's re-stem has
+nowhere to go, and the fallback fluff is the *genuine* last resort — fluff-and-be-
+seen, or be-censored-entirely. *There*, and only there, the C3 emission buys
+something privacy-relevant: **availability under total stem compromise**. That is
+a real privacy-vs-availability trade at the extreme, and a small `δ` is a
+defensible price for "your tx still propagates even when both your stem paths are
+hostile." So the `δ` worth bounding is not the general leak — it is the
+W3-fallback residual, conditioned on total stem compromise, which is exactly what
+the two-slot occupancy instrument (§12.5) measures.
+
+### 14.7 Resolution — this supersedes §13's `ρ` framing
+
+1. **Adopt reshape unconditionally** — not instrument-gated, not
+   cost-benefit-tuned — because it is a strict priority-order improvement: equal
+   censorship resistance, strictly better privacy, at a performance cost the
+   hierarchy explicitly permits and §14.5 measures as bounded. This changes §12's
+   framing: the two-slot instrument is **no longer a gate on adopting reshape**,
+   only on quantifying the irreducible remainder.
+2. **Bound `δ` only on the W3 residual** — the both-slots-adversarial fallback,
+   where the fluff is genuine last-resort availability. That `δ` is smaller and
+   more defensible than §13's general figure because it is conditioned on total
+   stem compromise, not on ordinary preemption. §13's formula still holds; its
+   *scope* narrows to the W3 fallback, and its `ρ` becomes a bound on that
+   residual rather than a general amplification tolerance.
+3. **The `ρ` question dissolves.** We do not pick a general tolerance for a leak
+   that buys us the wrong thing (performance). §13's `δ` table (the general leak)
+   is what reshape drives to ~0; the only `δ` left to price is W3's.
+
+### 14.8 Honest boundary — where this reversal could still be wrong
+
+`§14.5` measures recovery as `(cap+1)` embargo cycles, which assumes the re-stem
+completes normally once it reaches an honest successor. If real-network re-stem
+propagation is materially worse than that bound — pushing worst-case recovery
+past something operational — then the cost crosses from *performance* into
+*correctness/liveness*, which **outranks** performance and would force adoption
+back open. The priority order says privacy wins the performance trade; it does not
+say the performance cost is zero. So the recovery-latency profile must be
+**re-measured under RP-2 with the actual re-stem wiring**, not just the
+embargo-cycle bound — not to re-litigate adoption, but to confirm the cost stays a
+cost. That is the RD-1 discipline applied to this section's own claim: `§14.5` is
+where "reshape dominates" could still be wrong.

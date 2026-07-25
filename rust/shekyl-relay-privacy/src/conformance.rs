@@ -1826,3 +1826,74 @@ pub fn simulate_precision_increment<R: RelayRng + ?Sized>(
         delta: precision_c1_c3 - precision_c1,
     }
 }
+
+/// Reshape's recovery-latency profile for a black-holed transaction — the one
+/// place the "reshape strictly dominates fluff-on-expiry" claim can break.
+///
+/// **The performance cost of choosing privacy (§14).** Fluff-on-expiry recovers
+/// a dropped tx in *one* embargo cycle (the embargo fires, the node diffuses
+/// immediately). Reshape re-stems instead, so a dropped tx recovers in one cycle
+/// when the alternate successor is honest, and in `retry_cap + 1` cycles in the
+/// W3 case (every successor a black hole, then the fallback fluff). The retry cap
+/// bounds it, so the worst-case recovery is `(retry_cap + 1)` embargo means. This
+/// measures that the bound is a *cost* (a slower recovery) and not a *break* (the
+/// tx never fails to propagate): the worst case must stay far under
+/// `CRYPTONOTE_MEMPOOL_TX_LIVETIME` (3 days).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReshapeRecovery {
+    /// Retry cap the profile was taken at.
+    pub retry_cap: u32,
+    /// Fluff-on-expiry recovery (one embargo cycle): p50 / p90 / p99, seconds.
+    pub fluff_p50_s: f64,
+    pub fluff_p90_s: f64,
+    pub fluff_p99_s: f64,
+    /// Reshape worst case (every successor black-holed → `cap+1` cycles then
+    /// fallback fluff): p50 / p90 / p99, seconds.
+    pub reshape_worst_p50_s: f64,
+    pub reshape_worst_p90_s: f64,
+    pub reshape_worst_p99_s: f64,
+}
+
+/// Measure [`ReshapeRecovery`] at a retry cap.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero.
+#[must_use]
+pub fn simulate_reshape_recovery<R: RelayRng + ?Sized>(
+    embargo: &EmbargoTimer,
+    retry_cap: u32,
+    trials: usize,
+    rng: &mut R,
+) -> ReshapeRecovery {
+    assert!(trials > 0, "need at least one trial");
+    // A dropped tx recovers when an embargo fires. Fluff = 1 fire; reshape
+    // worst case = (retry_cap + 1) fires (each re-stem also dropped), then the
+    // fallback fluff. Each fire is one embargo draw (memoryless).
+    let mut one_cycle: Vec<u64> = Vec::with_capacity(trials);
+    let mut worst: Vec<u64> = Vec::with_capacity(trials);
+    for _ in 0..trials {
+        let e1 = embargo.deadline(0, rng); // ms
+        one_cycle.push(e1);
+        let mut total = e1;
+        for _ in 0..retry_cap {
+            total = total.saturating_add(embargo.deadline(0, rng));
+        }
+        worst.push(total);
+    }
+    one_cycle.sort_unstable();
+    worst.sort_unstable();
+    let q = |v: &[u64], p: f64| -> f64 {
+        let idx = (((v.len() as f64) * p) as usize).min(v.len() - 1);
+        v[idx] as f64 / 1000.0
+    };
+    ReshapeRecovery {
+        retry_cap,
+        fluff_p50_s: q(&one_cycle, 0.50),
+        fluff_p90_s: q(&one_cycle, 0.90),
+        fluff_p99_s: q(&one_cycle, 0.99),
+        reshape_worst_p50_s: q(&worst, 0.50),
+        reshape_worst_p90_s: q(&worst, 0.90),
+        reshape_worst_p99_s: q(&worst, 0.99),
+    }
+}
