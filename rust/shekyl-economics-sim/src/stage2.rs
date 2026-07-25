@@ -23,7 +23,12 @@ use crate::burden::{
     OUTPUTS_PER_TX_NORMAL,
 };
 use crate::engine::{ScenarioConfig, SimParams};
+use crate::escalation::{family, flat_25};
 use crate::scenarios::all_scenarios;
+
+/// `frozen_segment_count` sample points for the escalation-candidate preview,
+/// spanning the [`crate::escalation::KNEE_BAND`].
+const ESCALATION_PREVIEW_N: [u64; 5] = [0, 5_000, 25_000, 100_000, 250_000];
 
 /// One sampled year of a scenario's burden trajectory. Storage cost is reported
 /// across the full DQ-2B Kryder band at the base price; the `SKL/fiat`
@@ -114,6 +119,47 @@ pub fn burden_trajectory(params: &SimParams, config: &ScenarioConfig) -> BurdenT
     }
 }
 
+/// Preview the §6.1 escalation candidate family (DQ-2D): the staker-share `%`
+/// each `(asymptote, knee)` candidate produces across a span of
+/// `frozen_segment_count`. Shows the shapes A1 will measure for clearance; the
+/// flat 25% status quo is the first column's `n = 0` value (all candidates floor
+/// there).
+fn print_escalation_family() {
+    eprintln!(
+        "\nEscalation candidate family (§6.1 / DQ-2D) — staker share % vs n = frozen shards:\n\
+         (floor 25% at n=0, saturates to asymptote at the knee; all asymptotes < 100%)"
+    );
+    eprint!("{:>8} {:>7}", "asympt%", "knee");
+    for n in ESCALATION_PREVIEW_N {
+        eprint!("  n={n:>7}");
+    }
+    eprintln!();
+    // Status-quo baseline: the frozen 25% share every candidate is measured
+    // against in A1 (does escalation clear where the flat share does not?).
+    eprint!("{:>8} {:>7}", "FLAT", "-");
+    for n in ESCALATION_PREVIEW_N {
+        eprint!("  {:>9.1}", flat_25().share_fraction(n) * 100.0);
+    }
+    eprintln!();
+    for c in family() {
+        eprint!(
+            "{:>8.0} {:>7}",
+            c.asymptote as f64 / 10_000.0,
+            c.knee_shards
+        );
+        for n in ESCALATION_PREVIEW_N {
+            eprint!("  {:>9.1}", c.share_fraction(n) * 100.0);
+        }
+        eprintln!();
+    }
+    eprintln!(
+        "  -> Stage 2 sweeps all {} candidates; A1 keeps those that clear the\n\
+         burden under 0%/yr Kryder, A4/A5 drop those that fail W9/W10; Stage 3\n\
+         freezes the survivor's number.",
+        family().len()
+    );
+}
+
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
 /// stdout, a human-readable summary to stderr.
 pub fn run_stage2(params: &SimParams) {
@@ -154,6 +200,8 @@ pub fn run_stage2(params: &SimParams) {
          Absolute $ is conditional on the base-price + SKL/fiat bands (N-1); the\n\
          robust signal is the burden *trajectory* vs the funding decay (A1, next)."
     );
+
+    print_escalation_family();
 
     let json = serde_json::to_string_pretty(&trajectories).expect("JSON serialization failed");
     let mut stdout = std::io::stdout().lock();
