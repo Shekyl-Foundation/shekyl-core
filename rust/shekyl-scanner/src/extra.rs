@@ -257,9 +257,11 @@ impl Extra {
     /// entry would shift every later output's slice and silently make
     /// those vouts unscannable — the same failure class the
     /// single-field packing fix closed. The lengths are fixed by the
-    /// KEM algorithms, so a violation is a construction bug; it fails
-    /// loudly at build time rather than costing the recipient funds
-    /// visibility at scan time.
+    /// KEM algorithms, so a violation is a caller bug, not an input
+    /// this function can validate away: the panic aborts transaction
+    /// assembly while the transaction is still local — before signing
+    /// and broadcast — rather than publishing outputs the recipient
+    /// can never see.
     pub fn for_hybrid_transfer(
         tx_pubkey: EdwardsPoint,
         kem_ciphertexts: impl IntoIterator<Item = Vec<u8>>,
