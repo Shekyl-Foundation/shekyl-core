@@ -596,15 +596,24 @@ security instability (Carlsten).
 
 ---
 
-## 12. Stage 2 — the sim arm (design round, for ratification)
+## 12. Stage 2 — the sim arm (design, ratified)
 
 Stage 1/1b landed (`699876d89` / `725696210`); the work model is now honest and
 sim/production burn parity holds. Stage 2 is the **evidence** D2's escalation
 shape is ratified against. Before building six sim arms, this section pins their
-structure, their pass/fail criteria, and the two genuinely open calibration
-decisions — the same design-round-first discipline that made Stage 0 → 1 clean.
-Nothing here touches consensus code; the output is a recommendation Stage 3
-freezes.
+structure, their pass/fail criteria, and the calibration decisions — the same
+design-round-first discipline that made Stage 0 → 1 clean. Nothing here touches
+consensus code; the output is a recommendation Stage 3 freezes.
+
+**✅ Ratified** (review round, DQ-2A..2H). Folded that round: **N-1** — the
+`reward_P` (SKL) vs `burden_cost` (fiat) units mismatch → an explicit exogenous
+`SKL/fiat` price parameter, swept like Kryder, with the trend-vs-absolute honesty
+corollary (DQ-2A); **N-2** — A4's gate is **attacker ROI < 1** (not
+`Δshare/Δburden`) and A5's margin is **named** (§12.2); **DQ-2C resolved with
+data** (the Rucknium March-2024 report, not a fallback); **DQ-2H** gains a
+heavy-tailed variant + per-class-margin reporting + a rule-21 exit-dynamics
+reopen. Build is **authorized against this section — `shekyl-economics-sim` only**
+(DQ-2F boundary).
 
 ### 12.0 What Stage 2 decides, and the Stage-2 → Stage-3 boundary
 
@@ -649,8 +658,8 @@ Grounded in `shekyl-economics-sim`:
 | **A1 burden clearance** | Does the escalated pool fund the burden through the fee era? | `budget(E)` vs `burden_cost(E)` over the trajectory, ∀ Kryder in the band | **Report** the (Kryder, shape, scenario) region where `budget ≥ burden_cost` sustained; a shape "clears" iff it holds under the **pessimistic (0%/yr)** Kryder floor |
 | **A2 distributional shift (W6)** | The D1 fix moves ex-zero bulk holders into `Σwork`, diluting scarce-holders' shares of a fixed budget | Scarce-holder share pre- vs post-D1 across the archiver distribution | **Descriptive** — quantify the redistribution; **flag** if it strands scarce holders below their marginal cost |
 | **A3 stranding** | What fraction of diverted budget goes unminted? | Σ unclaimed `reward_P` past `MAX_CLAIM_AGE_W = 26` epochs ÷ Σ budget | **Report** the stranded fraction; joint with A1 (stranded budget is not burden-clearing) |
-| **A4 output-stuffing (W9)** | Is there an early-chain regime where marginal Δshare outruns marginal Δburden? | cost-per-shard (25,992 outputs of weight-fee + burn) vs permanent Δshare captured, on `scenario_4`(output-variant) × `scenario_7`(bootstrap) | **Pass** iff `Δshare/Δburden ≤ 1` everywhere in the sweep; calibrated to the March-2024 profile (DQ-2C). Fail → the §11.3 rule-21 per-output fee-floor reopen, **not** a D2 redesign |
-| **A5 proxy free-riding (W10)** | Does the §7.4 fetch-cost-vs-deadline margin still bind after D1 restores bulk pay and D2 escalates the pool? | proxy cost (fetch-within-grace, gate-4 window) vs honest cost (~13.6 GB held) vs **post-D1/D2** reward | **Pass** iff margin `> 0`. Fail → tighten gate-4 grace or accelerate PoRep reopen (§11.1), **not** a D2 redesign |
+| **A4 output-stuffing (W9)** | Does stuffing pay the attacker — is there an early-chain regime where their manipulation profits? | **attacker ROI** = marginal captured revenue (their stake-fraction of the Δpool, discounted over the horizon) ÷ marginal cost (weight-fees + their share of the burn), on `scenario_4`(output-variant) × `scenario_7`(bootstrap); `Δshare/Δburden` reported as a coherence **diagnostic** | **Pass** iff attacker **ROI < 1** everywhere in the sweep — the executable form of "stuffing it funds it" (§6.2); calibrated to the March-2024 profile (DQ-2C). Fail → the §11.3 rule-21 per-output fee-floor reopen, **not** a D2 redesign |
+| **A5 proxy free-riding (W10)** | Does the §7.4 fetch-cost-vs-deadline margin still bind after D1 restores bulk pay and D2 escalates the pool? | **margin** = expected proxy cost/epoch − honest storage cost/epoch, where proxy cost includes within-grace re-fetch feasibility (gate-4 window) **and** the L14 challenge-failure exposure; against the **post-D1/D2** reward on ~13.6 GB held | **Pass** iff margin `> 0` (§7.4: "if re-fetch is cheap, the challenge *is* the free-rider equilibrium"). Fail → tighten gate-4 grace or accelerate PoRep reopen (§11.1), **not** a D2 redesign |
 | **A6 swing / band width (§6.0)** | Is the lift a wide-but-slow band, not a cliff? | `d(share)/d(n)` across the sweep | **Report** the rate; **flag** any cliff (bounded-slope is the §6.1 requirement) |
 
 **Scenario 9 (new, §11.2):** high-history / low-activity — large `n`, low current
@@ -662,42 +671,90 @@ cannot; A1 runs on it as the binding case.
 ### 12.3 Design questions (recommended dispositions; ratify or correct)
 
 - **DQ-2A — burden cost model + "clears".** *Recommend:* `burden_cost(E) = n(E) ·
-  shard_bytes · storage_$per_byte(E)` (Kryder-declining) as the dominant term,
+  shard_bytes · storage_fiat_per_byte(E)` (Kryder-declining) as the dominant term,
   with serve-bandwidth cost as a **secondary sensitivity** (a challenge answers a
   bounded slice, not the whole shard). "Clears" = per-archiver `reward_P(E) ≥` that
   archiver's marginal cost of the shards they hold, sustained. *Open:* whether to
   price serve-bandwidth at all in the primary arm (recommend storage-dominant).
-- **DQ-2B — Kryder band.** *Recommend* sweeping **{0%/yr flat, 10%/yr, 25%/yr}** —
-  0% is the Arweave failure face and the **binding** clearance case; 25% is
-  historical-moderate; 10% the recent-decade conservative. The conclusion must
-  *state* which band members it holds under, never embed one (§11.2). This is the
-  single most assumption-laden input.
-- **DQ-2C — March-2024 W9 calibration (genuinely open; needs external data).** The
-  W9 stuffer must be calibrated to the incident's *actual* cost profile, not an
-  abstract stuffer (§11.3). *Recommend:* derive cost-per-output from public
-  March-2024 Monero data (output-count spike, fees paid, weeks-long duration) →
-  translate to Shekyl cost-per-shard at the `TX_WEIGHT_LIMIT` weight-fee. **Flag:**
-  I cannot fabricate those numbers; the data pull is a Stage-2 task, and if precise
-  figures are unavailable the fallback is a **parameterized stuffer swept over a
-  range** anchored to the incident's known shape (low per-output marginal cost,
-  sustained for weeks). Ratify the fallback or point me at a data source.
-- **DQ-2D — escalation-family parameterization.** *Recommend:* banded-PL, floor
-  25%, monotone in `n`, saturating to asymptote `A ∈ {50%, 75%, 90%}`, swept over
-  knee position `n_k` and initial slope. Integer `curve_milli` form. Stage 3 picks
-  from survivors; Stage 2 never emits a single "answer" curve, only the envelope.
-- **DQ-2E — per-arm criteria.** As tabled in §12.2. Ratify the A1 "binding case =
-  0%/yr Kryder" and A4 "`Δshare/Δburden ≤ 1`" thresholds in particular.
-- **DQ-2F — Stage-2 → 3 boundary.** §12.0. Stage 2 recommends; Stage 3 freezes the
-  number under §11.4 ceremony and writes consensus.
-- **DQ-2G — float sim, integer escalation.** *Recommend:* measure in `f64` (the
+  - **N-1 fix — the exchange unit is exogenous, and must be named.** `reward_P` is
+    atomic **SKL**; `burden_cost` is **fiat** (Kryder is a fiat `$/byte` decline).
+    They are not commensurable without an exchange assumption, and burying one is
+    exactly the silent-embed the Kryder parameter exists to prevent. So the sim
+    carries an **explicit exogenous `SKL/fiat` (price) parameter, constant per
+    run, swept like Kryder**, and the report flags it as the **least-knowable
+    input**. This is also where the **Filecoin provider-exodus face** lives —
+    token price collapsing against fiat hardware costs — correctly modeled as a
+    *swept exogenous parameter*, not a dynamic. **Honesty corollary, stated in the
+    report:** the robust outputs are the **trend comparisons** (burden growth vs
+    budget decay, regime boundaries, which shapes dominate which); **absolute
+    clearance is conditional on the price band** and is reported as such, never as
+    a point claim.
+- **DQ-2B — Kryder band. ✅ ratified.** Sweep **{0%/yr flat, 10%/yr, 25%/yr}** —
+  0% is the **binding** clearance case. **Provenance (state in the report, not bare
+  numbers):** ~25%/yr is the long-run historical `$/GB` decline, ~10%/yr the
+  post-2010s slowdown, 0% the Kryder-stall / Arweave failure face. The conclusion
+  must *state* which band members it holds under, never embed one (§11.2). This is
+  the single most assumption-laden input **after** the DQ-2A price parameter.
+- **DQ-2C — March-2024 W9 calibration. ✅ RESOLVED with data.** Source:
+  Rucknium, *Monero Black Marble Flood* (`github.com/Rucknium/misc-research`,
+  `Monero-Black-Marble-Flood/pdf/monero-black-marble-flood.pdf`, §6). Vendor these
+  figures + the derivation into the sim's calibration module with the source
+  pinned:
+
+  | Quantity | Value (report §6) |
+  | --- | --- |
+  | Duration | **23 days** (Mar 4–27, 2024) — weeks-sustained, not a burst |
+  | Spam shape | **1-in / 2-out** at the **minimum fee tier** (20 nanoneros/byte) |
+  | Total spam fees | **61.5 XMR** (81.3 under the wider 20-or-320 definition) |
+  | Total spam bytes | **3.08 GB** (3.12 wider) |
+
+  Internal check: 20 nanoneros/byte × 3.08 GB ≈ 61.6 XMR ✓. Derived: ~1.9 kB per
+  1in/2out tx → ≈1.6 M txs → ≈3.2 M outputs → ≈1.9×10⁻⁵ XMR ≈ **a quarter-cent per
+  output**; total attacker spend ≈ **\$8–11k** for a **~6× sustained flood**
+  (15–25k → 115–140k tx/day). **Three calibration directives the report itself
+  dictates:**
+  1. **Fee floor, not average.** The stuffer pays the minimum fee tier and sustains
+     — so A4 sweeps the Shekyl stuffer at the **minimum weight-fee**, not average
+     fees.
+  2. **Incident is an *upper bound* on cost-per-output.** The report notes an
+     adversary would use a **2-in / 16-out** shape to maximize black-marble outputs
+     per byte; the incident's 1in/2out is therefore not the cheapest. The
+     **Shekyl-binding case is the output-maximizing tx shape at `TX_WEIGHT_LIMIT`**,
+     strictly cheaper per output than the incident paid.
+  3. **Duration prior: weeks-sustained.** Model the flood as multi-week, not a
+     single-block burst.
+
+  Shekyl's fee schedule differs, so calibrate to a **point + range**: the derived
+  per-output cost is the anchor, the parameterized sweep is a band around it.
+- **DQ-2D — escalation-family parameterization. ✅ ratified.** Banded-PL, floor
+  25%, monotone in `n`, saturating to asymptote `A ∈ {50%, 75%, 90%}` (all `<
+  100%`), swept over knee position `n_k` and initial slope. Integer `curve_milli`
+  form. Stage 3 picks from survivors; Stage 2 never emits a single "answer" curve,
+  only the envelope.
+- **DQ-2E — per-arm criteria. ✅ ratified** (with the N-2 rewording folded into
+  §12.2): A1 binds on **0%/yr Kryder**; A4's gate is **attacker ROI < 1** (with
+  `Δshare/Δburden` demoted to a reported diagnostic); A5's margin is **named**
+  (proxy cost/epoch − honest storage cost/epoch, incl. within-grace re-fetch + the
+  L14 exposure).
+- **DQ-2F — Stage-2 → 3 boundary. ✅ ratified.** §12.0. Stage 2 recommends; Stage 3
+  freezes the number under §11.4 ceremony and writes consensus.
+- **DQ-2G — float sim, integer escalation. ✅ ratified.** Measure in `f64` (the
   `budget.rs` pattern), but evaluate escalation candidates in the integer
-  `curve_milli` form so the recommended shape is consensus-implementable; report
-  float for readability.
-- **DQ-2H — archiver population model (needed for W6 + stranding).** *Recommend:* a
-  parameterized distribution — some bulk holders (all shards), some scarce holders
-  (few shards) — anchored to the GF-7 measured floor `N ≈ 10/20` (M1 §4 founder
-  schedule). W6 *is* the redistribution across this distribution, so its shape is a
-  first-class input, not a detail. *Open:* the exact distribution.
+  `curve_milli` form so the recommended shape is consensus-implementable (not a
+  float sketch Stage 3 must re-derive); report float for readability.
+- **DQ-2H — archiver population model (needed for W6 + stranding). ✅ ratified,
+  two amendments.** A parameterized distribution anchored to the GF-7 measured
+  floor `N ≈ 10/20` (M1 §4 founder schedule); W6 *is* the redistribution across it,
+  so its shape is a first-class input.
+  1. **Add a heavy-tailed (Pareto-ish) variant** alongside the bulk-vs-scarce
+     binary — real archiver populations are Pareto-ish, and W6's redistribution
+     verdict can differ *qualitatively* between a two-class and a heavy-tailed
+     population. `N ≈ 10/20` sets the scale for both.
+  2. **Static population, but A1/A2 report per-class margin** — which archiver
+     classes sit underwater, and when — not only aggregates. A **dynamic exit
+     model is a named non-goal** (scope creep) with a **rule-21 reopen:** if any
+     class is *persistently* below marginal cost **inside the recommended
+     envelope**, the exit-dynamics arm gets built **before Stage 3 freezes**.
 
 ### 12.4 Output artifact
 
