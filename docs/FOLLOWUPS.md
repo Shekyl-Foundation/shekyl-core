@@ -47,6 +47,31 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Sliding-window m-of-n failure-confirmation is pinned but UNIMPLEMENTED in
+  consensus** (added 2026-07-25; surfaced double-checking the A5/W10 slash
+  model). `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` (pinned 2026-06-08) ratified
+  that a **single** baseline-challenge miss is **absorbed** — consensus keeps a
+  sliding window of misses per `(P_id, shard)` and slashes only at **m of the
+  last n** observations (Round-1 provisional `m=11`, `n=13`), property
+  *"Not-durably-absent"* — so honest connectivity flukes do not slash. **The
+  mechanism exists only in `shekyl-staking-sim/failure_confirmation.rs`** (the
+  harness that *chose* the policy). The consensus Rust crate has only the slash-
+  interval *append* mechanics (`bond_connect::slash_open_interval_to_append`);
+  there is **no m-of-n miss-window tally** in `shekyl-archival-retention` or the
+  C++ block-connect slash hook — so consensus **today single-strikes per epoch**,
+  directly contradicting the pin (a first miss *is* a loss, punishing exactly the
+  transient outages the pin absorbs). **Ordering (the pin's §4 corrected):** the
+  **structure** is *"Pinned — implement"* and is **NOT blocked** — it is a
+  **prerequisite** for the Round-2 stressnet, which runs *on* the built mechanism
+  to measure the outage-duration CDF and **re-pin `m/n` at testnet** (shape
+  genesis-frozen, numerics provisional — the `bond_duration` pattern). Build the
+  window with provisional `m=11/n=13` now; do not gate the code on the stressnet
+  it feeds. **Reopen/land** as a consensus work item before genesis freeze
+  (the composite-key miss tally per `ARCHIVAL_CONSENSUS_STATE.md`; §5's
+  escalate-on-failure alternative was rejected — do not re-introduce a
+  predictable recheck). Target: **V3.0** (pre-genesis; gates honest-liveness
+  correctness AND the Round-2 stressnet).
+
 - **D3 — archival-reward per-bond `curve_milli` cap is dodgeable at no bond
   cost** (added 2026-07-25; surfaced by A4/W9,
   `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.5 / reopen (e), sim commits
