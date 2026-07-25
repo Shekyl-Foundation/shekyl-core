@@ -28,7 +28,7 @@ use tracing::info;
 
 use crate::auth::{require_basic_auth, AuthConfig};
 use crate::handlers;
-use crate::tenant::TenantState;
+use crate::tenant::{DaemonEndpoint, TenantState};
 use crate::types::{JsonRpcRequest, JsonRpcResponse};
 
 /// Default max JSON-RPC body size (1 MiB). Wallet RPC payloads are small;
@@ -60,7 +60,7 @@ impl ListenAddr {
 }
 
 /// Server configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ServerConfig {
     /// Bind address (TCP or UDS).
     pub listen: ListenAddr,
@@ -70,11 +70,39 @@ pub struct ServerConfig {
     pub network: Network,
     /// Daemon JSON-RPC base URL (e.g. `http://127.0.0.1:28581`).
     pub daemon_address: String,
+    /// SOCKS5h proxy for the daemon transport (CLI `--proxy`); `None` = direct.
+    pub proxy: Option<String>,
     /// HTTP basic auth (disabled for UDS-by-default deployments).
     pub auth: AuthConfig,
     /// Argon2id cost for `create_wallet` / password rotation.
     /// Production uses [`KdfParams::default`]; tests may clamp.
     pub kdf: KdfParams,
+}
+
+/// Manual (not derived): `daemon_address` may carry digest credentials in
+/// its authority, so it renders through the transport's `redacted_endpoint`
+/// (`AuthConfig` redacts its own password; the remaining fields are inert).
+impl std::fmt::Debug for ServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerConfig")
+            .field("listen", &self.listen)
+            .field("wallet_dir", &self.wallet_dir)
+            .field("network", &self.network)
+            .field(
+                "daemon_address",
+                &shekyl_rpc_transport::redacted_endpoint(&self.daemon_address),
+            )
+            .field(
+                "proxy",
+                &self
+                    .proxy
+                    .as_deref()
+                    .map(shekyl_rpc_transport::redacted_endpoint),
+            )
+            .field("auth", &self.auth)
+            .field("kdf", &self.kdf)
+            .finish()
+    }
 }
 
 /// Shared application state.
@@ -98,7 +126,10 @@ impl AppState {
             tenants: tokio::sync::Mutex::new(TenantState::new(
                 config.wallet_dir.clone(),
                 config.network,
-                config.daemon_address.clone(),
+                DaemonEndpoint {
+                    address: config.daemon_address.clone(),
+                    proxy: config.proxy.clone(),
+                },
             )),
             auth: config.auth.clone(),
             kdf: config.kdf,
@@ -162,11 +193,34 @@ impl Drop for UdsCleanup {
     }
 }
 
+/// Refuse a malformed `--daemon-address` / `--proxy` at startup (offline
+/// shape check only — an unreachable daemon stays fine for offline
+/// commands). Deferred to first use, a bad flag would surface on
+/// `open_wallet` as "daemon unreachable": the wrong remedy pointer
+/// (rule 82 — the failure must name the flag, at the moment it can be
+/// fixed).
+fn validate_daemon_endpoint(
+    config: &ServerConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    shekyl_rpc_transport::validate_endpoint(&config.daemon_address, config.proxy.as_deref())
+        .map_err(|e| {
+            // Both flags are named here; the inner cause identifies the half
+            // ("daemon URL ..." / "--proxy ..." / "TLS connector ...").
+            // Attributing one flag per failure would need either a second
+            // validation pass (mislabeling a TLS-root failure as
+            // --daemon-address) or matching on error text — both worse than
+            // naming the pair.
+            format!("invalid daemon endpoint configuration (--daemon-address / --proxy): {e}")
+                .into()
+        })
+}
+
 /// Run the server until shutdown (SIGINT / SIGTERM via the Notify, or
 /// process exit). Blocks the calling task.
 pub async fn run_server(
     config: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    validate_daemon_endpoint(&config)?;
     let state = AppState::new(&config);
     let app = build_router(state.clone());
     let shutdown = state.shutdown.clone();
@@ -310,6 +364,7 @@ pub async fn spawn_in_process(
     wallet_dir: PathBuf,
     network: Network,
     daemon_address: String,
+    proxy: Option<String>,
 ) -> Result<InProcessHandle, Box<dyn std::error::Error + Send + Sync>> {
     let socket_dir = private_socket_dir()?;
     let mut handle = spawn_in_process_with(ServerConfig {
@@ -317,6 +372,7 @@ pub async fn spawn_in_process(
         wallet_dir,
         network,
         daemon_address,
+        proxy,
         auth: AuthConfig::Disabled,
         kdf: KdfParams::default(),
     })
@@ -333,6 +389,7 @@ pub async fn spawn_in_process(
 pub async fn spawn_in_process_with(
     config: ServerConfig,
 ) -> Result<InProcessHandle, Box<dyn std::error::Error + Send + Sync>> {
+    validate_daemon_endpoint(&config)?;
     let state = AppState::new(&config);
     let app = build_router(state.clone());
     let shutdown = state.shutdown.clone();
@@ -381,5 +438,50 @@ pub async fn spawn_in_process_with(
                 socket_dir: None,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tenant::DaemonEndpoint;
+
+    /// The credential-redaction pin: no `Debug` of server configuration —
+    /// the shapes that reach logs and panic output — renders the digest
+    /// credentials a daemon address may carry, a proxy userinfo, or the
+    /// `--rpc-login` password (rules 30/35).
+    #[test]
+    fn debug_of_server_state_never_renders_credentials() {
+        let endpoint = DaemonEndpoint {
+            address: "http://user:hunter2@127.0.0.1:28581/prefix".into(),
+            proxy: Some("socks5h://puser:swordfish@127.0.0.1:9050".into()),
+        };
+        let config = ServerConfig {
+            listen: ListenAddr::Tcp(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
+            wallet_dir: std::path::PathBuf::from("."),
+            network: Network::Stagenet,
+            daemon_address: endpoint.address.clone(),
+            proxy: endpoint.proxy.clone(),
+            auth: AuthConfig::from_rpc_login(Some("rpcuser:opensesame")),
+            kdf: KdfParams::default(),
+        };
+
+        for rendered in [
+            format!("{endpoint:?}"),
+            format!("{config:?}"),
+            format!("{:?}", config.auth),
+        ] {
+            for secret in ["hunter2", "swordfish", "opensesame"] {
+                assert!(
+                    !rendered.contains(secret),
+                    "a Debug render leaked {secret:?}: {rendered}"
+                );
+            }
+        }
+        // The redaction is visible (not silently dropping the field), and
+        // the non-secret parts survive for diagnostics.
+        assert!(format!("{endpoint:?}").contains("<redacted>"));
+        assert!(format!("{endpoint:?}").contains("127.0.0.1:28581"));
+        assert!(format!("{:?}", config.auth).contains("rpcuser"));
     }
 }

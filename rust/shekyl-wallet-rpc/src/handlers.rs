@@ -106,7 +106,7 @@ pub fn get_version_result() -> GetVersionResult {
 mod tests {
     use super::*;
     use crate::error::WalletRpcErrorCode;
-    use crate::tenant::TenantState;
+    use crate::tenant::{DaemonEndpoint, TenantState};
     use serde_json::json;
     use shekyl_engine_core::Network;
 
@@ -114,7 +114,10 @@ mod tests {
         tokio::sync::Mutex::new(TenantState::new(
             std::env::temp_dir(),
             Network::Stagenet,
-            "http://127.0.0.1:1".into(),
+            DaemonEndpoint {
+                address: "http://127.0.0.1:1".into(),
+                proxy: None,
+            },
         ))
     }
 

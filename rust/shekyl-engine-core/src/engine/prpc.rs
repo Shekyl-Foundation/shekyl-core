@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use shekyl_p_transport::{PTorClient, PTransportError, RequestErrorKind};
 use shekyl_rpc_client::{Rpc, RpcError};
-use shekyl_rpc_transport::SimpleRequestRpc;
+use shekyl_rpc_transport::HttpRpc;
 
 /// Marker for [`Rpc`] transports whose **network identity is the persona's
 /// own** — the §7.4 transport pin (`EMISSION_CLAIM_BUILDER.md`): a persona's
@@ -81,7 +81,7 @@ pub(crate) struct PRpc {
     /// **No HTTP authentication is performed.** The remote posture's access
     /// control is the onion address itself (an unguessable capability), so a
     /// daemon behind `--rpc-login` (HTTP digest auth) is out of scope — unlike the
-    /// reference `SimpleRequestRpc`, which parses `user:pass@` for digest auth. If
+    /// reference `HttpRpc`, which parses `user:pass@` for digest auth. If
     /// an authenticated remote is ever needed, it is a change at the choice site
     /// (the `base_url` carrying credentials) + here, recorded there.
     base_url: String,
@@ -102,7 +102,7 @@ impl Rpc for PRpc {
         body: Vec<u8>,
     ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
         // Route → Content-Type via the shared protocol invariant
-        // (`shekyl_rpc_client::content_type_for`), so `PRpc` and `SimpleRequestRpc`
+        // (`shekyl_rpc_client::content_type_for`), so `PRpc` and `HttpRpc`
         // can't drift on which routes are EPEE-binary. Sent for parity + daemon
         // forward-compat, **not** a validation the daemon enforces (its handlers
         // read the body via `String`/`Bytes` extractors that ignore `Content-Type`).
@@ -155,7 +155,7 @@ impl Rpc for PRpc {
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub(crate) struct LocalNodeRpc {
-    inner: SimpleRequestRpc,
+    inner: HttpRpc,
 }
 
 impl PersonaIsolatedTransport for LocalNodeRpc {}
@@ -212,7 +212,7 @@ impl LocalNodeRpc {
                  wallet's own node)"
             )));
         }
-        let inner = SimpleRequestRpc::with_custom_timeout(url, request_timeout).await?;
+        let inner = HttpRpc::with_custom_timeout(url, request_timeout).await?;
         Ok(Self { inner })
     }
 }
@@ -313,18 +313,35 @@ mod tests {
             "http://127.0.0.1:48081/json_rpc",
             // Loopback is the /8, not one literal address.
             "http://127.0.0.2:48081",
-            // '@' in the query is URL content, not credentials — the
-            // credential refusal is scoped to the authority.
-            "http://127.0.0.1:48081/json_rpc?tag=user@host",
-            // The authority terminates at `?` / `#` even with no path — a
-            // path-less query or fragment is not part of the host and its
-            // '@' is not credentials.
-            "http://127.0.0.1:48081?tag=user@host",
-            "http://localhost:48081#frag@ment",
         ] {
             LocalNodeRpc::new(ok.to_string(), Duration::from_secs(1))
                 .await
                 .unwrap_or_else(|e| panic!("loopback URL {ok} must construct: {e}"));
+        }
+
+        // '@' beyond the authority is URL content, not credentials — the
+        // credential refusal is scoped to the authority. These forms now
+        // refuse at the transport's base-URL shape check (a query/fragment
+        // daemon URL was never a joinable base), and the pinned property is
+        // that the refusal IS that shape check: never the credential
+        // refusal, and never an echo of the '@' content.
+        for not_credentials in [
+            "http://127.0.0.1:48081/json_rpc?tag=user@host",
+            "http://127.0.0.1:48081?tag=user@host",
+            "http://localhost:48081#frag@ment",
+        ] {
+            let err = LocalNodeRpc::new(not_credentials.to_string(), Duration::from_secs(1))
+                .await
+                .expect_err("a query/fragment URL is not a joinable base");
+            let rendered = format!("{err}");
+            assert!(
+                rendered.contains("query or fragment"),
+                "{not_credentials}: expected the base-URL shape refusal, got {err:?}"
+            );
+            assert!(
+                !rendered.contains("credentials"),
+                "{not_credentials}: the '@' must not be misread as credentials: {err:?}"
+            );
         }
 
         for (bad, why) in [

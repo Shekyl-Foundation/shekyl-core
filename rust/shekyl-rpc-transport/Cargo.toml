@@ -3,9 +3,10 @@ name = "shekyl-rpc-transport"
 version = "0.1.0"
 # First-party crate, relocated from the vendored shekyl-oxide `rpc/simple-request` in the
 # un-vendor: workspace path-dependency only, never published — no external consumers, so no
-# SemVer contract on its public surface. The simple-request/hyper transport for the client.
+# SemVer contract on its public surface. Owns a small hyper client (see `http_client`)
+# re-absorbed from `simple-request` so it can add an optional SOCKS5h proxy connector.
 publish = false
-description = "RPC connection to a Shekyl daemon via simple-request, built around shekyl-oxide"
+description = "RPC connection to a Shekyl daemon via a hyper client with optional SOCKS5h proxy"
 license = "BSD-3-Clause"
 repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
@@ -23,12 +24,29 @@ workspace = true
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 zeroize = { version = "^1.5", default-features = false, features = ["alloc", "std"] }
 digest_auth = { version = "0.3", default-features = false }
-simple-request = { version = "0.2", default-features = false, features = ["tls"] }
-tokio = { version = "1", default-features = false }
+# sync = Mutex (auth serialization), time = request timeout, net = the TCP
+# stream the SOCKS connector dials. Previously pulled in transitively via
+# simple-request; made explicit now that it is gone.
+tokio = { version = "1", default-features = false, features = ["sync", "time", "net"] }
+
+# Small hyper client owned in `http_client` (re-absorbed from simple-request so
+# a SOCKS5h connector can be added). Feature flags mirror what simple-request's
+# `tls` feature pulled: native roots via ring, http1, the legacy pooled client.
+hyper = { version = "1", default-features = false, features = ["http1", "client"] }
+hyper-util = { version = "0.1", default-features = false, features = ["http1", "client-legacy", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "rustls-native-certs", "native-tokio"] }
+http-body-util = { version = "0.1", default-features = false }
+tower-service = { version = "0.3", default-features = false }
+# SOCKS5h (remote-DNS) proxy support for the daemon transport. Verified at
+# source (rule 17): no `unsafe`, `+thiserror` only; a `Domain` target makes the
+# proxy resolve the hostname, so the local resolver never sees it.
+tokio-socks = { version = "0.5.3", default-features = false, features = ["tokio"] }
 
 shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-tokio = { version = "1", default-features = false, features = ["macros"] }
+# rt for #[tokio::test]; io-util for the in-test SOCKS5 acceptor's
+# read_exact/write_all (the ATYP=DOMAIN wire pin in `http_client`).
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "io-util"] }
 # Integration tests decode Bech32m addresses for generate_blocks (see tests/tests.rs).
 shekyl-address = { path = "../shekyl-address" }

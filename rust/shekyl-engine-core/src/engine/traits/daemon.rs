@@ -243,7 +243,7 @@ pub(crate) struct DaemonHealth {
 /// Engine-side view of the daemon RPC surface (§2.5).
 ///
 /// Implementors carry the RPC client (today: [`DaemonClient`] wrapping
-/// `shekyl_rpc_transport::SimpleRequestRpc`; at Stage 4: an
+/// `shekyl_rpc_transport::HttpRpc`; at Stage 4: an
 /// `ActorRef<DaemonActor>` per §1.4). Callers
 /// ([`Engine<S>`](super::super::Engine) orchestration,
 /// `RefreshEngine::produce_scan_result`, `PendingTxEngine::submit`)
@@ -258,7 +258,7 @@ pub(crate) struct DaemonHealth {
 /// - `Clone + Send + Sync + 'static` — the daemon handle is shared by
 ///   clone with the producer task in `run_refresh_task`'s
 ///   `tokio::spawn`'d future. `DaemonClient` /
-///   `SimpleRequestRpc` already satisfy these bounds, and
+///   `HttpRpc` already satisfy these bounds, and
 ///   `ActorRef<DaemonActor>` will at Stage 4.
 ///
 /// [`DaemonClient`]: super::super::DaemonClient

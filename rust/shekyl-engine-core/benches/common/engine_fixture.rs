@@ -126,7 +126,7 @@
 //! # Tokio runtime locality
 //!
 //! The Tokio runtime exists only to construct
-//! [`SimpleRequestRpc::new`] (which is async); it is dropped before
+//! [`HttpRpc::new`] (which is async); it is dropped before
 //! the bench's measured region. The `DaemonClient` owns the
 //! Arc-wrapped HTTP client and is self-sufficient post-runtime-drop.
 //! The measured region (`engine.synced_height()`) does no async work;
@@ -136,10 +136,13 @@
 //!
 //! # Daemon URL is an unreachable sentinel
 //!
-//! `SimpleRequestRpc::new("http://127.0.0.1:1")` does not connect —
-//! `new` only configures the HTTP agent and records the URL. The
-//! workload measured at Stage 0 PR-2 (`synced_height`) does not
-//! trigger a daemon RPC, so the URL is never contacted. A future
+//! `HttpRpc::new("http://127.0.0.1:1")` does not connect — for a
+//! **credential-free** URL like this sentinel, `new` only validates
+//! the URL shape, configures the HTTP client, and records the URL (a
+//! `user:pass@` URL would issue a digest-auth preflight, which this
+//! fixture must never do). The workload measured at Stage 0 PR-2
+//! (`synced_height`) does not trigger a daemon RPC, so the URL is
+//! never contacted. A future
 //! bench whose workload **does** trigger an RPC must swap the
 //! `DaemonClient` for a real test double — `TestDaemon`, arriving
 //! with Stage 1 PR 1 per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.1.
@@ -185,7 +188,7 @@ use shekyl_engine_core::{
 };
 use shekyl_engine_file::SafetyOverrides;
 use shekyl_engine_prefs::WalletPrefs;
-use shekyl_rpc_transport::SimpleRequestRpc;
+use shekyl_rpc_transport::HttpRpc;
 use tempfile::TempDir;
 
 // `engine_trait_bench_ledger_balance{,_iai}.rs` require the
@@ -260,7 +263,7 @@ pub const ECONOMICS_BENCH_HEIGHT: u64 = 262_800;
 /// # Panics
 ///
 /// Panics if any production lifecycle step fails (tempdir creation,
-/// tokio runtime build, `SimpleRequestRpc::new`, `Engine::create`).
+/// tokio runtime build, `HttpRpc::new`, `Engine::create`).
 /// All five are deterministic on a healthy CI worker; failure is a
 /// bench-environment problem, not a measurement to surface.
 pub fn build_engine_fixture() -> (Box<Engine<SoloSigner>>, TempDir) {
@@ -384,18 +387,20 @@ fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
 
 /// Build a `DaemonClient` against an unreachable URL.
 ///
-/// `SimpleRequestRpc::new` does not connect — it only configures the
-/// HTTP agent and records the URL. The runtime is local to this
-/// function and dropped before return; the returned `DaemonClient`
-/// owns an Arc-wrapped HTTP agent with no background tasks.
+/// `HttpRpc::new` does not connect for the credential-free sentinel
+/// used here — it only validates the URL shape, configures the HTTP
+/// client, and records the URL (a `user:pass@` URL would preflight).
+/// The runtime is local to this function and dropped before return;
+/// the returned `DaemonClient` owns an Arc-wrapped HTTP agent with no
+/// background tasks.
 fn construct_dummy_daemon() -> DaemonClient {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("build current-thread tokio runtime for bench fixture");
     let rpc = rt
-        .block_on(SimpleRequestRpc::new("http://127.0.0.1:1".to_string()))
-        .expect("SimpleRequestRpc::new (no connection attempted)");
+        .block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
+        .expect("HttpRpc::new (no connection attempted)");
     DaemonClient::new(rpc)
 }
 
