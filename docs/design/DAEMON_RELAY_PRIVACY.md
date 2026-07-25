@@ -1010,7 +1010,10 @@ instruments for both are built or scoped. What remains is the *arguments*:
   has freedom across `(embargo, F, reshape)` to meet `δ`, and it **must not
   over-constrain the embargo** to carry the whole burden — the embargo is fixed
   by the black-hole backstop (D-2), and pushing it further to chase the passive
-  target trades away liveness the other levers supply for free.
+  target trades away liveness the other levers supply for free. **Resolved in form
+  in §13:** `δ` is the precision *increment* `Precision(C1+C3) − Precision(C1)`,
+  bounded by a ratio target `ρ` (the one input the human supplies), driven toward
+  zero by reshape, with its high-`f` value gated on the two-slot instrument.
 
 **Closed in Rounds 1–2:**
 
@@ -1540,6 +1543,18 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 - **W2 fan-out.** Reopen if the netted §6.8 metric shows the fan-out cost exceeds
   the leak benefit at any *supported* topology (clearnet included, per the frozen
   default).
+- **Coupling note — one outbound-only property, opposite signs on two channels.**
+  W3's enrichment and Tor's passive-channel collapse (§6.3) are the *same*
+  fact — the stem pool is outbound-only
+  ([`!m_is_income`](../../src/cryptonote_protocol/levin_notify.cpp#L152)) — read
+  from two directions. Outbound-only is reshape's *friend* (it makes the inbound
+  passive supernode structurally absent over Tor) and, simultaneously, the reason
+  W3's residual is *worse* than independence (both stem slots are drawn from the
+  one enrichable outbound pool). One mechanism, two signs, so it must be **netted,
+  not counted twice** — the same discipline the fan-out cost needed. A future
+  round tightening one side (e.g. hardening outbound peer selection against
+  enrichment for W3) must check it did not loosen the other (the outbound-only
+  guarantee Tor's collapse depends on).
 - **HALT.** If any implementation of "the alternate successor" is found to create
   a **new** stem edge — widening the origin's peer set beyond `STEMS` rather than
   reusing an existing `out_mapping_` entry — halt. That is an anonymity
@@ -1554,3 +1569,104 @@ counter), and **W3/W3b, which are gated on the two-slot occupancy instrument
 being built and green first** — right now they rest on an argument that assumes
 away the supernode's outbound enrichment, which is the one place §12 still leans
 on a hopeful bound rather than a measurement.
+
+---
+
+## 13. The ε adopt-criterion, in increment-form (Q-9 resolved in form)
+
+Q-9 required `ε` derived as an *increment*, not a level, in the units the
+instrument reports, so the derivation and the measurement meet at a defined seam.
+Here it is, and it closes.
+
+### 13.1 The formula
+
+```text
+δ  :=  Precision_joint(C1 + C3)  −  Precision_joint(C1)
+
+adopt the mechanism parameters   iff   δ ≤ δ_max
+```
+
+- **`Precision_joint(·)`** — `P(the adversary's single best origin-guess is
+  correct, per transaction)`.
+- **`C1`** — the stem-spy channel that exists with or without our embargo
+  mechanism (the origin's stem successor is a spy).
+- **`C3`** — the forced-fluff channel our embargo *adds*.
+- **`δ`** — the increment: what our mechanism costs *on top of* the
+  deanonymization the adversary already gets from stems existing at all. This is
+  the increment-form Q-9 demanded; it discounts what the spy knew anyway (`C1`)
+  and prices only the new information (`C3`).
+- **`δ_max`** — the one number the human supplies.
+
+### 13.2 The computed left side (lower bound)
+
+At the adopted 144 s embargo, RD-4 stem support, `STEMS = 2`, independent-neighbour
+assumptions:
+
+| `f` | `Precision(C1)` | `Precision(C1+C3)` | `δ` |
+| --- | --- | --- | --- |
+| 0.05 | 0.0503 | 0.0513 | **+0.0010** |
+| 0.10 | 0.1000 | 0.1019 | **+0.0019** |
+| 0.30 | 0.3001 | 0.3046 | **+0.0045** |
+
+The mechanism as provisioned adds **0.1–0.45 percentage points** of
+origin-identification precision, depending on adversary size. That is `δ` — a
+different, larger-denominator quantity than the leak rate, because precision
+already folds in the "one sighting names a `5`-set, correct `~20 %` of the time"
+discount. It is emphatically *not* the `0.026 %`/`0.3 %` leak-rate numbers.
+
+**`δ` scales with `f` — it is a curve, not a scalar.** A single `δ_max` is
+under-specified until it names the `f` it is stated at — exactly the incompleteness
+"99.7 %" quietly dropped. Written as a formula, `δ`'s `f`-dependence is visible,
+and any scalar target is incomplete without pinning `f`.
+
+### 13.3 The recommended form: a ratio bound
+
+```text
+δ / Precision(C1)  ≤  ρ
+```
+
+"the embargo channel may not amplify the adversary's *existing* precision by more
+than `ρ`." Across the table that ratio is **~1.5–2 %** at every `f`
+(`0.0019/0.10`, `0.0045/0.30`) — it is **`f`-invariant**, so it is stated once and
+holds at every adversary size, removing the "at what `f`" incompleteness by
+construction. This is the form to derive toward. A worst-case bound
+(`δ_max ≤ 0.005 at f = 0.30`) is the alternative; the table meets it as-is, but it
+carries the `f`-naming burden the ratio form removes.
+
+### 13.4 What reshape is for, in these units
+
+Reshape drives the `C3` term toward zero — a re-stemmed fire emits no fluff to
+sight — so it drives `δ → 0`, collapsing `Precision(C1+C3)` back to
+`Precision(C1)`. **Reshape's job is to make the adopt-inequality hold with margin,
+not to hit a leak-rate target.** After reshape, `δ ≈ 0` for every transaction that
+re-stems, and the residual is only the W3/W3b both-slots-adversarial cases (§12) —
+which is *why* the two-slot occupancy instrument is the gate: it measures the `δ`
+that survives reshape.
+
+### 13.5 The one remaining input, and the verification status
+
+**`ρ` (or `δ_max` at a named `f`) is the human's judgment** — the input no
+computation supplies, exactly as Q-9 said it would be. The *form* is resolved and
+the left side is computed; the *number* is not owed by the calculator. If `ρ` is
+named, the design has its adopt-criterion and the two-slot instrument has its
+acceptance threshold, both in the same units, meeting at the seam the formula
+defines. A provisional `ρ ≈ 2 %` is met even before reshape, but it is a
+placeholder, not a decision.
+
+**Verification status (honest):**
+- *Form* — verified: increment-form, in precision units, meeting the measurement
+  at a defined seam. This is the Q-9 deliverable and it is complete.
+- *Left-side magnitude* — cross-checked, not re-run: `Precision(C1) ≈ f` holds by
+  construction, and at `f = 0.10` the `δ = 0.0019` sits just under the measured
+  raw `C3` origin-attribution (`leak 0.0114 × origin-share 0.198 = 0.0023`), the
+  gap being the `C1` overlap (a forced fluff whose origin the stem channel already
+  caught adds no increment). Right magnitude, right direction.
+- *Enriched value* — **gated on the two-slot instrument.** The table is the
+  independent-neighbour *lower* bound; the `f = 0.30` row rises under the
+  supernode's outbound enrichment (W3, §12), and the two-slot occupancy instrument
+  is what turns `0.0045` into its honest enriched value. Until then, `δ` at high
+  `f` is a floor, not the figure a `ρ` decision should be taken against.
+
+So Q-9 is **resolved in form**: `δ` is a per-transaction precision increment,
+bounded by a ratio target `ρ` the human names, driven toward zero by reshape, with
+its high-`f` value the acceptance threshold of the instrument Round 3 opens with.
