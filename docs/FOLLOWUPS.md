@@ -71,12 +71,15 @@ sustainability is unaffected by the recalibration.
   `PqcKemCiphertext` tx_extra field disagree on packing. Writers —
   `Extra::for_hybrid_transfer` as called by `sign_bridge.rs`,
   `stake_engine.rs` (bond + emission change), and `drain_assembly.rs` —
-  emit **one `0x06` field per output** (each `HYBRID_KEM_CT_BYTES` long).
+  emit **one `0x06` field per output** (each `HYBRID_KEM_CT_LEN` long —
+  the canonical `shekyl_crypto_pq::kem` constant; this note originally
+  named the scanner's since-unified `HYBRID_KEM_CT_BYTES` copy, renamed
+  in the PR #365 review round).
   Readers — `shekyl-scanner/src/scan.rs` (`extra.pqc_kem_ciphertext()`,
   first-match) and the WI-RPC-3 proof-check path
   (`shekyl-engine-core/src/engine/proofs.rs::on_chain_outputs_of`) — take
   only the **first** `0x06` field and slice per-output ciphertexts at
-  `o * HYBRID_KEM_CT_BYTES` offsets within it (the convention the
+  `o * HYBRID_KEM_CT_LEN` offsets within it (the convention the
   `bench_fixtures.rs` blob comment documents). Consequence: for any
   multi-output production tx, every output at vout ≥ 1 — including all
   change — fails the length guard and is silently undetectable by the

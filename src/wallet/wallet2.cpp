@@ -10775,6 +10775,12 @@ std::string wallet2::get_tx_proof(const crypto::hash &txid, const cryptonote::ac
 
     std::vector<uint8_t> ps_buf;
     std::vector<uint32_t> vout_indices;
+    // Reserve up front: ps_buf carries derived proof secrets, and a
+    // reallocation mid-loop would copy them to a fresh heap block and
+    // free the old one unwiped — the memwipe below only scrubs the
+    // final allocation. 4 secrets x 32 bytes per entry.
+    ps_buf.reserve(matching.size() * 128);
+    vout_indices.reserve(matching.size());
     for (size_t i : matching)
     {
       const auto& td = m_transfers[i];
