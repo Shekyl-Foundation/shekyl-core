@@ -1498,6 +1498,110 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
     }
 }
 
+/// The **W3 residual**: how often an adversary occupies *both* of the origin's
+/// outbound stem slots (`out_mapping_`) — the one exposure reshape cannot route
+/// around, and therefore the `δ` a `ρ` decision is taken against (§12, §13.4).
+/// This is *not* the demoted §13 table: that measured the leak of a mechanism we
+/// replace; this measures the leak that *survives* the replacement.
+///
+/// **Grounded as an OUTBOUND-occupancy channel, not the inbound reach.**
+/// [`dandelionpp.cpp:103-122`] builds `out_mapping_` by selecting `STEMS = 2`
+/// distinct peers, *without replacement*, from the origin's **outbound** pool
+/// (`P2P_DEFAULT_CONNECTIONS_COUNT = 12`, `cryptonote_config.h:134`). An adversary
+/// enters that pool only by being *selected* as an outbound peer — address-manager
+/// / sybil bias — which is the costly direction the origin's own peer selection
+/// resists, *not* the cheap inbound dialing that gives
+/// [`simulate_transport_observation`]'s `dial_fraction`. Importing that inbound
+/// reach here would measure a phantom (a channel the capability cannot reach), so
+/// this instrument's only adversary parameter is `outbound_share` `g` — the
+/// adversary's share of the origin's *outbound* peers.
+///
+/// Reshape (`retry_cap = STEMS − 1 = 1`) routes around an adversarial primary
+/// *iff* the alternate slot is honest, so the residual it cannot remove is exactly
+/// `P(both slots adversarial)`. W3b (the adversary pinning the origin to one live
+/// slot via induced churn) is a *cheaper*, capability-gated case bounded above by
+/// the single-slot occupancy reported here; it needs an eviction capability this
+/// instrument does not grant for free.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TwoSlotOccupancy {
+    /// `g` — the adversary's share of the origin's outbound pool.
+    pub outbound_share: f64,
+    /// `D_out` — the origin's outbound degree (daemon default 12).
+    pub outbound_degree: usize,
+    /// **W3.** `P(both stem slots adversarial)` — the exposure that survives
+    /// reshape, and the number a `ρ` decision is taken against.
+    pub both_slots: f64,
+    /// `P(≥ 1 stem slot adversarial)` — the pre-reshape single-slot exposure, and
+    /// the ceiling for the churn-gated W3b case.
+    pub at_least_one_slot: f64,
+    /// `(a/D_out)²` — the with-replacement reference at the *effective* integer
+    /// adversary share `a = round(g·D_out)`. `both_slots` sits *below* it:
+    /// choosing two *distinct* peers from a finite pool is anti-correlated
+    /// (`both_slots = both_slots_with_replacement · (a−1)/a · D_out/(D_out−1)`),
+    /// so W3 is bounded above by the independent draw, not merely equal to it.
+    pub independent_reference: f64,
+}
+
+/// Measure [`TwoSlotOccupancy`] at outbound share `g` over a pool of
+/// `outbound_degree` peers, mirroring the partial Fisher-Yates selection of
+/// `out_mapping_` at [`dandelionpp.cpp:113-118`].
+///
+/// The integer rounding of `g · D_out` is deliberate, not a modelling shortcut: a
+/// real adversary holds an integer number of the origin's outbound slots, and at
+/// `D_out = 12` that granularity *is* the result — `g = 0.10` is ~1 peer, which
+/// cannot fill two slots at all, so baseline `both_slots ≈ 0` until enrichment
+/// lifts `g` well above the raw node fraction `f`.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero, `outbound_degree < 2`, or `outbound_share` is
+/// outside `[0, 1]`.
+#[must_use]
+pub fn simulate_two_slot_occupancy<R: RelayRng + ?Sized>(
+    outbound_share: f64,
+    outbound_degree: usize,
+    trials: usize,
+    rng: &mut R,
+) -> TwoSlotOccupancy {
+    assert!(trials > 0, "need at least one trial");
+    assert!(
+        outbound_degree >= 2,
+        "need at least two outbound peers to fill two stem slots"
+    );
+    assert!(
+        (0.0..=1.0).contains(&outbound_share),
+        "outbound share must be in [0, 1]"
+    );
+
+    let d = outbound_degree;
+    // The adversary holds the first `a` of the `d` outbound peers.
+    let a = (outbound_share * d as f64).round() as usize;
+
+    let mut both = 0_usize;
+    let mut at_least_one = 0_usize;
+    for _ in 0..trials {
+        // Two distinct slot indices in `[0, d)`, mirroring the swap-and-pick of
+        // dandelionpp.cpp:116 (second draw taken from the remaining `d − 1` and
+        // mapped around the first).
+        let s0 = usize_from(bounded_uniform(rng, d as u64));
+        let r = usize_from(bounded_uniform(rng, (d - 1) as u64));
+        let s1 = if r < s0 { r } else { r + 1 };
+        let adv0 = s0 < a;
+        let adv1 = s1 < a;
+        both += usize::from(adv0 && adv1);
+        at_least_one += usize::from(adv0 || adv1);
+    }
+
+    let effective_share = a as f64 / d as f64;
+    TwoSlotOccupancy {
+        outbound_share,
+        outbound_degree: d,
+        both_slots: both as f64 / trials as f64,
+        at_least_one_slot: at_least_one as f64 / trials as f64,
+        independent_reference: effective_share * effective_share,
+    }
+}
+
 /// The clearnet passive inbound-neighbour channel: how often a supernode's
 /// inbound edge to a stem-prefix node catches that node's *embargo-fired* fluff
 /// before the natural diffusion, and attributes the source to a prefix member.

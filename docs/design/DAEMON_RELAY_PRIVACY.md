@@ -1013,7 +1013,7 @@ instruments for both are built or scoped. What remains is the *arguments*:
   target trades away liveness the other levers supply for free. **Resolved in form
   in §13:** `δ` is the precision *increment* `Precision(C1+C3) − Precision(C1)`,
   bounded by a ratio target `ρ` (the one input the human supplies), driven toward
-  zero by reshape, with its high-`f` value gated on the two-slot instrument.
+  zero by reshape, with the irreducible W3 residual now measured directly (§12.6).
 
 **Closed in Rounds 1–2:**
 
@@ -1516,8 +1516,8 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 | --- | --- | --- | --- | --- | --- |
 | W1 | `get_stem(nil)` no-op (ii) | design bug | select the alternate `out_mapping_` index explicitly, never re-call `get_stem` | none | **closed by spec** |
 | W2 | Fan-out 1→2 (i) | passive inbound supernode (§6.8) | reuse the existing 2nd `out_mapping_` entry; net against leak benefit in the §6.8 metric | fan-out cost sub-dominant to the ~86× rate cut | **closed (netted)** |
-| W3 | Both-successors-black-hole | adversary occupies *both* of the origin's 2 stem successors | re-stem to the 2nd is also dropped → fluff after the cap; the fluff recovers liveness | origin exposed iff **both** stem slots are adversarial. The two slots are **not** independent draws: `out_mapping_` is built from the origin's *outbound* pool ([`!m_is_income`](../../src/cryptonote_protocol/levin_notify.cpp#L152)), which a highly-connectable supernode over-represents itself in (Prop. 2). So the residual is `P(both stem slots adversarial | outbound enrichment)`, **bounded below by `p²` but rising toward the single-slot occupancy under enrichment** — not `p²`. Unmeasured. | **residual named, argued > p²** — gated on the two-slot instrument (§12.5) |
-| W3b | Single-live-stem fallback | adversary holds the origin at *one* live stem peer (induced churn / partial eclipse) | no alternate exists → fluff on embargo fire (the §12.2.7 fallback) | **every** embargo fire becomes an origin fluff for that origin — cheaper than W3 (one slot, not two), same lever (shaping the 2-slot stem set). Uncounted by §6.8. | **residual named** — gated on the same instrument (§12.5) |
+| W3 | Both-successors-black-hole | adversary occupies *both* of the origin's 2 stem successors | re-stem to the 2nd is also dropped → fluff after the cap; the fluff recovers liveness | origin exposed iff **both** stem slots are adversarial. The two slots are drawn **without replacement** from the origin's *outbound* pool of `D_out = 12` ([`out_mapping_`](../../src/net/dandelionpp.cpp#L103), [`!m_is_income`](../../src/cryptonote_protocol/levin_notify.cpp#L152)); an adversary enters that pool only by being *selected* as an outbound peer (the costly direction). Measured (§12.6): **≈ 0 at baseline `g = f`** (~1 of 12 peers cannot fill two slots), **bounded *above* by the independent draw `(a/D)²`** (no-replacement is anti-correlated, not "worse than independence"), rising only under genuine outbound enrichment `g ≫ f` — ≈ 0.08 even at `g = 0.30`, well under the inbound `π₀ = 0.45`. | **measured (build 1)** — small, gated on the costly outbound-selection capability |
+| W3b | Single-live-stem fallback | adversary holds the origin at *one* live stem peer (induced churn / partial eclipse) | no alternate exists → fluff on embargo fire (the §12.2.7 fallback) | **every** embargo fire becomes an origin fluff for that origin — cheaper than W3 (one slot, not two), same lever (shaping the 2-slot stem set). Uncounted by §6.8. | **ceiling measured** — the single-slot occupancy the same instrument reports (§12.6) bounds it; the realized rate is gated on an induced-churn capability |
 | W4 | Loop (revisited node) | topology | once-per-tx local cap bounds re-stemming; matches the paper's "fluff on loop" | bounded by the cap | **closed by cap + local state** |
 | W5 | Epoch-boundary straddle | timing | a re-stem after `change_channels` uses the fresh map; D++ already tolerates map turnover mid-flight ([levin_notify.cpp:711](../../src/cryptonote_protocol/levin_notify.cpp#L711)) | tx may re-stem into a rebuilt map | **low — within existing D++ tolerance** |
 | W6 | Wire position leak | on-path observer counting re-stems | retry state local, tx-hash-keyed, never serialized | none | **closed by spec (the wire rule)** |
@@ -1527,34 +1527,44 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 - **Cap (W-cap).** Re-derive if `CRYPTONOTE_DANDELIONPP_STEMS` changes (more
   alternates raise the achievable cap) or if `δ` is set tighter than the 0.026 %
   R=1 already delivers.
-- **W3 / W3b — the two-slot occupancy instrument is a required RP-2 gate, not a
-  "reopen if."** Both cells rest on the same unmeasured quantity: the *joint*
-  adversary occupancy of the origin's two stem slots under the supernode's
-  outbound over-representation. The independence framing (`p²`) assumes away the
-  very enrichment the mechanism exists to resist, so it must not be shipped as
-  the residual. The transport table's `π₀ = 0.45` at a 30 % attack (§6.5) is
-  already a measurement of *single*-slot occupancy under enrichment; **W3/W3b
-  want its two-slot analogue, which is a small extension of
-  `simulate_transport_observation`, not a new instrument.** Build it *before*
-  RP-2 implementation; if it shows either the joint occupancy or the induced
-  single-live-stem rate is material at a supported topology, reopen the cap or
-  the mechanism (e.g. bias re-stem selection away from recently-added outbound
-  peers, or require ≥2 *established* stem peers before arming).
+- **W3 / W3b — measured (Round-3 build 1), and grounding corrected a phantom.**
+  Both rest on the *joint* adversary occupancy of the origin's two stem slots. An
+  earlier draft called this "a small extension of `simulate_transport_observation`,"
+  reading the transport table's `π₀ = 0.45` (§6.5) as single-slot occupancy under
+  the same enrichment. **It is not.** `π₀` is the *inbound* diffusion reach — cheap
+  edges the spy dials — while `out_mapping_` is built from the origin's *outbound*
+  pool ([dandelionpp.cpp:103](../../src/net/dandelionpp.cpp#L103)), which an
+  adversary enters only by being *selected* as an outbound peer (address-manager /
+  sybil bias, the costly direction the node resists). Importing the inbound reach
+  would have measured a channel that capability cannot reach — the exact
+  ground-before-rigor trap. So `simulate_two_slot_occupancy` is a *separate*
+  instrument parameterized by the adversary's *outbound* share `g`, not an
+  extension of the inbound one. Result (§12.6): the residual is ≈ 0 at baseline and
+  small even under substantial outbound enrichment. Reopen the cap or the mechanism
+  only if a supported topology shows `g` can be driven high enough to make the
+  joint occupancy material — e.g. bias re-stem selection away from recently-added
+  outbound peers, or require ≥2 *established* stem peers before arming.
 - **W2 fan-out.** Reopen if the netted §6.8 metric shows the fan-out cost exceeds
   the leak benefit at any *supported* topology (clearnet included, per the frozen
   default).
-- **Coupling note — one outbound-only property, opposite signs on two channels.**
-  W3's enrichment and Tor's passive-channel collapse (§6.3) are the *same*
-  fact — the stem pool is outbound-only
-  ([`!m_is_income`](../../src/cryptonote_protocol/levin_notify.cpp#L152)) — read
-  from two directions. Outbound-only is reshape's *friend* (it makes the inbound
-  passive supernode structurally absent over Tor) and, simultaneously, the reason
-  W3's residual is *worse* than independence (both stem slots are drawn from the
-  one enrichable outbound pool). One mechanism, two signs, so it must be **netted,
-  not counted twice** — the same discipline the fan-out cost needed. A future
-  round tightening one side (e.g. hardening outbound peer selection against
-  enrichment for W3) must check it did not loosen the other (the outbound-only
-  guarantee Tor's collapse depends on).
+- **Coupling note — the outbound structure read on two channels (net, don't
+  double-count).** Two *distinct* source facts both flow from the origin's use of
+  outbound connections: fluff is outbound-only on Tor
+  ([levin_notify.cpp:448](../../src/cryptonote_protocol/levin_notify.cpp#L448)),
+  which makes the inbound passive supernode structurally absent (§6.3, reshape's
+  *friend*); and the stem pool is the outbound set
+  ([dandelionpp.cpp:103](../../src/net/dandelionpp.cpp#L103),
+  [`:152`](../../src/cryptonote_protocol/levin_notify.cpp#L152)), which is what W3
+  occupies. They are related but **not the same fact**, and the earlier "W3's
+  residual is *worse* than independence" reading was **backwards**: drawing two
+  *distinct* slots from a finite pool is anti-correlated, so W3 sits *below* the
+  independent draw, not above it (§12.6). W3's lever is not slot-correlation but
+  **outbound enrichment** — raising the per-slot share `g` — and that is the
+  *costly* direction, the opposite of the cheap inbound reach Tor collapses, so
+  **Tor does not remove W3** (an outbound-selected adversary persists on any
+  transport). A future round hardening outbound peer selection against enrichment
+  (for W3) must still preserve the outbound-only fluff rule Tor's collapse depends
+  on — one structure, two channels, netted.
 - **HALT.** If any implementation of "the alternate successor" is found to create
   a **new** stem edge — widening the origin's peer set beyond `STEMS` rather than
   reusing an existing `out_mapping_` entry — halt. That is an anonymity
@@ -1565,11 +1575,48 @@ the actual re-stem wiring in `levin_notify` / `tx_pool`, the tx-hash-keyed retry
 store, and the `out_mapping_` alternate-selection helper. This section specifies
 *what* must hold; the *how* is a later PR. Acceptance gates: W1 and W6 (closed by
 spec — the PR must not reintroduce a `get_stem(nil)` re-entry or a wire retry
-counter), and **W3/W3b, which are gated on the two-slot occupancy instrument
-being built and green first**. *Superseded framing (§14):* the instrument no
-longer gates *adopting* reshape — §14 adopts it unconditionally as a strict
-priority-order improvement — it only quantifies the irreducible W3 residual, which
-is the sole `δ` left to bound.
+counter), and **W3/W3b, whose two-slot occupancy instrument is now built and
+green (§12.6)** — RP-2 must not regress it. *Superseded framing (§14):* the
+instrument no longer gates *adopting* reshape — §14 adopts it unconditionally as a
+strict priority-order improvement — it only quantifies the irreducible W3
+residual, which is the sole `δ` left to bound.
+
+### 12.6 W3 residual — measured (Round-3 build 1)
+
+`simulate_two_slot_occupancy` (`two_slot_occupancy_is_the_reshape_residual`)
+measures `P(both outbound stem slots adversarial)` at `D_out = 12`
+(`P2P_DEFAULT_CONNECTIONS_COUNT`), over the adversary's *outbound* share `g` — the
+capability the channel actually requires, not the inbound reach (see the phantom
+correction in §12.5):
+
+| `g` (outbound share) | peers `a` | **W3 = P(both slots)** | P(≥1 slot) | independent `(a/D)²` |
+| --- | --- | --- | --- | --- |
+| 0.10 (= baseline `f`) | 1 | **0.0000** | 0.154 | 0.007 |
+| 0.20 | 2 | 0.013 | 0.295 | 0.028 |
+| 0.30 | 4 | **0.077** | 0.538 | 0.111 |
+| 0.50 | 6 | 0.192 | 0.731 | 0.250 |
+
+Three results, each against the argued framing this section previously carried:
+
+1. **Baseline W3 ≈ 0, not `p²`.** At `g = f = 0.10` the adversary holds ~1 of 12
+   outbound peers and *cannot* fill two slots, so W3 is essentially zero — *below*
+   `p² = 0.01`, refuting the earlier "bounded below by `p²`."
+2. **W3 is bounded *above* by the independent draw, not below it.** Selecting two
+   *distinct* slots without replacement is anti-correlated, so `W3 < (a/D)²` at
+   every `g` — the "worse than independence" reading was backwards.
+3. **The residual is small and gated on the costly capability.** Lifting W3 even
+   to ~0.08 needs `g = 0.30` — control of 4 of the origin's 12 outbound peers via
+   outbound-selection enrichment (the hard direction the node resists) — and even
+   then it is well under the cheap inbound supernode's `π₀ = 0.45` at the same
+   reach. W3b's ceiling is the `P(≥1 slot)` column, itself gated on an additional
+   induced-churn capability.
+
+So the `δ` a `ρ` decision is taken against is **small and capability-gated**:
+reshape's irreducible residual is the both-slots case, which honest outbound
+selection makes ≈ 0 and which only an adversary who can heavily bias the origin's
+outbound peer set can raise — an adversary who pays far more, for far less, than
+the inbound observer Tor already removes. `ρ` is now read against *this* measured
+residual, not the demoted §13 table.
 
 ---
 
@@ -1679,13 +1726,16 @@ placeholder, not a decision.
   Monte-Carlo noise, with `Precision(C1) ≈ f` by construction. Reshape
   (`retry_cap = 1`) collapses δ to ~0.00006, confirming §13.4. The test pins both.
   (The earlier "cross-checked, not re-run" caveat is discharged.)
-- *Enriched value* — **gated on the two-slot instrument.** The re-run confirms the
-  *independent-neighbour lower bound*; the `f = 0.30` row rises under the
-  supernode's outbound enrichment (W3, §12), because `simulate_precision_increment`
-  draws the origin's spy-neighbour independently at rate `f` rather than from the
-  enriched outbound pool. The two-slot occupancy instrument is what turns `0.0047`
-  into its honest enriched value. Until then, `δ` at high `f` is a floor, not the
-  figure a `ρ` decision should be taken against.
+- *Enriched value* — **measured directly (§12.6), and moot for the decision.** The
+  re-run confirms the *independent-neighbour lower bound* of this
+  (replaced-mechanism) `δ`; its `f = 0.30` row would rise under outbound
+  enrichment, because `simulate_precision_increment` draws the spy-neighbour
+  independently at `f` rather than from the enriched outbound pool. But the honest
+  enriched quantity is the **W3 residual**, now measured directly by
+  `simulate_two_slot_occupancy` (§12.6) as an *outbound-occupancy* channel — not by
+  enriching this table, which measures fluff-on-expiry, the mechanism §14 replaces.
+  So nothing is left to gate here: the decision `δ` is §12.6's W3 residual, and this
+  row is a floor on a number that is no longer the decision input.
 
 So Q-9 is **resolved in form, with the left side re-run and reproduced**: `δ` is a
 per-transaction precision increment (measured, not composed), bounded by a ratio

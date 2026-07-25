@@ -1682,3 +1682,93 @@ fn reshape_recovery_is_a_cost_not_a_break() {
         r.fluff_p99_s
     );
 }
+
+/// **§12 W3 residual — the δ a `ρ` decision is actually taken against (Round-3
+/// build 1).** The one exposure reshape cannot route around: an adversary holding
+/// *both* of the origin's outbound stem slots (`out_mapping_`). Grounded as an
+/// OUTBOUND-occupancy channel (peer selection, the costly direction), not the
+/// inbound diffusion reach `simulate_transport_observation` measures — importing
+/// that reach would measure a phantom. `D_out = 12` (`P2P_DEFAULT_CONNECTIONS_COUNT`).
+#[test]
+fn two_slot_occupancy_is_the_reshape_residual() {
+    use shekyl_relay_privacy::conformance::simulate_two_slot_occupancy;
+
+    const D_OUT: usize = 12; // P2P_DEFAULT_CONNECTIONS_COUNT, cryptonote_config.h:134
+    let trials = 1_000_000;
+
+    println!("\nW3 residual: P(adversary holds BOTH outbound stem slots), D_out=12");
+    println!(
+        "{:>8} {:>6} {:>12} {:>14} {:>16}",
+        "g", "a", "both (W3)", ">=1 slot", "indep (a/D)^2"
+    );
+    println!("{}", "-".repeat(60));
+
+    // (g, a) — g is the adversary's OUTBOUND share; a = round(g·12) is the
+    // integer peers it holds (carried explicitly to keep the display cast-free).
+    let cases: [(f64, usize); 4] = [(0.10, 1), (0.20, 2), (0.30, 4), (0.50, 6)];
+    let mut results = Vec::new();
+    for (idx, &(g, a)) in cases.iter().enumerate() {
+        let mut rng = SplitMix64::new(0x2510_0000 + idx as u64);
+        let o = simulate_two_slot_occupancy(g, D_OUT, trials, &mut rng);
+        println!(
+            "{:>8.2} {:>6} {:>12.4} {:>14.4} {:>16.4}",
+            g, a, o.both_slots, o.at_least_one_slot, o.independent_reference
+        );
+        results.push((g, o));
+    }
+
+    // 1. BASELINE (g = f = 0.10): the adversary holds ~1 of 12 outbound peers, so
+    //    it CANNOT fill two slots. W3 is essentially zero without enrichment —
+    //    the honest finite-pool result the "same enrichment as inbound" framing
+    //    missed.
+    let (_, base) = &results[0];
+    assert!(
+        base.both_slots < 0.001,
+        "at g=f=0.10 the adversary holds ~1 outbound peer and cannot occupy both \
+         stem slots; W3 should be ~0, got {:.4}",
+        base.both_slots
+    );
+
+    // 2. ANTI-CORRELATION: choosing two DISTINCT peers from a finite pool makes W3
+    //    sit strictly below the independent (with-replacement) draw at the same
+    //    effective share — bounded above by it, not equal to it.
+    for (g, o) in &results {
+        if o.both_slots > 0.0 {
+            assert!(
+                o.both_slots <= o.independent_reference + 1e-3,
+                "W3 at g={g:.2} ({:.4}) must sit at/below the independent draw ({:.4})",
+                o.both_slots,
+                o.independent_reference
+            );
+        }
+    }
+
+    // 3. ENRICHMENT IS REQUIRED and COSTLY: to lift W3 even to the ~0.09 range the
+    //    adversary must reach g=0.30 — control ~4 of the origin's 12 outbound
+    //    peers — and even then W3 stays well under the inbound supernode's first-
+    //    spy precision at the same nominal reach (π0 ≈ 0.45 at 0.30, §6.5). The
+    //    outbound both-slots channel is far costlier for far less occupancy.
+    let (_, g30) = &results[2];
+    assert!(
+        g30.both_slots < 0.12,
+        "W3 at g=0.30 should be ~0.09, well below the inbound pi0=0.45, got {:.4}",
+        g30.both_slots
+    );
+    assert!(
+        results[3].1.both_slots > results[2].1.both_slots
+            && results[2].1.both_slots > results[1].1.both_slots,
+        "W3 must rise with outbound enrichment g (it is monotone in the hard capability)"
+    );
+
+    println!(
+        "\n  W3 (both outbound stem slots adversarial) is the ONLY delta reshape\n  \
+         cannot route around, so it is the number a rho decision is taken against.\n  \
+         At baseline (g = f = 0.10, honest outbound selection) it is ~0: the\n  \
+         adversary holds ~1 of 12 outbound peers and cannot fill two slots. Lifting\n  \
+         it requires OUTBOUND enrichment (g >> f) via peer-selection/sybil bias --\n  \
+         the direction the node's own selection resists -- and even at g=0.30\n  \
+         (4 of 12 peers) W3 ~= 0.09, well under the cheap inbound supernode's\n  \
+         pi0 ~= 0.45 at the same reach. The residual is small AND gated on the\n  \
+         costly capability; that is the honest input to the rho decision."
+    );
+}
