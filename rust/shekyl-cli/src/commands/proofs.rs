@@ -22,7 +22,7 @@
 
 use serde_json::{json, Value};
 
-use super::{format_amount_str, opt_amount, require_open};
+use super::{format_amount, format_amount_str, opt_amount, require_open};
 use crate::rpc_client::RpcSession;
 
 // ── Generation (open wallet required) ────────────────────────────────
@@ -71,6 +71,15 @@ pub fn cmd_get_reserve_proof(rpc: &RpcSession, amount: Option<u64>, message: Opt
     if !require_open(rpc) {
         return;
     }
+    // Echo the parse-time binding before generating anything. The
+    // `[amount] [message...]` grammar reads an amount-shaped first token as
+    // the proof bound, so `get_reserve_proof 2026 budget review` proves
+    // 2026 SKL with message "budget review" — not the full balance with
+    // message "2026 budget review". Showing the bound amount and the exact
+    // challenge message here makes a misbind visible at generation time; at
+    // check time it would only surface as an inexplicable BAD proof
+    // (rule 82).
+    println!("{}", describe_reserve_binding(amount, message));
     let mut params = json!({ "message": message.unwrap_or("") });
     if let Some(a) = amount {
         params["amount"] = Value::String(a.to_string());
@@ -188,6 +197,22 @@ pub fn cmd_check_reserve_proof(
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
+/// Render the parse-time binding of a `get_reserve_proof` invocation: the
+/// amount bound ("the full balance" when unbounded) and the exact challenge
+/// message the verifier must supply ("(none)" when empty — shown explicitly
+/// so an accidentally-consumed message word is visible, not invisible).
+fn describe_reserve_binding(amount: Option<u64>, message: Option<&str>) -> String {
+    let bound = match amount {
+        Some(a) => format!("{} SKL", format_amount(a)),
+        None => "the full balance".to_owned(),
+    };
+    let msg = match message {
+        Some(m) => format!("{m:?}"),
+        None => "(none)".to_owned(),
+    };
+    format!("Proving: {bound}; challenge message: {msg}")
+}
+
 /// Read an `AtomicUnits` decimal-string field back as raw units.
 fn raw_amount(v: &Value, key: &str) -> Option<u64> {
     v.get(key)?.as_str()?.parse::<u64>().ok()
@@ -204,5 +229,37 @@ fn print_confirmations(val: &Value) {
         println!("The transaction is in the pool (0 confirmations).");
     } else if let Some(c) = val.get("confirmations").and_then(|v| v.as_u64()) {
         println!("Confirmations: {c}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::describe_reserve_binding;
+
+    /// The generation-time echo names both bindings explicitly: an unbounded
+    /// proof says "the full balance" (never a blank), and an empty challenge
+    /// message says "(none)" — so a first message word silently consumed as
+    /// the amount (`get_reserve_proof 2026 budget review`) is visible before
+    /// the proof string is ever shared (rule 82).
+    #[test]
+    fn reserve_binding_echo_names_amount_and_message_explicitly() {
+        assert_eq!(
+            describe_reserve_binding(None, None),
+            "Proving: the full balance; challenge message: (none)"
+        );
+        assert_eq!(
+            describe_reserve_binding(None, Some("quarterly audit")),
+            "Proving: the full balance; challenge message: \"quarterly audit\""
+        );
+        // The numeric-first-token misbind case: the echo shows 2026 SKL as
+        // the bound and only "budget review" as the message.
+        assert_eq!(
+            describe_reserve_binding(Some(2_026_000_000_000), Some("budget review")),
+            "Proving: 2026.000000000 SKL; challenge message: \"budget review\""
+        );
+        assert_eq!(
+            describe_reserve_binding(Some(2_500_000_000), None),
+            "Proving: 2.500000000 SKL; challenge message: (none)"
+        );
     }
 }

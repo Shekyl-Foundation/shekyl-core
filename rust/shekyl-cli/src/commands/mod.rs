@@ -72,8 +72,10 @@ supply the identical string — repeated spaces are collapsed to one):
                                       Verify a tx proof (no wallet needed)
   get_reserve_proof [amount] [message]
                                       Prove unspent reserve (FULL wallet;
-                                      omit amount to prove full balance —
-                                      see the disclosure warning it prints)
+                                      omit amount to prove full balance; a
+                                      numeric first word is read as the
+                                      amount — the binding is echoed, with
+                                      a disclosure warning, at generation)
   check_reserve_proof <address> <proof> [message]
                                       Verify a reserve proof (no wallet
                                       needed)

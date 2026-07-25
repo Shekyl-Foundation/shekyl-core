@@ -389,6 +389,22 @@ pub fn parse(input: &str) -> ResolvedCommand {
         "get_reserve_proof" => {
             // `get_reserve_proof [amount] [message...]` — an amount-shaped
             // first token bounds the proof; otherwise everything is message.
+            //
+            // The command takes no flags, so a flag-shaped token (a Monero
+            // muscle-memory `--all`, or a negative "amount" like `-5`) is a
+            // hard diagnostic. It must be neither silently dropped nor folded
+            // into the challenge message: a proof bound to the message
+            // "--all" verifies only against that exact string, so the
+            // verifier's check with the agreed (empty) message reports BAD
+            // proof — wrongly signalling fraud (rule 82).
+            if let Some(tok) = args.iter().find(|a| a.starts_with('-')) {
+                return diag(format!(
+                    "get_reserve_proof: {tok:?} looks like a flag, but this command takes \
+                     none — it would otherwise bind into the proof's challenge message \
+                     (usage: get_reserve_proof [amount] [message...]; omit amount to \
+                     prove the full balance)"
+                ));
+            }
             match args.first() {
                 Some(first) => match crate::commands::parse_amount(first) {
                     Some(amount) => ResolvedCommand::GetReserveProof {
@@ -863,6 +879,63 @@ mod tests {
         assert!(matches!(
             parse("check_reserve_proof onlyaddr"),
             ResolvedCommand::Diagnostic { .. }
+        ));
+    }
+
+    /// `get_reserve_proof` takes no flags, so a flag-shaped token is a hard
+    /// usage diagnostic naming the grammar — never silently dropped (the old
+    /// `filter` behavior) and never folded into the challenge message, where
+    /// it would make the verifier's check with the agreed message report BAD
+    /// proof (rule 82).
+    #[test]
+    fn get_reserve_proof_refuses_flag_shaped_tokens() {
+        for line in [
+            "get_reserve_proof --all",           // Monero muscle memory
+            "get_reserve_proof -5",              // negative "amount"
+            "get_reserve_proof 2.5 audit --all", // flag after valid args
+        ] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(
+                        message.contains("get_reserve_proof [amount] [message...]"),
+                        "{line:?} diagnostic must name the grammar: {message}"
+                    );
+                }
+                other => panic!("expected Diagnostic for {line:?}, got {other:?}"),
+            }
+        }
+    }
+
+    /// The `[amount] [message...]` grammar binds an amount-shaped FIRST token
+    /// as the proof bound — `get_reserve_proof 2026 budget review` proves
+    /// 2026 SKL with message "budget review", not the full balance with
+    /// message "2026 budget review". This test documents that inherent
+    /// ambiguity; the generation-time echo in `commands::proofs` is what
+    /// makes the binding visible to the user.
+    #[test]
+    fn get_reserve_proof_numeric_first_token_binds_as_amount() {
+        match parse("get_reserve_proof 2026 budget review") {
+            ResolvedCommand::GetReserveProof { amount, message } => {
+                assert_eq!(amount, Some(2_026_000_000_000));
+                assert_eq!(message.as_deref(), Some("budget review"));
+            }
+            other => panic!("expected GetReserveProof, got {other:?}"),
+        }
+        // Non-amount first token: full-balance proof, everything is message.
+        match parse("get_reserve_proof hello world") {
+            ResolvedCommand::GetReserveProof { amount, message } => {
+                assert_eq!(amount, None);
+                assert_eq!(message.as_deref(), Some("hello world"));
+            }
+            other => panic!("expected GetReserveProof, got {other:?}"),
+        }
+        // Bare command: full-balance proof, empty challenge message.
+        assert!(matches!(
+            parse("get_reserve_proof"),
+            ResolvedCommand::GetReserveProof {
+                amount: None,
+                message: None,
+            }
         ));
     }
 

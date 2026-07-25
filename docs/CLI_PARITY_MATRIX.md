@@ -64,7 +64,7 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 19 | `check_tx_key` | N/A | Out of scope | As row 18 |
 | 20 | `get_tx_proof` | `get_tx_proof` | Covered | Native DLEQ tx proof, direction auto-selected (OUTBOUND/INBOUND) by decoded-address comparison (WI-RPC-3); prints the contract's disclosure warnings at generation |
 | 21 | `check_tx_proof` | `check_tx_proof` | Covered | Wallet-less verification against the chain (WI-RPC-3); proof strings are kept out of readline history |
-| 22 | `get_reserve_proof` | `get_reserve_proof` | Covered | All-balance or amount-bounded (WI-RPC-3, FULL wallet); prints the key-image-beacon warning |
+| 22 | `get_reserve_proof` | `get_reserve_proof` | Covered | All-balance or amount-bounded (WI-RPC-3, FULL wallet). Grammar is `get_reserve_proof [amount] [message...]`: an amount-shaped first token binds as the bound, so the CLI echoes the bound amount and exact challenge message at generation; flag-shaped tokens (e.g. Monero's `--all`) are refused with a usage error rather than bound into the message. Prints the key-image-beacon warning |
 | 23 | `check_reserve_proof` | `check_reserve_proof` | Covered | Wallet-less verification with daemon spent-status reporting (WI-RPC-3) |
 | 24 | `sign` | RESERVED | Planned | Gated on the message-signing RPC surface (Phase 2c) |
 | 25 | `verify` | RESERVED | Planned | As row 24 |
