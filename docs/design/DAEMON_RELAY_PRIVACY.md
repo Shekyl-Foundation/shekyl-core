@@ -1885,21 +1885,71 @@ race), and it is still << the 3-day mempool lifetime (§14.5). §14.8's RP-2
 recovery re-measurement now has a specific reference: **does recovery make the
 next-block-but-one**, measured against block time — *not* FTL.
 
-### 15.6 The change: the derivation gets a block-time-awareness term
+### 15.6 The reference frame settles the direction: derive against survival, integrate against consensus
 
-**The number does not move.** 144 s is right for privacy, and the one-block-late
-cost on the rare first-hop black hole is dominated by the privacy requirement.
-What changes is that the derivation must **know** about the 120 s boundary and
-state that it crosses it *deliberately*:
+Re-anchored against Dandelion++ (Fanti et al., §11), the block-time collision is
+an **embedding artifact, not a design flaw** — because in the reference frame
+there is no block-time problem to solve. The paper's embargo lives on the
+*propagation* timescale and is never coupled to consensus:
 
-> 144 s, derived against preemption, knowingly exceeds one 120 s block interval,
-> because the privacy requirement dominates the ~9 pp one-block-latency cost on the
-> rare first-hop black-hole case, and the recovery distribution clears
-> `MIN_RELAY_TIME` and the mempool lifetime with margin (§15.3–15.5).
+- Its only upper-bound guidance is that the exponential clocks "should be slow
+  enough that they only trigger (with high probability) during a black-hole
+  attack" — survive the stem, with nothing about fitting under a block interval.
+- Its timescale reference is per-hop propagation latency, which it treats as
+  negligible ("each of the remaining clocks can be reset assuming propagation
+  latency in the stem is negligible").
 
-That is the difference from the 39 s ghost: a boundary the derivation **names and
-chooses to cross**, versus one it crosses without noticing. The block-time
-constraint is now a *stated non-binding term* of the embargo derivation — it does
-not move 144 s, but any future re-derivation must re-evaluate it, and if a shorter
-block time or a longer embargo ever pushed first-hop recovery materially past one
-interval, this is the term that would make that visible instead of silent.
+So the embargo answers to exactly one constraint — survive the stem with
+probability `1−ε` against sub-second per-hop latency — and our corrected
+112–144 s **is** the paper-faithful number. Block time never enters because the
+paper has no blocks: it is a networking-layer anonymity protocol whose terminal
+event is "the transaction diffuses." Confirmation, mining and block intervals are
+all downstream of where the paper stops.
+
+**This reframes the 39 s.** It is not a deliberate fit to block time — it is the
+`log10`-for-`ln` arithmetic error (F-1), which merely *happened* to land at ~⅓ of
+a block interval. But by error or by rationalization, **39 s is what "shortened to
+fit" looks like**, and it is the antipattern, not the solution. The irony the
+paper exposes: the *buggy* 39 s sits comfortably under block time while the
+*correct* 144 s collides with it. The bug produced a number wrong for privacy but
+incidentally comfortable for integration; our correction fixed the privacy and
+surfaced the tension the bug was masking. **Shortening the embargo now to slide
+back under 120 s re-commits the exact sin this whole arc undid** — letting a
+non-privacy constraint contaminate a privacy-derived number and calling the
+result "fit."
+
+The reference does not *solve* the collision; it *dissolves* it, by refusing to
+let block time touch the anonymity derivation. We keep that separation, enforced
+by construction:
+
+- **Do NOT** add a block-time term that *pulls* the embargo down. The derivation
+  stays block-time-**unaware**; it answers to survival and only survival. (This
+  supersedes an earlier draft of this section, which called block time a
+  "non-binding term of the derivation" — that framing left the contamination door
+  ajar, because a "term" a future re-derivation "re-evaluates" is one block time
+  could eventually be permitted to *move* the embargo through. Block time is not a
+  term of this derivation at any level, binding or not.)
+- **Do** record the block-time *awareness* at the **integration layer** (this
+  document, not the derivation): the embargo knowingly crosses the 120 s boundary;
+  the crossing affects only black-holed transactions, costs them one block of
+  confirmation latency on the rare first-hop case, and that cost is dominated by
+  the privacy requirement per [`00-mission`](../../.cursor/rules/00-mission.mdc)
+  (privacy > performance). The number does not move; we just stop crossing the
+  boundary *silently*.
+- **Do** verify the crossing does not *cascade* — the one place the separation
+  needs active checking in **our** stack, because Monero bolted on timers the
+  paper never had. FTL (540 s) and `MIN_RELAY_TIME` (300 s) are ours, not the
+  paper's, and the Round-3 recovery-latency measurement (§14.8) must confirm they
+  *absorb* the propagation-timescale embargo — that our added timers turn the
+  crossing into bounded latency, never a hard failure. **Precision, per §15.4:**
+  FTL does not *gate* recovery (it validates block timestamps), so in this check
+  it is a reference *scale*, not a constraint with teeth; the checks that actually
+  bite are the `MIN_RELAY_TIME` re-broadcast interaction and the mempool-lifetime
+  headroom.
+
+**The principle, stated once:** the embargo derivation is block-time-*unaware*;
+the integration layer is block-time-*aware*. Derive against survival, integrate
+against consensus, and never let the second move the first. That is the difference
+from the 39 s ghost — not a boundary the derivation "names and crosses," but a
+boundary the derivation *refuses to know about* while the layer above it does the
+reconciliation the paper always assumed some layer would.

@@ -61,22 +61,23 @@
 //! granularity — recomputed whenever any input moves, so it cannot drift from
 //! its justification the way a `#define` did.
 //!
-//! # The block-time boundary (a stated non-binding term)
+//! # This derivation is deliberately block-time-unaware — do not add a term
 //!
-//! This survival equation has no block-time term, and it should be read knowing
-//! that. The adopted embargo (144 s, RD-4) **exceeds one 120 s block interval**
-//! (`consensus_constants.json:daa_target_seconds`). That is deliberate, not an
-//! oversight: the embargo is memoryless, so first-hop black-hole recovery is a
-//! distribution, and crossing the boundary costs ~9 pp of "recover within one
-//! block interval" (0.657 → 0.565) on the rarest, worst case — a cost the
-//! privacy requirement dominates, and one the recovery distribution still clears
-//! against `MIN_RELAY_TIME` and the mempool lifetime with margin. The full
-//! accounting is `DAEMON_RELAY_PRIVACY.md` §15. The point of recording it here:
-//! block time is a **non-binding but named** constraint on this derivation, so
-//! any future re-derivation (shorter block time, longer embargo) re-evaluates it
-//! instead of crossing it silently the way the inherited 39 s constant crossed
-//! its own inputs. FTL (540 s) is *not* a term here — it validates block
-//! timestamps, not tx recovery latency (§15.4).
+//! The adopted embargo (144 s, RD-4) **exceeds one 120 s block interval**
+//! (`consensus_constants.json:daa_target_seconds`), and that is correct, not an
+//! oversight. In the reference frame (Dandelion++, Fanti et al.) the embargo
+//! lives on the *propagation* timescale — "slow enough to trigger only during a
+//! black-hole attack," set against negligible per-hop latency — and is never
+//! coupled to consensus. So this derivation answers to stem survival and only
+//! stem survival. **Do not add a block-time term.** Shortening the embargo to
+//! slide under one block interval is the `log10`-for-`ln` mistake (F-1) wearing a
+//! different hat: a non-privacy constraint contaminating a privacy-derived number
+//! — and, tellingly, the *buggy* 39 s sat comfortably under block time while this
+//! *correct* value crosses it. The 120 s boundary is reconciled at the
+//! *integration* layer as a non-cascade check (does black-hole recovery clear
+//! `MIN_RELAY_TIME` and the mempool lifetime — FTL is a reference scale, not a
+//! gate, since it validates block timestamps not tx recovery), never here. Full
+//! accounting: `DAEMON_RELAY_PRIVACY.md` §15.
 #![allow(clippy::cast_precision_loss)]
 // ^ Small integer parameters widen to `f64` for the survival sum. Every value
 //   involved is far below 2^53.
