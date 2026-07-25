@@ -1219,7 +1219,10 @@ instruments for both are built or scoped. What remains is the *arguments*:
   ([`P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`](../../src/cryptonote_config.h#L145)),
   which are *not* fresh gossip-fed draws, so they resist the re-roll — a bound of
   the form "≥ `k` of the `STEMS` slots are anchor-backed and thus not re-rollable"
-  is the shape of answer that would unblock `ρ`.
+  is the shape of answer that would unblock `ρ`. (This "repeated-refills" bound is
+  the obligation *under the current churn rotation*; the rotation-mechanism redesign
+  below **converts** it into a single-draw pin-formation bound by closing the
+  re-roll — a strictly easier thing to prove.)
 
   **`ρ` cannot be honestly chosen until this bound exists**: it must be decided
   against the largest `g` the anti-eclipse posture can *rule out* under repeated
@@ -1282,6 +1285,74 @@ instruments for both are built or scoped. What remains is the *arguments*:
   — the §6.9 concession, not a new caveat); and (b) the economic deterrent §6.10
   builds on pinning reaches the diffuse passive observer **only if stem-eligibility
   is gated on pinned tenure** — a design constraint, not a free property.
+
+  **Pinning is the *structural* lever on `g_max` — the rotation mechanism is where
+  it lives (and this is a different ledger from the §6.10 deterrent).** The
+  rotation/churn path is `g_max`-*increasing* today: `update()`'s fresh draw on
+  disconnect (W3c, §12.6) gives a churn-inducing adversary repeated chances at the
+  slot, so `g_max`-under-repeated-refills is strictly above single-draw `g`.
+  Pinning inverts that: a stable stem-eligible set that does not re-roll **closes
+  the W3c fresh-draw path**, so `g_max` stops growing through churn and freezes at
+  pin-formation composition. That lowers `g_max` **structurally — by removing the
+  re-roll amplification — not by economics**, and it is independent of the deterrent
+  argument entirely. This is the redesign the arc points at: the rotation mechanism
+  is where `g_max` structurally lives, and pinning is the lever that lowers it.
+
+  **It also simplifies what Q-10 owes.** With the re-roll closed, the p2p subsystem
+  no longer owes "bound `g` under repeated adversary-induced refills" (the hard
+  bound); it owes "bound `g` at pin formation under honest selection" — a
+  **single-draw bound, meaningfully more tractable**. The redesign does not just
+  lower `g_max`; it shrinks the unowned obligation.
+
+  **Pin + behavioural-floor = *conditional persistence*, which resolves the
+  double-edge.** Pure pinning's eclipse cost is that a bad pin is durable; the floor
+  makes persistence *conditional*. A pinned **dropper** is evicted the moment it
+  black-holes → the floor breaks bad pins, recovering the eclipse-resistance pure
+  pinning loses; the durable-bad-pin problem survives only for a *non-dropping* pin
+  — which is the §6.10 conscription case (durable, but out of scope for stopping and
+  taxed into infrastructure, not re-litigated). So pin + floor is stable enough to
+  close the re-roll and lower `g_max`, but not so stable a dropper gets tenure — the
+  best eclipse-vs-occupancy position the arc has found, because the floor breaks the
+  pin's downside for exactly the active dropper the pin would otherwise shelter.
+
+  **The rotation-mechanism design questions (ground at source before speccing — the
+  Q-10 round's agenda, not this doc's work):**
+  1. **Pin vs. epoch layering.** Dandelion++ already re-rolls the stem mapping every
+     ~10-min epoch (`change_channels`, `MIN_EPOCH`). Does pinning sit *under* the
+     epoch (the eligible *set* is pinned, per-epoch successor selection still rotates
+     within it — preserves per-epoch selection entropy while closing the pool
+     re-roll, the probable sweet spot) or *over* it (the successor itself pinned
+     across epochs)? Different `g_max`, different privacy profile; needs the analysis.
+  2. **The anchor relationship.** Anchors (`ANCHOR_CONNECTIONS_COUNT = 2`,
+     [`get_and_empty_anchor_peerlist`](../../src/p2p/net_peerlist.h#L497), restart-
+     persistent, `first_seen`-indexed, filled at
+     [net_node.inl:1820](../../src/p2p/net_node.inl#L1820)) are **already a partial
+     pin** — the eclipse-resistance mechanism is a pinning mechanism under another
+     name, so this is *not* greenfield. Is stem-eligibility pinning an extension of
+     anchors or a separate layer? And is **`anchors = 2` colliding with `STEMS = 2` a
+     hazard** — an adversary that becomes an anchor getting a persistent
+     stem-eligible slot for free?
+  3. **Pin lifetime / re-formation policy.** Too long → cannot recover from a bad
+     (passive) pin, and pins go stale as honest peers genuinely die; too short →
+     back to churn and the re-roll reopens. This is the actual tuning knob, and —
+     matching the arc's discipline — it must be *derived* against the
+     re-roll-vs-staleness trade-off, not inherited or picked.
+  4. **Re-draw source at formation.** Even pinned, the pin is *formed* from the
+     peerlist, which is enrichable — so `g`-at-pin-time is still the peerlist /
+     anti-eclipse problem. Pinning removes the re-roll *amplification*, not the base
+     `g`: **Q-10 is simplified, not eliminated.**
+
+  **The deterrent's one legitimate role here, kept in its own ledger.** §6.10 is a
+  documented *input* to how aggressively the pin-*lifetime* choice (Q3) weights
+  occupancy-resistance vs. eclipse-resistance: if the covert-occupier population is
+  economically thinned, the occupancy risk *from that class* is lower relative to
+  eclipse risk. That is held as an **explicit, stated economic assumption, never
+  baked into `g_max`**, and flagged so a future reader sees exactly which knob rests
+  on an adversary-budget assumption rather than on protocol structure. **The clean
+  separation the arc keeps having to redraw:** the rotation redesign lowers `g_max`
+  *structurally* (worst-case bound); the deterrent shifts the adversary *population*,
+  not the bound. Conflating "lowers the bound" with "thins the population" is the
+  error caught four times now in different costumes — they stay in separate ledgers.
 
 **Closed in Rounds 1–2:**
 
