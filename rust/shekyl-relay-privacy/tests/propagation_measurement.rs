@@ -1555,9 +1555,18 @@ fn origin_exposure_meets_target_via_reshape_not_embargo() {
     );
 }
 
-/// **§13 verified by re-run.** The δ increment-form adopt-criterion, measured
-/// end-to-end (RD-4 stem support, STEMS=2, 144 s embargo) rather than composed by
-/// hand. Reproduces the review's table and confirms reshape drives δ→0.
+/// **§13 verified by re-run — verification, not a decision target.** The δ
+/// increment-form adopt-criterion, measured end-to-end (RD-4 stem support,
+/// STEMS=2, 144 s embargo) rather than composed by hand. Reproduces the review's
+/// table and confirms reshape drives δ→0.
+///
+/// This test's permanence is the point *and* the hazard: it keeps the number
+/// honest (RD-4) but must not be read as canonical decision authority. The leak
+/// it pins belongs to *fluff-on-expiry*, which §14 replaces with reshape; picking
+/// `ρ`/`δ_max` against this table tunes a leak we remove. The δ a decision is
+/// taken against is the W3 residual (two-slot occupancy instrument, §12.5). Kept
+/// because RD-4 says measure your numbers — not because every measured number
+/// votes.
 #[test]
 fn precision_increment_reproduces_delta_table() {
     use shekyl_relay_privacy::conformance::simulate_precision_increment;

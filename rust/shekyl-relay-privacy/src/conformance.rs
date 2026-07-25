@@ -1702,6 +1702,14 @@ pub fn simulate_origin_exposure<R: RelayRng + ?Sized>(
 /// The δ increment-form adopt-criterion (§13), measured end-to-end rather than
 /// composed by hand.
 ///
+/// **Not a decision variable (§13 banner, §14).** This measures the leak of
+/// *fluff-on-expiry* — the mechanism §14 *replaces* with reshape because it
+/// spends privacy for performance. The number is kept and tested per RD-4
+/// (*measure your numbers*), but that does not make it a tuning target: do not
+/// pick `ρ`/`δ_max` against it, because reshape drives it to ~0. The live `δ` a
+/// decision is taken against is the W3 residual, measured by the two-slot
+/// occupancy instrument (§12.5), not this.
+///
 /// `δ := Precision_joint(C1 + C3) − Precision_joint(C1)`, where a
 /// `Precision_joint` is `P(the adversary's single best origin-guess is correct,
 /// per transaction)`:

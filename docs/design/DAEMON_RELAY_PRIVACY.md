@@ -1573,11 +1573,26 @@ is the sole `δ` left to bound.
 
 ---
 
-## 13. The ε adopt-criterion, in increment-form (Q-9 resolved in form)
+## 13. The ε adopt-criterion (form only) — superseded as a decision basis by §14
+
+> **⚠ Not a decision variable — read before the table.** §14 supersedes this
+> section as a *decision* basis. The δ table below measures the precision
+> increment of **fluff-on-expiry**, the mechanism §14 established spends privacy
+> for performance and therefore **replaces** with reshape rather than tunes. It
+> is retained, verified, and permanently tested per RD-4 (*measure your
+> numbers*) — but **verified is not the same as decision-input.** Do **not**
+> choose `ρ` or `δ_max` against these numbers: reshape drives every one of them
+> to ~0 (§13.4), so a `ρ` picked here would tune a leak we are *removing*, not
+> sizing one we are keeping. The only `δ` a `ρ` decision is taken against is the
+> **W3 residual** — the irreducible both-slots-adversarial leak that *survives*
+> reshape — measured by the two-slot occupancy instrument (§12.5, Round-3
+> build 1), not here. The polish of a re-runnable, permanently-tested number is
+> exactly what creates the pull to tune it; the pull is wrong, and this banner is
+> where it is refused.
 
 Q-9 required `ε` derived as an *increment*, not a level, in the units the
 instrument reports, so the derivation and the measurement meet at a defined seam.
-Here it is, and it closes.
+Here is the *form*, and the verified increment of the mechanism §14 replaces.
 
 ### 13.1 The formula
 
