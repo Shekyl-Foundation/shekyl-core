@@ -1316,7 +1316,8 @@ instruments for both are built or scoped. What remains is the *arguments*:
   pin's downside for exactly the active dropper the pin would otherwise shelter.
 
   **The rotation-mechanism design questions (ground at source before speccing — the
-  Q-10 round's agenda, not this doc's work):**
+  Q-10 round's agenda, not this doc's work; the substrate is now grounded in §12.8,
+  which resolves Q2 to an admission-policy mismatch and reframes Q1 as a measurement):**
   1. **Pin vs. epoch layering.** Dandelion++ already re-rolls the stem mapping every
      ~10-min epoch (`change_channels`, `MIN_EPOCH`). Does pinning sit *under* the
      epoch (the eligible *set* is pinned, per-epoch successor selection still rotates
@@ -2096,6 +2097,86 @@ contributor looking at the ProxyMark attack must not "fix" it by bumping STEMS t
 leak and moves off the expander-minimum. The constant now carries this reasoning
 here, at its C++ definition site, and on the `StemGraph::QuasiFourRegular` variant
 the crate uses.
+
+### 12.8 Rotation-mechanism grounding (the substrate the Q-10 round rests on)
+
+Grounded at source before any spec, per the arc's discipline. These four facts are
+durable independent of which pinning architecture wins; the Q-10 design (§7) sits on
+them.
+
+**G-1 — stem *selection* is public/clearnet-zone only.** `send_txs`
+([levin_notify.cpp:840-851](../../src/cryptonote_protocol/levin_notify.cpp#L840))
+routes noise zones (Tor/I2P) through the covert noise channel and **converts a
+`stem` relay to `local`** ("Dandelion++ stem not supported over noise networks");
+only the public zone runs `dandelionpp_notify` → `get_stem` → `out_mapping_`
+selection. So the `out_mapping_` occupancy surface — W3/W3c, `g_max`, the entire
+Q-10 target — is a **clearnet mechanism**: a Tor origin injects via the noise
+channel and a public-zone node does the stem-forwarding; there is no public
+`out_mapping_` of a Tor origin to occupy. *Reconciliation with §6.5/§6.6 (verified
+at source, since those sections are already pushed):* those model the **fluff
+phase's** inbound observability, which is transport-gated at
+[levin_notify.cpp:448](../../src/cryptonote_protocol/levin_notify.cpp#L448)
+(`fluff_notify` runs per-zone; on Tor it fluffs outbound-only). That is a
+*different phase* from stem selection, so "fluff visibility is transport-gated"
+(§6.3) and "stem selection is public-only" (here) are **consistent**, not in
+tension — Tor removes the fluff-inbound observer *and* routes the origin around
+stem-occupancy entirely.
+
+**G-2 — two re-roll paths, and the churn one fires on exactly the black-hole
+trigger.** (a) *Epoch boundary:* `change_channels`
+([levin_notify.cpp:587-617](../../src/cryptonote_protocol/levin_notify.cpp#L587))
+**replaces the whole `connection_map` with a fresh rebuild** every ~10 min
+(`MIN_EPOCH = 10`, `EPOCH_RANGE = 30 s`) — the deliberate per-epoch rotation, and
+the cross-epoch independence §6.8's intersection defence rests on. (b) *Mid-epoch
+churn:* `update_channels::run` → `map.update()`
+([levin_notify.cpp:528-536](../../src/cryptonote_protocol/levin_notify.cpp#L528),
+the fresh-draw refill at [dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160))
+fires on the **stem-send-*failure* retry**
+([dandelionpp_notify:575](../../src/cryptonote_protocol/levin_notify.cpp#L575),
+"connection list may be outdated, try again") and on `new_out_connection`
+([net_node.inl:1349](../../src/p2p/net_node.inl#L1349)). So the W3c re-roll is
+triggered by exactly the successor-unreachable case that correlates with the
+black-hole / reshape trigger — grounding the §12.6 coupling at its firing site.
+
+**G-3 — the stem pool is all synced outbound, anchors included.**
+`get_out_connections`
+([levin_notify.cpp:142-159](../../src/cryptonote_protocol/levin_notify.cpp#L142))
+returns every `!m_is_income` peer at height ≥ local; `out_mapping_` selects
+`STEMS = 2` from it. Anchors are outbound connections, so they sit **inside** the
+stem-eligible pool — the mechanism behind the `anchors = 2 ∥ STEMS = 2` hazard.
+
+**G-4 — anchor admission is *any* successful outbound handshake — no behavioural
+criterion.** `append_with_peer_anchor`
+([net_node.inl:1347](../../src/p2p/net_node.inl#L1347)) is called on **every**
+successful outbound handshake, unconditionally; on reconnect the 2 anchor slots are
+filled *first* ([net_node.inl:1820](../../src/p2p/net_node.inl#L1820)), then white
+(~70 %), then grey. So anchors are a **weak persistent pin populated by any
+accepted peer**, not a behavioural-floor pin.
+
+**What the grounding decides for the Q-10 design (framing, not spec):**
+
+- **Q2 is an admission-policy *mismatch*, not a coincidence hazard (lead with this
+  — it is grounded and immediate).** Because anchor admission is unfiltered (G-4),
+  "extend anchors into stem-eligibility pinning" would import an *unfiltered*
+  admission rule into the exact place the design needs a *filtered*
+  (behavioural-floor-gated) one. So the stem-eligibility pin must be a **separate,
+  stricter layer**, and `anchors = 2 ∥ STEMS = 2` (G-3) must be **broken** — an
+  anchor must not auto-confer stem-eligibility.
+- **Q1 is a *measurement* question, not a resolution.** Pinning the eligible set to
+  `K` peers and selecting `STEMS = 2` within it per epoch closes the churn re-roll
+  (G-2b: `update()` would draw from the pinned set, not the enrichable pool), but
+  the *cross-epoch* successor is then drawn from `K` instead of the ~12-peer pool.
+  Whether that helps or harms depends on a fact not yet measured: **does §6.8's
+  intersection bound need the cross-epoch successor drawn from the *full pool*, or
+  only *re-drawn at all*?** For small `K`, a pinned adversary's cross-epoch presence
+  rises from `~g` to `~1/K` conditional on holding a pinned slot — potentially
+  *worse*, and worse for exactly the steady low-rate origin §6.8 identified as the
+  exposed profile. The discriminating measurement — cross-epoch distinct-successor
+  count, pool-drawn vs. pinned-`K`, at fixed `g`-at-pin-formation — turns Q1 from an
+  argument into a number, the standard this arc holds every decision to. **Do not
+  claim pinning "folds occupancy and intersection into one `g` bound" until
+  measured:** a collapse is a simplification only if it is *conservative*; if `K` is
+  small it concentrates risk instead of bounding it.
 
 ---
 
