@@ -1776,6 +1776,68 @@ the same epoch* — because an implementation can otherwise satisfy the letter o
 draw. This also tightens Q-10: the `g`-bound it owes is a bound under *repeated
 adversary-induced refills*, not a single draw (see §7).
 
+### 12.7 Why `STEMS = 2` — the expander-minimum, and why the occupancy attack cannot be fixed by raising it
+
+`CRYPTONOTE_DANDELIONPP_STEMS = 2` is a **bare inherited constant**
+([cryptonote_config.h:101](../../src/cryptonote_config.h#L101): `2 // number of
+outgoing stem connections per epoch`), sitting directly above the 39 s embargo
+(line 106) with the same absence of justification F-1 exposed. Unlike the 39 s,
+**the 2 is correct** — but for a reason the tree does not record, and an unrecorded
+reason is exactly how the 39 s survived. It is the 39 s's *mirror image*, and more
+dangerous in one specific way: a *correct* undocumented constant invites a
+well-meaning "improvement" that a wrong one would have invited a fix for. So it must
+carry its derivation.
+
+**The 2 is the stem graph's out-degree (branching factor), not "two successors to
+pick from."** It is the corner solution of two opposing pressures, and it lands at 2
+because 2 is a *topological threshold*, not a tuning preference:
+
+- **Privacy wants 1.** A pure line graph — each node forwards to exactly one fixed
+  successor — is the most private honest-case topology: a single thin thread,
+  maximal anonymity-set per hop, the least for the backward-wave / first-spy
+  estimator to work with. Privacy-max, taken alone, would choose out-degree 1.
+- **But out-degree 1 is a black hole's paradise.** A functional graph (every node →
+  one successor) is a set of paths and cycles with a **single point of failure per
+  stem**: one black-holing node severs the entire stem below it, and the only
+  recovery is the embargo timeout → fluff. `STEMS = 1` makes the black-hole attack
+  maximally effective — one well-placed dropper kills a whole line.
+- **Out-degree ≥ 3 fans the stem toward a tree — a privacy regression.** Every extra
+  outgoing stem edge is another node observing your traffic *close to the source*,
+  and the paper's guarantee rests on the stem being approximately a **line** so the
+  fluff point is genuinely displaced from the origin along a single path. A high
+  branching factor fans the tx out early, hands the first-spy estimator more
+  early-position samples (the §6.5 channel), and trades privacy for robustness —
+  backwards for a privacy-max system.
+- **2 is the minimum that buys graph properties instead of line/tree properties.**
+  The paper's construction (§11) is an approximately **4-regular** anonymity graph —
+  2 in + 2 out per node — chosen because a random 4-regular graph is, with high
+  probability, an **expander**: no small cuts (you cannot sever the stem network by
+  removing a few nodes) and short average path length (the stem still completes
+  quickly). `STEMS = 2` is the **smallest** out-degree at which the stem topology
+  stops being severable lines and becomes a low-degree expander — the minimum
+  robustness privacy can afford, one edge past which is pure privacy cost.
+
+**The consequence for this arc — and why the seal is `g_max`, not STEMS.** The
+demonstrated occupancy attack (W3 / ProxyMark, §12.6) is tractable *because*
+`STEMS = 2` — "occupy the target's two outgoing stem slots" is only two to occupy.
+The naive fix is "raise STEMS so both-slot occupancy is harder." **That is backwards
+on the privacy axis:** raising STEMS fans the stem toward a tree and leaks *more* to
+the first-spy channel, and it moves the topology off the expander-minimum. You
+cannot fix the occupancy attack by widening the stem, because widening the stem is
+itself the privacy regression the count is set to avoid. The count is correctly 2
+and pinned by the privacy/robustness corner; the vulnerability is entirely in **who
+gets to be the two** — the selection layer (`g`, anchors, anti-eclipse), not the
+count layer. That is precisely why Round 3's seal landed on `g_max` (§7, Q-10) and
+not on STEMS: the branching factor is not the free variable; peer selection is.
+
+**Guard (matching the 39 s treatment).** `STEMS = 2` must not change without
+*re-deriving the expander property and re-pricing the first-spy fan-out*. A
+contributor looking at the ProxyMark attack must not "fix" it by bumping STEMS to 4
+— that trades a demonstrated active attack for an undemonstrated-but-real passive
+leak and moves off the expander-minimum. The constant now carries this reasoning
+here, at its C++ definition site, and on the `StemGraph::QuasiFourRegular` variant
+the crate uses.
+
 ---
 
 ## 13. The ε adopt-criterion (form only) — superseded as a decision basis by §14

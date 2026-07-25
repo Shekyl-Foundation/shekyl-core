@@ -55,15 +55,30 @@
 pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 
 /// The stem-graph shape, which fixes how many outbound peers carry stem
-/// traffic in an epoch.
+/// traffic in an epoch — i.e. the stem graph's out-degree.
+///
+/// The count is a topological corner, not a tuning knob (derivation:
+/// `DAEMON_RELAY_PRIVACY.md` §12.7). Privacy alone wants out-degree 1 (a pure
+/// line, maximal anonymity-set per hop), but 1 makes every stem a single-node
+/// black-hole point-of-failure; out-degree ≥ 3 fans the stem toward a tree and
+/// leaks more to the first-spy estimator. 2 is the *minimum* out-degree at which
+/// the stem graph becomes a low-degree expander (the paper's ~4-regular
+/// construction: no small cuts, short paths) rather than a set of severable lines
+/// — the least robustness privacy can afford. So the slot-occupancy attack
+/// (W3/ProxyMark) is *not* fixed by raising the count (that is a privacy
+/// regression); it is defended at the selection layer (`g_max`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StemGraph {
-    /// One stem peer per epoch. Lower linkability across transactions from the
-    /// same source, weaker against an adversary with graph knowledge.
+    /// One stem peer per epoch (out-degree 1). Most private in the honest case,
+    /// but a single black-holing successor severs the whole stem — the
+    /// point-of-failure `QuasiFourRegular` exists to remove. Not the shipped
+    /// value.
     Line,
-    /// Two stem peers per epoch, each source pinned to one of them. The
-    /// paper's recommendation, and what the inherited
-    /// `CRYPTONOTE_DANDELIONPP_STEMS = 2` implements.
+    /// Two stem peers per epoch, each source pinned to one of them (out-degree 2).
+    /// The paper's recommendation and what the inherited
+    /// `CRYPTONOTE_DANDELIONPP_STEMS = 2` implements: the expander-minimum that is
+    /// robust to a single dropper while staying as near a line as a robust graph
+    /// can be. Do not raise to harden occupancy — see the type-level note above.
     #[default]
     QuasiFourRegular,
 }
