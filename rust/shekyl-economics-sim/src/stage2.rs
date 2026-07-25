@@ -252,7 +252,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 /// sustained years (past the ramp) for a candidate, at a given opportunity-cost
 /// rate. `≥ 1` ⇒ the candidate keeps the staker whole every sustained year.
 ///
-/// `budget = emission_leg + total_burn · share(n)` (SKL). Burden (F-2) is the
+/// `budget = emission_leg + total_burn · share(n)` (SKL). Burden (F-G) is the
 /// **locked-bond opportunity cost** (the binding term) plus a minor storage
 /// term: `burden = bond_opp_cost_skl(n, rate) + storage_fiat / price`. The
 /// dominant term is **price-independent** (SKL vs SKL), so `price` and `kryder`
@@ -289,7 +289,7 @@ pub fn a1_min_clearance_ratio(
 
 /// A1 clearance for one candidate (or the flat baseline): the min clearance
 /// ratio at each opportunity-cost-rate-band member, at the binding 0%/yr Kryder
-/// and mid price for the minor storage term (F-2; the dominant term is
+/// and mid price for the minor storage term (F-G; the dominant term is
 /// price-independent).
 #[derive(Debug, Clone, Serialize)]
 pub struct A1CandidateResult {
@@ -317,7 +317,7 @@ fn a1_candidate_result(
     is_flat: bool,
 ) -> A1CandidateResult {
     // Mid price ($0.10) for the minor storage term; the binding bond-opp-cost
-    // term is price-independent, so this choice barely moves the verdict (F-2).
+    // term is price-independent, so this choice barely moves the verdict (F-G).
     let mid_price = SKL_FIAT_PRICE_BAND[1];
     let min_ratio_by_rate = OPP_COST_RATE_BAND
         .iter()
@@ -338,17 +338,17 @@ fn a1_candidate_result(
     }
 }
 
-/// A1 — burden clearance (§12.2, reshaped by F-2). For each scenario, the min
+/// A1 — burden clearance (§12.2, reshaped by F-G). For each scenario, the min
 /// `budget/burden` ratio of the flat-25 baseline and every candidate, across the
 /// opportunity-cost-rate band. `budget = emission_leg + fee_burn·share(n)`;
 /// `burden = locked-bond opportunity cost (binding) + minor storage`. Prints a
 /// stderr table, returns the data.
 fn a1_clearance_report(params: &SimParams) -> Vec<A1ScenarioResult> {
     eprintln!(
-        "\nA1 — burden clearance (§12.2, F-2): min budget / (bond-opp-cost + storage) ratio.\n\
+        "\nA1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.\n\
          budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R{R} x n x rate.\n\
          >=1.0 keeps the staker whole every sustained year. Columns = opp-cost rate {RATES:?} (10% binding).\n\
-         Storage is a minor add-on (F-2: ~100x smaller); the binding term is PRICE-INDEPENDENT (SKL vs SKL).",
+         Storage is a minor add-on (F-G: ~100x smaller); the binding term is PRICE-INDEPENDENT (SKL vs SKL).",
         R = REPLICAS_PER_SHARD,
         RATES = OPP_COST_RATE_BAND,
     );

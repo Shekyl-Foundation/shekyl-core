@@ -233,7 +233,7 @@ pub fn scenario_8_late_tail(params: &SimParams) -> ScenarioConfig {
 /// tail (years 20–60, 15 tx/block). Run to **60 years** so the emission leg is
 /// exhausted (`0.9^60 ≈ 0.002` of the initial staker-emission share, and most
 /// supply emitted) — the only regime where the fee leg is the primary budget and
-/// escalation is decisive (A1's binding case; F-2). None of scenarios 1–8 reach
+/// escalation is decisive (A1's binding case; F-G). None of scenarios 1–8 reach
 /// it (`scenario_8` is high-history but *busy* and only 5 years long).
 pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {

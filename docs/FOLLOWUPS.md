@@ -5268,6 +5268,25 @@ sustainability is unaffected by the recalibration.
   burn rate is now `activity × supply` (F-D,
   [`design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](./design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)).
 
+- **GENESIS-FREEZE: cap the coinbase output count in consensus (F-H, spawned
+  Stage-2 A4 grounding, 2026-07-24).** Coinbase outputs are curve-tree leaves
+  that count toward `frozen_segment_count` yet **pay no fee**, so the W9 fee-path
+  burden-coupling defense has a second, unpriced face. **Verified at source:**
+  `prevalidate_miner_transaction` / `validate_miner_transaction`
+  (`blockchain.cpp:1594`/`1634`) check output overflow, type, key validity,
+  commitment mask, and decomposed amount — **no output-*count* bound** on a
+  foreign coinbase; the honest template's `max_outs = 1` binds only the builder.
+  *Fix:* add a consensus coinbase output-count cap in
+  `prevalidate_miner_transaction`. **Recommended cap = 1** (staker pool accrues
+  off-coinbase per the `:6081` accrual; the template has only ever built 1;
+  uniform coinbase is privacy-consistent). **Principle:** decided on consensus
+  grounds — the test harness (`chaingen`/`block_reward` multi-out coinbases,
+  inherited Monero scaffolding) **conforms to the cap**, the cap is not inflated
+  for it. *Rule-21 reopen (sole trigger):* a consensus consumer that
+  structurally requires a multi-output coinbase, as its own design round. Pins
+  the state unrepresentable; forecloses the miner-stuffer channel so A4 stays
+  fee-path-only. See `design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.3 F-H.
+
 - **Remove or retain the orphaned `ActivityMetric.total_staked` observable
   (spawned Stage-1b `stake_factor` delete, commit `7256962`, 2026-07-24).** The
   F-D delete severed burn's only consumer of `total_staked`

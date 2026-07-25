@@ -65,10 +65,10 @@ pub const REPLICAS_PER_SHARD: u64 = 6;
 /// Bond-floor collateral per shard-replica, SKL (= `ARCHIVAL_BOND_FLOOR_ATOMIC`
 /// `750_000_000` / `COIN 1e9`). Locked and **returned on unbond**, so its cost
 /// to the staker is the **opportunity cost** of the lock, not the principal
-/// (Stage-2 finding F-2 — the binding staker burden, ~100× storage).
+/// (Stage-2 finding F-G — the binding staker burden, ~100× storage).
 pub const BOND_FLOOR_SKL: f64 = 0.75;
 
-/// Exogenous opportunity-cost-rate band (F-2, ratified): annual yield foregone
+/// Exogenous opportunity-cost-rate band (F-G, ratified): annual yield foregone
 /// on locked bond capital. `2%` risk-free / `5%` moderate-alt / `10%` high;
 /// **10% is the binding case** (highest bar for staking to clear). Another
 /// least-knowable exogenous, swept like Kryder/price.
@@ -82,7 +82,7 @@ pub fn locked_bond_skl(n: u64) -> f64 {
 }
 
 /// Annual opportunity cost of the locked bond capital, SKL — the **binding**
-/// staker burden (F-2). Price-**independent**: it is SKL yield foregone on SKL
+/// staker burden (F-G). Price-**independent**: it is SKL yield foregone on SKL
 /// capital, so the exogenous `SKL/fiat` price cancels against the SKL-denominated
 /// reward in the dominant clearance term (only the minor storage term keeps it).
 #[must_use]

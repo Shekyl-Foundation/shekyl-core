@@ -655,7 +655,7 @@ Grounded in `shekyl-economics-sim`:
 
 | Arm | Question | Metric | Pass / report criterion (DQ-2E) |
 | --- | --- | --- | --- |
-| **A1 burden clearance** | Does the escalated pool keep the staker's reward above the cost of their **growing locked-bond capital** through the fee era? (F-2: storage alone is trivially met) | `budget_skl(candidate)` vs `opp_cost_skl(n, rate) + storage/price`, over the trajectory, ∀ opp-cost rate in the band | **Report** the (rate, shape, scenario) region where `budget ≥ burden` sustained; a shape "clears" iff it holds under the **binding 10%/yr** rate (and 0%/yr Kryder for the minor storage term). The dominant term is price-independent |
+| **A1 burden clearance** | Does the escalated pool keep the staker's reward above the cost of their **growing locked-bond capital** through the fee era? (F-G: storage alone is trivially met) | `budget_skl(candidate)` vs `opp_cost_skl(n, rate) + storage/price`, over the trajectory, ∀ opp-cost rate in the band | **Report** the (rate, shape, scenario) region where `budget ≥ burden` sustained; a shape "clears" iff it holds under the **binding 10%/yr** rate (and 0%/yr Kryder for the minor storage term). The dominant term is price-independent |
 | **A2 distributional shift (W6)** | The D1 fix moves ex-zero bulk holders into `Σwork`, diluting scarce-holders' shares of a fixed budget | Scarce-holder share pre- vs post-D1 across the archiver distribution | **Descriptive** — quantify the redistribution; **flag** if it strands scarce holders below their marginal cost |
 | **A3 stranding** | What fraction of diverted budget goes unminted? | Σ unclaimed `reward_P` past `MAX_CLAIM_AGE_W = 26` epochs ÷ Σ budget | **Report** the stranded fraction; joint with A1 (stranded budget is not burden-clearing) |
 | **A4 output-stuffing (W9)** | Does stuffing pay the attacker — is there an early-chain regime where their manipulation profits? | **attacker ROI** = marginal captured revenue (their stake-fraction of the Δpool, discounted over the horizon) ÷ marginal cost (weight-fees + their share of the burn), on `scenario_4`(output-variant) × `scenario_7`(bootstrap); `Δshare/Δburden` reported as a coherence **diagnostic** | **Pass** iff attacker **ROI < 1** everywhere in the sweep — the executable form of "stuffing it funds it" (§6.2); calibrated to the March-2024 profile (DQ-2C). Fail → the §11.3 rule-21 per-output fee-floor reopen, **not** a D2 redesign |
@@ -670,12 +670,12 @@ cannot; A1 runs on it as the binding case.
 
 ### 12.3 Design questions (recommended dispositions; ratify or correct)
 
-- **DQ-2A — burden cost model + "clears". ⚠ REFINED by a Stage-2 finding (F-2,
+- **DQ-2A — burden cost model + "clears". ⚠ REFINED by a Stage-2 finding (F-G,
   ratified) — see below; the original storage-dominant form is retained as a
   minor term.** *Original:* `burden_cost(E) = n(E) · shard_bytes ·
   storage_fiat_per_byte(E)` (Kryder-declining), serve-bandwidth a secondary
   sensitivity. "Clears" = the pool's reward `≥` the burden, sustained.
-  - **F-2 (Stage-2 A1 finding, ratified) — storage is *not* the binding
+  - **F-G (Stage-2 A1 finding, ratified) — storage is *not* the binding
     constraint; the locked-bond opportunity cost is.** Building A1 showed
     storage-cost clearance is met by **4–6 orders of magnitude even for flat-25**
     (whole-network storage ≈ `$2/yr` at 10k shards; the budget's emission leg
@@ -776,6 +776,38 @@ cannot; A1 runs on it as the binding case.
   the per-output cost differ from Monero's. The Monero figures are an
   **order-of-magnitude anchor + proof-of-willingness**, never a number to
   hard-code; no ring-sig byte economics enter the sim.
+  - **A4 build pins (ratified round D-1..D-5):** the cost is single-sourced
+    through the production **`predict_size_and_weight`** (a byte-mirror of
+    `Transaction::write`) for a **1-in / 16-out** stuffer — a tx *shape* (1
+    input minimises the per-input FCMP membership proof; 16 = `MAX_OUTPUTS` =
+    `2^4`, zero BP+ padding, maximises leaves/tx), **not** a black-marble/decoy
+    construct (FCMP++ has no rings; the leaves inflate `frozen_segment_count`,
+    they do not poison a decoy pool). Fee floor `FEE_PER_BYTE = 300` atomic
+    (genesis-provisional); net cost carries the fee-rebate term. Revenue is
+    attacker-favouring (r=1 first-mover capture, undiscounted `H ∈ {1,5,10}`,
+    high `w_a`); gate is **attacker ROI < 1** everywhere.
+  - **F-H (Stage-2 finding, verified at source) — the coinbase channel is
+    fee-free leaves; needs a consensus cap.** Coinbase outputs are curve-tree
+    leaves that count toward `frozen_segment_count` **and pay no fee**, so the
+    fee-path cost model prices only one of two stuffing channels. Verified: the
+    miner-tx validation path (`prevalidate_miner_transaction`,
+    `validate_miner_transaction`, blockchain.cpp:1594/1634) checks overflow,
+    output type, key validity, commitment mask, and decomposed amount — **no
+    output-*count* bound** on a foreign coinbase (the honest template pins
+    `max_outs = 1`, but that binds only the builder). **Disposition:** add a
+    consensus coinbase output-count cap in `prevalidate_miner_transaction` — a
+    pre-genesis genesis-freeze item (Stage-3-adjacent), the cheapest
+    unrepresentable-state fix. It **forecloses the miner channel, so A4 stays
+    fee-path-only** (no miner-stuffer arm). **Principle (pinned now, value at
+    implementation):** the bound is decided on **consensus grounds; the test
+    harness conforms to it, never the reverse** — `chaingen`/`block_reward`
+    building multi-out coinbases is inherited Monero scaffolding and gets fixed
+    to match, the cap is not inflated to spare test churn. **Recommended cap =
+    1** on the merits: the staker pool accrues **off-coinbase**
+    (`blockchain.cpp:6081` accrual), the template has only ever built 1, and a
+    uniform coinbase shape is the privacy-consistent choice. **Rule-21 reopen —
+    sole legitimate trigger:** a consensus consumer that *structurally* requires
+    a multi-output coinbase, reviewed as its own design round.
 - **DQ-2D — escalation-family parameterization. ✅ ratified.** Banded-PL, floor
   25%, monotone in `n`, saturating to asymptote `A ∈ {50%, 75%, 90%}` (all `<
   100%`), swept over knee position `n_k` and initial slope. Integer `curve_milli`
