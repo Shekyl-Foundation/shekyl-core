@@ -137,9 +137,13 @@ fn fcmp_proof_size(n_in: InputCount, tree_depth: u8) -> usize {
         .unwrap_or(FCMP_PROOF_SIZE_MAX)
 }
 
-/// `ExtraField::PqcKemCiphertext`: tag + varint(len) + ciphertext.
-fn extra_kem_field_weight() -> usize {
-    1 + varint_len(HYBRID_KEM_CT_LEN as u64) + HYBRID_KEM_CT_LEN
+/// The single `ExtraField::PqcKemCiphertext` (`0x06`) field: tag +
+/// varint(len) + `n_out` concatenated per-output ciphertexts — the
+/// packing `Extra::for_hybrid_transfer` emits and every reader slices
+/// at `o * HYBRID_KEM_CT_LEN`.
+fn extra_kem_field_weight(n_out: usize) -> usize {
+    let blob = n_out * HYBRID_KEM_CT_LEN;
+    1 + varint_len(blob as u64) + blob
 }
 
 /// `ExtraField::PqcLeafHashes` (`0x07`): tag + varint(len) + `n_out × 32`
@@ -206,7 +210,7 @@ pub(crate) fn predict_weight(
     let n_in = n_in.get();
     let n_out = n_out.get();
     let extra_len = EXTRA_PUBKEY_FIELD_WEIGHT
-        + n_out * extra_kem_field_weight()
+        + extra_kem_field_weight(n_out)
         + extra_leaf_hashes_field_weight(n_out);
     [
         varint_len(TX_VERSION),            // version

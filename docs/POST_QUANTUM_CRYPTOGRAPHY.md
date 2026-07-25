@@ -102,8 +102,11 @@ preventing transaction linkability.
   "X25519 Binding to View Key" and "DH Semantics" below)
 - PQ component: `ML-KEM-768` (NIST level 3)
 - Combining rule: `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = context_bytes)`
-- ML-KEM ciphertexts are stored in `tx_extra` under tag `0x06`
-  (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`), one per output (1088 bytes each).
+- Hybrid KEM ciphertexts are stored in `tx_extra` under a **single**
+  `0x06` field (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`): all outputs'
+  ciphertexts concatenated in output order, one
+  `x25519_ct[32] || ml_kem_ct[1088]` entry (1120 bytes) per output;
+  readers slice output `o`'s entry at offset `o × 1120`.
 
 See "Per-Output PQC Key Derivation" section below for the full flow.
 
@@ -294,7 +297,9 @@ The derivation flow is:
    ml_kem_seed = per_output_seed[32..64]
    (ml_kem_shared_secret, ml_kem_ciphertext) = ML-KEM-768.EncapsFromSeed(recipient_ek, ml_kem_seed)
    ```
-   `ml_kem_ciphertext` (1088 bytes) is stored in `tx_extra` tag `0x06`.
+   `ml_kem_ciphertext` (1088 bytes) is stored — prefixed by the 32-byte
+   X25519 ephemeral key, at this output's offset within the single
+   concatenated `tx_extra` `0x06` field (see §Hybrid KEM above).
 5. **Combined shared secret:**
    ```
    combined_ss = HKDF-SHA-512(
@@ -1145,8 +1150,10 @@ The hybrid KEM combines:
 - **Combining rule:** `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = context_bytes)`
 
 The combined shared secret feeds into per-output PQC key derivation (see
-§Per-Output PQC Key Derivation). ML-KEM ciphertexts (1088 bytes each) are
-stored in `tx_extra` tag `0x06` (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`).
+§Per-Output PQC Key Derivation). Hybrid KEM ciphertexts
+(`x25519_ct[32] || ml_kem_ct[1088]`, 1120 bytes per output) are stored
+concatenated in output order in the single `tx_extra` tag `0x06` field
+(`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`).
 
 Implementation: `rust/shekyl-crypto-pq/src/kem.rs`
 
