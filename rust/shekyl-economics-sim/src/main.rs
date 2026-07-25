@@ -1,5 +1,6 @@
 mod budget;
 mod budget_scenarios;
+mod burden;
 mod engine;
 // The `RecordedChainFixture` recorder is test-substrate only: it
 // generates / verifies `docs/test_vectors/economics/*.json` for the
@@ -9,6 +10,7 @@ mod engine;
 #[cfg(test)]
 mod record;
 mod scenarios;
+mod stage2;
 
 use budget::run_budget_scenario;
 use budget_scenarios::all_budget_scenarios;
@@ -36,6 +38,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--fb1c-c2") {
         run_fb1c_c2(&params);
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--stage2") {
+        stage2::run_stage2(&params);
         return;
     }
 
