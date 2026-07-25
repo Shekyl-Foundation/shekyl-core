@@ -67,6 +67,28 @@
   estimate; principal lane only — P-lane fees are canonical and never
   user-facing).
 
+### Fixed
+
+- **scanner: KEM-ciphertext extra packing — vout ≥ 1 of multi-output
+  txs was silently unscannable** (`fix/kem-extra-packing`; closes the
+  FOLLOWUPS V3.0 genesis gate "KEM-ciphertext extra packing mismatch",
+  WI-RPC-3 review F-14; pre-genesis, no compat shim per rule 60).
+  `Extra::for_hybrid_transfer` emitted one `0x06` `PqcKemCiphertext`
+  extra field per output, but every reader — the scanner's scan path,
+  the proof-check path, `shekyl-wire::pqc_kem_per_output`, and the C++
+  `wallet2` reader — consumes a single field and slices output `o`'s
+  ciphertext at `o × HYBRID_KEM_CT_LEN` within it (the packing the C++
+  writers already emitted). Every output at vout ≥ 1 of a
+  production-built multi-output tx — including all change — was
+  therefore undetectable by the wallet and unverifiable by inbound
+  proof checking. The writer now concatenates all per-output
+  ciphertexts into one `0x06` field (readers unchanged);
+  `tx_fee_model::extra_kem_field_weight(n_out)` accounts the single
+  field so `predict_weight` stays byte-exact; bench fixtures serialize
+  through the production writer; regression test asserts both vouts of
+  a production-packed 2-output tx recover through `Scanner::scan`.
+  On-chain data was intact throughout — a rescan recovers.
+
 ### Changed
 
 - **proofs: tx-proof wire format carries per-entry vout indices**

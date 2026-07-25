@@ -47,8 +47,25 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **KEM-ciphertext extra packing mismatch — vout ≥ 1 unscannable in
-  production-built transactions** (added 2026-07-24; discovered during
+- **~~KEM-ciphertext extra packing mismatch — vout ≥ 1 unscannable in
+  production-built transactions~~** **CLOSED 2026-07-25**
+  (`fix/kem-extra-packing`): landed exactly per the fix direction below
+  — `Extra::for_hybrid_transfer` concatenates all per-output
+  ciphertexts into a single `0x06` field (readers unchanged; the C++
+  writers already used this packing, so the Rust writer was the sole
+  deviant), `tx_fee_model.rs::extra_kem_field_weight(n_out)` accounts
+  one tag + one varint over the concatenated blob (the
+  `predict_weight_matches_wire_weight` KAT validates against the real
+  serializer up to n_out = 4), the bench fixture assembly now
+  serializes through the production writer instead of hand-packing,
+  and the regression test
+  `multi_output_tx_recovers_every_vout_through_scanner_scan` asserts
+  both vouts of a production-packed 2-output tx recover through
+  `Scanner::scan` with an ownership hit (verified failing against the
+  pre-fix writer). The `IMPLEMENTATION_INDEX.md` §5 row is updated
+  BROKEN → FIXED. Original entry follows for the record.
+
+  (added 2026-07-24; discovered during
   WI-RPC-3 proofs work, `feat/wallet-rpc-proofs`; **funds-visibility bug,
   fix before genesis**). The writers and readers of the `0x06`
   `PqcKemCiphertext` tx_extra field disagree on packing. Writers —
