@@ -1,0 +1,31 @@
+[package]
+name = "shekyl-tx-weight"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Structural transaction-weight predictor (byte-mirror of shekyl_wire::Transaction::write) + bounded input/output counts. Hoisted from shekyl-engine-core so the wallet fee path and shekyl-economics-sim share one single-sourced weight model (docs/design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §12.3 D-1)."
+
+[dependencies]
+# MAX_INPUTS / MAX_TREE_DEPTH from their UPSTREAM home (never via tx-builder's
+# re-export — that would invert the arrow this crate exists to keep clean).
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+# Tx wire layout constants + the canonical Bp+ clawback formula + MAX_OUTPUTS.
+shekyl-wire = { path = "../shekyl-wire" }
+# ML-KEM-768 ciphertext length (the per-output hybrid KEM extra field).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# varint byte-length.
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+
+[dev-dependencies]
+# Parity test only: builds a wire `Transaction` by hand with the real `Extra`
+# serializer, then asserts `predict_weight == Transaction::weight()` — the
+# single-source guarantee. Dev-only, so it never pollutes the production surface
+# (the same discipline shekyl-wire itself models). No cycle: shekyl-scanner does
+# not depend on this crate.
+shekyl-scanner = { path = "../shekyl-scanner" }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+
+[lints]
+workspace = true

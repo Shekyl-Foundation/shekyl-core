@@ -18,6 +18,13 @@ members = [
     # Shekyl-owned replacement for the vendored shekyl-oxide block/tx/ct modules
     # (docs/design/GENESIS_TX_WIRE_FORMAT.md, Decision 1 / §4).
     "shekyl-wire",
+
+    # Structural tx-weight predictor (byte-mirror of shekyl_wire::Transaction::write)
+    # + bounded input/output counts. Hoisted from shekyl-engine-core so the wallet
+    # fee path and shekyl-economics-sim share one single-sourced weight model
+    # (docs/design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §12.3 D-1).
+    "shekyl-tx-weight",
+
     "shekyl-economics",
     "shekyl-economics-sim",
 
