@@ -464,6 +464,7 @@ mod tests {
             spent_height: None,
             key_image: None,
             awaiting_confirmation: lock,
+            spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: 100 + SPENDABLE_AGE,

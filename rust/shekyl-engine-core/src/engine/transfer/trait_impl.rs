@@ -83,8 +83,22 @@ where
     }
 
     fn release_awaiting_confirmation(&self, tx_hashes: &HashSet<TxHash>) -> usize {
-        self.ledger.with_ledger_block_mut(|ledger| {
-            submit_watchdog::release_awaiting_confirmation(ledger, tx_hashes)
+        // The confirmed-absent verdict releases the F14 locks ONLY. It
+        // deliberately does NOT touch the WI-RPC-3 retention record:
+        // the release trigger — a terminal reject when the held bytes
+        // are re-offered to the wallet's own daemon — is a *local
+        // relay verdict* (fee policy, an unmapped reject cause), not a
+        // proof of network-wide absence. Remote pools can still carry
+        // and mine the tx, and a deleted secret would permanently
+        // disable the OUTBOUND proof for a payment that late-settles.
+        // The record stays on its `pending_tx_hashes` reference:
+        // re-confirmation retires it through the reconciler like any
+        // pending tx, and a truly-dead tx leaves a bounded
+        // safe-direction residue — the retention policy's deliberate
+        // trade (`docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE
+        // death rule).
+        self.ledger.with_wallet_ledger_mut(|wallet| {
+            submit_watchdog::release_awaiting_confirmation(&mut wallet.ledger, tx_hashes)
         })
     }
 
@@ -294,8 +308,7 @@ where
                 let signer_err: SignerError = err.into();
                 fail_build_after_attempted(self.sink.as_ref(), map_signer_error(&signer_err))
             })?;
-        let tx_bytes = signed.tx_bytes().to_vec();
-        let pending = self.commit_built_sync(&request, &meta, reference, tx_bytes)?;
+        let pending = self.commit_built_sync(&request, &meta, reference, signed)?;
         reservation_cleanup.disarm();
         Ok(pending)
     }

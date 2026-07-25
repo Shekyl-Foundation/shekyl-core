@@ -4,6 +4,60 @@
 
 ### Added
 
+- **Transaction proofs and reserve proofs across the wallet stack**
+  (WI-RPC-3; Phase 2c, `feat/wallet-rpc-proofs`). The `shekyl-proofs`
+  DLEQ primitives are projected through the Engine
+  (`engine/proofs.rs` workflow with explicit `ProofsCtx` per
+  `ENGINE_COMPOSITION_DECOMPOSITION.md`; KeyActor generates inbound and
+  reserve proofs so secrets never leave the actor), the
+  `wallet_rpc.yaml` contract, `shekyl-wallet-rpc`
+  (`get_tx_proof`, `check_tx_proof`, `get_reserve_proof`,
+  `check_reserve_proof`; the `check_*` pair is wallet-less — a verifier
+  needs only a daemon), and the CLI (RESERVED stubs un-stubbed, with
+  disclosure warnings and proof strings kept out of readline history).
+  Proof strings are Bech32m (`shekyltxproof…`/`shekylreserveproof…`).
+  Prerequisite landed in the same tranche: the send path now retains
+  per-tx secrets in `TxMetaBlock.tx_keys` at dispatch, with the
+  spend-quadruple (`TransferDetails.spending_tx_hash`,
+  `KeyImageObserved.containing_tx_hash`) and reconciliation keeping the
+  I-2 no-orphans invariant through confirmation, reorg, and rescan.
+  Review hardening (F-13): `check_reserve_proof` rejects any proof
+  whose entries repeat a key image (`-29300` malformed) — entries
+  verify independently, so a duplicated unspent output would otherwise
+  inflate the proven reserve N-fold.
+  Review hardening (2026-07-24 high review, retention lifecycle): the
+  retention write moved from the submit-ACCEPTED verdict to dispatch
+  (persisted atomically with the in-flight flip, before the bytes can
+  reach the daemon), closing the crash/restart window that silently
+  lost the secret of an already-exposed tx; terminal and retryable
+  submit verdicts (provably unrelayed) retire the record so refused
+  builds still leave no residue. Retention death is now
+  reconciliation-only: a reorg rewind re-pends unreferenced entries
+  instead of collecting them (a rewound tx commonly re-confirms, and a
+  deleted secret can never serve that proof), and the watchdog's
+  confirmed-absent release clears F14 locks only — its trigger is a
+  local relay verdict, not a proof of network-wide absence. Lifecycle
+  pins amended in `wallet_rpc.yaml` §OUTBOUND PREREQUISITE.
+  Review hardening (2026-07-24 merge review, F1–F6): `get_reserve_proof`
+  refuses `amount = "0"` at the RPC params surface (-32602 "amount must
+  be positive"; the engine's selection independently refuses an empty
+  selection as `-29302`, so a zero bound can never reach the key actor
+  and surface as an internal error); `check_reserve_proof` resolves
+  locator-named txs in chunked batched `get_transactions` calls (100
+  hashes per call, the daemon's restricted-RPC cap) instead of one
+  round trip per unique txid; OUTBOUND generation reuses the shared
+  secrets derived during recipient-output discovery
+  (`generate_outbound_proof_with_secrets` — the hybrid KEM runs once
+  per output instead of twice; wire format unchanged, entries stay
+  `Zeroizing` in transit); the per-output hybrid-KEM ciphertext layout
+  constants have one home (`shekyl_crypto_pq::kem::{X25519_KEM_CT_LEN,
+  HYBRID_KEM_CT_LEN}` — the scanner/engine/fee-model copies are gone);
+  actor-side proof failures keep their typed `ProofError` through the
+  workflow error mapping (`KeyEngineError::Proof` →
+  `ProofsError::Generate`, honoring the variant's documented
+  discrimination); and the wallet-rpc `Hex32` rule has a single shared
+  parser (`params::parse_hex32`) behind both the txid and transfer-id
+  surfaces.
 - **cli: receiving, staking, and fee commands over the WI-RPC-1 surface**
   (WI-RPC-2b). `request new` / `requests list` (payment requests — the
   Shekyl-native receive-attribution primitive, un-deadening the FA-8
@@ -13,8 +67,28 @@
   estimate; principal lane only — P-lane fees are canonical and never
   user-facing).
 
+### Changed
+
+- **proofs: tx-proof wire format carries per-entry vout indices**
+  (WI-RPC-3; pre-genesis wire change, no compatibility shim per rule
+  60). Outbound/inbound per-output entries grew a `vout_index[u32 LE]`
+  prefix (128 → 132 bytes) so verification re-derives KEM secrets at
+  the *actual* output index; previously non-prefix output subsets
+  verified incorrectly against positional indices. FFI
+  (`shekyl_generate_tx_proof_inbound`) and the wallet2 caller pass
+  explicit indices.
+
 ### Removed
 
+- **cli: `get_tx_key` / `check_tx_key`** (WI-RPC-3; rule 60/21).
+  Exporting the raw per-transaction secret is the wallet2-era
+  mechanism; the DLEQ-based `get_tx_proof`/`check_tx_proof` is the
+  product (proves the payment without an interactive secret handoff,
+  and INBOUND proofs never reveal wallet key material at all). The
+  commands refuse at parse time with guidance naming the replacement.
+- **engine-state: `TxSecretKeys.additional`** (WI-RPC-3 adjacent, rule
+  15). No producer existed — the send path signs every output including
+  change with one tx key; `TX_META_BLOCK_VERSION` bumped to 2.
 - **cli: wallet2-era commands with no Shekyl-native equivalent**
   (WI-RPC-2b; rule 60, WI-RPC-1 pin 1). `account`* / `address new` (no
   account or subaddress model — payment requests replace receive

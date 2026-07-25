@@ -25,6 +25,7 @@ pub mod handlers;
 pub mod lifecycle;
 pub mod params;
 pub mod project;
+pub mod proofs;
 pub mod queries;
 pub mod receiving;
 pub mod send;

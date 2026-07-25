@@ -537,8 +537,13 @@ impl Default for ReservationTTLConfig {
 /// `tx_bytes` / `snapshot_id` / `created_at` are reached through
 /// [`Self::entry`]; V3.0's uniform "age from creation" TTL policy
 /// reads `entry.created_at` for both collections.
+///
+/// **Not `Clone`** (WI-RPC-3 retention): the held entry now carries
+/// the non-`Clone` per-tx secret, so the in-flight record moves like
+/// the entry does. Nothing cloned it — the lifecycle is
+/// insert-on-dispatch / remove-on-verdict.
 #[allow(dead_code)]
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct InFlightSubmit {
     /// The full held entry preserved across the
     /// `consumer_held → in_flight` transition (bytes, snapshot pin,

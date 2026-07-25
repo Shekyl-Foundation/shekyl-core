@@ -653,6 +653,7 @@ fn sample_transfer(seed: u64) -> TransferDetails {
             [lo ^ 0xFF; 32],
         )),
         awaiting_confirmation: None,
+        spending_tx_hash: None,
         source_ciphertext: Some(HybridCiphertext {
             x25519: [lo.wrapping_add(1); 32],
             ml_kem: vec![lo.wrapping_add(2); 1088],

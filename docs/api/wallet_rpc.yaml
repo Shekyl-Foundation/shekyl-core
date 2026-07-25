@@ -65,6 +65,12 @@
 #                                                   backup; mainnet/stagenet
 #                                                   only — testnet is
 #                                                   raw-seed)
+#   SPECIFIED (WI-RPC-3 — Phase 2c proofs tranche):
+#     get_tx_proof, check_tx_proof                 (DLEQ tx proofs over
+#                                                   rust/shekyl-proofs;
+#                                                   check_* is wallet-less)
+#     get_reserve_proof, check_reserve_proof       (DLEQ reserve proofs;
+#                                                   check_* is wallet-less)
 #   RESERVED (prerequisite in parentheses):
 #     unstake, claim, get_stakes                   (Stage 3 StakeEngine +
 #                                                   Phase 2b orchestrator;
@@ -85,10 +91,48 @@
 #                                                   engine substrate; the
 #                                                   create/list/URI half
 #                                                   landed with WI-RPC-1)
-#     get_tx_key, get_tx_proof, check_tx_proof,
-#     get_reserve_proof, check_reserve_proof       (Phase 2c proofs
-#                                                   orchestration over
-#                                                   shekyl-proofs)
+#
+#   REJECTED (rule 21 reversion shape — removed from RESERVED, not landed):
+#     get_tx_key, check_tx_key                     (WI-RPC-3, 2026-07-23;
+#       rationale corrected 2026-07-24. Exporting the raw per-tx secret as
+#       a naked hex string is the wallet2-era mechanism. The OUTBOUND tx
+#       proof also discloses the per-tx secret — it is carried in the
+#       proof wire format by construction (tx_proof.rs header) — so the
+#       rejection is NOT "the proof avoids revealing the key"; it is that
+#       the proof is the strictly better carrier for the same disclosure:
+#       Schnorr-sealed, challenge-message-bound, framed with the outputs
+#       it proves, and consumable by check_tx_proof without a second
+#       protocol. The INBOUND proof genuinely avoids the tx key (view-side
+#       per-output secrets only). A naked-key export method adds a second,
+#       weaker surface for a disclosure the proof already carries in
+#       bound form. Storage side: the wallet schema retains per-tx
+#       secrets (shekyl-engine-state TxMetaBlock.tx_keys), and the
+#       send path persists them at dispatch — that retention writer
+#       landed in this same WI-RPC-3 tranche as an in-scope
+#       prerequisite of the OUTBOUND proof, not a deferral (see
+#       GetTxProofParams). Reopen when: an
+#       external verifier/tool emerges that structurally cannot consume a
+#       DLEQ proof string and requires the raw scalar (named consumer,
+#       threat-model review); the re-evaluation shape is a fresh contract
+#       sub-PR citing this note. Pre-genesis there is no user holding
+#       wallet2-era tx keys to honor — rule 16 user-absent inversion
+#       applies.)
+#     get_spend_proof, check_spend_proof           (WI-RPC-3, 2026-07-24.
+#       Wallet2-era spend proofs exist ONLY to link key images to an
+#       identity — the reserve proof's forward-linkability hazard (see
+#       the Proofs section's DISCLOSURE SEMANTICS) as the entire product
+#       rather than a priced side effect, with no reserve-attestation
+#       payoff. Under FCMP++ that linkage is precisely what the system
+#       hides; outbound tx proofs already attest authorship of a
+#       payment. Registry residue: HRP_SPEND_PROOF in
+#       rust/shekyl-encoding has zero producers/consumers whole-tree
+#       and is deleted in the WI-RPC-3 implementation PR (rule 15) so
+#       the seal condition lives here, not in a dangling encoding
+#       entry. Reopen when: a named consumer requires spend attestation
+#       that an outbound tx proof structurally cannot express, with a
+#       threat-model review accepting the key-image disclosure; the
+#       re-evaluation shape is a fresh contract sub-PR citing this
+#       note.)
 #     sign, verify                                 (Phase 2 sign_message /
 #                                                   verify_message on the
 #                                                   orchestrator)
@@ -201,6 +245,10 @@ components:
             - get_staked_balance
             - get_staked_outputs
             - staking_info
+            - get_tx_proof
+            - check_tx_proof
+            - get_reserve_proof
+            - check_reserve_proof
         params:
           description: Per-method params object; see `*Params` schemas.
           type: object
@@ -272,6 +320,10 @@ components:
         - -29107   # SUBMIT_AMBIGUOUS
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
+        - -29300   # PROOF_MALFORMED
+        - -29301   # PROOF_TX_SECRET_UNAVAILABLE
+        - -29302   # PROOF_NO_PROVABLE_OUTPUTS
+        - -29303   # PROOF_TX_NOT_FOUND
         - -29400   # UNKNOWN_TRANSFER_ID
         - -29500   # STAKE_NOT_READY
         - -29501   # STAKE_IN_FLIGHT
@@ -288,7 +340,8 @@ components:
           -29004 INVALID_PASSWORD         open/change_password: MAC failure
           -29005 CAPABILITY_FORBIDS       operation requires FULL capability
                                           (data: {"capability": "..."})
-          -29100 INVALID_RECIPIENT        build: address parse/network check
+          -29100 INVALID_RECIPIENT        build/proofs: address parse or
+                                          network check failed
           -29101 INSUFFICIENT_FUNDS       build: spendable balance too low
           -29102 FEE_ESTIMATION_FAILED    build: daemon fee query failed
           -29103 RESERVATION_NOT_FOUND    submit: unknown/expired handle
@@ -305,7 +358,44 @@ components:
                                           resubmit-of-held-bytes is the
                                           status query
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
-          -29201 DAEMON_UNREACHABLE       refresh/rescan: daemon RPC failed
+          -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs: daemon RPC
+                                          failed (proof methods dial the
+                                          daemon for tx bodies / spent-set
+                                          queries)
+          -29300 PROOF_MALFORMED          check_*: proof string failed
+                                          Bech32m decode, carried the wrong
+                                          HRP, its wire framing did not
+                                          parse, it exceeds the size caps
+                                          pinned in the Proofs section
+                                          (locator count / decoded payload
+                                          bytes — refused before any daemon
+                                          fetch), or a reserve proof's
+                                          entries repeat a key image
+                                          (duplicate-output inflation —
+                                          malformed by construction, see
+                                          CheckReserveProofParams). Distinct
+                                          from a VALID framing that fails
+                                          cryptographic verification — that
+                                          is result {"valid": false}, not an
+                                          error
+          -29301 PROOF_TX_SECRET_UNAVAILABLE
+                                          get_tx_proof (outbound): the
+                                          wallet holds no per-tx secret for
+                                          this txid (not sent by this
+                                          wallet, or sent by another copy)
+          -29302 PROOF_NO_PROVABLE_OUTPUTS
+                                          get_tx_proof (inbound): no owned
+                                          outputs in this tx (the scan path
+                                          stores a source ciphertext for
+                                          every recorded incoming transfer,
+                                          so owned always implies provable).
+                                          get_reserve_proof: zero eligible
+                                          unspent outputs, or unspent total
+                                          below the requested amount
+          -29303 PROOF_TX_NOT_FOUND       proofs: a txid named by the
+                                          request (or embedded in a reserve
+                                          proof's locators) is unknown to
+                                          the daemon
           -29400 UNKNOWN_TRANSFER_ID      get_transfer_by_id: no match
           -29500 STAKE_NOT_READY          stake: persona funding not ready
                                           (W1-clean refusal — fund via
@@ -447,10 +537,17 @@ components:
       type: object
       required: [name, password, mnemonic]
       description: >
-        Recreate a wallet from its BIP-39 backup (WI-RPC-2a). The name must
-        not collide with an existing wallet file (-29002). Networks whose
-        seed format is not BIP-39 (testnet) refuse with -32602; the invalid-
-        mnemonic error message is stable and never reflects the mnemonic.
+        Recreate a wallet from its seed backup (WI-RPC-2a). The name must
+        not collide with an existing wallet file (-29002). Seed format is
+        NETWORK-GOVERNED, mirroring create's output: mainnet/stagenet
+        take the 24-word BIP-39 mnemonic; testnet takes the 32-byte raw
+        seed as 64-char hex (exactly CreateWalletResult.raw_seed_hex) —
+        ratified through the WI-RPC-2a high-review pass 2026-07-23;
+        contract reconciled to the shipped lifecycle.rs behavior
+        2026-07-24 (the earlier "testnet refuses with -32602" text
+        contradicted dev). Format failures refuse with -32602; the
+        invalid-seed error messages are stable and never reflect the
+        supplied material.
       properties:
         name:
           type: string
@@ -460,8 +557,10 @@ components:
         mnemonic:
           type: string
           description: >
-            24-word BIP-39 English mnemonic from CreateWalletResult. Equally
-            secret with the master seed — never log.
+            Network-governed seed material: 24-word BIP-39 English
+            mnemonic (mainnet/stagenet) or 64-hex raw seed (testnet),
+            from CreateWalletResult. Equally secret with the master
+            seed — never log.
         restore_height:
           type: integer
           format: int64
@@ -473,7 +572,9 @@ components:
         language:
           type: string
           default: en
-          description: BIP-39 wordlist language of the supplied mnemonic.
+          description: >
+            BIP-39 wordlist language of the supplied mnemonic
+            (mainnet/stagenet path only; ignored for testnet raw seeds).
 
     RestoreWalletResult:
       type: object
@@ -1191,3 +1292,402 @@ components:
           description: >
             The staking scan's sealed frontier height. Absent when the
             wallet has never scanned as a staker.
+
+    # ── Proofs — WI-RPC-3 (Phase 2c) ─────────────────────────────────
+    # DLEQ-based payment and reserve proofs over rust/shekyl-proofs. Two
+    # method pairs; the generate half needs an open FULL wallet, the check
+    # half is WALLET-LESS (a verifier checks someone else's proof against
+    # an address + the chain; it holds no wallet). Both check methods dial
+    # the daemon for on-chain data and never touch tenant wallet state.
+    #
+    # Proof strings are Bech32m over the canonical HRPs pinned in
+    # rust/shekyl-encoding (FCMP_PLUS_PLUS.md §"Address encoding" /
+    # "Implementation" — the proof-HRP constant list):
+    #
+    #   tx proof       HRP "shekyltxproof"
+    #                  payload: direction[1] ‖ proof_bytes
+    #                    direction 0x01 = OUTBOUND (prover = sender),
+    #                              0x02 = INBOUND  (prover = recipient);
+    #                    proof_bytes = shekyl-proofs tx_proof wire format
+    #                    (version-prefixed, Schnorr-sealed)
+    #   reserve proof  HRP "shekylreserveproof"
+    #                  payload: count[u32 LE]
+    #                           ‖ (txid[32] ‖ vout_index[u32 LE]) × count
+    #                           ‖ proof_bytes
+    #                    the locator prefix names the on-chain outputs so a
+    #                    wallet-less verifier can fetch them; proof_bytes =
+    #                    shekyl-proofs reserve_proof wire format
+    #
+    #   Size caps (verifier-side resource bound; the VALUES are
+    #   provisional, the EXISTENCE of the bound is the contract-level
+    #   fact): reserve locator count ≤ 4096 (rhymes with
+    #   MAX_HOLDINGS_SHARDS), and decoded proof payload ≤ 1 MiB
+    #   (1,048,576 bytes) for BOTH check methods — a 4096-locator
+    #   reserve proof decodes to 933,961 bytes, so the caps are
+    #   mutually consistent. An over-limit proof is malformed by this
+    #   contract's definition (-29300) and is refused BEFORE any
+    #   daemon fetch: the u32 locator count otherwise admits four
+    #   billion tx fetches against the verifier's daemon off one
+    #   hostile string — a cheap amplification lever.
+    #
+    # The wallet2-era HRPs ("shekylouttxproof"/"shekylintxproof") are a
+    # divergence from the pinned registry and are deleted with wallet2
+    # (Phase 5); pre-genesis there are no proof strings in the wild to
+    # honor (rule 16 user-absent inversion — no legacy-HRP acceptance).
+    #
+    # DISCLOSURE SEMANTICS (wargame, verified against the shekyl-proofs
+    # wire formats 2026-07-24). A proof string is a deliberate,
+    # irrevocable disclosure artifact: anything below is learned by ANY
+    # holder of the string, not just the intended verifier, forever.
+    #
+    #   adversary: proof-string holder (intended verifier, or anyone a
+    #   verifier leaks/sells the string to; strings cannot be revoked)
+    #
+    #   OUTBOUND tx proof — carries tx_key_secret in plaintext
+    #     (tx_proof.rs header: version ‖ tx_key_secret[32] ‖ sig ‖ count).
+    #     Holder re-derives the combined shared secret for EVERY output
+    #     of that tx: decrypts all amounts and can test any candidate
+    #     address for recipiency. Disclosure is tx-wide, not bound to
+    #     the address in the proof. Sharing an outbound proof = sharing
+    #     the tx key, in signed form.
+    #     WHY the scalar is revealed at all (forcing constraint — do
+    #     not "fix" this into a DLEQ): Monero's OutProofV2 reveals
+    #     per-output shared-secret points under DLEQ, never the
+    #     scalar. Shekyl cannot — the verifier must re-derive the
+    #     HYBRID combined secret, and there is no DLEQ over the
+    #     ML-KEM half: deterministic re-encapsulation needs the
+    #     encapsulation coins, which derive from tx_key_secret
+    #     (crypto-pq output.rs rederive_combined_ss: per-output seed
+    #     = derive_kem_seed(tx_key_secret, …); bytes 32..64 feed
+    #     encaps_from_seed). An X25519-half-only DLEQ would silently
+    #     degrade outbound verification to classical-only, breaking
+    #     the hybrid posture (00-mission priority 1). The tradeoff is
+    #     deliberate: tx-wide disclosure bought PQ-complete
+    #     verification.
+    #     RE-MINT COROLLARY: because the signing key travels inside
+    #     the proof, any holder of an OUTBOUND string can re-sign a
+    #     fresh proof for the SAME tx under a DIFFERENT challenge
+    #     message (re-binding to an unpaid address fails output
+    #     derivation, but the message is free). Outbound
+    #     challenge-binding therefore attests KNOWLEDGE OF THE TX
+    #     KEY, not first-party identity — a holder of the sender's
+    #     proof for challenge C1 can answer a third party's C2 as if
+    #     they were the sender. Freshness is exactly as strong as
+    #     tx-key secrecy, which the proof destroys on first share.
+    #     Verifiers must scope conclusions accordingly. INBOUND does
+    #     not have this property (the view scalar never travels;
+    #     only per-output projections do).
+    #   INBOUND tx proof — carries per-output view-side secrets
+    #     (ho/y/z/k_amount) for the DISCLOSED outputs only. Holder
+    #     decrypts those outputs' amounts and links them to the
+    #     recipient address. Scoped to the disclosed outputs.
+    #   Reserve proof — carries, per disclosed output: amounts
+    #     (k_amount) AND the key image of an UNSPENT output. Publishing
+    #     an unspent output's key image lets the holder watch the chain
+    #     and detect the exact moment that output is later spent —
+    #     FCMP++ spend-unlinkability for the disclosed outputs is
+    #     permanently broken against every holder of the string. This
+    #     is inherent to reserve proving (the DLEQ against the spent
+    #     set IS the mechanism), not an implementation artifact. On the
+    #     wallet2 lineage this cost little marginally (the spend graph
+    #     was already visible-ish); on Shekyl it is the largest
+    #     identity-to-chain link surface in the wallet API.
+    #     Wargame row — adversary: verifier, or anyone the bearer
+    #     string ever reaches (no verifier binding beyond `message`);
+    #     capability: permanent spend-detection on the disclosed
+    #     outputs, attributable to the prover's identity; defense:
+    #     amount-bounded minimal proofs (fewest-beacons selection) +
+    #     the GetReserveProofResult warning + intended-verifier-only
+    #     sharing.
+    #
+    # Client guidance the servers of this contract must surface: share a
+    # proof string only with the party it is generated for; prefer
+    # amount-bounded reserve proofs (smallest disclosed output set);
+    # prefer INBOUND direction when both sides can prove.
+    GetTxProofParams:
+      type: object
+      required: [txid, address]
+      description: >
+        Generate a payment proof for `txid` bound to `address`. Direction
+        is selected by address ownership, mirroring the prover's actual
+        capability: `address` equal to the open wallet's primary address
+        selects INBOUND (the wallet proves it RECEIVED outputs in the tx,
+        signing with view material over per-output secrets re-derived
+        from the stored source ciphertexts — the scan path records a
+        source ciphertext for every incoming transfer, so an owned
+        output is always provable); any other address selects OUTBOUND
+        (the wallet proves it PAID that address, disclosing the per-tx
+        secret inside the sealed proof — see the section's DISCLOSURE
+        SEMANTICS block — -29301 when this wallet holds no retained
+        secret for the tx, i.e. it did not send it). The ownership
+        comparison is between DECODED addresses (canonical forms), never
+        raw strings — Bech32m admits an all-uppercase encoding of the
+        same address, and a string compare would silently misroute
+        INBOUND to OUTBOUND and fail -29301 on correct-looking input.
+        Capability: INBOUND requires only view material and is permitted
+        on VIEW_ONLY wallets (the auditor-wallet use case, deliberate);
+        OUTBOUND is not capability-gated — it needs the retained tx
+        secret, not spend material, and a view-only wallet answers
+        -29301 naturally because it never sent.
+        OUTBOUND PREREQUISITE (in-scope for WI-RPC-3, its own commit
+        ordered before the proof wrapper): the send path must persist
+        the per-tx secret into TxMetaBlock.tx_keys — the schema exists
+        but has no production writer as of 2026-07-24; without that
+        retention commit every OUTBOUND request truthfully answers
+        -29301. The retention write's lifecycle pins: (1) WRITE at
+        DISPATCH, not at build and not at the accept verdict
+        (review-hardened 2026-07-24 from the original submit-ACCEPTED
+        form): the record — secret plus its pending-record reference —
+        is persisted atomically immediately before the bytes can leave
+        for the daemon, because the verdict is an observation about
+        network exposure, not its start; a crash or dropped connection
+        between dispatch and verdict must not orphan the secret of a
+        tx the network may still mine. A built-then-discarded tx still
+        leaves no secret residue (keeps the engine-state I-2
+        no-orphans invariant), and the definite refusal verdicts
+        (terminal / retryable — provably unrelayed under
+        single-egress) retire the record in their finalizers so a
+        daemon-refused build leaves none either; (2) DEATH follows I-2
+        with the reference set CLOSED BY THE SPEND-QUADRUPLE — spent
+        transfer rows record their
+        spending_tx_hash (TransferDetails grows the field; written at
+        spend detection, where the scanner holds the containing tx —
+        KeyImageObserved grows the hash alongside block_height), and
+        I-2's live set becomes: transfer-creating tx hashes + spent
+        rows' spending hashes + scanned-pool entries + pending records.
+        Without the quadruple, an exact-spend send (no change output)
+        orphans its secret the moment post-confirmation cleanup drops
+        the transient references — a steady-state hole, not a rescan
+        corner; with it, the send stays referenced by the spent rows it
+        consumed for as long as the wallet retains its history. Death
+        is RECONCILIATION-ONLY (review-hardened 2026-07-24): a reorg
+        rewind re-pends entries it unreferences instead of collecting
+        them — the references died with the orphaned blocks, not the
+        tx, and re-confirmation on the new chain is the common
+        outcome, which a deleted secret could never serve; and the
+        watchdog's confirmed-absent release clears F14 locks only,
+        never the retention record, because its trigger is a local
+        relay verdict (fee policy / unmapped reject cause at the
+        wallet's own daemon), not a proof of network-wide absence. A
+        tx that never re-confirms therefore leaves a bounded
+        safe-direction residue (a retained secret with no proof to
+        serve) — the deliberate trade under the indefinite-retention
+        policy below; reopen a supersession-driven collector (keyed on
+        persisted input linkage) only if pending-record growth is
+        observed in practice; (3) RESCAN-SURVIVING, coherently — tx_keys is
+        send-derived state that cannot be rebuilt from chain data, so
+        it survives rescan; rescan's spend re-detection rebuilds the
+        spending-hash references from chain data, so I-2 holds through
+        rescan by construction rather than by carve-out. The quadruple
+        also feeds the TransferDirection::Outgoing projection (typed
+        as reserved for exactly this datum) and outbound-proof
+        enumeration. Retention policy (deliberate): per-tx secrets are
+        retained indefinitely with the OUTBOUND proof as their sole
+        consumer — the raw-export surface stays rejected (see
+        get_tx_key in the header registry).
+        Requires an open wallet; OUTBOUND additionally fetches the tx
+        body from the daemon to enumerate outputs.
+      properties:
+        txid:
+          $ref: "#/components/schemas/Hex32"
+        address:
+          type: string
+          description: >
+            The counterparty address the proof is bound to (or the
+            wallet's own primary address for INBOUND). Parse/network
+            failures are -29100 INVALID_RECIPIENT.
+        message:
+          type: string
+          default: ""
+          description: >
+            Optional challenge text sealed into the proof's Schnorr
+            challenge. The verifier must present the identical string.
+
+    GetTxProofResult:
+      type: object
+      required: [proof, direction]
+      properties:
+        proof:
+          type: string
+          description: >
+            Bech32m, HRP `shekyltxproof`. A disclosure artifact — see
+            the DISCLOSURE SEMANTICS block (OUTBOUND strings carry the
+            tx key; treat as sensitive, share only with the intended
+            verifier).
+        direction:
+          type: string
+          enum: [OUTBOUND, INBOUND]
+
+    CheckTxProofParams:
+      type: object
+      required: [txid, address, proof]
+      description: >
+        WALLET-LESS verification of a `shekyltxproof` string against the
+        chain. Fetches the tx body from the daemon (-29303 when unknown),
+        extracts the per-output on-chain data (output keys, commitments,
+        encrypted amounts, hybrid KEM ciphertexts), and verifies the
+        proof's DLEQ/Schnorr content against `address` and `message`.
+        Direction is read from the proof payload, not guessed.
+      properties:
+        txid:
+          $ref: "#/components/schemas/Hex32"
+        address:
+          type: string
+          description: The address the prover claims the proof binds to.
+        proof:
+          type: string
+          description: Bech32m `shekyltxproof` string (-29300 on decode/framing failure).
+        message:
+          type: string
+          default: ""
+
+    CheckTxProofResult:
+      type: object
+      required: [valid]
+      description: >
+        `valid: false` means the proof parsed but its cryptographic
+        content does not verify against this (txid, address, message) —
+        the method succeeded at answering the question. All other fields
+        are present only when `valid` is true.
+      properties:
+        valid:
+          type: boolean
+        direction:
+          type: string
+          enum: [OUTBOUND, INBOUND]
+        received:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: Sum of the verified outputs' decrypted amounts.
+        outputs:
+          type: array
+          description: Per-output verification detail.
+          items:
+            type: object
+            required: [output_index, amount]
+            properties:
+              output_index:
+                type: integer
+                format: int64
+              amount:
+                $ref: "#/components/schemas/AtomicUnits"
+        in_pool:
+          type: boolean
+          description: Whether the tx is still in the mempool.
+        confirmations:
+          type: integer
+          format: int64
+          description: >
+            Daemon chain height (block COUNT) minus the tx's block
+            height (0-based index): a tx in the tip block reports 1;
+            0 is reported only while the tx is pool-only.
+
+    GetReserveProofParams:
+      type: object
+      description: >
+        Prove control of unspent balance. With `amount` omitted, every
+        eligible unspent output is included (prove-all). With `amount`
+        given, a minimal subset of outputs covering at least that amount
+        is selected (largest-first), and the proof discloses ONLY those
+        outputs — amount-bounding is output selection, so the proven
+        total may exceed `amount` by up to one output's value.
+        Selection policy is a DELIBERATE choice, not a wallet2
+        inheritance: every disclosed output is a permanent
+        spend-detection beacon (see DISCLOSURE SEMANTICS), so
+        largest-first minimizes the number of beacons at the cost of
+        placing the highest-value outputs under surveillance; the
+        alternative (small-outputs-first) inverts that trade. Fewest
+        beacons wins here because beacon count, not beacon value,
+        bounds the holder's forward-linkage surface — revisit if a
+        caller emerges that needs value-under-surveillance minimized
+        instead.
+        Requires an open FULL wallet (-29005 otherwise; the proof signs
+        with the spend key). -29302 when the wallet has no eligible
+        outputs or the unspent total is below `amount`.
+      properties:
+        amount:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Minimum reserve to prove. Omitted = full balance. Must be
+            positive when present: `"0"` selects no outputs and proves
+            nothing, so it is refused as invalid params (-32602,
+            "amount must be positive") — omit the field to prove the
+            full balance.
+        message:
+          type: string
+          default: ""
+
+    GetReserveProofResult:
+      type: object
+      required: [proof, total, output_count]
+      properties:
+        proof:
+          type: string
+          description: >
+            Bech32m, HRP `shekylreserveproof`. A disclosure artifact —
+            see the DISCLOSURE SEMANTICS block (holders learn amounts
+            and gain permanent spend-detection on the disclosed
+            outputs; prefer amount-bounded proofs).
+        total:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: Sum of the amounts the proof actually discloses.
+        output_count:
+          type: integer
+          format: int64
+
+    CheckReserveProofParams:
+      type: object
+      required: [address, proof]
+      description: >
+        WALLET-LESS verification of a `shekylreserveproof` string.
+        Enforces the section's size caps BEFORE any daemon traffic
+        (locator count ≤ 4096, decoded payload ≤ 1 MiB — over-limit is
+        -29300), then fetches every locator-named tx from the daemon
+        (-29303 when any is unknown), extracts the named outputs'
+        on-chain data, verifies the
+        proof's per-output DLEQ content and spend-key signature against
+        `address` and `message`, REJECTS any proof whose entries repeat
+        a key image (-29300 — entries verify independently, so a
+        duplicated UNSPENT output would otherwise inflate the proven
+        reserve N-fold with `spent` staying zero; the key image is the
+        dedup key because it is what makes an entry economically
+        distinct and what the spent set is keyed on), and queries the
+        daemon's spent set for the proof's key images — a proof over spent outputs verifies
+        cryptographically but the spent portion is reported so the
+        verifier can subtract it. Note the spent-set query forwards the
+        proof's key-image list to the VERIFIER'S daemon
+        (is_key_image_spent): a hostile or remote daemon learns which
+        key images the verifier is interested in — the standard
+        remote-daemon caveat applies to the verifier here, on top of
+        the prover-side disclosure in DISCLOSURE SEMANTICS.
+      properties:
+        address:
+          type: string
+          description: The prover's address (carries the spend pubkey the proof signs under).
+        proof:
+          type: string
+          description: Bech32m `shekylreserveproof` string (-29300 on decode/framing failure).
+        message:
+          type: string
+          default: ""
+
+    CheckReserveProofResult:
+      type: object
+      required: [valid]
+      description: >
+        `valid: false` = parsed but cryptographically refused (same
+        contract as CheckTxProofResult). `total`/`spent` present only
+        when valid; the provable live reserve is `total - spent`.
+      properties:
+        valid:
+          type: boolean
+        total:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: Sum of all verified outputs in the proof.
+        spent:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Portion of `total` whose key images the daemon reports spent
+            at verification time.
+        output_count:
+          type: integer
+          format: int64

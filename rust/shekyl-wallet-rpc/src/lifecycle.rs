@@ -601,7 +601,11 @@ fn validate_wallet_name(name: &str) -> Result<(), WalletRpcError> {
     Ok(())
 }
 
-async fn make_daemon(daemon: &DaemonEndpoint) -> Result<DaemonClient, WalletRpcError> {
+/// Build a [`DaemonClient`] for the tenant's daemon endpoint. Shared with
+/// the wallet-less proof-check handlers (`proofs.rs`), which dial the
+/// verifier's daemon without any open wallet — through the same endpoint
+/// (address + proxy), so a proof check never bypasses the proxy posture.
+pub(crate) async fn make_daemon(daemon: &DaemonEndpoint) -> Result<DaemonClient, WalletRpcError> {
     // SOCKS5h when a proxy is set: the daemon's block scan then resolves the
     // node hostname *at the proxy*, never leaking it to the local resolver.
     let rpc = HttpRpc::with_proxy(daemon.address.clone(), daemon.proxy.clone())

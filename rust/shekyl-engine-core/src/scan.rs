@@ -218,6 +218,15 @@ pub struct KeyImageObserved {
     /// protection at consumer sites; the wire bytes are unchanged
     /// (`KeyImage` is `#[serde(transparent)]`).
     pub key_image: shekyl_crypto_pq::key_image::KeyImage,
+
+    /// Canonical txid of the transaction the input appeared in — the
+    /// WI-RPC-3 spend-quadruple leg (F-9). The producer holds the
+    /// containing tx in loop scope at observation time (non-miner tx
+    /// hashes ride `Block::transaction_hashes` positionally; the miner
+    /// tx hashes on demand), and the merge writes it through
+    /// [`shekyl_engine_state::LedgerIndexes::detect_spends`] into
+    /// `TransferDetails::spending_tx_hash`.
+    pub containing_tx_hash: shekyl_types::TxHash,
 }
 
 /// A reorg-rewind directive. When present in a [`ScanResult`], the

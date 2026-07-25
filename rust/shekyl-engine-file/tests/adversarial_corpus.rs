@@ -595,7 +595,6 @@ fn ledger_invariant_orphan_tx_key_is_refused() {
         orphan_hash,
         TxSecretKeys {
             primary: TxSecretKey::new(Zeroizing::new([0xCD; 32])),
-            additional: Vec::new(),
         },
     );
     let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());

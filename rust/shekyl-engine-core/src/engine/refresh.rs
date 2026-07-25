@@ -2216,10 +2216,12 @@ mod refresh_driver_tests {
             crate::scan::KeyImageObserved {
                 block_height: 5,
                 key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([9; 32]),
+                containing_tx_hash: shekyl_types::TxHash::from_bytes([0xD5; 32]),
             },
             crate::scan::KeyImageObserved {
                 block_height: 7,
                 key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([8; 32]),
+                containing_tx_hash: shekyl_types::TxHash::from_bytes([0xD7; 32]),
             },
         ];
         result.reorg_rewind = Some(crate::scan::ReorgRewind { fork_height: 5 });

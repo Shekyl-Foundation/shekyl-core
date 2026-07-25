@@ -64,8 +64,16 @@ pub enum WalletRpcErrorCode {
     SubmitAmbiguous = -29107,
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200,
-    /// Refresh / rescan: daemon RPC failed.
+    /// Refresh / rescan / proofs: daemon RPC failed.
     DaemonUnreachable = -29201,
+    /// `check_*`: proof string failed decode / framing / size caps.
+    ProofMalformed = -29300,
+    /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
+    ProofTxSecretUnavailable = -29301,
+    /// `get_tx_proof` INBOUND / `get_reserve_proof`: nothing to prove.
+    ProofNoProvableOutputs = -29302,
+    /// Proofs: a txid named by the request is unknown to the daemon.
+    ProofTxNotFound = -29303,
     /// `get_transfer_by_id`: no match.
     UnknownTransferId = -29400,
     /// Stake: funding not ready (W1-clean refusal — fund the persona /
@@ -165,6 +173,26 @@ pub enum WalletRpcError {
     /// Submit: transport-level ambiguity.
     #[error("submit ambiguous")]
     SubmitAmbiguous,
+    /// `check_*`: proof string failed Bech32m decode, carried the wrong
+    /// HRP, its wire framing did not parse, or it exceeds the section's
+    /// size caps. The client message is deliberately stable and
+    /// detail-free — the framing detail can echo client-controlled bytes
+    /// (the HRP) and is logged server-side at the mapping site instead.
+    #[error("proof string malformed")]
+    ProofMalformed,
+    /// `get_tx_proof` OUTBOUND: this wallet holds no retained per-tx
+    /// secret for the txid (it did not send the tx, or another copy did).
+    #[error("no retained tx secret for this transaction")]
+    ProofTxSecretUnavailable,
+    /// `get_tx_proof` INBOUND with no owned outputs in the tx, or
+    /// `get_reserve_proof` with zero eligible outputs / unspent total
+    /// below the requested amount.
+    #[error("no provable outputs")]
+    ProofNoProvableOutputs,
+    /// Proofs: a txid named by the request (or embedded in a reserve
+    /// proof's locators) is unknown to the daemon.
+    #[error("transaction not found")]
+    ProofTxNotFound,
     /// `get_transfer_by_id`: no match.
     #[error("unknown transfer id")]
     UnknownTransferId,
@@ -212,6 +240,10 @@ impl WalletRpcError {
             Self::ContentGenMismatch { .. } => WalletRpcErrorCode::ContentGenMismatch,
             Self::SubmitRejected { .. } => WalletRpcErrorCode::SubmitRejected,
             Self::SubmitAmbiguous => WalletRpcErrorCode::SubmitAmbiguous,
+            Self::ProofMalformed => WalletRpcErrorCode::ProofMalformed,
+            Self::ProofTxSecretUnavailable => WalletRpcErrorCode::ProofTxSecretUnavailable,
+            Self::ProofNoProvableOutputs => WalletRpcErrorCode::ProofNoProvableOutputs,
+            Self::ProofTxNotFound => WalletRpcErrorCode::ProofTxNotFound,
             Self::UnknownTransferId => WalletRpcErrorCode::UnknownTransferId,
             Self::StakeNotReady { .. } => WalletRpcErrorCode::StakeNotReady,
             Self::StakeInFlight => WalletRpcErrorCode::StakeInFlight,

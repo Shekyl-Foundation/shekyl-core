@@ -67,6 +67,7 @@ use shekyl_units::AtomicUnits;
 
 use super::error::KeyEngineError;
 use super::local_keys::LocalKeys;
+use super::proof_bridge::{self, InboundProofRequest, ReserveProofRequest};
 use super::sign_bridge;
 use super::traits::key::{
     AccountPublicAddress, KeyEngine, OutputClaim, OutputClaimResult, OutputDetectionInput,
@@ -239,6 +240,48 @@ impl Message<SignTransaction> for KeyActor {
     }
 }
 
+/// Actor message for INBOUND tx-proof generation (WI-RPC-3). The request
+/// carries public data only (stored ciphertexts, vout indices, address
+/// bytes, challenge message); the actor signs with its view secret and
+/// replies with the sealed proof blob. See
+/// [`proof_bridge::generate_inbound_proof`].
+pub(crate) struct GenerateInboundProof {
+    pub req: InboundProofRequest,
+}
+
+impl Message<GenerateInboundProof> for KeyActor {
+    type Reply = Result<Vec<u8>, KeyEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: GenerateInboundProof,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        proof_bridge::generate_inbound_proof(&self.local, &msg.req)
+    }
+}
+
+/// Actor message for reserve-proof generation (WI-RPC-3). The request
+/// carries public data only; the actor re-derives per-output secrets from
+/// view material and signs with its spend secret (the FULL-capability
+/// gate is the engine delegator's, before the message is built). See
+/// [`proof_bridge::generate_reserve_proof`].
+pub(crate) struct GenerateReserveProof {
+    pub req: ReserveProofRequest,
+}
+
+impl Message<GenerateReserveProof> for KeyActor {
+    type Reply = Result<Vec<u8>, KeyEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: GenerateReserveProof,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        proof_bridge::generate_reserve_proof(&self.local, &msg.req)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Handle projections
 // ---------------------------------------------------------------------------
@@ -377,6 +420,36 @@ impl KeyEngineHandle {
         let actor = KeyActor::spawn(keys);
 
         Self { actor, public }
+    }
+
+    /// Generate an INBOUND tx proof inside the actor (WI-RPC-3).
+    ///
+    /// Inherent rather than a [`KeyEngine`] trait method by rule-21
+    /// disposition: proofs have exactly one production caller (the engine
+    /// proofs workflow) and no `LocalKeys`-direct equivalence oracle to
+    /// abstract over — widening the trait would force a dead
+    /// `LocalKeys` impl. Reopen if a second `KeyEngine` implementor
+    /// (hardware signer) needs to serve proofs.
+    pub(crate) async fn generate_inbound_proof(
+        &self,
+        req: InboundProofRequest,
+    ) -> Result<Vec<u8>, KeyEngineError> {
+        self.actor
+            .ask(GenerateInboundProof { req })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Generate a reserve proof inside the actor (WI-RPC-3). Same
+    /// inherent-method disposition as [`Self::generate_inbound_proof`].
+    pub(crate) async fn generate_reserve_proof(
+        &self,
+        req: ReserveProofRequest,
+    ) -> Result<Vec<u8>, KeyEngineError> {
+        self.actor
+            .ask(GenerateReserveProof { req })
+            .await
+            .map_err(collapse_send_error)
     }
 }
 
@@ -830,5 +903,129 @@ mod tests {
             .await
             .expect_err("empty inputs are rejected");
         assert!(matches!(err, KeyEngineError::Primitive { .. }));
+    }
+
+    // --- WI-RPC-3 proof bridge (actor-mailbox round trips) -----------------
+
+    use crate::engine::proof_bridge::{
+        InboundProofOutput, InboundProofRequest, ReserveProofOutput, ReserveProofRequest,
+    };
+    use shekyl_proofs::reserve_proof::{verify_reserve_proof, ReserveOnChainOutput};
+    use shekyl_proofs::tx_proof::{verify_inbound_proof, OnChainOutput};
+
+    /// Synthetic canonical address bytes for proof binding — the proofs
+    /// crate treats the address as opaque challenge input, so any stable
+    /// byte string exercises the binding.
+    const TEST_ADDRESS_BYTES: &[u8] = b"shekyl-test-canonical-address";
+    const TEST_MESSAGE: &[u8] = b"WI-RPC-3 proof bridge round trip";
+
+    // Actor-generated INBOUND proof verifies wallet-lessly against the
+    // wallet's public keys and the on-chain output data.
+    #[tokio::test]
+    async fn inbound_proof_via_actor_round_trips() {
+        let tx_hash = [21u8; 32];
+        let blob = make_blob(TEST_SEED);
+        let view_pk = *blob.view_pk.as_canonical_bytes();
+        let spend_pk = *blob.spend_pk.as_canonical_bytes();
+        let input = build_output_paid_to(&blob, 0, 5_000, tx_hash);
+
+        let on_chain = OnChainOutput {
+            output_key: input.output_key,
+            commitment: input.commitment,
+            enc_amount: input.enc_amount,
+            x25519_eph_pk: input.ciphertext.x25519,
+            ml_kem_ct: input.ciphertext.ml_kem.clone(),
+        };
+
+        let handle = KeyEngineHandle::spawn(blob);
+        let proof = handle
+            .generate_inbound_proof(InboundProofRequest {
+                txid: tx_hash,
+                address_bytes: TEST_ADDRESS_BYTES.to_vec(),
+                message: TEST_MESSAGE.to_vec(),
+                outputs: vec![InboundProofOutput {
+                    vout_index: 0,
+                    ciphertext: input.ciphertext.clone(),
+                }],
+            })
+            .await
+            .expect("actor generates the inbound proof");
+
+        let verified = verify_inbound_proof(
+            &proof,
+            &tx_hash,
+            TEST_ADDRESS_BYTES,
+            TEST_MESSAGE,
+            &view_pk,
+            &spend_pk,
+            &[on_chain],
+        )
+        .expect("verifier accepts the actor-generated proof");
+        assert_eq!(verified.len(), 1);
+        assert_eq!(verified[0].amount, 5_000, "decrypted amount round-trips");
+    }
+
+    // Actor-generated reserve proof verifies wallet-lessly and discloses
+    // the claimed key image; a tampered challenge message is rejected.
+    #[tokio::test]
+    async fn reserve_proof_via_actor_round_trips_and_binds_message() {
+        let tx_hash = [22u8; 32];
+        let blob = make_blob(TEST_SEED);
+        let spend_pk = *blob.spend_pk.as_canonical_bytes();
+        let input = build_output_paid_to(&blob, 0, 9_000, tx_hash);
+
+        let on_chain = ReserveOnChainOutput {
+            output_key: input.output_key,
+            commitment: input.commitment,
+            enc_amount: input.enc_amount,
+        };
+
+        let handle = KeyEngineHandle::spawn(blob);
+        // The wallet's canonical key image for the output, via the claim path.
+        let claim = expect_mine(
+            handle
+                .try_claim_output(&input)
+                .await
+                .expect("claim succeeds"),
+        );
+
+        let proof = handle
+            .generate_reserve_proof(ReserveProofRequest {
+                address_bytes: TEST_ADDRESS_BYTES.to_vec(),
+                message: TEST_MESSAGE.to_vec(),
+                outputs: vec![ReserveProofOutput {
+                    vout_index: 0,
+                    ciphertext: input.ciphertext.clone(),
+                    key_image: claim.key_image,
+                    output_key: input.output_key,
+                }],
+            })
+            .await
+            .expect("actor generates the reserve proof");
+
+        let verified = verify_reserve_proof(
+            &proof,
+            TEST_ADDRESS_BYTES,
+            TEST_MESSAGE,
+            &spend_pk,
+            std::slice::from_ref(&on_chain),
+        )
+        .expect("verifier accepts the actor-generated proof");
+        assert_eq!(verified.len(), 1);
+        assert_eq!(verified[0].amount, 9_000, "decrypted amount round-trips");
+        assert_eq!(
+            verified[0].key_image, claim.key_image,
+            "the disclosed key image is the wallet's canonical one"
+        );
+
+        // Message binding: a different challenge message must not verify.
+        verify_reserve_proof(
+            &proof,
+            TEST_ADDRESS_BYTES,
+            b"a different challenge",
+            &spend_pk,
+            std::slice::from_ref(&on_chain),
+        )
+        .expect_err("tampered challenge message is rejected");
     }
 }

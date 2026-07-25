@@ -284,6 +284,7 @@ mod tests {
             spent_height: None,
             key_image: None,
             awaiting_confirmation: None,
+            spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: 0,

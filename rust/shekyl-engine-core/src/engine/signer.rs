@@ -256,6 +256,14 @@ pub struct SignedTransfer {
     /// behavior (`tx_bytes: Vec::new()`); Phase 2a's tx-builder
     /// integration replaces this with the actual on-wire body.
     pub(crate) tx_bytes: Vec<u8>,
+    /// Per-tx secret scalar carried alongside the signed body so the
+    /// submit path can persist it into `TxMetaBlock.tx_keys` at
+    /// submit-ACCEPTED (WI-RPC-3 retention, `docs/api/wallet_rpc.yaml`
+    /// OUTBOUND PREREQUISITE pin 1). Zeroize-on-drop; non-`Clone` —
+    /// which also makes `SignedTransfer` itself non-`Clone`, keeping
+    /// the secret single-copy through the pipeline. `Debug` is safe:
+    /// [`shekyl_engine_state::TxSecretKey`]'s impl is redacted.
+    pub(crate) tx_key_secret: shekyl_engine_state::TxSecretKey,
 }
 
 impl SignedTransfer {
@@ -472,7 +480,10 @@ impl Signer for LocalSigner {
             }
         })?;
 
-        Ok(SignedTransfer { tx_bytes })
+        Ok(SignedTransfer {
+            tx_bytes,
+            tx_key_secret: signatures.tx_key_secret,
+        })
     }
 }
 

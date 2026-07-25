@@ -12,6 +12,7 @@ use shekyl_scanner::BalanceSummary;
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 
+use crate::params::parse_hex32;
 use crate::types::{
     BuildPendingTxResult, GetBalanceResult, RefreshResult, TransferDirection, TransferState,
     TransferView,
@@ -50,20 +51,15 @@ pub fn transfer_id(td: &TransferDetails) -> String {
 /// has a single home.
 ///
 /// Accepts exactly the canonical form `transfer_id` emits (64 lowercase hex
-/// chars, `:`, decimal index with no leading zeros or sign). Anything else
-/// returns `None` — the same ids that per-row string equality against
-/// [`transfer_id`] output would have failed to match, so lookups by the
-/// parsed parts preserve match semantics while comparing typed fields
-/// instead of formatting a fresh id string for every ledger row scanned.
+/// chars per the crate's shared [`parse_hex32`] rule, `:`, decimal index
+/// with no leading zeros or sign). Anything else returns `None` — the same
+/// ids that per-row string equality against [`transfer_id`] output would
+/// have failed to match, so lookups by the parsed parts preserve match
+/// semantics while comparing typed fields instead of formatting a fresh id
+/// string for every ledger row scanned.
 pub fn parse_transfer_id(id: &str) -> Option<(TxHash, u64)> {
     let (hash_hex, idx_str) = id.split_once(':')?;
-    if hash_hex.len() != 64
-        || !hash_hex
-            .bytes()
-            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-    {
-        return None;
-    }
+    let bytes = parse_hex32(hash_hex)?;
     // Canonical decimal only: `u64::from_str` also accepts `+` and leading
     // zeros, which `transfer_id` never emits and string equality would
     // therefore never have matched.
@@ -74,8 +70,6 @@ pub fn parse_transfer_id(id: &str) -> Option<(TxHash, u64)> {
         return None;
     }
     let idx: u64 = idx_str.parse().ok()?;
-    let mut bytes = [0u8; 32];
-    hex::decode_to_slice(hash_hex, &mut bytes).ok()?;
     Some((TxHash::from_bytes(bytes), idx))
 }
 

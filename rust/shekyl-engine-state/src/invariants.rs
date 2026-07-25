@@ -38,7 +38,7 @@
 //! | Stable name                          | Cross-block relationship                                                              |
 //! |--------------------------------------|---------------------------------------------------------------------------------------|
 //! | `tip-height-not-below-transfer`      | `ledger.tip.synced_height >= max(ledger.transfers[*].block_height)`                   |
-//! | `tx-keys-no-orphans`                 | Every tx-hash in `tx_meta.tx_keys` appears in a live reference (transfers, pool, or pending) |
+//! | `tx-keys-no-orphans`                 | Every tx-hash in `tx_meta.tx_keys` appears in a live reference (transfer tx_hash / spending_tx_hash / awaiting_confirmation, pool, or pending) |
 //! | `reorg-trail-monotonic`              | `ledger.reorg_blocks.blocks` is strictly ascending and capped by `tip.synced_height`  |
 //! | `spent-state-consistent`             | Within `ledger.transfers`: spend-triple self-consistency + key-image uniqueness       |
 //!
@@ -149,13 +149,20 @@ fn check_tip_not_below_transfer(ledger: &LedgerBlock) -> Result<(), WalletLedger
 
 /// I-2. Every tx-hash in `tx_meta.tx_keys` must still be referenced
 /// by *something* the wallet actively tracks: a live
-/// [`TransferDetails`] (the scanner observed it), a scanned pool
-/// entry (we saw it in mempool), or the user-submitted pending list
-/// (we originated it and it has not yet been mined). A tx-hash in
-/// `tx_keys` with no live reference is an orphan — the secret scalar
-/// for a transaction the wallet has forgotten exists, which is both
-/// a secret-handling leak and a sign that the garbage-collection
-/// logic is broken.
+/// [`TransferDetails`] (the scanner observed it — as the receiving
+/// txid, as a confirmed `spending_tx_hash` (WI-RPC-3 F-9
+/// spend-quadruple), or as an in-flight `awaiting_confirmation`
+/// lock), a scanned pool entry (we saw it in mempool), or the
+/// user-submitted pending list (we originated it and it has not yet
+/// been mined). A tx-hash in `tx_keys` with no live reference is an
+/// orphan — the secret scalar for a transaction the wallet has
+/// forgotten exists, which is both a secret-handling leak and a sign
+/// that the garbage-collection logic is broken.
+///
+/// The `spending_tx_hash` leg is what keeps retention alive for a
+/// no-change outbound tx: such a tx produces no owned output, so once
+/// it confirms (leaving `pending_tx_hashes`) the *only* live
+/// references to its txid are the spent rows it consumed.
 ///
 /// `tx_notes` and `attributes` are deliberately *not* part of this
 /// check: user-authored notes may legitimately reference an arbitrary
@@ -180,6 +187,18 @@ fn check_tx_keys_no_orphans(
         // `live` unifies typed transfer hashes with the still-raw `tx_meta` /
         // `pending_tx_hashes` keys; convert at this boundary.
         live.insert(t.tx_hash.to_bytes());
+        // Spend-quadruple leg (F-9): the confirmed tx that spent this
+        // output keeps its retained secret live even when it produced
+        // no owned output of its own.
+        if let Some(spending) = &t.spending_tx_hash {
+            live.insert(spending.to_bytes());
+        }
+        // F14 lock: a network-exposed spend awaiting confirmation is a
+        // tracked tx — its secret must not be collected in the window
+        // between broadcast-accept and refresh-observed confirmation.
+        if let Some(lock) = &t.awaiting_confirmation {
+            live.insert(lock.tx_hash.to_bytes());
+        }
     }
     for h in tx_meta.scanned_pool_txs.keys() {
         live.insert(*h);
@@ -193,7 +212,8 @@ fn check_tx_keys_no_orphans(
             INV_TX_KEYS_NO_ORPHANS,
             format!(
                 "tx_meta.tx_keys contains an entry for tx_hash = {} that does not appear in \
-                 ledger.transfers, tx_meta.scanned_pool_txs, or sync_state.pending_tx_hashes",
+                 ledger.transfers (tx_hash / spending_tx_hash / awaiting_confirmation), \
+                 tx_meta.scanned_pool_txs, or sync_state.pending_tx_hashes",
                 hex::encode(orphan)
             ),
         ));
@@ -354,6 +374,7 @@ mod tests {
             spent_height: None,
             key_image: None,
             awaiting_confirmation: None,
+            spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,
@@ -431,7 +452,6 @@ mod tests {
             [0x77; 32],
             TxSecretKeys {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
-                additional: Vec::new(),
             },
         );
         let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
@@ -453,7 +473,6 @@ mod tests {
             txid,
             TxSecretKeys {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
-                additional: Vec::new(),
             },
         );
         let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
@@ -477,7 +496,6 @@ mod tests {
             txid,
             TxSecretKeys {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
-                additional: Vec::new(),
             },
         );
         let mut pool = BTreeMap::new();
@@ -491,6 +509,81 @@ mod tests {
             StakingBlock::empty(),
         );
         w.check_invariants().expect("pool ref satisfies I-2");
+    }
+
+    /// WI-RPC-3 F-9 spend-quadruple: a no-change outbound tx produces no
+    /// owned output, so after confirmation its *only* live references
+    /// are the spent rows' `spending_tx_hash`. The retained secret must
+    /// stay I-2-live through that leg alone.
+    #[test]
+    fn tx_key_referenced_by_spending_tx_hash_is_accepted() {
+        let txid = [0x77; 32];
+        let mut tx_keys = BTreeMap::new();
+        tx_keys.insert(
+            txid,
+            TxSecretKeys {
+                primary: TxSecretKey::new(Zeroizing::new([0; 32])),
+            },
+        );
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        // The spent row's own tx_hash differs from `txid`; only the
+        // `spending_tx_hash` leg satisfies I-2 here.
+        let mut spent_row = mk_transfer(0x11, 10);
+        spent_row.spent = true;
+        spent_row.spent_height = Some(20);
+        spent_row.key_image = Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+            [0x33; 32],
+        ));
+        spent_row.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
+        let ledger = LedgerBlock::new(
+            vec![spent_row],
+            BlockchainTip::new(30, [0xAA; 32]),
+            ReorgBlocks::default(),
+        );
+        let w = WalletLedger::new(
+            ledger,
+            BookkeepingBlock::empty(),
+            tx_meta,
+            SyncStateBlock::empty(),
+            StakingBlock::empty(),
+        );
+        w.check_invariants()
+            .expect("spending_tx_hash ref satisfies I-2");
+    }
+
+    /// F14 lock leg: a network-exposed spend awaiting confirmation is a
+    /// tracked tx; its secret must not be orphaned in the window between
+    /// broadcast-accept and refresh-observed confirmation.
+    #[test]
+    fn tx_key_referenced_by_awaiting_confirmation_is_accepted() {
+        let txid = [0x77; 32];
+        let mut tx_keys = BTreeMap::new();
+        tx_keys.insert(
+            txid,
+            TxSecretKeys {
+                primary: TxSecretKey::new(Zeroizing::new([0; 32])),
+            },
+        );
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let mut locked_row = mk_transfer(0x11, 10);
+        locked_row.awaiting_confirmation = Some(crate::transfer::AwaitingConfirmation {
+            tx_hash: shekyl_types::TxHash::from_bytes(txid),
+            accepted_at_height: 25,
+        });
+        let ledger = LedgerBlock::new(
+            vec![locked_row],
+            BlockchainTip::new(30, [0xAA; 32]),
+            ReorgBlocks::default(),
+        );
+        let w = WalletLedger::new(
+            ledger,
+            BookkeepingBlock::empty(),
+            tx_meta,
+            SyncStateBlock::empty(),
+            StakingBlock::empty(),
+        );
+        w.check_invariants()
+            .expect("awaiting_confirmation ref satisfies I-2");
     }
 
     #[test]
