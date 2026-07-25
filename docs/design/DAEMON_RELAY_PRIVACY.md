@@ -1472,10 +1472,17 @@ reasons — *and a refuted one I record so it is not re-argued*:
    instead of 1" — reuse of an existing `out_mapping_` entry, **not a new edge**.
    That distinction is a rule-21 halt criterion (§12.5): reshape must never widen
    the origin's peer set beyond `STEMS`.
-7. **Degenerate case.** If `out_mapping_` has fewer than 2 live entries (a
-   successor disconnected and is `nil`), there is no alternate; the node fluffs
-   on embargo fire (the current R=0 behaviour). Reshape is a best-effort overlay
-   on the existing map, never a reason to hold a transaction.
+7. **Degenerate case — and it is adversarially reachable (W3b).** If
+   `out_mapping_` has fewer than 2 live entries (a successor disconnected and is
+   `nil`), there is no alternate; the node fluffs on embargo fire (the R=0
+   behaviour). Reshape is a best-effort overlay, never a reason to hold a
+   transaction. But this is not a benign churn case only: an adversary who can
+   hold the origin at *one* live stem peer (peer churn it induces, or a partial
+   eclipse) converts **every** embargo fire back into an origin fluff — a cheaper
+   attack than controlling *both* successors (W3), and the same underlying lever
+   (shaping the origin's two-slot stem set). It is tabled as W3b, not folded into
+   this fallback line, because `§6.8`'s leak arithmetic does not count it: reshape
+   removes the embargo-fired origin fluff *only while a second live stem exists*.
 
 ### 12.3 The retry cap is derived, not a magic constant
 
@@ -1506,21 +1513,30 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 | --- | --- | --- | --- | --- | --- |
 | W1 | `get_stem(nil)` no-op (ii) | design bug | select the alternate `out_mapping_` index explicitly, never re-call `get_stem` | none | **closed by spec** |
 | W2 | Fan-out 1→2 (i) | passive inbound supernode (§6.8) | reuse the existing 2nd `out_mapping_` entry; net against leak benefit in the §6.8 metric | fan-out cost sub-dominant to the ~86× rate cut | **closed (netted)** |
-| W3 | Both-successors-black-hole | adversary controls *both* of the origin's 2 stem successors | re-stem to the 2nd is also dropped → fluff after the cap; the fluff recovers liveness | origin exposed iff both successors are spies ≈ (on-path spy share)²; worst-case recovery ~doubles | **residual named** — reopen if measured material (§12.5) |
+| W3 | Both-successors-black-hole | adversary occupies *both* of the origin's 2 stem successors | re-stem to the 2nd is also dropped → fluff after the cap; the fluff recovers liveness | origin exposed iff **both** stem slots are adversarial. The two slots are **not** independent draws: `out_mapping_` is built from the origin's *outbound* pool ([`!m_is_income`](../../src/cryptonote_protocol/levin_notify.cpp#L152)), which a highly-connectable supernode over-represents itself in (Prop. 2). So the residual is `P(both stem slots adversarial | outbound enrichment)`, **bounded below by `p²` but rising toward the single-slot occupancy under enrichment** — not `p²`. Unmeasured. | **residual named, argued > p²** — gated on the two-slot instrument (§12.5) |
+| W3b | Single-live-stem fallback | adversary holds the origin at *one* live stem peer (induced churn / partial eclipse) | no alternate exists → fluff on embargo fire (the §12.2.7 fallback) | **every** embargo fire becomes an origin fluff for that origin — cheaper than W3 (one slot, not two), same lever (shaping the 2-slot stem set). Uncounted by §6.8. | **residual named** — gated on the same instrument (§12.5) |
 | W4 | Loop (revisited node) | topology | once-per-tx local cap bounds re-stemming; matches the paper's "fluff on loop" | bounded by the cap | **closed by cap + local state** |
 | W5 | Epoch-boundary straddle | timing | a re-stem after `change_channels` uses the fresh map; D++ already tolerates map turnover mid-flight ([levin_notify.cpp:711](../../src/cryptonote_protocol/levin_notify.cpp#L711)) | tx may re-stem into a rebuilt map | **low — within existing D++ tolerance** |
 | W6 | Wire position leak | on-path observer counting re-stems | retry state local, tx-hash-keyed, never serialized | none | **closed by spec (the wire rule)** |
-| W7 | Degenerate map (<2 live stems) | churn | fall back to fluff (R=0) | equals the no-reshape rate for those txs | **accepted** — reshape is best-effort, never holds a tx |
 
 ### 12.5 Reopen / halt criteria (rule 21)
 
 - **Cap (W-cap).** Re-derive if `CRYPTONOTE_DANDELIONPP_STEMS` changes (more
   alternates raise the achievable cap) or if `δ` is set tighter than the 0.026 %
   R=1 already delivers.
-- **W3 both-successors-black-hole.** Reopen the mechanism if a measurement of
-  `P(both of an origin's stem successors are adversarial)` at expected topology,
-  or of the doubled worst-case recovery, shows either is material. Until then the
-  residual is `(spy-share)²`, named and small.
+- **W3 / W3b — the two-slot occupancy instrument is a required RP-2 gate, not a
+  "reopen if."** Both cells rest on the same unmeasured quantity: the *joint*
+  adversary occupancy of the origin's two stem slots under the supernode's
+  outbound over-representation. The independence framing (`p²`) assumes away the
+  very enrichment the mechanism exists to resist, so it must not be shipped as
+  the residual. The transport table's `π₀ = 0.45` at a 30 % attack (§6.5) is
+  already a measurement of *single*-slot occupancy under enrichment; **W3/W3b
+  want its two-slot analogue, which is a small extension of
+  `simulate_transport_observation`, not a new instrument.** Build it *before*
+  RP-2 implementation; if it shows either the joint occupancy or the induced
+  single-live-stem rate is material at a supported topology, reopen the cap or
+  the mechanism (e.g. bias re-stem selection away from recently-added outbound
+  peers, or require ≥2 *established* stem peers before arming).
 - **W2 fan-out.** Reopen if the netted §6.8 metric shows the fan-out cost exceeds
   the leak benefit at any *supported* topology (clearnet included, per the frozen
   default).
@@ -1532,4 +1548,9 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 **Deferred to implementation (RP-2+, with its own design round per rule 20):**
 the actual re-stem wiring in `levin_notify` / `tx_pool`, the tx-hash-keyed retry
 store, and the `out_mapping_` alternate-selection helper. This section specifies
-*what* must hold; the *how* is a later PR, and W1/W3/W6 are its acceptance gates.
+*what* must hold; the *how* is a later PR. Acceptance gates: W1 and W6 (closed by
+spec — the PR must not reintroduce a `get_stem(nil)` re-entry or a wire retry
+counter), and **W3/W3b, which are gated on the two-slot occupancy instrument
+being built and green first** — right now they rest on an argument that assumes
+away the supernode's outbound enrichment, which is the one place §12 still leans
+on a hopeful bound rather than a measurement.
