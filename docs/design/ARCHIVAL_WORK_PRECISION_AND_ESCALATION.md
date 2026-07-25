@@ -446,7 +446,23 @@ decision.
   - (c) **a per-output fee-floor term** pricing the perpetual set-growth
     externality at output creation (§11.3) — out of this round's pinned scope
     (staker share only), **trigger:** the W9 sweep showing weight-fees alone do
-    not clear cost-of-burden;
+    not clear cost-of-burden. **🔴 FIRED (Stage 2 · A4 · cp4b `d4026efe3`, cp4c).**
+    The W9 served-work sweep fails ROI < 1 even at the rational honest
+    equilibrium (2.8× baseline → 17.8× late-tail; §12.5). Promoted from named
+    reopen to a **Stage-3 hard input**, denominated in **weight** (a per-output
+    virtual-weight surcharge that rides the fee market and flows through the
+    existing weight/fee/burn machinery with zero new consensus fields — not a
+    frozen atomic constant), and **paired** with the capture-side **D3** fix
+    (reopen (e)) — each closes the regime the other cannot;
+  - (e) **the archival-reward per-bond curve-cap dodgeability (D3)** — the
+    `curve_milli` plateau caps per *bond* while the bond floor is per *shard*, so
+    holdings split into small bonds at no extra bond cost dodge the cap; a naive
+    big-bond archiver self-caps while a splitter (attacker or savvy honest) is
+    uncapped. **Surfaced by A4** (Stage 2, cp4b) and **load-bearing for W9** (it
+    ~2× the stuffer's ROI at the capped-honest end), it is its own defect at the
+    archival-reward layer needing its own design round (fix space: per-*persona*
+    curve application, per-bond bond floors, or bond-proportional plateaus).
+    Filed `FOLLOWUPS.md`;
   - (d) **the §7.4 on-demand-serving equilibrium** (§11.1) — reopens via the doc's
     own economics-reopens (traffic-proportional pay §0.3, or PoRep durability
     fork) **trigger:** the W10 proxy-cost arm showing the fetch-cost-vs-deadline
@@ -466,7 +482,7 @@ decision.
 | W6 | Distributional dilution: D1 fix moves ex-zero archivers into `Σwork`, shrinking scarce-holders' shares of fixed budget | Stage-2 sim models the shift, not just aggregate lift | ⏳ sim-arm scope |
 | W7 | Cached `frozen_segment_count` drift at the D2 read-point | Pinned read through frontier-check (M1 §11.8 M3-1) | ✅ carried |
 | W8 | **Fast-swing** manipulation of the staker share (pump-and-dump, whale dive, reflexive feedback) | The operand is monotone + slow + predictable (§6.0) and the function is a pure map of `n` with no controller (§6.1) — pump/dump/whale have **no lever** on a monotone chain-state operand; the only lever is the durable one (W9) | ✅ by operand (fast-swing has no lever) |
-| W9 | **Durable output-stuffing** — mint outputs to inflate leaf count → segment-freeze rate → `n` → share, permanently (the ratchet cuts both ways, §6.2). Not covered by `DESIGN_CONCEPTS.md` §6, which keys the stuffer's cost to `tx_volume` (a tx count) via the sqrt damper, which does not escalate against output count. **Live precedent**: Monero's suspected March-2024 output-flood; Bitcoin's 2015 dust floods (§11.3) | Burden-coupling: the operand *is* the funded quantity, so a stuffer raises the share and the real cost (a permanent ~3.33 MB shard held forever) in the coupled ratio — "manipulating an honest measure of the funded quantity mostly funds the quantity"; only weight-fees escalate against outputs | ⏳ pending Stage-2 sweep — **calibrated against the March-2024 incident's cost profile** (`scenario_4` output variant × `scenario_7` bootstrap, §6.2); rule-21 reopen if weight-fees alone don't clear (§8) |
+| W9 | **Durable output-stuffing** — mint outputs to inflate leaf count → segment-freeze rate → `n` → share, permanently (the ratchet cuts both ways, §6.2). Not covered by `DESIGN_CONCEPTS.md` §6, which keys the stuffer's cost to `tx_volume` (a tx count) via the sqrt damper, which does not escalate against output count. **Live precedent**: Monero's suspected March-2024 output-flood; Bitcoin's 2015 dust floods (§11.3) | Burden-coupling: the operand *is* the funded quantity, so a stuffer raises the share and the real cost (a permanent ~3.33 MB shard held forever) in the coupled ratio — "manipulating an honest measure of the funded quantity mostly funds the quantity"; only weight-fees escalate against outputs | 🔴 **FAILS** (Stage 2, A4 cp4b/cp4c). Served-work ROI is 2.8×–17.8× at the rational honest equilibrium (§12.5): the coupled bond burden is real but ~1% of cost, and the weight-fee at the `300`/byte floor is cheap against the Δpool a flood unlocks. Diagnosis: **pure fee-flow-volume leverage** (first-mover premium ≈ 1.0 — *not* a concentration attack at the realistic end); the cross-regime `fee×→1` spread (2.8→17.8) is volume/share-slope, so a floor cannot be one number. Disposition: reopen (c) **FIRED** — weight-denominated per-output fee-floor + the **D3** capture-side companion (reopen (e)); **not** a D2 redesign (§8). |
 | W10 | **Proxy free-riding on the on-demand-serving ruling** (§11.1) — a thin proxy re-fetches challenged data cheaply within the gate-4 grace window instead of holding it; D1 now *pays* that profile (was zero under truncation) and D2 escalates the pool it drains, re-pricing the §7.4 free-rider equilibrium that was closed under the old economics | Fetch-cost-vs-deadline margin must still bind (the §7.4/L14 judgment). If the Stage-2 arm shows it doesn't: tighten the gate-4 grace window or accelerate the PoRep reopen (the doc's own named economics-reopens) — **not** redesign D2 | ⏳ pending Stage-2 proxy-cost arm (§5) |
 
 ---
@@ -658,7 +674,7 @@ Grounded in `shekyl-economics-sim`:
 | **A1 burden clearance** | Does the escalated pool keep the staker's reward above the cost of their **growing locked-bond capital** through the fee era? (F-G: storage alone is trivially met) | `budget_skl(candidate)` vs `opp_cost_skl(n, rate) + storage/price`, over the trajectory, ∀ opp-cost rate in the band | **Report** the (rate, shape, scenario) region where `budget ≥ burden` sustained; a shape "clears" iff it holds under the **binding 10%/yr** rate (and 0%/yr Kryder for the minor storage term). The dominant term is price-independent |
 | **A2 distributional shift (W6)** | The D1 fix moves ex-zero bulk holders into `Σwork`, diluting scarce-holders' shares of a fixed budget | Scarce-holder share pre- vs post-D1 across the archiver distribution | **Descriptive** — quantify the redistribution; **flag** if it strands scarce holders below their marginal cost |
 | **A3 stranding** | What fraction of diverted budget goes unminted? | Σ unclaimed `reward_P` past `MAX_CLAIM_AGE_W = 26` epochs ÷ Σ budget | **Report** the stranded fraction; joint with A1 (stranded budget is not burden-clearing) |
-| **A4 output-stuffing (W9)** | Does stuffing pay the attacker — is there an early-chain regime where their manipulation profits? | **attacker ROI** = marginal captured revenue (their stake-fraction of the Δpool, discounted over the horizon) ÷ marginal cost (weight-fees + their share of the burn), on `scenario_4`(output-variant) × `scenario_7`(bootstrap); `Δshare/Δburden` reported as a coherence **diagnostic** | **Pass** iff attacker **ROI < 1** everywhere in the sweep — the executable form of "stuffing it funds it" (§6.2); calibrated to the March-2024 profile (DQ-2C). Fail → the §11.3 rule-21 per-output fee-floor reopen, **not** a D2 redesign |
+| **A4 output-stuffing (W9)** | Does stuffing pay the attacker — is there an early-chain regime where their manipulation profits? | **attacker ROI** = marginal captured revenue (their **served-work first-mover slice** of the Δpool over the horizon) ÷ marginal cost (weight-fees + the coupled bond). ⚠️ **Retraction (§12.5):** the ratified D-2 wording "*stake-fraction* of the Δpool" was wrong at source — the staker pool distributes by **capped served work per bond** (`reward_share_floor`), *not* by stake; the capture term was written without re-walking the disbursement path. The correction makes the attack **stronger** (r=1 first-mover work-capture is a sharper lever than any stake fraction). On `scenario_4`(output-variant) × `scenario_7`(bootstrap); `Δshare/Δburden` reported as a coherence **diagnostic** | **Pass** iff attacker **ROI < 1** everywhere in the sweep — the executable form of "stuffing it funds it" (§6.2); calibrated to the March-2024 profile (DQ-2C). **Result: FAILS (§12.5)** → the §11.3 rule-21 per-output fee-floor reopen (c, FIRED) + the D3 companion (reopen e), **not** a D2 redesign |
 | **A5 proxy free-riding (W10)** | Does the §7.4 fetch-cost-vs-deadline margin still bind after D1 restores bulk pay and D2 escalates the pool? | **margin** = expected proxy cost/epoch − honest storage cost/epoch, where proxy cost includes within-grace re-fetch feasibility (gate-4 window) **and** the L14 challenge-failure exposure; against the **post-D1/D2** reward on ~13.6 GB held | **Pass** iff margin `> 0` (§7.4: "if re-fetch is cheap, the challenge *is* the free-rider equilibrium"). Fail → tighten gate-4 grace or accelerate PoRep reopen (§11.1), **not** a D2 redesign |
 | **A6 swing / band width (§6.0)** | Is the lift a wide-but-slow band, not a cliff? | `d(share)/d(n)` across the sweep | **Report** the rate; **flag** any cliff (bounded-slope is the §6.1 requirement) |
 
@@ -885,3 +901,59 @@ per-output fee-floor for W9; gate-4/PoRep for W10), never a D2 redesign.
 
 Registration: the Stage-2 sim build gets an `IMPLEMENTATION_INDEX.md` row at
 birth (rule 94); this design round does not (it lives in this doc).
+
+### 12.5 A4 (W9) result — the escalation fails the stuffing gate; reopen (c) FIRED
+
+**Built:** cp4a (`11452248f`, leaf-stuffer cost via the production `predict_weight`
+hoist, D-1), cp4b (`d4026efe3`, served-work ROI + the DQ-2H population), cp4c
+(decomposition + replication-response). `shekyl-economics-sim --stage2`.
+
+**Channel correction (the D-2 retraction, §12.2).** The D2 `staker_pool` is the
+*archival* reward pool: `epoch_close_compute` distributes it by **capped served
+work per bond** (`reward_share_floor(pool, my_capped_work, Σwork)`), not by stake.
+The attacker captures the raised pool only by **archiving** the shards it stuffs —
+the §6.2 coupling, which a stake-capture model deletes. The first model cut used
+free stake capture (a phantom) and was corrected at source; the served-work model
+is the honest gate, and the correction makes the attack *stronger* (r=1 first-mover
+work-capture beats any stake fraction).
+
+**Metric — the manipulation premium, not the whole capture.** W9 asks whether
+gaming the escalation share *adds* profit, not whether archiving pays (that is A1).
+Revenue is the attacker's served-work slice of the **Δpool the share increase
+creates** × horizon; **flat-25 reads exactly 0** (no share lever), so the premium
+is purely the escalation's.
+
+**Verdict: FAILS.** At the rational honest equilibrium (small bonds, `hHold=4`) the
+served-work ROI is **2.8× (baseline) → 17.8× (late-tail)** after the coupled bond.
+Decomposition (cp4c):
+
+- **First-mover premium ≈ 1.0** at the realistic end — *no* concentration premium;
+  capture is exactly proportional (the r-independence invariant). The attack is
+  **pure fee-flow-volume leverage**: cheap stuffing unlocks a large Δpool, and the
+  attacker's proportional slice of it dwarfs the stuffing cost.
+- **Cost is ~99% fees** (the coupled bond is real but ~1%). The weight-fee at the
+  `FEE_PER_BYTE=300` floor is the whole lever, and it is too cheap.
+- **`fee×→1` spans 2.8→17.8** across regimes. The fee-*rate* cancels in that ratio,
+  so the spread is volume/share-slope variation — a single per-output floor sized
+  for late-tail over-charges benign multi-output txs ~6× (the remedy's real cost).
+- **Replication response** (r:1→R after a 2 y lag; first-order, *not* gating) cuts
+  ROI ~3×: baseline → 0.93 (passes), late-tail → 5.9× (**fails robustly**, not only
+  under the r=1-forever assumption).
+
+**Disposition (both pre-committed; no D2 redesign).**
+1. **Reopen (c) FIRED** — a **weight-denominated** per-output fee-floor (a virtual-
+   weight surcharge that rides the fee market and flows through the existing
+   weight/fee/burn machinery with zero new consensus fields; the D-1 predictor
+   hoist now serves both consensus-adjacent code and the sim). Promoted to a
+   Stage-3 hard input. An atomic-unit constant is rejected (the Bitcoin-dust-limit
+   mistake — right idea, wrong denomination, rots within years).
+2. **Reopen (e) — D3** (new): the per-bond `curve_milli` cap is dodgeable at no
+   bond cost (bond floor is per-shard), so it is **load-bearing for W9** — it ~2×
+   the stuffer's ROI at the capped-honest end (`hHold=512`). Its own defect / design
+   round (per-persona cap, per-bond floors, or bond-proportional plateaus). Filed
+   `FOLLOWUPS.md`. The pair — fee-floor (fee-flow regime) + D3 (concentration
+   regime) — each closes what the other cannot.
+
+**Freeze note:** the FAIL stands at the binding case, the correct pre-genesis
+standard. The `ROI(resp)` row is reported so Stage 3 sees how much is "market never
+responds" — but a freeze decision cannot *rely* on market-response speed.

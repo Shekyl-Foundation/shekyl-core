@@ -47,6 +47,28 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **D3 — archival-reward per-bond `curve_milli` cap is dodgeable at no bond
+  cost** (added 2026-07-25; surfaced by A4/W9,
+  `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.5 / reopen (e), sim commits
+  `d4026efe3`+cp4c). `sigma_work_milli` applies the `curve_milli` plateau **per
+  bond entry** (`per_p_work_milli`), while `bond_floor_of` scales the bond
+  requirement **per shard** — so splitting one bonded principal's holdings into
+  many small bonds dodges the plateau at *zero* extra bond cost. A naive
+  big-bond archiver self-caps (earns ~`plateau/holdings` per shard) while a
+  splitter — attacker or savvy honest — stays in the linear region and is
+  uncapped. **Load-bearing for W9, not orthogonal:** at the fully-capped-honest
+  end the dodge ~2× the stuffer's served-work ROI (A4 `hHold=512` column). This
+  is a genesis-freeze concern (the reward-curve *shape* is frozen) at the
+  **archival-reward layer**, needing its own design round — it is not a D2
+  escalation change. **Fix space:** apply the cap per *persona*/principal (sum a
+  principal's bonds before the curve), a per-*bond* minimum floor, or a
+  bond-proportional plateau. **Pairs with** the reopen-(c) weight-denominated
+  per-output fee-floor: the floor prices the fee-flow regime, D3 prices the
+  concentration regime — each closes the regime the other cannot (§12.5).
+  **Reopen when** the escalation/fee-floor design round opens; the
+  re-evaluation shape is a joint capture-side + cost-side design pass. Target:
+  V3.0 (pre-genesis; gates the escalation freeze).
+
 - **WI-RPC-2b deferrals — CLI RESERVED commands awaiting their RPC
   surfaces** (added 2026-07-22; WI-RPC-2b, `feat/cli-rpc-client-surface`;
   the `reserved()` refusals in `rust/shekyl-cli/src/commands/mod.rs` point
