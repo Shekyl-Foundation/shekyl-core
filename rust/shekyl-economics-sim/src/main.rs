@@ -1,6 +1,7 @@
 mod budget;
 mod budget_scenarios;
 mod burden;
+mod calibration;
 mod engine;
 mod escalation;
 // The `RecordedChainFixture` recorder is test-substrate only: it

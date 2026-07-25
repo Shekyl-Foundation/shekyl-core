@@ -24,11 +24,16 @@
 use shekyl_crypto_pq::kem::ML_KEM_768_CT_LEN;
 use shekyl_curve_io::varint_len;
 // Consensus proof-system limits from their UPSTREAM home (constraint 1 — never
-// via shekyl-tx-builder's re-export, which would invert the arrow).
-use shekyl_fcmp::{MAX_INPUTS, MAX_TREE_DEPTH};
+// via shekyl-tx-builder's re-export, which would invert the arrow). `MAX_TREE_DEPTH`
+// and `MAX_OUTPUTS` are re-exported (`pub use`) so consumers that price real tx
+// shapes (the economics sim's leaf-stuffer, DQ-2G) can single-source them through
+// this crate — the sanctioned window into the weight model — instead of depping
+// shekyl-fcmp / shekyl-wire directly; `MAX_INPUTS` stays crate-internal.
+use shekyl_fcmp::MAX_INPUTS;
+pub use shekyl_fcmp::MAX_TREE_DEPTH;
+pub use shekyl_wire::transaction::MAX_OUTPUTS;
 use shekyl_wire::transaction::{
-    bp_plus_weight_clawback, MAX_OUTPUTS, PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN,
-    TX_VERSION,
+    bp_plus_weight_clawback, PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN, TX_VERSION,
 };
 
 // ── Bounded input/output counts ─────────────────────────────────────────────

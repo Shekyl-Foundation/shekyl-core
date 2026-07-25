@@ -3909,7 +3909,9 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-archival-retention",
+ "shekyl-curve-tree",
  "shekyl-economics",
+ "shekyl-tx-weight",
 ]
 
 [[package]]
@@ -3966,6 +3968,7 @@ dependencies = [
  "shekyl-scanner",
  "shekyl-standoff",
  "shekyl-tx-builder",
+ "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
@@ -4392,6 +4395,18 @@ dependencies = [
  "shekyl-wire",
  "thiserror",
  "zeroize",
+]
+
+[[package]]
+name = "shekyl-tx-weight"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "shekyl-crypto-pq",
+ "shekyl-curve-io",
+ "shekyl-fcmp",
+ "shekyl-scanner",
+ "shekyl-wire",
 ]
 
 [[package]]

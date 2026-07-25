@@ -32,9 +32,14 @@ use crate::burden::{
     BASE_STORAGE_FIAT_PER_BYTE_YEAR, OPP_COST_RATE_BAND, OUTPUTS_PER_TX_NORMAL, REPLICAS_PER_SHARD,
     SKL_FIAT_PRICE_BAND,
 };
+use crate::calibration::{
+    leaf_stuffer_cost_per_shard_atomic, rucknium_shards_equivalent, stuffer_tx_fee_atomic,
+    tree_depth_for_leaves, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
+};
 use crate::engine::{ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve};
 use crate::scenarios::all_scenarios;
+use shekyl_archival_retention::SEGMENT_LEAF_COUNT;
 
 /// Atomic units per SKL (mirrors `engine.rs`).
 const COIN: f64 = 1_000_000_000.0;
@@ -469,6 +474,49 @@ fn print_escalation_family() {
     );
 }
 
+/// A4 (W9) **cost side** — the leaf-stuffer's cost to inflate `n` by one shard,
+/// across chain depth (§12.2, DQ-2C). The *revenue* side and the ROI < 1 gate
+/// land next (cp4b); this establishes the price of a stuffed shard, single-
+/// sourced through the production weight predictor (`calibration.rs`), and the
+/// Monero-replication row (the March-2024 anchor as shards' worth of leaves).
+///
+/// `n` is sampled as **frozen shards**; the curve-tree depth (hence FCMP proof
+/// cost) rides the total leaf count `n · SEGMENT_LEAF_COUNT`, so the cost RISES
+/// with chain size — cheapest early (the binding direction, §11.3).
+fn print_stuffer_cost_curve() {
+    let rep = rucknium_shards_equivalent();
+    eprintln!(
+        "\nA4 (W9) leaf-stuffer cost — 1-in/{OUT}-out, min weight-fee @ {FPB} atomic/byte:\n\
+         Monero-replication anchor (DQ-2C): the March-2024 spam bought ~{GB:.2} GB / {DAYS} days\n\
+         for ~{XMR:.1} XMR — that output volume is only ~{REP} Shekyl shards' worth of leaves.\n\
+         Shape is max-leaves-per-fee geometry, NOT decoy poisoning (FCMP++ has no rings).",
+        OUT = crate::calibration::STUFFER_OUTPUTS_PER_TX,
+        FPB = crate::calibration::FEE_PER_BYTE_ATOMIC,
+        GB = RUCKNIUM_SPAM_BYTES_GB,
+        DAYS = RUCKNIUM_DURATION_DAYS,
+        XMR = RUCKNIUM_SPAM_FEES_XMR,
+        REP = rep,
+    );
+    eprintln!(
+        "{:<14} {:>10} {:>16} {:>18}",
+        "chain n(shards)", "tree_depth", "fee/tx (SKL)", "cost/shard (SKL)"
+    );
+    for n_shards in ESCALATION_PREVIEW_N {
+        // n=0 has no tree; sample the first shard so the depth/cost are defined.
+        let n_shards = n_shards.max(1);
+        let chain_leaves = n_shards.saturating_mul(SEGMENT_LEAF_COUNT);
+        let depth = tree_depth_for_leaves(chain_leaves);
+        let fee_tx_skl = stuffer_tx_fee_atomic(depth) as f64 / COIN;
+        let cost_shard_skl = leaf_stuffer_cost_per_shard_atomic(chain_leaves) as f64 / COIN;
+        eprintln!("{n_shards:<14} {depth:>10} {fee_tx_skl:>16.6} {cost_shard_skl:>18.4}",);
+    }
+    eprintln!(
+        "  -> cost/shard rises with chain depth (deeper tree = larger FCMP proof).\n\
+         cp4b weighs this against the escalation Delta-pool a stuffing staker captures\n\
+         (ROI < 1 gate): a survivor of A1 must ALSO price the stuffer out here."
+    );
+}
+
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
 /// stdout, a human-readable summary to stderr.
 pub fn run_stage2(params: &SimParams) {
@@ -511,6 +559,7 @@ pub fn run_stage2(params: &SimParams) {
     );
 
     print_escalation_family();
+    print_stuffer_cost_curve();
     let a1 = a1_clearance_report(params);
 
     let report = Stage2Report {
