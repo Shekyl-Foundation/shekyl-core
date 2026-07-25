@@ -28,8 +28,8 @@ use shekyl_economics::{
 };
 
 use crate::burden::{
-    burden_cost_fiat_per_year, frozen_shards, skl_to_fiat, KryderRate,
-    BASE_STORAGE_FIAT_PER_BYTE_YEAR, OUTPUTS_PER_TX_NORMAL, REPLICAS_PER_SHARD,
+    bond_opp_cost_skl, burden_cost_fiat_per_year, frozen_shards, KryderRate,
+    BASE_STORAGE_FIAT_PER_BYTE_YEAR, OPP_COST_RATE_BAND, OUTPUTS_PER_TX_NORMAL, REPLICAS_PER_SHARD,
     SKL_FIAT_PRICE_BAND,
 };
 use crate::engine::{ScenarioConfig, SimParams};
@@ -248,15 +248,20 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
     aggs
 }
 
-/// The **minimum** clearance ratio `budget_fiat / burden_fiat` across the
-/// sustained years (past the ramp) for a candidate at a given price and Kryder
-/// rate. `≥ 1` ⇒ the candidate funds the whole-network burden every sustained
-/// year. `budget = emission_leg + total_burn · share(n)`; `burden = n · R ·
-/// SHARD_BYTES · storage(year, kryder)`.
+/// The **minimum** clearance ratio `budget_skl / burden_skl` across the
+/// sustained years (past the ramp) for a candidate, at a given opportunity-cost
+/// rate. `≥ 1` ⇒ the candidate keeps the staker whole every sustained year.
+///
+/// `budget = emission_leg + total_burn · share(n)` (SKL). Burden (F-2) is the
+/// **locked-bond opportunity cost** (the binding term) plus a minor storage
+/// term: `burden = bond_opp_cost_skl(n, rate) + storage_fiat / price`. The
+/// dominant term is **price-independent** (SKL vs SKL), so `price` and `kryder`
+/// touch only the minor storage remainder.
 #[must_use]
 pub fn a1_min_clearance_ratio(
     aggs: &[A1YearAgg],
     candidate: &EscalationCurve,
+    opp_cost_rate: f64,
     fiat_per_skl: f64,
     kryder: KryderRate,
 ) -> f64 {
@@ -265,33 +270,36 @@ pub fn a1_min_clearance_ratio(
         .map(|a| {
             let share = candidate.share_fraction(a.n);
             let budget_skl = a.emission_leg_skl + a.total_burn_skl * share;
-            let budget_fiat = skl_to_fiat(budget_skl, fiat_per_skl);
-            let burden_fiat = burden_cost_fiat_per_year(
+            let opp_cost_skl = bond_opp_cost_skl(a.n, opp_cost_rate);
+            let storage_fiat = burden_cost_fiat_per_year(
                 a.n * REPLICAS_PER_SHARD,
                 a.year as f64,
                 BASE_STORAGE_FIAT_PER_BYTE_YEAR,
                 kryder,
             );
-            if burden_fiat <= 0.0 {
+            let burden_skl = opp_cost_skl + storage_fiat / fiat_per_skl;
+            if burden_skl <= 0.0 {
                 f64::INFINITY
             } else {
-                budget_fiat / burden_fiat
+                budget_skl / burden_skl
             }
         })
         .fold(f64::INFINITY, f64::min)
 }
 
 /// A1 clearance for one candidate (or the flat baseline): the min clearance
-/// ratio at each `SKL_FIAT_PRICE_BAND` member, all at the **binding 0%/yr
-/// Kryder** case.
+/// ratio at each opportunity-cost-rate-band member, at the binding 0%/yr Kryder
+/// and mid price for the minor storage term (F-2; the dominant term is
+/// price-independent).
 #[derive(Debug, Clone, Serialize)]
 pub struct A1CandidateResult {
     /// `None` for the flat-25 status-quo baseline.
     pub asymptote_pct: Option<f64>,
     pub knee_shards: Option<u64>,
-    /// Min `budget/burden` ratio across sustained years, per price-band member
-    /// (`≥ 1` clears). Parallel to [`SKL_FIAT_PRICE_BAND`].
-    pub min_ratio_by_price: Vec<f64>,
+    /// Min `budget/burden` ratio across sustained years, per opportunity-cost
+    /// rate (`≥ 1` clears). Parallel to [`OPP_COST_RATE_BAND`]; the last member
+    /// (10%) is the binding case.
+    pub min_ratio_by_rate: Vec<f64>,
 }
 
 /// A1 clearance for one scenario.
@@ -308,9 +316,12 @@ fn a1_candidate_result(
     curve: &EscalationCurve,
     is_flat: bool,
 ) -> A1CandidateResult {
-    let min_ratio_by_price = SKL_FIAT_PRICE_BAND
+    // Mid price ($0.10) for the minor storage term; the binding bond-opp-cost
+    // term is price-independent, so this choice barely moves the verdict (F-2).
+    let mid_price = SKL_FIAT_PRICE_BAND[1];
+    let min_ratio_by_rate = OPP_COST_RATE_BAND
         .iter()
-        .map(|&price| a1_min_clearance_ratio(aggs, curve, price, KryderRate::Stall))
+        .map(|&rate| a1_min_clearance_ratio(aggs, curve, rate, mid_price, KryderRate::Stall))
         .collect();
     A1CandidateResult {
         asymptote_pct: if is_flat {
@@ -323,26 +334,27 @@ fn a1_candidate_result(
         } else {
             Some(curve.knee_shards)
         },
-        min_ratio_by_price,
+        min_ratio_by_rate,
     }
 }
 
-/// A1 — burden clearance (§12.2). For each scenario, the min `budget/burden`
-/// ratio (0%/yr Kryder binding) of the flat-25 baseline and every candidate,
-/// across the SKL/fiat price band. Prints a stderr table, returns the data.
+/// A1 — burden clearance (§12.2, reshaped by F-2). For each scenario, the min
+/// `budget/burden` ratio of the flat-25 baseline and every candidate, across the
+/// opportunity-cost-rate band. `budget = emission_leg + fee_burn·share(n)`;
+/// `burden = locked-bond opportunity cost (binding) + minor storage`. Prints a
+/// stderr table, returns the data.
 fn a1_clearance_report(params: &SimParams) -> Vec<A1ScenarioResult> {
     eprintln!(
-        "\nA1 — burden clearance (§12.2): min budget/burden ratio, BINDING 0%/yr Kryder.\n\
-         budget = emission_leg + fee_burn x share(n); burden = n x {R} replicas x {SHARD:.2} MB x storage.\n\
-         >=1.0 clears every sustained year. Columns = SKL/fiat price {PRICES:?} (N-1, least-knowable).\n\
-         Absolute ratios are price-conditional; the robust signal is escalation-vs-flat and cross-scenario.",
+        "\nA1 — burden clearance (§12.2, F-2): min budget / (bond-opp-cost + storage) ratio.\n\
+         budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R{R} x n x rate.\n\
+         >=1.0 keeps the staker whole every sustained year. Columns = opp-cost rate {RATES:?} (10% binding).\n\
+         Storage is a minor add-on (F-2: ~100x smaller); the binding term is PRICE-INDEPENDENT (SKL vs SKL).",
         R = REPLICAS_PER_SHARD,
-        SHARD = crate::burden::SHARD_BYTES / 1.0e6,
-        PRICES = SKL_FIAT_PRICE_BAND,
+        RATES = OPP_COST_RATE_BAND,
     );
     eprintln!(
-        "{:<20} {:>12} {:>26} {:>26}",
-        "scenario", "candidate", "flat-25 ratio @price", "best-cand ratio @price"
+        "{:<20} {:>12}   {:>24}   {:>24}",
+        "scenario", "best-cand", "flat-25 ratio @rate", "best-cand ratio @rate"
     );
 
     let mut results = Vec::new();
@@ -355,30 +367,30 @@ fn a1_clearance_report(params: &SimParams) -> Vec<A1ScenarioResult> {
             .map(|c| a1_candidate_result(&aggs, c, false))
             .collect();
 
-        // Report the flat baseline and the strongest candidate (max min-ratio at
-        // the mid price) as the headline; the JSON carries all nine.
-        let mid = 1; // $0.10 index
+        // Headline: the flat baseline and the strongest candidate (max min-ratio
+        // at the BINDING 10% rate); the JSON carries all nine.
+        let binding = OPP_COST_RATE_BAND.len() - 1; // 10% index
         let best = candidates
             .iter()
             .max_by(|a, b| {
-                a.min_ratio_by_price[mid]
-                    .partial_cmp(&b.min_ratio_by_price[mid])
+                a.min_ratio_by_rate[binding]
+                    .partial_cmp(&b.min_ratio_by_rate[binding])
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .cloned()
             .unwrap_or_else(|| flat25.clone());
         eprintln!(
-            "{:<20} {:>12} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>8.2}",
+            "{:<20} {:>12}   {:>7.2} {:>7.2} {:>7.2}   {:>7.2} {:>7.2} {:>7.2}",
             trunc(&config.name, 20),
             best.asymptote_pct
                 .map(|a| format!("{a:.0}%/{}", best.knee_shards.unwrap_or(0)))
                 .unwrap_or_default(),
-            flat25.min_ratio_by_price[0],
-            flat25.min_ratio_by_price[1],
-            flat25.min_ratio_by_price[2],
-            best.min_ratio_by_price[0],
-            best.min_ratio_by_price[1],
-            best.min_ratio_by_price[2],
+            flat25.min_ratio_by_rate[0],
+            flat25.min_ratio_by_rate[1],
+            flat25.min_ratio_by_rate[2],
+            best.min_ratio_by_rate[0],
+            best.min_ratio_by_rate[1],
+            best.min_ratio_by_rate[2],
         );
 
         results.push(A1ScenarioResult {
@@ -389,10 +401,10 @@ fn a1_clearance_report(params: &SimParams) -> Vec<A1ScenarioResult> {
         });
     }
     eprintln!(
-        "  -> price cols each = [{:?}]. escalation clears where flat does not iff the\n\
-         best-cand ratio crosses 1.0 while flat's stays below — the D2 case. A4/A5\n\
-         then drop any winner that fails W9/W10.",
-        SKL_FIAT_PRICE_BAND
+        "  -> rate cols each = {:?} (10% binding, last). The D2 case is where the\n\
+         best candidate clears (>=1.0) at 10% while flat-25 does NOT — escalation\n\
+         earning its keep. A4/A5 then drop any winner that fails W9/W10.",
+        OPP_COST_RATE_BAND
     );
     results
 }
@@ -553,9 +565,11 @@ mod tests {
         let params = SimParams::default();
         for cfg in all_scenarios(&params) {
             let aggs = a1_year_aggs(&params, &cfg);
-            let flat_ratio = a1_min_clearance_ratio(&aggs, &flat_25(), 0.10, KryderRate::Stall);
+            // Binding 10% opp-cost rate, mid price.
+            let flat_ratio =
+                a1_min_clearance_ratio(&aggs, &flat_25(), 0.10, 0.10, KryderRate::Stall);
             for c in family() {
-                let r = a1_min_clearance_ratio(&aggs, &c, 0.10, KryderRate::Stall);
+                let r = a1_min_clearance_ratio(&aggs, &c, 0.10, 0.10, KryderRate::Stall);
                 assert!(
                     r >= flat_ratio - 1e-6,
                     "escalation ratio {r} < flat {flat_ratio} in {}",

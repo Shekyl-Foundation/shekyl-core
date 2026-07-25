@@ -62,6 +62,34 @@ pub const SKL_FIAT_PRICE_BAND: [f64; 3] = [0.01, 0.10, 1.00];
 /// same 6.)
 pub const REPLICAS_PER_SHARD: u64 = 6;
 
+/// Bond-floor collateral per shard-replica, SKL (= `ARCHIVAL_BOND_FLOOR_ATOMIC`
+/// `750_000_000` / `COIN 1e9`). Locked and **returned on unbond**, so its cost
+/// to the staker is the **opportunity cost** of the lock, not the principal
+/// (Stage-2 finding F-2 — the binding staker burden, ~100× storage).
+pub const BOND_FLOOR_SKL: f64 = 0.75;
+
+/// Exogenous opportunity-cost-rate band (F-2, ratified): annual yield foregone
+/// on locked bond capital. `2%` risk-free / `5%` moderate-alt / `10%` high;
+/// **10% is the binding case** (highest bar for staking to clear). Another
+/// least-knowable exogenous, swept like Kryder/price.
+pub const OPP_COST_RATE_BAND: [f64; 3] = [0.02, 0.05, 0.10];
+
+/// Whole-network locked bond capital at `n` frozen shards, SKL:
+/// `bond_floor · R · n`.
+#[must_use]
+pub fn locked_bond_skl(n: u64) -> f64 {
+    BOND_FLOOR_SKL * REPLICAS_PER_SHARD as f64 * n as f64
+}
+
+/// Annual opportunity cost of the locked bond capital, SKL — the **binding**
+/// staker burden (F-2). Price-**independent**: it is SKL yield foregone on SKL
+/// capital, so the exogenous `SKL/fiat` price cancels against the SKL-denominated
+/// reward in the dominant clearance term (only the minor storage term keeps it).
+#[must_use]
+pub fn bond_opp_cost_skl(n: u64, opp_cost_rate: f64) -> f64 {
+    locked_bond_skl(n) * opp_cost_rate
+}
+
 /// The DQ-2B storage-cost-decline band. Annual fractional decline in fiat
 /// `$/byte`; the report states the provenance, never bare numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,13 +171,6 @@ pub fn burden_cost_fiat_per_year(
     (shards as f64)
         * SHARD_BYTES
         * storage_fiat_per_byte_year(year, base_fiat_per_byte_year, kryder)
-}
-
-/// Convert an SKL amount to fiat at the exogenous price (DQ-2A / N-1) so a
-/// SKL-denominated reward and a fiat-denominated burden are commensurable.
-#[must_use]
-pub fn skl_to_fiat(skl: f64, fiat_per_skl: f64) -> f64 {
-    skl * fiat_per_skl
 }
 
 #[cfg(test)]

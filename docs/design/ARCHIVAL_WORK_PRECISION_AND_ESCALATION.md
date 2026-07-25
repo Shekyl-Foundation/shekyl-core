@@ -655,7 +655,7 @@ Grounded in `shekyl-economics-sim`:
 
 | Arm | Question | Metric | Pass / report criterion (DQ-2E) |
 | --- | --- | --- | --- |
-| **A1 burden clearance** | Does the escalated pool fund the burden through the fee era? | `budget(E)` vs `burden_cost(E)` over the trajectory, ∀ Kryder in the band | **Report** the (Kryder, shape, scenario) region where `budget ≥ burden_cost` sustained; a shape "clears" iff it holds under the **pessimistic (0%/yr)** Kryder floor |
+| **A1 burden clearance** | Does the escalated pool keep the staker's reward above the cost of their **growing locked-bond capital** through the fee era? (F-2: storage alone is trivially met) | `budget_skl(candidate)` vs `opp_cost_skl(n, rate) + storage/price`, over the trajectory, ∀ opp-cost rate in the band | **Report** the (rate, shape, scenario) region where `budget ≥ burden` sustained; a shape "clears" iff it holds under the **binding 10%/yr** rate (and 0%/yr Kryder for the minor storage term). The dominant term is price-independent |
 | **A2 distributional shift (W6)** | The D1 fix moves ex-zero bulk holders into `Σwork`, diluting scarce-holders' shares of a fixed budget | Scarce-holder share pre- vs post-D1 across the archiver distribution | **Descriptive** — quantify the redistribution; **flag** if it strands scarce holders below their marginal cost |
 | **A3 stranding** | What fraction of diverted budget goes unminted? | Σ unclaimed `reward_P` past `MAX_CLAIM_AGE_W = 26` epochs ÷ Σ budget | **Report** the stranded fraction; joint with A1 (stranded budget is not burden-clearing) |
 | **A4 output-stuffing (W9)** | Does stuffing pay the attacker — is there an early-chain regime where their manipulation profits? | **attacker ROI** = marginal captured revenue (their stake-fraction of the Δpool, discounted over the horizon) ÷ marginal cost (weight-fees + their share of the burn), on `scenario_4`(output-variant) × `scenario_7`(bootstrap); `Δshare/Δburden` reported as a coherence **diagnostic** | **Pass** iff attacker **ROI < 1** everywhere in the sweep — the executable form of "stuffing it funds it" (§6.2); calibrated to the March-2024 profile (DQ-2C). Fail → the §11.3 rule-21 per-output fee-floor reopen, **not** a D2 redesign |
@@ -670,12 +670,47 @@ cannot; A1 runs on it as the binding case.
 
 ### 12.3 Design questions (recommended dispositions; ratify or correct)
 
-- **DQ-2A — burden cost model + "clears".** *Recommend:* `burden_cost(E) = n(E) ·
-  shard_bytes · storage_fiat_per_byte(E)` (Kryder-declining) as the dominant term,
-  with serve-bandwidth cost as a **secondary sensitivity** (a challenge answers a
-  bounded slice, not the whole shard). "Clears" = per-archiver `reward_P(E) ≥` that
-  archiver's marginal cost of the shards they hold, sustained. *Open:* whether to
-  price serve-bandwidth at all in the primary arm (recommend storage-dominant).
+- **DQ-2A — burden cost model + "clears". ⚠ REFINED by a Stage-2 finding (F-2,
+  ratified) — see below; the original storage-dominant form is retained as a
+  minor term.** *Original:* `burden_cost(E) = n(E) · shard_bytes ·
+  storage_fiat_per_byte(E)` (Kryder-declining), serve-bandwidth a secondary
+  sensitivity. "Clears" = the pool's reward `≥` the burden, sustained.
+  - **F-2 (Stage-2 A1 finding, ratified) — storage is *not* the binding
+    constraint; the locked-bond opportunity cost is.** Building A1 showed
+    storage-cost clearance is met by **4–6 orders of magnitude even for flat-25**
+    (whole-network storage ≈ `$2/yr` at 10k shards; the budget's emission leg
+    alone is millions of SKL/yr for a decade). So D2 is **not** justified by
+    storage clearance. The binding staker cost is the **opportunity cost of
+    locked bond capital**: `locked_skl(n) = bond_floor (0.75 SKL) · R (6) · n`,
+    at an exogenous rate. It grows `∝ n` like storage but is **~100× larger**,
+    and **crosses the flat-25 fee leg around `n ≈ 50–110k` shards** — exactly
+    where escalation earns its keep (the mechanism gap the D2 premise names,
+    made quantitative). **Reshape:** `burden = bond_opp_cost + storage +
+    serving`, bond-opp-cost-**dominant**; storage/serving retained as minor
+    terms. A1 "clears" iff `budget_skl(candidate) ≥ opp_cost_skl(n, rate) +
+    storage_fiat/price`, sustained, under the binding rate.
+  - **Opportunity-cost rate band (new exogenous, ratified):** sweep
+    `{2%, 5%, 10%}/yr` — risk-free / moderate-alt / high; **10% is the binding
+    case** (highest bar for staking to clear). Reported conditional on the rate,
+    like Kryder.
+  - **The binding clearance is price-independent** (a robustness bonus): reward
+    and bond-opp-cost are both SKL (`budget_skl ≥ locked_skl · rate`), so the
+    N-1 `SKL/fiat` price **cancels** in the dominant term — it survives only in
+    the minor storage term. So the A1 verdict is robust to the least-knowable
+    price; the price band still sweeps the storage remainder.
+  - **N-1 fix — the exchange unit is exogenous, and must be named.** `reward_P` is
+    atomic **SKL**; the *storage* term is **fiat** (Kryder is a fiat `$/byte`
+    decline). They are not commensurable without an exchange assumption, and
+    burying one is exactly the silent-embed the Kryder parameter exists to
+    prevent. So the sim carries an **explicit exogenous `SKL/fiat` (price)
+    parameter, constant per run, swept like Kryder**, and the report flags it as
+    a **least-knowable input**. This is also where the **Filecoin
+    provider-exodus face** lives — token price collapsing against fiat hardware
+    costs — correctly modeled as a *swept exogenous parameter*, not a dynamic.
+    **Honesty corollary, stated in the report:** the robust outputs are the
+    **trend comparisons** (burden growth vs budget decay, regime boundaries,
+    which shapes dominate which); **absolute clearance is conditional on the
+    exogenous bands** and is reported as such, never as a point claim.
   - **N-1 fix — the exchange unit is exogenous, and must be named.** `reward_P` is
     atomic **SKL**; `burden_cost` is **fiat** (Kryder is a fiat `$/byte` decline).
     They are not commensurable without an exchange assumption, and burying one is
