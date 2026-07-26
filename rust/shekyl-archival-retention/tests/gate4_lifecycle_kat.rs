@@ -15,10 +15,9 @@ use shekyl_archival_retention::{
     bond_floor, challenge_fire_height, challenge_seal_height, p_canonical_id_from_hybrid_pubkey,
     r_market_count, serve_credit_epoch_ok, sigma_work_milli, verify_conservation_snapshot,
     verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
-    ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondPostError, BondPostKind,
-    ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow,
-    ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS,
-    VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
+    ArchivalServeCreditResponse, BadInterval, BondPostError, BondPostKind, ConservationError,
+    ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow, ShardSet,
+    ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 
@@ -141,14 +140,6 @@ fn build_gate4_document() -> Value {
 }
 
 fn gate4_emission_phase2_vectors(emission: &Value) {
-    let curve = BandedCurveParams {
-        plateau_work_milli: emission["curve"]["plateau_work_milli"]
-            .as_u64()
-            .expect("plateau_work"),
-        plateau_value_milli: emission["curve"]["plateau_value_milli"]
-            .as_u64()
-            .expect("plateau_value"),
-    };
     let e = emission["settlement_epoch"].as_u64().expect("epoch");
     let shard = emission["shard_id"].as_u64().expect("shard");
 
@@ -205,7 +196,7 @@ fn gate4_emission_phase2_vectors(emission: &Value) {
         .map(|v| v.as_bool().unwrap())
         .collect();
     assert_eq!(
-        sigma_work_milli(&works, &curve, &mask),
+        sigma_work_milli(&works, &mask),
         expected["sigma_work_milli"].as_u64().expect("sigma")
     );
 }

@@ -6,14 +6,10 @@
 //! `R_market` / `Σwork` values. C++ performs no consensus arithmetic of its
 //! own (`20-rust-vs-cpp-policy.mdc` §4; `40-ffi-discipline.mdc` coarse-call rule).
 
-use crate::bond_floor::{
-    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-};
+use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 use crate::constants::{effective_settlement_epoch_blocks, SETTLEMENT_EPOCH_BLOCKS};
 use crate::reward_arithmetic::{
-    curve_milli, mul_div_floor, scarcity_micro, work_milli_from_micro, BandedCurveParams,
-    WORK_MILLI_SCALE,
+    mul_div_floor, scarcity_micro, work_milli_from_micro, WORK_MILLI_SCALE,
 };
 
 const _: () = assert!(
@@ -181,11 +177,7 @@ pub fn shard_work_micro(
 /// error, not a recoverable input state. [`epoch_close_compute`] builds both
 /// from the same bond list, so the contract holds by construction there.
 #[must_use]
-pub fn sigma_work_milli(
-    per_p_work_milli: &[u64],
-    curve: &BandedCurveParams,
-    market_mask: &[bool],
-) -> u64 {
+pub fn sigma_work_milli(per_p_work_milli: &[u64], market_mask: &[bool]) -> u64 {
     assert_eq!(
         per_p_work_milli.len(),
         market_mask.len(),
@@ -193,7 +185,7 @@ pub fn sigma_work_milli(
     );
     let mut sum = 0u64;
     for (&work, &in_market) in per_p_work_milli.iter().zip(market_mask.iter()) {
-        sum = sum.saturating_add(capped_work_milli(work, in_market, curve));
+        sum = sum.saturating_add(capped_work_milli(work, in_market));
     }
     sum
 }
@@ -206,9 +198,9 @@ pub fn sigma_work_milli(
 /// (`emission_verify`) cannot drift on the guard — the M-2 sourcing-divergence
 /// the WS-1 design makes unrepresentable rather than tested-against.
 #[must_use]
-pub fn capped_work_milli(work_milli: u64, is_member: bool, curve: &BandedCurveParams) -> u64 {
-    if is_member && work_milli > 0 {
-        curve_milli(work_milli, curve)
+pub fn capped_work_milli(work_milli: u64, is_member: bool) -> u64 {
+    if is_member {
+        work_milli
     } else {
         0
     }
@@ -298,7 +290,6 @@ pub struct EpochCloseInputs<'a> {
     pub close_block_height: u64,
     pub settlement_epoch_blocks: u64,
     pub age_weight_milli: u64,
-    pub curve: BandedCurveParams,
     pub bonds: &'a [EpochCloseBond<'a>],
     pub shards: &'a [EpochCloseShard],
     pub credit_pairs: &'a [CreditPair],
@@ -306,7 +297,7 @@ pub struct EpochCloseInputs<'a> {
 
 impl<'a> EpochCloseInputs<'a> {
     /// The close-path construction: the pinned consensus params
-    /// (schedule, age weight, banded curve) filled from the compiled
+    /// (schedule, age weight) filled from the compiled
     /// constants pipeline — the **single** source both this and
     /// [`Self::verify_view`] draw from, so the close FFI shim and the
     /// verify views cannot drift on a param (the
@@ -326,10 +317,6 @@ impl<'a> EpochCloseInputs<'a> {
             close_block_height,
             settlement_epoch_blocks: effective_settlement_epoch_blocks(),
             age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-            curve: BandedCurveParams {
-                plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-                plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-            },
             bonds,
             shards,
             credit_pairs,
@@ -568,7 +555,7 @@ pub fn epoch_close_compute(
 ) -> Result<EpochCloseResult, CreditIndexOutOfRange> {
     // `as_of_e_served_work` validates the gather indices internally.
     let served = as_of_e_served_work(inputs)?;
-    let sigma = sigma_work_milli(&served.work_by_bond, &inputs.curve, &served.member);
+    let sigma = sigma_work_milli(&served.work_by_bond, &served.member);
 
     Ok(EpochCloseResult {
         r_market_by_shard: served.r_market_by_shard,
@@ -634,7 +621,6 @@ mod tests {
             close_block_height: 60_000,
             settlement_epoch_blocks: 10_000,
             age_weight_milli: 0,
-            curve: BandedCurveParams::from_sim_cap_milli(8_000),
             bonds,
             shards,
             credit_pairs: pairs,
@@ -704,7 +690,6 @@ mod tests {
             // The real age weight; irrelevant here since fresh shards have age 0
             // (g_milli = 1000 regardless), but faithful to production params.
             age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-            curve: BandedCurveParams::from_sim_cap_milli(8_000),
             bonds: &bonds,
             shards: &shards,
             credit_pairs: &pairs,
@@ -733,6 +718,76 @@ mod tests {
     /// Stage-1 diff that landed the micro fix — the ratified acceptance gate. It
     /// is enabled and green; the history is recorded because it is *why* the test
     /// exists, not a pending step.
+    /// **D3/R2 acceptance gate — the plateau is deleted from the reward path.**
+    ///
+    /// Mirror of [`bulk_holder_past_cliff_earns_proportional_not_zero`] (the
+    /// Stage-1 gate): written to be **red against the capping code** and green
+    /// only once `curve_milli` no longer gates `capped_work_milli`, so "the
+    /// plateau is gone" is a checkmark rather than an absence a reader must
+    /// verify by inspection.
+    ///
+    /// Drives the **production** constructor `EpochCloseInputs::close_view`, whose
+    /// signature does not carry the curve — so this test compiles on both sides of
+    /// the deletion and the only thing that moves is the verdict.
+    ///
+    /// The expectation is **derived from the production primitives**
+    /// (`scarcity_micro` → `work_milli_from_micro`), never hardcoded, and the test
+    /// **arms itself**: it asserts the configuration actually lands past the
+    /// plateau knee, so it cannot pass vacuously if the fixture drifts below the
+    /// regime it is meant to exercise.
+    #[test]
+    fn credited_work_is_linear_no_plateau_compression() {
+        // Sole holder of many shards ⇒ r_market = 1, maximal per-shard scarcity,
+        // and enough shards to land well past the plateau knee.
+        const N_SHARDS: usize = 40;
+        let bonds = [EpochCloseBond {
+            join_settlement_epoch: 0,
+            is_foundation_complete_tree: false,
+            bad_intervals: &[],
+        }];
+        // `has_segment: true` so the age term is LIVE — with it false the age is
+        // zeroed (`epoch_close_missing_segment_zeroes_age_not_scarcity`) and the
+        // fixture would silently exercise a weaker `g`, weakening the arm.
+        let shards: Vec<EpochCloseShard> = (0..N_SHARDS)
+            .map(|i| EpochCloseShard {
+                shard_id: i as u64,
+                has_segment: true,
+                freeze_height: 0,
+            })
+            .collect();
+        let pairs: Vec<CreditPair> = (0..N_SHARDS)
+            .map(|shard_idx| CreditPair {
+                bond_idx: 0,
+                shard_idx,
+            })
+            .collect();
+
+        let inputs = EpochCloseInputs::close_view(5, 60_000, &bonds, &shards, &pairs);
+
+        // Linear expectation through the same primitives consensus uses.
+        let age = shard_age_milli(60_000, 0, inputs.settlement_epoch_blocks);
+        let per_shard = scarcity_micro(1, age, inputs.age_weight_milli);
+        let linear_milli = work_milli_from_micro(per_shard * N_SHARDS as u64);
+
+        // ARM: the fixture must sit in the regime the plateau *used to* compress,
+        // or this test proves nothing. The retired value is carried here as a
+        // literal precisely because the constant is deleted — the marker has to
+        // outlive the mechanism it marks, else the arm silently stops arming.
+        const RETIRED_PLATEAU_VALUE_MILLI: u64 = 8_000;
+        assert!(
+            linear_milli > RETIRED_PLATEAU_VALUE_MILLI,
+            "fixture must exceed the retired plateau value to exercise the \
+             compression regime: linear={linear_milli} retired_plateau={RETIRED_PLATEAU_VALUE_MILLI}"
+        );
+
+        let sigma = epoch_close_compute(&inputs).unwrap().sigma_work_milli;
+        assert_eq!(
+            sigma, linear_milli,
+            "credited work must be LINEAR: the plateau no longer compresses the \
+             reward path (got {sigma}, linear {linear_milli})"
+        );
+    }
+
     #[test]
     fn bulk_holder_past_cliff_earns_proportional_not_zero() {
         // crowd = 1000 ⇒ r_market = 1001 > g_milli = 1000 ⇒ the pre-fix per-shard

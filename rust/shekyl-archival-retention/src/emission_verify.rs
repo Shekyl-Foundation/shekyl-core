@@ -359,7 +359,7 @@ pub struct ClaimantShare {
     pub work_micro_p: u64,
     /// Market membership at `E` (the claimant's mask term).
     pub is_member: bool,
-    /// `reward_share_floor(budget, capped_work_milli(work_P, member, curve),
+    /// `reward_share_floor(budget, capped_work_milli(work_P, member),
     /// persisted Σwork)` — verify's step-5 `RewardMismatch` operand and the
     /// builder's claimability/wire-positivity predicate.
     pub reward: u64,
@@ -408,7 +408,7 @@ pub fn claimant_reward_share(
     };
     // The capped term is the same single-sourced per-P definition that built
     // the persisted `Σwork(E)` denominator.
-    let capped = capped_work_milli(work_p, is_member, &source.inputs.curve);
+    let capped = capped_work_milli(work_p, is_member);
     let reward = reward_share_floor(source.budget, capped, source.persisted_sigma_work_milli);
     Ok(ClaimantShare {
         served,

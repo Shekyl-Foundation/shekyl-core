@@ -2480,7 +2480,7 @@ pub unsafe extern "C" fn shekyl_archival_emission_epoch_work(
     // The single-sourced per-P capped term: non-members and zero-work members
     // contribute nothing to the stored denominator, so their capped term is
     // zero here too.
-    let capped = capped_work_milli(work, served.member[snap.claimant_bond_idx], &inputs.curve);
+    let capped = capped_work_milli(work, served.member[snap.claimant_bond_idx]);
     unsafe {
         *out_work_milli = work;
         *out_capped_work_milli = capped;
@@ -3123,10 +3123,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_archival_retention::{
-        BandedCurveParams, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-        ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, SETTLEMENT_EPOCH_BLOCKS,
-    };
+    use shekyl_archival_retention::{ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, SETTLEMENT_EPOCH_BLOCKS};
     use std::ptr;
 
     #[test]
@@ -4112,10 +4109,6 @@ mod tests {
             close_block_height: 5 * SETTLEMENT_EPOCH_BLOCKS,
             settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
             age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-            curve: BandedCurveParams {
-                plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-                plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-            },
             bonds: &rust_bonds,
             shards: &rust_shards,
             credit_pairs: &rust_pairs,
@@ -4479,7 +4472,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use shekyl_archival_retention::{
-        curve_milli, reward_share_floor, sigma_work_milli, EmissionAuthRole, MembershipOnlyBacking,
+        reward_share_floor, sigma_work_milli, EmissionAuthRole, MembershipOnlyBacking,
         ShardWorkEntry, WorkEpochClaim,
     };
     use shekyl_crypto_pq::derivation::hash_pqc_public_key;
@@ -4513,10 +4506,6 @@ mod tests {
     impl EmissionFfiFixture {
         fn build() -> Self {
             let close = epoch_close_height(EM_EPOCH).expect("fixture epoch closes");
-            let curve = BandedCurveParams {
-                plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-                plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-            };
             let bonds = [
                 EpochCloseBond {
                     join_settlement_epoch: 1,
@@ -4560,7 +4549,6 @@ mod tests {
                 close_block_height: close,
                 settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
                 age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-                curve,
                 bonds: &bonds,
                 shards: &shards,
                 credit_pairs: &pairs,
@@ -4572,8 +4560,9 @@ mod tests {
             // aggregate compare demands this exact value (D1 fix).
             let work_micro = served.work_micro_by_bond[0];
             assert!(served.member[0] && work > 0, "fixture claimant must earn");
-            let sigma = sigma_work_milli(&served.work_by_bond, &curve, &served.member);
-            let reward = reward_share_floor(EM_BUDGET, curve_milli(work, &curve), sigma);
+            let sigma = sigma_work_milli(&served.work_by_bond, &served.member);
+            // D3/R2: no plateau in the reward path — the credited term is the work.
+            let reward = reward_share_floor(EM_BUDGET, work, sigma);
             assert!(reward > 0, "fixture reward must be wire-encodable (>0)");
 
             let scheme = HybridEd25519MlDsa;

@@ -67,7 +67,7 @@ fn consensus_state_kat_v1() {
             .map(|v| v.as_bool().unwrap())
             .collect();
         let expected_sigma = doc["expected"]["sigma_work_milli"].as_u64().expect("sigma");
-        assert_eq!(sigma_work_milli(&works, &curve, &mask), expected_sigma);
+        assert_eq!(sigma_work_milli(&works, &mask), expected_sigma);
     }
 
     if let Some(cases) = doc["curve_cases"].as_array() {
@@ -96,7 +96,6 @@ fn consensus_state_kat_v1() {
         close_block_height: ec["close_block_height"].as_u64().expect("close height"),
         settlement_epoch_blocks: ec["settlement_epoch_blocks"].as_u64().expect("seb"),
         age_weight_milli: ec["age_weight_milli"].as_u64().expect("age weight"),
-        curve,
         bonds: &bonds,
         shards: &shards,
         credit_pairs: &pairs,

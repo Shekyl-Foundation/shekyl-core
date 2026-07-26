@@ -953,7 +953,7 @@ pub(crate) mod test_fixtures {
             let bonds = snap.bonds_view();
             let view = snap.source(&bonds);
             let served = as_of_e_served_work(&view.inputs).expect("well-formed fixture");
-            sigma_work_milli(&served.work_by_bond, &view.inputs.curve, &served.member)
+            sigma_work_milli(&served.work_by_bond, &served.member)
         };
         snap.sigma_work_milli = sigma;
     }
@@ -1160,9 +1160,8 @@ mod tests {
     use shekyl_archival_retention::{
         as_of_e_served_work, bond_wire::MAX_HOLDINGS_SHARDS, capped_work_milli,
         claimed_epochs_check_and_set, reward_share_floor, settlement_epoch_at_height,
-        BandedCurveParams, ClaimedEpochsError, CreditPair, EpochCloseInputs, EpochCloseShard,
-        ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-        EMISSION_KAT_SHAPE, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
+        ClaimedEpochsError, CreditPair, EpochCloseInputs, EpochCloseShard, EMISSION_KAT_SHAPE,
+        MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
     };
 
     /// The derivation's structural checks in one grid: boundary verdicts
@@ -1235,11 +1234,7 @@ mod tests {
             let view = snap.source(&bonds);
             let served = as_of_e_served_work(&view.inputs).unwrap();
             let idx = view.claimant_bond_idx.unwrap();
-            let capped = capped_work_milli(
-                served.work_by_bond[idx],
-                served.member[idx],
-                &view.inputs.curve,
-            );
+            let capped = capped_work_milli(served.work_by_bond[idx], served.member[idx]);
             assert_eq!(
                 c.reward,
                 reward_share_floor(view.budget, capped, view.persisted_sigma_work_milli),
@@ -1679,10 +1674,6 @@ mod tests {
                 // `scarcity_micro = 1000·g ≈ 1.0×10¹⁰ ∈ (u32::MAX, u64::MAX]`.
                 // (`u64::MAX` would overflow to 0 — no longer a hostile value.)
                 age_weight_milli: 10_000_000,
-                curve: BandedCurveParams {
-                    plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-                    plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-                },
                 bonds: &bonds,
                 shards: &shards,
                 credit_pairs: &pairs,
