@@ -98,6 +98,13 @@
 #define CRYPTONOTE_MEMPOOL_TX_FROM_ALT_BLOCK_LIVETIME     604800 //seconds, one week
 
 
+// 2 is the out-degree of the (approximately) 4-regular expander stem graph, and is
+// load-bearing for privacy, not a tuning knob: 1 makes every stem a single-node
+// black-hole point-of-failure; >=3 fans the stem toward a tree and leaks to the
+// first-spy estimator. Do NOT raise this to harden the slot-occupancy attack
+// (ProxyMark / W3) — that trades a demonstrated active attack for a real passive
+// leak; the occupancy defence lives in peer selection (g_max), not the count.
+// Derivation and guard: docs/design/DAEMON_RELAY_PRIVACY.md sec 12.7.
 #define CRYPTONOTE_DANDELIONPP_STEMS              2 // number of outgoing stem connections per epoch
 #define CRYPTONOTE_DANDELIONPP_FLUFF_PROBABILITY 20 // out of 100
 #define CRYPTONOTE_DANDELIONPP_MIN_EPOCH         10 // minutes

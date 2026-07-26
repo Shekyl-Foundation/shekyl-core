@@ -5402,6 +5402,18 @@ sustainability is unaffected by the recalibration.
      regardless of on-chain unlinkability). *Reopen when:* testnet shows residual
      `(tier, contiguous-window)` serial correlation, or same-circuit egress linkage,
      under a passive observer despite full-window batching.
+     **UPDATE 2026-07-23 — the assumed baseline is under repair.** Criterion (a)
+     is written as though the inherited daemon Dandelion++ is a working baseline
+     to build a network-layer equivalent on. Measurement says otherwise:
+     [`DAEMON_RELAY_PRIVACY.md`](./design/DAEMON_RELAY_PRIVACY.md) records four
+     verified defects in the inherited relay *timing*, two of them high-severity
+     (the stem embargo draws a distribution its own derivation does not describe
+     and consequently never fires; the per-transaction fluff delay carries the
+     same defect and is ~2× more invertible than intended). Re-read this item
+     once that document converges — "Dandelion++-equivalent" needs a correct
+     Dandelion++ to be equivalent *to*, and the concrete randomized-delay
+     distribution this item asks for should be taken from that document's
+     derivation rather than from the inherited `#define`s.
   2. **Thin-cohort warning — stake *and* claim (T3 + F0).** Wallet surfaces a warning
      when the observable cohort is small (estimable from public participation):
      **(a)** before a stake lands, on the band cohort; **(b) elevated by the §7.5.3
