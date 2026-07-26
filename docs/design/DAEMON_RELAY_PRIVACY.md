@@ -2571,6 +2571,12 @@ threshold's real input (a topology measurement, like `F` and hop latency); it do
 The `ε → distinct-peers` and top-2-share numbers are in-crate; what remains is
 RP-2-adjacent and must be inherited honestly:
 
+- **First move: re-census the anchors before wiring.** §§12.8–12.11 are grounded
+  against `get_stem` / `out_mapping_` / the embargo-disarm behaviour of a dev tree
+  that will have moved by the time RP-2 begins (staking-consensus work is landing in
+  parallel). "Grounded three weeks ago" is exactly the stale-gate class this arc kept
+  catching — not a concern with the design, but a reminder that the design's anchors
+  decay at the tree's rate. Re-verify them at source before building on them.
 - **The genuine background-failure rate** is a plain topology measurement (like `F`,
   hop latency, §7 Q-5) — a knob input.
 - **The cooldown/threshold sweep is the empirical *validation* of §12.11's separation
