@@ -1713,6 +1713,98 @@ pub fn simulate_epoch_layering<R: RelayRng + ?Sized>(
     }
 }
 
+/// **§12.11 ossification measurement:** pure preference (`ε = 0`) collapses the stem
+/// graph to `STEMS = 2` peers and never touches the rest of the pool; even `ε ≈ 0.05`
+/// exploration restores the full pool. Reproduces the `ε → distinct-peers` result
+/// §12.11 cited from an external model, in-crate per the §13.5 discipline (reproduce
+/// the load-bearing number in our own instrument).
+///
+/// Model: `pool` peers ranked by a *converged* track record — the ossification is a
+/// property of the argmax rule, not the learning dynamics, so the ranking is treated
+/// as settled (cold-start learning is itself a form of exploration, exactly what
+/// `ε > 0` also provides). `STEMS = 2` slots per epoch: slot 0 always exploits the top
+/// peer; slot 1 explores (uniform over the non-top peers `[2, pool)`) with *per-epoch*
+/// probability `ε` (memoryless, §12.11 edge 2), else exploits the second peer. There is
+/// deliberately **no induced-failure dial** — that priced a phantom (§12.11 part D:
+/// inducing an honest peer's failure costs the occupancy/eclipse budget already bounded).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EpsilonGreedySelection {
+    /// Exploration rate measured at.
+    pub epsilon: f64,
+    /// Outbound pool size `D`.
+    pub pool: usize,
+    /// Epochs observed.
+    pub epochs: usize,
+    /// Mean distinct peers exercised as a stem successor over `epochs`: `ε = 0` → 2
+    /// (ossified), `ε ≈ 0.05` → the full pool.
+    pub distinct_peers: f64,
+    /// Fraction of stem-sends to the top-2 peers. Exploration does *not* redistribute
+    /// the bulk (top-2 still carry ~`1 − ε/2`); the point is that the `ε/2` escape
+    /// fraction reaches non-top peers, so a top-2 occupier no longer sees 100 % and
+    /// full eclipse is prevented (§12.10 regime 3).
+    pub top2_traffic_share: f64,
+}
+
+/// Measure [`EpsilonGreedySelection`] at exploration rate `epsilon` over a `pool` of
+/// peers for `epochs` epochs.
+///
+/// # Panics
+///
+/// Panics if `trials`/`epochs` is zero, `pool < 3`, or `epsilon` is outside `[0, 1]`.
+#[must_use]
+pub fn simulate_epsilon_greedy_selection<R: RelayRng + ?Sized>(
+    epsilon: f64,
+    pool: usize,
+    epochs: usize,
+    trials: usize,
+    rng: &mut R,
+) -> EpsilonGreedySelection {
+    assert!(trials > 0, "need at least one trial");
+    assert!(epochs >= 1, "need at least one epoch");
+    assert!(
+        pool >= 3,
+        "need a pool larger than STEMS to have non-top peers to explore"
+    );
+    assert!((0.0..=1.0).contains(&epsilon), "epsilon must be in [0, 1]");
+
+    // `bernoulli` takes a rational probability; express epsilon per million.
+    const EPS_DENOM: u64 = 1_000_000;
+    let eps_num = (epsilon * EPS_DENOM as f64).round() as u64;
+
+    let mut distinct_total = 0_u64;
+    let mut top2_sends = 0_u64;
+    let mut all_sends = 0_u64;
+
+    for _ in 0..trials {
+        let mut used = vec![false; pool];
+        for _ in 0..epochs {
+            // slot 0: exploit the top peer.
+            used[0] = true;
+            top2_sends += 1;
+            all_sends += 1;
+            // slot 1: explore with per-epoch probability epsilon, else exploit peer 1.
+            if bernoulli(rng, eps_num, EPS_DENOM) {
+                let e = 2 + usize_from(bounded_uniform(rng, (pool - 3) as u64));
+                used[e] = true;
+                all_sends += 1;
+            } else {
+                used[1] = true;
+                top2_sends += 1;
+                all_sends += 1;
+            }
+        }
+        distinct_total += used.iter().filter(|&&u| u).count() as u64;
+    }
+
+    EpsilonGreedySelection {
+        epsilon,
+        pool,
+        epochs,
+        distinct_peers: distinct_total as f64 / trials as f64,
+        top2_traffic_share: top2_sends as f64 / all_sends as f64,
+    }
+}
+
 /// The clearnet passive inbound-neighbour channel: how often a supernode's
 /// inbound edge to a stem-prefix node catches that node's *embargo-fired* fluff
 /// before the natural diffusion, and attributes the source to a prefix member.

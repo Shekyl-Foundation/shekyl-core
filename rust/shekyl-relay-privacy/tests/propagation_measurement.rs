@@ -1853,3 +1853,63 @@ fn epoch_layering_pinning_amplifies_direct_successor_exposure() {
          << D, or admission must pay for the amplification. NOT a free simplification."
     );
 }
+
+/// **§12.11 C — pure preference ossifies to a self-inflicted eclipse.** Reproduces
+/// in-crate the `ε → distinct-peers` result §12.11 cited from an external model: pure
+/// exploit (`ε = 0`) collapses the stem graph to STEMS=2 peers; `ε ≈ 0.05` restores
+/// the full pool. Epsilon-greedy, `ε ≈ 0.05` = the RL/ARPANET value.
+#[test]
+fn epsilon_greedy_pure_preference_ossifies_to_two_peers() {
+    use shekyl_relay_privacy::conformance::simulate_epsilon_greedy_selection;
+
+    const POOL: usize = 12;
+    const M: usize = 2000; // enough epochs for eps=0.05 to cover the pool
+
+    println!("\n§12.11 ossification: epsilon -> distinct peers exercised (pool=12, STEMS=2)");
+    println!("{:>8} {:>16} {:>18}", "epsilon", "distinct peers", "top2 traffic share");
+    let mut rows = std::collections::BTreeMap::new();
+    for &pct in &[0_u64, 1, 5, 10] {
+        let eps = pct as f64 / 100.0;
+        let mut rng = SplitMix64::new(0x0E95_0000 + pct);
+        let o = simulate_epsilon_greedy_selection(eps, POOL, M, 200, &mut rng);
+        println!(
+            "{:>8.2} {:>16.2} {:>18.3}",
+            eps, o.distinct_peers, o.top2_traffic_share
+        );
+        rows.insert(pct, o);
+    }
+
+    // eps=0 ossifies to EXACTLY STEMS=2 peers — the eligible pool collapses 12->2.
+    assert!(
+        (rows[&0].distinct_peers - 2.0).abs() < 1e-9,
+        "pure preference must ossify to 2 peers, got {}",
+        rows[&0].distinct_peers
+    );
+    // eps=0.05 restores ~the full pool.
+    assert!(
+        rows[&5].distinct_peers > 11.9,
+        "eps=0.05 must restore ~full pool (12), got {}",
+        rows[&5].distinct_peers
+    );
+    // Concentration barely moves (top-2 still carry ~1 - eps/2): exploration buys
+    // full-pool DIVERSITY + the eps/2 eclipse-escape, not a bulk redistribution.
+    assert!(
+        rows[&5].top2_traffic_share > 0.95 && rows[&0].top2_traffic_share > 0.999,
+        "top-2 still carry the bulk at eps=0.05 (concentration is not the mechanism)"
+    );
+    // Monotone: more exploration, more distinct peers exercised.
+    assert!(
+        rows[&1].distinct_peers > rows[&0].distinct_peers
+            && rows[&5].distinct_peers >= rows[&1].distinct_peers,
+        "distinct peers must rise with epsilon"
+    );
+
+    println!(
+        "\n  Pure preference (eps=0) is a DEGENERATE 2-peer stem graph — a self-\n  \
+         inflicted eclipse (the eligible pool collapses 12->2, §12.10 regime 3). eps=\n  \
+         0.05 restores all 12 exercised while the top-2 still carry ~97.5% of traffic\n  \
+         -- so exploration buys full-pool DIVERSITY + the eps/2 eclipse-escape (a top-2\n  \
+         occupier no longer sees 100%), not a bulk redistribution. epsilon-greedy,\n  \
+         eps~0.05 = the RL/ARPANET value, reproduced in-crate (§13.5 discipline)."
+    );
+}

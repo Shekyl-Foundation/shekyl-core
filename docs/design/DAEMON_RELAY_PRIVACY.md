@@ -2521,8 +2521,8 @@ threshold against a phantom):
   path cannot drop that tx. So inflating S's floor costs exactly the occupancy/eclipse
   budget §12.10 regime 3 already bounds — **pricing it again in the threshold
   double-counts one capability.** The honest floor is therefore preemption + *genuine
-  background* downstream failure (a real, measurable network quantity), not preemption
-  + an adversarial dial.
+  background* downstream failure (a real, measurable network quantity), not
+  preemption plus an adversarial dial.
 - **The content-selective censor needs a selector Shekyl's privacy layer erases.**
   FCMP++, confidential amounts, and stealth addresses leave the stem-phase censor an
   encrypted blob with no visible sender, recipient, or amount — *no property to select
@@ -2549,11 +2549,13 @@ is double-counting, and it over-provisions this mechanism's parameters against a
 straw adversary. Protection composes; explore every attack, but pay for each capability
 once.
 
-**What is measured vs. owed.** The `ε_explore = 0 → 2/12`, `0.05 → 12/12` result is
-from an external model; per the arc's discipline (reproduce the load-bearing number
-in our own instrument, the §13.5 lesson) it should be re-run in the crate — an
-epsilon-greedy selection instrument (`ε → distinct-peers-exercised`, plus the
-strategic-dropper `P(both-adv)` rows) parallel to `simulate_epoch_layering`. The
+**What is measured vs. owed.** The `ε_explore = 0 → 2`, `0.05 → 12` result is now
+**reproduced in-crate** (`simulate_epsilon_greedy_selection` /
+`epsilon_greedy_pure_preference_ossifies_to_two_peers`), per the §13.5 discipline: pure
+exploit ossifies to exactly `STEMS = 2` distinct peers, `ε = 0.05` restores all 12, and
+the top-2 still carry ~97.5 % of traffic — so exploration buys full-pool diversity and
+the `ε/2` eclipse-escape, not a bulk redistribution. No induced-failure dial was added
+(part D: that priced a phantom). The
 parameters this specifies are the concrete form of §12.10's two bounds: **cooldown
 length + rate-decay threshold** (eviction responsiveness; the threshold clears the
 *genuine ambient* honest floor — preemption + real background downstream failure, per
