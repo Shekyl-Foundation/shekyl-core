@@ -49,7 +49,8 @@ namespace dandelionpp
 {
     connection_map::connection_map(std::vector<boost::uuids::uuid> out_connections, const std::size_t stems)
       : handle_(nullptr, &shekyl_dandelionpp_map_free),
-        out_mapping_()
+        out_mapping_(),
+        stem_width_(stems)
     {
         // Preserve the original contract: `select_stem` reserved max size_t as
         // its error sentinel, so the constructor rejected that stem count up
@@ -67,7 +68,8 @@ namespace dandelionpp
 
     connection_map::connection_map(const connection_map& source)
       : handle_(shekyl_dandelionpp_map_clone(source.handle_.get()), &shekyl_dandelionpp_map_free),
-        out_mapping_(source.out_mapping_)
+        out_mapping_(source.out_mapping_),
+        stem_width_(source.stem_width_)
     {}
 
     connection_map::~connection_map() noexcept
@@ -75,15 +77,18 @@ namespace dandelionpp
 
     void connection_map::refresh_shadow()
     {
-        const std::size_t count = shekyl_dandelionpp_map_snapshot(handle_.get(), nullptr, 0);
+        // Configured stem width is a hard upper bound on slot count
+        // (`StemMap::width`). Production STEMS is 2; tests use small counts.
+        // One snapshot with that cap fills the shadow — no probe-then-fill.
+        out_mapping_.resize(stem_width_);
+        const std::size_t count = shekyl_dandelionpp_map_snapshot(
+            handle_.get(),
+            stem_width_ == 0
+                ? nullptr
+                : reinterpret_cast<std::uint8_t*>(out_mapping_.data()),
+            stem_width_);
+        // Under-filled maps report fewer slots than width; keep the real span.
         out_mapping_.resize(count);
-        if (count != 0)
-        {
-            shekyl_dandelionpp_map_snapshot(
-                handle_.get(),
-                reinterpret_cast<std::uint8_t*>(out_mapping_.data()),
-                count);
-        }
     }
 
     connection_map connection_map::clone() const

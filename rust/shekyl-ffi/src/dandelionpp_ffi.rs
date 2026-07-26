@@ -125,15 +125,19 @@ pub unsafe extern "C" fn shekyl_dandelionpp_map_new(
 }
 
 /// Deep-copy a handle — the C++ `connection_map::clone()` / copy-constructor.
-/// The copy and the original diverge; nothing is shared.
+/// The copy and the original diverge; nothing is shared. A null `handle`
+/// (moved-from wrapper) returns null.
 ///
 /// # Safety
-/// `handle` must be a live pointer from [`shekyl_dandelionpp_map_new`] /
+/// `handle` must be null or a live pointer from [`shekyl_dandelionpp_map_new`] /
 /// [`shekyl_dandelionpp_map_clone`]. The returned handle must be freed.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_dandelionpp_map_clone(
     handle: *const StemMapHandle,
 ) -> *mut StemMapHandle {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
     let h = &*handle;
     Box::into_raw(Box::new(StemMapHandle {
         map: h.map.clone(),
@@ -144,16 +148,20 @@ pub unsafe extern "C" fn shekyl_dandelionpp_map_clone(
 /// Merge `ids` (`n` × 16 bytes) into the map. Returns `true` iff the live stem
 /// set changed — the **exact** C++ `update` predicate the caller gates channel
 /// re-arm on (a slot dropped/emptied, or the map grew), not "the set differed".
+/// A null `handle` returns `false`.
 ///
 /// # Safety
-/// `handle` must be live; `ids` must point to `n * 16` readable bytes (or be
-/// null with `n == 0`).
+/// `handle` must be null or live; `ids` must point to `n * 16` readable bytes
+/// (or be null with `n == 0`).
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_dandelionpp_map_update(
     handle: *mut StemMapHandle,
     ids: *const u8,
     n: usize,
 ) -> bool {
+    if handle.is_null() {
+        return false;
+    }
     let h = &mut *handle;
     let conns = read_ids(ids, n);
     h.map.update(conns, &mut h.rng).needs_rearm()
@@ -162,17 +170,25 @@ pub unsafe extern "C" fn shekyl_dandelionpp_map_update(
 /// Resolve the stem peer for `source` (16 bytes; nil = locally originated),
 /// writing it into `out` (16 bytes). Returns `true` if a stem was assigned;
 /// on `false` the caller must fluff and `out` is left nil. Mutates the map
-/// (source→slot pinning), as the C++ `get_stem` does.
+/// (source→slot pinning), as the C++ `get_stem` does. A null `handle` or
+/// null `out` returns `false` (and writes nil into `out` when `out` is non-null).
 ///
 /// # Safety
-/// `handle` must be live; `source` and `out` must each point to 16 bytes
-/// (readable / writable respectively).
+/// `handle` must be null or live; when non-null, `source` and `out` must each
+/// point to 16 bytes (readable / writable respectively) if provided.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_dandelionpp_map_get_stem(
     handle: *mut StemMapHandle,
     source: *const u8,
     out: *mut u8,
 ) -> bool {
+    if out.is_null() {
+        return false;
+    }
+    if handle.is_null() {
+        write_id(out, &NIL);
+        return false;
+    }
     let h = &mut *handle;
     let src = read_source(source);
     match h.map.stem_for(src, &mut h.rng) {
@@ -191,24 +207,36 @@ pub unsafe extern "C" fn shekyl_dandelionpp_map_get_stem(
 /// the nil UUID for an emptied slot. Returns the slot count (which may exceed
 /// the live count and [`shekyl_dandelionpp_map_live_stems`]). If `cap` is below
 /// the slot count nothing is written and the needed count is returned, so a
-/// caller can size with `(buf = null, cap = 0)` then fill.
+/// caller can size with `(buf = null, cap = 0)` then fill — or, when the caller
+/// knows the configured stem width (a hard upper bound on slot count), pass that
+/// as `cap` and fill in one call. A null `handle` returns `0`.
 ///
 /// Order and nils are load-bearing: `levin_notify` indexes a parallel noise
 /// channel by slot position (§16.1).
 ///
 /// # Safety
-/// `handle` must be live; if `cap >= slot count`, `buf` must point to
-/// `cap * 16` writable bytes.
+/// `handle` must be null or live; if `cap >= slot count` and `count > 0`,
+/// `buf` must point to `cap * 16` writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_dandelionpp_map_snapshot(
     handle: *const StemMapHandle,
     buf: *mut u8,
     cap: usize,
 ) -> usize {
+    if handle.is_null() {
+        return 0;
+    }
     let h = &*handle;
     let slots = h.map.slots();
     let count = slots.len();
     if cap < count {
+        return count;
+    }
+    if count == 0 {
+        return 0;
+    }
+    if buf.is_null() {
+        // cap >= count > 0 but no buffer: refuse to write; still report count.
         return count;
     }
     for (i, slot) in slots.iter().enumerate() {
@@ -220,11 +248,15 @@ pub unsafe extern "C" fn shekyl_dandelionpp_map_snapshot(
 
 /// Number of stem slots backed by a live peer — the C++ `connection_map::size()`
 /// (non-nil count), distinct from the total slot count `map_snapshot` returns.
+/// A null `handle` returns `0`.
 ///
 /// # Safety
-/// `handle` must be live.
+/// `handle` must be null or live.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_dandelionpp_map_live_stems(handle: *const StemMapHandle) -> usize {
+    if handle.is_null() {
+        return 0;
+    }
     (*handle).map.live_stems()
 }
 
@@ -285,6 +317,8 @@ mod tests {
     }
 
     /// Micro-test (4): the update bool is the re-arm predicate, not "differed".
+    /// Arms: unchanged-at-width → false; drop → true; grow/backfill → true
+    /// (DAEMON_RELAY_PRIVACY.md §16 acceptance).
     #[test]
     fn update_returns_the_rearm_predicate_not_set_difference() {
         unsafe {
@@ -302,6 +336,25 @@ mod tests {
                 shekyl_dandelionpp_map_update(h, std::ptr::null(), 0),
                 "dropping every stem must report a change"
             );
+            shekyl_dandelionpp_map_free(h);
+
+            // Grow/backfill arm: construct under-width, then offer enough peers
+            // to fill → true (a stem set change, not a mere set-difference).
+            let under: Vec<[u8; 16]> = (1..=1).map(id).collect();
+            let under_flat = flatten(&under);
+            let h = shekyl_dandelionpp_map_new(under_flat.as_ptr(), under.len(), 2);
+            assert_eq!(
+                shekyl_dandelionpp_map_live_stems(h),
+                1,
+                "one peer against width 2 leaves a hole"
+            );
+            let fill: Vec<[u8; 16]> = (1..=3).map(id).collect();
+            let fill_flat = flatten(&fill);
+            assert!(
+                shekyl_dandelionpp_map_update(h, fill_flat.as_ptr(), fill.len()),
+                "growing/backfilling under-capacity must re-arm"
+            );
+            assert_eq!(shekyl_dandelionpp_map_live_stems(h), 2);
             shekyl_dandelionpp_map_free(h);
         }
     }
@@ -352,6 +405,53 @@ mod tests {
             );
             assert!(after.contains(&keep), "the surviving stem kept its slot");
             assert_eq!(shekyl_dandelionpp_map_live_stems(h), 1);
+            shekyl_dandelionpp_map_free(h);
+        }
+    }
+
+    /// Null handle is a safe no-op on every export (moved-from C++ wrapper).
+    #[test]
+    fn null_handle_is_a_safe_no_op() {
+        unsafe {
+            assert!(shekyl_dandelionpp_map_clone(std::ptr::null()).is_null());
+            assert!(!shekyl_dandelionpp_map_update(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0
+            ));
+            let mut out = [0xAAu8; 16];
+            assert!(!shekyl_dandelionpp_map_get_stem(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                out.as_mut_ptr()
+            ));
+            assert_eq!(out, NIL);
+            assert_eq!(
+                shekyl_dandelionpp_map_snapshot(std::ptr::null(), std::ptr::null_mut(), 0),
+                0
+            );
+            assert_eq!(shekyl_dandelionpp_map_live_stems(std::ptr::null()), 0);
+            shekyl_dandelionpp_map_free(std::ptr::null_mut()); // no-op
+        }
+    }
+
+    /// Caller that knows the configured stem width can fill in one snapshot call.
+    #[test]
+    fn snapshot_fills_in_one_call_when_cap_is_stem_width() {
+        unsafe {
+            let ids: Vec<[u8; 16]> = (1..=4).map(id).collect();
+            let flat = flatten(&ids);
+            let stems = 3usize;
+            let h = shekyl_dandelionpp_map_new(flat.as_ptr(), ids.len(), stems);
+            let mut buf = vec![0u8; stems * 16];
+            let count = shekyl_dandelionpp_map_snapshot(h, buf.as_mut_ptr(), stems);
+            assert_eq!(count, 3);
+            // Under-filled: one peer, width 3 → one slot written, count 1.
+            shekyl_dandelionpp_map_free(h);
+            let one = flatten(&[id(1)]);
+            let h = shekyl_dandelionpp_map_new(one.as_ptr(), 1, stems);
+            let count = shekyl_dandelionpp_map_snapshot(h, buf.as_mut_ptr(), stems);
+            assert_eq!(count, 1, "slot span is under width when under-filled");
             shekyl_dandelionpp_map_free(h);
         }
     }

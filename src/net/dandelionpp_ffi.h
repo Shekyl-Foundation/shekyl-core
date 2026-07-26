@@ -39,6 +39,10 @@
 // all zero — is the absent-slot / local-origin sentinel). Every call is
 // serialised by the zone strand, so the handle needs no internal lock.
 //
+// A null handle is a safe no-op on every export (clone → null, update/get_stem
+// → false, snapshot/live_stems → 0, free → no-op). Moved-from C++ wrappers
+// still must not be used as a public contract — the hardening is defensive.
+//
 // Rust twins: rust/shekyl-ffi/src/dandelionpp_ffi.rs.
 
 // Opaque handle to the Rust `StemMap`. Never dereferenced on the C++ side.
@@ -64,7 +68,9 @@ extern "C"
 
     //! Copy every slot in index order (nil for an empty slot) into `buf`
     //! (`cap` × 16 bytes); returns the slot count. If `cap` is below the count,
-    //! nothing is written and the needed count is returned (size with cap 0).
+    //! nothing is written and the needed count is returned. Callers that know
+    //! the configured stem width (a hard upper bound on slot count) can fill
+    //! in one call by passing that width as `cap`.
     std::size_t shekyl_dandelionpp_map_snapshot(const StemMapHandle* handle, std::uint8_t* buf, std::size_t cap);
 
     //! Number of slots backed by a live peer (the C++ `size()` non-nil count).
