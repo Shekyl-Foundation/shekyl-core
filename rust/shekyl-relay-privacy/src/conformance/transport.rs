@@ -87,6 +87,9 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
 
     let n = flood.nodes;
     let peers = flood.peers.min(n - 1);
+    // Scaled Bernoulli, compared with `<=` (not `<`) so `dial_fraction == 1.0`
+    // (threshold == u32::MAX) marks *every* node, honouring the `(0, 1]` contract;
+    // for other fractions the difference is one in 2^32.
     let dial_threshold = (dial_fraction * f64::from(u32::MAX)) as u32;
 
     let mut observed = 0_usize;
@@ -109,7 +112,7 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
         // The supernode's inbound edges: the honest nodes it dialed. On
         // clearnet these deliver fluff to it; on Tor they do not.
         let watched: Vec<bool> = (0..n)
-            .map(|_| (rng.next_u64() as u32) < dial_threshold)
+            .map(|_| (rng.next_u64() as u32) <= dial_threshold)
             .collect();
 
         // Source is node 0; Dijkstra over the transport-appropriate edge set.
@@ -217,6 +220,9 @@ pub fn simulate_passive_neighbor_leak<R: RelayRng + ?Sized>(
         "dial fraction must be in (0, 1]"
     );
     let clearnet = matches!(transport, Transport::Clearnet);
+    // Scaled Bernoulli, compared with `<=` (not `<`) so `dial_fraction == 1.0`
+    // (threshold == u32::MAX) marks *every* node, honouring the `(0, 1]` contract;
+    // for other fractions the difference is one in 2^32.
     let dial_threshold = (dial_fraction * f64::from(u32::MAX)) as u32;
 
     let mut leaks = 0_u64;
@@ -225,7 +231,7 @@ pub fn simulate_passive_neighbor_leak<R: RelayRng + ?Sized>(
     for _ in 0..trials {
         let mut neighboured: Vec<bool> = Vec::new();
         let trace = super::stem::walk_stem_observing(params, embargo, rng, |_pos, _t, rng| {
-            let mark = clearnet && (rng.next_u64() as u32) < dial_threshold;
+            let mark = clearnet && (rng.next_u64() as u32) <= dial_threshold;
             neighboured.push(mark);
         });
         neighboured.truncate(trace.deadlines.len());

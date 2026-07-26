@@ -154,6 +154,8 @@ pub fn simulate_diffusion_first_spy<R: RelayRng + ?Sized>(
     let draw_ms = |rng: &mut R| -> u64 { table.draw(rng).saturating_mul(250) };
 
     let peers = flood.peers.min(flood.nodes - 1);
+    // Scaled Bernoulli, compared with `<=` (not `<`) so `spy_fraction == 1.0`
+    // (threshold == u32::MAX) marks every candidate node, per the `(0, 1]` contract.
     let spy_threshold = (spy_fraction * f64::from(u32::MAX)) as u32;
 
     let mut correct = 0_usize;
@@ -173,7 +175,7 @@ pub fn simulate_diffusion_first_spy<R: RelayRng + ?Sized>(
             }
         }
         let spies: Vec<bool> = (0..flood.nodes)
-            .map(|n| n != 0 && (rng.next_u64() as u32) < spy_threshold)
+            .map(|n| n != 0 && (rng.next_u64() as u32) <= spy_threshold)
             .collect();
 
         let mut best = vec![u64::MAX; flood.nodes];
