@@ -34,10 +34,13 @@
 //! Table construction uses `f64`, but deliberately uses **no transcendental
 //! function**: the weights are built by the recurrence `w_0 = 1`,
 //! `w_k = w_{k-1} * λ / k`, and normalized by their own sum. Only `+`, `*`,
-//! and `/` are involved, all of which IEEE-754 pins exactly. There is no
-//! `exp()` and no `pow()`, so no libm variation can enter. The resulting table
-//! is bit-identical on every platform, which is what makes the fingerprint
-//! assertion in `tests/golden_vector.rs` a real gate rather than an x86 note.
+//! and `/` are involved — IEEE-754 specifies these as *correctly rounded* (not
+//! mathematically exact, but deterministic for the same operands and rounding
+//! mode), and crucially there is no `exp()`, `pow()`, or `ln()`, so no libm
+//! variation can enter. The load-bearing property is the absence of
+//! transcendentals, not exact arithmetic. The resulting table is bit-identical
+//! on every platform, which is what makes the fingerprint assertion in
+//! `tests/golden_vector.rs` a real gate rather than an x86 note.
 //!
 //! # Float honesty
 //!
@@ -182,12 +185,24 @@ impl PoissonTable {
         } else {
             self.thresholds[idx - 1]
         };
-        hi.saturating_sub(lo)
+        let width = hi.saturating_sub(lo);
+        // The final outcome also absorbs the single top input `u64::MAX`
+        // (`draw()`'s clamp maps it to the last bin), so its realized mass is
+        // one more than the half-open width `[lo, hi)`. This is what makes the
+        // per-outcome masses partition the full `2^64` domain exactly rather
+        // than `2^64 − 1`.
+        if idx == self.thresholds.len() - 1 {
+            width.saturating_add(1)
+        } else {
+            width
+        }
     }
 
     /// Per-outcome quantized masses, indexed by `k`. The distribution as the
     /// draw actually realizes it, for instruments that need the whole shape
-    /// rather than one point.
+    /// rather than one point. The masses partition the full `2^64` input domain
+    /// (they sum to `2^64`, so use `u128` to add them — see
+    /// `quantized_mass_sums_to_the_full_domain`).
     #[must_use]
     pub fn masses(&self) -> Vec<u64> {
         (0..=self.max_support())
@@ -271,7 +286,10 @@ mod tests {
         let total: u128 = (0..=t.max_support())
             .map(|k| u128::from(t.quantized_mass(k)))
             .sum();
-        assert_eq!(total, u128::from(u64::MAX));
+        // The masses partition the full `2^64` input domain: every `u64` the
+        // RNG can produce maps to exactly one outcome, including `u64::MAX`
+        // (absorbed by the last bin via `draw()`'s clamp).
+        assert_eq!(total, 1_u128 << 64);
     }
 
     #[test]

@@ -2145,8 +2145,8 @@ absence of a pool.** Grounded precisely: the 2 noise channels are *selected per
 epoch from the ~12-peer Tor outbound pool* (`start_epoch` builds
 `connection_map{get_out_connections, count = NOISE_CHANNELS = 2}`; the proxy zone's
 `max_out_connection_count` defaults to `P2P_DEFAULT_CONNECTIONS_COUNT = 12`,
-[net_node.inl:2683](../../src/p2p/net_node.inl#L2683)) — the *same* 2-of-12 selection
-structure as clearnet's `out_mapping_`. The difference is the *send*: clearnet
+[net_node.inl:2683](../../src/p2p/net_node.inl#L2683)) — the *same* 2-from-12
+selection structure as clearnet's `out_mapping_`. The difference is the *send*: clearnet
 `get_stem` sends the origin's own tx to **one** selected successor, while Tor
 **broadcasts it to *both* selected channels**
 ([send_txs:866-872](../../src/cryptonote_protocol/levin_notify.cpp#L866)). So per

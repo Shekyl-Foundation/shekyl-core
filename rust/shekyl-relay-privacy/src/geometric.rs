@@ -183,10 +183,20 @@ impl GeometricTable {
         } else {
             self.thresholds[idx - 1]
         };
-        hi.saturating_sub(lo)
+        let width = hi.saturating_sub(lo);
+        // The final outcome also absorbs the single top input `u64::MAX`
+        // (`draw()`'s clamp maps it to the last bin), so its realized mass is
+        // one more than the half-open width `[lo, hi)` — this is what makes the
+        // masses partition the full `2^64` domain exactly, not `2^64 − 1`.
+        if idx == self.thresholds.len() - 1 {
+            width.saturating_add(1)
+        } else {
+            width
+        }
     }
 
-    /// Per-outcome quantized masses, indexed by `k`.
+    /// Per-outcome quantized masses, indexed by `k`. They partition the full
+    /// `2^64` input domain (sum to `2^64`; add with `u128`).
     #[must_use]
     pub fn masses(&self) -> Vec<u64> {
         (0..=self.max_support())

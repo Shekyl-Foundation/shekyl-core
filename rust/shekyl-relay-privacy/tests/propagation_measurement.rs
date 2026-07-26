@@ -1866,7 +1866,10 @@ fn epsilon_greedy_pure_preference_ossifies_to_two_peers() {
     const M: usize = 2000; // enough epochs for eps=0.05 to cover the pool
 
     println!("\n§12.11 ossification: epsilon -> distinct peers exercised (pool=12, STEMS=2)");
-    println!("{:>8} {:>16} {:>18}", "epsilon", "distinct peers", "top2 traffic share");
+    println!(
+        "{:>8} {:>16} {:>18}",
+        "epsilon", "distinct peers", "top2 traffic share"
+    );
     let mut rows = std::collections::BTreeMap::new();
     for &pct in &[0_u64, 1, 5, 10] {
         let eps = pct as f64 / 100.0;

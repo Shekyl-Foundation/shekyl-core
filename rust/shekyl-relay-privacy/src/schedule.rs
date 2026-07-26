@@ -293,12 +293,21 @@ impl FluffScheduler {
     }
 }
 
-/// Which distribution the embargo delay is drawn from.
+/// The delay-shape family for a randomized relay delay — `Poisson` (what the
+/// inherited daemon draws) versus `Geometric` (the memoryless family the
+/// derivation assumes).
 ///
-/// This is not a tuning knob, it is a correctness question. The Dandelion++
-/// embargo formula is derived from an exponential survival function; the
-/// inherited daemon draws from a Poisson. See [`crate::geometric`] for the
-/// full argument and `tests/propagation_measurement.rs` for the measured
+/// Despite the name, this is the **shared** delay-shape selector for *all* the
+/// relay delays this crate models — the stem embargo (its headline use, hence
+/// the name), and also the fluff delay ([`FluffScheduler`]) and the flood-return
+/// simulation ([`crate::conformance::simulate_fluff_return`]). It carries no
+/// embargo-specific semantics; it is purely the choice of distribution family,
+/// applied wherever a delay is drawn.
+///
+/// For the embargo it is not a tuning knob but a correctness question: the
+/// Dandelion++ embargo formula is derived from an exponential survival function,
+/// while the inherited daemon draws from a Poisson. See [`crate::geometric`] for
+/// the full argument and `tests/propagation_measurement.rs` for the measured
 /// consequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbargoDistribution {

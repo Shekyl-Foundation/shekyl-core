@@ -636,9 +636,15 @@ pub fn simulate_fluff_return<R: RelayRng + ?Sized>(
         // topologies is more honest than pinning one lucky graph.
         let mut adjacency: Vec<Vec<usize>> = vec![Vec::with_capacity(peers); flood.nodes];
         for node in 0..flood.nodes {
-            for _ in 0..peers {
+            // Each node initiates `peers` *distinct non-self* edges — the
+            // documented model. Redraw on self or a repeat so the effective
+            // degree is the topology input, not a self-hit / collision artifact.
+            // (`peers ≤ nodes − 1`, so this always terminates.)
+            let mut initiated: Vec<usize> = Vec::with_capacity(peers);
+            while initiated.len() < peers {
                 let other = usize_from(bounded_uniform(rng, (flood.nodes - 1) as u64));
-                if other != node {
+                if other != node && !initiated.contains(&other) {
+                    initiated.push(other);
                     adjacency[node].push(other);
                     adjacency[other].push(node); // fluff travels both ways
                 }
