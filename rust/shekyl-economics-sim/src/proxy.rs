@@ -33,8 +33,9 @@
 //! **weaker**, not stronger — the free-rider is more viable, not less.
 
 use shekyl_archival_retention::{
-    ARCHIVAL_BOND_FLOOR_ATOMIC, CHALLENGES_PER_EPOCH, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
-    MAX_HOLDINGS_SHARDS, SETTLEMENT_EPOCH_BLOCKS,
+    failure_window_slashable, BaselineObservation, ARCHIVAL_BOND_FLOOR_ATOMIC,
+    CHALLENGES_PER_EPOCH, FAILURE_WINDOW_M, FAILURE_WINDOW_N, MAX_HOLDINGS_SHARDS,
+    SETTLEMENT_EPOCH_BLOCKS,
 };
 
 use crate::burden::{COIN, SHARD_BYTES};
@@ -98,31 +99,50 @@ pub fn proxy_refetch_cost_per_epoch(fetch_fiat_per_byte: f64) -> f64 {
     responses * RESPONSE_BYTES * fetch_fiat_per_byte
 }
 
-/// `P(≥ m misses in the last n)` for iid per-epoch re-fetch-failure prob `q` — the
-/// sliding-window slash probability at any epoch (upper binomial tail). This is
-/// the corrected m-of-n exposure: a single miss is absorbed; only sustained
-/// failure slashes.
+/// Per-epoch slash probability under the **shipped consensus predicate** — not a
+/// re-expression of it (DQ-2G dep-don't-mirror).
+///
+/// Enumerates every length-`n` observation pattern (2^13 = 8 192), hands each to
+/// `failure_window_slashable`, and weights the slashing ones by their binomial
+/// probability under an iid per-observation miss rate `q`. Calling the real
+/// predicate rather than a formula captures the semantics a hand-written binomial
+/// misses — chiefly that **the head observation must itself be a miss** (the
+/// window is only consulted on a missed baseline), so the hazard is
+/// `q · P(≥ m−1 of the other n−1)`, not `P(≥ m of n)`.
+///
+/// A5 originally modelled the latter and thereby **overstated** the slash
+/// exposure by ~18 % (the shipped predicate is ~0.85× the naive binomial across
+/// the whole crossover band). Lower exposure ⇒ weaker deterrent ⇒ the free-rider
+/// is *more* viable, so this correction moves against the comfortable direction.
+///
+/// `m`/`n` are accepted for call-site clarity but the predicate reads the
+/// consensus constants itself; the assert pins that they agree.
 #[must_use]
 pub fn slash_prob_per_epoch(q: f64, m: u32, n: u32) -> f64 {
+    debug_assert!(m == FAILURE_WINDOW_M && n == FAILURE_WINDOW_N);
     let q = q.clamp(0.0, 1.0);
-    let mut p = 0.0;
-    for k in m..=n {
-        p += binom(n, k) * q.powi(k as i32) * (1.0 - q).powi((n - k) as i32);
+    let width = FAILURE_WINDOW_N as usize;
+    let mut p = 0.0_f64;
+    for mask in 0u32..(1u32 << width) {
+        // bit i set = a MISS at position i; position 0 is the head (decision epoch).
+        let obs: Vec<BaselineObservation> = (0..width)
+            .map(|i| {
+                let epoch = (width - i) as u64; // strictly descending
+                if (mask >> i) & 1 == 1 {
+                    BaselineObservation::missed(epoch)
+                } else {
+                    BaselineObservation::served(epoch)
+                }
+            })
+            .collect();
+        // A served head is `HeadNotAMiss`: consensus never consults the window that
+        // epoch, so it contributes no slash hazard.
+        if failure_window_slashable(&obs).unwrap_or(false) {
+            let k = mask.count_ones() as i32;
+            p += q.powi(k) * (1.0 - q).powi(width as i32 - k);
+        }
     }
     p
-}
-
-/// Exact binomial coefficient `C(n, k)` as f64 (n ≤ 13 here, no overflow).
-fn binom(n: u32, k: u32) -> f64 {
-    if k > n {
-        return 0.0;
-    }
-    let k = k.min(n - k);
-    let mut c = 1.0_f64;
-    for i in 0..k {
-        c = c * f64::from(n - i) / f64::from(i + 1);
-    }
-    c
 }
 
 /// The proxy's total cost per epoch, fiat: re-fetch bandwidth + the L14 slash
