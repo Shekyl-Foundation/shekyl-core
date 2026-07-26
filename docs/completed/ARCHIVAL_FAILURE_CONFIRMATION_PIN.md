@@ -148,6 +148,14 @@ stressnet planning; do not treat Round-1 `m=11` as final without the CDF.
 **Gating input.** Outage-duration **CDF** (residual-life derived); steady-state `u_eff` alone
 does not pin tail shape.
 
+**Hard ceiling on the re-pin (added with the implementation).** `n` is bounded above by
+the serve-credit ledger's retention: the window may not reach past
+`prune_archival_epochs_before`'s horizon, which gives `n ≤ MAX_CLAIM_AGE_W − 1` (= **25**
+at the current `W = 26`). Raising `n` past that does not fork the chain — it silently
+converts pruned-but-served epochs into misses. A const-assert in `failure_window.rs`
+fails the build at the boundary, so a re-pin that needs a wider `n` is a joint decision
+about `n` **and** `W`, not a numerics bump. §4.1 has the derivation.
+
 ### 3.3 Enforcement pro-cyclicality (swan-2/W6, 2026-06-11)
 
 During a legitimate crisis (the L17 black-swan regimes,
@@ -215,10 +223,20 @@ from the next slash — the single-strike knife-edge, rebuilt. Gate-4 §3.4 call
 *reinstatement* and §4.2 makes slash forward-only; the clean window is the symmetric
 reading, and the burned collateral is what makes it not a cheap reset.
 
-**Nothing persisted, so nothing to keep in sync.** The window is recomputed from the
-`serve_credit_bit` ledger and the bond record, both of which `pop_block` already reverts
-(gate-2 §8, gate-4 §5). No new schema, no `42-serialization-policy` bump, and reorg
-safety comes free: a rewound bit is a rewound observation.
+**Nothing persisted — with one thing to keep in sync.** The window is recomputed from
+the `serve_credit_bit` ledger and the bond record, both of which `pop_block` already
+reverts (gate-2 §8, gate-4 §5). No new schema, no `42-serialization-policy` bump, and
+reorg safety comes free: a rewound bit is a rewound observation.
+
+The price is that **`n` is now a retention constraint**. The decision used to read one
+epoch's bit; it now reads up to `n − 1` epochs further back, into rows
+`prune_archival_epochs_before` deletes below `tip_epoch − MAX_CLAIM_AGE_W`. A pruned row
+is indistinguishable from a never-earned one, so a window out-reaching the prune horizon
+would read *served* epochs as misses. A const-assert in `failure_window.rs` couples the
+two (`n + LAG ≤ MAX_CLAIM_AGE_W + 1`, where `LAG = 2` is the settlement lag at the
+genesis schedule) and fails the build if either constant moves across it — verified by
+mutation. Not a fork risk: pruning is deterministic in tip height, so nodes would agree
+on the wrong answer rather than split.
 
 **Tests.** The consensus decision is pinned against the Round-1 sim policy itself —
 `failure_confirmation::sliding_window_first_slash_baseline` was extracted from
