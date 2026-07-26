@@ -1736,6 +1736,66 @@ TEST(archival_substrate_lmdb, slash_scheduler_slashes_sustained_absence_at_m_of_
   EXPECT_TRUE(db.archival_bond_good_through(p_served, slash_epoch + 1));
 }
 
+// The shard's add-epoch is the window's floor, not the record's join epoch.
+//
+// Every other fixture here adds the shard at the join epoch, so the two
+// boundaries coincide and a look-back that ignored the per-shard add-epoch
+// would still land in the right place. This record joins at epoch 0 and
+// acquires shard 7 at epoch 5, separating them: observations for (P, 7) start
+// at E_add + 1 = 6 (P2B-7 Pin 5 — the partial add epoch is forfeited in both
+// directions), so the m-th miss lands at epoch 5 + m, not epoch m.
+//
+// Asserting the record is intact at the deadline of epoch m is what makes this
+// decisive: a window that counted the record's bonded-but-shardless epochs
+// 1..5 as misses would fire there, five epochs early, slashing a P for epochs
+// in which it held nothing to serve.
+TEST(archival_substrate_lmdb, failure_window_floor_is_the_shard_add_epoch)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const FailureWindowParams window = failure_window_params();
+  const uint64_t add_epoch = 5;
+
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  const crypto::hash p_id = make_hash(0x81);
+  shekyl::db::ArchivalBondValue seed = window_kat_bond();
+  seed.shard_add_epochs = {add_epoch}; // acquired mid-life, not at join
+  db.put_archival_bond_value(p_id, seed);
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+
+  // Epoch m: where this record WOULD be slashed if the window counted from the
+  // join epoch. It holds only m - add_epoch observed misses, so it stands.
+  append_minimal_blocks(db,
+    shekyl_archival_epoch_slash_deadline_height(window.m) + 2);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_TRUE(read.holds_shard(7));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
+  EXPECT_EQ(db.get_total_burned(), 0u);
+  ASSERT_EQ(db.get_archival_last_slash_epoch(), window.m);
+
+  // The m-th observed miss is at E_add + m; the slash fires there.
+  const uint64_t slash_epoch = add_epoch + window.m;
+  append_minimal_blocks(db,
+    shekyl_archival_epoch_slash_deadline_height(slash_epoch) + 2 - db.height());
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_FALSE(read.holds_shard(7));
+  EXPECT_EQ(db.get_total_burned(), floor);
+  ASSERT_EQ(read.bad_intervals.size(), 1u);
+  EXPECT_EQ(read.bad_intervals[0].start_epoch, slash_epoch);
+}
+
 // A FULL n-wide window with passes inside it, at exactly the threshold.
 //
 // Both KATs above fire on a window shorter than n (observations start at

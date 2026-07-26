@@ -87,6 +87,23 @@
 //! Recomputing is what makes the mechanism reorg-safe for free: a rewound bit is
 //! a rewound observation, with no second copy of the history to keep in sync.
 //!
+//! **The price of recomputing: `n` is now a retention constraint.** Before the
+//! window, the slash decision read a *single* epoch's `serve_credit_bit`; it now
+//! reads up to `n − 1` epochs further back. Those rows are not permanent —
+//! `prune_archival_epochs_before` deletes `archival_serve_credit` below
+//! `tip_epoch − MAX_CLAIM_AGE_W` (`prune_below_epoch_at_height`,
+//! `ARCHIVAL_CONSENSUS_STATE.md` §5). A pruned row is indistinguishable from a
+//! never-earned one, so a window reaching past the prune horizon would read
+//! *served* epochs as **misses** and slash an archiver for history the node
+//! deleted. The horizon is comfortable at the shipped values and the assert
+//! below pins it, because **raising `n` at Round-2 is exactly the edit that
+//! would cross it** and nothing else would catch that.
+//!
+//! Note the constraint is a false-slash risk, not a fork risk: pruning is a
+//! deterministic function of tip height, so every node deletes the same rows and
+//! would compute the same wrong answer. Reorgs cannot reach a prune boundary
+//! either (`ARCHIVAL_REORG_DEPTH_BLOCKS` ≪ `SETTLEMENT_EPOCH_BLOCKS`).
+//!
 //! ## Numerics are provisional; the shape is frozen
 //!
 //! [`ARCHIVAL_FAILURE_WINDOW_M`] / [`ARCHIVAL_FAILURE_WINDOW_N`] come from
@@ -98,6 +115,9 @@
 //! robust, deterrence-credible at the L17 ×0.25 crisis multiplier). The
 //! *m-of-n shape* is genesis-frozen; the two integers are not — the
 //! `bond_duration` precedent.
+
+use crate::bond_floor::MAX_CLAIM_AGE_W;
+use crate::constants::{CHALLENGE_RESOLUTION_BLOCKS, SETTLEMENT_EPOCH_BLOCKS};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -125,6 +145,42 @@ const _: () = assert!(
 const _: () = assert!(
     ARCHIVAL_FAILURE_WINDOW_N >= ARCHIVAL_FAILURE_WINDOW_M,
     "n < m makes the miss threshold unreachable — a silently disabled slash"
+);
+
+/// Settlement epochs between a baseline epoch and the tip at which its slash
+/// pass runs. Epoch `E` is settled by the first block above
+/// `H_slash_deadline(E) = (E + 1)·SEB + CHALLENGE_RESOLUTION_BLOCKS`, and the
+/// scheduler settles each epoch at that block (it advances its watermark on
+/// every connect, so it does not drift behind the tip). At the genesis schedule
+/// this is `2`.
+const SLASH_SETTLEMENT_TIP_LAG_EPOCHS: u64 =
+    1 + (CHALLENGE_RESOLUTION_BLOCKS + 1) / SETTLEMENT_EPOCH_BLOCKS;
+
+/// **Prune-horizon coupling — the window may not out-reach the serve-credit
+/// ledger's retention.** At the moment epoch `E` is settled the tip is
+/// `E + LAG`, so rows below `E + LAG − MAX_CLAIM_AGE_W` are already deleted,
+/// while the look-back reaches `E − (n − 1)`. Requiring
+/// `n − 1 ≤ MAX_CLAIM_AGE_W − LAG` keeps every epoch the window can read on
+/// disk. At the shipped values: `13 ≤ 26 − 2 + 1 = 25`, a 12-epoch margin.
+///
+/// This is the assert that must fire if Round-2 re-pins `n` upward past the
+/// retention window, or if `MAX_CLAIM_AGE_W` is ever lowered. Crossing it does
+/// not fork the network (pruning is deterministic in tip height, so every node
+/// deletes the same rows) — it silently converts served epochs into misses.
+/// Whichever constant moves, the fix is a decision about both, not a bump.
+///
+/// Measured on the **genesis** schedule. The FAKECHAIN-only
+/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override shortens `SEB` while
+/// `CHALLENGE_RESOLUTION_BLOCKS` stays in blocks, which inflates the real lag
+/// far past this constant — so a regtest chain short enough to prune inside the
+/// window is not a faithful model of the slash path. That is a harness-fidelity
+/// caveat, not a consensus one: the override is refused on public networks.
+const _: () = assert!(
+    (ARCHIVAL_FAILURE_WINDOW_N as u64) + SLASH_SETTLEMENT_TIP_LAG_EPOCHS <= MAX_CLAIM_AGE_W + 1,
+    "the failure window reaches further back than the serve-credit ledger is \
+     retained (prune_archival_epochs_before deletes below tip - MAX_CLAIM_AGE_W): \
+     a pruned bit reads as a MISS, so this window would slash archivers for \
+     epochs they served and the node deleted"
 );
 
 /// One baseline observation for a `(P_id, shard)` pair: an epoch at which a
@@ -284,6 +340,23 @@ mod tests {
         assert_eq!(FAILURE_WINDOW_M, 11);
         assert_eq!(FAILURE_WINDOW_N, 13);
         assert_eq!(FAILURE_WINDOW_SERVE_BUDGET, 2);
+    }
+
+    #[test]
+    fn the_window_fits_inside_the_serve_credit_retention_horizon() {
+        // The const-assert above is the gate; this states the margin in numbers
+        // so a Round-2 re-pin can see how much room it has before the window
+        // starts reading pruned epochs as misses.
+        let deepest_epoch_read = u64::from(FAILURE_WINDOW_N) - 1; // n - 1 below the decision epoch
+        let oldest_epoch_retained = MAX_CLAIM_AGE_W - SLASH_SETTLEMENT_TIP_LAG_EPOCHS;
+        assert!(
+            deepest_epoch_read <= oldest_epoch_retained,
+            "window reaches {deepest_epoch_read} epochs back; only \
+             {oldest_epoch_retained} are retained at slash time"
+        );
+        assert_eq!(SLASH_SETTLEMENT_TIP_LAG_EPOCHS, 2);
+        // Headroom for the Round-2 re-pin, at the genesis schedule.
+        assert_eq!(oldest_epoch_retained - deepest_epoch_read, 12);
     }
 
     #[test]

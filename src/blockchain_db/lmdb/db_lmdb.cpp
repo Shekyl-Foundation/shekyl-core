@@ -5933,6 +5933,18 @@ void BlockchainLMDB::process_archival_slash_for_epoch(uint64_t block_height,
     // §3.2 (criterion 4), sharpened; whether Unbond/drop must additionally
     // clear the window is a Round-2 decision, recorded in that pin's §4.1 —
     // NOT a gap to close by adding a gate here.
+    //
+    // Scan cost, for whoever profiles this next: the complete-tree arm below
+    // walks the whole shard registry and breaks only on a shard that SLASHES,
+    // so while a non-serving foundation record is inside its m-1 absorb window
+    // it now walks every shard AND runs a full look-back per shard, where
+    // single-strike broke on the first failure. That is N_shards x n, and the
+    // per-epoch seal-block hash is re-fetched inside each one (it depends on
+    // the epoch, not the shard, so it is redundant across the shard loop —
+    // hoisting it is the obvious win if this ever shows up). It is bounded and
+    // rare rather than hot: a shard that served short-circuits before any of
+    // this, and the scheduler settles each epoch exactly once (the watermark
+    // advances), so the cost is once per epoch, not once per block.
     if (bond.is_complete_tree())
     {
       MDB_cursor* seg_cur = nullptr;
