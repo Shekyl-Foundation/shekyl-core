@@ -90,8 +90,7 @@ pub fn simulate_fluff_return<R: RelayRng + ?Sized>(
             if at > best[node] {
                 continue;
             }
-            let neighbours = adjacency[node].clone();
-            for next in neighbours {
+            for &next in &adjacency[node] {
                 let arrival = at.saturating_add(draw_ms(rng));
                 if arrival < best[next] {
                     best[next] = arrival;
@@ -198,7 +197,7 @@ pub fn simulate_diffusion_first_spy<R: RelayRng + ?Sized>(
                 first_spy = Some((at, node));
                 break;
             }
-            for next in adjacency[node].clone() {
+            for &next in &adjacency[node] {
                 let arrival = at.saturating_add(draw_ms(rng));
                 if arrival < best[next] {
                     best[next] = arrival;
