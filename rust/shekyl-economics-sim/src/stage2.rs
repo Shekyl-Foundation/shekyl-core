@@ -1049,6 +1049,7 @@ fn a3_stranding_report(params: &SimParams) {
                 a.n,
                 archivers,
                 claim_cost_atomic,
+                crate::stranding::RATIONAL_CLAIM_CADENCE_EPOCHS,
                 crate::stranding::Scoring::PreD1,
             );
             let post = crate::stranding::measure(
@@ -1056,6 +1057,7 @@ fn a3_stranding_report(params: &SimParams) {
                 a.n,
                 archivers,
                 claim_cost_atomic,
+                crate::stranding::RATIONAL_CLAIM_CADENCE_EPOCHS,
                 crate::stranding::Scoring::PostD1,
             );
             eprintln!(

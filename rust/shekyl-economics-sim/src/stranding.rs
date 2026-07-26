@@ -36,7 +36,7 @@
 
 use shekyl_archival_retention::{
     curve_milli, g_age_milli, reward_share_floor, scarcity_micro, work_milli_from_micro,
-    MAX_HOLDINGS_SHARDS,
+    MAX_CLAIM_AGE_W, MAX_HOLDINGS_SHARDS,
 };
 
 use crate::population::{reward_curve, AGE_MILLI, AGE_WEIGHT_MILLI};
@@ -123,18 +123,39 @@ pub struct StrandingOutcome {
     pub zero_work_fraction: f64,
 }
 
+/// Rational claim **cadence**, in settlement epochs. Rewards batch: an archiver
+/// may claim once per `MAX_CLAIM_AGE_W` window, amortising **one** claim
+/// transaction across that many epochs of accrued reward, which lowers the
+/// claim-cost viability floor by the same factor. `1` is the naive per-epoch
+/// claimer; [`MAX_CLAIM_AGE_W`] is the rational batcher and the **bound** on the
+/// amortisation (claim later than that and the epoch expires — *supply never
+/// created*, `ARCHIVAL_BUDGET_SCHEDULE.md` §4). Purely archiver-side behaviour:
+/// **no consensus change**, which is what makes it the cheapest of the levers.
+pub const RATIONAL_CLAIM_CADENCE_EPOCHS: u64 = MAX_CLAIM_AGE_W;
+
 /// Measure stranding for one epoch's `budget_atomic` over the DQ-2H population,
-/// under `scoring`. A class claims iff its per-archiver reward covers
-/// `claim_cost_atomic` (one claim transaction at the fee floor) — the rational
-/// non-claim rule that turns small shares into *supply never created*.
+/// under `scoring`. A class claims iff its accrued reward over
+/// `claim_cadence_epochs` covers `claim_cost_atomic` (one claim transaction at
+/// the fee floor) — the rational non-claim rule that turns small shares into
+/// *supply never created*.
+///
+/// **Cadence is load-bearing** (do not leave it implicit): the per-epoch reward is
+/// weighed against `claim_cost / cadence`, so a batching archiver's viability
+/// floor is up to `MAX_CLAIM_AGE_W` (26×) below a naive per-epoch claimer's. An
+/// earlier revision of this arm priced cadence `1` implicitly and therefore
+/// *overstated* the floor — and with it the claim-cost force in the D3 triangle
+/// (§12.8) — by that factor.
 #[must_use]
 pub fn measure(
     budget_atomic: u64,
     n_shards: u64,
     archivers: u64,
     claim_cost_atomic: u64,
+    claim_cadence_epochs: u64,
     scoring: Scoring,
 ) -> StrandingOutcome {
+    // Amortise one claim tx across the batching window.
+    let claim_cost_atomic = claim_cost_atomic / claim_cadence_epochs.max(1);
     let mean_r = mean_replication(archivers, n_shards);
     let curve = reward_curve();
 
@@ -240,8 +261,8 @@ mod tests {
         let n = 1_000u64; // early corpus
         let archivers = 40_000u64;
         let claim_cost = 10_000_000u64; // 0.01 SKL
-        let pre = measure(budget, n, archivers, claim_cost, Scoring::PreD1);
-        let post = measure(budget, n, archivers, claim_cost, Scoring::PostD1);
+        let pre = measure(budget, n, archivers, claim_cost, 1, Scoring::PreD1);
+        let post = measure(budget, n, archivers, claim_cost, 1, Scoring::PostD1);
         assert!(
             pre.mean_r > 1_000,
             "test must reach the cliff: r={}",
@@ -270,9 +291,37 @@ mod tests {
             10_000,
             5_000,
             10_000_000,
+            1,
             Scoring::PostD1,
         );
         assert!((0.0..=1.0).contains(&out.stranded_fraction));
         assert!((0.0..=1.0).contains(&out.non_claiming_fraction));
+    }
+
+    #[test]
+    fn batching_lowers_the_claim_viability_floor() {
+        // G-3: cadence is load-bearing. Batching to the MAX_CLAIM_AGE_W window
+        // amortises one claim tx across 26 epochs, so a holder who cannot justify
+        // claiming every epoch may still clear the floor when batching — the
+        // claim-cost force in D3's triangle is cadence-dependent, bounded by 26x.
+        let budget = 1_000_000_000u64; // small pool ⇒ small per-epoch rewards
+        let (n, archivers) = (10_000u64, 3_000u64);
+        let claim_cost = 5_000_000u64; // 0.005 SKL
+        let naive = measure(budget, n, archivers, claim_cost, 1, Scoring::PostD1);
+        let batched = measure(
+            budget,
+            n,
+            archivers,
+            claim_cost,
+            RATIONAL_CLAIM_CADENCE_EPOCHS,
+            Scoring::PostD1,
+        );
+        assert!(
+            batched.non_claiming_fraction <= naive.non_claiming_fraction,
+            "batching must not raise the non-claim fraction: naive={} batched={}",
+            naive.non_claiming_fraction,
+            batched.non_claiming_fraction
+        );
+        assert!(batched.stranded_fraction <= naive.stranded_fraction);
     }
 }

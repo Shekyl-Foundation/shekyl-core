@@ -1146,45 +1146,90 @@ pre-D1 counterfactual is recorded only as the evidence that D1 had to land first
 
 ### 12.8 D3 round charter — the holdings-size force triangle
 
-**Status:** charter only. D3 (§8 reopen (e)) is its own design round on the
-**archival-reward** layer; this section states the problem it must start from, not
-its answer. Filed `FOLLOWUPS.md` (V3.0, pre-genesis).
+**Status:** charter, amended (G-1…G-4) and ratified. D3 (§8 reopen (e)) is its own
+design round on the **archival-reward** layer; this section states the problem it
+must start from, not its answer. Filed `FOLLOWUPS.md` (V3.0, pre-genesis).
+
+**Objective (G-4) — named, so it is not decided implicitly by the first mechanism
+proposed.** The selection criterion is **maximal reach** — archiver count and shard
+coverage — **subject to** (i) the §12.6 durability scoping (*foundation owns
+durability; market owns reach*, so reach is the market layer's actual product) and
+(ii) closure of W9's **concentration** regime (§12.5). Manipulation resistance and
+the viability floors are **constraints, not co-objectives**: a design that
+maximises them at reach's expense has optimised the wrong quantity.
 
 **Why a charter at all.** D3 entered the record as "the per-bond `curve_milli` cap
-is dodgeable at no bond cost." That framing is true but *partial*: it names one
-force acting on holdings size and would invite a fix aimed at the cap in isolation.
-Stage 2 has since measured **two more** forces pushing the opposite way. A round
-that starts from the cap alone will optimise one corner of an equilibrium.
+is dodgeable at no bond cost." True but *partial*: it names one force acting on
+holdings size and invites a fix aimed at the cap in isolation. Stage 2 has since
+measured **two more** forces pushing the opposite way.
 
 **The triangle (all three empirically anchored).**
 
 | Force | Direction on holdings | Source | Anchor |
 | --- | --- | --- | --- |
 | **Dodgeable curve cap** — `curve_milli` plateaus **per bond** while `bond_floor` scales **per shard**, so splitting holdings across many small bonds dodges the plateau at *zero* extra bond cost | **↓ pushes holdings down** (splitting pays) | §8 reopen (e); A4 | A4 `hHold` columns: capped-honest doubles the stuffer's ROI (§12.5) |
-| **Milli quantization** — a bond's per-shard micro work must sum to ≥ 1 milli, so below `~n_shards × 1000 < r` a holding scores **zero** | **↑ pushes holdings up** (too small ⇒ unrepresentable) | §12.7 Finding 3 | A3: 16-shard holder zeroes at `r > ~16 k` |
-| **Claim-cost economics** — a reward below the cost of one claim transaction is rationally never claimed, and unclaimed is *supply never created* | **↑ pushes holdings up** (too small ⇒ not worth claiming) | §12.7; `ARCHIVAL_BUDGET_SCHEDULE.md` §4 | A3 `noclm%` column; claim cost priced via the production weight predictor |
+| **Milli quantization** — a bond's per-shard micro work must sum to ≥ 1 milli, else the holding scores **zero** | **↑ pushes holdings up** (too small ⇒ unrepresentable) | §12.7 Finding 3 | A3: 16-shard holder zeroes at `r > ~16 k` |
+| **Claim-cost economics** — a reward below the cost of one claim transaction is rationally never claimed, and unclaimed is *supply never created* | **↑ pushes holdings up**, but **weakly** (see G-3) | §12.7; `ARCHIVAL_BUDGET_SCHEDULE.md` §4 | A3 `noclm%`, priced at the rational batching cadence |
 
-**What D3 must produce.** Not "close the dodge" but **the equilibrium holdings
-size these three forces select**, and a cap design whose selected equilibrium is
-the one the network wants — *large enough* to clear quantization and claim cost,
-*without* making bond-splitting the dominant strategy. Note the forces are not
-symmetric: the cap dodge is an **attacker-and-rational-actor** incentive, while the
-other two are **floors on viability**; a fix that only raises the floors would
-push small honest archivers out, which is a reach loss (cf. §12.6's reach-vs-
-durability scoping).
+**G-3 — force three is cadence-dependent and weaker than first reported.** Rewards
+batch: claiming once per `MAX_CLAIM_AGE_W` window amortises **one** claim
+transaction across 26 epochs of accrued reward, lowering the claim-cost viability
+floor by up to **26×** — purely archiver-side behaviour, **no consensus change**,
+which makes it the cheapest lever available and a fourth (behavioural) one. A3
+originally priced cadence `1` implicitly and so *overstated* this force by that
+factor; the model now takes cadence explicitly and reports at the rational bound.
+**Re-run finding:** at the batching cadence the swept regimes show
+`noclm% == zero_work%` — i.e. **none** of the observed non-claiming is
+claim-cost-driven; all of it is quantization. Force three is real but has **not**
+been shown to bind anywhere yet, and the round should not size against it as if it
+had.
 
-**Candidate levers (from reopen (e); the round should not treat this as closed).**
-Per-**persona**/principal curve application (sum a principal's bonds before the
-curve — makes the cap undodgeable and prices capture in bonded capital);
-per-**bond** minimum floors; **bond-proportional** plateaus.
+**Inherited constraints (hard).**
 
-**Constraints the round inherits.**
+- **G-1 — cross-bond aggregation is forbidden by the privacy architecture.**
+  "Apply the cap per persona/principal" requires consensus to **link a principal's
+  bonds**, and per-persona unlinkability is a deliberate privacy property under
+  priority #1 (§`00-mission`). Both branches are dead: **mandatory** linkage is a
+  privacy regression the priority order forbids outright; **voluntary** linkage is
+  unenforceable against anyone who declines, reproducing the exact pathology one
+  level up — *a cap that binds only the honest*. Therefore: **any cap can bind at
+  most per bond.** This is not a narrowing of the fix space but an honest map of
+  it — and it **removes what the first draft listed as the leading candidate**.
 - **`WORK_MILLI_SCALE` is genesis-frozen** — the quantization floor is *not*
   eliminable; it is a parameter of the problem, not a target (§12.7 Finding 3).
-- **Load-bearing for W9** (§12.5): D3's resolution closes the concentration regime
-  the per-output fee-floor cannot reach, so it is **paired** with reopen (c), not
+- **Load-bearing for W9** (§12.5): D3 closes the concentration regime the
+  per-output fee-floor cannot reach, so it is **paired** with reopen (c), not
   sequenced after it.
-- **A2 (W6) and A6 are held on this round** (§12.4.1): both model the
-  bond-splitting equilibrium D3 is about to change, so they build on its outcome.
-- **Empirical anchor:** the A3 table and the A4 `hHold` sweep are the round's
-  starting data; re-run `--stage2` rather than transcribing numbers.
+
+**Live lever families (post-G-1).**
+
+1. **Per-bond friction** — minimum bond sizes, or fixed per-bond capital costs
+   that make bond *multiplication* expensive in capital rather than free. Prices
+   splitting without needing to detect it.
+2. **Curve reshaping within the bond** — alter the plateau's shape/position, the
+   only cap surface that remains enforceable.
+3. **Cap deletion (G-2) — first-class, not a straw option.** The charter must not
+   presuppose "a cap design." The branch's own evidence argues for weighing
+   removal: at the realistic end (everyone splitting, effectively uncapped) A4
+   measures **prem ≈ 1.0** — the concentration premium *vanishes* by total-work
+   invariance; at the capped-honest end the stuffer's ROI **doubles**, because the
+   plateau binds naive-honest work while the attacker splits past it. So against
+   rational actors the plateau is (i) dodgeable, (ii) unenforceable above the bond
+   (G-1), and (iii) **actively harmful in the regime where it binds**. Meanwhile
+   `MAX_HOLDINGS_SHARDS = 4096` already imposes a hard, wire-enforced per-bond work
+   ceiling, and per-shard bond floors already price holdings in capital. *A rule
+   that costs distortion when it works and protects nothing when it doesn't is a
+   [`15-deletion-and-debt`](../../.cursor/rules/15-deletion-and-debt.mdc)
+   candidate.* Option: **delete the plateau**, let work run linear to the wire cap,
+   and let capital (bond floors) + the fee-floor companion carry concentration
+   pricing.
+4. **Claim cadence** (behavioural, free) — see G-3; no consensus change.
+
+**The A2 circularity, and its resolution.** The honest counter to G-2 is that the
+curve may serve a **distributional** purpose that A2 (W6) would reveal — and A2 is
+*held on D3* (§12.4.1), which is a genuine chicken-and-egg. **Resolution:** the
+round runs a **provisional A2 probe under both cap-kept and cap-deleted** before
+deciding, rather than letting the hold become a circular blocker.
+
+**Empirical anchors.** The A3 table (§12.7) and the A4 `hHold` sweep (§12.5) are
+the round's starting data; re-run `--stage2` rather than transcribing numbers.

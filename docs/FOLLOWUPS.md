@@ -95,9 +95,16 @@ sustainability is unaffected by the recalibration.
   end the dodge ~2× the stuffer's served-work ROI (A4 `hHold=512` column). This
   is a genesis-freeze concern (the reward-curve *shape* is frozen) at the
   **archival-reward layer**, needing its own design round — it is not a D2
-  escalation change. **Fix space:** apply the cap per *persona*/principal (sum a
-  principal's bonds before the curve), a per-*bond* minimum floor, or a
-  bond-proportional plateau. **Pairs with** the reopen-(c) weight-denominated
+  escalation change. **Fix space (post-charter G-1/G-2):** ~~apply the cap per
+  *persona*/principal~~ — **struck: forbidden by the privacy architecture**
+  (cross-bond linkage is a priority-#1 regression if mandatory, and unenforceable
+  if voluntary — a cap that binds only the honest), so **any cap binds at most
+  per bond**. What remains: **per-bond friction** (minimum bond size, fixed
+  per-bond capital cost making bond *multiplication* expensive), **curve
+  reshaping within the bond**, or **deleting the plateau outright** (a rule-15
+  candidate — A4 shows it is dodgeable, unenforceable above the bond, and
+  *actively harmful in the regime where it binds*, while `MAX_HOLDINGS_SHARDS`
+  already caps per-bond work and bond floors already price holdings in capital). **Pairs with** the reopen-(c) weight-denominated
   per-output fee-floor: the floor prices the fee-flow regime, D3 prices the
   concentration regime — each closes the regime the other cannot (§12.5).
   **Charter: `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.8** — the round must
