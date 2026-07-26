@@ -69,8 +69,18 @@ sustainability is unaffected by the recalibration.
   it feeds. **Reopen/land** as a consensus work item before genesis freeze
   (the composite-key miss tally per `ARCHIVAL_CONSENSUS_STATE.md`; §5's
   escalate-on-failure alternative was rejected — do not re-introduce a
-  predictable recheck). Target: **V3.0** (pre-genesis; gates honest-liveness
-  correctness AND the Round-2 stressnet).
+  predictable recheck). **⚠️ JOINT TUNING — do not pin `m`/`n` against honest
+  false-slash alone.** The gate-4 **grace window** and `m`/`n` are one design
+  surface (`slash_prob(q, m, n)` is the shared function), and reopen (d) —
+  **FIRED** by the A5/W10 arm (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6)
+  — needs the same parameters tuned so the proxy-deterrence crossover
+  `q* ≈ 0.088–0.26` is *reachable*. Pinning for false-slash alone immediately
+  invalidates its own work. One round, both objectives (false-slash ≤ target
+  **and** `q*` reachable at an implementable grace), with A5's crossover surface
+  (`shekyl-economics-sim::proxy`) as input; if no `(grace, m, n)` satisfies both,
+  that infeasibility promotes the **PoRep** branch of reopen (d). Target:
+  **V3.0** (pre-genesis; gates honest-liveness correctness AND the Round-2
+  stressnet).
 
 - **D3 — archival-reward per-bond `curve_milli` cap is dodgeable at no bond
   cost** (added 2026-07-25; surfaced by A4/W9,
