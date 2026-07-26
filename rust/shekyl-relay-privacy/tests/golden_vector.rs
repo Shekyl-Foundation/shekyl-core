@@ -195,7 +195,7 @@ fn epoch_sequence() {
 fn derived_parameters() {
     let p = DandelionParams::inherited();
     assert!((p.expected_stem_length() - 5.0).abs() < 1e-12);
-    assert_eq!(p.average_embargo_secs(), 17);
+    assert_eq!(p.closed_form_embargo_secs(), 17);
     assert_eq!(p.stem_count(), 2);
     assert_eq!(DandelionParams::INHERITED_EMBARGO_SECS, 39);
 }

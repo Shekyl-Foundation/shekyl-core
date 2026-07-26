@@ -138,8 +138,10 @@ pub use geometric::GeometricTable;
 pub use params::{DandelionParams, StemGraph, EMBARGO_FULL_TRAVEL_PROBABILITY};
 pub use poisson::PoissonTable;
 pub use rng::{bernoulli, bounded_uniform, RelayRng, SplitMix64};
+#[allow(deprecated)]
+pub use schedule::EmbargoDistribution;
 pub use schedule::{
-    EmbargoDistribution, EmbargoTimer, Epoch, EpochScheduler, FluffScheduler, Millis, NoiseCadence,
-    PeerDirection,
+    DelayFamily, EmbargoTimer, Epoch, EpochScheduler, FluffScheduler, Millis, NoiseCadence,
+    PeerDirection, DEFAULT_EMBARGO_TICK_MILLIS,
 };
 pub use stem_map::{ConnectionId, StemMap};

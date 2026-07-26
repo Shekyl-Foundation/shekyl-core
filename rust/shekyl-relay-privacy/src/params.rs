@@ -166,7 +166,8 @@ impl DandelionParams {
     ///
     /// Deliberately *not* a field of [`DandelionParams`] — it is not an input,
     /// it is an output that the inherited code froze by hand. Compare it with
-    /// [`Self::average_embargo_secs`].
+    /// [`Self::closed_form_embargo_secs`] (diagnosis) and
+    /// [`crate::schedule::EmbargoTimer::adopted`] (the production path).
     pub const INHERITED_EMBARGO_SECS: u32 = 39;
 
     /// Expected stem length `k`, the reciprocal of the fluff probability.
@@ -185,8 +186,7 @@ impl DandelionParams {
         100.0 / f64::from(self.fluff_probability_pct)
     }
 
-    /// Average embargo timeout `Tbase`, derived from the paper's appendix B.5
-    /// formula:
+    /// Paper appendix B.5 closed-form `Tbase` — **diagnosis only**.
     ///
     /// ```text
     /// Tbase = (-k * (k - 1) * hop) / (2 * ln(1 - ep))
@@ -194,12 +194,21 @@ impl DandelionParams {
     ///
     /// with `k` the expected stem length, `hop` the per-node traversal time,
     /// and `1 - ep` = [`EMBARGO_FULL_TRAVEL_PROBABILITY`]. Rounded up to whole
-    /// seconds, matching the granularity the timer actually has.
+    /// seconds.
     ///
-    /// Note the logarithm is **natural**. Substituting `log10` here is what
-    /// reproduces the inherited 39 s — see [`reconciles_under_log10`].
+    /// This is **not** the embargo this crate recommends shipping. The closed
+    /// form under-provisions (Finding 3): it substitutes `E[K]` into an
+    /// expression in `K(K-1)`, omits the fluff-return term (RD-1), and lets the
+    /// origin fluff (pre-RD-4). The production path is
+    /// [`crate::schedule::EmbargoTimer::adopted`] /
+    /// [`crate::derive::derive_embargo`].
+    ///
+    /// Kept so the F-1 log-base defect and the F-3 under-provisioning finding
+    /// stay executable. Note the logarithm is **natural**. Substituting
+    /// `log10` is what reproduces the inherited 39 s — see
+    /// [`reconciles_under_log10`].
     #[must_use]
-    pub fn average_embargo_secs(&self) -> u32 {
+    pub fn closed_form_embargo_secs(&self) -> u32 {
         let k = self.expected_stem_length();
         let hop = f64::from(self.time_between_hop_ms) / 1000.0;
         let secs = (-k * (k - 1.0) * hop) / (2.0 * EMBARGO_FULL_TRAVEL_PROBABILITY.ln());
@@ -218,21 +227,29 @@ impl DandelionParams {
         }
     }
 
+    /// Historical name for [`Self::closed_form_embargo_secs`].
+    #[deprecated(note = "closed form is diagnosis-only; use EmbargoTimer::adopted for production")]
+    #[must_use]
+    pub fn average_embargo_secs(&self) -> u32 {
+        self.closed_form_embargo_secs()
+    }
+
     /// Number of outbound peers carrying stem traffic this epoch.
     #[must_use]
     pub const fn stem_count(&self) -> usize {
         self.graph.stem_count()
     }
 
-    /// How far the inherited hard-coded embargo departs from this parameter
-    /// set's own derivation, as a ratio. `1.0` means they agree.
+    /// How far the inherited hard-coded embargo departs from the paper closed
+    /// form, as a ratio. `1.0` means they agree. Diagnosis only — see
+    /// [`Self::closed_form_embargo_secs`].
     #[must_use]
     pub fn inherited_embargo_ratio(&self) -> f64 {
-        let derived = self.average_embargo_secs();
-        if derived == 0 {
+        let closed = self.closed_form_embargo_secs();
+        if closed == 0 {
             return f64::INFINITY;
         }
-        f64::from(Self::INHERITED_EMBARGO_SECS) / f64::from(derived)
+        f64::from(Self::INHERITED_EMBARGO_SECS) / f64::from(closed)
     }
 }
 
@@ -298,10 +315,10 @@ mod tests {
         // The stated inputs: k = 1/0.20 = 5, hop = 175 ms, ep = 0.10.
         assert!((p.expected_stem_length() - 5.0).abs() < 1e-12);
 
-        // What the paper's formula actually yields.
-        let derived = p.average_embargo_secs();
+        // What the paper's formula actually yields (diagnosis, not production).
+        let closed = p.closed_form_embargo_secs();
         assert_eq!(
-            derived, 17,
+            closed, 17,
             "paper formula (natural log) over the inherited inputs"
         );
 
@@ -312,7 +329,7 @@ mod tests {
         let ratio = p.inherited_embargo_ratio();
         assert!(
             (2.2..2.4).contains(&ratio),
-            "inherited/derived embargo ratio = {ratio}"
+            "inherited/closed-form embargo ratio = {ratio}"
         );
     }
 
@@ -334,9 +351,9 @@ mod tests {
         // embargo (the k(k-1) term). This is the coupling the inherited
         // `#define` layout hid: the two constants cannot be tuned separately.
         let mut p = DandelionParams::inherited();
-        let base = p.average_embargo_secs();
+        let base = p.closed_form_embargo_secs();
         p.fluff_probability_pct = 10;
-        let doubled_k = p.average_embargo_secs();
+        let doubled_k = p.closed_form_embargo_secs();
         assert!(
             doubled_k > base * 3,
             "k doubled: embargo went {base} -> {doubled_k}, expected >3x"
@@ -363,7 +380,7 @@ mod tests {
                     continue;
                 }
                 let hop = f64::from(hop_ms) / 1000.0;
-                let t = f64::from(p.average_embargo_secs());
+                let t = f64::from(p.closed_form_embargo_secs());
                 let probability = ((-k * (k - 1.0) * hop) / (2.0 * t)).exp();
                 assert!(
                     probability >= EMBARGO_FULL_TRAVEL_PROBABILITY,

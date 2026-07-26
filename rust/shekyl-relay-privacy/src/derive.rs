@@ -8,7 +8,7 @@
 //!
 //! # Why the closed form had to go
 //!
-//! [`crate::params::DandelionParams::average_embargo_secs`] evaluates the
+//! [`crate::params::DandelionParams::closed_form_embargo_secs`] evaluates the
 //! Dandelion++ appendix B.5 closed form. That form is
 //!
 //! ```text
@@ -385,7 +385,7 @@ mod tests {
                 fluff_probability_pct: pct,
                 ..DandelionParams::inherited()
             };
-            let closed_form_secs = params.average_embargo_secs();
+            let closed_form_secs = params.closed_form_embargo_secs();
             if closed_form_secs == 0 {
                 continue;
             }

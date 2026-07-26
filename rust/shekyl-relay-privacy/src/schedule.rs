@@ -123,32 +123,50 @@ impl EpochScheduler {
 pub struct FluffScheduler {
     inbound: DelayTable,
     outbound: DelayTable,
-    distribution: EmbargoDistribution,
+    family: DelayFamily,
     /// Peers with a batch in flight, and when it flushes.
     pending: BTreeMap<ConnectionId, Millis>,
 }
 
 /// One of the two delay tables, chosen at construction.
+///
+/// Shared by [`FluffScheduler`], [`EmbargoTimer`], and the flood instruments in
+/// [`crate::conformance`]: a single enum so nothing re-implements dual-`Option`
+/// table state.
 #[derive(Debug, Clone)]
-enum DelayTable {
+pub(crate) enum DelayTable {
     Poisson(PoissonTable),
     Geometric(GeometricTable),
 }
 
 impl DelayTable {
-    fn build(mean_quarter_secs: u32, distribution: EmbargoDistribution) -> Self {
-        match distribution {
-            EmbargoDistribution::Poisson => Self::Poisson(PoissonTable::new(mean_quarter_secs)),
-            EmbargoDistribution::Geometric => {
-                Self::Geometric(GeometricTable::new(mean_quarter_secs))
-            }
+    /// Build a table at a mean expressed in the caller's tick unit (seconds,
+    /// quarter-seconds, or derived embargo ticks — unit-agnostic).
+    pub(crate) fn build(mean_ticks: u32, family: DelayFamily) -> Self {
+        match family {
+            DelayFamily::Poisson => Self::Poisson(PoissonTable::new(mean_ticks)),
+            DelayFamily::Geometric => Self::Geometric(GeometricTable::new(mean_ticks)),
         }
     }
 
-    fn draw<R: RelayRng + ?Sized>(&self, rng: &mut R) -> u64 {
+    pub(crate) fn draw<R: RelayRng + ?Sized>(&self, rng: &mut R) -> u64 {
         match self {
             Self::Poisson(t) => t.draw(rng),
             Self::Geometric(t) => t.draw(rng),
+        }
+    }
+
+    pub(crate) fn family(&self) -> DelayFamily {
+        match self {
+            Self::Poisson(_) => DelayFamily::Poisson,
+            Self::Geometric(_) => DelayFamily::Geometric,
+        }
+    }
+
+    pub(crate) fn is_truncated(&self) -> bool {
+        match self {
+            Self::Poisson(_) => false,
+            Self::Geometric(t) => t.is_truncated(),
         }
     }
 }
@@ -183,7 +201,7 @@ impl FluffScheduler {
         Self::new(
             inherited::FLUFF_AVERAGE_IN_QUARTER_SECS,
             inherited::FLUFF_AVERAGE_OUT_QUARTER_SECS,
-            EmbargoDistribution::Poisson,
+            DelayFamily::Poisson,
         )
     }
 
@@ -194,30 +212,32 @@ impl FluffScheduler {
         Self::new(
             inherited::FLUFF_AVERAGE_IN_QUARTER_SECS,
             inherited::FLUFF_AVERAGE_OUT_QUARTER_SECS,
-            EmbargoDistribution::Geometric,
+            DelayFamily::Geometric,
         )
     }
 
     /// Construct with explicit means (both in quarter-seconds) and an explicit
-    /// distribution.
+    /// delay family.
     #[must_use]
-    pub fn new(
-        inbound_quarter_secs: u32,
-        outbound_quarter_secs: u32,
-        distribution: EmbargoDistribution,
-    ) -> Self {
+    pub fn new(inbound_quarter_secs: u32, outbound_quarter_secs: u32, family: DelayFamily) -> Self {
         Self {
-            inbound: DelayTable::build(inbound_quarter_secs, distribution),
-            outbound: DelayTable::build(outbound_quarter_secs, distribution),
-            distribution,
+            inbound: DelayTable::build(inbound_quarter_secs, family),
+            outbound: DelayTable::build(outbound_quarter_secs, family),
+            family,
             pending: BTreeMap::new(),
         }
     }
 
-    /// Distribution in force.
+    /// Delay family in force.
     #[must_use]
-    pub const fn distribution(&self) -> EmbargoDistribution {
-        self.distribution
+    pub const fn family(&self) -> DelayFamily {
+        self.family
+    }
+
+    /// Alias retained for call sites that still say "distribution".
+    #[must_use]
+    pub const fn distribution(&self) -> DelayFamily {
+        self.family
     }
 
     /// Queue a peer for fluffing at `now`, returning the earliest pending
@@ -297,20 +317,17 @@ impl FluffScheduler {
 /// inherited daemon draws) versus `Geometric` (the memoryless family the
 /// derivation assumes).
 ///
-/// Despite the name, this is the **shared** delay-shape selector for *all* the
-/// relay delays this crate models — the stem embargo (its headline use, hence
-/// the name), and also the fluff delay ([`FluffScheduler`]) and the flood-return
-/// simulation ([`crate::conformance::simulate_fluff_return`]). It carries no
-/// embargo-specific semantics; it is purely the choice of distribution family,
-/// applied wherever a delay is drawn.
+/// Shared by *all* the relay delays this crate models: the stem embargo, the
+/// fluff delay ([`FluffScheduler`]), and the flood-return instruments in
+/// [`crate::conformance`]. Pure distribution-family choice; no embargo-specific
+/// semantics.
 ///
 /// For the embargo it is not a tuning knob but a correctness question: the
 /// Dandelion++ embargo formula is derived from an exponential survival function,
 /// while the inherited daemon draws from a Poisson. See [`crate::geometric`] for
-/// the full argument and `tests/propagation_measurement.rs` for the measured
-/// consequence.
+/// the full argument and the measurement tests for the measured consequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EmbargoDistribution {
+pub enum DelayFamily {
     /// What the inherited C++ does: `crypto::random_poisson_seconds`. Tightly
     /// clustered around the mean (`CV = 1/√λ`).
     Poisson,
@@ -319,21 +336,26 @@ pub enum EmbargoDistribution {
     Geometric,
 }
 
+/// Historical name for [`DelayFamily`]. Prefer the new name at new call sites.
+#[deprecated(note = "renamed to DelayFamily — shared by all relay delays, not embargo-only")]
+pub type EmbargoDistribution = DelayFamily;
+
 /// The stem embargo: how long a node waits for a stemmed transaction to come
 /// back to it as fluff before giving up and fluffing it itself.
 ///
-/// This is the black-hole backstop. Its mean is [`DandelionParams::
-/// average_embargo_secs`] — **derived**, not the inherited 39 s constant — and
-/// its distribution is a deliberate choice rather than an inherited default.
-/// See [`crate::params`] for why the means differ by a factor of 2.3, and
-/// [`crate::geometric`] for why the distribution family differs at all.
+/// This is the black-hole backstop. The **adopted** configuration is
+/// [`Self::adopted`] — exact survival solve + memoryless draws at the default
+/// tick. The closed-form helpers ([`Self::closed_form_poisson`],
+/// [`Self::paper_faithful`]) exist only as measurement baselines against the
+/// paper formula; they are not what this crate recommends shipping.
+///
+/// See [`crate::derive`] for the exact equation and [`crate::geometric`] for
+/// why the distribution family differs from the inherited Poisson.
 #[derive(Debug, Clone)]
 pub struct EmbargoTimer {
-    poisson: Option<PoissonTable>,
-    geometric: Option<GeometricTable>,
+    table: DelayTable,
     mean_secs: u32,
     tick_millis: u64,
-    distribution: EmbargoDistribution,
 }
 
 /// Default tick for the memoryless embargo: a quarter second.
@@ -348,14 +370,45 @@ pub struct EmbargoTimer {
 pub const DEFAULT_EMBARGO_TICK_MILLIS: u64 = 250;
 
 impl EmbargoTimer {
-    /// Build the embargo draw for a parameter set, using the derived mean and
-    /// the inherited Poisson distribution.
+    /// The configuration this crate recommends shipping: exact discrete survival
+    /// solve ([`crate::derive_embargo`]) at [`DEFAULT_EMBARGO_TICK_MILLIS`],
+    /// memoryless draws.
     ///
-    /// This isolates one variable: same distribution as the daemon ships, mean
-    /// corrected to what the formula yields.
+    /// This is the single authoritative production path. Prefer it over
+    /// [`Self::closed_form_poisson`] / [`Self::paper_faithful`], which evaluate
+    /// the paper's under-provisioning closed form for measurement only.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the target full-travel probability is unreachable (it is not
+    /// for any representable target strictly below 1).
+    #[must_use]
+    pub fn adopted(params: &DandelionParams) -> Self {
+        let d = crate::derive::derive_embargo(
+            params,
+            DEFAULT_EMBARGO_TICK_MILLIS,
+            crate::params::EMBARGO_FULL_TRAVEL_PROBABILITY,
+        )
+        .expect("full-travel target reachable below 1");
+        Self::geometric_from_ticks(d.mean_ticks, d.tick_millis)
+    }
+
+    /// Closed-form mean + Poisson — measurement isolation only.
+    ///
+    /// Same distribution family as the daemon ships, mean corrected to what the
+    /// paper formula yields. **Not** the adopted path; see [`Self::adopted`].
+    #[must_use]
+    pub fn closed_form_poisson(params: &DandelionParams) -> Self {
+        Self::new(params.closed_form_embargo_secs(), DelayFamily::Poisson)
+    }
+
+    /// Historical name for [`Self::closed_form_poisson`].
+    #[deprecated(
+        note = "use closed_form_poisson for the diagnosis path, or adopted for production"
+    )]
     #[must_use]
     pub fn derived(params: &DandelionParams) -> Self {
-        Self::new(params.average_embargo_secs(), EmbargoDistribution::Poisson)
+        Self::closed_form_poisson(params)
     }
 
     /// Build exactly what the daemon ships: 39 s, Poisson.
@@ -366,21 +419,21 @@ impl EmbargoTimer {
     pub fn inherited() -> Self {
         Self::new(
             DandelionParams::INHERITED_EMBARGO_SECS,
-            EmbargoDistribution::Poisson,
+            DelayFamily::Poisson,
         )
     }
 
-    /// Build the configuration the paper's derivation actually describes:
-    /// derived mean, memoryless delay.
+    /// Closed-form mean + memoryless delay — measurement isolation only.
+    ///
+    /// Isolates the distribution fix at the paper's plug-in mean. The adopted
+    /// mean is longer ([`Self::adopted`]); this row exists so a table can
+    /// separate "distribution" from "mean" without claiming either is shipped.
     #[must_use]
     pub fn paper_faithful(params: &DandelionParams) -> Self {
-        Self::new(
-            params.average_embargo_secs(),
-            EmbargoDistribution::Geometric,
-        )
+        Self::new(params.closed_form_embargo_secs(), DelayFamily::Geometric)
     }
 
-    /// Build at an explicit mean and distribution, at the default tick.
+    /// Build at an explicit mean and delay family, at the default tick.
     ///
     /// Poisson always ticks in whole seconds, because that is what the
     /// inherited `crypto::random_poisson_seconds` does and the point of this
@@ -393,22 +446,20 @@ impl EmbargoTimer {
     /// transaction immediately, which silently disables the stem phase. That
     /// must fail loudly rather than ship as "very fast relay".
     #[must_use]
-    pub fn new(mean_secs: u32, distribution: EmbargoDistribution) -> Self {
-        match distribution {
-            EmbargoDistribution::Poisson => {
+    pub fn new(mean_secs: u32, family: DelayFamily) -> Self {
+        match family {
+            DelayFamily::Poisson => {
                 assert!(
                     mean_secs > 0,
                     "embargo mean must be non-zero — a zero embargo disables the stem phase"
                 );
                 Self {
-                    poisson: Some(PoissonTable::new(mean_secs)),
-                    geometric: None,
+                    table: DelayTable::build(mean_secs, DelayFamily::Poisson),
                     mean_secs,
                     tick_millis: 1_000,
-                    distribution,
                 }
             }
-            EmbargoDistribution::Geometric => {
+            DelayFamily::Geometric => {
                 Self::geometric_with_tick(mean_secs, DEFAULT_EMBARGO_TICK_MILLIS)
             }
         }
@@ -421,8 +472,8 @@ impl EmbargoTimer {
     /// systematically over-reports early firing: at a one-second tick against
     /// a sub-second stem, roughly a fifth of the measured preemption is
     /// rounding rather than mechanism. Shrinking the tick converges on the
-    /// continuous result. `tests/propagation_measurement.rs` measures the
-    /// convergence rather than asserting it.
+    /// continuous result. The measurement tests measure the convergence rather
+    /// than asserting it.
     ///
     /// # Panics
     ///
@@ -446,11 +497,9 @@ impl EmbargoTimer {
             "embargo mean of {mean_secs}s rounds to zero at a {tick_millis}ms tick"
         );
         Self {
-            poisson: None,
-            geometric: Some(GeometricTable::new(mean_ticks)),
+            table: DelayTable::build(mean_ticks, DelayFamily::Geometric),
             mean_secs,
             tick_millis,
-            distribution: EmbargoDistribution::Geometric,
         }
     }
 
@@ -472,11 +521,9 @@ impl EmbargoTimer {
         let mean_secs = u32::try_from((u64::from(mean_ticks) * tick_millis).div_ceil(1_000))
             .unwrap_or(u32::MAX);
         Self {
-            poisson: None,
-            geometric: Some(GeometricTable::new(mean_ticks)),
+            table: DelayTable::build(mean_ticks, DelayFamily::Geometric),
             mean_secs,
             tick_millis,
-            distribution: EmbargoDistribution::Geometric,
         }
     }
 
@@ -492,28 +539,28 @@ impl EmbargoTimer {
         self.tick_millis
     }
 
-    /// Distribution in force.
+    /// Delay family in force.
     #[must_use]
-    pub const fn distribution(&self) -> EmbargoDistribution {
-        self.distribution
+    pub fn family(&self) -> DelayFamily {
+        self.table.family()
+    }
+
+    /// Alias retained for call sites that still say "distribution".
+    #[must_use]
+    pub fn distribution(&self) -> DelayFamily {
+        self.family()
     }
 
     /// True if the underlying table clipped its upper tail — see
     /// [`GeometricTable::is_truncated`]. Always false for Poisson.
     #[must_use]
     pub fn is_truncated(&self) -> bool {
-        self.geometric
-            .as_ref()
-            .is_some_and(GeometricTable::is_truncated)
+        self.table.is_truncated()
     }
 
     /// Draw an embargo deadline relative to `now`.
     pub fn deadline<R: RelayRng + ?Sized>(&self, now: Millis, rng: &mut R) -> Millis {
-        let ticks = match (&self.poisson, &self.geometric) {
-            (Some(t), _) => t.draw(rng),
-            (_, Some(t)) => t.draw(rng),
-            _ => unreachable!("constructor always populates exactly one table"),
-        };
+        let ticks = self.table.draw(rng);
         now.saturating_add(ticks.saturating_mul(self.tick_millis))
     }
 }
@@ -686,26 +733,43 @@ mod tests {
     }
 
     #[test]
-    fn embargo_mean_matches_its_parameter() {
-        let derived = EmbargoTimer::derived(&DandelionParams::inherited());
-        assert_eq!(derived.mean_secs(), 17);
+    fn closed_form_poisson_mean_matches_its_parameter() {
+        let closed = EmbargoTimer::closed_form_poisson(&DandelionParams::inherited());
+        assert_eq!(closed.mean_secs(), 17);
         assert_eq!(EmbargoTimer::inherited().mean_secs(), 39);
 
         let mut rng = SplitMix64::new(8);
         let n = 20_000_u64;
-        let total: u64 = (0..n).map(|_| derived.deadline(0, &mut rng)).sum();
+        let total: u64 = (0..n).map(|_| closed.deadline(0, &mut rng)).sum();
         let mean_secs = total / n / 1_000;
         assert!((16..=18).contains(&mean_secs), "embargo mean {mean_secs}s");
     }
 
     #[test]
+    fn adopted_embargo_is_exact_solve_memoryless() {
+        let params = DandelionParams::inherited();
+        let adopted = EmbargoTimer::adopted(&params);
+        assert_eq!(adopted.family(), DelayFamily::Geometric);
+        assert_eq!(adopted.tick_millis(), DEFAULT_EMBARGO_TICK_MILLIS);
+        // Exact solve under-provisions the closed form; adopted mean is the
+        // longer one (RD-1/RD-4 corrections push it past 100 s).
+        assert!(
+            adopted.mean_secs() > params.closed_form_embargo_secs(),
+            "adopted {}s should exceed closed form {}s",
+            adopted.mean_secs(),
+            params.closed_form_embargo_secs()
+        );
+        assert!(!adopted.is_truncated());
+    }
+
+    #[test]
     fn paper_faithful_embargo_shares_the_mean_but_not_the_spread() {
         let params = DandelionParams::inherited();
-        let poisson = EmbargoTimer::derived(&params);
+        let poisson = EmbargoTimer::closed_form_poisson(&params);
         let geometric = EmbargoTimer::paper_faithful(&params);
         assert_eq!(poisson.mean_secs(), geometric.mean_secs());
-        assert_eq!(poisson.distribution(), EmbargoDistribution::Poisson);
-        assert_eq!(geometric.distribution(), EmbargoDistribution::Geometric);
+        assert_eq!(poisson.family(), DelayFamily::Poisson);
+        assert_eq!(geometric.family(), DelayFamily::Geometric);
 
         // Only the geometric can produce a near-immediate embargo, which is
         // exactly the behaviour the derivation assumes is available.
@@ -730,7 +794,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "disables the stem phase")]
     fn zero_embargo_is_rejected() {
-        let timer = EmbargoTimer::new(0, EmbargoDistribution::Poisson);
+        let timer = EmbargoTimer::new(0, DelayFamily::Poisson);
         assert_eq!(
             timer.mean_secs(),
             0,
