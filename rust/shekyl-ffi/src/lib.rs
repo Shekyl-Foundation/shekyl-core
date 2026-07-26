@@ -107,6 +107,11 @@ pub mod archival_ffi;
 // General CT cleartext-balance verification FFI (`GENESIS_TX_WIRE_FORMAT.md` §2.3).
 pub mod ct_balance_ffi;
 
+// Dandelion++ stem-map FFI — RP-2a (`DAEMON_RELAY_PRIVACY.md` §16). The opaque
+// handle the C++ `net::dandelionpp::connection_map` forwards to once its logic
+// moves to `shekyl-relay-privacy`'s `StemMap`.
+pub mod dandelionpp_ffi;
+
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
 // `shekyl_log_install_tracing_forwarder`, …) are compiled into

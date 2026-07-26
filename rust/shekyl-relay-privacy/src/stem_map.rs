@@ -48,6 +48,32 @@ impl ConnectionId {
     }
 }
 
+/// The outcome of [`StemMap::update`] — whether the live stem set changed.
+///
+/// This is a *specific* predicate: a stem slot was dropped/emptied, or the map
+/// grew to fill under-capacity. It is **not** "the connection set differed."
+/// `levin_notify` gates its channel **re-arm** on exactly this signal
+/// (DAEMON_RELAY_PRIVACY.md §16.1), so the distinction is load-bearing, and the
+/// `#[must_use]` makes a dropped re-arm signal a compile-time warning rather
+/// than a silent one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub enum StemSetChange {
+    /// No live stem changed; the caller need not re-point channels.
+    Unchanged,
+    /// The live stem set changed; the caller must re-point channels.
+    Changed,
+}
+
+impl StemSetChange {
+    /// Whether the caller must re-arm downstream channels — the C++
+    /// `connection_map::update` bool, carried faithfully to the FFI boundary.
+    #[must_use]
+    pub fn needs_rearm(self) -> bool {
+        matches!(self, Self::Changed)
+    }
+}
+
 /// Maps transaction sources to stem peers for one Dandelion++ epoch.
 ///
 /// The map is rebuilt from scratch at each epoch boundary (that is the point
@@ -116,14 +142,14 @@ impl StemMap {
     ///
     /// Slots whose peer has gone are emptied and backfilled from peers not
     /// already in use; empty stem slots are filled if candidates remain.
-    /// Returns `true` if the set of live stem peers changed, which is the
-    /// signal the caller uses to decide whether downstream channels need
-    /// re-pointing.
+    /// Returns [`StemSetChange::Changed`] if the set of live stem peers changed,
+    /// which is the signal the caller uses to decide whether downstream channels
+    /// need re-pointing.
     pub fn update<R: RelayRng + ?Sized>(
         &mut self,
         current: Vec<ConnectionId>,
         rng: &mut R,
-    ) -> bool {
+    ) -> StemSetChange {
         // Candidates not already serving as a stem.
         let mut candidates: Vec<ConnectionId> = current;
         candidates.sort_unstable();
@@ -153,7 +179,7 @@ impl StemMap {
 
         if !replaced && self.out.len() == self.usage.len() {
             // Every slot is live and the map is at full width: nothing to do.
-            return false;
+            return StemSetChange::Unchanged;
         }
 
         let existing_outs = self.out.len();
@@ -177,7 +203,25 @@ impl StemMap {
             }
         }
 
-        replaced || existing_outs < self.out.len()
+        if replaced || existing_outs < self.out.len() {
+            StemSetChange::Changed
+        } else {
+            StemSetChange::Unchanged
+        }
+    }
+
+    /// The stem slots in index order, `None` for an emptied slot.
+    ///
+    /// This is the ordering the daemon's noise-channel iteration indexes **by
+    /// position** (`levin_notify` computes `i = id - begin()` and posts to
+    /// `channels[i]`), so the FFI snapshot must preserve it, nils included —
+    /// see DAEMON_RELAY_PRIVACY.md §16.1. Length is the live-or-emptied slot
+    /// count, which can be below [`StemMap::width`] when the map is
+    /// under-filled; it mirrors the C++ `connection_map` iterator span, not
+    /// `size()`.
+    #[must_use]
+    pub fn slots(&self) -> &[Option<ConnectionId>] {
+        &self.out
     }
 
     /// Number of stem slots currently backed by a live peer.
@@ -382,7 +426,11 @@ mod tests {
             .filter(|p| !live.contains(p))
             .copied()
             .collect();
-        assert!(m.update(survivors, &mut rng), "update should report change");
+        assert_eq!(
+            m.update(survivors, &mut rng),
+            StemSetChange::Changed,
+            "update should report change"
+        );
         assert_eq!(m.live_stems(), 2, "slots backfilled from survivors");
         for slot in m.out.iter().flatten() {
             assert!(!live.contains(slot), "a dead peer was reused");
@@ -405,7 +453,7 @@ mod tests {
 
         // Call 1: drop one live stem, offering only the other — no candidate to
         // backfill, so a slot goes empty and stays empty.
-        m.update(vec![live[1]], &mut rng);
+        assert_eq!(m.update(vec![live[1]], &mut rng), StemSetChange::Changed);
         assert_eq!(
             m.live_stems(),
             1,
@@ -414,8 +462,9 @@ mod tests {
 
         // Call 2: the surviving stem stays and a fresh candidate appears. The
         // empty slot must be backfilled — and the change must be reported.
-        assert!(
+        assert_eq!(
             m.update(vec![live[1], spare], &mut rng),
+            StemSetChange::Changed,
             "backfilling a previously-emptied slot is a reportable change"
         );
         assert_eq!(
@@ -430,7 +479,7 @@ mod tests {
         let mut rng = SplitMix64::new(9);
         let peers = ids(5);
         let mut m = StemMap::new(peers.clone(), 2, &mut rng);
-        assert!(!m.update(peers, &mut rng));
+        assert_eq!(m.update(peers, &mut rng), StemSetChange::Unchanged);
     }
 
     #[test]
@@ -441,7 +490,7 @@ mod tests {
         let source = Some(peers[0]);
         assert!(m.stem_for(source, &mut rng).is_some());
 
-        assert!(m.update(Vec::new(), &mut rng));
+        assert_eq!(m.update(Vec::new(), &mut rng), StemSetChange::Changed);
         assert_eq!(m.live_stems(), 0);
         assert_eq!(
             m.stem_for(source, &mut rng),
@@ -468,7 +517,7 @@ mod tests {
         let victim = m.out[0].expect("slot 0 live");
         let survivors: Vec<ConnectionId> =
             peers.iter().filter(|p| **p != victim).copied().collect();
-        m.update(survivors, &mut rng);
+        assert_eq!(m.update(survivors, &mut rng), StemSetChange::Changed);
         for p in &peers {
             let _ = m.stem_for(Some(*p), &mut rng);
         }
@@ -484,7 +533,7 @@ mod tests {
         let mut rng = SplitMix64::new(12);
         let peers = ids(3);
         let mut m = StemMap::new(peers.clone(), 3, &mut rng);
-        m.update(peers, &mut rng);
+        assert_eq!(m.update(peers, &mut rng), StemSetChange::Unchanged);
         let live: Vec<ConnectionId> = m.out.iter().flatten().copied().collect();
         let mut sorted = live.clone();
         sorted.sort_unstable();
