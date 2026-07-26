@@ -5776,10 +5776,12 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
     // verify preconditions (per-shard cooldown + slashes settled through the
     // shard's last-served anchor) guarantee every epoch through the anchor
     // resolved on still-bonded collateral, and the unserved tail past it is
-    // exit-forgiven at the connect, capped at one cooldown ("stop serving,
-    // hold, never drop" keeps being slashed — the persona is pushed to
-    // actually drop). Fail loudly rather than silently no-op (the
-    // connect-fold posture).
+    // exit-forgiven at the connect, capped at one cooldown. (The parenthetical
+    // that used to sit here — "'stop serving, hold, never drop' keeps being
+    // slashed, so the persona is pushed to actually drop" — was a
+    // single-strike argument and is corrected with the sliding-window m-of-n;
+    // see the process_archival_slash_for_epoch note below.) Fail loudly rather
+    // than silently no-op (the connect-fold posture).
     if (it == shards.end())
       throw std::runtime_error("FATAL: archival slash apply for a shard the record does not hold");
     // v6 coupling is STRICT: the two per-shard arrays are index-parallel, so
@@ -5915,9 +5917,22 @@ void BlockchainLMDB::process_archival_slash_for_epoch(uint64_t block_height,
     // AND slashes settled through its last-served anchor, so every epoch a
     // serve was credited for has resolved on bonded collateral; the unserved
     // tail between the anchor and the drop connect is exit-forgiven, capped
-    // at one cooldown — a bounded, deliberately-accepted forgiveness, not an
-    // escape (the alternative, "stop serving and just hold", keeps being
-    // slashed every epoch).
+    // at one cooldown — a bounded, deliberately-accepted forgiveness.
+    //
+    // CORRECTED with the sliding-window m-of-n (2026-07-25). The clause that
+    // used to close this paragraph — "not an escape (the alternative, 'stop
+    // serving and just hold', keeps being slashed every epoch)" — was true
+    // only while consensus single-struck. It no longer is: holding without
+    // serving is now slash-free for up to m-1 observed misses, so the
+    // forgiven tail is bounded by the WINDOW, not by one cooldown. The
+    // release predicates are unchanged and anchor on the last SERVED epoch
+    // (release_cooldown.rs), so neither asks whether the window holds
+    // unresolved misses — a persona that goes dark can satisfy both and exit
+    // with full collateral inside the m-epoch grace. That is the
+    // deterrence-credible criterion of ARCHIVAL_FAILURE_CONFIRMATION_PIN.md
+    // §3.2 (criterion 4), sharpened; whether Unbond/drop must additionally
+    // clear the window is a Round-2 decision, recorded in that pin's §4.1 —
+    // NOT a gap to close by adding a gate here.
     if (bond.is_complete_tree())
     {
       MDB_cursor* seg_cur = nullptr;

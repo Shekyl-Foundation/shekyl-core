@@ -107,7 +107,7 @@ that is **simultaneously**:
 | **Tail-robust** | `m` above true p99 (or agreed quantile) single-outage baseline span |
 | **Bond-resolution acceptable** | Slash latency bounded for bond/holdings cleanup (and any metric not serve-credit-gated) |
 | **Crisis-tail robust (swan-2/W6)** | `m` above the outage **run-length** quantile measured under **induced correlated failure**, not just the normal-times marginal CDF |
-| **Deterrence-credible (swan-3/W16)** | Expected slash cost under a realistic degrade play (drop bytes, keep bond, answer what can be re-fetched) **exceeds the storage-opex savings at crisis prices** — evaluated at the pinned crisis multiplier below |
+| **Deterrence-credible (swan-3/W16)** | Expected slash cost under a realistic degrade play (drop bytes, keep bond, answer what can be re-fetched) **exceeds the storage-opex savings at crisis prices** — evaluated at the pinned crisis multiplier below. **Now includes the exit path:** the release predicates anchor on last-*served*, not last-*observed*, so a persona can `Unbond` with full collateral inside the `m`-epoch grace — §4.1.1 |
 
 **The W16 tension — crisis-tail `m` and slash deterrence pull in opposite directions.**
 The W6 fix raises `m` to ride out correlated honest outages; but every baseline a `P` may
@@ -230,6 +230,41 @@ coverage in `failure_window.rs` and the `archival_substrate_lmdb` KATs
 (`slash_scheduler_absorbs_a_single_missed_challenge`,
 `slash_scheduler_slashes_sustained_absence_at_m_of_n`,
 `failure_window_recomputes_from_reverted_state_on_pop`).
+
+#### 4.1.1 Consequence for the exit path — a Round-2 deterrence question, NOT a gap to patch
+
+Landing the window **widened the exit-forgiven tail**, and the consequence is recorded
+here rather than fixed in passing because it is criterion 4 of the §3.2 joint gate
+(deterrence-credible) made concrete.
+
+`Unbond` legality (gate-4 §4.3, `release_cooldown.rs`) rests on two predicates, both
+anchored on the record's **last-served** epoch: the release cooldown
+(`current ≥ anchor + RELEASE_COOLDOWN_EPOCHS`, 2 epochs) and slash settlement
+(`archival_last_slash_epoch ≥ anchor`). **Neither asks whether the window holds
+unresolved misses**, and the scheduler's watermark advances whether or not a slash fired.
+
+Under single-strike, a persona that went dark was slashed at the next deadline and had
+an emptied record with nothing left to release. Under the window it is slash-free for
+`m − 1` observed misses, while both release predicates are satisfied within roughly a
+cooldown of its last serve — so it can `Unbond` with **full collateral** during the
+grace. The §3.1 framing ("slow slash primarily delays bond release") assumed the bond
+was still there to release later; it is not, if the release path is open during the
+latency. The same reasoning applies to `HoldingsUpdate`-drop's per-shard tail.
+
+This is bounded, not unbounded: the persona earns no `serve_credit_bit` while dark, so
+what it gains is the storage opex saved over the grace plus its collateral back — which
+is exactly the §3.2 W16 fetch-on-demand degrade play, to be evaluated **at the pinned
+L17 ×0.25 crisis multiplier**.
+
+**Deliberately not decided here.** The candidate fix — extend the release anchor from
+last-*served* to last-*observed*, so `Unbond` must also clear the window — is a
+consensus change on the bond-post verify surface (rule 19), it needs `m` to be settled
+first, and it carries its own failure-mode cost: an honest operator who goes dark and
+then exits would be blocked from releasing collateral for the whole window. Choosing
+between them before the Round-2 CDF is exactly the pre-provisioned flexibility rule 21
+rejects. **Round-2 owns it, as part of criterion 4.** The code comments at both
+slash-scan sites in `db_lmdb.cpp` name this rather than repeating the retired
+single-strike rationale.
 
 **Round-2 re-pin is a one-file edit.** `m`/`n` live in `config/consensus_constants.json`;
 `build.rs` refuses `m = 0` and `n < m`, and a Rust const-assert pins the shipped pair to

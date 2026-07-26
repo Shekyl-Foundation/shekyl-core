@@ -1736,6 +1736,69 @@ TEST(archival_substrate_lmdb, slash_scheduler_slashes_sustained_absence_at_m_of_
   EXPECT_TRUE(db.archival_bond_good_through(p_served, slash_epoch + 1));
 }
 
+// A FULL n-wide window with passes inside it, at exactly the threshold.
+//
+// Both KATs above fire on a window shorter than n (observations start at
+// epoch 1, so the m-th miss lands before n observations exist), and both see
+// at most one pass. This one exercises the shape neither does: the serve
+// budget's early-break in the gather loop, and a window whose miss count
+// reaches m only by spanning all n observations.
+//
+// The `serve_budget` passes sit IMMEDIATELY BELOW the decision epoch, so the
+// walk-back meets every one of them before it has collected the misses that
+// make the verdict. The gather's stop rule is "more than serve_budget passes",
+// and the boundary is load-bearing: an off-by-one there (`>=` for `>`) breaks
+// out at the last tolerable pass, hands Rust a window holding a single miss,
+// and silently ABSORBS a slash that is exactly at the threshold.
+TEST(archival_substrate_lmdb, slash_scheduler_spans_a_full_window_past_the_serve_budget)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const FailureWindowParams window = failure_window_params();
+  ASSERT_GE(window.serve_budget, 1u); // else the early-break is unreachable
+
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  const crypto::hash p_id = make_hash(0x80);
+  db.put_archival_bond_value(p_id, window_kat_bond());
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+
+  // Observations are epochs 1..n; pass exactly `serve_budget` of them, the ones
+  // directly below the decision epoch n. Misses are then n - serve_budget == m,
+  // reached only by counting the full window.
+  const uint64_t decision_epoch = window.n;
+  for (uint32_t i = 1; i <= window.serve_budget; ++i)
+    db.set_archival_serve_credit_bit(p_id, 7, decision_epoch - i);
+
+  // One epoch short of the decision epoch the record must still be intact: the
+  // misses so far are m - 1.
+  append_minimal_blocks(db,
+    shekyl_archival_epoch_slash_deadline_height(decision_epoch - 1) + 2);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_TRUE(read.holds_shard(7));
+  EXPECT_EQ(db.get_total_burned(), 0u);
+
+  append_minimal_blocks(db,
+    shekyl_archival_epoch_slash_deadline_height(decision_epoch) + 2 - db.height());
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_FALSE(read.holds_shard(7));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor - floor);
+  EXPECT_EQ(db.get_total_burned(), floor);
+  ASSERT_EQ(read.bad_intervals.size(), 1u);
+  EXPECT_EQ(read.bad_intervals[0].start_epoch, decision_epoch);
+}
+
 // Reorg safety. The window is never persisted — it is recomputed from the
 // serve_credit_bit ledger and the bond record on every evaluation — so the
 // property to prove is that the decision FOLLOWS those reverted inputs rather

@@ -100,7 +100,20 @@
   file. The consensus decision is held equal to the sim policy that
   measured the pin by an exhaustive equivalence sweep, and
   `archival_substrate_lmdb` covers absorb / sustained-slash /
-  pop-recompute at the scheduler's production site.
+  full-window-slide / pop-recompute at the scheduler's production site.
+  **Consequence recorded, not patched:** the window widens the
+  exit-forgiven tail from one cooldown to ~`m` epochs, and the
+  `Unbond` / `HoldingsUpdate`-drop release predicates anchor on the last
+  *served* epoch — so a persona that goes dark can exit with full
+  collateral inside the grace, where single-strike would have slashed it
+  at the next deadline. That is the pin's §3.2 deterrence-credible
+  criterion sharpened, it needs `m` settled first, and the candidate fix
+  (anchor on last-*observed*) costs an honest dark-then-exit operator a
+  full window of locked collateral — so it is routed to the Round-2
+  stressnet (`FOLLOWUPS.md` V3.1) rather than pre-provisioned (rule 21).
+  Two `db_lmdb.cpp` comments that justified the exit-forgiven tail with
+  "'stop serving and just hold' keeps being slashed every epoch" were
+  single-strike arguments and are corrected in place.
 
 - **scanner: KEM-ciphertext extra packing — vout ≥ 1 of multi-output
   txs was silently unscannable** (`fix/kem-extra-packing`; closes the

@@ -5267,6 +5267,40 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1 — audit response and stressnet gates
 
+- **Round-2 stressnet: re-pin archival `m`/`n`, and decide whether the
+  bond-release path must clear the failure window** (surfaced 2026-07-25
+  with the sliding-window m-of-n landing;
+  `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §3.2 joint gate + §4.1.1). Two
+  coupled questions, both owned by the stressnet, both blocked on the
+  measured outage-duration CDF that only it produces.
+  **(a) The numerics.** `m = 11` / `n = 13` are Round-1 provisional
+  (`config/consensus_constants.json`; shape genesis-frozen, numerics
+  not). The CDF must admit an `m` satisfying all four §3.2 criteria
+  *simultaneously* — tail-robust, bond-resolution acceptable,
+  crisis-tail robust under **induced correlated failure** (run-lengths,
+  not the marginal single-`P` CDF), and deterrence-credible at the
+  pinned L17 ×0.25 crisis multiplier. If no `m` satisfies all four, the
+  §3.2 escape (a liveness signal decoupled from `m`) *becomes the
+  design*, and it inherits the `H_fire`-class beacon-unpredictability
+  requirement — a predictable liveness probe rebuilds the §5 escalation
+  dodge surface under a new name.
+  **(b) The exit path, sharpened by the landing.** `Unbond` /
+  `HoldingsUpdate`-drop legality anchors on the last **served** epoch
+  (`release_cooldown.rs`: cooldown elapsed + slashes settled through the
+  anchor); neither predicate asks whether the window holds unresolved
+  misses, and the slash watermark advances whether or not a slash fired.
+  So a persona that goes dark satisfies both within ~one cooldown of its
+  last serve and can exit with **full collateral** during the `m`-epoch
+  grace — where single-strike would have slashed it at the next
+  deadline. Bounded (it earns nothing while dark), but it is exactly the
+  W16 fetch-on-demand degrade play and must be priced at crisis prices,
+  not normal-times. The candidate fix — extend the release anchor from
+  last-*served* to last-*observed* — is a bond-post verify-surface
+  change (rule 19), needs `m` settled first, and costs an honest
+  operator who goes dark then exits a full window of locked collateral
+  (rule 82). **Do not pre-provision either way** (rule 21): decide with
+  the CDF in hand. Target: **V3.1** (Round-2 stressnet).
+
 - **Raw-import archival/burn bookkeeping parity** (surfaced 2026-07-09,
   F-B1a remediation). The non-verifying import path
   (`blockchain_import.cpp` direct `db.add_block`) bypasses
