@@ -56,7 +56,7 @@ sustainability is unaffected by the recalibration.
   window and `m`/`n` are one design surface (`slash_prob(q, m, n)` is the shared
   function), and **reopen (d)** — FIRED by the A5/W10 arm
   (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6) — needs the same parameters
-  to keep the proxy-deterrence crossover `q* ≈ 0.089–0.264` reachable. Pinning for
+  to keep the proxy-deterrence crossover `q* ≈ 0.098–0.278` reachable. Pinning for
   false-slash alone immediately invalidates (d). One round, both objectives; if no
   `(grace, m, n)` satisfies both, that infeasibility promotes the **PoRep** branch
   of (d). Input: `shekyl-economics-sim::proxy` (which now **deps**

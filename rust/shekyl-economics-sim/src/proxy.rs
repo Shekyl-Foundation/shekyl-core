@@ -32,6 +32,8 @@
 //! *sustained* re-fetch failure (`P(≥m misses in n)`), which makes the deterrent
 //! **weaker**, not stronger — the free-rider is more viable, not less.
 
+use std::sync::OnceLock;
+
 use shekyl_archival_retention::{
     failure_window_slashable, BaselineObservation, ARCHIVAL_BOND_FLOOR_ATOMIC,
     CHALLENGES_PER_EPOCH, FAILURE_WINDOW_M, FAILURE_WINDOW_N, MAX_HOLDINGS_SHARDS,
@@ -99,6 +101,7 @@ pub fn proxy_refetch_cost_per_epoch(fetch_fiat_per_byte: f64) -> f64 {
     responses * RESPONSE_BYTES * fetch_fiat_per_byte
 }
 
+#[cfg(test)]
 /// Per-epoch slash probability under the **shipped consensus predicate** — not a
 /// re-expression of it (DQ-2G dep-don't-mirror).
 ///
@@ -114,6 +117,11 @@ pub fn proxy_refetch_cost_per_epoch(fetch_fiat_per_byte: f64) -> f64 {
 /// exposure by ~18 % (the shipped predicate is ~0.85× the naive binomial across
 /// the whole crossover band). Lower exposure ⇒ weaker deterrent ⇒ the free-rider
 /// is *more* viable, so this correction moves against the comfortable direction.
+///
+/// **Demoted to a test oracle** by the absorption-DP fix: the live model is
+/// [`expected_slash_cost_per_epoch`], and this independent construction now
+/// *checks* it (`dp_one_step_hazard_matches_enumeration`) — two constructions
+/// guarding each other, the pattern the hoist's parity test uses.
 ///
 /// `m`/`n` are accepted for call-site clarity but the predicate reads the
 /// consensus constants itself; the assert pins that they agree.
@@ -148,38 +156,67 @@ pub fn slash_prob_per_epoch(q: f64, m: u32, n: u32) -> f64 {
 /// The proxy's total cost per epoch, fiat: re-fetch bandwidth + the L14 slash
 /// exposure.
 ///
-/// **Labelled approximation (one-way safe *today*, not by construction).** The
-/// caller sums this per-epoch exposure over the horizon, which treats a slash as
-/// **repeatable**. It is not — a slashed `(P, shard)` is an **absorbing state**
-/// (the open bad interval bars a second forfeiture of the same bond), so
-/// `Σ hazard ≥ P(at least one slash)` and this **overstates the deterrent**.
-/// Overstated deterrence biases toward PASS and the verdict is FAIL, so the
-/// result is *a fortiori* robust — but the label matters because this arm now
-/// **re-prices automatically** when the Round-2 re-pin moves `m`/`n`, and
-/// direction-safety must be re-checked there rather than assumed to carry.
-///
-/// **Scope matching (load-bearing).** The margin compares a *full holding*
-/// (`MAX_HOLDINGS_SHARDS`) proxied vs held, so the exposure must be summed over
-/// the shards at risk: each shard is challenged **independently** every epoch
-/// (`CHALLENGES_PER_EPOCH`) and slashed **independently** (per-shard bonds,
-/// `FOUNDATION_GENESIS_IDENTITY_SET.md` §3.2). Hence
-/// `exposure = shards · P(m-of-n) · per_shard_loss` — pairing a *single* shard's
-/// loss against a *whole* holding's storage saving would understate the deterrent
-/// by `MAX_HOLDINGS_SHARDS`×.
-///
-/// `per_shard_slash_loss_fiat` = one shard's bond floor + that shard's forgone
-/// post-D1/D2 reward stream (§12.2 "against the post-D1/D2 reward").
+/// **Aggregation is EXACT (the approximation was fixed, not labelled).** A slashed
+/// `(P, shard)` is an absorbing state, so summing per-epoch hazards would
+/// double-count and *overstate the deterrent* — direction-safe only at today's
+/// `(m, n)`. Since this arm re-prices automatically at the Round-2 re-pin, that
+/// overstatement could silently flip a marginal verdict; the exposure therefore
+/// comes from [`expected_slash_cost_per_epoch`]'s absorbing Markov chain, priced
+/// at the actual first-slash epoch.
 #[must_use]
+pub fn expected_slash_cost_per_epoch(
+    q: f64,
+    bond_loss_fiat: f64,
+    reward_per_epoch_fiat: f64,
+    horizon_epochs: u64,
+) -> f64 {
+    if horizon_epochs == 0 {
+        return 0.0;
+    }
+    let q = q.clamp(0.0, 1.0);
+    let absorb = absorb_table();
+    let mask = PRIOR_STATES - 1;
+    let mut dist = vec![0.0_f64; PRIOR_STATES];
+    dist[0] = 1.0; // a pair that has been serving: no prior misses
+    let mut expected = 0.0_f64;
+    let mut next = vec![0.0_f64; PRIOR_STATES];
+    for epoch in 1..=horizon_epochs {
+        next.iter_mut().for_each(|v| *v = 0.0);
+        for (state, &p) in dist.iter().enumerate() {
+            if p < 1e-18 {
+                continue; // negligible mass; keeps the sweep cheap
+            }
+            let miss = p * q;
+            if absorb[state] {
+                // Absorbed at `epoch`: bond forfeited + the remaining stream lost.
+                let remaining = horizon_epochs.saturating_sub(epoch) as f64;
+                expected += miss * (bond_loss_fiat + reward_per_epoch_fiat * remaining);
+            } else {
+                next[((state << 1) | 1) & mask] += miss;
+            }
+            next[(state << 1) & mask] += p * (1.0 - q);
+        }
+        std::mem::swap(&mut dist, &mut next);
+    }
+    expected / horizon_epochs as f64
+}
+
 pub fn proxy_cost_per_epoch(
     fetch_fiat_per_byte: f64,
     q: f64,
-    per_shard_slash_loss_fiat: f64,
-    m: u32,
-    n: u32,
+    bond_loss_fiat: f64,
+    reward_per_epoch_fiat: f64,
+    horizon_epochs: u64,
 ) -> f64 {
     let shards_at_risk = MAX_HOLDINGS_SHARDS as f64;
     proxy_refetch_cost_per_epoch(fetch_fiat_per_byte)
-        + shards_at_risk * slash_prob_per_epoch(q, m, n) * per_shard_slash_loss_fiat
+        + shards_at_risk
+            * expected_slash_cost_per_epoch(
+                q,
+                bond_loss_fiat,
+                reward_per_epoch_fiat,
+                horizon_epochs,
+            )
 }
 
 /// The W10 margin per epoch: `proxy_cost − honest_storage_cost`. **> 0 passes**
@@ -189,12 +226,17 @@ pub fn margin_per_epoch(
     fetch_fiat_per_byte: f64,
     storage_fiat_per_byte_year: f64,
     q: f64,
-    slash_loss_fiat: f64,
-    m: u32,
-    n: u32,
+    bond_loss_fiat: f64,
+    reward_per_epoch_fiat: f64,
+    horizon_epochs: u64,
 ) -> f64 {
-    proxy_cost_per_epoch(fetch_fiat_per_byte, q, slash_loss_fiat, m, n)
-        - honest_storage_cost_per_epoch(storage_fiat_per_byte_year)
+    proxy_cost_per_epoch(
+        fetch_fiat_per_byte,
+        q,
+        bond_loss_fiat,
+        reward_per_epoch_fiat,
+        horizon_epochs,
+    ) - honest_storage_cost_per_epoch(storage_fiat_per_byte_year)
 }
 
 /// The crossover re-fetch-failure rate `q*` at which the margin first turns
@@ -206,18 +248,18 @@ pub fn margin_per_epoch(
 pub fn crossover_q(
     fetch_fiat_per_byte: f64,
     storage_fiat_per_byte_year: f64,
-    slash_loss_fiat: f64,
-    m: u32,
-    n: u32,
+    bond_loss_fiat: f64,
+    reward_per_epoch_fiat: f64,
+    horizon_epochs: u64,
 ) -> Option<f64> {
     let f = |q: f64| {
         margin_per_epoch(
             fetch_fiat_per_byte,
             storage_fiat_per_byte_year,
             q,
-            slash_loss_fiat,
-            m,
-            n,
+            bond_loss_fiat,
+            reward_per_epoch_fiat,
+            horizon_epochs,
         )
     };
     if f(0.0) >= 0.0 {
@@ -266,10 +308,11 @@ pub fn bond_at_risk_skl() -> f64 {
 /// the exposure prices (undiscounted — deterrence-favourable).
 pub const A5_REWARD_HORIZON_EPOCHS: f64 = 131.0;
 
-/// A5 (W10) report. `forgone_reward_skl` is **one shard's** post-D1/D2 reward
-/// stream over the horizon (per-shard, matching the §3.2 per-shard slash scope);
-/// `skl_price` prices SKL losses to the fiat margin.
-pub fn a5_proxy_report(forgone_reward_skl: f64, skl_price: f64) {
+/// A5 (W10) report. `reward_per_epoch_skl` is **one shard's** post-D1/D2 reward
+/// **per epoch** (per-shard, matching the §3.2 per-shard slash scope) — the
+/// absorption DP prices the stream forgone *from the slash epoch onward*, so it
+/// needs the rate, not a horizon lump. `skl_price` converts SKL losses to fiat.
+pub fn a5_proxy_report(reward_per_epoch_skl: f64, skl_price: f64) {
     let storage = honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR);
     eprintln!(
         "\nA5 — W10 proxy free-rider margin (§12.2/§11.1): GATE2-conformant cheap opening\n\
@@ -290,7 +333,8 @@ pub fn a5_proxy_report(forgone_reward_skl: f64, skl_price: f64) {
         "fetch $/GB", "refetch/epoch", "margin@q=0", "q* bond-only", "q* +reward"
     );
     let bond_loss_fiat = bond_at_risk_skl() * skl_price;
-    let reward_loss_fiat = forgone_reward_skl * skl_price;
+    let reward_per_epoch_fiat = reward_per_epoch_skl * skl_price;
+    let horizon = A5_REWARD_HORIZON_EPOCHS as u64;
     for &fp in &FETCH_FIAT_PER_BYTE_BAND {
         let refetch = proxy_refetch_cost_per_epoch(fp);
         let margin0 = margin_per_epoch(
@@ -298,22 +342,16 @@ pub fn a5_proxy_report(forgone_reward_skl: f64, skl_price: f64) {
             STORAGE_FIAT_PER_BYTE_YEAR,
             0.0,
             bond_loss_fiat,
-            SLASH_M,
-            SLASH_N,
+            0.0,
+            horizon,
         );
-        let qc_bond = crossover_q(
-            fp,
-            STORAGE_FIAT_PER_BYTE_YEAR,
-            bond_loss_fiat,
-            SLASH_M,
-            SLASH_N,
-        );
+        let qc_bond = crossover_q(fp, STORAGE_FIAT_PER_BYTE_YEAR, bond_loss_fiat, 0.0, horizon);
         let qc_rew = crossover_q(
             fp,
             STORAGE_FIAT_PER_BYTE_YEAR,
-            bond_loss_fiat + reward_loss_fiat,
-            SLASH_M,
-            SLASH_N,
+            bond_loss_fiat,
+            reward_per_epoch_fiat,
+            horizon,
         );
         eprintln!(
             "{:<22} {:>13.6} {:>14.6} {:>13} {:>12}",
@@ -376,20 +414,37 @@ mod tests {
         // At q≈0 (loose grace, reliable re-fetch) the margin is negative — W10 FAILS.
         let fp = FETCH_FIAT_PER_BYTE_BAND[1]; // retail egress (proxy-unfavourable)
         let slash_loss = bond_loss_fiat(0.10) + 0.0; // bond only, mid SKL price
-        assert!(
-            margin_per_epoch(
-                fp,
-                STORAGE_FIAT_PER_BYTE_YEAR,
-                0.0,
-                slash_loss,
-                SLASH_M,
-                SLASH_N
-            ) < 0.0
-        );
+        assert!(margin_per_epoch(fp, STORAGE_FIAT_PER_BYTE_YEAR, 0.0, slash_loss, 0.0, 131) < 0.0);
         // A crossover q* exists (bond exposure can close it if re-fetch is forced
         // unreliable enough) — the "how tight must grace be" number.
-        let qc = crossover_q(fp, STORAGE_FIAT_PER_BYTE_YEAR, slash_loss, SLASH_M, SLASH_N);
+        let qc = crossover_q(fp, STORAGE_FIAT_PER_BYTE_YEAR, slash_loss, 0.0, 131);
         assert!(qc.is_some_and(|q| q > 0.0 && q < 1.0));
+    }
+
+    #[test]
+    fn dp_one_step_hazard_matches_enumeration() {
+        // The two independent constructions check each other (the hoist-parity
+        // pattern): the DP's absorption table, driven from the iid stationary
+        // state distribution, must reproduce the 2^13 enumeration of the shipped
+        // predicate — q · P(≥ m−1 of the other n−1).
+        let absorb = absorb_table();
+        for &q in &[0.05_f64, 0.1, 0.2, 0.35, 0.6] {
+            // Stationary distribution of the prior window under iid misses.
+            let mut hazard = 0.0_f64;
+            for (state, &slashes) in absorb.iter().enumerate() {
+                if !slashes {
+                    continue;
+                }
+                let k = (state as u32).count_ones() as i32;
+                let p_state = q.powi(k) * (1.0 - q).powi(PRIOR_WIDTH as i32 - k);
+                hazard += p_state * q; // head must miss for the window to be consulted
+            }
+            let enumerated = slash_prob_per_epoch(q, SLASH_M, SLASH_N);
+            assert!(
+                (hazard - enumerated).abs() <= 1e-12 * enumerated.max(1e-12),
+                "DP table vs enumeration disagree at q={q}: {hazard} vs {enumerated}"
+            );
+        }
     }
 
     /// One shard's bond at risk in fiat (per-shard slash scope, §3.2).
@@ -404,11 +459,10 @@ mod tests {
         // challenged shards. Pairing one shard's loss against the whole holding's
         // storage saving would understate the deterrent by MAX_HOLDINGS_SHARDS×.
         let per_shard = bond_loss_fiat(0.10);
-        let q = 0.9; // sustained failure ⇒ slash prob ≈ 1
-        let cost =
-            proxy_cost_per_epoch(FETCH_FIAT_PER_BYTE_BAND[0], q, per_shard, SLASH_M, SLASH_N);
+        let q = 0.9; // sustained failure ⇒ absorption is near-certain
+        let cost = proxy_cost_per_epoch(FETCH_FIAT_PER_BYTE_BAND[0], q, per_shard, 0.0, 131);
         let exposure = cost - proxy_refetch_cost_per_epoch(FETCH_FIAT_PER_BYTE_BAND[0]);
-        let single_shard_exposure = slash_prob_per_epoch(q, SLASH_M, SLASH_N) * per_shard;
+        let single_shard_exposure = expected_slash_cost_per_epoch(q, per_shard, 0.0, 131);
         assert!(
             (exposure / single_shard_exposure - MAX_HOLDINGS_SHARDS as f64).abs() < 1e-6,
             "exposure must scale by shards at risk"

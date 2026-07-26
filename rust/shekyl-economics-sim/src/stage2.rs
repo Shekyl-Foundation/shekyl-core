@@ -1270,9 +1270,9 @@ pub fn run_stage2(params: &SimParams) {
                 max_shard_reward_per_epoch_skl.max(pool_per_epoch_skl / a.n as f64);
         }
     }
-    let forgone_reward_skl =
-        max_shard_reward_per_epoch_skl * crate::proxy::A5_REWARD_HORIZON_EPOCHS;
-    crate::proxy::a5_proxy_report(forgone_reward_skl, SKL_FIAT_PRICE_BAND[1]);
+    // The absorption DP prices the stream forgone FROM the slash epoch, so it
+    // takes the per-epoch rate rather than a horizon lump.
+    crate::proxy::a5_proxy_report(max_shard_reward_per_epoch_skl, SKL_FIAT_PRICE_BAND[1]);
 
     let report = Stage2Report {
         burden_trajectories: trajectories,
