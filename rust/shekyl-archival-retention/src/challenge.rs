@@ -72,6 +72,17 @@ pub fn challenge_leaf_index(
 }
 
 /// Beacon fire height `H_fire ∈ (H_open, H_close]` (§3.4).
+///
+/// The range holds for every well-formed epoch (`H_close > H_seal`, guaranteed by
+/// the genesis epoch formulas: `H_close − H_seal = SEB − 2`). Consumers therefore
+/// do NOT range-check `H_fire`: a derivation outside `(0, H_close]` needs a
+/// degenerate epoch (`H_close ≤ H_seal`) or a saturating-overflow epoch, both of
+/// which the epoch formulas preclude and the seal-committed guards
+/// ([`challenge_seal_on_chain`] on the serve-credit side, `H_seal ≤ tip` on the
+/// slash side) additionally shield. **Reopen criterion (rule 21):** a Round-2
+/// epoch re-pin that admits `H_close ≤ H_seal` (or an unbounded epoch) must
+/// restore an `H_fire ∈ (0, H_close]` check at both the serve-credit gate
+/// (`blockchain.cpp`) and the slash-eligibility consumer (`db_lmdb.cpp`).
 #[must_use]
 pub fn challenge_fire_height(
     h_open: u64,

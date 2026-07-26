@@ -25,6 +25,7 @@ use libfuzzer_sys::fuzz_target;
 use shekyl_archival_retention::serve_credit_decisions::{
     serve_credit_gate_decision, GateReject, GateVerdict, ServeCreditGateInputs,
 };
+use shekyl_archival_retention::challenge_seal_on_chain;
 use shekyl_archival_retention::serve_credit_epoch_ok;
 use shekyl_archival_retention::wire::{MAX_BRANCH_SCALARS, MAX_PATH_LAYERS_PER_KIND};
 use shekyl_archival_retention::VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE;
@@ -148,6 +149,9 @@ fn assert_reason_is_red(i: &ServeCreditGateInputs<'_>, reason: GateReject) {
         }
         GateReject::NotGoodThrough => assert!(!i.good_through),
         GateReject::PastCreditDeadline => assert!(i.current_height > i.h_close),
+        GateReject::SealBlockNotYetCommitted => {
+            assert!(!challenge_seal_on_chain(i.h_open, i.current_height));
+        }
         GateReject::SealHashUnavailable => assert!(i.seal_hash.is_none()),
         GateReject::ShardNotHeldAtFire => assert!(!i.held_at_fire),
         GateReject::ShardRegistryUnavailableAtFire => assert!(!i.registry_present_at_fire),
@@ -160,7 +164,7 @@ fn assert_reason_is_red(i: &ServeCreditGateInputs<'_>, reason: GateReject) {
             );
         }
         GateReject::FfiVerifyFailed => assert!(!i.verify_ok),
-        GateReject::FireHeightDerivationFailed | GateReject::LeafIndexOutOfSegmentRange => {}
+        GateReject::LeafIndexOutOfSegmentRange => {}
     }
 }
 

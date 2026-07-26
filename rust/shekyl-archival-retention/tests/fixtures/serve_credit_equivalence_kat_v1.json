@@ -248,18 +248,6 @@
     "cpp_setup": "unseeded_seal_throws"
    },
    {
-    "id": "B-13-fire-guard-shielded",
-    "note": "A degenerate epoch (H_close == H_open, so H_close < H_seal) that once reached the step-8 fire guard is now intercepted by the seal-on-chain guard (step 6b): current_height <= H_close is necessarily <= H_seal. Pins that the fire-guard branch is unreachable through the gate. Mirror-only (h_close is FFI-derived, not overridable on the C++ leg).",
-    "overrides": {
-     "h_close": 10000,
-     "current_height": 10000
-    },
-    "expected_verdict": false,
-    "expected_reason": "SealBlockNotYetCommitted",
-    "cpp_reachable": false,
-    "cpp_setup": null
-   },
-   {
     "id": "B-14-not-held-at-fire",
     "note": "Step 9 (WS-1 slash boundary): holding removed AT h_fire == 19137 -- a slash at at_height means already-removed; rejects.",
     "overrides": {

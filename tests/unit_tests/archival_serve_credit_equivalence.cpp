@@ -531,15 +531,12 @@ TEST(serve_credit_equivalence, gate_vectors_live_cpp_verdict)
   ASSERT_EQ(base["h_fire"].GetUint64(), derived_fire_height(substrate));
 
   // Vectors the integration harness structurally cannot reach (marshaling
-  // failure paths that cannot be forced through the live gate): the degenerate
-  // fire-guard epoch (H_close comes from the epoch FFI, not the fixture — and it
-  // is now shielded by the seal-on-chain guard anyway), do_serialize failure on
-  // a well-formed variant, and the wire-tag checks (the gate serializes the
-  // response itself, so the first byte is always the variant tag). Enumerated
-  // here per §5 — recorded, not silently dropped; the Rust mirror leg asserts
-  // these branches.
+  // failure paths that cannot be forced through the live gate): do_serialize
+  // failure on a well-formed variant, and the wire-tag checks (the gate
+  // serializes the response itself, so the first byte is always the variant
+  // tag). Enumerated here per §5 — recorded, not silently dropped; the Rust
+  // mirror leg asserts these branches.
   const std::set<std::string> known_unreachable = {
-    "B-13-fire-guard-shielded",
     "B-19-serialize-fail",
     "B-20-wrong-tag",
     "B-21-empty-wire",

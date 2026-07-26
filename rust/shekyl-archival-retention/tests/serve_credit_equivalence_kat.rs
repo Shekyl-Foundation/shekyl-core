@@ -101,7 +101,6 @@ fn reason_from_name(name: &str) -> GateReject {
         "PastCreditDeadline" => GateReject::PastCreditDeadline,
         "SealBlockNotYetCommitted" => GateReject::SealBlockNotYetCommitted,
         "SealHashUnavailable" => GateReject::SealHashUnavailable,
-        "FireHeightDerivationFailed" => GateReject::FireHeightDerivationFailed,
         "ShardNotHeldAtFire" => GateReject::ShardNotHeldAtFire,
         "ShardRegistryUnavailableAtFire" => GateReject::ShardRegistryUnavailableAtFire,
         "LeafIndexOutOfSegmentRange" => GateReject::LeafIndexOutOfSegmentRange,

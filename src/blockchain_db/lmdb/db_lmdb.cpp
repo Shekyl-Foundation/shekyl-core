@@ -5611,11 +5611,15 @@ bool BlockchainLMDB::archival_challenge_failed_at_height(uint64_t block_height,
     return false;
   }
 
+  // Derived identically to the serve-credit consumer (blockchain.cpp) from the
+  // same deterministic inputs (WS-1 h_fire symmetry). No range check: H_fire is
+  // in (0, H_close] for every well-formed epoch — see challenge_fire_height's
+  // reopen criterion (a Round-2 re-pin that admits H_close <= H_seal restores it
+  // at both consumers). The h_seal-vs-block_height guard above already precludes
+  // the degenerate epochs that could put H_fire out of range.
   const uint64_t h_fire = shekyl_archival_challenge_fire_height(
     h_open, h_close, reinterpret_cast<const uint8_t*>(seal_hash.data),
     reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
-  if (h_fire == 0 || h_fire > h_close)
-    return false;
 
   return archival_bond_holds_shard(p_id, shard_id, h_fire);
 }
