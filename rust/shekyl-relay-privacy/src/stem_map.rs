@@ -131,15 +131,23 @@ impl StemMap {
 
         let mut replaced = false;
         for slot in &mut self.out {
-            if let Some(id) = slot {
-                if let Ok(pos) = candidates.binary_search(id) {
-                    // Still connected; take it out of the candidate pool so it
-                    // cannot also be used to backfill another slot.
-                    candidates.remove(pos);
-                } else {
-                    *slot = None;
-                    replaced = true;
+            match slot {
+                Some(id) => {
+                    if let Ok(pos) = candidates.binary_search(id) {
+                        // Still connected; take it out of the candidate pool so
+                        // it cannot also be used to backfill another slot.
+                        candidates.remove(pos);
+                    } else {
+                        *slot = None;
+                        replaced = true;
+                    }
                 }
+                // A slot left empty by an earlier update still needs backfilling.
+                // The C++ `connection_map::update` re-marks nil slots (setting
+                // `replace = true`); mirror that, so the early-return below does
+                // not skip a fillable empty slot and `update` reports the change
+                // once the slot is filled.
+                None => replaced = true,
             }
         }
 
@@ -379,6 +387,42 @@ mod tests {
         for slot in m.out.iter().flatten() {
             assert!(!live.contains(slot), "a dead peer was reused");
         }
+    }
+
+    #[test]
+    fn a_slot_emptied_by_an_earlier_update_is_backfilled_later() {
+        // Regression: an empty slot left by a prior update (no candidate to fill
+        // it then) must be backfilled by a *later* update that offers one, even
+        // if that later update disconnects nothing else. The early-return must
+        // not treat "nothing disconnected this call" as "every slot is live".
+        let mut rng = SplitMix64::new(11);
+        let peers = ids(3); // 3 peers, 2 stems → exactly one spare
+        let mut m = StemMap::new(peers.clone(), 2, &mut rng);
+        assert_eq!(m.live_stems(), 2);
+
+        let live: Vec<ConnectionId> = m.out.iter().flatten().copied().collect();
+        let spare: ConnectionId = *peers.iter().find(|p| !live.contains(p)).unwrap();
+
+        // Call 1: drop one live stem, offering only the other — no candidate to
+        // backfill, so a slot goes empty and stays empty.
+        m.update(vec![live[1]], &mut rng);
+        assert_eq!(
+            m.live_stems(),
+            1,
+            "one slot left empty (no candidate to fill)"
+        );
+
+        // Call 2: the surviving stem stays and a fresh candidate appears. The
+        // empty slot must be backfilled — and the change must be reported.
+        assert!(
+            m.update(vec![live[1], spare], &mut rng),
+            "backfilling a previously-emptied slot is a reportable change"
+        );
+        assert_eq!(
+            m.live_stems(),
+            2,
+            "the empty slot was backfilled from the new candidate"
+        );
     }
 
     #[test]

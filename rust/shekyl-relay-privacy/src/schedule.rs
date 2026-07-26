@@ -435,7 +435,11 @@ impl EmbargoTimer {
             "embargo mean must be non-zero — a zero embargo disables the stem phase"
         );
         assert!(tick_millis > 0, "embargo tick must be non-zero");
-        let mean_ticks_u64 = u64::from(mean_secs) * 1_000 / tick_millis;
+        // Round the mean UP at a tick that does not divide 1000ms evenly:
+        // under-provisioning the embargo fluffs prematurely, which is a privacy
+        // loss (D-5's asymmetry), so the conservative direction is longer, not
+        // shorter. Matches the `div_ceil` used for the reverse conversion below.
+        let mean_ticks_u64 = (u64::from(mean_secs) * 1_000).div_ceil(tick_millis);
         let mean_ticks = u32::try_from(mean_ticks_u64).unwrap_or(u32::MAX);
         assert!(
             mean_ticks > 0,
