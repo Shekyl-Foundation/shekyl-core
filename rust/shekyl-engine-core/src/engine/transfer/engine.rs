@@ -34,7 +34,7 @@ use super::super::pending::{
     TxRequest,
 };
 use super::super::refresh::{derive_snapshot_id, LedgerSnapshot};
-use super::super::signer::{Signer, TransferSigningContext};
+use super::super::signer::{SignedTransfer, Signer, TransferSigningContext};
 use super::super::signing_assembly::assemble_tx_to_sign;
 use super::super::traits::LedgerEngine;
 use super::super::transaction_submitter::canonical_tx_id;
@@ -314,6 +314,14 @@ where
         // watchdog's rung-1 resubmit-same-bytes probe before the in-flight
         // record (their only holder) is dropped. Ephemeral — a restart
         // drops the map and the probe rung degrades to the operator alarm.
+        //
+        // WI-RPC-3 retention: nothing to write here — the record was
+        // persisted at dispatch (pin 1, dispatch form), keyed by the
+        // canonical txid of the bytes; dropping the entry wipes the
+        // runtime copy of the secret. (A daemon returning a hash that
+        // differs from the canonical txid would leave the record
+        // pending under the canonical key — safe direction, the proof
+        // stays servable for the tx actually broadcast.)
         if let Some(flight) = state.in_flight.remove(&id) {
             state.held_bytes.insert(tx_hash, flight.entry.tx_bytes);
         }
@@ -330,10 +338,10 @@ where
         // §7.1) until refresh observes the spend on-chain
         // (confirmed-present release, `mark_spent`) or the watchdog horizon
         // resolves the tx as confirmed-absent.
-        self.ledger.with_ledger_block_mut(|ledger| {
-            let accepted_at_height = ledger.height();
+        self.ledger.with_wallet_ledger_mut(|wallet| {
+            let accepted_at_height = wallet.ledger.height();
             for index in selected_indices {
-                if let Some(td) = ledger.transfer_mut(index) {
+                if let Some(td) = wallet.ledger.transfer_mut(index) {
                     // Race guard: if the tx mined during the submit round-trip,
                     // a refresh may already have observed the spend and run
                     // `mark_spent` (spent = true, lock cleared). The
@@ -408,6 +416,10 @@ where
         // watchdog probe (see the accept path). The AlreadyInChain arm
         // holds too, so a fruitless-re-scan escalation can fall through to
         // the F31 resubmit-as-status-query with the original bytes.
+        //
+        // WI-RPC-3 retention: as on the accept path, the record was
+        // persisted at dispatch — an AlreadyInChain verdict changes the
+        // lock baseline, not the retention record.
         if let Some(flight) = state.in_flight.remove(&id) {
             state.held_bytes.insert(tx_hash, flight.entry.tx_bytes);
         }
@@ -416,10 +428,10 @@ where
         // consecutive-rejection streak, same as a fresh accept.
         state.loop_breaker.record_accept();
 
-        let synced_height = self.ledger.with_ledger_block_mut(|ledger| {
-            let synced_height = ledger.height();
+        let synced_height = self.ledger.with_wallet_ledger_mut(|wallet| {
+            let synced_height = wallet.ledger.height();
             for index in selected_indices {
-                if let Some(td) = ledger.transfer_mut(index) {
+                if let Some(td) = wallet.ledger.transfer_mut(index) {
                     // Same race guard as the accept path: if refresh already
                     // observed the spend and ran `mark_spent`, the
                     // confirmed-present state is authoritative — re-locking
@@ -519,7 +531,17 @@ where
         id: ReservationId,
         kind: TerminalErrorKind,
     ) -> SubmitError {
-        state.in_flight.remove(&id);
+        if let Some(flight) = state.in_flight.remove(&id) {
+            // WI-RPC-3 retention: a terminal verdict is a definite
+            // refusal — the daemon did not relay (single-egress), so
+            // exposure never began. Retire the dispatch-persisted
+            // record; a refused build leaves no residue (pin 1's
+            // discard side).
+            let txid = canonical_tx_id(&flight.entry.tx_bytes);
+            self.ledger.with_wallet_ledger_mut(|wallet| {
+                wallet.retire_retained_tx_key(&txid.to_bytes());
+            });
+        }
         release_output_locks_for(state, id);
 
         emit_pending_tx_diagnostic(
@@ -567,6 +589,16 @@ where
         cause: RetryableRejectCause,
     ) -> SubmitError {
         if let Some(flight) = state.in_flight.remove(&id) {
+            // WI-RPC-3 retention: §2.5 retryable is likewise definite
+            // ("provably unrelayed") — retire the dispatch-persisted
+            // record. The next `submit(id, gen)` re-persists at its own
+            // dispatch, possibly under a new canonical txid after a
+            // re-anchor rebuild, so retiring here also prevents a stale
+            // record for bytes that will never be re-offered.
+            let txid = canonical_tx_id(&flight.entry.tx_bytes);
+            self.ledger.with_wallet_ledger_mut(|wallet| {
+                wallet.retire_retained_tx_key(&txid.to_bytes());
+            });
             state.consumer_held.insert(id, flight.entry);
         }
 
@@ -1075,8 +1107,16 @@ where
         request: &TxRequest,
         meta: &BuiltPendingMeta,
         reference: ReferenceBlock,
-        tx_bytes: Vec<u8>,
+        signed: SignedTransfer,
     ) -> Result<PendingTx, SendError> {
+        // WI-RPC-3 retention: take the whole `SignedTransfer` so the
+        // per-tx secret rides into `consumer_held` alongside the bytes
+        // (persisted at submit-ACCEPTED, wiped with the entry on
+        // discard). Destructure once; the secret moves, never copies.
+        let SignedTransfer {
+            tx_bytes,
+            tx_key_secret,
+        } = signed;
         let mut state = self.state.lock().map_err(|_| {
             fail_build_after_attempted(
                 self.sink.as_ref(),
@@ -1121,6 +1161,7 @@ where
                 // A fresh build is generation 0; re-anchor bumps it (§4).
                 content_gen: 0,
                 fingerprint,
+                tx_key_secret,
             },
         );
 
@@ -1397,7 +1438,15 @@ where
                     let signer_err: SignerError = err.into();
                     ReanchorError::Failed(map_signer_error(&signer_err))
                 })?;
-            let tx_bytes = signed.tx_bytes().to_vec();
+            // WI-RPC-3 retention: a reprove re-mints the per-tx secret
+            // (fresh scalar → fresh output derivations → fresh bytes),
+            // so the swap below replaces the entry's held secret too;
+            // the superseded secret zeroizes on drop. A `continue`
+            // retry drops this pair the same way — no residue.
+            let SignedTransfer {
+                tx_bytes,
+                tx_key_secret,
+            } = signed;
             // Checked + single-sourced with the fresh-build path (§4 F-G); the
             // fee-coverage check above guarantees this succeeds here.
             let new_fingerprint = ContentFingerprint::from_build(fee, &summary, total_covered)
@@ -1470,6 +1519,7 @@ where
             };
 
             entry.tx_bytes = tx_bytes;
+            entry.tx_key_secret = tx_key_secret;
             entry.reference = reference;
             entry.fingerprint = new_fingerprint;
             entry.content_gen = content_gen;
@@ -1610,6 +1660,35 @@ where
                 .remove(&id)
                 .expect("consumer_held membership established above, lock held throughout");
             let tx_bytes = held.tx_bytes.clone();
+
+            // WI-RPC-3 retention (OUTBOUND PREREQUISITE pin 1, dispatch
+            // form): persist the per-tx secret BEFORE the bytes can
+            // leave for the daemon. The accept verdict is an
+            // *observation* about network exposure, not its start — a
+            // crash or dropped connection between this send and the
+            // verdict leaves a tx the network may still mine, and a
+            // secret that lived only in the runtime `in_flight` map
+            // died with the process, permanently disabling the OUTBOUND
+            // proof for a payment that settles normally. Definite
+            // refusals (terminal / retryable — provably unrelayed under
+            // single-egress, §2.5) retire the record in their
+            // finalizers, so a never-accepted build still leaves no
+            // residue; accept / already-in-chain / ambiguous / crash
+            // keep it.
+            //
+            // Second copy, accounted: from here the persisted record is
+            // the durable holder; the runtime copy stays on the entry
+            // only so a §2.5 retryable restoration can re-dispatch, and
+            // is wiped when the entry drops (`TxSecretKey` is
+            // zeroize-on-drop).
+            let dispatch_txid = canonical_tx_id(&held.tx_bytes);
+            let retained = shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
+                *held.tx_key_secret.as_bytes(),
+            ));
+            self.ledger.with_wallet_ledger_mut(|wallet| {
+                wallet.record_retained_tx_key(dispatch_txid.to_bytes(), retained);
+            });
+
             let submitted_at = Instant::now();
             state.in_flight.insert(
                 id,

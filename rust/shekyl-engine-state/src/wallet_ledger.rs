@@ -51,8 +51,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    bookkeeping_block::BookkeepingBlock, error::WalletLedgerError, ledger_block::LedgerBlock,
-    staking_block::StakingBlock, sync_state_block::SyncStateBlock, tx_meta_block::TxMetaBlock,
+    bookkeeping_block::BookkeepingBlock,
+    error::WalletLedgerError,
+    ledger_block::LedgerBlock,
+    staking_block::StakingBlock,
+    sync_state_block::SyncStateBlock,
+    tx_meta_block::{TxMetaBlock, TxSecretKey, TxSecretKeys},
 };
 
 /// Bundle-level `format_version`.
@@ -85,6 +89,13 @@ use crate::{
 /// Version `10` adds `TransferDetails::awaiting_confirmation` — the F14
 /// persisted awaiting-confirmation lock (`LEDGER_BLOCK_VERSION` 8,
 /// `DAEMON_SUBMIT_VERDICT.md` §2.6).
+/// Version `11` deletes `TxSecretKeys::additional`
+/// (`TX_META_BLOCK_VERSION` 2, WI-RPC-3 rule-15 dead-store removal —
+/// single tx secret scalar per tx, no subaddresses, no producer).
+/// Version `12` adds `TransferDetails::spending_tx_hash`
+/// (`LEDGER_BLOCK_VERSION` 9, WI-RPC-3 F-9 spend-quadruple leg:
+/// confirmed spending txid so `tx_meta.tx_keys` retention stays
+/// I-2-live for no-change outbound txs).
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -96,7 +107,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 10;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 12;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.
@@ -209,6 +220,139 @@ impl WalletLedger {
         self.sync_state.check_version()?;
         self.staking.check_version()?;
         Ok(())
+    }
+
+    /// Persist the WI-RPC-3 retention record for a dispatched tx in one
+    /// atomic write: the per-tx secret enters `tx_meta.tx_keys` and the
+    /// txid enters `sync_state.pending_tx_hashes` — the I-2 live
+    /// reference the secret is born with (`docs/api/wallet_rpc.yaml`
+    /// OUTBOUND PREREQUISITE pin 1: the record exists before the tx
+    /// bytes can reach the daemon).
+    pub fn record_retained_tx_key(&mut self, txid: [u8; 32], secret: TxSecretKey) {
+        self.tx_meta
+            .tx_keys
+            .insert(txid, TxSecretKeys { primary: secret });
+        if !self.sync_state.pending_tx_hashes.contains(&txid) {
+            self.sync_state.pending_tx_hashes.push(txid);
+        }
+    }
+
+    /// Retire the retention record for a tx the daemon *definitely
+    /// refused* (terminal / retryable submit verdict — provably
+    /// unrelayed under single-egress, `DAEMON_SUBMIT_VERDICT.md` §2.5):
+    /// exposure never began, so the record mirrors a never-submitted
+    /// build. `TxSecretKey` zeroizes on drop; removal is the wipe.
+    pub fn retire_retained_tx_key(&mut self, txid: &[u8; 32]) {
+        self.tx_meta.tx_keys.remove(txid);
+        self.sync_state.pending_tx_hashes.retain(|h| h != txid);
+    }
+
+    /// WI-RPC-3 retention reconciliation (`docs/api/wallet_rpc.yaml`
+    /// OUTBOUND PREREQUISITE, lifecycle pin 2: "DEATH follows I-2 with
+    /// the reference set closed by the spend-quadruple").
+    ///
+    /// Called by the orchestrator after every refresh merge (once the
+    /// scan result — including spend detection, which writes
+    /// `TransferDetails::spending_tx_hash` — has been applied), with
+    /// `reorg_rewound` saying whether that merge performed a reorg
+    /// rewind. Two directions:
+    ///
+    /// 1. **Pending → confirmed.** A txid in
+    ///    `sync_state.pending_tx_hashes` that now has a chain reference
+    ///    (a transfer row's own `tx_hash`, or a spent row's
+    ///    `spending_tx_hash`) has been mined; the pending record's job
+    ///    is done and it is removed. The retained secret's liveness
+    ///    transfers seamlessly to the chain reference (I-2 holds before
+    ///    and after).
+    /// 2. **Orphan handling.** A `tx_meta.tx_keys` entry with *no*
+    ///    remaining live reference — not chain-referenced, not locked
+    ///    (`awaiting_confirmation`), not in the scanned pool, not
+    ///    pending. On a **rewind** merge such an entry is *not* dead:
+    ///    the rewind itself removed its chain references (rows at or
+    ///    above the fork, spend un-marking), and the common outcome is
+    ///    re-confirmation on the new chain a few blocks later — so the
+    ///    txid is **re-pended** instead of collected, returning it to
+    ///    the normal lifecycle (direction 1 retires it again when the
+    ///    tx re-confirms; a tx that never re-confirms leaves a bounded
+    ///    safe-direction residue, the retention policy's deliberate
+    ///    trade). On a non-rewind merge no unreferenced entry can
+    ///    legitimately exist — the record is created with its pending
+    ///    reference in one atomic write and every retiring path leaves
+    ///    a successor reference — so collection is the I-2 safety net
+    ///    it claims to be.
+    ///
+    /// Returns `(pending_confirmed, secrets_collected)` for the
+    /// caller's diagnostics.
+    pub fn reconcile_tx_key_retention(&mut self, reorg_rewound: bool) -> (usize, usize) {
+        use std::collections::HashSet;
+
+        // Fast path: with no retained secret and no pending record
+        // there is provably nothing to reconcile in either direction —
+        // skip the O(transfers) live-set build this method would
+        // otherwise pay under the merge's write guard on every refresh
+        // (the common receive-only-wallet shape).
+        if self.tx_meta.tx_keys.is_empty() && self.sync_state.pending_tx_hashes.is_empty() {
+            return (0, 0);
+        }
+
+        // Chain references: rebuilt from chain data by any rescan, so
+        // retention keyed on them is rescan-coherent by construction.
+        let mut chain_referenced: HashSet<[u8; 32]> =
+            HashSet::with_capacity(self.ledger.transfers.len() * 2);
+        for t in &self.ledger.transfers {
+            chain_referenced.insert(t.tx_hash.to_bytes());
+            if let Some(spending) = &t.spending_tx_hash {
+                chain_referenced.insert(spending.to_bytes());
+            }
+        }
+
+        // Direction 1: confirmed txids leave the pending list.
+        let before = self.sync_state.pending_tx_hashes.len();
+        self.sync_state
+            .pending_tx_hashes
+            .retain(|h| !chain_referenced.contains(h));
+        let pending_confirmed = before - self.sync_state.pending_tx_hashes.len();
+
+        // Direction 2: the live set mirrors I-2's exactly
+        // (invariants::check_tx_keys_no_orphans).
+        let mut live = chain_referenced;
+        for t in &self.ledger.transfers {
+            if let Some(lock) = &t.awaiting_confirmation {
+                live.insert(lock.tx_hash.to_bytes());
+            }
+        }
+        for h in self.tx_meta.scanned_pool_txs.keys() {
+            live.insert(*h);
+        }
+        for h in &self.sync_state.pending_tx_hashes {
+            live.insert(*h);
+        }
+
+        if reorg_rewound {
+            // Rewind direction: resurrect the pending reference instead
+            // of collecting — the references died with the orphaned
+            // blocks, not with the tx, and a deleted secret cannot be
+            // rebuilt if the tx re-confirms. `!live` implies the txid is
+            // not currently pending, so a plain push cannot duplicate.
+            let orphaned: Vec<[u8; 32]> = self
+                .tx_meta
+                .tx_keys
+                .keys()
+                .filter(|h| !live.contains(*h))
+                .copied()
+                .collect();
+            for h in orphaned {
+                self.sync_state.pending_tx_hashes.push(h);
+            }
+            return (pending_confirmed, 0);
+        }
+
+        let before = self.tx_meta.tx_keys.len();
+        // `TxSecretKey` zeroizes on drop; removal is the wipe.
+        self.tx_meta.tx_keys.retain(|h, _| live.contains(h));
+        let secrets_collected = before - self.tx_meta.tx_keys.len();
+
+        (pending_confirmed, secrets_collected)
     }
 }
 
@@ -401,5 +545,186 @@ mod tests {
             WalletLedgerError::Postcard(_),
         );
         assert!(is_postcard, "truncated input must hit the postcard branch");
+    }
+
+    // ── WI-RPC-3 retention reconciliation ─────────────────────────────
+
+    fn mk_transfer(seed: u8, block_height: u64) -> crate::transfer::TransferDetails {
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+        crate::transfer::TransferDetails {
+            tx_hash: shekyl_types::TxHash::from_bytes([seed; 32]),
+            internal_output_index: u64::from(seed),
+            global_output_index: u64::from(seed),
+            block_height,
+            key: ED25519_BASEPOINT_POINT,
+            key_offset: Scalar::ONE,
+            commitment: shekyl_curve_primitives::Commitment::new(Scalar::ONE, 1_000),
+            payment_id: None,
+            spent: false,
+            spent_height: None,
+            key_image: None,
+            awaiting_confirmation: None,
+            spending_tx_hash: None,
+            source_ciphertext: None,
+            output_handle: None,
+            eligible_height: block_height + crate::transfer::SPENDABLE_AGE,
+            frozen: false,
+            fcmp_precomputed_path: None,
+            receive_attribution: crate::ReceiveAttribution::default(),
+        }
+    }
+
+    fn insert_secret(w: &mut WalletLedger, txid: [u8; 32]) {
+        w.tx_meta.tx_keys.insert(
+            txid,
+            crate::tx_meta_block::TxSecretKeys {
+                primary: crate::tx_meta_block::TxSecretKey::new(zeroize::Zeroizing::new(
+                    [0x5A; 32],
+                )),
+            },
+        );
+    }
+
+    /// Direction 1: a pending txid whose spend was confirmed on-chain
+    /// (spent row records `spending_tx_hash`) leaves the pending list;
+    /// the secret survives, now chain-referenced. I-2 holds throughout.
+    #[test]
+    fn reconcile_moves_confirmed_pending_to_chain_reference() {
+        let txid = [0x77; 32];
+        let mut w = WalletLedger::empty();
+        insert_secret(&mut w, txid);
+        w.sync_state.pending_tx_hashes.push(txid);
+        w.check_invariants().expect("pending ref keeps I-2");
+
+        // Refresh observes the spend: the consumed output's row records
+        // the spending txid (the no-change case — no owned output row
+        // for `txid` itself).
+        let mut spent_row = mk_transfer(0x11, 10);
+        spent_row.spent = true;
+        spent_row.spent_height = Some(20);
+        spent_row.key_image = Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+            [0x33; 32],
+        ));
+        spent_row.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
+        w.ledger.transfers.push(spent_row);
+        w.ledger.tip.synced_height = 30;
+
+        let (confirmed, collected) = w.reconcile_tx_key_retention(false);
+        assert_eq!(confirmed, 1, "pending record retired at confirmation");
+        assert_eq!(collected, 0, "secret stays chain-referenced");
+        assert!(w.sync_state.pending_tx_hashes.is_empty());
+        assert!(w.tx_meta.tx_keys.contains_key(&txid));
+        w.check_invariants().expect("I-2 after reconcile");
+    }
+
+    /// Direction 2, non-rewind merge: a secret with no remaining
+    /// reference is collected — removal is the zeroizing drop.
+    #[test]
+    fn reconcile_collects_orphaned_secret() {
+        let txid = [0x77; 32];
+        let mut w = WalletLedger::empty();
+        insert_secret(&mut w, txid);
+        // No transfers, no pool entry, no pending record: the tx has
+        // lost every live reference.
+        let (confirmed, collected) = w.reconcile_tx_key_retention(false);
+        assert_eq!(confirmed, 0);
+        assert_eq!(collected, 1, "orphaned secret is collected");
+        assert!(w.tx_meta.tx_keys.is_empty());
+        w.check_invariants().expect("I-2 after collection");
+    }
+
+    /// Direction 2, rewind merge: an entry orphaned by the rewind is
+    /// re-pended, not collected — the tx commonly re-confirms on the
+    /// new chain, and a deleted secret cannot serve that proof. The
+    /// re-pended entry then retires through direction 1 like any
+    /// pending tx once the re-confirmation is observed.
+    #[test]
+    fn reconcile_repends_rewind_orphan_instead_of_collecting() {
+        let txid = [0x77; 32];
+        let mut w = WalletLedger::empty();
+        insert_secret(&mut w, txid);
+        // Post-rewind shape: the confirming rows are gone, the pending
+        // record was retired at first confirmation — no reference left.
+        let (confirmed, collected) = w.reconcile_tx_key_retention(true);
+        assert_eq!(confirmed, 0);
+        assert_eq!(collected, 0, "rewind merge never collects");
+        assert!(
+            w.tx_meta.tx_keys.contains_key(&txid),
+            "the secret survives the rewind window"
+        );
+        assert_eq!(
+            w.sync_state.pending_tx_hashes,
+            vec![txid],
+            "the txid is re-pended exactly once"
+        );
+        w.check_invariants().expect("I-2 after re-pend");
+
+        // Re-confirmation on the new chain retires the re-pended record
+        // through the ordinary direction-1 path.
+        let mut spent_row = mk_transfer(0x11, 10);
+        spent_row.spent = true;
+        spent_row.spent_height = Some(22);
+        spent_row.key_image = Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+            [0x33; 32],
+        ));
+        spent_row.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
+        w.ledger.transfers.push(spent_row);
+        w.ledger.tip.synced_height = 32;
+        let (confirmed, collected) = w.reconcile_tx_key_retention(false);
+        assert_eq!(confirmed, 1, "re-pended record retires at re-confirmation");
+        assert_eq!(collected, 0);
+        assert!(w.tx_meta.tx_keys.contains_key(&txid));
+        w.check_invariants().expect("I-2 after re-confirmation");
+    }
+
+    /// The dispatch-persist / definite-refusal helper pair: `record`
+    /// writes secret + pending reference atomically (and is idempotent
+    /// on the pending side); `retire` removes both.
+    #[test]
+    fn record_and_retire_retained_tx_key_round_trip() {
+        let txid = [0x77; 32];
+        let mut w = WalletLedger::empty();
+        w.record_retained_tx_key(
+            txid,
+            crate::tx_meta_block::TxSecretKey::new(zeroize::Zeroizing::new([0x5A; 32])),
+        );
+        w.check_invariants().expect("record is I-2-atomic");
+        w.record_retained_tx_key(
+            txid,
+            crate::tx_meta_block::TxSecretKey::new(zeroize::Zeroizing::new([0x5B; 32])),
+        );
+        assert_eq!(
+            w.sync_state.pending_tx_hashes,
+            vec![txid],
+            "re-record never duplicates the pending reference"
+        );
+
+        w.retire_retained_tx_key(&txid);
+        assert!(w.tx_meta.tx_keys.is_empty());
+        assert!(w.sync_state.pending_tx_hashes.is_empty());
+        w.check_invariants().expect("retire leaves no orphan");
+    }
+
+    /// A secret held live only by an `awaiting_confirmation` lock is
+    /// not collected: the spend is network-exposed but unconfirmed, and
+    /// the pending record may already be gone.
+    #[test]
+    fn reconcile_keeps_secret_under_awaiting_confirmation_lock() {
+        let txid = [0x77; 32];
+        let mut w = WalletLedger::empty();
+        insert_secret(&mut w, txid);
+        let mut locked_row = mk_transfer(0x11, 10);
+        locked_row.awaiting_confirmation = Some(crate::transfer::AwaitingConfirmation {
+            tx_hash: shekyl_types::TxHash::from_bytes(txid),
+            accepted_at_height: 25,
+        });
+        w.ledger.transfers.push(locked_row);
+        w.ledger.tip.synced_height = 30;
+
+        let (confirmed, collected) = w.reconcile_tx_key_retention(false);
+        assert_eq!(confirmed, 0);
+        assert_eq!(collected, 0, "F14-locked secret survives");
+        assert!(w.tx_meta.tx_keys.contains_key(&txid));
+        w.check_invariants().expect("I-2 with lock leg");
     }
 }

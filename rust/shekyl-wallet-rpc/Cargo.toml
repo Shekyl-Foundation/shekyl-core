@@ -46,6 +46,9 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }
 shekyl-scanner = { path = "../shekyl-scanner" }
+# WI-RPC-3 proofs: decode / network-check the counterparty address the
+# proof binds to (canonical decoded-form comparison per the contract).
+shekyl-address = { path = "../shekyl-address" }
 shekyl-units = { path = "../shekyl-units" }
 shekyl-types = { path = "../shekyl-types" }
 

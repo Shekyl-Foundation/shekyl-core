@@ -92,7 +92,7 @@ const GLOBAL_TIMEOUT: Duration = Duration::from_secs(120);
 /// txs), so the default would reject legitimate large blocks the local posture
 /// (unbounded `read_to_end`) syncs fine. This cap sits above the largest legitimate
 /// daemon response while still bounding a runaway/malicious (posture ③) response —
-/// the reference `SimpleRequestRpc` reads unbounded because it dials only the
+/// the reference `HttpRpc` reads unbounded because it dials only the
 /// trusted local daemon; the per-`P` path may dial an untrusted node, so it keeps a
 /// (generous) explicit bound rather than ureq's too-small default.
 const MAX_RESPONSE_BODY_SIZE: u64 = 256 * 1024 * 1024;

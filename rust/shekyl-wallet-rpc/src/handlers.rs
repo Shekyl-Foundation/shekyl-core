@@ -14,6 +14,7 @@ use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use crate::error::WalletRpcError;
 use crate::fees;
 use crate::lifecycle;
+use crate::proofs;
 use crate::queries;
 use crate::receiving;
 use crate::send;
@@ -66,6 +67,13 @@ pub async fn dispatch(
         "get_staked_balance" => staking::get_staked_balance(tenants, params).await,
         "get_staked_outputs" => staking::get_staked_outputs(tenants, params).await,
         "staking_info" => staking::staking_info(tenants, params).await,
+        // WI-RPC-3 proofs. The `get_*` pair requires an open wallet; the
+        // `check_*` pair is WALLET-LESS by contract (a verifier checks
+        // someone else's proof against the chain).
+        "get_tx_proof" => proofs::get_tx_proof(tenants, params).await,
+        "check_tx_proof" => proofs::check_tx_proof(tenants, params).await,
+        "get_reserve_proof" => proofs::get_reserve_proof(tenants, params).await,
+        "check_reserve_proof" => proofs::check_reserve_proof(tenants, params).await,
         other => Err(WalletRpcError::MethodNotFound(other.to_owned())),
     }
 }
@@ -106,7 +114,7 @@ pub fn get_version_result() -> GetVersionResult {
 mod tests {
     use super::*;
     use crate::error::WalletRpcErrorCode;
-    use crate::tenant::TenantState;
+    use crate::tenant::{DaemonEndpoint, TenantState};
     use serde_json::json;
     use shekyl_engine_core::Network;
 
@@ -114,7 +122,10 @@ mod tests {
         tokio::sync::Mutex::new(TenantState::new(
             std::env::temp_dir(),
             Network::Stagenet,
-            "http://127.0.0.1:1".into(),
+            DaemonEndpoint {
+                address: "http://127.0.0.1:1".into(),
+                proxy: None,
+            },
         ))
     }
 
@@ -186,6 +197,38 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
+    }
+
+    #[tokio::test]
+    async fn get_tx_proof_without_open_wallet_is_wallet_not_open() {
+        // Params parse before the wallet gate, so supply valid ones.
+        let tenants = test_tenants();
+        let err = dispatch(
+            &tenants,
+            "get_tx_proof",
+            &json!({ "txid": "ab".repeat(32), "address": "x" }),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
+    }
+
+    #[tokio::test]
+    async fn check_tx_proof_is_wallet_less_and_gates_on_params_first() {
+        // No wallet is open; the wallet-less check must NOT answer
+        // WalletNotOpen. With an undecodable address it refuses -29100
+        // before dialing the (unreachable) test daemon.
+        let tenants = test_tenants();
+        let err = dispatch(
+            &tenants,
+            "check_tx_proof",
+            &json!({ "txid": "ab".repeat(32), "address": "junk", "proof": "junk" }),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::InvalidRecipient);
     }
 
     #[tokio::test]

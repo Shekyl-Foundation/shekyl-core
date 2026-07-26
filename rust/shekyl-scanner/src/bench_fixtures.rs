@@ -90,26 +90,15 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
 use zeroize::Zeroizing;
 
 use shekyl_crypto_pq::{
-    kem::{HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation, ML_KEM_768_CT_LEN},
+    kem::{
+        HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation, HYBRID_KEM_CT_LEN,
+        ML_KEM_768_CT_LEN,
+    },
     output::construct_output,
 };
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
-use crate::{
-    extra::{Extra, ExtraField},
-    view_pair::ViewPair,
-    ScannableBlock,
-};
-
-/// Bytes per X25519 ephemeral public key on the wire. Mirrors the
-/// module-private constant in [`crate::scan`] so this module compiles
-/// without coupling to scanner internals.
-const X25519_CT_BYTES: usize = 32;
-
-/// Bytes per per-output hybrid KEM ciphertext on the wire
-/// (`X25519_pubkey || ML-KEM-768_ciphertext`). Mirrors the
-/// module-private constant in [`crate::scan`].
-const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
+use crate::{extra::Extra, view_pair::ViewPair, ScannableBlock};
 
 /// Fixed per-transaction key for deterministic fixture construction.
 /// Real transactions use a fresh random `tx_key`; here we pin a
@@ -281,7 +270,7 @@ fn assemble_scannable_block(
     let mut commitments: Vec<[u8; 32]> = Vec::with_capacity(n_outputs);
     let mut enc_amounts: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
     let mut enc_labels: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
-    let mut kem_ct_blob: Vec<u8> = Vec::with_capacity(n_outputs * HYBRID_KEM_CT_BYTES);
+    let mut per_output_kem_cts: Vec<Vec<u8>> = Vec::with_capacity(n_outputs);
 
     for output_index in 0..n_outputs {
         let out = construct_output(
@@ -306,28 +295,31 @@ fn assemble_scannable_block(
         commitments.push(out.commitment);
         enc_amounts.push(join_enc9(&out.enc_amount, out.amount_tag));
         enc_labels.push(join_enc9(&out.enc_label, out.label_tag));
-        // Per `scan.rs::scan_transaction`, the KEM ciphertext blob
-        // for output `o` is read at offset `o * HYBRID_KEM_CT_BYTES`
-        // and consists of `X25519_CT_BYTES || ML_KEM_768_CT_LEN`.
-        kem_ct_blob.extend_from_slice(&out.kem_ciphertext_x25519);
+        // One `X25519_KEM_CT_LEN || ML_KEM_768_CT_LEN` ciphertext per
+        // output; `Extra::for_hybrid_transfer` below concatenates them
+        // into the single `0x06` field the scanner slices at
+        // `o * HYBRID_KEM_CT_LEN` offsets.
         debug_assert_eq!(
             out.kem_ciphertext_ml_kem.len(),
             ML_KEM_768_CT_LEN,
             "construct_output must produce ML-KEM ciphertexts of exactly ML_KEM_768_CT_LEN bytes"
         );
-        kem_ct_blob.extend_from_slice(&out.kem_ciphertext_ml_kem);
+        let mut kem_ct = Vec::with_capacity(HYBRID_KEM_CT_LEN);
+        kem_ct.extend_from_slice(&out.kem_ciphertext_x25519);
+        kem_ct.extend_from_slice(&out.kem_ciphertext_ml_kem);
+        per_output_kem_cts.push(kem_ct);
     }
 
-    debug_assert_eq!(
-        kem_ct_blob.len(),
-        n_outputs * HYBRID_KEM_CT_BYTES,
-        "KEM ciphertext blob length must match scanner's read-offset arithmetic"
-    );
-
-    // Serialize the extra field as a `Vec<u8>` (the scanner re-parses
-    // the byte slice via `Extra::read` at scan time, mirroring the
-    // production daemon → scanner path).
-    let extra_serialized = Extra(vec![ExtraField::PqcKemCiphertext(kem_ct_blob)]).serialize();
+    // Serialize the extra through the PRODUCTION writer
+    // (`Extra::for_hybrid_transfer`) rather than hand-packing the
+    // `0x06` field, so every fixture-driven scan exercises the
+    // writer↔reader packing contract — the hand-packed shape is how
+    // the per-output-field writer bug (FOLLOWUPS "KEM-ciphertext extra
+    // packing mismatch") stayed invisible to the bench sanity tests.
+    // The scanner re-parses the byte slice via `Extra::read` at scan
+    // time, mirroring the production daemon → scanner path.
+    let tx_pubkey = Scalar::from_bytes_mod_order(BENCH_TX_KEY) * ED25519_BASEPOINT_POINT;
+    let extra_serialized = Extra::for_hybrid_transfer(tx_pubkey, per_output_kem_cts).serialize();
 
     let tx = Transaction {
         prefix: TxPrefix {
@@ -514,7 +506,7 @@ mod tests {
 
         // Sanity-check the KEM ciphertext length matches the offset
         // arithmetic in `scan.rs::scan_transaction` (which slices the
-        // extra blob into `[X25519_CT_BYTES..HYBRID_KEM_CT_BYTES]`).
+        // extra blob into `[X25519_KEM_CT_LEN..HYBRID_KEM_CT_LEN]`).
         // A length mismatch here would propagate into the bench as
         // an unrelated parse error rather than a clean fast/slow-
         // path classification.
@@ -681,5 +673,69 @@ mod tests {
                 "typical-case block's non-miner tx output count must match requested N={n}"
             );
         }
+    }
+
+    /// KEM-packing regression (`FOLLOWUPS.md` "KEM-ciphertext extra
+    /// packing mismatch", 2026-07-24): every output of a multi-output
+    /// transaction whose extra was packed by the PRODUCTION writer
+    /// (`Extra::for_hybrid_transfer`, via the fixture assembly) must be
+    /// recovered by [`crate::scan::Scanner::scan`] — ownership hit and
+    /// key-image computation included, not just view-tag detection.
+    ///
+    /// Pre-fix, the writer emitted one `0x06` field per output while
+    /// every reader consumed only the FIRST field and sliced per-output
+    /// ciphertexts from it, so vout ≥ 1 — including all change — was
+    /// silently unscannable (recovery 1/2 on this exact shape). The
+    /// bench wallets deliberately miss ownership (`2 * G` on-chain
+    /// spend point, non-canonical placeholder spend secret), so this
+    /// test builds its own wallet whose on-chain spend point matches
+    /// the registered one and whose spend scalar is canonical.
+    #[test]
+    fn multi_output_tx_recovers_every_vout_through_scanner_scan() {
+        use crate::scan::Scanner;
+
+        let kem = HybridX25519MlKem;
+        let (kem_pk, kem_sk) = kem
+            .keypair_generate()
+            .expect("HybridX25519MlKem::keypair_generate is infallible under OsRng");
+        let sk_x25519: [u8; 32] = kem_sk.x25519;
+        let sk_ml_kem: Vec<u8> = kem_sk.ml_kem.clone();
+        drop(kem_sk);
+
+        // Canonical spend scalar; the on-chain spend point below is
+        // its public key, so ownership lookup hits and key-image
+        // computation runs with a valid secret.
+        let spend_scalar = Scalar::from_bytes_mod_order([0x0Au8; 32]);
+        let spend_point = spend_scalar * ED25519_BASEPOINT_POINT;
+        let view_scalar = Scalar::from_bytes_mod_order([0x0Bu8; 32]);
+
+        let view_pair = ViewPair::new(
+            spend_point,
+            Zeroizing::new(view_scalar),
+            Zeroizing::new(sk_x25519),
+            Zeroizing::new(sk_ml_kem),
+        )
+        .expect("scalar * basepoint is torsion-free");
+
+        let block = scannable_block_for_recipient(2, &kem_pk, &spend_point.compress().to_bytes());
+
+        let mut scanner = Scanner::new(view_pair, Zeroizing::new(spend_scalar.to_bytes()));
+        let outputs = scanner
+            .scan(block)
+            .expect("scan succeeds on a well-formed fixture block")
+            .into_inner();
+
+        let mut recovered: Vec<u64> = outputs
+            .iter()
+            .map(|o| o.wallet_output().index_in_transaction())
+            .collect();
+        recovered.sort_unstable();
+        assert_eq!(
+            recovered,
+            vec![0, 1],
+            "every vout of a production-packed multi-output tx must be \
+             recovered; missing vout >= 1 is the KEM-packing regression \
+             (one 0x06 field per output instead of one concatenated field)"
+        );
     }
 }

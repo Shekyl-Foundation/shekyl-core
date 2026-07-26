@@ -21,7 +21,7 @@
 //! synthetic-tree measurements stays in engine-core (where the measurement
 //! machinery lives) and calls the `pub` [`fcmp_proof_size`] here.
 
-use shekyl_crypto_pq::kem::ML_KEM_768_CT_LEN;
+use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
 use shekyl_curve_io::varint_len;
 // Consensus proof-system limits from their UPSTREAM home (constraint 1 — never
 // via shekyl-tx-builder's re-export, which would invert the arrow). `MAX_TREE_DEPTH`
@@ -74,10 +74,6 @@ bounded_count!(OutputCount, MAX_OUTPUTS, "output");
 // sums them so it equals `Transaction::weight()` exactly. Sizes with a canonical
 // home are imported, not re-typed (the hybrid PQC pk/sig lengths come from
 // `shekyl_wire`).
-
-/// Hybrid KEM ciphertext per output in `tx_extra`: the 32-byte x25519 component ‖ the
-/// ML-KEM-768 ciphertext (canonical length from `shekyl-crypto-pq`).
-const KEM_CIPHERTEXT_LEN: usize = 32 + ML_KEM_768_CT_LEN;
 
 /// `Input::ToKey`: tag + varint(amount=0) + varint(key_offsets=0) + key_image.
 const INPUT_TO_KEY_WEIGHT: usize = 1 + 1 + 1 + 32;
@@ -190,9 +186,19 @@ pub fn fcmp_proof_size(n_in: InputCount, tree_depth: u8) -> usize {
         .unwrap_or(FCMP_PROOF_SIZE_MAX)
 }
 
-/// `ExtraField::PqcKemCiphertext`: tag + varint(len) + ciphertext.
-fn extra_kem_field_weight() -> usize {
-    1 + varint_len(KEM_CIPHERTEXT_LEN as u64) + KEM_CIPHERTEXT_LEN
+/// The **single** `ExtraField::PqcKemCiphertext` (`0x06`) field: tag +
+/// varint(len) + `n_out` concatenated per-output ciphertexts — the packing
+/// `Extra::for_hybrid_transfer` emits, which every reader slices at
+/// `o * HYBRID_KEM_CT_LEN`.
+///
+/// **Was one field PER OUTPUT** until the parallel `0x06` fix on `dev`
+/// (`5cd252883`); this crate carried the pre-fix shape through the D-1 hoist and
+/// is corrected here at the merge. The delta is only the 15 saved tag+varint
+/// pairs (~45 B on a 1-in/16-out tx, ~0.13 %), but the predictor must byte-mirror
+/// `Transaction::write` exactly — the traveling parity test is the arbiter.
+fn extra_kem_field_weight(n_out: usize) -> usize {
+    let blob = n_out * HYBRID_KEM_CT_LEN;
+    1 + varint_len(blob as u64) + blob
 }
 
 /// `ExtraField::PqcLeafHashes` (`0x07`): tag + varint(len) + `n_out × 32`
@@ -253,7 +259,7 @@ pub fn predict_weight(n_in: InputCount, n_out: OutputCount, tree_depth: u8, fee:
     let n_in = n_in.get();
     let n_out = n_out.get();
     let extra_len = EXTRA_PUBKEY_FIELD_WEIGHT
-        + n_out * extra_kem_field_weight()
+        + extra_kem_field_weight(n_out)
         + extra_leaf_hashes_field_weight(n_out);
     [
         varint_len(TX_VERSION),            // version
@@ -416,7 +422,7 @@ mod tests {
             let extra = {
                 let mut e = Extra::for_hybrid_transfer(
                     ED25519_BASEPOINT_POINT,
-                    (0..n_out).map(|_| vec![0u8; KEM_CIPHERTEXT_LEN]),
+                    (0..n_out).map(|_| vec![0u8; HYBRID_KEM_CT_LEN]),
                 );
                 // The 0x07 leaf-hash blob the transfer path appends (sign_bridge.rs)
                 // — real serializer, same as the KEM term.

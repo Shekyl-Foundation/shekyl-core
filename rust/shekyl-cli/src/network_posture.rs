@@ -14,12 +14,17 @@
 //!   wallet and when it is active. This is *metadata* exposure — it holds even
 //!   if the link is encrypted (TLS) — not a claim that the payload is cleartext.
 //! - **A local-resolving SOCKS scheme (`socks5://`, `socks4://`) with a
-//!   *hostname* endpoint → warn.** Those schemes resolve the target locally and
-//!   connect the proxy to the resulting IP, so the hostname reaches the system
-//!   resolver in cleartext *before* the proxy is involved. This is a documented
-//!   property of the scheme, not a guess about the far end — and it is why
+//!   *hostname* endpoint, dialed by a transport that honors the scheme →
+//!   warn.** Those schemes resolve the target locally and connect the proxy to
+//!   the resulting IP, so the hostname reaches the system resolver in
+//!   cleartext *before* the proxy is involved. This is a documented property
+//!   of the scheme, not a guess about the far end — and it is why
 //!   `socks5h://` / `socks4a://` exist. An IP-literal endpoint has no name to
-//!   leak and is silent.
+//!   leak and is silent — and so is an endpoint whose dialing transport
+//!   always resolves at the proxy regardless of scheme
+//!   ([`ProxyResolution::AlwaysRemote`]): warning there would claim a lookup
+//!   no opened connection performs, the mirror error of an unearned
+//!   assurance.
 //! - **Loopback, unix socket, or a remote-resolving proxy → silence.**
 //! - **No configuration ever draws an assurance.** This is the load-bearing
 //!   half. A positive "your connection is private" claim derived from an
@@ -48,6 +53,22 @@
 //! this crate does not depend on engine-core, and the duplicated logic is a thin
 //! wrapper over `std::net::IpAddr::is_loopback` rather than a rule that can
 //! drift.
+
+/// How the transport that will dial an endpoint resolves its hostname when a
+/// proxy is configured — the fact the DNS-leak disclosure hinges on. The
+/// *caller* knows which transport opens; this module only knows schemes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyResolution {
+    /// The transport honors the proxy URL's scheme: `socks5://` / `socks4://`
+    /// resolve the endpoint hostname at the local resolver (the leak),
+    /// `socks5h://` / `socks4a://` at the proxy. The ureq clients — the
+    /// `--rpc-url` session and the REPL's direct daemon client — are this.
+    HonorsScheme,
+    /// The transport hands the hostname to the proxy regardless of scheme
+    /// (SOCKS5h semantics always), so there is no local lookup to disclose.
+    /// The self-hosted scan transport (`shekyl-rpc-transport`) is this.
+    AlwaysRemote,
+}
 
 /// What an outbound endpoint exposes to a passive network observer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,22 +213,6 @@ pub fn warning_for(label: &str, host: &str) -> String {
     )
 }
 
-/// The warning text for the self-hosted wallet server's connection to a remote
-/// daemon. That connection **cannot** be proxied (its transport has no proxy
-/// support), so — unlike [`warning_for`] — it fires regardless of `--proxy`,
-/// and its only remedy is a node on this machine.
-#[must_use]
-pub fn warning_for_direct(label: &str, host: &str) -> String {
-    format!(
-        "Warning: {label} '{host}' is not loopback. The self-hosted wallet \
-         server scans the chain over this connection, which does not use \
-         --proxy, so an observer on the network path can see that you run a \
-         Shekyl wallet and when it is active — regardless of who operates the \
-         node and even if the link is encrypted. Point --daemon-address at a \
-         node on this machine to avoid this."
-    )
-}
-
 /// `true` for SOCKS schemes that resolve the target hostname **locally** and
 /// then connect the proxy to the resulting IP — leaking the hostname to the
 /// system resolver in cleartext before the proxy is ever involved.
@@ -246,9 +251,20 @@ pub fn warning_for_dns_leak(label: &str, host: &str, proxy: &str) -> String {
 /// this module cannot establish a weakness for (there is deliberately no
 /// "looks good" message).
 ///
+/// `resolution` names how the dialing transport resolves hostnames under a
+/// proxy: the DNS-leak warning is only *true* for a transport that honors a
+/// local-resolving scheme, so a [`ProxyResolution::AlwaysRemote`] transport
+/// never draws it (the clear-network warning is unaffected — it is about
+/// having no proxy at all).
+///
 /// The two warnings are mutually exclusive by construction: `ClearNetwork` means
 /// no proxy is configured, `Proxied` means one is.
-pub fn disclose(label: &str, endpoint: &str, proxy: Option<&str>) -> Option<String> {
+pub fn disclose(
+    label: &str,
+    endpoint: &str,
+    proxy: Option<&str>,
+    resolution: ProxyResolution,
+) -> Option<String> {
     match classify(endpoint, proxy) {
         Exposure::Local => None,
         // A proxy is in use — we still say nothing about whether it is
@@ -258,7 +274,10 @@ pub fn disclose(label: &str, endpoint: &str, proxy: Option<&str>) -> Option<Stri
         Exposure::Proxied => {
             let proxy = proxy?;
             let host = host_of(endpoint);
-            if proxy_resolves_locally(proxy) && host.parse::<std::net::IpAddr>().is_err() {
+            if resolution == ProxyResolution::HonorsScheme
+                && proxy_resolves_locally(proxy)
+                && host.parse::<std::net::IpAddr>().is_err()
+            {
                 let msg = warning_for_dns_leak(label, host, proxy);
                 eprintln!("{msg}");
                 return Some(msg);
@@ -267,26 +286,6 @@ pub fn disclose(label: &str, endpoint: &str, proxy: Option<&str>) -> Option<Stri
         }
         Exposure::ClearNetwork { host } => {
             let msg = warning_for(label, &host);
-            eprintln!("{msg}");
-            Some(msg)
-        }
-    }
-}
-
-/// Disclose an endpoint whose connection **cannot** honor `--proxy` — the
-/// self-hosted wallet server's block-scanning link to the daemon, whose
-/// transport has no proxy support. Warns on a non-loopback daemon *regardless*
-/// of `--proxy` (it genuinely does not protect this connection), and is silent
-/// for a loopback / unix-socket / unconfigured daemon. Returns the warning
-/// printed, if any.
-pub fn disclose_unproxyable(label: &str, endpoint: &str) -> Option<String> {
-    // Passing `None` makes `classify` do the loopback/uds/empty determination
-    // without ever reporting `Proxied` — which is exactly right here, since the
-    // proxy does not reach this connection.
-    match classify(endpoint, None) {
-        Exposure::Local | Exposure::Proxied => None,
-        Exposure::ClearNetwork { host } => {
-            let msg = warning_for_direct(label, &host);
             eprintln!("{msg}");
             Some(msg)
         }
@@ -375,11 +374,29 @@ mod tests {
     #[test]
     fn only_establishable_weaknesses_speak() {
         // Local: nothing to disclose.
-        assert!(disclose("daemon", "127.0.0.1:11028", None).is_none());
+        assert!(disclose(
+            "daemon",
+            "127.0.0.1:11028",
+            None,
+            ProxyResolution::HonorsScheme
+        )
+        .is_none());
         // Remote, no proxy: clear-network warning.
-        assert!(disclose("daemon", "node.example.com:11028", None).is_some());
+        assert!(disclose(
+            "daemon",
+            "node.example.com:11028",
+            None,
+            ProxyResolution::HonorsScheme
+        )
+        .is_some());
         // Remote behind a remote-resolving proxy: silence — we do not grade it.
-        assert!(disclose("daemon", "node.example.com:11028", Some("socks5h://x")).is_none());
+        assert!(disclose(
+            "daemon",
+            "node.example.com:11028",
+            Some("socks5h://x"),
+            ProxyResolution::HonorsScheme
+        )
+        .is_none());
     }
 
     /// A local-resolving SOCKS scheme leaks the hostname to the system resolver
@@ -392,6 +409,7 @@ mod tests {
             "daemon address",
             "node.example.com:11028",
             Some("socks5://x"),
+            ProxyResolution::HonorsScheme,
         );
         let msg = leaked.expect("socks5:// with a hostname must warn");
         assert!(
@@ -402,21 +420,93 @@ mod tests {
         assert!(msg.contains("node.example.com"));
 
         // socks4:// resolves locally too.
-        assert!(disclose("daemon", "node.example.com:11028", Some("socks4://x")).is_some());
+        assert!(disclose(
+            "daemon",
+            "node.example.com:11028",
+            Some("socks4://x"),
+            ProxyResolution::HonorsScheme
+        )
+        .is_some());
 
         // The remote-resolving variants are the fix, not the problem.
-        assert!(disclose("daemon", "node.example.com:11028", Some("socks5h://x")).is_none());
-        assert!(disclose("daemon", "node.example.com:11028", Some("socks4a://x")).is_none());
+        assert!(disclose(
+            "daemon",
+            "node.example.com:11028",
+            Some("socks5h://x"),
+            ProxyResolution::HonorsScheme
+        )
+        .is_none());
+        assert!(disclose(
+            "daemon",
+            "node.example.com:11028",
+            Some("socks4a://x"),
+            ProxyResolution::HonorsScheme
+        )
+        .is_none());
 
         // An IP-literal endpoint involves no lookup — warning would be a false
         // positive of exactly the kind §15 rejected.
-        assert!(disclose("daemon", "203.0.113.7:11028", Some("socks5://x")).is_none());
-        assert!(disclose("daemon", "[2001:db8::1]:11028", Some("socks5://x")).is_none());
+        assert!(disclose(
+            "daemon",
+            "203.0.113.7:11028",
+            Some("socks5://x"),
+            ProxyResolution::HonorsScheme
+        )
+        .is_none());
+        assert!(disclose(
+            "daemon",
+            "[2001:db8::1]:11028",
+            Some("socks5://x"),
+            ProxyResolution::HonorsScheme
+        )
+        .is_none());
 
         // An HTTP proxy passes the host in the request; it does not resolve
         // locally. An unrecognized/absent scheme is not an established leak.
-        assert!(disclose("daemon", "node.example.com:11028", Some("http://x")).is_none());
-        assert!(disclose("daemon", "node.example.com:11028", Some("127.0.0.1:9050")).is_none());
+        assert!(disclose(
+            "daemon",
+            "node.example.com:11028",
+            Some("http://x"),
+            ProxyResolution::HonorsScheme
+        )
+        .is_none());
+        assert!(disclose(
+            "daemon",
+            "node.example.com:11028",
+            Some("127.0.0.1:9050"),
+            ProxyResolution::HonorsScheme
+        )
+        .is_none());
+    }
+
+    /// An always-remote transport (the self-hosted scan) performs no local
+    /// lookup for any proxy scheme, so the DNS-leak warning would assert a
+    /// leak no opened connection produces — it stays silent. The
+    /// clear-network warning (no proxy at all) is about the dial itself and
+    /// is unaffected.
+    #[test]
+    fn always_remote_transport_never_draws_the_dns_leak_warning() {
+        assert!(disclose(
+            "daemon address",
+            "node.example.com:11028",
+            Some("socks5://x"),
+            ProxyResolution::AlwaysRemote
+        )
+        .is_none());
+        assert!(disclose(
+            "daemon address",
+            "node.example.com:11028",
+            Some("socks4://x"),
+            ProxyResolution::AlwaysRemote
+        )
+        .is_none());
+        assert!(disclose(
+            "daemon address",
+            "node.example.com:11028",
+            None,
+            ProxyResolution::AlwaysRemote
+        )
+        .is_some());
     }
 
     /// The load-bearing property: no configuration produces an assurance. The
@@ -426,12 +516,36 @@ mod tests {
     #[test]
     fn no_configuration_ever_draws_an_assurance() {
         let outputs = [
-            disclose("daemon", "127.0.0.1:11028", None),
-            disclose("daemon", "uds:///run/w.sock", None),
-            disclose("daemon", "node.example.com:11028", Some("socks5://x")),
-            disclose("daemon", "node.example.com:11028", Some("socks5h://x")),
-            disclose("daemon", "node.example.com:11028", None),
-            disclose_unproxyable("daemon", "node.example.com:11028"),
+            disclose(
+                "daemon",
+                "127.0.0.1:11028",
+                None,
+                ProxyResolution::HonorsScheme,
+            ),
+            disclose(
+                "daemon",
+                "uds:///run/w.sock",
+                None,
+                ProxyResolution::HonorsScheme,
+            ),
+            disclose(
+                "daemon",
+                "node.example.com:11028",
+                Some("socks5://x"),
+                ProxyResolution::HonorsScheme,
+            ),
+            disclose(
+                "daemon",
+                "node.example.com:11028",
+                Some("socks5h://x"),
+                ProxyResolution::HonorsScheme,
+            ),
+            disclose(
+                "daemon",
+                "node.example.com:11028",
+                None,
+                ProxyResolution::HonorsScheme,
+            ),
         ];
         for out in outputs.into_iter().flatten() {
             assert!(
@@ -480,30 +594,43 @@ mod tests {
         );
     }
 
+    /// The self-hosted daemon scan now honors --proxy (SOCKS5h), so it is
+    /// disclosed via `disclose` like every other daemon connection — there is
+    /// no longer an "unproxyable" path. A non-loopback daemon with no proxy
+    /// warns; a remote-resolving proxy silences it.
     #[test]
-    fn unproxyable_disclosure_warns_regardless_of_proxy() {
-        // The self-hosted scan connection cannot use --proxy: a non-loopback
-        // daemon warns; loopback / unix-socket / unconfigured stay silent.
-        assert!(disclose_unproxyable("daemon address", "127.0.0.1:11028").is_none());
-        assert!(disclose_unproxyable("daemon address", "uds:///run/w.sock").is_none());
-        assert!(disclose_unproxyable("daemon address", "").is_none());
-        let w = disclose_unproxyable("daemon address", "node.example.com:11028")
-            .expect("a non-loopback self-hosted daemon warns");
+    fn self_hosted_daemon_is_disclosed_proxy_aware() {
+        assert!(disclose(
+            "daemon address",
+            "127.0.0.1:11028",
+            None,
+            ProxyResolution::HonorsScheme
+        )
+        .is_none());
+        assert!(disclose(
+            "daemon address",
+            "node.example.com:11028",
+            Some("socks5h://x"),
+            ProxyResolution::HonorsScheme
+        )
+        .is_none());
+        let w = disclose(
+            "daemon address",
+            "node.example.com:11028",
+            None,
+            ProxyResolution::HonorsScheme,
+        )
+        .expect("a non-loopback daemon with no proxy warns");
         assert!(w.starts_with("Warning:"));
-        assert!(w.contains("does not use --proxy"));
         assert!(w.contains("node.example.com"));
     }
 
     #[test]
     fn warnings_do_not_claim_the_payload_is_cleartext() {
-        // #5: neither warning says "in the clear" — the exposure is metadata,
-        // which holds even over an encrypted (TLS) link.
-        for w in [
-            warning_for("daemon", "node"),
-            warning_for_direct("daemon", "node"),
-        ] {
-            assert!(!w.to_lowercase().contains("in the clear"), "{w}");
-            assert!(w.contains("even if the link is encrypted"), "{w}");
-        }
+        // #5: the warning does not say "in the clear" — the exposure is
+        // metadata, which holds even over an encrypted (TLS) link.
+        let w = warning_for("daemon", "node");
+        assert!(!w.to_lowercase().contains("in the clear"), "{w}");
+        assert!(w.contains("even if the link is encrypted"), "{w}");
     }
 }

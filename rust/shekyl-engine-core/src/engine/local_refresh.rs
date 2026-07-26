@@ -814,17 +814,35 @@ impl RefreshEngine for LocalRefresh {
                 // owned-output set; we do not pre-filter here
                 // because the snapshot deliberately does not carry
                 // the wallet's owned-output index.
+                // The containing txid rides along (spend-quadruple leg,
+                // F-9): the merge writes it into the spent row's
+                // `spending_tx_hash`. Miner txs carry no wire hash, so
+                // hash lazily — a `ToKey` input in a miner tx is not a
+                // shape Shekyl produces, but the collection is
+                // deliberately unfiltered (see comment above).
+                let mut miner_tx_hash: Option<shekyl_types::TxHash> = None;
                 for input in &miner_tx.prefix.inputs {
                     if let Input::ToKey { key_image, .. } = input {
+                        let containing_tx_hash = *miner_tx_hash.get_or_insert_with(|| {
+                            shekyl_types::TxHash::from_bytes(miner_tx.hash())
+                        });
                         spent_key_images.push(KeyImageObserved {
                             block_height: h,
                             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                                 *key_image,
                             ),
+                            containing_tx_hash,
                         });
                     }
                 }
-                for tx in &scannable.transactions {
+                // `Block::transaction_hashes` pairs positionally with
+                // `scannable.transactions` (the scanner enforces the
+                // length match at construction).
+                for (tx, tx_hash) in scannable
+                    .transactions
+                    .iter()
+                    .zip(&scannable.block.transaction_hashes)
+                {
                     for input in &tx.prefix.inputs {
                         if let Input::ToKey { key_image, .. } = input {
                             spent_key_images.push(KeyImageObserved {
@@ -833,6 +851,7 @@ impl RefreshEngine for LocalRefresh {
                                     shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                                         *key_image,
                                     ),
+                                containing_tx_hash: shekyl_types::TxHash::from_bytes(*tx_hash),
                             });
                         }
                     }

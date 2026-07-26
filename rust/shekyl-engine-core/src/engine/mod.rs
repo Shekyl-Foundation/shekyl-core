@@ -109,7 +109,7 @@
 //! | `reservations`        | `BTreeMap<ReservationId, Reservation>`               | runtime-only `PendingTx` tracker        |
 //! | `next_reservation_id` | `u64`                                                | process-local monotonic counter         |
 //! | `prefs`               | [`shekyl_engine_prefs::WalletPrefs`]                 | plaintext-with-HMAC layer 2             |
-//! | `daemon`              | [`DaemonClient`]                                     | thin wrapper around `SimpleRequestRpc`  |
+//! | `daemon`              | [`DaemonClient`]                                     | thin wrapper around `HttpRpc`  |
 //! | `network`             | [`Network`]                                          | cached from `file.network()`            |
 //! | `capability`          | [`Capability`]                                       | cached from `file.capability()`         |
 //! | `_signer`             | `PhantomData<S>`                                     | compile-time signer dispatch            |
@@ -325,6 +325,10 @@ pub mod output_selector;
 pub mod payment_requests;
 pub mod pending;
 pub(crate) mod principal_stake;
+/// WI-RPC-3 proof-generation bridge: the crypto bodies behind the
+/// [`key_actor::KeyActor`]'s inbound-tx-proof and reserve-proof messages.
+pub(crate) mod proof_bridge;
+pub mod proofs;
 pub(crate) mod pscan;
 pub mod refresh;
 /// Track-2 end-to-end FAKECHAIN regtest (C++↔Rust FCMP++ verify parity). Spawns
@@ -691,7 +695,7 @@ pub struct Engine<
     ///
     /// Generic over `D: DaemonEngine`. Production code defaults `D` to
     /// [`DaemonClient`] (a thin wrapper over
-    /// `shekyl_rpc_transport::SimpleRequestRpc`); crate-internal
+    /// `shekyl_rpc_transport::HttpRpc`); crate-internal
     /// tests substitute `TestDaemon` to drive failure-injection and
     /// deduplication scenarios against the same orchestration logic.
     /// See `crate::engine::traits::daemon` for the trait contract.
@@ -891,7 +895,7 @@ impl<
     ///   accessors.
     /// - `daemon` — passes through to [`DaemonClient`]'s `Debug`, which
     ///   includes the daemon URL but no auth credentials (see
-    ///   [`shekyl_rpc_transport::SimpleRequestRpc`]).
+    ///   [`shekyl_rpc_transport::HttpRpc`]).
     /// - `network`, `capability` — printed verbatim; these are cached
     ///   public values from region 1 of the wallet file.
     /// - `pending` — printed as an outstanding-count via

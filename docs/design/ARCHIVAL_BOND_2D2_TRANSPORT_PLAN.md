@@ -4,7 +4,7 @@
 §11–§15 add the buildable SP decomposition (grounded surface map, SP enumeration, type-safety,
 dependency posture, per-SP design). The transport is greenfield (no Arti/Tor/onion code on
 dev; the only network primitive is `ureq` + `socks-proxy` in `rust/shekyl-cli/Cargo.toml:25`,
-and the wallet→daemon path is HTTP(S) `DaemonClient` over `SimpleRequestRpc`,
+and the wallet→daemon path is HTTP(S) `DaemonClient` over `HttpRpc`,
 `rust/shekyl-engine-core/src/engine/daemon.rs`). 2d-1 pinned the *seams* (below); 2d-2 fills
 them. **The scope is deliberately small** — most of the apparent surface dissolved on
 grounding (see §0): the privacy job is one boundary, the liveness job is ordinary, and the
@@ -353,7 +353,7 @@ starting one layer deeper than §2: the *real* substrate, read at the function, 
 | --- | --- | --- | --- |
 | **SP-0 `BlockSource`** (`engine-core/pscan/block_source.rs`, over `shekyl-rpc-client`) | the per-`P` fetch keystone — whole-block-by-height, **no selective fetch** (isolation is the trait's *shape*). 2d-1 ships `DaemonBlockSource`, a placeholder over an existing `DaemonEngine`. | **`P`'s** | **the seam 2d-2 implements** — the real per-`P`-isolated transport goes *behind this trait* |
 | `cli/daemon.rs::DaemonClient` (`ureq` + SOCKS) | the lightweight, "independent-of-wallet2-FFI" client for unauthenticated CLI queries (`get_info`, …) | **principal's** | a circuit `P` must stay disjoint from; the `IsolateSOCKSAuth` *model* |
-| `engine-core::DaemonClient` over `SimpleRequestRpc` | the wallet2-FFI refresh path | **principal's** | the other circuit `P` must stay disjoint from |
+| `engine-core::DaemonClient` over `HttpRpc` | the wallet2-FFI refresh path | **principal's** | the other circuit `P` must stay disjoint from |
 
 The firewall requirement is exactly: **`P`'s `BlockSource` transport shares a circuit with
 neither principal surface.** That is the whole of half (A).
@@ -645,7 +645,7 @@ not implement). The scope shrank to §0–§7 precisely *because* these collapse
 | --- | --- | --- |
 | **Serving requires a full validating node → scan is forced local → TM-3/TM-6 dissolve** | **Refuted.** The chain model is light-client (daemon serves leaves, wallet verifies vs. per-block header `curve_tree_root`); no doc requires a validating node. Remote scan is a supported posture, not a phantom. | `CURVE_TREE_CLIENT.md`; grep for "full node required" (empty) |
 | **Slash forces a *local* node** | **Refuted.** "Trusted" ≠ "local" — a self-hosted *remote* node is equally trusted. The real structure is the three-posture taxonomy (§4): trust dissolves TM-3 (local *or* own-remote); only locality dissolves TM-6. | the posture analysis, §4 |
-| **Challenge-response is a single-missed-deadline capital knife-edge** | **Refuted at the code.** The slash is **sliding-window m-of-n** — `failure_confirmation::run_sliding` slashes only when `miss_count >= miss_threshold` within the window; a single transient is a scored `false_slash` the tuning avoids. A transient is absorbed by retry + Tor failover; only *sustained* failure slashes (the mechanism working). | `run_sliding`, `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` |
+| **Challenge-response is a single-missed-deadline capital knife-edge** | **Refuted at the code** — though only since the m-of-n landed in consensus. The slash is **sliding-window m-of-n**: it fires only when `m` misses fall within the last `n` baseline observations for a `(P_id, shard)`; a single transient is absorbed by retry + Tor failover, and only *sustained* failure slashes (the mechanism working). **Pointer corrected:** when this row was written the only implementation was `failure_confirmation::run_sliding` — the **sim** — while consensus still single-struck, so the refutation was citing a model of the mechanism rather than the mechanism. The consensus implementation now exists and the two are held equal by an exhaustive equivalence test. | `shekyl-archival-retention::failure_window`, `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §4.1 |
 | **Multi-path liveness has a privacy tension (N paths = N origin exposures)** | **Dissolved.** `P` is public (§0); the vin is public-content; multi-path only keeps each path's origin in `P`-space, never the principal's — no competing privacy axis. So multi-path is a *latency nicety*, not bond protection. | §0 charter + §5 |
 | **Guard-level censorship is a hard liveness floor needing bundled PT/bridges** | **Over-scoped → out of scope.** Default-Tor guard behavior is correct (deviation creates a signature); reaching Tor where it is *blocked* is the Tor Project's cat-and-mouse — a doc pointer (§8), not our machinery — and §5's backoff makes it not a capital cliff. | Tor SOCKS/guard model (§3) |
 | **Operator runs K *simultaneous* personas; cardinality is a structural 2d-2 hand-off** | **Retracted** — the design is sequential (`stake_engine`: "never two active personas"); the channel does not exist. | `ARCHIVAL_TM1_CLUSTERING.md` §0 |

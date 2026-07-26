@@ -169,6 +169,11 @@ rust/shekyl-engine-state/src/transfer.rs|key: Vec<u8>
 rust/shekyl-engine-state/src/transfer.rs|key_offset: Vec<u8>
 rust/shekyl-engine-state/src/transfer.rs|commitment: Vec<u8>
 rust/shekyl-engine-state/src/transfer.rs|key_image: Option<[u8; 32]>
+# Spend-quadruple leg (WI-RPC-3): the schema mirror of
+# `TransferDetails.spending_tx_hash` — the real field is
+# `Option<TxHash>` (a public 32-byte transaction hash, the same
+# public-bytes class as `tx_hash` above); no secret material.
+rust/shekyl-engine-state/src/transfer.rs|spending_tx_hash: Option<[u8; 32]>
 
 # ── tx_meta_block.rs ──────────────────────────────────────────────────
 #

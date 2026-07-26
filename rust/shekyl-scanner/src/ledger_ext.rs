@@ -64,6 +64,7 @@ impl TransferDetailsExt for TransferDetails {
             spent_height: None,
             key_image: None,
             awaiting_confirmation: None,
+            spending_tx_hash: None,
             // M3b deterministic-handle pathway: populated by the
             // orchestrator-side post-pass in
             // `shekyl_engine_core::engine::merge::populate_engine_handle_fields`,

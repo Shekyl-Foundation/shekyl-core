@@ -25,6 +25,7 @@ fn host(dir: &std::path::Path) -> RpcSession {
         dir.to_path_buf(),
         Network::Stagenet,
         NO_DAEMON.into(),
+        None,
         false,
     )
     .expect("host in-process wallet RPC")

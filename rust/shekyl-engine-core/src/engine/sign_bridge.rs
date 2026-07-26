@@ -528,6 +528,11 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         output_keys,
         view_tags,
         tx_extra,
+        // WI-RPC-3 retention: the minted scalar leaves the signing
+        // frame inside a zeroize-on-drop wrapper instead of dying at
+        // function exit; the submit path persists it at
+        // submit-ACCEPTED.
+        tx_key_secret: shekyl_engine_state::TxSecretKey::new(tx_key_secret),
     })
 }
 

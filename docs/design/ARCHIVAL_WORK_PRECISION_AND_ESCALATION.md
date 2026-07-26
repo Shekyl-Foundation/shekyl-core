@@ -354,7 +354,7 @@ argument for it over a participation-derived signal:
 >    ceiling against `−0.10` at the *full* reorg bound, one-directional always. No reversal, no
 >    oscillation, no whipsaw. **W8 stays armed by operand.**
 > 2. **Acceleration: economically closed — and *conditionally*.** The slew is real
->    (a W9 flood buys `n` at the block-weight ceiling: ~2 708 shards/epoch
+>    (a W9 flood buys `n` at the block-weight ceiling: ~2 714 shards/epoch
 >    early-chain penalty-free — **`+1.41` pts/epoch**, or **`+2.82`** if the flooder
 >    also compensates the miner-reward penalty to use the legal `2×` limit,
 >    ~45 k SKL/epoch in fees) and it is closed by **price**, not by structure. The
@@ -973,7 +973,7 @@ models (each cell links its section).
 | **A1** clearance | ✅ **clears** | Escalation earns its keep in the far tail: scenario 9 flat-25 **0.66×** (fails) vs best candidate **2.36×** at the binding 10 % opportunity-cost rate, 0 %/yr Kryder. A non-event while emission dominates. |
 | **A2** distribution (W6) | ✅ **clears** (§12.10) | Scarce-holder share `1.0000 → 0.9998` — **0.02 %** dilution, **zero** scarce holders stranded below marginal cost. |
 | **A3** stranding | ✅ **reported** (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff — the §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside the quantization corner. |
-| **A4** stuffing (W9) | 🔴 **FAILS** (§12.5) | Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6663**, `fee×→1` **0.7** (§12.9 OQ-4). |
+| **A4** stuffing (W9) | 🔴 **FAILS** (§12.5) | Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6671**, `fee×→1` **0.7** (§12.9 OQ-4). |
 | **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching a ~3 KB opening beats holding 13.6 GB by **4–40×**; crossover `q* ≈ 0.088–0.26`. |
 | **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts. Adversarial slew ceiling **1.41 pts/epoch penalty-free** (closed **economically** by reopen (c)) or **2.82 pts/epoch at the legal 2× limit** — the latter already priced out by the block-reward penalty (~10.24 M SKL/epoch, **114×** the fees). See the §6.0 amendment. |
 
@@ -1520,9 +1520,9 @@ pushed to sit at the floor.
 
 | honest regime | ROI | `fee× → 1` |
 | --- | --- | --- |
-| kept, small bonds (`h=4`) | 0.6663 | 0.7 |
-| kept, **capped** (`h=512`) | **1.1948** | 1.2 |
-| **DELETED** (`h` irrelevant) | **0.6663** | **0.7** |
+| kept, small bonds (`h=4`) | 0.6671 | 0.7 |
+| kept, **capped** (`h=512`) | **1.1963** | 1.2 |
+| **DELETED** (`h` irrelevant) | **0.6671** | **0.7** |
 
 Deletion reproduces the small-bond row **bit-for-bit**: with no cap to dodge the
 honest-holdings axis stops mattering, and A4 has *one* number per regime instead
@@ -1603,8 +1603,8 @@ no-controller constraint. Stuffer weight comes from the production predictor.
 
 | `n` | `Δn`/epoch | `Δshare` %pts/ep (penalty-free) | %pts/ep (legal 2× limit) | reorg `Δshare` %pt |
 | --- | --- | --- | --- | --- |
-| 0 | 2 708 | **1.4081 %** | **2.8199 %** | 0.1014 % |
-| 25 000 | 2 554 | 1.3280 % | 2.6598 % | 0.0951 % |
+| 0 | 2 714 | **1.4112 %** | **2.8230 %** | 0.1014 % |
+| 25 000 | 2 554 | 1.3312 % | 2.6629 % | 0.0956 % |
 | 250 000 | 2 554 | 0.0000 % | 0.0000 % | 0.0000 % |
 
 **The two claims must be separated** — see the §6.0 amendment for the ruling form.

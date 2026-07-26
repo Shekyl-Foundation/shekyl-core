@@ -776,7 +776,7 @@ mod tests {
 
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_engine_state::pscan_cursor::PScanCursor;
-    use shekyl_rpc_transport::SimpleRequestRpc;
+    use shekyl_rpc_transport::HttpRpc;
     use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
     use shekyl_units::AtomicUnits;
     use tempfile::TempDir;
@@ -790,9 +790,9 @@ mod tests {
     fn dummy_daemon() -> DaemonClient {
         let rpc = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
-                .block_on(SimpleRequestRpc::new("http://127.0.0.1:1".to_string()))
+                .block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
         })
-        .expect("construct SimpleRequestRpc (no actual connection attempted)");
+        .expect("construct HttpRpc (no actual connection attempted)");
         DaemonClient::new(rpc)
     }
 

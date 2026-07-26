@@ -68,9 +68,13 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 ///   (FA-8, §5.7.9).
 /// - Version `7` retires the confidential-staking (claim-era) fields
 ///   (PR-3 of the staking sweep).
-/// - Version `8` (this version) adds
-///   `TransferDetails::awaiting_confirmation` — the F14 persisted
-///   awaiting-confirmation lock (`DAEMON_SUBMIT_VERDICT.md` §2.6).
+/// - Version `8` adds `TransferDetails::awaiting_confirmation` — the
+///   F14 persisted awaiting-confirmation lock
+///   (`DAEMON_SUBMIT_VERDICT.md` §2.6).
+/// - Version `9` (this version) adds
+///   `TransferDetails::spending_tx_hash` — the WI-RPC-3 spend-quadruple
+///   leg (F-9): the confirmed spending txid recorded so `tx_meta.tx_keys`
+///   retention stays I-2-live for no-change outbound transactions.
 ///
 /// Any field addition / removal / renaming inside the block, or any
 /// transitive change in a nested type's serialized shape, bumps this;
@@ -78,7 +82,7 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 8;
+pub const LEDGER_BLOCK_VERSION: u32 = 9;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -387,6 +391,9 @@ mod tests {
                 tx_hash: shekyl_types::TxHash::from_bytes([seed.wrapping_add(4); 32]),
                 accepted_at_height: 100 + u64::from(seed),
             }),
+            // Exercise the Some leg of the spend-quadruple field in the
+            // round-trip tests as well.
+            spending_tx_hash: Some(shekyl_types::TxHash::from_bytes([seed.wrapping_add(5); 32])),
             // Post-M3d: per-output secrets are no longer persisted on
             // `TransferDetails`; the M3b deterministic-handle pathway
             // (`source_ciphertext`, `output_handle`) carries the

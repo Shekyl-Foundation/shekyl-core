@@ -4727,6 +4727,8 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_outbound(
 /// - `view_secret_key`, `txid`: 32 bytes each.
 /// - `address`: `address_len` bytes.
 /// - `proof_secrets`: `output_count * 128` bytes (ho[32]+y[32]+z[32]+k_amount[32]).
+/// - `output_indices`: `output_count` u32 vout indices, strictly increasing,
+///   entry i pairing with proof-secrets entry i.
 /// - `proof_out`: writable `ShekylBuffer`.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_generate_tx_proof_inbound(
@@ -4737,6 +4739,7 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_inbound(
     message: *const u8,
     message_len: usize,
     proof_secrets_ptr: *const u8,
+    output_indices: *const u32,
     output_count: u32,
     proof_out: *mut ShekylBuffer,
 ) -> bool {
@@ -4765,7 +4768,11 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_inbound(
     let Some(ps_bytes) = (unsafe { slice_from_ptr(proof_secrets_ptr, n * 128) }) else {
         return false;
     };
-    let secrets: Vec<shekyl_crypto_pq::output::ProofSecrets> = (0..n)
+    if output_indices.is_null() {
+        return false;
+    }
+    let indices = unsafe { std::slice::from_raw_parts(output_indices, n) };
+    let secrets: Vec<(u32, shekyl_crypto_pq::output::ProofSecrets)> = (0..n)
         .map(|i| {
             let base = i * 128;
             let mut ho = [0u8; 32];
@@ -4776,7 +4783,10 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_inbound(
             y.copy_from_slice(&ps_bytes[base + 32..base + 64]);
             z.copy_from_slice(&ps_bytes[base + 64..base + 96]);
             k_amount.copy_from_slice(&ps_bytes[base + 96..base + 128]);
-            shekyl_crypto_pq::output::ProofSecrets { ho, y, z, k_amount }
+            (
+                indices[i],
+                shekyl_crypto_pq::output::ProofSecrets { ho, y, z, k_amount },
+            )
         })
         .collect();
 

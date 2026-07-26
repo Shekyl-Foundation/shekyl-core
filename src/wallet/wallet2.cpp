@@ -10759,26 +10759,44 @@ std::string wallet2::get_tx_proof(const crypto::hash &txid, const cryptonote::ac
   {
     const crypto::secret_key& view_sk = m_account.get_keys().m_view_secret_key;
 
-    std::vector<uint8_t> ps_buf;
-    uint32_t output_count = 0;
-    for (const auto& td : m_transfers)
+    // Collect (vout index, transfer) pairs sorted by vout index — the proof
+    // wire format carries each entry's index and requires strict ascending
+    // order.
+    std::vector<size_t> matching;
+    for (size_t i = 0; i < m_transfers.size(); ++i)
     {
+      const auto& td = m_transfers[i];
       if (td.m_txid == txid && td.m_combined_shared_secret_set)
-      {
-        uint8_t ho[32], y_buf[32], z_buf[32], k_amount[32];
-        shekyl_derive_proof_secrets(
-            td.m_combined_shared_secret.data(),
-            td.m_internal_output_index,
-            ho, y_buf, z_buf, k_amount);
-        ps_buf.insert(ps_buf.end(), ho, ho + 32);
-        ps_buf.insert(ps_buf.end(), y_buf, y_buf + 32);
-        ps_buf.insert(ps_buf.end(), z_buf, z_buf + 32);
-        ps_buf.insert(ps_buf.end(), k_amount, k_amount + 32);
-        memwipe(ho, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_amount, 32);
-        ++output_count;
-      }
+        matching.push_back(i);
     }
-    THROW_WALLET_EXCEPTION_IF(output_count == 0, error::wallet_internal_error,
+    std::sort(matching.begin(), matching.end(), [this](size_t a, size_t b) {
+      return m_transfers[a].m_internal_output_index < m_transfers[b].m_internal_output_index;
+    });
+
+    std::vector<uint8_t> ps_buf;
+    std::vector<uint32_t> vout_indices;
+    // Reserve up front: ps_buf carries derived proof secrets, and a
+    // reallocation mid-loop would copy them to a fresh heap block and
+    // free the old one unwiped — the memwipe below only scrubs the
+    // final allocation. 4 secrets x 32 bytes per entry.
+    ps_buf.reserve(matching.size() * 128);
+    vout_indices.reserve(matching.size());
+    for (size_t i : matching)
+    {
+      const auto& td = m_transfers[i];
+      uint8_t ho[32], y_buf[32], z_buf[32], k_amount[32];
+      shekyl_derive_proof_secrets(
+          td.m_combined_shared_secret.data(),
+          td.m_internal_output_index,
+          ho, y_buf, z_buf, k_amount);
+      ps_buf.insert(ps_buf.end(), ho, ho + 32);
+      ps_buf.insert(ps_buf.end(), y_buf, y_buf + 32);
+      ps_buf.insert(ps_buf.end(), z_buf, z_buf + 32);
+      ps_buf.insert(ps_buf.end(), k_amount, k_amount + 32);
+      memwipe(ho, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_amount, 32);
+      vout_indices.push_back(static_cast<uint32_t>(td.m_internal_output_index));
+    }
+    THROW_WALLET_EXCEPTION_IF(vout_indices.empty(), error::wallet_internal_error,
         "No matching transfers found — cannot generate inbound proof");
 
     ShekylBuffer proof_buf{};
@@ -10787,7 +10805,8 @@ std::string wallet2::get_tx_proof(const crypto::hash &txid, const cryptonote::ac
         reinterpret_cast<const uint8_t*>(&txid),
         reinterpret_cast<const uint8_t*>(addr_blob.data()), addr_blob.size(),
         reinterpret_cast<const uint8_t*>(message.data()), message.size(),
-        ps_buf.data(), output_count,
+        ps_buf.data(), vout_indices.data(),
+        static_cast<uint32_t>(vout_indices.size()),
         &proof_buf);
     memwipe(ps_buf.data(), ps_buf.size());
     THROW_WALLET_EXCEPTION_IF(!gen_ok, error::wallet_internal_error,

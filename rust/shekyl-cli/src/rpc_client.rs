@@ -117,6 +117,7 @@ impl RpcSession {
         wallet_dir: PathBuf,
         network: Network,
         daemon_address: String,
+        proxy: Option<String>,
         debug: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Multi-thread runtime: Engine create/open paths use
@@ -130,6 +131,7 @@ impl RpcSession {
                 wallet_dir,
                 network,
                 daemon_address,
+                proxy,
             ))
             .map_err(|e| format!("failed to start in-process wallet RPC: {e}"))?;
         let socket = handle

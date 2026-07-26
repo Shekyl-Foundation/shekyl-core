@@ -18,7 +18,7 @@ use base64::Engine as _;
 use subtle::ConstantTimeEq;
 
 /// Auth configuration for the RPC listener.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum AuthConfig {
     /// No credential check (UDS / `--disable-rpc-login`).
     Disabled,
@@ -30,6 +30,22 @@ pub enum AuthConfig {
         /// header; treat as a secret under `35-secure-memory.mdc`.
         password: String,
     },
+}
+
+/// Manual (not derived) so no `Debug` of server state — `ServerConfig`,
+/// `AppState`, a panic message — can ever render the `--rpc-login` password
+/// (rule 35: it is a secret; rendering is the one thing Debug must not do).
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disabled => f.write_str("AuthConfig::Disabled"),
+            Self::Basic { username, .. } => f
+                .debug_struct("AuthConfig::Basic")
+                .field("username", username)
+                .field("password", &"<redacted>")
+                .finish(),
+        }
+    }
 }
 
 impl AuthConfig {

@@ -59,7 +59,7 @@ exercised; (4) `ct2_tier_b.json` not generated, `recon_tier_b.rs` `#[ignore]`d.
 ### Phase 0 — `RegtestDaemon` harness (DONE, green)
 Spawn `shekyld --regtest --offline --non-interactive --fixed-difficulty 1
 --rpc-bind-port <ephemeral> --data-dir <temp>`; poll `get_info` for readiness;
-`generate_blocks`/`pop_blocks`/`get_info` over `SimpleRequestRpc`; kill + clean on
+`generate_blocks`/`pop_blocks`/`get_info` over `HttpRpc`; kill + clean on
 `Drop`. **Placement:** internal `#[cfg(test)]` module
 `shekyl-engine-core/src/engine/regtest_e2e.rs` (not a `tests/` crate) — it needs
 crate-internal visibility for the serialize/parse + reanchor assertions, and the
@@ -144,7 +144,7 @@ fixture generator and depth-3+ build on top.
 ## 6. Findings log (real bugs surfaced)
 
 The wallet↔daemon RPC transport had never been run end-to-end (production only
-pointed `SimpleRequestRpc` at dummy URLs). Three incompatibilities between the
+pointed `HttpRpc` at dummy URLs). Three incompatibilities between the
 vendored monero-oxide client and our axum `shekyl-daemon-rpc` server — all
 **transport, not consensus**, so Rust-side fixes are correct:
 

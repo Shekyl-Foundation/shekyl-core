@@ -4,6 +4,60 @@
 
 ### Added
 
+- **Transaction proofs and reserve proofs across the wallet stack**
+  (WI-RPC-3; Phase 2c, `feat/wallet-rpc-proofs`). The `shekyl-proofs`
+  DLEQ primitives are projected through the Engine
+  (`engine/proofs.rs` workflow with explicit `ProofsCtx` per
+  `ENGINE_COMPOSITION_DECOMPOSITION.md`; KeyActor generates inbound and
+  reserve proofs so secrets never leave the actor), the
+  `wallet_rpc.yaml` contract, `shekyl-wallet-rpc`
+  (`get_tx_proof`, `check_tx_proof`, `get_reserve_proof`,
+  `check_reserve_proof`; the `check_*` pair is wallet-less — a verifier
+  needs only a daemon), and the CLI (RESERVED stubs un-stubbed, with
+  disclosure warnings and proof strings kept out of readline history).
+  Proof strings are Bech32m (`shekyltxproof…`/`shekylreserveproof…`).
+  Prerequisite landed in the same tranche: the send path now retains
+  per-tx secrets in `TxMetaBlock.tx_keys` at dispatch, with the
+  spend-quadruple (`TransferDetails.spending_tx_hash`,
+  `KeyImageObserved.containing_tx_hash`) and reconciliation keeping the
+  I-2 no-orphans invariant through confirmation, reorg, and rescan.
+  Review hardening (F-13): `check_reserve_proof` rejects any proof
+  whose entries repeat a key image (`-29300` malformed) — entries
+  verify independently, so a duplicated unspent output would otherwise
+  inflate the proven reserve N-fold.
+  Review hardening (2026-07-24 high review, retention lifecycle): the
+  retention write moved from the submit-ACCEPTED verdict to dispatch
+  (persisted atomically with the in-flight flip, before the bytes can
+  reach the daemon), closing the crash/restart window that silently
+  lost the secret of an already-exposed tx; terminal and retryable
+  submit verdicts (provably unrelayed) retire the record so refused
+  builds still leave no residue. Retention death is now
+  reconciliation-only: a reorg rewind re-pends unreferenced entries
+  instead of collecting them (a rewound tx commonly re-confirms, and a
+  deleted secret can never serve that proof), and the watchdog's
+  confirmed-absent release clears F14 locks only — its trigger is a
+  local relay verdict, not a proof of network-wide absence. Lifecycle
+  pins amended in `wallet_rpc.yaml` §OUTBOUND PREREQUISITE.
+  Review hardening (2026-07-24 merge review, F1–F6): `get_reserve_proof`
+  refuses `amount = "0"` at the RPC params surface (-32602 "amount must
+  be positive"; the engine's selection independently refuses an empty
+  selection as `-29302`, so a zero bound can never reach the key actor
+  and surface as an internal error); `check_reserve_proof` resolves
+  locator-named txs in chunked batched `get_transactions` calls (100
+  hashes per call, the daemon's restricted-RPC cap) instead of one
+  round trip per unique txid; OUTBOUND generation reuses the shared
+  secrets derived during recipient-output discovery
+  (`generate_outbound_proof_with_secrets` — the hybrid KEM runs once
+  per output instead of twice; wire format unchanged, entries stay
+  `Zeroizing` in transit); the per-output hybrid-KEM ciphertext layout
+  constants have one home (`shekyl_crypto_pq::kem::{X25519_KEM_CT_LEN,
+  HYBRID_KEM_CT_LEN}` — the scanner/engine/fee-model copies are gone);
+  actor-side proof failures keep their typed `ProofError` through the
+  workflow error mapping (`KeyEngineError::Proof` →
+  `ProofsError::Generate`, honoring the variant's documented
+  discrimination); and the wallet-rpc `Hex32` rule has a single shared
+  parser (`params::parse_hex32`) behind both the txid and transfer-id
+  surfaces.
 - **cli: receiving, staking, and fee commands over the WI-RPC-1 surface**
   (WI-RPC-2b). `request new` / `requests list` (payment requests — the
   Shekyl-native receive-attribution primitive, un-deadening the FA-8
@@ -13,8 +67,102 @@
   estimate; principal lane only — P-lane fees are canonical and never
   user-facing).
 
+### Fixed
+
+- **consensus: archival slash single-struck on one missed baseline —
+  sliding-window m-of-n failure confirmation now gates it**
+  (`feat/archival-failure-window`; builds the pinned-but-unimplemented
+  policy of `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §1, pinned
+  2026-06-08; pre-genesis V3.0 correctness gap). The m-of-n existed
+  only in the Round-1 sim (`failure_confirmation::run_sliding`), so
+  consensus went straight from gate-2 §6's `challenge_failed(P, s, E)`
+  to the gate-4 §4.2 slash and forfeited a `FLOOR` on a *single* missed
+  challenge — punishing exactly the isolated connectivity flukes the
+  pin exists to absorb, and leaving the Round-2 stressnet with nothing
+  to stress. The slash now fires only when `m` misses fall within the
+  last `n` baseline **observations** for a `(P_id, shard)`
+  (`shekyl-archival-retention::failure_window`, reached through
+  `shekyl_archival_failure_window_params` / `_slashable`). The
+  interval-append is untouched — `slash_open_interval_to_append` still
+  produces exactly what the writer appends; only *whether* it fires
+  moved. The window counts epochs at which a challenge was actually
+  **posed**, so a bonded-but-untested epoch can never become a miss,
+  and look-back stops at the boundary of the pair's current continuous
+  challengeable run — which makes a `Rebond`-reinstated record start
+  clean rather than sit one or two misses from the next slash. Nothing
+  is persisted: the window is recomputed from the `serve_credit_bit`
+  ledger and the bond record, both already reverted by `pop_block`, so
+  there is no schema change (no rule-42 bump) and reorg safety is
+  structural. `m = 11` / `n = 13` are the Round-1 **provisional**
+  values in `config/consensus_constants.json` (shape genesis-frozen,
+  numerics re-pinned at the Round-2 stressnet — the `bond_duration`
+  precedent); C++ reads them through the FFI, so there is no
+  cross-language drift pair, and a re-pin is a deliberate two-site edit
+  (the JSON value plus the Round-1 sentinel const-assert that pins the
+  shipped pair — the `bond_floor` idiom). The consensus decision is held
+  equal to the sim policy that
+  measured the pin by an exhaustive equivalence sweep, and
+  `archival_substrate_lmdb` covers absorb / sustained-slash /
+  full-window-slide / pop-recompute at the scheduler's production site.
+  **Consequence — the window working as designed at end-of-life:** the
+  window widens the exit-forgiven tail, so a persona that goes dark can
+  `Unbond` with full collateral inside the grace, where single-strike
+  would have slashed it at the next deadline. Grounded in the numbers this
+  is not a new escape: the release cooldown is 2 epochs, far below
+  `m = 11`, so a departing record only rides the **same** `m − 1`
+  forgiveness envelope a still-bonded record already gets, earns nothing
+  while dark, and cannot exceed the window's tolerance without crossing
+  `m`-of-`n` and being slashed. An exit-time "clear the window" gate would
+  punish the honest crash-then-leave record identically to the adversarial
+  squeeze — they are on-chain indistinguishable — so it is a mis-fix
+  (rule 82); the exit tail is **subsumed by the `m`/`n` sizing** the
+  Round-2 stressnet already owns (`FOLLOWUPS.md` V3.1), not a separate
+  decision (rule 21). Two `db_lmdb.cpp` comments that justified the
+  exit-forgiven tail with "'stop serving and just hold' keeps being slashed
+  every epoch" were single-strike arguments and are corrected in place.
+
+- **scanner: KEM-ciphertext extra packing — vout ≥ 1 of multi-output
+  txs was silently unscannable** (`fix/kem-extra-packing`; closes the
+  FOLLOWUPS V3.0 genesis gate "KEM-ciphertext extra packing mismatch",
+  WI-RPC-3 review F-14; pre-genesis, no compat shim per rule 60).
+  `Extra::for_hybrid_transfer` emitted one `0x06` `PqcKemCiphertext`
+  extra field per output, but every reader — the scanner's scan path,
+  the proof-check path, `shekyl-wire::pqc_kem_per_output`, and the C++
+  `wallet2` reader — consumes a single field and slices output `o`'s
+  ciphertext at `o × HYBRID_KEM_CT_LEN` within it (the packing the C++
+  writers already emitted). Every output at vout ≥ 1 of a
+  production-built multi-output tx — including all change — was
+  therefore undetectable by the wallet and unverifiable by inbound
+  proof checking. The writer now concatenates all per-output
+  ciphertexts into one `0x06` field (readers unchanged);
+  `tx_fee_model::extra_kem_field_weight(n_out)` accounts the single
+  field so `predict_weight` stays byte-exact; bench fixtures serialize
+  through the production writer; regression test asserts both vouts of
+  a production-packed 2-output tx recover through `Scanner::scan`.
+  On-chain data was intact throughout — a rescan recovers.
+
+### Changed
+
+- **proofs: tx-proof wire format carries per-entry vout indices**
+  (WI-RPC-3; pre-genesis wire change, no compatibility shim per rule
+  60). Outbound/inbound per-output entries grew a `vout_index[u32 LE]`
+  prefix (128 → 132 bytes) so verification re-derives KEM secrets at
+  the *actual* output index; previously non-prefix output subsets
+  verified incorrectly against positional indices. FFI
+  (`shekyl_generate_tx_proof_inbound`) and the wallet2 caller pass
+  explicit indices.
+
 ### Removed
 
+- **cli: `get_tx_key` / `check_tx_key`** (WI-RPC-3; rule 60/21).
+  Exporting the raw per-transaction secret is the wallet2-era
+  mechanism; the DLEQ-based `get_tx_proof`/`check_tx_proof` is the
+  product (proves the payment without an interactive secret handoff,
+  and INBOUND proofs never reveal wallet key material at all). The
+  commands refuse at parse time with guidance naming the replacement.
+- **engine-state: `TxSecretKeys.additional`** (WI-RPC-3 adjacent, rule
+  15). No producer existed — the send path signs every output including
+  change with one tx key; `TX_META_BLOCK_VERSION` bumped to 2.
 - **cli: wallet2-era commands with no Shekyl-native equivalent**
   (WI-RPC-2b; rule 60, WI-RPC-1 pin 1). `account`* / `address new` (no
   account or subaddress model — payment requests replace receive

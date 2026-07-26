@@ -200,7 +200,7 @@ dependencies = [
  "nom 7.1.3",
  "num-traits",
  "rusticata-macros",
- "thiserror",
+ "thiserror 2.0.18",
  "time",
 ]
 
@@ -263,7 +263,7 @@ dependencies = [
  "num-traits",
  "pastey",
  "rayon",
- "thiserror",
+ "thiserror 2.0.18",
  "v_frame",
  "y4m",
 ]
@@ -713,7 +713,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1090,7 +1090,7 @@ dependencies = [
  "borsh",
  "ciphersuite",
  "std-shims",
- "thiserror",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -1121,7 +1121,7 @@ dependencies = [
  "multiexp",
  "rand_core 0.6.4",
  "schnorr-signatures",
- "thiserror",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -1133,7 +1133,7 @@ checksum = "19fd7ef12f5a35aa2fd29310211d51a72d41ee7fc529d66ef16c9262f65ccdf0"
 dependencies = [
  "ciphersuite",
  "dkg",
- "thiserror",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -2404,7 +2404,7 @@ dependencies = [
  "rand_core 0.6.4",
  "schnorr-signatures",
  "subtle",
- "thiserror",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -3125,7 +3125,7 @@ dependencies = [
  "rand 0.9.4",
  "rand_chacha 0.9.0",
  "simd_helpers",
- "thiserror",
+ "thiserror 2.0.18",
  "v_frame",
  "wasm-bindgen",
 ]
@@ -3211,7 +3211,7 @@ checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
 dependencies = [
  "getrandom 0.2.17",
  "libredox",
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3642,7 +3642,7 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-encoding",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3654,7 +3654,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-ct-balance",
  "shekyl-units",
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3674,7 +3674,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-types",
  "shekyl-units",
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3688,7 +3688,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "std-shims",
- "thiserror",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -3731,7 +3731,7 @@ name = "shekyl-consensus"
 version = "3.1.0"
 dependencies = [
  "serde",
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3772,7 +3772,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-fcmp",
  "shekyl-stats",
- "thiserror",
+ "thiserror 2.0.18",
  "x25519-dalek",
  "zeroize",
 ]
@@ -3877,7 +3877,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
  "tower",
  "tower-http",
@@ -3899,7 +3899,7 @@ dependencies = [
  "blake2",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3919,7 +3919,7 @@ name = "shekyl-encoding"
 version = "3.1.0"
 dependencies = [
  "bech32",
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3955,6 +3955,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
  "shekyl-economics",
+ "shekyl-encoding",
  "shekyl-engine-core",
  "shekyl-engine-file",
  "shekyl-engine-prefs",
@@ -3963,6 +3964,7 @@ dependencies = [
  "shekyl-fcmp-proofs",
  "shekyl-multisig",
  "shekyl-p-transport",
+ "shekyl-proofs",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-scanner",
@@ -3973,7 +3975,7 @@ dependencies = [
  "shekyl-units",
  "shekyl-wire",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3992,7 +3994,7 @@ dependencies = [
  "shekyl-engine-prefs",
  "shekyl-engine-state",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.18",
  "tracing",
  "zeroize",
 ]
@@ -4008,7 +4010,7 @@ dependencies = [
  "sha2",
  "shekyl-units",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.18",
  "toml 0.8.23",
  "tracing",
  "windows-sys 0.60.2",
@@ -4058,7 +4060,7 @@ dependencies = [
  "shekyl-scanner",
  "shekyl-types",
  "shekyl-units",
- "thiserror",
+ "thiserror 2.0.18",
  "tracing",
  "zeroize",
 ]
@@ -4085,7 +4087,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-fcmp-proofs",
- "thiserror",
+ "thiserror 2.0.18",
  "tracing",
  "zeroize",
 ]
@@ -4164,7 +4166,7 @@ version = "3.1.0"
 dependencies = [
  "libc",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.18",
  "time",
  "tracing",
  "tracing-appender",
@@ -4186,7 +4188,7 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-units",
  "shekyl-wire",
- "thiserror",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -4222,7 +4224,7 @@ dependencies = [
  "sha2",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
- "thiserror",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -4249,7 +4251,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-rpc-types",
  "std-shims",
- "thiserror",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -4259,10 +4261,15 @@ version = "0.1.0"
 dependencies = [
  "digest_auth",
  "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
  "shekyl-address",
  "shekyl-rpc-client",
- "simple-request",
  "tokio",
+ "tokio-socks",
+ "tower-service",
  "zeroize",
 ]
 
@@ -4299,7 +4306,7 @@ dependencies = [
  "shekyl-units",
  "shekyl-wire",
  "subtle",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "zeroize",
@@ -4313,7 +4320,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-shard-visual",
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4327,7 +4334,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sha3",
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4393,7 +4400,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-units",
  "shekyl-wire",
- "thiserror",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -4444,6 +4451,7 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "serde_json",
+ "shekyl-address",
  "shekyl-crypto-pq",
  "shekyl-engine-core",
  "shekyl-engine-file",
@@ -4457,7 +4465,7 @@ dependencies = [
  "shekyl-units",
  "subtle",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
  "tower",
  "tower-http",
@@ -4537,21 +4545,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95890f873bec569a0362c235787f3aca6e1e887302ba4840839bcc6459c42da6"
 dependencies = [
  "quote",
-]
-
-[[package]]
-name = "simple-request"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c2b7792ed2409a25b01606121e65579dcacbc574e90f275a8cb6a4d78006986"
-dependencies = [
- "futures-util",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "tokio",
- "tower-service",
 ]
 
 [[package]]
@@ -4711,11 +4704,31 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
 version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 2.0.18",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -4844,6 +4857,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
  "rustls",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-socks"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7e2948f60dbe26b35f2c7fb74ac2854c1fddded0fe9d7548fcc674a246f7615"
+dependencies = [
+ "either",
+ "futures-util",
+ "thiserror 1.0.69",
  "tokio",
 ]
 
@@ -5016,7 +5041,7 @@ checksum = "050686193eb999b4bb3bc2acfa891a13da00f79734704c4b8b4ef1a10b368a3c"
 dependencies = [
  "crossbeam-channel",
  "symlink",
- "thiserror",
+ "thiserror 2.0.18",
  "time",
  "tracing-subscriber",
 ]
@@ -5738,7 +5763,7 @@ dependencies = [
  "oid-registry",
  "ring",
  "rusticata-macros",
- "thiserror",
+ "thiserror 2.0.18",
  "time",
 ]
 

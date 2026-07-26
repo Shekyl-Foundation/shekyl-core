@@ -163,6 +163,11 @@ impl LedgerIndexes {
 
     /// Mark an output as spent by its key image.
     ///
+    /// `spending_tx` is the canonical txid of the confirmed transaction
+    /// containing the spend — the WI-RPC-3 spend-quadruple leg (F-9).
+    /// Refresh always knows it (the key image was observed inside a
+    /// concrete on-chain tx), so it is non-optional here.
+    ///
     /// Returns `true` if the key image was found and the output was
     /// marked spent.
     pub fn mark_spent(
@@ -170,11 +175,13 @@ impl LedgerIndexes {
         ledger: &mut LedgerBlock,
         key_image: &KeyImage,
         spent_height: u64,
+        spending_tx: shekyl_types::TxHash,
     ) -> bool {
         if let Some(&idx) = self.key_images.get(key_image) {
             if let Some(td) = ledger.transfers.get_mut(idx) {
                 td.spent = true;
                 td.spent_height = Some(spent_height);
+                td.spending_tx_hash = Some(spending_tx);
                 // F14 confirmed-present release (§2.6): the observed
                 // on-chain spend supersedes the awaiting-confirmation
                 // lock — refresh is the settlement authority.
@@ -206,6 +213,7 @@ impl LedgerIndexes {
                     if td.spent {
                         td.spent = false;
                         td.spent_height = None;
+                        td.spending_tx_hash = None;
                         unmarked += 1;
                     }
                 }
@@ -221,15 +229,19 @@ impl LedgerIndexes {
 
     /// Process incoming transaction inputs to detect spends of our
     /// outputs.
+    ///
+    /// Each element pairs the observed key image with the canonical
+    /// txid of the transaction it appeared in, so [`Self::mark_spent`]
+    /// can record the spend-quadruple leg (`spending_tx_hash`, F-9).
     pub fn detect_spends(
         &self,
         ledger: &mut LedgerBlock,
         block_height: u64,
-        key_images: &[KeyImage],
+        spends: &[(KeyImage, shekyl_types::TxHash)],
     ) -> usize {
         let mut spent_count = 0;
-        for ki in key_images {
-            if self.mark_spent(ledger, ki, block_height) {
+        for (ki, spending_tx) in spends {
+            if self.mark_spent(ledger, ki, block_height, *spending_tx) {
                 spent_count += 1;
             }
         }
@@ -300,6 +312,13 @@ impl LedgerIndexes {
             if td.spent_height.is_some_and(|h| h >= fork_height) {
                 td.spent = false;
                 td.spent_height = None;
+                // The spending tx's block is gone with the fork; the
+                // quadruple leg dies with the confirmation it recorded.
+                // If the spending tx re-confirms on the new chain,
+                // refresh re-detects it and `mark_spent` re-records the
+                // txid (I-2 reconciliation then re-evaluates `tx_keys`
+                // liveness downstream).
+                td.spending_tx_hash = None;
             }
         }
 
@@ -519,6 +538,7 @@ mod tests {
             spent_height: None,
             key_image,
             awaiting_confirmation: None,
+            spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,
@@ -570,7 +590,12 @@ mod tests {
         let mut ledger = ledger_init;
         let indexes = LedgerIndexes::rebuild_from_ledger(&ledger);
 
-        assert!(indexes.mark_spent(&mut ledger, &ki(0xAA), 160));
+        assert!(indexes.mark_spent(
+            &mut ledger,
+            &ki(0xAA),
+            160,
+            shekyl_types::TxHash::from_bytes([0xEE; 32])
+        ));
         let td = &ledger.transfers[0];
         assert!(td.spent);
         assert_eq!(td.spent_height, Some(160));
@@ -664,7 +689,12 @@ mod tests {
             vec![mk_transfer(1, 100, Some(ki(0xAA)))],
         );
 
-        assert!(indexes.mark_spent(&mut ledger, &ki(0xAA), 200));
+        assert!(indexes.mark_spent(
+            &mut ledger,
+            &ki(0xAA),
+            200,
+            shekyl_types::TxHash::from_bytes([0xEE; 32])
+        ));
         assert!(ledger.transfers[0].spent);
 
         let unmarked = indexes.unmark_spent(&mut ledger, &[ki(0xAA)]);
@@ -713,7 +743,12 @@ mod tests {
             ],
         );
         // Output 0: spend CONFIRMED at height 200 (above the fork).
-        assert!(indexes.mark_spent(&mut ledger, &ki(0x10), 200));
+        assert!(indexes.mark_spent(
+            &mut ledger,
+            &ki(0x10),
+            200,
+            shekyl_types::TxHash::from_bytes([0xEE; 32])
+        ));
         // Output 1: spend IN FLIGHT — optimistically marked at submit, no height yet.
         ledger.transfers[1].spent = true;
         // Advance the tip past the fork (empty block) so the rewind is well-formed.

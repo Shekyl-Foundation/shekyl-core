@@ -1578,7 +1578,7 @@ mod tests {
 
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
     use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
-    use shekyl_rpc_transport::SimpleRequestRpc;
+    use shekyl_rpc_transport::HttpRpc;
     use tempfile::TempDir;
     use zeroize::Zeroizing;
 
@@ -1591,16 +1591,16 @@ mod tests {
     /// became require-ambient (§4.2), every engine-building lifecycle test is a
     /// `#[tokio::test(flavor = "multi_thread")]`. This helper therefore must not
     /// build a *nested* runtime (`block_on` inside a runtime panics); it bridges
-    /// the async `SimpleRequestRpc::new` to the sync test body via
+    /// the async `HttpRpc::new` to the sync test body via
     /// `block_in_place` + the ambient handle — the same shape as
     /// [`super::drive_persistence`]'s multi-thread branch, and the reason the
     /// tests pin `flavor = "multi_thread"`.
     fn dummy_daemon() -> DaemonClient {
         let rpc = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
-                .block_on(SimpleRequestRpc::new("http://127.0.0.1:1".to_string()))
+                .block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
         })
-        .expect("construct SimpleRequestRpc (no actual connection attempted)");
+        .expect("construct HttpRpc (no actual connection attempted)");
         DaemonClient::new(rpc)
     }
 

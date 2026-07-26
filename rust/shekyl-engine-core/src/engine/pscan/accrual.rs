@@ -520,6 +520,9 @@ impl PScanAccrual {
     /// SP-R0 arm #1 fire counter — total spent funding records pruned by
     /// [`ingest`](Self::ingest) this run (see the field docs; the DQ-F
     /// logic-discharge lane asserts this non-zero).
+    // Consumers (`arm1_fire`, the accrual tests) exist only under
+    // `test-helpers` / `cfg(test)`; a plain dependency build sees no caller.
+    #[allow(dead_code)]
     pub(crate) fn spent_pruned_total(&self) -> u64 {
         self.spent_pruned_total
     }

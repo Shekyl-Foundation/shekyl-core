@@ -76,3 +76,20 @@ pub(crate) fn parse_atomic_units(s: &str) -> Result<AtomicUnits, WalletRpcError>
     })?;
     Ok(AtomicUnits::from_raw(raw))
 }
+
+/// Parse a contract `Hex32` value (exactly 64 **lowercase** hex chars) into
+/// its 32 bytes.
+///
+/// One home for the canonical-hex rule shared by the txid params surface
+/// (`proofs::parse_txid`) and the transfer-id format
+/// (`project::parse_transfer_id`). Returns `None` on any non-canonical
+/// form; callers shape their own error per surface (the messages there are
+/// load-bearing and stable).
+pub(crate) fn parse_hex32(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 || !s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return None;
+    }
+    let mut bytes = [0u8; 32];
+    hex::decode_to_slice(s, &mut bytes).ok()?;
+    Some(bytes)
+}
