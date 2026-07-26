@@ -70,10 +70,16 @@ unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
     // bug — catch it in debug; stay UB-free in release by returning the empty set
     // rather than forming a slice from null.
     debug_assert!(n == 0 || !ids.is_null(), "read_ids: null ids with n > 0");
-    if n == 0 || ids.is_null() {
-        return Vec::new();
-    }
-    let bytes = slice::from_raw_parts(ids, n * 16);
+    // `n * 16` must not overflow the address space: a huge `n` from a buggy or
+    // hostile C caller would otherwise form an undersized slice and read out of
+    // bounds. Overflow, a null pointer, or `n == 0` all degrade to the empty set.
+    let byte_len = n.checked_mul(16);
+    debug_assert!(byte_len.is_some(), "read_ids: n * 16 overflows usize");
+    let byte_len = match byte_len {
+        Some(len) if len != 0 && !ids.is_null() => len,
+        _ => return Vec::new(),
+    };
+    let bytes = slice::from_raw_parts(ids, byte_len);
     (0..n)
         .map(|i| {
             let mut b = [0u8; 16];
@@ -115,7 +121,9 @@ unsafe fn write_id(dst: *mut u8, src: &[u8; 16]) {
 // --- the six exports ----------------------------------------------------------
 
 /// Construct a map over `ids` (`n` × 16 bytes), keeping at most `stems` slots.
-/// Mirrors the C++ `connection_map{out_connections, stems}` constructor.
+/// Mirrors the C++ `connection_map{out_connections, stems}` constructor. Returns
+/// null if `stems == usize::MAX` (the C++ error sentinel), matching the wrapper's
+/// `throw` rather than aborting across the FFI.
 ///
 /// # Safety
 /// `ids` must point to `n * 16` readable bytes (or be null with `n == 0`). The
@@ -126,6 +134,13 @@ pub unsafe extern "C" fn shekyl_dandelionpp_map_new(
     n: usize,
     stems: usize,
 ) -> *mut StemMapHandle {
+    // `usize::MAX` is `select_stem`'s error sentinel in the C++ map, and
+    // `vec![0; usize::MAX]` in `StemMap::new` would abort — reject it at the
+    // boundary. The C++ wrapper throws before reaching here; this defends direct
+    // C callers.
+    if stems == usize::MAX {
+        return std::ptr::null_mut();
+    }
     let conns = read_ids(ids, n);
     let mut rng = SecureRelayRng;
     let map = StemMap::new(conns, stems, &mut rng);
@@ -461,6 +476,17 @@ mod tests {
             let count = shekyl_dandelionpp_map_snapshot(h, buf.as_mut_ptr(), stems);
             assert_eq!(count, 1, "slot span is under width when under-filled");
             shekyl_dandelionpp_map_free(h);
+        }
+    }
+
+    #[test]
+    fn map_new_rejects_the_max_stems_sentinel() {
+        // `usize::MAX` is the C++ error sentinel; `map_new` must return null
+        // rather than let `StemMap::new` abort on `vec![0; usize::MAX]`.
+        unsafe {
+            let h = shekyl_dandelionpp_map_new(std::ptr::null(), 0, usize::MAX);
+            assert!(h.is_null(), "usize::MAX stems must return null, not abort");
+            shekyl_dandelionpp_map_free(h); // null free is a no-op
         }
     }
 }
