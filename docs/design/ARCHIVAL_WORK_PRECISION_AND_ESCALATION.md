@@ -466,7 +466,15 @@ decision.
   - (d) **the §7.4 on-demand-serving equilibrium** (§11.1) — reopens via the doc's
     own economics-reopens (traffic-proportional pay §0.3, or PoRep durability
     fork) **trigger:** the W10 proxy-cost arm showing the fetch-cost-vs-deadline
-    margin no longer binds under the D1/D2 economics.
+    margin no longer binds under the D1/D2 economics. **🔴 FIRED (Stage 2 · A5 ·
+    cp5a `49cf160e9`).** The margin is negative at the current grace window (the
+    cheap ~3 KB opening re-fetches for ≪ the cost of holding 13.6 GB; §12.6). The
+    named remedy applies: **tighten the gate-4 grace window** to force a re-fetch-
+    failure rate `q ≥ q*` (`q* ≈ 0.085–0.26` — the m-of-n slash crossover),
+    **or** accelerate the **PoRep** reopen (`q → 1`, sealed possession). **Not** a
+    D2 redesign. NB: the corrected m-of-n slash (`ARCHIVAL_FAILURE_CONFIRMATION_PIN`,
+    a single miss absorbed) *weakens* the deterrent vs a single-strike, so `q*` is
+    a floor.
 
 ---
 
@@ -483,7 +491,7 @@ decision.
 | W7 | Cached `frozen_segment_count` drift at the D2 read-point | Pinned read through frontier-check (M1 §11.8 M3-1) | ✅ carried |
 | W8 | **Fast-swing** manipulation of the staker share (pump-and-dump, whale dive, reflexive feedback) | The operand is monotone + slow + predictable (§6.0) and the function is a pure map of `n` with no controller (§6.1) — pump/dump/whale have **no lever** on a monotone chain-state operand; the only lever is the durable one (W9) | ✅ by operand (fast-swing has no lever) |
 | W9 | **Durable output-stuffing** — mint outputs to inflate leaf count → segment-freeze rate → `n` → share, permanently (the ratchet cuts both ways, §6.2). Not covered by `DESIGN_CONCEPTS.md` §6, which keys the stuffer's cost to `tx_volume` (a tx count) via the sqrt damper, which does not escalate against output count. **Live precedent**: Monero's suspected March-2024 output-flood; Bitcoin's 2015 dust floods (§11.3) | Burden-coupling: the operand *is* the funded quantity, so a stuffer raises the share and the real cost (a permanent ~3.33 MB shard held forever) in the coupled ratio — "manipulating an honest measure of the funded quantity mostly funds the quantity"; only weight-fees escalate against outputs | 🔴 **FAILS** (Stage 2, A4 cp4b/cp4c). Served-work ROI is 2.8×–17.8× at the rational honest equilibrium (§12.5): the coupled bond burden is real but ~1% of cost, and the weight-fee at the `300`/byte floor is cheap against the Δpool a flood unlocks. Diagnosis: **pure fee-flow-volume leverage** (first-mover premium ≈ 1.0 — *not* a concentration attack at the realistic end); the cross-regime `fee×→1` spread (2.8→17.8) is volume/share-slope, so a floor cannot be one number. Disposition: reopen (c) **FIRED** — weight-denominated per-output fee-floor + the **D3** capture-side companion (reopen (e)); **not** a D2 redesign (§8). |
-| W10 | **Proxy free-riding on the on-demand-serving ruling** (§11.1) — a thin proxy re-fetches challenged data cheaply within the gate-4 grace window instead of holding it; D1 now *pays* that profile (was zero under truncation) and D2 escalates the pool it drains, re-pricing the §7.4 free-rider equilibrium that was closed under the old economics | Fetch-cost-vs-deadline margin must still bind (the §7.4/L14 judgment). If the Stage-2 arm shows it doesn't: tighten the gate-4 grace window or accelerate the PoRep reopen (the doc's own named economics-reopens) — **not** redesign D2 | ⏳ pending Stage-2 proxy-cost arm (§5) |
+| W10 | **Proxy free-riding on the on-demand-serving ruling** (§11.1) — a thin proxy re-fetches challenged data cheaply within the gate-4 grace window instead of holding it; D1 now *pays* that profile (was zero under truncation) and D2 escalates the pool it drains, re-pricing the §7.4 free-rider equilibrium that was closed under the old economics | Fetch-cost-vs-deadline margin must still bind (the §7.4/L14 judgment). If the Stage-2 arm shows it doesn't: tighten the gate-4 grace window or accelerate the PoRep reopen (the doc's own named economics-reopens) — **not** redesign D2 | 🔴 **FAILS** (Stage 2, A5 cp5a; §12.6). The margin is negative at the current grace: the challenge is a cheap ~3 KB opening (GATE2 §0–3: *fetch-on-demand IS service*), re-fetchable for ≪ the cost of holding 13.6 GB. Disposition (§8 reopen (d), **FIRED**): tighten gate-4 grace to force `q ≥ q* ≈ 0.085–0.26`, or accelerate PoRep (`q→1`) — **not** a D2 redesign. |
 
 ---
 
@@ -957,3 +965,48 @@ Decomposition (cp4c):
 **Freeze note:** the FAIL stands at the binding case, the correct pre-genesis
 standard. The `ROI(resp)` row is reported so Stage 3 sees how much is "market never
 responds" — but a freeze decision cannot *rely* on market-response speed.
+
+### 12.6 A5 (W10) result — the proxy free-rides; reopen (d) FIRED
+
+**Built:** cp5a (`49cf160e9`, `shekyl-economics-sim::proxy`). This is the
+**reopen-trigger** arm, and it is deliberately **GATE2-conformant** — it models
+the cheap opening the genesis spec chose, not the whole-shard challenge.
+
+**Scope (why it does not model actual possession).** GATE2 §0–3: the serve-
+challenge is a `VerifyPath` **opening** (128-B leaf + a *shallow* segment
+co-path), and *"fetch-on-demand at test time **is** providing the service"* —
+serve-credit is *"not continuous storage"*, *"not claimed: continuous offline
+possession."* §11.1: *"foundation owns durability; market owns reach"*, with
+**PoRep a named non-genesis path**. So a proxy that holds nothing and re-fetches
+the ~3 KB opening on demand passes **by design**. A5's job is not to forbid that
+(that would deviate from GATE2, in the opposite direction) but to test whether
+the §7.4 fetch-cost-vs-deadline **margin still binds** under the post-D1/D2
+economics — a FAIL being the §11.1 trigger for the whole-shard/PoRep reopen.
+
+**Corrected L14 exposure.** The slash is the ratified sliding-window **m-of-n**
+(`ARCHIVAL_FAILURE_CONFIRMATION_PIN`, `m=11`/`n=13` provisional) — a single missed
+re-fetch is **absorbed**. An earlier draft modelled single-strike; the correction
+*weakens* the deterrent (only sustained failure slashes), so the free-rider is
+**more** viable, and every `q*` below is a floor. (Aside: that pin is itself
+**unbuilt in consensus** — filed `FOLLOWUPS.md`, a separate pre-genesis gap.)
+
+**Verdict: FAILS.** `margin/epoch = proxy(re-fetch + P(m-of-n slash)·loss) −
+honest storage`; pass iff `> 0`.
+
+- Honest storage ≈ **$0.0052/epoch** (hold `MAX_HOLDINGS_SHARDS · SHARD_BYTES` ≈
+  13.6 GB at `1e-11 $/B/yr`).
+- Proxy re-fetch ≈ **$0.0001–0.0013/epoch** (4,096 openings × ~3 KB at
+  `$0.01–0.10/GB`) — **4–40× cheaper**. So at the current grace window (`q≈0`,
+  re-fetch reliable) `margin < 0`: honest holding is the *dearer* strategy.
+- **Crossover `q*`** — the per-epoch re-fetch-failure rate gate-4 grace must
+  force to flip the margin: **≈ 0.26** on bond exposure alone, **≈ 0.085** once
+  the forgone post-D2 reward stream is folded in (the escalated reward is the one
+  way D2 *helps* here — a bigger forfeit). The current hours-long grace gives
+  `q≈0 ≪ q*`, so it does not bind.
+
+**Disposition (§8 reopen (d), FIRED; not a D2 redesign).** Tighten the gate-4
+grace window to force `q ≥ q*` (a far tighter response deadline), **or**
+accelerate the **PoRep** reopen (`q→1`: sealed per-provider replicas, where
+re-fetch cannot substitute for possession — the whole-shard/actual-possession
+test). PoRep is the named non-genesis durability fork; A5's FAIL is the evidence
+that promotes it from "if needed" to "triggered."
