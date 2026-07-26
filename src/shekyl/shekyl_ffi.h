@@ -1889,6 +1889,44 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
     uint64_t bond_debit,
     uint8_t record_exists);
 
+// D3/R3 admission viability gate (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
+// §12.9). Its own error space — this is a separate consensus predicate called
+// alongside the vin verify, not part of it.
+#define SHEKYL_ARCHIVAL_ADMISSION_OK                            0
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR                  1
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_HOLDINGS_KIND             2
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH           3
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_BELOW_FLOOR               4
+
+/// Refuse a bond whose holdings credit no work: admission runs the SAME chain
+/// that pays (shard_work_micro -> work_milli_from_micro), so a bond can never be
+/// admitted into a position the frozen work scale cannot pay.
+///
+/// r_market_* is the per-shard archival_r_market row for the LAST SETTLED
+/// settlement epoch; freeze_height_* the per-shard segment freeze height. Both
+/// are parallel to the vin's shard list. A shard with no row marshals as 0 —
+/// correct and load-bearing: Rust scores the applicant as joining the market
+/// (r_market + 1), so a never-yet-served shard reads as maximal scarcity rather
+/// than as a zero. Without that term the first archiver on a rare shard would be
+/// refused, and no bond would be admissible at all before the first epoch close.
+///
+/// parent_height MUST be chain_height - 1. chain_height at the dispatch is
+/// m_db->height(), the height of the block BEING VALIDATED; passing it here
+/// would date the age term one block into the future and let the block under
+/// validation move its own verdict. This is the one place the parent-state
+/// read-point can be violated silently — no Rust test can catch it.
+///
+/// CompleteTree holdings are decided without a gather (dominance: they hold a
+/// superset of every compact holding). Pass vin_shard_count = 0 and NULL arrays.
+uint8_t shekyl_archival_check_bond_admission(
+    uint8_t holdings_kind,
+    size_t vin_shard_count,
+    const uint64_t* r_market_ptr,
+    size_t r_market_len,
+    const uint64_t* freeze_height_ptr,
+    size_t freeze_height_len,
+    uint64_t parent_height);
+
 // Unbond bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
 // P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18,
 // 20, 21, and 22 are Unbond-semantic; 19 (LEN_OVERFLOW) and 23

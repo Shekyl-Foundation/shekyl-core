@@ -54,8 +54,8 @@ pub mod serve_eligibility;
 pub mod wire;
 
 pub use admission::{
-    check_admission, credited_work_at_admission, AdmissionError, AdmissionShard,
-    ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
+    check_admission, check_admission_of, credited_work_at_admission, AdmissionError,
+    AdmissionShard, ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
 };
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,

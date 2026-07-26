@@ -233,11 +233,25 @@ pub fn check_admission(
     holdings: &HoldingsDescriptor,
     parent_state: &ParentStateHoldings<'_>,
 ) -> Result<(), AdmissionError> {
-    if holdings.kind == HoldingsKind::CompleteTree {
+    check_admission_of(holdings.kind, holdings.shard_ids.len(), parent_state)
+}
+
+/// [`check_admission`] from the holdings' `(kind, shard count)` alone.
+///
+/// The gate never reads shard-id *values* — only how many there are, to check the
+/// gather lines up — so a caller that holds just the count (the FFI, whose C++
+/// side already marshals the count and would have to rebuild a validated
+/// `ShardSet` for no gain) shares the one implementation. Same split, and the
+/// same reason, as [`crate::bond_floor::bond_floor_of`].
+pub fn check_admission_of(
+    kind: HoldingsKind,
+    vin_shards: usize,
+    parent_state: &ParentStateHoldings<'_>,
+) -> Result<(), AdmissionError> {
+    if kind == HoldingsKind::CompleteTree {
         return Ok(());
     }
 
-    let vin_shards = holdings.shard_ids.len();
     if parent_state.shards.len() != vin_shards {
         return Err(AdmissionError::GatherLengthMismatch {
             vin_shards,

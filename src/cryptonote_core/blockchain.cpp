@@ -5110,6 +5110,61 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     return false;
   }
 
+  // D3/R3 admission viability: refuse a JoinMarket bond whose holdings would
+  // credit zero work, so capital is never locked into a position the frozen
+  // work scale cannot pay. A separate consensus predicate called ALONGSIDE the
+  // vin verify (the bond_post_block_unique idiom), not threaded through it.
+  //
+  // The read-point is the PARENT block. chain_height is m_db->height() — the
+  // height of the block being validated — so the parent is chain_height - 1;
+  // scoring against the tip would let this block move its own verdict. The
+  // r_market rows are settled-epoch state and ordering-immune by construction,
+  // but the shard age is height-derived, and a shard's freeze height can be
+  // written by this very block: the weaker read-point governs.
+  //
+  // CompleteTree holds every shard, so it dominates any compact holding and is
+  // decided without a gather (which would otherwise mean reading the whole
+  // corpus — the only unbounded path in the predicate).
+  {
+    const uint64_t parent_height = chain_height ? chain_height - 1 : 0;
+    std::vector<uint64_t> adm_r_market;
+    std::vector<uint64_t> adm_freeze_heights;
+    if (bond.holdings.kind != archival_holdings_kind::CompleteTree)
+    {
+      // r_market rows exist only for epochs that have CLOSED, so read the last
+      // settled epoch. Before the first close there is none, and every shard
+      // reads 0 — which Rust scores as maximal scarcity, not as a zero, because
+      // the applicant counts itself.
+      const uint64_t parent_epoch = shekyl_archival_settlement_epoch_at_height(parent_height);
+      const uint64_t settled_epoch = parent_epoch ? parent_epoch - 1 : 0;
+      adm_r_market.reserve(bond.holdings.shard_ids.size());
+      adm_freeze_heights.reserve(bond.holdings.shard_ids.size());
+      for (const uint64_t shard_id : bond.holdings.shard_ids)
+      {
+        adm_r_market.push_back(parent_epoch ? m_db->get_archival_r_market(shard_id, settled_epoch) : 0);
+        uint64_t freeze = 0;
+        m_db->archival_shard_freeze_height(shard_id, freeze);
+        adm_freeze_heights.push_back(freeze);
+      }
+    }
+    const uint8_t adm_rc = shekyl_archival_check_bond_admission(
+      static_cast<uint8_t>(bond.holdings.kind),
+      bond.holdings.shard_ids.size(),
+      adm_r_market.empty() ? nullptr : adm_r_market.data(),
+      adm_r_market.size(),
+      adm_freeze_heights.empty() ? nullptr : adm_freeze_heights.data(),
+      adm_freeze_heights.size(),
+      parent_height);
+    if (adm_rc != SHEKYL_ARCHIVAL_ADMISSION_OK)
+    {
+      MERROR_VER("Archival JoinMarket rejected: holdings credit no work at the "
+        "parent-block read-point (admission code "
+        << static_cast<unsigned>(adm_rc) << ") — this bond would score zero at "
+        "every epoch close");
+      return false;
+    }
+  }
+
   // Credit-path authorization (gate-4 §3.5 step 5, the debit selection's
   // twin): bond_debit == 0 paths authorize with the IDENTITY key P_pubkey.
   if (auth_pubkey != bond.hybrid_public_key)
