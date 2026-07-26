@@ -343,6 +343,33 @@ argument for it over a participation-derived signal:
   directly defeats the "unpredictable churn" vector; operators can see the share
   drift coming rather than being whipsawed by it.
 
+> **⚠️ Amended by §12.10 (A6, Stage 2) — "cannot be moved in a burst" is measured,
+> and it is not quite true. Three layers, separated by what excludes each:**
+>
+> 1. **Reversal and oscillation: structurally excluded — unchanged, and this is
+>    the property that actually matters here.** This section's scope is *swings*:
+>    pump-and-dump, whale diving, reflexive feedback — manipulation that profits
+>    from a **reversal**. The lever A6 found can only **accelerate the monotone
+>    ratchet**: `+1.41` points/epoch at the block-weight surge ceiling against
+>    `−0.10` at the *full* reorg bound, one-directional always. No reversal, no
+>    oscillation, no whipsaw. **W8 stays armed by operand.**
+> 2. **Acceleration: economically closed — and *conditionally*.** The slew is real
+>    (a W9 flood buys `n` at the block-weight ceiling: ~2 708 shards/epoch
+>    early-chain, ~44 922 SKL/epoch in fees) and it is closed by **price**, not by
+>    structure — specifically by the **reopen-(c) per-output fee-floor**. Until (c)
+>    lands, **it is open**: A4's own tables say the flood driving this slew *profits
+>    today* (ROI 2.8×–17.8×). So this claim now carries an explicit dependency —
+>    *"closed economically by the paired reopen-(c) companion"* — and **one missing
+>    mechanism would leave two failures**: W9's profit gate *and* this anti-swing
+>    property. Stage 3 must freeze the shape seeing that dependency **named**.
+> 3. **Hardening with depth: improves unattended.** The slew ceiling **falls** as
+>    the tree deepens (deeper tree ⇒ heavier FCMP proofs ⇒ fewer leaves per block),
+>    so the operand becomes *harder* to move over time. Pinned in a test.
+>
+> **"Slow" therefore holds in the sense the section needs** — no burst can reverse
+> or oscillate the operand — **but not in the absolute sense the original wording
+> implies.** The honest statement: *monotone, bounded, depth-hardening, and priced.*
+
 Consequences for the function shape (below): prefer a **smooth, bounded-slope**
 form with **no cliffs** — the priority is damping the *rate* of change, not
 hitting a precise target share. The Stage-2 sim evaluates the band's width and
@@ -386,6 +413,14 @@ The constraints §6.0 and the operand imply, to be pinned at Stage 3:
    rejects — and it would add per-block state to a function that should be a pure
    map of `n`.
 
+
+> **§12.10 consequence (A6).** The **no-controller** constraint survives with a
+> *shifted justification*. It was: smoothness inherited from an operand that
+> cannot move. It is now: **the operand moves only monotonically, at a bounded and
+> depth-falling slew, at a price the reopen-(c) fee floor makes unprofitable** —
+> and a rate-limiter would only slow a *paid, one-way ratchet that already does not
+> pay*, while adding exactly the stateful machinery this section forbids. Same
+> conclusion; honest premises.
 ### 6.2 The ratchet cuts both ways — durable output-stuffing (wargame W9)
 
 The same monotonicity that defeats fast-swing manipulation (W8) *enables* a
@@ -920,30 +955,58 @@ per-output fee-floor for W9; gate-4/PoRep for W10), never a D2 redesign.
 Registration: the Stage-2 sim build gets an `IMPLEMENTATION_INDEX.md` row at
 birth (rule 94); this design round does not (it lives in this doc).
 
-#### 12.4.1 Arm status (synthesis — live as of cp5b)
+#### 12.4.1 Arm status — **FINAL synthesis, Stage 2 closed**
 
-| Arm | Status | Result / disposition |
+Every arm landed. Verdicts, with the numbers as re-measured at their corrected
+models (each cell links its section).
+
+| Arm | Verdict | Result |
 | --- | --- | --- |
-| **A1** clearance | ✅ reported | Escalation earns its keep in the far tail: scenario 9 flat-25 **0.66×** (fails) vs best candidate **2.36×** (clears) at the binding 10 % opportunity-cost rate, 0 %/yr Kryder. Non-event while emission dominates. |
-| **A2** distribution (W6) | ⏸️ **held on D3** | Rides the bond-splitting equilibrium D3 destabilized (§8 reopen (e)); building it on the current cap semantics would model a surface under revision. |
-| **A3** stranding | ✅ reported (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff (early-chain regime) — §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside a residual: the cliff **scales** to `r > ~1000 × shards_held`, so small holders still zero at extreme replication. |
-| **A4** output-stuffing (W9) | 🔴 **FAILS** (§12.5) | Served-work ROI **2.8×–17.8×** at the rational honest equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. → reopen (c) **FIRED** (weight-denominated per-output fee-floor) **+ D3** (reopen (e)). |
-| **A5** proxy free-riding (W10) | 🔴 **FAILS** (§12.6) | Margin negative at the current grace: re-fetching a ~3 KB opening beats holding 13.6 GB by **4–40×**. Crossover `q* ≈ 0.088–0.26`. → reopen (d) **FIRED** (tighten gate-4 grace, or accelerate PoRep). |
-| **A6** swing / band width | ⏸️ **held on D3** | Same dependency as A2; the `d(share)/d(n)` reading is already bounded-slope by construction (§6.1, `no_cliff_bounded_slope` test). |
+| **A1** clearance | ✅ **clears** | Escalation earns its keep in the far tail: scenario 9 flat-25 **0.66×** (fails) vs best candidate **2.36×** at the binding 10 % opportunity-cost rate, 0 %/yr Kryder. A non-event while emission dominates. |
+| **A2** distribution (W6) | ✅ **clears** (§12.10) | Scarce-holder share `1.0000 → 0.9998` — **0.02 %** dilution, **zero** scarce holders stranded below marginal cost. |
+| **A3** stranding | ✅ **reported** (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff — the §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside the quantization corner. |
+| **A4** stuffing (W9) | 🔴 **FAILS** (§12.5) | Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6663**, `fee×→1` **0.7** (§12.9 OQ-4). |
+| **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching a ~3 KB opening beats holding 13.6 GB by **4–40×**; crossover `q* ≈ 0.088–0.26`. |
+| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts. But an adversarial **1.4081** pts/epoch slew ceiling exists, closed **economically** by reopen (c) — see the §6.0 amendment. |
 
-**Survivor envelope — not yet emittable, and that is the finding.** Stage 2 was to
-hand Stage 3 the `(shape, asymptote)` survivors that clear A1 under the pessimistic
-Kryder floor *without* failing W9/W10. **Both wargame arms fail**, so no candidate
-survives on the escalation's own terms: the escalation is *securable but not free*.
-The envelope is therefore **conditional on its two companions landing** — the
-weight-denominated per-output fee-floor (reopen (c)) and the gate-4-grace/PoRep
-decision (reopen (d)), with **D3** (reopen (e)) load-bearing for the first. Stage 3
-inherits these as **hard inputs**, not options; per §8 none of them is a D2 redesign.
+**The through-line: one theorem, three independent confirmations.** A4's
+`prem ≈ 1.0`, OQ-1's `|Δ| = 0` at the partition optimum, and A2's `0.02 %`
+dilution are **the same total-work invariance** seen from three directions (a
+shard's work is `r`-independent in total, so each replica carries `~1/r`). Read
+them as one mechanism verified three ways, not three small numbers.
 
-**Cross-arm coordination.** Reopen (d) and the (unbuilt, pinned) sliding-window
-`m`-of-`n` failure-confirmation are **one design surface** — `slash_prob(q, m, n)`
-is shared, so `m`/`n` chosen for honest false-slash alone moves `q*` and
-invalidates (d). They must be tuned in a single round (see §12.6).
+**The survivor envelope is CONDITIONAL — and that is Stage 2 succeeding.** Stage 2
+was to hand Stage 3 the `(shape, asymptote)` survivors clearing A1 without failing
+W9/W10. **Both wargame arms fail**, so no candidate survives on the escalation's
+own terms: the escalation is **securable but not free**. The envelope is
+conditional on its two companions, which Stage 3 inherits as **hard inputs, not
+options**:
+
+1. **Reopen (c) — weight-denominated per-output fee-floor.** Now load-bearing
+   **twice over**: it closes W9's profit gate (§12.5) *and* it is what closes
+   §6.0's anti-swing property (§12.10 / §6.0 amendment). **One missing mechanism
+   would be two failures.**
+2. **Reopen (d) — gate-4 grace tightening to `q ≥ q*`, or PoRep** (§12.6).
+3. **D3 — resolved** (§12.9): plateau deleted, admission predicate, cadence
+   monitored. Its outcome is *already folded into* the numbers above.
+
+A synthesis that presented a clean survivor set would have been the
+green-by-construction failure at report level; the conditionality **is** the
+finding, bought for the price of a sim rather than a mainnet.
+
+**Historical, not live — read with care.** The **`hHold` sweep column** in §12.5
+is **retired**: it was evidence for the plateau, which R2 deletes, so it documents
+*why the mechanism was removed* rather than a live regime. Likewise the
+**pre-D1** columns throughout are counterfactual. Recomputing against either is
+recomputing against a ghost.
+
+**Method record (three catches, one discipline).** *Always-split* as "rational";
+the **two-point partition proof** (proposed by the reviewer, falsified by
+exhaustive check); and A6's **invented pass/fail threshold**. Each was a claim
+promoted past its verification, and each was caught by the same rule — *measure
+before recording, regardless of which side of the review table the claim came
+from.* Carried into Stage 3's freeze reviews: **"proven" means exhaustively
+checked or mechanically derived.**
 
 ### 12.5 A4 (W9) result — the escalation fails the stuffing gate; reopen (c) FIRED
 
@@ -1491,3 +1554,62 @@ optimum*, so both can now build on a settled surface. The implementing PR inheri
 the §12.9 census — rule-42 digest membership, the **"C++ source-unchanged yet
 behaviourally live"** callout (mandatory PR language), the KAT/fixture regeneration
 list, and the **`curve_milli`-survives** carve-out for §6.1.
+
+### 12.10 A2 (W6) and A6 (swing) results — the last two arms
+
+Both unblocked by the D3 closure (§12.9); deletion removed the behavioural axis
+each would otherwise have needed.
+
+#### A2 — distributional shift: **W6 clears** (sim `88cb1a956`)
+
+Population crosses the DQ-2H **size** classes with a **holding-scarcity**
+dimension, because *"scarce-holder" is about what you hold, not how much* — the
+diluting cohort is defined by holding *common* (high-`r`) shards, which size alone
+cannot express. Bands straddle the co-holder cliff, so the last band is a
+structural zero pre-D1 and paid post-D1: the whole W6 mechanism.
+
+> **Scarce-holder aggregate share: PRE-D1 `1.0000` → POST-D1 `0.9998`** — a
+> **0.02 %** dilution. **Zero** scarce holders stranded below marginal cost (bond
+> opportunity cost at the binding 10 % + storage).
+
+**Why the number is small — the total-work invariance, third appearance.** This is
+*the same theorem* that produced A4's `prem ≈ 1.0` and OQ-1's `|Δ| = 0`: a shard's
+work is `r`-independent in total, so each replica carries `~1/r`. The ex-zero
+cohort therefore enters `Σwork` carrying **very little**, and admitting it barely
+moves the denominator. Stage 3 should read these as **one mechanism verified three
+independent ways**, not three coincidentally small numbers.
+
+**Recorded, outside the W6 flag:** all three past-cliff (`r = 3 000`) cells sit
+**under water** post-D1 — reward `0.002 / 0.034 / 0.55` SKL against cost
+`0.046 / 0.73 / 11.74`. D1 pays them *something*; scarcity weighting keeps that
+below the bond opportunity cost. That is the market signal working as designed
+(*do not over-replicate*), and it dovetails with **A3**: these are exactly the
+cells whose rewards fall under the claim-cost floor.
+
+#### A6 — swing: **cliff no, slew rate yes** (sim `4d238ccba`)
+
+Binding input is a **W9 flood at the block-weight surge ceiling**
+(`300 000 B × 50`), not organic growth — a stuffer buying leaves at the ceiling is
+the fastest `n` can physically move, so it is the honest worst case for a
+no-controller constraint. Stuffer weight comes from the production predictor.
+
+| `n` | `Δn`/epoch | `Δshare` %pts/epoch | reorg `Δshare` %pt |
+| --- | --- | --- | --- |
+| 0 | 2 708 | **1.4081 %** | 0.1014 % |
+| 25 000 | 2 554 | 1.3280 % | 0.0951 % |
+| 250 000 | 2 554 | 0.0000 % | 0.0000 % |
+
+**The two claims must be separated** — see the §6.0 amendment for the ruling form.
+Structurally, **no cliff**: monotone, no single-shard discontinuity, only
+down-swing bounded at `0.1014` points. Economically, a **real slew ceiling** of
+`1.4081` points/epoch, costing ~`44 922` SKL/epoch — **closed by the reopen-(c)
+fee-floor, and open until it lands.** And the ceiling **falls with tree depth**, so
+the operand hardens unattended.
+
+**Method note.** A6's first pass gated on *"under 1 point per epoch"* — a threshold
+**invented by the test author**, not §6.1's requirement (which is monotone +
+bounded-slope, i.e. *no discontinuity*). The test now asserts the specification;
+the slew rate is **reported**, not gated. This is the third instance of the same
+discipline in this arc (always-split as "rational"; the two-point partition proof;
+now an invented pass/fail bound) — **separating what the spec requires from what
+the test author assumed is how a made-up number gets caught before it freezes.**
