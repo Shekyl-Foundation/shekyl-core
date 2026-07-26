@@ -30,6 +30,24 @@ pub fn challenge_seal_height(h_open: u64) -> u64 {
     h_open.saturating_add(CHALLENGE_BEACON_SEAL_BLOCKS)
 }
 
+/// Is the epoch's challenge seal block committed at `chain_height`?
+///
+/// `chain_height` is the block **count** (`m_db->height()` on the C++ side), so
+/// the highest committed block index is `chain_height - 1`; the seal block
+/// `H_seal = challenge_seal_height(h_open)` is on chain iff `H_seal <
+/// chain_height`. The fire-time beacon `block_hash(H_seal)` — and therefore
+/// `H_fire` — is knowable only once this holds.
+///
+/// The serve-credit gate calls this before reading `block_hash(H_seal)`: a
+/// response whose `settlement_epoch` (attacker-chosen) puts `H_seal` at or
+/// beyond the tip is rejected here, rather than by catching the `BLOCK_DNE` the
+/// read would otherwise throw. The slash-eligibility consumer applies the same
+/// predicate against its just-connected block height.
+#[must_use]
+pub fn challenge_seal_on_chain(h_open: u64, chain_height: u64) -> bool {
+    challenge_seal_height(h_open) < chain_height
+}
+
 /// Segment-relative leaf index `ℓ` for `(P, shard, E)` (§3.3).
 ///
 /// `segment_leaf_count` must be the registry value at epoch close; returns `0` when
@@ -54,6 +72,17 @@ pub fn challenge_leaf_index(
 }
 
 /// Beacon fire height `H_fire ∈ (H_open, H_close]` (§3.4).
+///
+/// The range holds for every well-formed epoch (`H_close > H_seal`, guaranteed by
+/// the genesis epoch formulas: `H_close − H_seal = SEB − 2`). Consumers therefore
+/// do NOT range-check `H_fire`: a derivation outside `(0, H_close]` needs a
+/// degenerate epoch (`H_close ≤ H_seal`) or a saturating-overflow epoch, both of
+/// which the epoch formulas preclude and the seal-committed guards
+/// ([`challenge_seal_on_chain`] on the serve-credit side, `H_seal ≤ tip` on the
+/// slash side) additionally shield. **Reopen criterion (rule 21):** a Round-2
+/// epoch re-pin that admits `H_close ≤ H_seal` (or an unbounded epoch) must
+/// restore an `H_fire ∈ (0, H_close]` check at both the serve-credit gate
+/// (`blockchain.cpp`) and the slash-eligibility consumer (`db_lmdb.cpp`).
 #[must_use]
 pub fn challenge_fire_height(
     h_open: u64,

@@ -226,8 +226,19 @@
     "cpp_setup": "past_deadline"
    },
    {
+    "id": "B-11b-seal-uncommitted",
+    "note": "Step 6b: current_height == H_seal — the seal block is one past the tip (chain_height is the block count), so it is not yet on chain; the seal-on-chain guard rejects before any block-hash read. Distinct from B-12, which is a read failure at a committed height (corruption).",
+    "overrides": {
+     "current_height": 10001
+    },
+    "expected_verdict": false,
+    "expected_reason": "SealBlockNotYetCommitted",
+    "cpp_reachable": true,
+    "cpp_setup": "baseline"
+   },
+   {
     "id": "B-12-no-seal-hash",
-    "note": "Step 7: the seal-block hash load throws (production LMDB BLOCK_DNE).",
+    "note": "Step 7: the seal-block hash load throws at a COMMITTED height (current_height > H_seal), i.e. genuine DB corruption — the not-yet-committed case is caught earlier by the seal-on-chain guard (B-11b).",
     "overrides": {
      "seal_hash_available": false
     },
@@ -235,18 +246,6 @@
     "expected_reason": "SealHashUnavailable",
     "cpp_reachable": true,
     "cpp_setup": "unseeded_seal_throws"
-   },
-   {
-    "id": "B-13-fire-guard",
-    "note": "Step 8: degenerate H_close == H_open puts h_fire past H_close; defensive dead branch under the pinned epoch formulas -- unreachable through live C++ (mirror-only).",
-    "overrides": {
-     "h_close": 10000,
-     "current_height": 10000
-    },
-    "expected_verdict": false,
-    "expected_reason": "FireHeightDerivationFailed",
-    "cpp_reachable": false,
-    "cpp_setup": null
    },
    {
     "id": "B-14-not-held-at-fire",

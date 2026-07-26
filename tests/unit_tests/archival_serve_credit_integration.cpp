@@ -122,8 +122,14 @@ public:
     m_block_hashes[height] = hash;
   }
 
+  // Every queried height is captured so the seal-committed-guard KAT can assert
+  // that an uncommitted-seal credit is rejected BEFORE this read is attempted
+  // (the guard short-circuits), not by catching a throw from it.
+  mutable std::vector<uint64_t> block_hash_queried_heights;
+
   crypto::hash get_block_hash_from_height(const uint64_t& height) const override
   {
+    block_hash_queried_heights.push_back(height);
     const auto it = m_block_hashes.find(height);
     if (it != m_block_hashes.end())
       return it->second;
@@ -389,6 +395,61 @@ TEST(archival_serve_credit, gate2_integration_rejects_serve_at_join_epoch)
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
   EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.current_height));
+}
+
+// The seal-committed guard: a credit whose challenge-seal block is not yet on
+// chain (h_seal >= current_height, i.e. the seal index is at or past the tip) is
+// rejected by the explicit predicate BEFORE the block-hash read is attempted —
+// not by letting get_block_hash_from_height throw BLOCK_DNE and catching it. The
+// accept/reject decision is unchanged (the FFI verifier already rejects any
+// current_height <= H_fire, and H_fire > h_seal); this pins that the rejection
+// happens at the predicate, and at exactly h_seal, via the read counter.
+TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_read)
+{
+  const IntegrationKat kat = load_integration_kat();
+  const txin_archival_serve_credit_response resp = load_serve_credit_vin(kat.wire_hex);
+
+  const std::pair<uint8_t, uint64_t> hard_forks[] = {
+    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
+    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
+  };
+  const cryptonote::test_options test_options = {hard_forks, 5000};
+
+  // current_height == h_seal: the seal block's index is one past the tip, so the
+  // guard rejects and the block-hash read is never reached.
+  {
+    auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
+    seed_substrate(*db, kat, resp);
+    ArchivalServeCreditIntegrationDB* db_raw = db.get();
+    BlockchainAndPool bap;
+    cryptonote::Blockchain* bc = &bap.bc;
+    ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+
+    db_raw->block_hash_queried_heights.clear(); // ignore any init-time reads
+    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.h_seal));
+    EXPECT_TRUE(db_raw->block_hash_queried_heights.empty());
+  }
+
+  // current_height == h_seal + 1: the seal block is now the committed tip, so the
+  // guard passes and the read IS reached (the credit is still rejected further
+  // downstream on H_fire timing — not what this KAT pins).
+  {
+    auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
+    seed_substrate(*db, kat, resp);
+    ArchivalServeCreditIntegrationDB* db_raw = db.get();
+    BlockchainAndPool bap;
+    cryptonote::Blockchain* bc = &bap.bc;
+    ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+
+    db_raw->block_hash_queried_heights.clear();
+    // Guard passes at h_seal + 1 (the seal is now the committed tip), so the gate
+    // reaches the seal read exactly once, for h_seal. The credit is still
+    // rejected — downstream on H_fire timing (current_height <= H_fire), not by
+    // this guard.
+    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.h_seal + 1));
+    ASSERT_EQ(db_raw->block_hash_queried_heights.size(), 1u);
+    EXPECT_EQ(db_raw->block_hash_queried_heights[0], kat.h_seal);
+  }
 }
 
 namespace {

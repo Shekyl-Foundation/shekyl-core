@@ -5224,6 +5224,20 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     return false;
   }
 
+  // block_hash(H_seal) must be committed to derive the H_fire beacon. The
+  // seal-on-chain predicate is Rust-authoritative (challenge_seal_on_chain):
+  // called here and mirrored by shekyl-archival-retention::serve_credit_decisions
+  // from that one source, so the boundary never drifts. Rejecting a future-epoch
+  // (attacker-chosen settlement_epoch) input by predicate keeps the seal read
+  // below from throwing BLOCK_DNE on it; the slash-eligibility consumer
+  // (db_lmdb.cpp) applies the same boundary against its connected block height.
+  if (!shekyl_archival_challenge_seal_on_chain(h_open, current_height))
+  {
+    MERROR_VER("Archival serve-credit: seal block " << h_seal
+      << " at or beyond chain height " << current_height << " (not yet committed)");
+    return false;
+  }
+
   crypto::hash seal_hash{};
   try
   {
@@ -5231,27 +5245,26 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   }
   catch (const std::exception& e)
   {
+    // Post-guard, h_seal is a committed height, so this can only be a genuine DB
+    // read failure (corruption/IO), never BLOCK_DNE. Rejecting keeps this twin
+    // symmetric with the slash consumer; whether a corrupt read should instead
+    // halt is a separate consensus-policy question, decided for both together.
     MERROR_VER("Archival serve-credit: cannot load seal block hash at height " << h_seal
       << ": " << e.what());
     return false;
   }
 
+  // Derived identically to the slash-eligibility consumer (db_lmdb.cpp,
+  // archival_baseline_observed_at_epoch) from the same deterministic inputs, so
+  // the two consumers of "held at fire height" agree on which height that is
+  // (WS-1 h_fire symmetry). H_fire is in (0, H_close] for every well-formed
+  // epoch, so no range check is applied here — see challenge_fire_height's
+  // reopen criterion (a Round-2 re-pin that admits H_close <= H_seal restores
+  // the check at both consumers).
   const uint64_t h_fire = shekyl_archival_challenge_fire_height(
     h_open, h_close, reinterpret_cast<const uint8_t*>(seal_hash.data),
     reinterpret_cast<const uint8_t*>(resp.p_canonical_id.data),
     resp.shard_id, resp.settlement_epoch);
-  // Same guard as the slash-eligibility consumer (db_lmdb.cpp,
-  // archival_baseline_observed_at_epoch — the observability predicate the
-  // sliding-window failure confirmation counts over, reached from
-  // archival_challenge_failed_at_height): both sides derive h_fire from the
-  // identical deterministic inputs, and both reject a derivation outside
-  // (0, h_close] — the two consumers of "held at fire height" must agree on
-  // which height that is (WS-1 h_fire symmetry).
-  if (h_fire == 0 || h_fire > h_close)
-  {
-    MERROR_VER("Archival serve-credit: challenge fire height derivation failed");
-    return false;
-  }
 
   if (!m_db->archival_bond_holds_shard(resp.p_canonical_id, resp.shard_id, h_fire))
   {
