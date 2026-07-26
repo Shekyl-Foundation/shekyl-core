@@ -101,10 +101,28 @@ pub fn delta_share(curve: &EscalationCurve, n: u64, delta: u64) -> u64 {
         .saturating_sub(curve.share(n))
 }
 
+/// **Miner-reward penalty compensation**, SKL per epoch, for a flooder using the
+/// legal `2×` limit — **measured from the production penalty formula**, not
+/// derived. `cryptonote_basic_impl.cpp::get_block_reward`:
+///
+/// ```text
+/// reward = base_reward · (2M − B) · B / M²      for M < B ≤ 2M
+/// ```
+///
+/// At `B = 2M` this is **exactly zero** — the miner forfeits the *entire* block
+/// reward — so a flooder at the ceiling must compensate `base_reward` per block or
+/// no rational miner includes the flood. Over an epoch that is
+/// `base_reward × EPOCH_BLOCKS`, which **dwarfs the stuffing fees**.
+#[must_use]
+pub fn penalty_compensation_skl_per_epoch(base_block_reward_atomic: u64) -> f64 {
+    // reward at B = 2M is 0 ⇒ full base_reward forfeited, every block.
+    (u128::from(base_block_reward_atomic) * u128::from(EPOCH_BLOCKS)) as f64 / 1.0e9
+}
+
 /// A6 report: the slew ceiling, per-epoch `Δshare` under a sustained flood, and
 /// the reorg-window reversibility bound — measured on the **steepest** candidate,
 /// since a cliff would appear there first.
-pub fn a6_report(n_samples: &[u64]) {
+pub fn a6_report(n_samples: &[u64], base_block_reward_atomic: u64) {
     let curve = family()
         .iter()
         .max_by_key(|c| c.asymptote)
@@ -180,13 +198,17 @@ pub fn a6_report(n_samples: &[u64]) {
              down-swing reaches {RDP:.4} points. W8 stands armed BY OPERAND.\n\
          (b) ADVERSARIAL SLEW RATE (economic) — {W:.4} pts/epoch penalty-free, {WP:.4}\n\
              pts/epoch if the flooder also compensates the miner penalty (the legal 2x\n\
-             limit). MEASURED against blockchain.cpp's ArticMine algorithm, not derived. a\n\
-             flood can force, at maximum effort, early-chain. That is a rate, not a cliff,\n\
+             limit). MEASURED against blockchain.cpp's ArticMine algorithm, not derived —\n\
+             the ceiling a flood can force at maximum effort, early-chain. A rate, not a cliff,\n\
              and it is bounded, monotone and one-directional — but it is NOT invisible,\n\
              which is the honest correction to a purely structural reading of §6.0.\n\
-             It is also PRICED: that slew costs ~{C:.0} SKL/epoch in stuffing fees at the\n\
-             A4 rate, and A4 already gates whether such a flood pays (it does not, once\n\
-             the reopen-(c) fee-floor lands). So the swing lever exists physically and is\n\
+             It is also PRICED, and the legal-limit price is dominated by a term that is\n\
+             NOT the fees: ~{C:.0} SKL/epoch in stuffing fees at the A4 rate, PLUS\n\
+             ~{P:.0} SKL/epoch of miner-reward penalty compensation — at B = 2M the\n\
+             production penalty formula (get_block_reward) pays the miner EXACTLY ZERO,\n\
+             so the flooder must fund the whole block reward, every block, or no rational\n\
+             miner includes the flood. Measured, not derived. A4 already gates whether\n\
+             such a flood pays (it does not, once the reopen-(c) fee-floor lands). So the swing lever exists physically and is\n\
              closed ECONOMICALLY, not structurally — Stage 3 should freeze the shape\n\
              knowing that, rather than on the stronger claim that no lever exists.",
         RDP = worst_reorg_pts,
@@ -194,6 +216,7 @@ pub fn a6_report(n_samples: &[u64]) {
         WP = worst_pen_pts,
         C = worst_dn as f64
             * (leaf_stuffer_cost_per_shard_atomic(SEGMENT_LEAF_COUNT) as f64 / 1.0e9),
+        P = penalty_compensation_skl_per_epoch(base_block_reward_atomic),
     );
 }
 

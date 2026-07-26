@@ -357,13 +357,19 @@ argument for it over a participation-derived signal:
 >    (a W9 flood buys `n` at the block-weight ceiling: ~2 708 shards/epoch
 >    early-chain penalty-free — **`+1.41` pts/epoch**, or **`+2.82`** if the flooder
 >    also compensates the miner-reward penalty to use the legal `2×` limit,
->    ~44 922 SKL/epoch in fees alone) and it is closed by **price**, not by
->    structure — specifically by the **reopen-(c) per-output fee-floor**. Until (c)
->    lands, **it is open**: A4's own tables say the flood driving this slew *profits
->    today* (ROI 2.8×–17.8×). So this claim now carries an explicit dependency —
->    *"closed economically by the paired reopen-(c) companion"* — and **one missing
->    mechanism would leave two failures**: W9's profit gate *and* this anti-swing
->    property. Stage 3 must freeze the shape seeing that dependency **named**.
+>    ~45 k SKL/epoch in fees) and it is closed by **price**, not by structure. The
+>    measurement splits it into **two tiers with two different closers**:
+>    - **penalty-free tier (`+1.41`)** — closed by the **reopen-(c) per-output
+>      fee-floor**, and **open until (c) lands**: A4's own tables say the flood
+>      driving it *profits today* (ROI 2.8×–17.8×). This is the conditional layer,
+>      and it is why **one missing mechanism would leave two failures** — W9's
+>      profit gate *and* this anti-swing property. Stage 3 must freeze the shape
+>      seeing that dependency **named**.
+>    - **legal-`2×` tier (`+2.82`)** — closed **already, independently of (c)**, by
+>      the block-reward penalty: at `B = 2M` the production formula
+>      (`get_block_reward`) pays the miner *exactly zero*, so the flooder must fund
+>      ~**10.24 M SKL/epoch** of compensation — **114×** the fee cost. Doubling the
+>      slew costs ~114× more, so the upper tier is not a live lever.
 > 3. **Hardening with depth: improves unattended.** The slew ceiling **falls** as
 >    the tree deepens (deeper tree ⇒ heavier FCMP proofs ⇒ fewer leaves per block),
 >    so the operand becomes *harder* to move over time. Pinned in a test.
@@ -969,7 +975,7 @@ models (each cell links its section).
 | **A3** stranding | ✅ **reported** (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff — the §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside the quantization corner. |
 | **A4** stuffing (W9) | 🔴 **FAILS** (§12.5) | Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6663**, `fee×→1` **0.7** (§12.9 OQ-4). |
 | **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching a ~3 KB opening beats holding 13.6 GB by **4–40×**; crossover `q* ≈ 0.088–0.26`. |
-| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts. But an adversarial **1.4081** pts/epoch slew ceiling exists, closed **economically** by reopen (c) — see the §6.0 amendment. |
+| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts. Adversarial slew ceiling **1.41 pts/epoch penalty-free** (closed **economically** by reopen (c)) or **2.82 pts/epoch at the legal 2× limit** — the latter already priced out by the block-reward penalty (~10.24 M SKL/epoch, **114×** the fees). See the §6.0 amendment. |
 
 **The through-line: one theorem, three independent confirmations.** A4's
 `prem ≈ 1.0`, OQ-1's `|Δ| = 0` at the partition optimum, and A2's `0.02 %`
@@ -1595,18 +1601,27 @@ Binding input is a **W9 flood at the block-weight surge ceiling**
 the fastest `n` can physically move, so it is the honest worst case for a
 no-controller constraint. Stuffer weight comes from the production predictor.
 
-| `n` | `Δn`/epoch | `Δshare` %pts/epoch | reorg `Δshare` %pt |
-| --- | --- | --- | --- |
-| 0 | 2 708 | **1.4081 %** | 0.1014 % |
-| 25 000 | 2 554 | 1.3280 % | 0.0951 % |
-| 250 000 | 2 554 | 0.0000 % | 0.0000 % |
+| `n` | `Δn`/epoch | `Δshare` %pts/ep (penalty-free) | %pts/ep (legal 2× limit) | reorg `Δshare` %pt |
+| --- | --- | --- | --- | --- |
+| 0 | 2 708 | **1.4081 %** | **2.8199 %** | 0.1014 % |
+| 25 000 | 2 554 | 1.3280 % | 2.6598 % | 0.0951 % |
+| 250 000 | 2 554 | 0.0000 % | 0.0000 % | 0.0000 % |
 
 **The two claims must be separated** — see the §6.0 amendment for the ruling form.
 Structurally, **no cliff**: monotone, no single-shard discontinuity, only
-down-swing bounded at `0.1014` points. Economically, a **real slew ceiling** of
-`1.4081` points/epoch, costing ~`44 922` SKL/epoch — **closed by the reopen-(c)
-fee-floor, and open until it lands.** And the ceiling **falls with tree depth**, so
-the operand hardens unattended.
+down-swing bounded at `0.1014` points. Economically, the slew ceiling has **two
+tiers, closed by two different mechanisms** — which the first pass conflated:
+
+- **Penalty-free** (`≤` the effective median): **`1.41` pts/epoch**, ~`45 k`
+  SKL/epoch in stuffing fees. **Closed by the reopen-(c) fee-floor, and open until
+  it lands** — this is the conditional layer.
+- **Legal `2×` limit**: **`2.82` pts/epoch**, ~`90 k` SKL/epoch in fees **plus
+  ~`10.24 M` SKL/epoch of miner-reward penalty compensation** — at `B = 2M` the
+  production formula pays the miner *exactly zero*, so the flooder funds the whole
+  block reward every block. That is **114×** the fee cost, and it prices the upper
+  tier out **already, independent of (c)**. Doubling the slew costs ~114× more.
+
+And the ceiling **falls with tree depth**, so the operand hardens unattended.
 
 **Method note.** A6's first pass gated on *"under 1 point per epoch"* — a threshold
 **invented by the test author**, not §6.1's requirement (which is monotone +

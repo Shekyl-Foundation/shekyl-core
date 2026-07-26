@@ -1223,7 +1223,24 @@ pub fn run_stage2(params: &SimParams) {
             );
         }
     }
-    crate::swing::a6_report(&ESCALATION_PREVIEW_N);
+    {
+        // Base block reward at a representative mid-chain supply, for A6's measured
+        // penalty-compensation term (the production emission fn, not a constant).
+        let econ = EconomicParams {
+            release_min: params.release_min,
+            release_max: params.release_max,
+            tx_volume_baseline: params.tx_volume_baseline,
+            burn_base_rate: params.burn_base_rate,
+            burn_cap: params.burn_cap,
+            staker_pool_share: params.staker_pool_share,
+            money_supply: params.money_supply,
+            emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
+            final_subsidy_per_minute: params.final_subsidy_per_minute,
+            daa_target_seconds: EconomicParams::default().daa_target_seconds,
+        };
+        let br = base_block_reward(params.money_supply / 2, &econ).unwrap_or(0);
+        crate::swing::a6_report(&ESCALATION_PREVIEW_N, br);
+    }
     let a4 = a4_stuffing_report(params);
 
     // A5 (W10): the L14 slash forfeits the forgone post-D1/D2 reward stream — of
