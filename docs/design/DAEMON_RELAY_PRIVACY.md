@@ -2139,17 +2139,25 @@ and only one gets a mechanism on Tor:
   (it reassembles and forwards the tx in D++ mode), and reads your originated
   transactions directly. The noise channel is **transparent** to it. Undefended.
 
-And it is *worse* than clearnet on this axis in two compounding ways: (i) **no
-dilution** — the origin does not `get_stem`-select one successor from a pool, it
-**broadcasts every originated tx to *both* noise endpoints**
-([send_txs:866-872](../../src/cryptonote_protocol/levin_notify.cpp#L866)), so each
-endpoint sees everything (occupying *one* already observes all — no per-epoch
-selection to evade); and (ii) **a minimal 2-endpoint target**. On clearnet the
-peer-as-adversary is diluted by `get_stem` over the ~12-pool (imperfect, `g`-bounded,
-but present); on Tor it is undiluted against a 2-of-2 structure, and the noise
-channel's genuine strength on the *other* axis is exactly what camouflages the hole.
-So the Q-10 redesign target (occupancy dilution) applies to **both** transports, and
-Tor currently has **none** — not a weaker mechanism, none.
+And it is *worse* than clearnet on this axis — **the ~2× broadcast penalty, not the
+absence of a pool.** Grounded precisely: the 2 noise channels are *selected per
+epoch from the ~12-peer Tor outbound pool* (`start_epoch` builds
+`connection_map{get_out_connections, count = NOISE_CHANNELS = 2}`; the proxy zone's
+`max_out_connection_count` defaults to `P2P_DEFAULT_CONNECTIONS_COUNT = 12`,
+[net_node.inl:2683](../../src/p2p/net_node.inl#L2683)) — the *same* 2-of-12 selection
+structure as clearnet's `out_mapping_`. The difference is the *send*: clearnet
+`get_stem` sends the origin's own tx to **one** selected successor, while Tor
+**broadcasts it to *both* selected channels**
+([send_txs:866-872](../../src/cryptonote_protocol/levin_notify.cpp#L866)). So per
+epoch Tor exposes the origin's own-tx stream to **2 of 12**, clearnet to **1 of
+12** — Tor is worse by the **broadcast factor (~2×)**, on the *same* pool dilution.
+(An earlier draft of this section wrote "no dilution / `D = 2` / undiluted"; that was
+wrong — `D_tor ≈ 12` with per-epoch selection, and the penalty is the broadcast, not
+a missing pool. The correction came from grounding Tor first, exactly as Q4 requires.)
+So the `D/K` pinning analysis (§12.8 Q1) applies on Tor too, with `D_tor ≈ 12`, *plus*
+the 2× broadcast; and the Q-10 occupancy work is still what the Tor path needs
+*most*, because the broadcast doubles the exposure and the noise channel's genuine
+strength on the *other* axis is exactly what camouflages it.
 
 *Reconciliation with §6.5/§6.6 (verified at source; those sections are already
 pushed):* they model the **fluff phase's** inbound observability — the
@@ -2226,8 +2234,42 @@ accepted peer**, not a behavioural-floor pin.
   conservative; small `K` *concentrates* the occupancy risk (`D/K`) while only
   helping the weaker axis. **Q1's resolution:** pinning the eligible set is safe only
   if `K` is not `≪ D`, **or** the pin-admission bound (`g_max`, Q4) makes holding `a`
-  slots in `K` harder than in `D` by *more than `D/K`*. Admission must pay for the
-  amplification; the layering choice cannot be made without the admission bound.
+  slots in `K` harder than in `D` by *more than `D/K`*. The layering choice cannot be
+  made without the admission bound.
+
+  **The coupling — `D/K` and admission are one constraint, not two gates.** "Safe if
+  admission beats `D/K`" reads as two gates you satisfy separately; they are the same
+  small-`K` driving both, and they multiply. Admission bounds `g` *at pin formation*,
+  but the pin is formed from the enrichable peerlist, and any admission criterion is a
+  target the adversary optimises toward (the arc's standing result). So the real
+  quantity is not "does admission beat `D/K` against a fixed adversary" — it is "does
+  admission beat `D/K` against an adversary *specifically optimising to pass admission
+  into the small `K`*." Shrinking `K` makes that **harder**, because each captured
+  slot is a larger fraction of a smaller set, so there is more optimisation pressure
+  per slot. Tighter pinning raises `D/K` **and** raises the admission difficulty — one
+  coupled constraint where small `K` worsens both sides. Q4 must size the admission
+  bound against a `D/K` that admission itself is making harder to clear, or it will
+  size against the wrong (easier) adversary.
+
+  **Q4 tee-up — ground admission on Tor *first*, and check whether a filter can exist
+  there at all before sizing one.** Two reasons, both grounded here: (i) Tor is worse
+  on occupancy (the ~2× broadcast, G-1), and it is where the demonstrated attack
+  lives, so a filter designed on clearnet's `D = 12` and "extended to Tor" repeats the
+  clearnet-first/Tor-as-afterthought pattern that produced the original hole; (ii) on
+  Tor the address layer offers **no scarce, forge-resistant signal** — onion addresses
+  are free, unlimited, positionless, and subnet/ASN do not exist — so a
+  stricter-than-anchor admission filter can key on almost nothing there. It cannot key
+  on address/subnet/position; behaviour is *eviction* (the dropper floor), not
+  admission, and a patient adversary passes it; that leaves only relationship history
+  / proof-of-prior-useful-work (has this onion peer demonstrably relayed for me
+  before). **The honest possible outcome:** no admission filter beats `D/K` on a
+  broadcast-to-2 target keying only on forgeable-onion-address-plus-behaviour — in
+  which case Q4's answer for Tor is *not* a `g_max` number but a **structural
+  finding**: the occupancy fix is architectural, not policy. And grounding (G-1) has
+  already sharpened *which* structure — not "give Tor a pool" (it has ~12), but
+  **reduce the broadcast-to-2** (select one noise channel per tx, like `get_stem`),
+  *if* broadcasting to both is not load-bearing for the cover-traffic uniformity or
+  reliability. That "is broadcast load-bearing?" question is the first thing Q4 grounds.
 
 ---
 
