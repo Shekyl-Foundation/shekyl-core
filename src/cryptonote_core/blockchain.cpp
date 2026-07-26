@@ -5224,19 +5224,17 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     return false;
   }
 
-  // The seal block must be committed for its fire-beacon hash to be knowable
-  // (challenge.rs: h_seal is the first height at which block_hash(h_seal) is
-  // knowable). current_height == m_db->height() is the block COUNT, so the
-  // highest committed index is current_height - 1; a settlement_epoch whose
-  // h_seal is not yet on chain — a future epoch, or one still inside its seal
-  // lag — is rejected here by an explicit predicate instead of by catching the
-  // BLOCK_DNE the read below would otherwise throw on that attacker-chosen
-  // input. The slash-eligibility consumer (db_lmdb.cpp) applies the equivalent
-  // guard against its just-connected block height.
-  if (h_seal >= current_height)
+  // block_hash(H_seal) must be committed to derive the H_fire beacon. The
+  // seal-on-chain predicate is Rust-authoritative (challenge_seal_on_chain):
+  // called here and mirrored by shekyl-archival-retention::serve_credit_decisions
+  // from that one source, so the boundary never drifts. Rejecting a future-epoch
+  // (attacker-chosen settlement_epoch) input by predicate keeps the seal read
+  // below from throwing BLOCK_DNE on it; the slash-eligibility consumer
+  // (db_lmdb.cpp) applies the same boundary against its connected block height.
+  if (!shekyl_archival_challenge_seal_on_chain(h_open, current_height))
   {
     MERROR_VER("Archival serve-credit: seal block " << h_seal
-      << " not yet committed (chain height " << current_height << ")");
+      << " at or beyond chain height " << current_height << " (not yet committed)");
     return false;
   }
 

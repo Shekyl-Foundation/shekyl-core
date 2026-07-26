@@ -442,8 +442,13 @@ TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_r
     ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
     db_raw->block_hash_queried_heights.clear();
-    bc->check_archival_serve_credit_input(resp, kat.h_seal + 1);
-    EXPECT_FALSE(db_raw->block_hash_queried_heights.empty());
+    // Guard passes at h_seal + 1 (the seal is now the committed tip), so the gate
+    // reaches the seal read exactly once, for h_seal. The credit is still
+    // rejected — downstream on H_fire timing (current_height <= H_fire), not by
+    // this guard.
+    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.h_seal + 1));
+    ASSERT_EQ(db_raw->block_hash_queried_heights.size(), 1u);
+    EXPECT_EQ(db_raw->block_hash_queried_heights[0], kat.h_seal);
   }
 }
 

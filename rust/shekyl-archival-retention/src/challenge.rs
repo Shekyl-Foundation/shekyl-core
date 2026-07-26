@@ -30,6 +30,24 @@ pub fn challenge_seal_height(h_open: u64) -> u64 {
     h_open.saturating_add(CHALLENGE_BEACON_SEAL_BLOCKS)
 }
 
+/// Is the epoch's challenge seal block committed at `chain_height`?
+///
+/// `chain_height` is the block **count** (`m_db->height()` on the C++ side), so
+/// the highest committed block index is `chain_height - 1`; the seal block
+/// `H_seal = challenge_seal_height(h_open)` is on chain iff `H_seal <
+/// chain_height`. The fire-time beacon `block_hash(H_seal)` — and therefore
+/// `H_fire` — is knowable only once this holds.
+///
+/// The serve-credit gate calls this before reading `block_hash(H_seal)`: a
+/// response whose `settlement_epoch` (attacker-chosen) puts `H_seal` at or
+/// beyond the tip is rejected here, rather than by catching the `BLOCK_DNE` the
+/// read would otherwise throw. The slash-eligibility consumer applies the same
+/// predicate against its just-connected block height.
+#[must_use]
+pub fn challenge_seal_on_chain(h_open: u64, chain_height: u64) -> bool {
+    challenge_seal_height(h_open) < chain_height
+}
+
 /// Segment-relative leaf index `ℓ` for `(P, shard, E)` (§3.3).
 ///
 /// `segment_leaf_count` must be the registry value at epoch close; returns `0` when

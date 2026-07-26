@@ -99,6 +99,7 @@ fn reason_from_name(name: &str) -> GateReject {
         "EpochBeforeEFirst" => GateReject::EpochBeforeEFirst,
         "NotGoodThrough" => GateReject::NotGoodThrough,
         "PastCreditDeadline" => GateReject::PastCreditDeadline,
+        "SealBlockNotYetCommitted" => GateReject::SealBlockNotYetCommitted,
         "SealHashUnavailable" => GateReject::SealHashUnavailable,
         "FireHeightDerivationFailed" => GateReject::FireHeightDerivationFailed,
         "ShardNotHeldAtFire" => GateReject::ShardNotHeldAtFire,
