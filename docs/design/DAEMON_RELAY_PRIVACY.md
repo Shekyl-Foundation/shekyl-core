@@ -2454,8 +2454,11 @@ black hole are identical at the failure event (cool both down), and separate ove
 time by rate (the honest peer recovers, the black hole keeps firing); retained
 history snaps the honest peer back to preference on recovery while the black hole's
 rate decays it out. This is the **aggregate** layer — it catches the *indiscriminate*
-black hole; the *selective* censor (relays most → honest-looking rate, drops the
-target → one fire) is the per-tx **reshape**'s job (§14), not the rate signal's.
+black hole; a peer that drops the *current* tx is caught per-tx by **reshape** (§14),
+not the rate signal. (The "content-selective censor that hides under the threshold" is
+a phantom — see part D: Shekyl's privacy layer denies the selector, so the only
+selective censorship is origin-censorship, which is the occupancy attack reshape
+already targets, not a wide content-selective gap.)
 
 **C. Epsilon-greedy exploration — pure preference ossifies to a *self-inflicted
 eclipse*.** Pure exploit (`ε_explore = 0`) selects the top-2 track-record peers
@@ -2501,6 +2504,51 @@ required:
    it so nobody later reads "exploration = more peers see my traffic" as a pure
    regression.
 
+**D. The eviction threshold is derived against the *ambient* honest floor — because
+the two adversarial edges collapse under "how," and the system already prices them.**
+The threshold's honest floor is *not* adversarially inflatable at a new/cheap cost,
+and there is *not* a wide content-selective-censor gap beneath it — two claims that
+look plausible until you name the capability each requires (the arc's grounding
+discipline, applied in the threat direction, where it is easiest to inflate a
+threshold against a phantom):
+
+- **"Induced eviction" (inflate honest S's fire-rate) collapses into the occupancy /
+  eclipse bound already priced.** To make S's forwarded tx fail to diffuse, the
+  adversary must drop it *below* S (occupy the slot below S — the occupancy attack)
+  or suppress the predecessor's diffusion-observation *from every path* (eclipse the
+  predecessor — the embargo disarms on diffusion from *any* direction, and a
+  few-second delay is nothing against the ~112 s window). A sybil not *on* the tx's
+  path cannot drop that tx. So inflating S's floor costs exactly the occupancy/eclipse
+  budget §12.10 regime 3 already bounds — **pricing it again in the threshold
+  double-counts one capability.** The honest floor is therefore preemption + *genuine
+  background* downstream failure (a real, measurable network quantity), not preemption
+  + an adversarial dial.
+- **The content-selective censor needs a selector Shekyl's privacy layer erases.**
+  FCMP++, confidential amounts, and stealth addresses leave the stem-phase censor an
+  encrypted blob with no visible sender, recipient, or amount — *no property to select
+  on*. The only visible attributes are: predecessor identity (→ origin/node
+  censorship, which is occupancy, and *self-defeating* at the direct-successor
+  position because the victim origin sees ~100 % fire-rate from that successor and
+  evicts it); and coarse structural/economic fields (tx shape / input-output count if
+  unpadded, fee if public) — which permit "censor large txs / low-fee txs" but **not**
+  victim-targeting, and are still occupancy-limited and rate-caught. So *every* visible
+  selector is occupancy + rate-caught or coarse-non-targeting; the "suppress this
+  victim while hiding under the threshold" scenario has **no input**.
+
+**Consequence for the threshold (the 39 s lesson, threat-direction).** The threshold
+is a *derivation* against the ambient floor — above (preemption + genuine background
+failure), below the indiscriminate-black-hole rate (~100 %) — and it must **not** be
+inflated against the induced-eviction floor (double-counts occupancy) nor widened to
+leave a large reshape gap for a content-selective censor (which does not exist). The
+clean ~10–15 %-vs-~100 % separation is the correct one; the inflated floor was the
+phantom. **System-composition principle, stated for the next reviewer:** an adversarial
+edge on one mechanism must be grounded by naming the capability it requires; if that
+capability is already *priced* by another subsystem (the occupancy/eclipse bound) or
+*denied* by another (FCMP++'s confidentiality), it must not be re-defended here — that
+is double-counting, and it over-provisions this mechanism's parameters against a
+straw adversary. Protection composes; explore every attack, but pay for each capability
+once.
+
 **What is measured vs. owed.** The `ε_explore = 0 → 2/12`, `0.05 → 12/12` result is
 from an external model; per the arc's discipline (reproduce the load-bearing number
 in our own instrument, the §13.5 lesson) it should be re-run in the crate — an
@@ -2508,9 +2556,14 @@ epsilon-greedy selection instrument (`ε → distinct-peers-exercised`, plus the
 strategic-dropper `P(both-adv)` rows) parallel to `simulate_epoch_layering`. The
 parameters this specifies are the concrete form of §12.10's two bounds: **cooldown
 length + rate-decay threshold** (eviction responsiveness; the threshold clears the
-~10 %+ambient honest floor and sits well below ~100 %) and **`ε_explore` + retained
-history** (re-entry cost / bootstrap-vs-whitewash). Derive them against the
-honest-recovery vs black-hole-delay vs false-eviction trade-off — measure, don't pick.
+*genuine ambient* honest floor — preemption + real background downstream failure, per
+part D — and sits well below the ~100 % indiscriminate-black-hole rate; it is **not**
+sized against an induced-eviction floor, which double-counts occupancy) and
+**`ε_explore` + retained history** (re-entry cost / bootstrap-vs-whitewash). Derive
+them against the honest-recovery vs black-hole-delay vs false-eviction trade-off —
+measure, don't pick. The instrument owes the *genuine background failure rate* as the
+threshold's real input (a topology measurement, like `F` and hop latency); it does
+**not** owe an "induced-failure dial" row — that dial priced a phantom (part D).
 
 ---
 
