@@ -540,4 +540,113 @@ mod tests {
         sorted.dedup();
         assert_eq!(sorted.len(), live.len(), "duplicate peer across stem slots");
     }
+
+    // --- Faithful translations of the C++ `dandelionpp_map` gtests (the
+    // survivor half of RP-2a's acceptance, DAEMON_RELAY_PRIVACY.md §16). The C++
+    // suite runs unchanged against this map as the migration oracle; these keep
+    // its coverage once it is retired. `traits` is a C++ STL-iterator-ABI test
+    // with no Rust analogue; `empty` and `zero_stems` are covered by
+    // `empty_map_routes_nothing` / `zero_stems_routes_nothing` above.
+
+    #[test]
+    fn gtest_dropped_connection() {
+        // 6 peers / 3 stems: nine inbound sources spread 3-per-stem, then one
+        // stem is dropped and backfilled from an unused peer, no dead reuse.
+        let mut rng = SplitMix64::new(0xD1);
+        let peers = ids(6);
+        let mut m = StemMap::new(peers.clone(), 3, &mut rng);
+        assert_eq!(m.live_stems(), 3);
+
+        // Nine inbound sources, disjoint from the peer ids.
+        let sources: Vec<ConnectionId> = (0u8..9)
+            .map(|i| {
+                let mut b = [0u8; 16];
+                b[0] = 100 + i;
+                ConnectionId::from_bytes(b)
+            })
+            .collect();
+        for s in &sources {
+            assert!(m.stem_for(Some(*s), &mut rng).is_some());
+        }
+        assert_eq!(m.usage().len(), 3);
+        assert!(
+            m.usage().iter().all(|u| *u == 3),
+            "nine sources spread 3-per-stem: {:?}",
+            m.usage()
+        );
+
+        let lost = m
+            .slots()
+            .iter()
+            .flatten()
+            .nth(1)
+            .copied()
+            .expect("a live stem");
+        let survivors: Vec<ConnectionId> = peers.iter().filter(|p| **p != lost).copied().collect();
+        assert_eq!(m.update(survivors, &mut rng), StemSetChange::Changed);
+        assert_eq!(m.live_stems(), 3, "the dropped slot was backfilled");
+        assert!(
+            m.slots().iter().flatten().all(|s| *s != lost),
+            "the dropped peer was reused"
+        );
+    }
+
+    #[test]
+    fn gtest_dropped_connection_remapped_leaves_a_nil_hole() {
+        // 3 peers / 3 stems: dropping a stem with no spare nils the slot *in
+        // place* — the iterator span (slots().len()) stays at width while the
+        // live count falls. This is the §16.1 snapshot property the FFI relies
+        // on for index alignment. A later peer backfills the hole.
+        let mut rng = SplitMix64::new(0xD2);
+        let peers = ids(3);
+        let mut m = StemMap::new(peers.clone(), 3, &mut rng);
+        assert_eq!((m.live_stems(), m.slots().len()), (3, 3));
+
+        let dropped = m.slots()[1].expect("slot 1 live");
+        let survivors: Vec<ConnectionId> =
+            peers.iter().filter(|p| **p != dropped).copied().collect();
+        assert_eq!(
+            m.update(survivors.clone(), &mut rng),
+            StemSetChange::Changed
+        );
+        assert_eq!(m.slots().len(), 3, "span keeps the nil hole in position");
+        assert_eq!(m.live_stems(), 2, "one slot is nil, not compacted away");
+        assert_eq!(m.slots().iter().filter(|s| s.is_none()).count(), 1);
+
+        let fresh = ConnectionId::from_bytes([210u8; 16]);
+        let mut refill = survivors;
+        refill.push(fresh);
+        assert_eq!(m.update(refill, &mut rng), StemSetChange::Changed);
+        assert_eq!(
+            m.live_stems(),
+            3,
+            "the hole was backfilled from the fresh peer"
+        );
+        assert!(m.slots().iter().flatten().any(|s| *s == fresh));
+    }
+
+    #[test]
+    fn gtest_dropped_all_connections() {
+        // 8 peers / 3 stems: after every peer is gone the span stays but nothing
+        // is routable, and pinned sources surface `None`, not a stale peer.
+        let mut rng = SplitMix64::new(0xD3);
+        let peers = ids(8);
+        let mut m = StemMap::new(peers.clone(), 3, &mut rng);
+        let sources = ids(9);
+        for s in &sources {
+            assert!(m.stem_for(Some(*s), &mut rng).is_some());
+        }
+        assert_eq!(m.live_stems(), 3);
+
+        assert_eq!(m.update(Vec::new(), &mut rng), StemSetChange::Changed);
+        assert_eq!(m.live_stems(), 0, "no live stem remains");
+        assert_eq!(m.slots().len(), 3, "the slots are nil, not removed");
+        for s in &sources {
+            assert_eq!(
+                m.stem_for(Some(*s), &mut rng),
+                None,
+                "no routable stem must surface as None, not a stale peer"
+            );
+        }
+    }
 }
