@@ -115,10 +115,20 @@ sustainability is unaffected by the recalibration.
   the *equilibrium holdings size* those three forces select, plus a cap design
   that selects the one the network wants — noting the asymmetry (the dodge is an
   incentive; the other two are viability floors, so raising floors alone pushes
-  small honest archivers out = a reach loss). **Reopen when** the
-  escalation/fee-floor design round opens; the re-evaluation shape is a joint
-  capture-side + cost-side design pass. Target: V3.0 (pre-genesis; gates the
-  escalation freeze).
+  small honest archivers out = a reach loss).
+  **✅ ROUND CLOSED (2026-07-26, §12.9)** — all five OQs discharged. Resolution:
+  **R2** delete the plateau's *reward-path application* (keep `curve_milli` itself,
+  §6.1's escalation reuses the idiom); **R3** an **admission-time viability
+  predicate** — `work_milli(bond) ≥ k` at connect height via the production chain,
+  **not** a frozen minimum size (that would be a forecast about `r`, and the sizing
+  exercise is what proved the numeric wrong), pinning **`k = 1` milli** and a
+  **parent-block read-point**; **R4** cadence monitored-not-designed-for. Evidence:
+  deletion is distribution-neutral **at the true partition optimum** (OQ-1,
+  `|Δ| = 0`), and A4's `fee_mult_to_close` is unchanged under deletion, so reopen
+  (c)'s sizing survives (OQ-4). **What remains is the implementing round**, which
+  inherits the §12.9 census: rule-42 digest regen, the *"C++ source-unchanged yet
+  behaviourally live"* PR callout, the KAT/fixture regeneration list, and the §6.1
+  idiom carve-out. Target: V3.0 (pre-genesis; gates the escalation freeze).
 
 - **WI-RPC-2b deferrals — CLI RESERVED commands awaiting their RPC
   surfaces** (added 2026-07-22; WI-RPC-2b, `feat/cli-rpc-client-surface`;
