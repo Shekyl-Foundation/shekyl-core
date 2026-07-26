@@ -2265,11 +2265,19 @@ accepted peer**, not a behavioural-floor pin.
   on address/subnet/position; behaviour is *eviction* (the dropper floor), not
   admission, and a patient adversary passes it; that leaves only relationship history
   / proof-of-prior-useful-work (has this onion peer demonstrably relayed for me
-  before). **The honest possible outcome:** no admission filter beats `D/K` on a
-  broadcast-to-2 target keying only on forgeable-onion-address-plus-behaviour — in
-  which case Q4's answer for Tor is *not* a `g_max` number but a **structural
-  finding**: the occupancy fix is architectural, not policy — and §12.9 states what
-  that architecture is. (The "is broadcast load-bearing for cover uniformity?"
+  before). **This worry is RESOLVED in §12.10** — the "structural not policy" outcome
+  was reached by treating admission as *identity*-filtering (which onion defeats). But
+  admission is *select-toward-demonstrated-work*, and relationship-history /
+  demonstrated-propagation is not a thin last resort — it is *the* signal, correctly
+  signed for disruption, transport-blind (work, not identity), and it *conscripts*
+  the observer rather than failing to exclude it. So admission-as-policy **is** viable
+  on Tor. What remains below is the original framing, kept for the reasoning trail;
+  read it through §12.10. **The honest possible outcome (superseded by §12.10):** no
+  admission filter beats `D/K` on a broadcast-to-2 target keying only on
+  forgeable-onion-address-plus-behaviour — in which case Q4's answer for Tor is *not*
+  a `g_max` number but a **structural finding**: the occupancy fix is architectural,
+  not policy — and §12.9 states what that architecture is. (The "is broadcast
+  load-bearing for cover uniformity?"
   question raised in an earlier draft is **resolved and closed**: `send_noise` pads
   every channel to a constant rate on its own timer
   [levin_notify.cpp:663](../../src/cryptonote_protocol/levin_notify.cpp#L663), so
@@ -2324,8 +2332,71 @@ demonstrated attack. It also collapses Q4: it is a **single admission problem** 
 mechanism to bound, reading a transport-dependent signal — not a per-transport pair
 to keep in sync. *(Implementation is RP-2+: unify the stem mechanism onto the
 anonymity zone, replacing the `MWARNING` fork; the zone survives only as the
-pool-and-signal parameter. The `g_max` admission bound Q4 owes is then one bound,
-parameterized by the identifier the transport exposes.)*
+pool-and-signal parameter. The `g_max` admission bound Q4 owes — reframed in §12.10 —
+is then one bound, keyed on the same medium-blind signal on both transports.)*
+
+### 12.10 `g_max` reframed — select toward demonstrated work, not distinguish adversary from honest
+
+The §6.10 conscription insight applied to admission, correctly signed this time (an
+earlier draft filed "the positive signal recruits the patient observer" as a *cost*
+— that was the out-of-scope observer dragged back in; the recruiting is the
+**objective**). It resolves the pin-vs-churn fork and the §12.8 Tor-admission worry
+together.
+
+**Admission is *select-toward-demonstrated-work*, not distinguish-adversary.** The
+"distinguish" framing is what drags the out-of-scope observer back in — it should
+*not* try to tell adversary from honest. The admissible signal is **demonstrated
+propagation / relationship history**: it demands work from *both*, excludes the one
+that structurally *cannot* produce it (a disruptor — dropping is the exact opposite
+of the signal), and **conscripts** the one that can (the observer earns its vantage
+by relaying, on pain of eviction — HUMINT: you don't deny the source you can't deny,
+you make being that source cost more than it is worth and get its work in the
+bargain). One mechanism, two edges: **admit on demonstrated propagation, evict on
+demonstrated dropping** — stem-eligibility as a standing, revocable toll paid in
+relay work. It is **transport-blind** (work, not identity), which resolves the §12.8
+worry: onion gives *identity*-admission nothing, but *work*-admission everything, on
+both transports identically.
+
+**Two `g_max`, and the split is what was mis-computed.** *Observational* `g_max`
+(share to occupy-to-**observe**) is out of scope (§6.9, unstoppable) and is the one
+pool share governs — so bounding pool-share `g` was bounding the wrong quantity.
+*Disruptive* `g_max` (share to occupy-to-**disrupt**) is in scope, and it splits into
+**three regimes**:
+
+| regime | in scope? | bounded by | pool-share dependent? |
+| --- | --- | --- | --- |
+| Observation (any share) | no (§6.9) | — (conceded; the signal *taxes* it) | — |
+| Partial disruption (some slots) | yes → **delay only** | the backstop (§14) reduces censorship to delay; the signal + eviction bound the delay-*surface* = **eviction responsiveness × re-entry cost** | **no** |
+| Full eclipse (all of O's outbound) | yes → **censorship** | backstop *fails* (no honest path: reshape's alternate and the fluff peers are all adversarial) → **anti-eclipse** = anchors + the conscription cost the signal imposes | **yes** |
+
+So the pool-share bound does **not** fully dissolve: it is out of scope for
+observation, backstop-dissolved for partial disruption, and **survives for full
+eclipse** — but reframed from "how cheap is enrichment" to "how expensive is it to
+*conscript* enough of O's outbound (past the anchors) to eclipse." The positive
+signal helps all three (taxes observation, excludes indiscriminate droppers, raises
+eclipse cost from enrichment to conscription) but eliminates pool-share only for the
+first two.
+
+**This makes pinning safe and dissolves the D/K worry.** Pinning was dangerous only
+under "durable slot = durable adversary *vantage*" — the observation worry, out of
+scope. Under occupancy-as-conscription, a durable slot held by a peer that must
+continuously demonstrate propagation to keep it is the *best* state: a stable tier of
+nodes all meeting a high propagation bar as the condition of tenure, evicted the
+instant they lapse. The `D/K` amplification was occupancy-as-*observation*; under
+occupancy-as-*conscription* a captured slot is one whose holder is forced to relay
+flawlessly — which is what you wanted from the slot. And the observer is not
+*upgraded*: slot-observation (precision-1) was always achievable via occupancy (that
+*is* `g_max`); the signal only taxes its acquisition (cheap enrichment → expensive
+conscription), which is costless-or-better on the out-of-scope axis.
+
+**So Q4's deliverable is reframed — two well-posed bounds, not a pool-share `g`:**
+(1) the eviction floor's **responsiveness** (and the signal's re-entry cost), which
+bounds the partial-disruption delay-surface; and (2) **eclipse-resistance as
+conscription cost** (anchors + how expensive it is to conscript enough of O's
+outbound), which bounds full-eclipse censorship. Both are dramatically better-posed
+than "bound pool-share `g`," because the positive signal is doing the work on both.
+Select toward demonstrated work; pin the workers; evict the droppers; let the
+observer buy lunch and carry freight.
 
 ---
 
