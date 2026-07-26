@@ -168,7 +168,7 @@ pub fn shard_work_micro(
     scarcity_micro(r_market, age_milli, age_weight_milli)
 }
 
-/// `Σwork(E)` milli — sum of `Curve(work_P)` over market archivers.
+/// `Σwork(E)` milli — sum of the credited per-`P` term over market archivers.
 ///
 /// # Panics
 ///
@@ -190,9 +190,22 @@ pub fn sigma_work_milli(per_p_work_milli: &[u64], market_mask: &[bool]) -> u64 {
     sum
 }
 
-/// One `P`'s capped work term `Curve(work_P)` — the single definition of the
-/// per-`P` contribution to `Σwork(E)`. Non-members and zero-work members
-/// contribute nothing. Sourced here so the persisted denominator
+/// One `P`'s **credited** work term — the single definition of the per-`P`
+/// contribution to `Σwork(E)`.
+///
+/// **D3/R2: this is a membership gate, not a cap.** It was `Curve(work_P)`; the
+/// plateau was deleted from the reward path (dodgeable at no bond cost,
+/// unenforceable above the bond under the privacy architecture, and measurably
+/// harmful where it bound — A4 put the capped regime at ROI 1.19 vs 0.67
+/// uncapped). Credited work is now **linear in work**: members credit their work
+/// unchanged, non-members credit nothing. A zero-work member still contributes
+/// nothing — by arithmetic now, not by a guard.
+///
+/// The **name is retained deliberately** rather than renamed in the deletion
+/// commit: it is also the C-ABI out-parameter (`out_capped_work_milli`,
+/// `shekyl_ffi.h`), so renaming crosses the language boundary and belongs with a
+/// change that already touches it — not smuggled into a rule-15 deletion.
+/// Sourced here so the persisted denominator
 /// ([`sigma_work_milli`]), the emission numerator FFI
 /// (`shekyl_archival_emission_epoch_work`), and the verify body
 /// (`emission_verify`) cannot drift on the guard — the M-2 sourcing-divergence
@@ -381,7 +394,7 @@ impl std::error::Error for CreditIndexOutOfRange {}
 ///
 /// Epoch close calls [`as_of_e_served_work`] to build the stored `Σwork(E)`
 /// denominator; the PR-E3 emission verify body calls it with the same frozen
-/// gather to build `P`'s `capped_P` numerator. Because both sides run this
+/// gather to build `P`'s credited numerator. Because both sides run this
 /// one function over the same as-of-`E` inputs, the numerator is `P`'s exact
 /// term in the denominator *by definition* — sourcing divergence (the M-2
 /// silent over/under-mint) is unrepresentable rather than tested-against.
@@ -540,7 +553,7 @@ pub fn shard_contribution_micro(
 ///    aggregate, saturating. The held-and-served set is the serve-credit ledger
 ///    itself (WS-1 §5) via [`as_of_e_served_work`], the single sourcing function
 ///    shared with the emission verify body.
-/// 4. **`Σwork(E)`** — [`sigma_work_milli`] over per-bond `Curve(work_P)`.
+/// 4. **`Σwork(E)`** — [`sigma_work_milli`] over the per-bond credited term.
 ///
 /// Errors (rather than panics) on malformed gather indices so the FFI shim
 /// can map the failure to a loud daemon-side abort.
