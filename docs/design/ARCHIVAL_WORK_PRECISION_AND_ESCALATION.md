@@ -1008,13 +1008,27 @@ is **retired**: it was evidence for the plateau, which R2 deletes, so it documen
 **pre-D1** columns throughout are counterfactual. Recomputing against either is
 recomputing against a ghost.
 
-**Method record (three catches, one discipline).** *Always-split* as "rational";
+**Method record (five catches, one discipline).** *Always-split* as "rational";
 the **two-point partition proof** (proposed by the reviewer, falsified by
-exhaustive check); and A6's **invented pass/fail threshold**. Each was a claim
-promoted past its verification, and each was caught by the same rule — *measure
-before recording, regardless of which side of the review table the claim came
-from.* Carried into Stage 3's freeze reviews: **"proven" means exhaustively
-checked or mechanically derived.**
+exhaustive check); A6's **invented pass/fail threshold**; the **un-propagated
+measurement** (C-1 — corrected at its origin, stale at two of three consumers);
+and the **mirrored mechanism** (below). Each was a claim promoted past its
+verification, and each was caught by the same rule — *measure before recording,
+regardless of which side of the review table the claim came from.* Carried into
+Stage 3's freeze reviews: **"proven" means exhaustively checked or mechanically
+derived**, and **a measurement is not landed until every consumer quotes it.**
+
+**The unit's accidental controlled experiment — dep vs. mirror.** Every arm that
+**depped production arithmetic** (`scarcity_micro`, `curve_milli`,
+`predict_weight`, and now `failure_window_slashable`) either needed **no
+correction** or now **re-prices itself automatically**. The one arm that
+**mirrored a mechanism still in flight** (A5's hand-written binomial) was wrong
+**within days** of that mechanism shipping (#368) — and wrong in the **semantics**,
+not the values, which is precisely the failure a coefficient audit would never
+catch. `dep-don't-mirror` (DQ-2G) was argued from drift *theory* at the D-1
+hoist; this is its empirical confirmation, and the fix is **structural** rather
+than corrective: the Round-2 re-pin will re-price the arm instead of silently
+diverging from it.
 
 ### 12.5 A4 (W9) result — the escalation fails the stuffing gate; reopen (c) FIRED
 
@@ -1132,6 +1146,20 @@ honest storage`; pass iff `> 0`.
 - Proxy re-fetch ≈ **$0.0001–0.0013/epoch** (4,096 openings × ~3 KB at
   `$0.01–0.10/GB`) — **4–40× cheaper**. So at the current grace window (`q≈0`,
   re-fetch reliable) `margin < 0`: honest holding is the *dearer* strategy.
+> **Remaining approximation, labelled (one-way safe today, not by construction).**
+> The horizon exposure **sums per-epoch hazards**, which treats a slash as
+> *repeatable*. It is not: a slashed `(P, shard)` is an **absorbing state** — the
+> open bad interval means the same bond cannot be forfeited twice — so
+> `Σ hazard ≥ P(at least one slash)` and the model **overstates the deterrent**.
+> Overstated deterrence biases toward **PASS**; the verdict is **FAIL**; the result
+> is therefore *a fortiori* robust. It is labelled rather than fixed because
+> **direction-safe today is not direction-safe under every future
+> parameterisation** — and this arm now **re-prices itself automatically** when the
+> Round-2 re-pin moves `m`/`n` (it deps `failure_window_slashable`), so the re-pin
+> must not inherit an *unlabelled* approximation sitting beside a *labelled*
+> mechanism. Same one-way-safety pattern as A4's omitted fee-rebate and the
+> superseded per-shard scope charge.
+
 - **Crossover `q*`** — the per-epoch re-fetch-failure rate gate-4 grace must
   force to flip the margin: **≈ 0.264** on bond exposure alone, **≈ 0.089** once
   the forgone post-D2 reward stream is folded in (the escalated reward is the one

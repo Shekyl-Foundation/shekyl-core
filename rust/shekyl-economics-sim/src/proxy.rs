@@ -148,6 +148,16 @@ pub fn slash_prob_per_epoch(q: f64, m: u32, n: u32) -> f64 {
 /// The proxy's total cost per epoch, fiat: re-fetch bandwidth + the L14 slash
 /// exposure.
 ///
+/// **Labelled approximation (one-way safe *today*, not by construction).** The
+/// caller sums this per-epoch exposure over the horizon, which treats a slash as
+/// **repeatable**. It is not — a slashed `(P, shard)` is an **absorbing state**
+/// (the open bad interval bars a second forfeiture of the same bond), so
+/// `Σ hazard ≥ P(at least one slash)` and this **overstates the deterrent**.
+/// Overstated deterrence biases toward PASS and the verdict is FAIL, so the
+/// result is *a fortiori* robust — but the label matters because this arm now
+/// **re-prices automatically** when the Round-2 re-pin moves `m`/`n`, and
+/// direction-safety must be re-checked there rather than assumed to carry.
+///
 /// **Scope matching (load-bearing).** The margin compares a *full holding*
 /// (`MAX_HOLDINGS_SHARDS`) proxied vs held, so the exposure must be summed over
 /// the shards at risk: each shard is challenged **independently** every epoch
