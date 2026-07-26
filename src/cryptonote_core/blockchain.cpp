@@ -5255,7 +5255,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   }
 
   // Derived identically to the slash-eligibility consumer (db_lmdb.cpp,
-  // archival_challenge_failed_at_height) from the same deterministic inputs, so
+  // archival_baseline_observed_at_epoch) from the same deterministic inputs, so
   // the two consumers of "held at fire height" agree on which height that is
   // (WS-1 h_fire symmetry). H_fire is in (0, H_close] for every well-formed
   // epoch, so no range check is applied here — see challenge_fire_height's

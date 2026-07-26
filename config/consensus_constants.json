@@ -24,6 +24,10 @@
   "release_cooldown_epochs": 2,
   "challenge_resolution_blocks": 10000,
 
+  "_comment_archival_failure_window": "Sliding-window m-of-n archival failure confirmation (docs/completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md §1). Shape genesis-frozen (slash iff m misses fall within the last n baseline OBSERVATIONS for a (P_id, shard); no per-P confirmation FSM, no post-miss recheck — a predictable recheck is the dodge surface §5 rejects); numerics PROVISIONAL at the Round-1 values, re-pinned at the Round-2 testnet stressnet against the measured outage-duration CDF (pin §3.2 four-criterion joint gate). The bond_duration precedent: shape frozen, numerics re-pinnable. Consumer is Rust-only (shekyl-archival-retention::failure_window); C++ reads m/n through shekyl_archival_failure_window_params rather than a generated header constant, so there is ONE authority and no drift pair to keep aligned.",
+  "archival_failure_window_m": 11,
+  "archival_failure_window_n": 13,
+
   "_comment_bond_duration": "Per-shard retention-commitment horizon (gate-4 §4.4; ARCHIVAL_TIMING_CONSTANTS.md §1). Shape genesis-frozen (age-scaled-constant: bond_duration(age) = BASE * (1 + SCALE * age)); numerics provisional (H2 plateau arm, re-pin at testnet within scale band [2,8]). Age is shard_age_milli evaluated at the shard's add-epoch settlement close H_close(add_epoch) = (add_epoch+1)*SEB (NOT a raw within-epoch add block height; the age-realization invariant), computed once at acquisition.",
   "bond_duration_base_epochs": 4,
   "bond_duration_age_scale": 4,

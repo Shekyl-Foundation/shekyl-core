@@ -5178,6 +5178,17 @@ bool BlockchainLMDB::archival_bond_holds_shard(const crypto::hash& p_id, uint64_
   if (!load_archival_bond_value(p_id, bond))
     return false;
 
+  return archival_bond_holds_shard_of(p_id, bond, shard_id, at_height);
+}
+
+bool BlockchainLMDB::archival_bond_holds_shard_of(const crypto::hash& p_id,
+  const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id, uint64_t at_height) const
+{
+  // Split out of archival_bond_holds_shard so a caller that already holds the
+  // decoded record does not pay a re-load + re-decode per query. The failure-
+  // window look-back asks this up to n times for one (P, s) candidate; the
+  // slash scan has the record in hand from its own cursor walk.
+
   // As-of-height semantics (WS-1, REWARD_EMISSION_E3_GATING_ROUND.md §5;
   // extended for mutable holdings by the HoldingsUpdate connect slice —
   // P2B-7 Pin 4/5): both consumers — serve-credit acceptance and slash
@@ -5573,10 +5584,26 @@ void BlockchainLMDB::append_archival_slash_log(uint64_t block_height, uint32_t s
     throw0(DB_ERROR(lmdb_error("Failed to append archival slash log: ", result).c_str()));
 }
 
-bool BlockchainLMDB::archival_challenge_failed_at_height(uint64_t block_height,
+bool BlockchainLMDB::archival_baseline_observed_at_epoch(uint64_t block_height,
   const crypto::hash& p_id, const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
-  uint64_t settlement_epoch) const
+  uint64_t settlement_epoch, ArchivalSealHashCache* seal_cache) const
 {
+  // Was a baseline challenge actually POSED to (p_id, shard_id) at this epoch,
+  // and has its outcome resolved? This is the observability predicate the
+  // sliding-window failure confirmation counts over
+  // (docs/completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md §1): an epoch in which
+  // the pair was bonded but untested is NOT an observation, so it can never be
+  // counted as a miss. It answers only "was it posed", never "was it answered"
+  // — the serve_credit_bit is the caller's separate read.
+  //
+  // The failure-window look-back walks epochs downward and stops at the first
+  // epoch this returns false for, which is what scopes the window to the pair's
+  // current continuous challengeable run. Three consensus boundaries fall out
+  // of that, none special-cased: before E_join + 1 and inside a bad interval
+  // good_through is false (so a slash -> Rebond reinstatement starts the window
+  // clean); at or before the shard's E_add the as-of-H_fire holdings read is
+  // false (the partial add epoch is forfeited in both directions, P2B-7 Pin 5).
+
   // good_through covers both the join-epoch gate and bad-interval exclusion
   // (ARCHIVAL_INCENTIVES §3.4); computed in Rust.
   //
@@ -5585,10 +5612,6 @@ bool BlockchainLMDB::archival_challenge_failed_at_height(uint64_t block_height,
   // as-of-height read at the bottom. A tip read ahead of it let a P drop the
   // shard after the fire and escape the slash.
   if (!archival_bond_good_through_ffi(bond, settlement_epoch))
-    return false;
-  if (has_archival_serve_credit_bit(p_id, shard_id, settlement_epoch))
-    return false;
-  if (has_archival_slash_applied(p_id, shard_id, settlement_epoch))
     return false;
 
   const uint64_t h_open = shekyl_archival_epoch_open_height(settlement_epoch);
@@ -5601,14 +5624,34 @@ bool BlockchainLMDB::archival_challenge_failed_at_height(uint64_t block_height,
   if (h_seal > block_height)
     return false;
 
+  // The seal-block hash depends on the epoch (via h_seal), not the shard, so
+  // across the caller's shard loop the same handful of heights are read over
+  // and over. Memoize per height when a cache is supplied; the value is
+  // immutable for a committed height within the scan's write txn, so this is
+  // behaviour-identical to fetching every time.
   crypto::hash seal_hash{};
-  try
+  bool have_seal = false;
+  if (seal_cache)
   {
-    seal_hash = get_block_hash_from_height(h_seal);
+    const auto it = seal_cache->find(h_seal);
+    if (it != seal_cache->end())
+    {
+      seal_hash = it->second;
+      have_seal = true;
+    }
   }
-  catch (const std::exception&)
+  if (!have_seal)
   {
-    return false;
+    try
+    {
+      seal_hash = get_block_hash_from_height(h_seal);
+    }
+    catch (const std::exception&)
+    {
+      return false;
+    }
+    if (seal_cache)
+      (*seal_cache)[h_seal] = seal_hash;
   }
 
   // Derived identically to the serve-credit consumer (blockchain.cpp) from the
@@ -5621,7 +5664,103 @@ bool BlockchainLMDB::archival_challenge_failed_at_height(uint64_t block_height,
     h_open, h_close, reinterpret_cast<const uint8_t*>(seal_hash.data),
     reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
 
-  return archival_bond_holds_shard(p_id, shard_id, h_fire);
+  return archival_bond_holds_shard_of(p_id, bond, shard_id, h_fire);
+}
+
+bool BlockchainLMDB::archival_failure_window_slashable(uint64_t block_height,
+  const crypto::hash& p_id, const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
+  uint64_t settlement_epoch, ArchivalSealHashCache* seal_cache) const
+{
+  // Gather the trailing window and hand it to Rust. This function reads LMDB
+  // and decides NOTHING (20-rust-vs-cpp-policy): m, n, the stop budget, and the
+  // m-of-n verdict all come from shekyl-archival-retention::failure_window.
+  //
+  // Nothing is persisted. The window is recomputed from the serve_credit_bit
+  // ledger and the bond record on every evaluation, which is what makes it
+  // reorg-safe for free: pop_block already reverts both (gate-2 §8, gate-4 §5),
+  // so a rewound bit is a rewound observation with no second copy to resync.
+  //
+  // m/n/serve_budget are compile-time constants (generated from
+  // config/consensus_constants.json into shekyl-archival-retention); the FFI
+  // returns generated constants, never runtime state, so they cannot change
+  // between calls. Fetch once per process behind a function-local static — this
+  // is still the one authority (no header-constant drift pair) but pays the
+  // marshal exactly once, not on every slash-candidate. m is unused C++-side
+  // (the m-of-n verdict is Rust's); n bounds the look-back, serve_budget stops
+  // it early.
+  struct WindowParams { uint32_t m, n, serve_budget; };
+  static const WindowParams window = [] {
+    WindowParams p{};
+    if (shekyl_archival_failure_window_params(&p.m, &p.n, &p.serve_budget)
+      != SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB)
+      throw std::runtime_error("FATAL: archival failure-window params marshal failed");
+    return p;
+  }();
+  const uint32_t window_n = window.n;
+  const uint32_t serve_budget = window.serve_budget;
+
+  std::vector<uint64_t> epochs;
+  std::vector<uint8_t> served;
+  epochs.reserve(window_n);
+  served.reserve(window_n);
+
+  // Head of the window is the decision epoch, which the caller has already
+  // established is an observed miss.
+  epochs.push_back(settlement_epoch);
+  served.push_back(0);
+
+  uint32_t passes_seen = 0;
+  uint64_t epoch = settlement_epoch;
+  while (epochs.size() < window_n && epoch > 0)
+  {
+    --epoch;
+    if (!archival_baseline_observed_at_epoch(block_height, p_id, bond, shard_id, epoch, seal_cache))
+      break; // boundary of the pair's current continuous challengeable run
+    const bool passed = has_archival_serve_credit_bit(p_id, shard_id, epoch);
+    epochs.push_back(epoch);
+    served.push_back(passed ? 1 : 0);
+    // Rust-computed stop budget (n - m): once more than this many observations
+    // in the window have PASSED, fewer than m misses remain possible however
+    // far back the history goes, so reading further is wasted LMDB traffic.
+    // Truncating here cannot change the verdict — the short window is still
+    // handed to Rust, which necessarily answers ABSORB for it — so the decision
+    // stays on the Rust side of the boundary rather than being short-circuited
+    // by this loop.
+    if (passed && ++passes_seen > serve_budget)
+      break;
+  }
+
+  const uint8_t verdict = shekyl_archival_failure_window_slashable(
+    epochs.data(), served.data(), epochs.size());
+  if (verdict == SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL)
+    throw std::runtime_error(
+      "FATAL: archival failure-window rejected the gathered observation sequence");
+  return verdict == SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH;
+}
+
+bool BlockchainLMDB::archival_challenge_failed_at_height(uint64_t block_height,
+  const crypto::hash& p_id, const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
+  uint64_t settlement_epoch, ArchivalSealHashCache* seal_cache) const
+{
+  // Cheap single-key reads first: an epoch with an affirmative pass, or one an
+  // earlier scan already slashed, is not a candidate at all. (All the
+  // predicates here are pure reads, so their order is free; the beacon
+  // reconstruction below is the expensive one and runs last.)
+  if (has_archival_serve_credit_bit(p_id, shard_id, settlement_epoch))
+    return false;
+  if (has_archival_slash_applied(p_id, shard_id, settlement_epoch))
+    return false;
+
+  // A miss only counts if a baseline was posed and resolved at this epoch.
+  if (!archival_baseline_observed_at_epoch(block_height, p_id, bond, shard_id, settlement_epoch, seal_cache))
+    return false;
+
+  // Sliding-window m-of-n failure confirmation (the pin's "not-durably-absent"
+  // property): one missed baseline is NOT a slashable failure. Everything
+  // downstream of this — apply_archival_slash_one and the interval it appends
+  // via shekyl_archival_slash_open_interval_to_append — is unchanged; only
+  // WHETHER the slash fires is decided here.
+  return archival_failure_window_slashable(block_height, p_id, bond, shard_id, settlement_epoch, seal_cache);
 }
 
 void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& seq,
@@ -5674,10 +5813,12 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
     // verify preconditions (per-shard cooldown + slashes settled through the
     // shard's last-served anchor) guarantee every epoch through the anchor
     // resolved on still-bonded collateral, and the unserved tail past it is
-    // exit-forgiven at the connect, capped at one cooldown ("stop serving,
-    // hold, never drop" keeps being slashed — the persona is pushed to
-    // actually drop). Fail loudly rather than silently no-op (the
-    // connect-fold posture).
+    // exit-forgiven at the connect, capped at one cooldown. (The parenthetical
+    // that used to sit here — "'stop serving, hold, never drop' keeps being
+    // slashed, so the persona is pushed to actually drop" — was a
+    // single-strike argument and is corrected with the sliding-window m-of-n;
+    // see the process_archival_slash_for_epoch note below.) Fail loudly rather
+    // than silently no-op (the connect-fold posture).
     if (it == shards.end())
       throw std::runtime_error("FATAL: archival slash apply for a shard the record does not hold");
     // v6 coupling is STRICT: the two per-shard arrays are index-parallel, so
@@ -5780,6 +5921,15 @@ void BlockchainLMDB::process_archival_slash_for_epoch(uint64_t block_height,
 
   const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
 
+  // One seal-hash memo for the whole epoch scan (see ArchivalSealHashCache):
+  // every record's failure-window look-back reads the same per-epoch seal-block
+  // hashes, so sharing one cache across all records folds what would be
+  // N_records x N_shards x n re-reads of the same handful of heights down to one
+  // read each. Scoped to this call — a fresh scan (including after a pop_block
+  // rewind) rebuilds it — so no stale hash can outlive the write txn it was read
+  // under.
+  ArchivalSealHashCache seal_cache;
+
   MDB_cursor* cur = nullptr;
   int rc = mdb_cursor_open(*m_write_txn, m_archival_bond, &cur);
   if (rc)
@@ -5813,9 +5963,40 @@ void BlockchainLMDB::process_archival_slash_for_epoch(uint64_t block_height,
     // AND slashes settled through its last-served anchor, so every epoch a
     // serve was credited for has resolved on bonded collateral; the unserved
     // tail between the anchor and the drop connect is exit-forgiven, capped
-    // at one cooldown — a bounded, deliberately-accepted forgiveness, not an
-    // escape (the alternative, "stop serving and just hold", keeps being
-    // slashed every epoch).
+    // at one cooldown — a bounded, deliberately-accepted forgiveness.
+    //
+    // CORRECTED with the sliding-window m-of-n (2026-07-25). The clause that
+    // used to close this paragraph — "not an escape (the alternative, 'stop
+    // serving and just hold', keeps being slashed every epoch)" — was true
+    // only while consensus single-struck. It no longer is: holding without
+    // serving is now slash-free for up to m-1 observed misses. That is the
+    // window working as designed at end-of-life, not a new escape. The release
+    // cooldown anchors on the last SERVED epoch and clears only
+    // RELEASE_COOLDOWN_EPOCHS (2) past it — far below m (11) — so a departing
+    // record rides the SAME m-1 forgiveness envelope a still-bonded record
+    // already gets anywhere in its life, earns nothing while dark, and cannot
+    // exceed the window's tolerance without first crossing m-of-n and being
+    // slashed. An exit-time "clear the window before release" gate would punish
+    // the honest crash-then-leave record identically to the adversarial squeeze
+    // — the two are on-chain indistinguishable, and both sit inside a tolerance
+    // the window already grants — so it is deliberately NOT added. What
+    // genuinely remains for the Round-2 stressnet is the SIZING of m/n for
+    // crisis-time correlated failure (ARCHIVAL_FAILURE_CONFIRMATION_PIN.md
+    // §3.2); the exit tail is subsumed by that sizing, not a separate decision
+    // (FOLLOWUPS.md V3.1).
+    //
+    // Scan cost, for whoever profiles this next: the complete-tree arm below
+    // walks the whole shard registry and breaks only on a shard that SLASHES,
+    // so while a non-serving foundation record is inside its m-1 absorb window
+    // it walks every shard AND runs a full look-back per shard, where
+    // single-strike broke on the first failure. That is N_shards x n LMDB
+    // reads. The one expensive read in each observation — the per-epoch
+    // challenge seal-block hash, a function of the epoch and not the shard — is
+    // memoized across the whole scan by seal_cache (below), so it is fetched
+    // once per epoch, not once per (shard, epoch). What remains is bounded and
+    // rare rather than hot: a shard that served short-circuits before any of
+    // this, and the scheduler settles each epoch exactly once (the watermark
+    // advances), so the cost is once per epoch, not once per block.
     if (bond.is_complete_tree())
     {
       MDB_cursor* seg_cur = nullptr;
@@ -5830,7 +6011,7 @@ void BlockchainLMDB::process_archival_slash_for_epoch(uint64_t block_height,
         if (sk.mv_size != 8)
           throw std::runtime_error("FATAL: archival_shard_segment key size mismatch during slash scan");
         const uint64_t shard_id = shekyl::db::load_be64(static_cast<const uint8_t*>(sk.mv_data));
-        if (archival_challenge_failed_at_height(block_height, p_id, bond, shard_id, settlement_epoch))
+        if (archival_challenge_failed_at_height(block_height, p_id, bond, shard_id, settlement_epoch, &seal_cache))
         {
           apply_archival_slash_one(block_height, seq, p_id, shard_id, settlement_epoch, floor);
           break;
@@ -5845,7 +6026,7 @@ void BlockchainLMDB::process_archival_slash_for_epoch(uint64_t block_height,
     {
       for (const uint64_t shard_id : bond.held_shard_ids)
       {
-        if (archival_challenge_failed_at_height(block_height, p_id, bond, shard_id, settlement_epoch))
+        if (archival_challenge_failed_at_height(block_height, p_id, bond, shard_id, settlement_epoch, &seal_cache))
           apply_archival_slash_one(block_height, seq, p_id, shard_id, settlement_epoch, floor);
       }
     }

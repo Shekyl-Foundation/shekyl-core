@@ -41,6 +41,7 @@ pub mod emission_kat_shape;
 pub mod emission_verify;
 pub mod emission_wire;
 pub mod error;
+pub mod failure_window;
 pub mod hash;
 pub mod id;
 pub mod path;
@@ -120,6 +121,10 @@ pub use emission_wire::{
     MAX_BACKING_PROOF_BYTES, MAX_SETTLEMENT_EPOCHS_PER_EMISSION, VIN_TYPE_ARCHIVAL_REWARD_EMISSION,
 };
 pub use error::VerifyError;
+pub use failure_window::{
+    failure_window_slashable, BaselineObservation, FailureWindowError, FAILURE_WINDOW_M,
+    FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
+};
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
 pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
 pub use release_cooldown::{release_cooldown_elapsed, whole_record_last_served};
