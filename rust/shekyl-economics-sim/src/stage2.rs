@@ -1139,6 +1139,7 @@ pub fn run_stage2(params: &SimParams) {
     print_stuffer_cost_curve();
     let a1 = a1_clearance_report(params);
     a3_stranding_report(params);
+    crate::distribution::oq1_probe_report();
     let a4 = a4_stuffing_report(params);
 
     // A5 (W10): the L14 slash forfeits the forgone post-D1/D2 reward stream — of

@@ -2,6 +2,7 @@ mod budget;
 mod budget_scenarios;
 mod burden;
 mod calibration;
+mod distribution;
 mod engine;
 mod escalation;
 mod population;
