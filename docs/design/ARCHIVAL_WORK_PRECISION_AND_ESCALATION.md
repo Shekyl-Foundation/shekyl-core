@@ -1233,3 +1233,85 @@ deciding, rather than letting the hold become a circular blocker.
 
 **Empirical anchors.** The A3 table (§12.7) and the A4 `hHold` sweep (§12.5) are
 the round's starting data; re-run `--stage2` rather than transcribing numbers.
+
+### 12.9 D3 round — OQ-1 probe and OQ-3 census results
+
+The two results the round said could change its recommendation. **Neither does —
+both strengthen R2.**
+
+#### OQ-1 — deletion is distribution-neutral in equilibrium ✅ (sim `fcc79eb2f`)
+
+Per-class pool shares across `{naive-unsplit, split-dodge, rational best-response,
+plateau-deleted}` × DQ-2H classes × a replication sweep, all scored through the
+**production** chain so the split-dodge meets the quantization floor rather than
+being assumed free.
+
+| `r_market` | kept, NAIVE (unsplit) | kept, RATIONAL best-resp | PLATEAU DELETED | `\|Δ\|` rat−del |
+| --- | --- | --- | --- | --- |
+| 6 | 0.437 / 0.469 / 0.094 | 0.040 / 0.229 / 0.731 | 0.040 / 0.229 / 0.731 | **0.0000** |
+| 100 | 0.097 / 0.556 / 0.347 | 0.040 / 0.229 / 0.731 | 0.040 / 0.229 / 0.731 | **0.0000** |
+| 5 000 | 0.038 / 0.228 / 0.734 | 0.038 / 0.228 / 0.734 | 0.038 / 0.228 / 0.734 | **0.0000** |
+| 100 000 | 0.000 / 0.200 / 0.800 | 0.000 / 0.200 / 0.800 | 0.000 / 0.200 / 0.800 | **0.0000** |
+
+**Verdict: OQ-1 confirmed at every depth — G-2's distributional
+counter-consideration is empirically discharged.** It holds by **two different
+routes**, which is what makes it robust: at shallow `r` the actor **splits** and
+escapes the cap; at deep `r` splitting would **quantize to zero** so the actor does
+*not* split — and there the cap does not bind anyway (work sits below the knee).
+Either way **the plateau is inert against an optimizing actor**.
+
+**Modelling correction, recorded because it nearly produced the opposite answer.**
+"Rational" must be **best response** (`max(unsplit, split)`), not *always split*.
+Modelling it as always-split slandered the rational actor at deep `r` — where
+splitting zeroes out — and produced a spurious `|Δ|` of 0.73–0.80. The
+`SplitDodge` regime is retained precisely because its deep-`r` zeros are the
+evidence **R3's `min_holding` must be sized against**: the dodge is
+**self-limiting**, not unconditional.
+
+**What the naive column shows.** The plateau's only observable effect is
+redistribution **from** the large class **to** smalls (`0.437/0.469/0.094` vs
+`0.040/0.229/0.731` at `r = 6`) — but strictly **over the naive fraction**. Sweep
+at `r = 6`: `f=0.0 → 0.0000`, `0.2 → 0.0143`, `0.4 → 0.0367`, `0.6 → 0.0770`,
+`0.8 → 0.1709`, `1.0 → 0.6377`. So *"the curve protects smalls"* is true exactly
+to the extent smalls **fail to optimize** — R1's distortion wearing a defense's
+name, now quantified.
+
+#### OQ-3 — deletion blast-radius census ✅
+
+- **Consensus/reward path:** `reward_arithmetic.rs` (`curve_milli`, plateau
+  consts), `consensus_state.rs` (`BandedCurveParams`).
+- **Build-generated, not hand-pinned:** `build.rs` reads
+  `archival_reward_plateau_{value,work}_milli` from `config/` — so deletion is a
+  **generated-params** change and joins that digest surface
+  ([`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc)).
+- **FFI:** `archival_ffi.rs` constructs `BandedCurveParams` **internally** from the
+  generated constants — the plateau **does not cross the FFI signature**
+  (`shekyl_archival_epoch_close_compute` takes bonds/shards/credit-pairs only).
+- **C++: source-unchanged but behaviourally live.** `db_lmdb.cpp` and
+  `blockchain_db.h` call the curve-bearing FFI entry points, so C++ needs **no
+  edit** while its results change. *State this explicitly in the implementing PR* —
+  "no C++ changes" would otherwise be misread as "no C++ impact."
+- **KAT fixtures embedding plateau values (regenerate):**
+  `consensus_state_kat_v1.json`, `gate4_lifecycle_kat_v1.json`; plus
+  `reward_arithmetic_determinism_kat.rs`, `emission_verify_kat.rs`,
+  `gate4_lifecycle_kat.rs`, `consensus_state_kat.rs`, `tests/common/mod.rs`.
+- **Other consumers:** `shekyl-engine-core::emission_claim` (wallet-side),
+  `shekyl-staking-sim::reward`, and this doc's sims.
+- **⚠️ `curve_milli` the *function* survives deletion.** D2's escalation share
+  reuses it in its continuous `pv = pw/2` form (§6.1, `escalation.rs`), so
+  *deleting the plateau from the reward path is not deleting `curve_milli`*. The
+  implementing PR must keep the function and remove only the **reward-path
+  application** — the idiom is cited, the plateau is not.
+
+#### OQ-5 — failure-confirmation interaction ✅ (as expected)
+
+The m-of-n window is keyed **per `(P_id, shard)`** (composite key), so window
+*semantics* are holdings-size-independent. Holdings size changes only the *number*
+of windows a principal carries. **The joint grace + `m`/`n` round should still be
+told** that `min_holding` (R3) may shift the population's bond-count/holdings shape,
+which changes challenge *volume* per bond even though per-window tuning is
+unaffected.
+
+**Round status:** OQ-1 and OQ-3 discharged; **R2 + R3 stands as the resolution
+shape**. Remaining: OQ-2 (`min_holding` sizing) and OQ-4 (A4 re-run under
+deletion).
