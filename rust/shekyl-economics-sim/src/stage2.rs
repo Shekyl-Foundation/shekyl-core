@@ -1223,6 +1223,7 @@ pub fn run_stage2(params: &SimParams) {
             );
         }
     }
+    crate::swing::a6_report(&ESCALATION_PREVIEW_N);
     let a4 = a4_stuffing_report(params);
 
     // A5 (W10): the L14 slash forfeits the forgone post-D1/D2 reward stream — of

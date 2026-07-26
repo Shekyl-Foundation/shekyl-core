@@ -10,6 +10,7 @@ mod population;
 mod proxy;
 mod redistribution;
 mod stranding;
+mod swing;
 // The `RecordedChainFixture` recorder is test-substrate only: it
 // generates / verifies `docs/test_vectors/economics/*.json` for the
 // `EconomicsEngine` C4 differential (`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`
