@@ -3067,6 +3067,59 @@ external serialisation and needs no internal lock:
 `get_stem` mutates (`in_mapping_`/`usage_count_` on a miss); the strand `\pre` is
 the ownership rule that keeps that safe across the FFI.
 
+### 16.1 Seam-consumption contracts — three signatures carry more than their types
+
+The six gtests test the map **in isolation**; `levin_notify` consumes three of the
+calls in ways the gtests never exercise, so each carries a contract beyond its
+signature. All three share one failure shape — green-by-construction: the gtests
+(the oracle for the map's *logic*) are structurally blind to the seam's
+*consumption* semantics, so a wrong contract passes the oracle and diverges only
+in daemon behaviour. Each is verified at the call site, not paraphrased.
+
+- **`map_update` returns the exact re-arm predicate, not "the set differed."**
+  `dandelionpp.cpp:169` returns `replace || existing_outs < out_mapping_.size()`
+  — *a stem slot was dropped/nil'd, **or** the map grew to fill under-capacity* —
+  with an early `false` (`:151`) when nothing dropped and already at width.
+  `levin_notify.cpp:534` gates a channel **re-arm** on this bool; a
+  reimplementation returning "the connection vector changed" would re-arm
+  spuriously (or miss one), and the gtests would still pass. **Verified faithful:**
+  `stem_map.rs:180` returns `replaced || existing_outs < self.out.len()` with the
+  same early-`false` (`:154`) and nil-remark (`:150`), line-for-line. The FFI
+  returns this predicate unchanged, as a `#[must_use]` named type (not a bare
+  `bool`) so the seam is self-documenting; micro-test (4) pins it.
+- **`map_clone` is a C++ copy-constructor contract, and the copy path is
+  production-live.** `change_channels`'s copy-ctor (`levin:599`) calls
+  `map_.clone()`, and Boost.Asio copies the posted handler — so the deep copy
+  fires **every epoch**, not only in tests. The handle-wrapper's
+  **copy-constructor and copy-assignment must both route through `map_clone`**,
+  and the shallow defaults must be explicitly **deleted or defined** — a defaulted
+  shallow copy shares one Rust handle between two wrappers, and the epoch swap
+  (`:614` move-assign) then mutates/frees a map the other wrapper still points at:
+  silent corruption the gtests miss (they never drop a slot twice, so never
+  exercise divergence-after-copy). Move-ctor/assign transfer the handle and null
+  the source; the destructor frees iff non-null. `StemMap` derives `Clone` (deep),
+  so the Rust side is correct — this contract lives entirely on the C++ wrapper;
+  micro-test (5) arms it as a compile-time guard.
+- **`map_snapshot` preserves slot order *including nils*, because a consumer
+  indexes by position.** `levin:520–522` iterates `begin()..end()` and computes
+  `i = id - begin()` to index the **parallel noise channel** `channels[i]`;
+  `begin()/end()` span *all* slots, nils included (`net.cpp:2024` asserts
+  `end()-begin()==3` at `size()==2`). So `map_snapshot` returns every slot in `out`
+  order with `None → nil-uuid` (zero bytes), index-aligned; the wrapper derives
+  `size()` (non-nil count, `:514`) and the iterators from it. An unstable or
+  nil-collapsed order passes the map gtests and **misassigns noise channels** in
+  the daemon; micro-test (6) pins the order.
+
+**Type security — the migration's dividend (rule 25).** Rust owns the map with
+`Option<ConnectionId>` (an empty slot is `None`, not a magic nil UUID) and a
+`ConnectionId([u8; 16])` newtype; `stem_for`'s "must fluff" is `None`, not a
+sentinel. The FFI maps `None ↔ nil-uuid` **explicitly at the boundary** so zero
+bytes never re-enter Rust as a "valid" id, and the C-ABI `bool`/`*handle`/`[u8;16]`
+are reconstituted into these types on the first Rust line. The map draws
+randomness (`new`/`update`/`stem_for`); the FFI handle **owns a
+cryptographically-secure `RelayRng`** matching the C++ `crypto::random_device` /
+`rand_idx` — never the deterministic `SplitMix64` the measurement suite uses.
+
 **Acceptance — run the oracle *and* keep the survivor (do both).**
 
 1. The 6 `dandelionpp_map` gtests ([net.cpp:1787–2140]) pass **unchanged** against
@@ -3079,6 +3132,19 @@ the ownership rule that keeps that safe across the FFI.
    whichever keeps the diff clean).
 3. The RP-1 `a_slot_emptied_by_an_earlier_update_is_backfilled_later` regression
    still holds.
+
+The six gtests are **necessary but not sufficient** — they are structurally blind
+to the three §16.1 consumption contracts. Three micro-tests arm them (an armed
+trigger, not a documented caveat):
+
+4. **update-predicate:** `current` changes but every stem stays live and the map
+   is at width → `update` returns **false** (no spurious re-arm); a drop and a
+   grow each return **true**.
+5. **clone-divergence:** clone a map, `update` one copy → the other is unchanged
+   (Rust `StemMap`); and the C++ wrapper's shallow copy-ctor/assign are **deleted**
+   — a compile-time guard that no accidental shallow share exists.
+6. **snapshot-order:** `map_snapshot` returns slots in `out` order with nils in
+   position, so `i = index` maps to the same connection C++ `begin()+i` did.
 
 **Handoff to RP-2b.** The W3c churn-stable alternate (§12.5) + Q-10 selection, its
 own design round, its own repeated-induced-churn sibling test + the `g`-bound, and
