@@ -25,6 +25,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod admission;
 pub mod bond_connect;
 pub mod bond_ct_balance;
 pub mod bond_duration;
@@ -52,6 +53,10 @@ pub mod serve_credit_decisions;
 pub mod serve_eligibility;
 pub mod wire;
 
+pub use admission::{
+    check_admission, credited_work_at_admission, AdmissionError, AdmissionShard,
+    ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
+};
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,
     holdings_update_pop, is_clean_interval_close, rebond_connect, rebond_pop,
