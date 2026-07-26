@@ -2567,6 +2567,32 @@ measure, don't pick. The instrument owes the *genuine background failure rate* a
 threshold's real input (a topology measurement, like `F` and hop latency); it does
 **not** owe an "induced-failure dial" row — that dial priced a phantom (part D).
 
+**Handoff to RP-2 — two owed measurements, one a reopen-checkpoint not a sweep.**
+The `ε → distinct-peers` and top-2-share numbers are in-crate; what remains is
+RP-2-adjacent and must be inherited honestly:
+
+- **The genuine background-failure rate** is a plain topology measurement (like `F`,
+  hop latency, §7 Q-5) — a knob input.
+- **The cooldown/threshold sweep is the empirical *validation* of §12.11's separation
+  claim, and it can *reopen*.** The whole reputation mechanism rests on the honest
+  floor (~10–15 %) sitting well below the indiscriminate-black-hole rate (~100 %).
+  That separation was *argued* against a modelled ambient floor; the sweep measures
+  it against the *real* one. If the measured ambient floor comes back materially
+  higher (real networks are messier than models — say 25 % rather than 10–15 %), the
+  threshold still works but the margin is thinner and the cooldown must be tuned more
+  carefully — **which is a finding, not a knob-turn.** So RP-2 must carry this as a
+  *checkpoint that can reopen the separation*, not a sweep that can only confirm it.
+- **The capability-accounting guard (part D) travels with the wiring.** Everything in
+  §§12.10–12.11 is priced against capabilities we bounded (occupancy, eclipse) or
+  denied (the content-selector FCMP++ erases). RP-2 wires this into the daemon, and
+  *implementation creates observables the design did not have* — a field that leaks
+  position, a timing that fingerprints an explore-slot, a fee that turns out visible
+  and unpadded such that it composes into a selector. The design is sound on the
+  capabilities enumerated; the implementation is where you learn whether the
+  enumeration was complete. **Guard for RP-2: every wiring decision that exposes a new
+  observable is a new capability — price it before building on it,** the same
+  discipline as part D, at the layer where observables are actually created.
+
 ---
 
 ## 13. The ε adopt-criterion (form only) — superseded as a decision basis by §14
