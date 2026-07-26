@@ -644,6 +644,25 @@ private:
   /// archival_bond_holds_shard's as-of-height reconstruction (WS-1).
   bool archival_slash_removed_holding_after(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t at_height) const;
+  /// archival_bond_holds_shard's as-of-height reconstruction over an ALREADY
+  /// DECODED record — for callers holding the value (the slash scan's cursor
+  /// walk, the failure-window look-back) so they do not pay a re-load and
+  /// re-decode per query.
+  bool archival_bond_holds_shard_of(const crypto::hash& p_id,
+    const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id, uint64_t at_height) const;
+  /// Was a baseline challenge POSED to (p_id, shard_id) at this settlement
+  /// epoch, and has its outcome resolved? The observability predicate the
+  /// sliding-window failure confirmation counts over — a bonded-but-untested
+  /// epoch is not an observation and can never be counted as a miss
+  /// (ARCHIVAL_FAILURE_CONFIRMATION_PIN.md §1).
+  bool archival_baseline_observed_at_epoch(uint64_t block_height, const crypto::hash& p_id,
+    const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
+    uint64_t settlement_epoch) const;
+  /// Gather this (P, shard)'s trailing observation window and ask Rust whether
+  /// it is a slashable m-of-n failure. Reads LMDB; decides nothing.
+  bool archival_failure_window_slashable(uint64_t block_height, const crypto::hash& p_id,
+    const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
+    uint64_t settlement_epoch) const;
   bool archival_challenge_failed_at_height(uint64_t block_height, const crypto::hash& p_id,
     const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
     uint64_t settlement_epoch) const;

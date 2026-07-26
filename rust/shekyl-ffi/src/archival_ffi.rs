@@ -17,21 +17,22 @@ use shekyl_archival_retention::{
     claimed_epochs_check_and_set, effective_settlement_epoch_blocks, emission_block_claims_unique,
     emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
     emission_vin_verify_claims, epoch_close_compute, epoch_close_due_at_height, epoch_close_height,
-    frozen_segment_count, good_through, holdings_update_add_connect, holdings_update_drop_connect,
-    holdings_update_pop, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
-    rebond_connect, rebond_pop, serve_credit_epoch_ok, settlement_epoch_at_height,
-    settlement_epoch_blocks_overridden, slash_open_interval_to_append, unbond_connect, unbond_pop,
-    verify_bond_post_ct_balance, verify_holdings_update_add, verify_holdings_update_drop,
-    verify_join_market_bond_post, verify_leaf_index, verify_rebond_bond_post, verify_segment_path,
-    verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin,
-    ArchivalRewardEmissionVin, ArchivalServeCreditResponse, BadInterval, BondCtBalanceError,
+    failure_window_slashable, frozen_segment_count, good_through, holdings_update_add_connect,
+    holdings_update_drop_connect, holdings_update_pop, p_canonical_id_from_hybrid_pubkey,
+    prune_below_epoch_at_height, rebond_connect, rebond_pop, serve_credit_epoch_ok,
+    settlement_epoch_at_height, settlement_epoch_blocks_overridden, slash_open_interval_to_append,
+    unbond_connect, unbond_pop, verify_bond_post_ct_balance, verify_holdings_update_add,
+    verify_holdings_update_drop, verify_join_market_bond_post, verify_leaf_index,
+    verify_rebond_bond_post, verify_segment_path, verify_unbond_bond_post,
+    whole_record_last_served, ArchivalBondPostVin, ArchivalRewardEmissionVin,
+    ArchivalServeCreditResponse, BadInterval, BaselineObservation, BondCtBalanceError,
     BondPostError, BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
     EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
     EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
     HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError, RebondPopError,
     RewardCommit, ShardSet, ShardSetError, UnbondConnectError, UnbondPopError, WireError,
-    CHALLENGE_RESOLUTION_BLOCKS, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
-    MAX_CLAIM_AGE_W,
+    CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
+    HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -1815,6 +1816,119 @@ pub unsafe extern "C" fn shekyl_archival_slash_open_interval_to_append(
             SHEKYL_ARCHIVAL_SLASH_INTERVAL_APPEND
         }
         None => SHEKYL_ARCHIVAL_SLASH_INTERVAL_COALESCE,
+    }
+}
+
+/// [`shekyl_archival_failure_window_slashable`]: the window absorbs this miss —
+/// fewer than `m` of the last `n` baseline observations were missed, so the
+/// slash does NOT fire (pin §1 "an isolated transient miss does not slash").
+pub const SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB: u8 = 0;
+/// [`shekyl_archival_failure_window_slashable`]: `m` of the last `n`
+/// observations were missed — a confirmed durable absence; proceed to the
+/// gate-4 §4.2 slash.
+pub const SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH: u8 = 1;
+/// [`shekyl_archival_failure_window_slashable`] /
+/// [`shekyl_archival_failure_window_params`]: marshal error (null pointer, a
+/// window longer than `n`, non-descending epochs, or a passed head). The C++
+/// slash scan maps this to a FATAL abort, never a skip in either direction —
+/// deciding a slash over a malformed window would be a consensus divergence.
+pub const SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL: u8 = 2;
+
+/// Sliding-window failure-confirmation parameters
+/// (`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §1), read from the one authority
+/// (`config/consensus_constants.json` → `shekyl-archival-retention`).
+///
+/// The C++ slash scan reads them here rather than from a generated header
+/// constant so there is no cross-language drift pair to keep aligned: `m` and
+/// `n` are re-pinned at the Round-2 stressnet, and a re-pin must move exactly
+/// one file.
+///
+/// - `m_out` — misses required inside the window to slash.
+/// - `n_out` — baseline observations the miss count is taken over; the caller's
+///   look-back stops after gathering this many.
+/// - `serve_budget_out` — passed observations the window tolerates before `m`
+///   becomes unreachable (`n − m`). Once the caller has seen more than this many
+///   passes it can stop reading LMDB: the verdict is already
+///   [`SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB`]. Computed here so the arithmetic
+///   stays Rust-side (`20-rust-vs-cpp-policy`).
+///
+/// # Safety
+/// All three out-pointers must be valid for writes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_failure_window_params(
+    m_out: *mut u32,
+    n_out: *mut u32,
+    serve_budget_out: *mut u32,
+) -> u8 {
+    if m_out.is_null() || n_out.is_null() || serve_budget_out.is_null() {
+        return SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL;
+    }
+    unsafe {
+        *m_out = FAILURE_WINDOW_M;
+        *n_out = FAILURE_WINDOW_N;
+        *serve_budget_out = FAILURE_WINDOW_SERVE_BUDGET;
+    }
+    SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB
+}
+
+/// Sliding-window **m-of-n** failure confirmation
+/// (`shekyl-archival-retention::failure_window::failure_window_slashable`;
+/// `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §1) — is this observation sequence a
+/// *slashable* failure, or a transient the window absorbs?
+///
+/// This is the decision gate-2 §6's `challenge_failed(P, s, E)` now feeds: a
+/// single missed baseline is no longer a slash. The interval the slash appends
+/// is unchanged ([`shekyl_archival_slash_open_interval_to_append`]); only
+/// whether it fires is decided here.
+///
+/// The caller supplies the trailing window for one `(P_id, shard)` pair as two
+/// parallel arrays of `observations_len` entries, **most recent first**:
+///
+/// - `observation_epochs_ptr` — the settlement epoch of each baseline
+///   observation, strictly descending. Head is the decision epoch.
+/// - `observation_served_ptr` — `0` iff that epoch's `serve_credit_bit` is
+///   unset (the miss the window counts); any nonzero value is a pass.
+///
+/// Only epochs at which a challenge was actually posed belong in the arrays —
+/// bonded-but-untested epochs are not observations and must not appear (the
+/// pin §3.1 Round-2 concern, on the enforcement side). Gathering stops at the
+/// boundary of the pair's current continuous challengeable run, so a shorter
+/// window is normal (a young or freshly-reinstated pair) and is evaluated
+/// as-is.
+///
+/// Returns [`SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH`],
+/// [`SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB`], or
+/// [`SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL`].
+///
+/// # Safety
+/// When `observations_len > 0`, both pointers must address `observations_len`
+/// valid elements of their respective types for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_failure_window_slashable(
+    observation_epochs_ptr: *const u64,
+    observation_served_ptr: *const u8,
+    observations_len: usize,
+) -> u8 {
+    if observations_len == 0 {
+        return SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL;
+    }
+    if observation_epochs_ptr.is_null() || observation_served_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL;
+    }
+    let epochs = unsafe { std::slice::from_raw_parts(observation_epochs_ptr, observations_len) };
+    let served = unsafe { std::slice::from_raw_parts(observation_served_ptr, observations_len) };
+    let observations: Vec<BaselineObservation> = epochs
+        .iter()
+        .zip(served.iter())
+        .map(|(&settlement_epoch, &served)| BaselineObservation {
+            settlement_epoch,
+            served: served != 0,
+        })
+        .collect();
+    match failure_window_slashable(&observations) {
+        Ok(true) => SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH,
+        Ok(false) => SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB,
+        Err(_) => SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL,
     }
 }
 

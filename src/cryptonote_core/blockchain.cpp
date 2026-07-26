@@ -5241,6 +5241,8 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     reinterpret_cast<const uint8_t*>(resp.p_canonical_id.data),
     resp.shard_id, resp.settlement_epoch);
   // Same guard as the slash-eligibility consumer (db_lmdb.cpp,
+  // archival_baseline_observed_at_epoch — the observability predicate the
+  // sliding-window failure confirmation counts over, reached from
   // archival_challenge_failed_at_height): both sides derive h_fire from the
   // identical deterministic inputs, and both reject a derivation outside
   // (0, h_close] — the two consumers of "held at fire height" must agree on

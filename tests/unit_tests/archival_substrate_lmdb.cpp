@@ -1537,7 +1537,16 @@ uint64_t connect_block_with_txs(BlockchainDB& db, const std::vector<transaction>
 // are the two polarities of the shared boundary; the accessor fix that
 // changed the reward side changed this consensus rule too, so it is
 // validated here at its own production site.
-TEST(archival_substrate_lmdb, slash_scheduler_slashes_missed_challenge_at_deadline)
+//
+// The polarity of the FIRST case is now the sliding-window m-of-n failure
+// confirmation's (docs/completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md §1): one
+// missed baseline is NOT a slashable failure, so "held at fire, didn't respond"
+// is ABSORBED at a single miss and slashes only at the m-th miss within the
+// last n observations. Both are covered — this test takes the single-miss
+// absorb (and asserts the eligibility substrate really was there, so it cannot
+// pass vacuously), and slash_scheduler_slashes_sustained_absence_at_m_of_n
+// below takes the sustained case at its production site.
+TEST(archival_substrate_lmdb, slash_scheduler_absorbs_a_single_missed_challenge)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
@@ -1573,20 +1582,11 @@ TEST(archival_substrate_lmdb, slash_scheduler_slashes_missed_challenge_at_deadli
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
-  // P_miss: held at the fire height (derivable from the real seal block) and
-  // never responded — slashed. The bond lost the shard at tip, standing is
-  // gone from E onward, and the stake was burned.
-  shekyl::db::ArchivalBondValue read{};
-  ASSERT_TRUE(db.get_archival_bond_value(p_miss, read));
-  EXPECT_FALSE(read.holds_shard(7));
-  EXPECT_EQ(read.bonded_total_atomic, 2 * floor - floor);
-  EXPECT_FALSE(db.archival_bond_good_through(p_miss, settlement_epoch));
-  EXPECT_EQ(db.get_total_burned(), floor);
-
-  // The as-of-fire read the eligibility bottomed out in still answers "held"
-  // for the fire height after the slash emptied the tip holdings — the
-  // "regardless of tip holdings" half of the mirror, reconstructed from the
-  // slash log the production pass just wrote.
+  // The epoch-1 challenge really was POSED to P_miss: h_fire derives from the
+  // real seal block and lands inside the epoch, and P held shard 7 at that
+  // height. Asserted first, and before any verdict, so the absorb below cannot
+  // be the trivial "there was no observation to miss" — it is the WINDOW that
+  // absorbs, not a missing challenge.
   const uint64_t h_open = shekyl_archival_epoch_open_height(settlement_epoch);
   const uint64_t h_close = shekyl_archival_epoch_close_height(settlement_epoch);
   const uint64_t h_seal = shekyl_archival_challenge_seal_height(h_open);
@@ -1597,6 +1597,26 @@ TEST(archival_substrate_lmdb, slash_scheduler_slashes_missed_challenge_at_deadli
   ASSERT_NE(h_fire, 0u);
   ASSERT_LE(h_fire, h_close);
   EXPECT_TRUE(db.archival_bond_holds_shard(p_miss, 7, h_fire));
+  // ... and it really was missed: no affirmative pass for (P_miss, 7, E=1).
+  EXPECT_FALSE(db.has_archival_serve_credit_bit(p_miss, 7, settlement_epoch));
+
+  // P_miss: one observed miss is not a durable absence (m = 11 of the last
+  // n = 13 observations is). The scheduler ran the epoch past its deadline and
+  // the window absorbed it — shard, collateral, and standing all intact, and
+  // nothing burned. This assertion is the regression guard for the replaced
+  // single-strike behaviour: before the window, this record was slashed here.
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_miss, read));
+  EXPECT_TRUE(read.holds_shard(7));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
+  EXPECT_TRUE(read.bad_intervals.empty());
+  EXPECT_TRUE(db.archival_bond_good_through(p_miss, settlement_epoch));
+  EXPECT_TRUE(db.archival_bond_good_through(p_miss, settlement_epoch + 1));
+  EXPECT_EQ(db.get_total_burned(), 0u);
+  EXPECT_EQ(db.get_total_bonded_atomic(), 4 * floor);
+  // The scheduler did reach and settle the epoch — the absorb is a decision,
+  // not an epoch the pass never got to.
+  EXPECT_GE(db.get_archival_last_slash_epoch(), settlement_epoch);
 
   // P_served: same holdings, same epoch — the serve-credit bit
   // short-circuits eligibility, so no slash and standing intact.
@@ -1604,6 +1624,224 @@ TEST(archival_substrate_lmdb, slash_scheduler_slashes_missed_challenge_at_deadli
   EXPECT_TRUE(read.holds_shard(7));
   EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
   EXPECT_TRUE(db.archival_bond_good_through(p_served, settlement_epoch + 1));
+}
+
+namespace {
+
+/// Window parameters, read from the ONE authority through the FFI rather than
+/// hardcoded: `m`/`n` are provisional and re-pinned at the Round-2 stressnet
+/// (ARCHIVAL_FAILURE_CONFIRMATION_PIN.md §3.2), so the KATs below derive their
+/// epochs and chain lengths from these values and survive a re-pin.
+struct FailureWindowParams
+{
+  uint32_t m = 0;
+  uint32_t n = 0;
+  uint32_t serve_budget = 0;
+};
+
+FailureWindowParams failure_window_params()
+{
+  FailureWindowParams p{};
+  EXPECT_EQ(shekyl_archival_failure_window_params(&p.m, &p.n, &p.serve_budget),
+    SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB);
+  return p;
+}
+
+/// Seed a bond joined at epoch 0 holding shard 7 since epoch 0. Observations
+/// for (P, 7) therefore begin at epoch 1 — E_join + 1 and the shard's
+/// E_add + 1 coincide — so the k-th observed baseline is epoch k.
+shekyl::db::ArchivalBondValue window_kat_bond()
+{
+  shekyl::db::ArchivalBondValue seed{};
+  seed.hybrid_pubkey = {0x0A};
+  seed.join_settlement_epoch = 0;
+  seed.bonded_total_atomic = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  seed.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  seed.held_shard_ids = {7};
+  seed.shard_add_epochs = {0}; // v6 coupling
+  return seed;
+}
+
+} // namespace
+
+// Sustained absence DOES slash — the other half of the pin's
+// "not-durably-absent" property, at the scheduler's production site.
+//
+// P_miss answers no baseline; P_served answers every one. Blocks connect
+// through add_block, so every slash pass runs where it runs in production.
+// The chain is walked to the (m-1)-th miss FIRST and the absorb asserted
+// there — a test that only checked the end state could not tell the window
+// apart from a slash that fires one epoch late, or early.
+TEST(archival_substrate_lmdb, slash_scheduler_slashes_sustained_absence_at_m_of_n)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const FailureWindowParams window = failure_window_params();
+  ASSERT_GE(window.m, 2u); // else there is no "absorbed" epoch to check
+
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  const crypto::hash p_miss = make_hash(0x7D);
+  const crypto::hash p_served = make_hash(0x7E);
+  db.put_archival_bond_value(p_miss, window_kat_bond());
+  db.put_archival_bond_value(p_served, window_kat_bond());
+  db.set_total_bonded_atomic(4 * floor);
+  db.set_total_burned(0);
+  for (uint64_t epoch = 1; epoch <= window.m; ++epoch)
+    db.set_archival_serve_credit_bit(p_served, 7, epoch);
+
+  // Walk to the deadline of epoch m-1: that is m-1 observed misses, one short
+  // of the threshold.
+  const uint64_t absorbed_epoch = window.m - 1;
+  append_minimal_blocks(db,
+    shekyl_archival_epoch_slash_deadline_height(absorbed_epoch) + 2);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_miss, read));
+  EXPECT_TRUE(read.holds_shard(7));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
+  EXPECT_EQ(db.get_total_burned(), 0u);
+  ASSERT_EQ(db.get_archival_last_slash_epoch(), absorbed_epoch);
+
+  // One more epoch: the m-th miss crosses the threshold and the slash fires,
+  // keyed to the epoch that crossed it.
+  const uint64_t slash_epoch = window.m;
+  append_minimal_blocks(db,
+    shekyl_archival_epoch_slash_deadline_height(slash_epoch) + 2 - db.height());
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_TRUE(db.get_archival_bond_value(p_miss, read));
+  EXPECT_FALSE(read.holds_shard(7));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor - floor);
+  EXPECT_EQ(db.get_total_burned(), floor);
+  // The interval-append is unchanged by this work: one open interval opening
+  // at the epoch that crossed the threshold (P2B-9 Pin 5 coalescing).
+  ASSERT_EQ(read.bad_intervals.size(), 1u);
+  EXPECT_EQ(read.bad_intervals[0].start_epoch, slash_epoch);
+  EXPECT_EQ(read.bad_intervals[0].end_exclusive, std::numeric_limits<uint64_t>::max());
+  EXPECT_FALSE(db.archival_bond_good_through(p_miss, slash_epoch));
+
+  // P_served answered every baseline: untouched, and its standing survives the
+  // whole run.
+  ASSERT_TRUE(db.get_archival_bond_value(p_served, read));
+  EXPECT_TRUE(read.holds_shard(7));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
+  EXPECT_TRUE(read.bad_intervals.empty());
+  EXPECT_TRUE(db.archival_bond_good_through(p_served, slash_epoch + 1));
+}
+
+// Reorg safety. The window is never persisted — it is recomputed from the
+// serve_credit_bit ledger and the bond record on every evaluation — so the
+// property to prove is that the decision FOLLOWS those reverted inputs rather
+// than a tally that outlived them.
+//
+// Popping the slashing block reverts the slash (gate-2 §8 / gate-4 §5) and
+// rewinds the scheduler watermark. Re-connecting then re-decides from scratch:
+// with the history unchanged the same slash lands again (determinism), and with
+// one of the missed epochs' bits present — the shape a reorg onto a chain that
+// DID carry that response produces — the count drops to m-1 and the same block
+// height decides ABSORB instead. A cached or persisted tally would slash both
+// times.
+TEST(archival_substrate_lmdb, failure_window_recomputes_from_reverted_state_on_pop)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const FailureWindowParams window = failure_window_params();
+  ASSERT_GE(window.m, 2u);
+
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  const crypto::hash p_id = make_hash(0x7F);
+  db.put_archival_bond_value(p_id, window_kat_bond());
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+
+  // Stop the chain at exactly the block whose connect hook crosses the epoch's
+  // slash deadline, so the tip IS the slashing block: the connect fires the
+  // hook at prev_height + 1 and the slash journal keys on that same height, so
+  // popping the tip is what reverts this slash.
+  const uint64_t slash_epoch = window.m;
+  const uint64_t slash_hook_height =
+    shekyl_archival_epoch_slash_deadline_height(slash_epoch) + 1;
+  append_minimal_blocks(db, slash_hook_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_EQ(db.height(), slash_hook_height);
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  ASSERT_FALSE(read.holds_shard(7));
+  ASSERT_EQ(db.get_archival_last_slash_epoch(), slash_epoch);
+
+  // Pop the block whose connect hook ran the slashing pass.
+  block popped{};
+  std::vector<transaction> popped_txs;
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Everything the slash wrote is gone, and the scheduler will re-run the
+  // epoch: the watermark rewound to the last epoch settled before it.
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_TRUE(read.holds_shard(7));
+  EXPECT_EQ(read.shard_add_epochs, (std::vector<uint64_t>{0}));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
+  EXPECT_TRUE(read.bad_intervals.empty());
+  EXPECT_EQ(db.get_total_bonded_atomic(), 2 * floor);
+  EXPECT_EQ(db.get_total_burned(), 0u);
+  EXPECT_EQ(db.get_archival_last_slash_epoch(), slash_epoch - 1);
+  EXPECT_TRUE(db.archival_bond_good_through(p_id, slash_epoch));
+
+  // Re-connect at the same height with the history unchanged: the same
+  // decision, re-derived. Determinism across a reorg is the baseline the
+  // divergence case below is measured against.
+  append_minimal_blocks(db, 1);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_EQ(db.height(), slash_hook_height);
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_FALSE(read.holds_shard(7));
+  EXPECT_EQ(db.get_total_burned(), floor);
+
+  // Now pop again and change ONE input the window reads: an alternate chain
+  // that carried this P's response for a mid-run epoch. Nothing else moves —
+  // same heights, same record, same block count.
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  ASSERT_TRUE(read.holds_shard(7));
+  ASSERT_EQ(db.get_total_burned(), 0u);
+
+  const uint64_t answered_epoch = slash_epoch / 2;
+  ASSERT_GE(answered_epoch, 1u);
+  db.set_archival_serve_credit_bit(p_id, 7, answered_epoch);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  append_minimal_blocks(db, 1);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // m-1 misses in the window: the very same block height that slashed twice
+  // now absorbs. The verdict tracked the reverted-and-amended bit ledger, so
+  // no tally survived the pop.
+  ASSERT_EQ(db.height(), slash_hook_height);
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_TRUE(read.holds_shard(7));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
+  EXPECT_TRUE(read.bad_intervals.empty());
+  EXPECT_EQ(db.get_total_burned(), 0u);
+  EXPECT_TRUE(db.archival_bond_good_through(p_id, slash_epoch));
 }
 
 // One-strike invariant (cascade guard): a slash for epoch E appends the

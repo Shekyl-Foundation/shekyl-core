@@ -2332,6 +2332,49 @@ uint8_t shekyl_archival_slash_open_interval_to_append(
     uint64_t* interval_start_out,
     uint64_t* interval_end_out);
 
+// Sliding-window m-of-n failure confirmation
+// (docs/completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md §1). A single missed
+// baseline is NOT a slashable failure: the slash fires only when m misses fall
+// within the last n baseline OBSERVATIONS for a (P_id, shard). The gather (LMDB
+// reads) is C++; the decision, the parameters, and the window contract are Rust.
+#define SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB      0
+#define SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH       1
+#define SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL 2
+
+/// Window parameters from the one authority (config/consensus_constants.json →
+/// shekyl-archival-retention). Read here rather than from a generated header
+/// constant so a Round-2 stressnet re-pin moves exactly one file and there is no
+/// cross-language drift pair. `serve_budget_out` is `n - m`: once the gather has
+/// seen more than that many PASSED observations, m is unreachable and the
+/// look-back can stop reading LMDB (the arithmetic is Rust-side by design).
+/// Returns SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL on a null out-pointer.
+uint8_t shekyl_archival_failure_window_params(
+    uint32_t* m_out,
+    uint32_t* n_out,
+    uint32_t* serve_budget_out);
+
+/// Is this observation sequence a slashable failure? Two parallel arrays of
+/// `observations_len` entries, MOST RECENT FIRST: `observation_epochs_ptr` is
+/// strictly descending settlement epochs (head = the decision epoch);
+/// `observation_served_ptr` is 0 iff that epoch's serve_credit_bit is unset (the
+/// miss the window counts), nonzero for a pass.
+///
+/// Only epochs at which a challenge was actually POSED belong in the arrays —
+/// bonded-but-untested epochs are not observations and must not appear. The
+/// caller stops gathering at the boundary of the pair's current continuous
+/// challengeable run (before E_join + 1, before the shard's E_add + 1, or at a
+/// closed bad interval — a reinstated record starts the window clean), so a
+/// shorter-than-n window is normal and is evaluated as-is.
+///
+/// Returns SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH / _ABSORB, or _ERR_MARSHAL for a
+/// malformed window (null pointer, longer than n, non-descending epochs, passed
+/// head) — which the slash scan maps to a FATAL abort, never a skip in either
+/// direction: a slash decided over a malformed window is a consensus divergence.
+uint8_t shekyl_archival_failure_window_slashable(
+    const uint64_t* observation_epochs_ptr,
+    const uint8_t* observation_served_ptr,
+    size_t observations_len);
+
 /// `good_through(P, E)` from bond fields (§3.4 interval semantics).
 /// `bad_intervals_ptr` is `2 × bad_intervals_len` u64s — flattened
 /// `(start_epoch, end_exclusive)` pairs. Returns 0 (fail-closed) on malformed input.
