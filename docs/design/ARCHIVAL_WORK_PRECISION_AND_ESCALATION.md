@@ -1312,6 +1312,57 @@ told** that `min_holding` (R3) may shift the population's bond-count/holdings sh
 which changes challenge *volume* per bond even though per-window tuning is
 unaffected.
 
-**Round status:** OQ-1 and OQ-3 discharged; **R2 + R3 stands as the resolution
-shape**. Remaining: OQ-2 (`min_holding` sizing) and OQ-4 (A4 re-run under
-deletion).
+#### OQ-2 — `min_holding` sized; no clustering pressure ✅ (sim `37310ff11`)
+
+Boundary computed through the **production** chain (not the closed form, so it
+cannot drift): `min_holding(r)` = least `h` whose `h · scarcity_micro(r)` reaches
+one milli = **`ceil(r/1000)`**, the exact mirror of the cliff. Across the swept
+regimes it runs **1–8 shards**; with the 2× safety multiple:
+
+> **Recommended provisional `min_holding` = 16 shards** — composes with the wire
+> cap (`< MAX_HOLDINGS_SHARDS`), covers the worst swept replication. A
+> genesis-provisional **number** under a **frozen shape** (`bond_duration`
+> posture): re-pin at testnet against *measured* replication, named reopen.
+> Under-sizing is the costly direction — an under-sized floor admits exactly the
+> zero-scoring bonds R3 exists to refuse.
+
+**Clustering: none, and the reason is structural.** Under **R2** credited work is
+**linear**, so bond *count* does not change total credit — the splitting incentive
+that motivated D3 is *gone*. The residual pressure runs the **other way**: each
+bond floors independently, so splitting discards sub-milli remainders.
+**Consolidation is weakly preferred; nobody is pushed to sit at the floor.**
+(Where `min_holding` divides the boundary exactly the loss is legitimately zero —
+the ideal case; the invariant asserted is *split ≤ whole*, i.e. splitting never
+pays.)
+
+#### OQ-4 — A4 under deletion: prediction confirmed exactly ✅
+
+| honest regime | ROI | `fee× → 1` |
+| --- | --- | --- |
+| kept, small bonds (`h=4`) | 0.6663 | 0.7 |
+| kept, **capped** (`h=512`) | **1.1948** | 1.2 |
+| **DELETED** (`h` irrelevant) | **0.6663** | **0.7** |
+
+Deletion reproduces the small-bond row **bit-for-bit**: with no cap to dodge the
+honest-holdings axis stops mattering, and A4 has *one* number per regime instead
+of a naive/rational spread. **`fee_mult_to_close` is unchanged**, so reopen (c)'s
+sizing evidence **survives deletion** (it was sized at the realistic end already).
+The capped row is precisely what deletion removes — a penalty falling on
+non-optimizing honest archivers that *doubled* the stuffer's relative capture, and
+here pushes ROI **above 1** where deletion leaves it below.
+
+#### A3 correction (found while deriving OQ-2)
+
+`mean_replication` did not clamp a class's holdings to `n`, so early-chain rows
+credited archivers with 4,096 shards out of a 1,011-shard corpus — replication
+inflated ≈ 2.2×. Clamped. §12.7's cliff findings are **qualitatively unchanged**
+(`r` still crosses 1,000 at scale), but the early-chain `r` figures are now honest.
+
+**Round status: all five open questions discharged (OQ-1…OQ-5). R2 + R3 is the
+resolution.** Delete the plateau's reward-path application, admit at a
+quantization-sized floor (provisional 16 shards), let the wire cap + capital +
+the reopen-(c) fee-floor carry concentration pricing, record R4 (cadence)
+monitored-not-designed-for. **A2 and A6 unblock** — the probe showed distribution
+is deletion-invariant in equilibrium, so they can now build on a settled surface.
+The implementing PR inherits the §12.9 census, including the load-bearing catch
+that **`curve_milli` the function survives** for D2's escalation.
