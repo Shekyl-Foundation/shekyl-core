@@ -97,10 +97,17 @@ pub fn mean_replication(archivers: u64, n_shards: u64) -> u64 {
     if n_shards == 0 {
         return 1;
     }
+    // Divide LAST: `held` is an aggregate *quantity* (shard-slots), so folding the
+    // per-mille weight in before the division keeps the rounding to a single
+    // floor at the end. Dividing first would truncate each class's archiver count
+    // and bias `mean_r` **downward** — the direction that would understate the
+    // co-holder cliff this function exists to locate. (At the swept band every
+    // `archivers × per_mille` is already a multiple of 1000, so no current figure
+    // moves; the ordering is what keeps that true for bands that are not.)
     let held: u128 = ARCHIVER_CLASSES
         .iter()
         .map(|&(per_mille, shards)| {
-            u128::from(archivers) * u128::from(per_mille) / 1000 * u128::from(shards.min(n_shards))
+            u128::from(archivers) * u128::from(per_mille) * u128::from(shards.min(n_shards)) / 1000
         })
         .sum();
     u64::try_from(held / u128::from(n_shards))
@@ -170,6 +177,9 @@ pub fn measure(
     let mut sigma_milli: u128 = 0;
     let mut capped_by_class: Vec<u64> = Vec::new();
     for &(per_mille, shards) in ARCHIVER_CLASSES {
+        // Truncated deliberately, unlike `mean_replication`'s aggregate above:
+        // this is a *count of discrete archivers*, not a quantity, so a fractional
+        // class member is meaningless and flooring is the honest reading.
         let count = archivers * u64::from(per_mille) / 1000;
         let work = scoring.work_milli(shards, mean_r);
         let capped = if work > 0 {

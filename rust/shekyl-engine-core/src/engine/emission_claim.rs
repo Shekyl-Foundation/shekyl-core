@@ -200,8 +200,17 @@ use super::emission_source::{BondContext, EmissionClaimSource, EpochSnapshot};
 // for a nonzero term makes `scarcity_micro = floor(WORK_MICRO_PER_MILLI · g /
 // r) ≤ WORK_MICRO_PER_MILLI · g`). A weight bump that could cross the wire
 // field's width must fail this build, not silently arm the runtime refusal.
+//
+// Evaluated in `u128`: every operand is a **config-generated** `u64`, so the
+// drift this guard exists to catch is precisely the drift that could overflow a
+// `u64` product first — and a const-eval overflow reports "attempt to compute …
+// which would overflow" instead of the message below, i.e. the guard would fail
+// to explain itself exactly when it fires. `u128` cannot overflow from `u64`
+// operands, so the diagnostic is preserved for any value the config can produce.
 const _: () = assert!(
-    WORK_MICRO_PER_MILLI * (WORK_MILLI_SCALE + ARCHIVAL_REWARD_AGE_WEIGHT_MILLI) <= u32::MAX as u64,
+    (WORK_MICRO_PER_MILLI as u128)
+        * ((WORK_MILLI_SCALE as u128) + (ARCHIVAL_REWARD_AGE_WEIGHT_MILLI as u128))
+        <= u32::MAX as u128,
     "compiled constants must keep scarcity_micro within the u32 wire field"
 );
 
