@@ -2367,9 +2367,10 @@ uint8_t shekyl_archival_failure_window_params(
 /// shorter-than-n window is normal and is evaluated as-is.
 ///
 /// Returns SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH / _ABSORB, or _ERR_MARSHAL for a
-/// malformed window (null pointer, longer than n, non-descending epochs, passed
-/// head) — which the slash scan maps to a FATAL abort, never a skip in either
-/// direction: a slash decided over a malformed window is a consensus divergence.
+/// malformed window (null pointer, an empty window with observations_len == 0,
+/// longer than n, non-descending epochs, passed head) — which the slash scan
+/// maps to a FATAL abort, never a skip in either direction: a slash decided over
+/// a malformed window is a consensus divergence.
 uint8_t shekyl_archival_failure_window_slashable(
     const uint64_t* observation_epochs_ptr,
     const uint8_t* observation_served_ptr,

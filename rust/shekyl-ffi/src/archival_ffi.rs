@@ -1828,10 +1828,11 @@ pub const SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB: u8 = 0;
 /// gate-4 §4.2 slash.
 pub const SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH: u8 = 1;
 /// [`shekyl_archival_failure_window_slashable`] /
-/// [`shekyl_archival_failure_window_params`]: marshal error (null pointer, a
-/// window longer than `n`, non-descending epochs, or a passed head). The C++
-/// slash scan maps this to a FATAL abort, never a skip in either direction —
-/// deciding a slash over a malformed window would be a consensus divergence.
+/// [`shekyl_archival_failure_window_params`]: marshal error (null pointer, an
+/// empty window (`observations_len == 0`), a window longer than `n`,
+/// non-descending epochs, or a passed head). The C++ slash scan maps this to a
+/// FATAL abort, never a skip in either direction — deciding a slash over a
+/// malformed window would be a consensus divergence.
 pub const SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL: u8 = 2;
 
 /// Sliding-window failure-confirmation parameters
@@ -1894,7 +1895,9 @@ pub unsafe extern "C" fn shekyl_archival_failure_window_params(
 /// pin §3.1 Round-2 concern, on the enforcement side). Gathering stops at the
 /// boundary of the pair's current continuous challengeable run, so a shorter
 /// window is normal (a young or freshly-reinstated pair) and is evaluated
-/// as-is.
+/// as-is. An empty window (`observations_len == 0`) is rejected as
+/// [`SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL`]: the decision epoch is always
+/// the head, so a well-formed gather never produces one.
 ///
 /// Returns [`SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH`],
 /// [`SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB`], or

@@ -18,6 +18,7 @@ use crate::model::Rng;
 use crate::timing_cluster::SETTLEMENT_EPOCH_BLOCKS;
 use crate::transport::{effective_uptime, regime_latency_epochs};
 use serde::Serialize;
+use std::collections::VecDeque;
 
 /// L16 onion band-ceiling operating point (scalar `u_eff` does not pin tail shape).
 pub const L16_U_BASE: f64 = 0.9;
@@ -92,13 +93,11 @@ impl DownDurationLaw {
     pub fn assumed_residual_start_epochs(&self, quantile: f64) -> u32 {
         let p = quantile.clamp(f64::EPSILON, 1.0 - f64::EPSILON);
         match self {
-            Self::Exponential { mean_epochs } => {
-                (-mean_epochs * (1.0 - p).ln()).ceil().max(1.0) as u32
-            }
+            Self::Exponential { mean_epochs } => exponential_quantile_ceil_epochs(*mean_epochs, p),
             Self::Lognormal { mean_epochs, sigma } => {
                 let inspection_factor = 1.0 + sigma * sigma / 2.0;
                 let effective_mean = mean_epochs * inspection_factor;
-                (-effective_mean * (1.0 - p).ln()).ceil().max(1.0) as u32
+                exponential_quantile_ceil_epochs(effective_mean, p)
             }
         }
     }
@@ -112,9 +111,7 @@ impl DownDurationLaw {
     pub fn outage_duration_quantile_epochs(self, quantile: f64) -> u32 {
         let p = quantile.clamp(f64::EPSILON, 1.0 - f64::EPSILON);
         match self {
-            Self::Exponential { mean_epochs } => {
-                (-mean_epochs * (1.0 - p).ln()).ceil().max(1.0) as u32
-            }
+            Self::Exponential { mean_epochs } => exponential_quantile_ceil_epochs(mean_epochs, p),
             Self::Lognormal { mean_epochs, sigma } => {
                 let mu = mean_epochs.ln() - sigma * sigma / 2.0;
                 let z = standard_normal_quantile(p);
@@ -122,6 +119,16 @@ impl DownDurationLaw {
             }
         }
     }
+}
+
+/// Ceil-quantile of an `Exponential(mean_epochs)` down-duration, in epochs: the
+/// inverse CDF `-mean · ln(1 − p)`, rounded up and floored at one epoch. Shared
+/// by [`DownDurationLaw::assumed_residual_start_epochs`] (memoryless ⇒ residual ≡
+/// full duration, and the lognormal residual proxy reuses the same closed form
+/// on an inflated mean) and [`DownDurationLaw::outage_duration_quantile_epochs`],
+/// so a correction to the exponential arm cannot land in one and miss the other.
+fn exponential_quantile_ceil_epochs(mean_epochs: f64, p: f64) -> u32 {
+    (-mean_epochs * (1.0 - p).ln()).ceil().max(1.0) as u32
 }
 
 /// Standard-normal quantile for outage-span sizing (Winitzki upper-tail approx).
@@ -521,13 +528,21 @@ pub fn sliding_window_first_slash_baseline(
     miss_threshold: usize,
     window_epochs: usize,
 ) -> Option<usize> {
-    let mut window: Vec<u8> = Vec::new();
+    // Rolling window of the last `window_epochs` observations with a running miss
+    // count: push each new bit and, once the window is full, pop the one that
+    // fell off and adjust the count — O(1) per baseline, no per-step re-sum or
+    // front-shift. Behaviour is identical to summing a trimmed Vec each step; the
+    // equivalence sweep against the consensus impl pins that.
+    let mut window: VecDeque<bool> = VecDeque::with_capacity(window_epochs);
+    let mut miss_count: usize = 0;
     for (index, &miss) in missed.iter().enumerate() {
-        window.push(u8::from(miss));
+        window.push_back(miss);
+        miss_count += usize::from(miss);
         if window.len() > window_epochs {
-            window.remove(0);
+            if let Some(dropped) = window.pop_front() {
+                miss_count -= usize::from(dropped);
+            }
         }
-        let miss_count = window.iter().map(|&m| m as usize).sum::<usize>();
         if miss_count >= miss_threshold {
             return Some(index);
         }
