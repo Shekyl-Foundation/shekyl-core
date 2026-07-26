@@ -57,15 +57,48 @@ pub enum Regime {
     /// dodges it at zero bond cost (G-1: no enforceable cross-bond aggregation).
     /// **Not** by itself "the rational play" — see [`Regime::RationalBestResponse`].
     SplitDodge,
-    /// Plateau kept, actor plays the **best response**: `max(unsplit, split)`.
-    /// This is the regime R1's principle actually names. Splitting dodges the cap
-    /// where the cap binds, but at deep replication a fine split **quantizes to
-    /// zero** (§12.7), and an actor facing that does not split. Modelling
-    /// "rational" as *always split* would slander the rational actor at deep `r`
-    /// and produce a spurious divergence from deletion.
+    /// Plateau kept, actor plays the **true partition optimum** — the best over
+    /// *every* bond granularity, not a two-point `max(unsplit, split-at-4)`.
+    ///
+    /// **Why the full search is required (a two-point max is provably wrong).** The
+    /// binding trade-off is *not* "cap binds ⇒ split, else don't". It is **curve
+    /// compression vs per-bond flooring waste**: fine bonds escape the plateau but
+    /// discard a sub-milli remainder *each*, so the optimum is the **largest**
+    /// granularity whose per-bond work still lands in the curve's linear region.
+    /// At `r = 700`, `h = 4096` the optimum credits **5 849** milli against the
+    /// two-point max's **5 120** — a 14 % understatement. Modelling "rational" as
+    /// either extreme slanders the rational actor somewhere.
     RationalBestResponse,
     /// Plateau deleted (R2): work linear to the wire cap.
     PlateauDeleted,
+}
+
+/// Credited milli under the **best** partition of `shards` into equal-ish bonds at
+/// `r_market` — an exhaustive search over bond granularity, which is what
+/// "rational" means once the actor optimises rather than picking an extreme.
+///
+/// **Result worth stating** (asserted in tests): this optimum **equals the
+/// plateau-deleted linear value** up to per-bond flooring residue. An optimising
+/// actor can always recover the linear value by choosing granularity — which is
+/// the sharpest form of "the plateau is inert against an optimiser", and the
+/// reason OQ-1's `|Δ| = 0` holds *at the optimum*, not merely at sampled
+/// strategies.
+#[must_use]
+pub fn best_partition_credit_milli(shards: u64, r_market: u64) -> u64 {
+    let per_shard_micro = scarcity_micro(r_market, AGE_MILLI, AGE_WEIGHT_MILLI);
+    let curve = reward_curve();
+    let credit_at = |k: u64| -> u64 {
+        let mut total = 0u64;
+        let mut left = shards;
+        while left > 0 {
+            let take = left.min(k);
+            let w = work_milli_from_micro(per_shard_micro.saturating_mul(take));
+            total = total.saturating_add(curve_milli(w, &curve));
+            left -= take;
+        }
+        total
+    };
+    (1..=shards.max(1)).map(credit_at).max().unwrap_or(0)
 }
 
 /// One archiver's **credited** work (milli) under `regime`, holding `shards`
@@ -100,8 +133,7 @@ pub fn credited_work_milli(shards: u64, r_market: u64, regime: Regime) -> u64 {
             // still bounds `shards`, so per-bond work remains structurally bounded.
             work_milli_from_micro(per_shard_micro.saturating_mul(shards))
         }
-        Regime::RationalBestResponse => credited_work_milli(shards, r_market, Regime::NaiveCapped)
-            .max(credited_work_milli(shards, r_market, Regime::SplitDodge)),
+        Regime::RationalBestResponse => best_partition_credit_milli(shards, r_market),
     }
 }
 
@@ -231,6 +263,35 @@ mod tests {
     /// Replication shallow enough that no class hits the quantization floor, so the
     /// probe isolates the CAP effect (deep-`r` interaction is tested separately).
     const R_SHALLOW: u64 = 6;
+
+    #[test]
+    fn the_partition_optimum_equals_the_deleted_value() {
+        // The corrected theorem (a proposed two-boundary proof was FALSIFIED by
+        // exhaustive search — see §12.9). The optimum is neither unsplit nor
+        // split-at-4; it is the largest granularity inside the curve's linear
+        // region. Its VALUE equals the plateau-deleted linear value up to per-bond
+        // flooring residue — which is what makes the plateau inert at the optimum.
+        for r in [2u64, 50, 200, 700, 1023, 2000, 4000, 50_000] {
+            for h in [256u64, 4_096] {
+                let opt = best_partition_credit_milli(h, r);
+                let deleted = credited_work_milli(h, r, Regime::PlateauDeleted);
+                // Equal, or below only by sub-permille flooring residue.
+                assert!(opt <= deleted, "optimum cannot exceed linear: r={r} h={h}");
+                assert!(
+                    deleted - opt <= deleted / 1_000 + 1,
+                    "optimum must reach the linear value: r={r} h={h} opt={opt} del={deleted}"
+                );
+            }
+        }
+        // And the two-point max genuinely understates it somewhere — the reason the
+        // full search is not gold-plating.
+        let two_point = credited_work_milli(4_096, 700, Regime::NaiveCapped)
+            .max(credited_work_milli(4_096, 700, Regime::SplitDodge));
+        assert!(
+            best_partition_credit_milli(4_096, 700) > two_point,
+            "the two-point max must be strictly beaten at r=700"
+        );
+    }
 
     #[test]
     fn deletion_equals_rational_play_the_oq1_hypothesis() {
