@@ -1273,7 +1273,9 @@ evidence **R3's `min_holding` must be sized against**: the dodge is
 
 **Partition optimality — a proposed proof REFUTED, and the stronger theorem that
 replaces it (sim `392cc36f6`).** The natural reviewer challenge is *"what about
-intermediate split sizes?"* A two-boundary argument was proposed to close it: the
+intermediate split sizes?"* **The reviewer's own proposed proof** closed it with a
+two-boundary argument — recorded here as *proposed by the reviewer and falsified by
+exhaustive check*, so the record shows which direction the correction flowed: the
 4-split viability boundary sits at `r ≈ 4·g ≈ 4 000`, the cap-binding boundary at
 `r < holdings/4 ≤ 1 024`, they never cross, so `max(unsplit, split-at-4)` is the
 full optimum. **Exhaustive search over every granularity falsifies it:**
@@ -1293,12 +1295,31 @@ lands in the curve's linear region: an **interior** point, neither extreme. (At
 ~4 micro across 16.)
 
 > **Corrected theorem (asserted in test).** The partition optimum **equals the
-> plateau-deleted linear value**, up to per-bond flooring residue (≤ 0.1 %). *An
+> plateau-deleted linear value**, up to accumulated per-bond flooring residue. *An
 > optimising actor can always recover the linear value by choosing granularity.*
+>
+> **The residue bound, stated by regime** — measured, not asserted:
+> - **Exact (0.0000 %) in every swept regime but one**, including *all* cap-inert
+>   regimes (both sides take the **same single floor**, so it cancels) *and* the
+>   coarse-split regimes where accumulated residue stays **sub-milli**
+>   (`r = 700`: 17 bonds × ~4 micro).
+> - **≤ 0.1 % where the cap forces a fine split** — worst observed **0.0082 %** at
+>   `r = 6`, the shallowest point, where per-shard work is largest and the knee
+>   forces ~179 bonds, so ~318 micro of residue per bond accumulates past a milli.
+>
+> **Do not read this as a bound on absolute flooring discard.** At deep `r` a
+> *single* floor can discard a large fraction of a small total (`r = 100 000`:
+> 40 960 micro → 40 milli, ~2.3 % discarded) — but that floor falls **identically on
+> both sides** and therefore cancels. The bound is on the **difference** between the
+> optimum and the linear-deleted value, which is what OQ-1 turns on.
 
 That is the sharpest available statement of "the plateau is inert against an
-optimiser", and strictly stronger than the two-point claim it replaces. `|Δ| = 0`
-above is therefore measured **at the optimum**, not at sampled strategies — the
+optimiser", and strictly stronger than the two-point claim it replaces — **it makes
+`|Δ| = 0` a corollary rather than a measurement**: if the optimiser recovers the
+linear value everywhere, the cap-kept-optimal distribution *is* the deleted
+distribution by identity, and the full-granularity sweep confirming it at every `r`
+is the theorem checking itself. `|Δ| = 0` above is therefore measured **at the
+optimum**, not at sampled strategies — the
 probe's `RationalBestResponse` searches all granularities, and a test pins that the
 two-point max is *strictly beaten* at `r = 700`, so the full search is not
 gold-plating. The refuted argument is recorded rather than deleted, for the same

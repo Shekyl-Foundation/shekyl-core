@@ -266,11 +266,19 @@ mod tests {
 
     #[test]
     fn the_partition_optimum_equals_the_deleted_value() {
-        // The corrected theorem (a proposed two-boundary proof was FALSIFIED by
-        // exhaustive search — see §12.9). The optimum is neither unsplit nor
-        // split-at-4; it is the largest granularity inside the curve's linear
-        // region. Its VALUE equals the plateau-deleted linear value up to per-bond
-        // flooring residue — which is what makes the plateau inert at the optimum.
+        // The corrected theorem (the reviewer's proposed two-boundary proof was
+        // FALSIFIED by exhaustive search — see §12.9). The optimum is neither
+        // unsplit nor split-at-4; it is the coarsest granularity inside the curve's
+        // linear region. Its VALUE equals the plateau-deleted linear value up to
+        // ACCUMULATED per-bond flooring residue — which is what makes the plateau
+        // inert at the optimum.
+        //
+        // Residue by regime (measured): EXACT in every swept regime but one —
+        // including all cap-inert regimes, where both sides take the same single
+        // floor so it cancels — and ≤0.1% where the cap forces a fine split (worst
+        // 0.0082% at r=6, ~179 bonds). NB this bounds the DIFFERENCE from the
+        // linear value, not absolute flooring discard: at deep r a single floor can
+        // drop ~2.3% of a small total, but it falls identically on both sides.
         for r in [2u64, 50, 200, 700, 1023, 2000, 4000, 50_000] {
             for h in [256u64, 4_096] {
                 let opt = best_partition_credit_milli(h, r);
