@@ -5224,6 +5224,22 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     return false;
   }
 
+  // The seal block must be committed for its fire-beacon hash to be knowable
+  // (challenge.rs: h_seal is the first height at which block_hash(h_seal) is
+  // knowable). current_height == m_db->height() is the block COUNT, so the
+  // highest committed index is current_height - 1; a settlement_epoch whose
+  // h_seal is not yet on chain — a future epoch, or one still inside its seal
+  // lag — is rejected here by an explicit predicate instead of by catching the
+  // BLOCK_DNE the read below would otherwise throw on that attacker-chosen
+  // input. The slash-eligibility consumer (db_lmdb.cpp) applies the equivalent
+  // guard against its just-connected block height.
+  if (h_seal >= current_height)
+  {
+    MERROR_VER("Archival serve-credit: seal block " << h_seal
+      << " not yet committed (chain height " << current_height << ")");
+    return false;
+  }
+
   crypto::hash seal_hash{};
   try
   {
@@ -5231,6 +5247,10 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   }
   catch (const std::exception& e)
   {
+    // Post-guard, h_seal is a committed height, so this can only be a genuine DB
+    // read failure (corruption/IO), never BLOCK_DNE. Rejecting keeps this twin
+    // symmetric with the slash consumer; whether a corrupt read should instead
+    // halt is a separate consensus-policy question, decided for both together.
     MERROR_VER("Archival serve-credit: cannot load seal block hash at height " << h_seal
       << ": " << e.what());
     return false;
