@@ -69,6 +69,39 @@
 
 ### Fixed
 
+- **consensus: archival slash single-struck on one missed baseline —
+  sliding-window m-of-n failure confirmation now gates it**
+  (`feat/archival-failure-window`; builds the pinned-but-unimplemented
+  policy of `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §1, pinned
+  2026-06-08; pre-genesis V3.0 correctness gap). The m-of-n existed
+  only in the Round-1 sim (`failure_confirmation::run_sliding`), so
+  consensus went straight from gate-2 §6's `challenge_failed(P, s, E)`
+  to the gate-4 §4.2 slash and forfeited a `FLOOR` on a *single* missed
+  challenge — punishing exactly the isolated connectivity flukes the
+  pin exists to absorb, and leaving the Round-2 stressnet with nothing
+  to stress. The slash now fires only when `m` misses fall within the
+  last `n` baseline **observations** for a `(P_id, shard)`
+  (`shekyl-archival-retention::failure_window`, reached through
+  `shekyl_archival_failure_window_params` / `_slashable`). The
+  interval-append is untouched — `slash_open_interval_to_append` still
+  produces exactly what the writer appends; only *whether* it fires
+  moved. The window counts epochs at which a challenge was actually
+  **posed**, so a bonded-but-untested epoch can never become a miss,
+  and look-back stops at the boundary of the pair's current continuous
+  challengeable run — which makes a `Rebond`-reinstated record start
+  clean rather than sit one or two misses from the next slash. Nothing
+  is persisted: the window is recomputed from the `serve_credit_bit`
+  ledger and the bond record, both already reverted by `pop_block`, so
+  there is no schema change (no rule-42 bump) and reorg safety is
+  structural. `m = 11` / `n = 13` are the Round-1 **provisional**
+  values in `config/consensus_constants.json` (shape genesis-frozen,
+  numerics re-pinned at the Round-2 stressnet — the `bond_duration`
+  precedent); C++ reads them through the FFI, so a re-pin moves one
+  file. The consensus decision is held equal to the sim policy that
+  measured the pin by an exhaustive equivalence sweep, and
+  `archival_substrate_lmdb` covers absorb / sustained-slash /
+  pop-recompute at the scheduler's production site.
+
 - **scanner: KEM-ciphertext extra packing — vout ≥ 1 of multi-output
   txs was silently unscannable** (`fix/kem-extra-packing`; closes the
   FOLLOWUPS V3.0 genesis gate "KEM-ciphertext extra packing mismatch",

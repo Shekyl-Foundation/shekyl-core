@@ -177,12 +177,65 @@ Two consequences pinned into the Round-2 close criteria:
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Sliding-window m-of-n in consensus | **Pinned — implement** | `m`/`n` from Round-2 CDF gate |
+| Sliding-window m-of-n in consensus | **Built** | `shekyl-archival-retention::failure_window`; `m`/`n` re-pinned at the Round-2 CDF gate |
 | Per-`P` confirmation FSM | **Rejected** | §5 |
 | Gate-2 baseline + `serve_credit_bit` wire | In progress | Orthogonal to scheduling choice |
 | Round-2 stressnet | **Open** | §3.2 joint `m` feasibility |
 
 Cross-reference: gate-2 §10; challenge **scheduling** is orthogonal to vin verify.
+
+### 4.1 As built
+
+Before this landed, consensus single-struck: gate-2 §6's `challenge_failed(P, s, E)`
+went straight to the gate-4 §4.2 slash, so one missed baseline forfeited a `FLOOR` —
+punishing exactly the isolated connectivity flukes §1 exists to absorb. The window now
+sits between the two. The **interval-append is unchanged** (`slash_open_interval_to_append`
+still produces exactly what the writer appends); only **whether** the slash fires moved.
+
+| Layer | Where |
+|-------|-------|
+| Decision (m-of-n arithmetic, window contract) | `rust/shekyl-archival-retention/src/failure_window.rs` |
+| `m` / `n` authority | `config/consensus_constants.json` → `build.rs` (`bond_duration` precedent) |
+| FFI | `shekyl_archival_failure_window_params` / `_slashable` |
+| Gather (LMDB reads only; decides nothing) | `db_lmdb.cpp` `archival_failure_window_slashable` |
+| Observability predicate | `db_lmdb.cpp` `archival_baseline_observed_at_epoch` |
+
+**Observations, not epochs.** The window counts epochs at which a challenge was actually
+**posed** to the `(P_id, shard)` pair; a bonded-but-untested epoch is not an observation
+and can never become a miss. This is §3.1's Round-2 confirmation concern stated on the
+enforcement side.
+
+**Scoped to the current standing run.** Look-back walks epochs downward and stops at the
+first non-observation, which yields three boundaries with no special-casing: before
+`E_join + 1` and inside a bad interval (`good_through` false), and at or before the
+shard's `E_add` (the as-of-`H_fire` holdings read). The bad-interval case is a **ruling**:
+*a reinstated record starts the window clean*. Carrying pre-slash misses across a `Rebond`
+would punish one absence twice and leave an already-slashed archiver one or two misses
+from the next slash — the single-strike knife-edge, rebuilt. Gate-4 §3.4 calls `Rebond`
+*reinstatement* and §4.2 makes slash forward-only; the clean window is the symmetric
+reading, and the burned collateral is what makes it not a cheap reset.
+
+**Nothing persisted, so nothing to keep in sync.** The window is recomputed from the
+`serve_credit_bit` ledger and the bond record, both of which `pop_block` already reverts
+(gate-2 §8, gate-4 §5). No new schema, no `42-serialization-policy` bump, and reorg
+safety comes free: a rewound bit is a rewound observation.
+
+**Tests.** The consensus decision is pinned against the Round-1 sim policy itself —
+`failure_confirmation::sliding_window_first_slash_baseline` was extracted from
+`run_sliding` so `sliding_window_matches_consensus_exhaustively_to_length_16` compares
+consensus to the measured code, not a re-typed copy. That equivalence pins the arithmetic
+and the firing epoch; it pins **nothing** about the observability filter, which has no sim
+counterpart (every baseline in the sim's grid is an observation) and carries its own
+coverage in `failure_window.rs` and the `archival_substrate_lmdb` KATs
+(`slash_scheduler_absorbs_a_single_missed_challenge`,
+`slash_scheduler_slashes_sustained_absence_at_m_of_n`,
+`failure_window_recomputes_from_reverted_state_on_pop`).
+
+**Round-2 re-pin is a one-file edit.** `m`/`n` live in `config/consensus_constants.json`;
+`build.rs` refuses `m = 0` and `n < m`, and a Rust const-assert pins the shipped pair to
+the Round-1 values so a re-pin is deliberate. The C++ reads both through the FFI rather
+than a generated header constant, so there is no cross-language drift pair. The KATs
+derive their epochs from the FFI values and survive a re-pin.
 
 ---
 
