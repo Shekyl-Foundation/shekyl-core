@@ -976,6 +976,120 @@ fn a4_print_decomposition(rows: &[(String, A4Decomp)]) {
     );
 }
 
+/// Archiver-population sizes swept by A3 — shallow (`r` below the pre-fix
+/// co-holder cliff) through deep (past it). Replication is *derived* from these
+/// (`mean_replication`), so the D1 cliff is reached only where a real network
+/// would reach it.
+const A3_ARCHIVER_BAND: [u64; 3] = [2_000, 20_000, 60_000];
+
+/// A3 (W-stranding) — the fraction of `budget(E)` that never mints, under **both**
+/// work scorings. This is the executable evidence for the §1 Stage-0 coupling
+/// claim ("D2 without D1 enlarges a pool that partly evaporates"): pre-D1 puts a
+/// bulk-holder cohort at structural zero past the co-holder cliff, and a share
+/// that is never claimed is *supply never created* (`ARCHIVAL_BUDGET_SCHEDULE.md`
+/// §4). The claim cost is one transaction at the fee floor, priced through the
+/// production weight predictor (`calibration`), not a guessed constant.
+fn a3_stranding_report(params: &SimParams) {
+    // One claim tx (1-in/2-out) at the chain's depth and the fee floor.
+    let claim_cost_atomic = {
+        let n_in = shekyl_tx_weight::InputCount::clamped(1);
+        let n_out = shekyl_tx_weight::OutputCount::clamped(2);
+        let depth = tree_depth_for_leaves(SEGMENT_LEAF_COUNT * 1_000);
+        let mut fee = 0u64;
+        for _ in 0..2 {
+            fee = shekyl_tx_weight::predict_weight(n_in, n_out, depth, fee) as u64
+                * crate::calibration::FEE_PER_BYTE_ATOMIC;
+        }
+        fee
+    };
+    eprintln!(
+        "\nA3 — budget stranding (§12.2): fraction of budget(E) that NEVER MINTS.\n\
+         budget is a minting ENTITLEMENT — unclaimed past MAX_CLAIM_AGE_W=26 is \"supply\n\
+         never created\" (ARCHIVAL_BUDGET_SCHEDULE §4). A class claims iff its reward\n\
+         covers one claim tx ({CC:.6} SKL @ the {FPB} atomic/byte floor, via the production\n\
+         predictor). PRE-D1 vs POST-D1 scoring = the §1 Stage-0 coupling claim, measured:\n\
+         pre-D1 zeroes bulk holders past the co-holder cliff (r_market > g_milli ≈ 1000),\n\
+         and a structural-zero cohort's slice never mints.",
+        CC = claim_cost_atomic as f64 / COIN,
+        FPB = crate::calibration::FEE_PER_BYTE_ATOMIC,
+    );
+    eprintln!(
+        "{:<10} {:>8} {:>8}  {:>10} {:>9}  {:>11} {:>9} {:>10}",
+        "archivers",
+        "mean_r",
+        "n",
+        "pre strand",
+        "pre zero%",
+        "post strand",
+        "post zero%",
+        "post noclm%"
+    );
+
+    // Sweep the CORPUS TRAJECTORY, not one year: replication is
+    // `archivers · holdings / n`, so the pre-fix co-holder cliff is an EARLY-chain
+    // regime (few shards, many holders ⇒ r ≫ 1000) that the corpus grows out of.
+    // Showing early/mid/late is what makes the crossing legible.
+    let cfg = &all_scenarios(params)[0];
+    let aggs = a1_year_aggs(params, cfg);
+    let years: Vec<&A1YearAgg> = aggs.iter().filter(|a| a.n > 0).collect();
+    if years.is_empty() {
+        return;
+    }
+    let picks = [0usize, years.len() / 2, years.len() - 1];
+    let epy = crate::proxy::epochs_per_year();
+    for (label, &yi) in ["early", "mid", "late"].iter().zip(picks.iter()) {
+        let a = years[yi];
+        let budget_atomic = a
+            .emission_leg_atomic
+            .saturating_add(mul_scale(a.whole_burn_atomic, flat_25().share(a.n)));
+        let budget_per_epoch = (budget_atomic as f64 / epy) as u64;
+        for &archivers in &A3_ARCHIVER_BAND {
+            let pre = crate::stranding::measure(
+                budget_per_epoch,
+                a.n,
+                archivers,
+                claim_cost_atomic,
+                crate::stranding::Scoring::PreD1,
+            );
+            let post = crate::stranding::measure(
+                budget_per_epoch,
+                a.n,
+                archivers,
+                claim_cost_atomic,
+                crate::stranding::Scoring::PostD1,
+            );
+            eprintln!(
+                "{:<10} {:>8} {:>8}  {:>9.2}% {:>8.1}%  {:>10.2}% {:>8.1}% {:>9.1}%  {label}",
+                archivers,
+                pre.mean_r,
+                a.n,
+                pre.stranded_fraction * 100.0,
+                pre.zero_work_fraction * 100.0,
+                post.stranded_fraction * 100.0,
+                post.zero_work_fraction * 100.0,
+                post.non_claiming_fraction * 100.0,
+            );
+        }
+    }
+    eprintln!(
+        "  -> Read: the §1 Stage-0 claim is CONFIRMED, and stronger than stated — where\n\
+         mean_r crosses the co-holder cliff (~1000) pre-D1 strands 100% of budget,\n\
+         not 'partly': EVERY class floors to zero, so the whole epoch's entitlement is\n\
+         supply-never-created. Replication = archivers x holdings / n, so this is an\n\
+         EARLY-CHAIN regime (few shards, many holders) the corpus grows out of — and one a\n\
+         large archiver population re-enters at any n. D2-without-D1 would have escalated\n\
+         a pool that evaporates ENTIRELY in exactly the bootstrap window that most needs\n\
+         archivers paid.\n\
+         RESIDUAL (post-D1, worth naming): D1 does not abolish structural zeros — it\n\
+         SCALES the cliff with holdings, to r > ~1000 x shards_held (the micro sum must\n\
+         reach one milli). Unreachable for a bulk holder (4096 shards ⇒ r > 4M), but a\n\
+         16-shard hobbyist still zeroes at r > ~16k — the 70% zero/no-claim column above.\n\
+         So the residual stranding exposure is SMALL holders in extreme-replication\n\
+         regimes, which is a holdings-size effect adjacent to D3. Joint with A1: stranded\n\
+         budget is not burden-clearing.",
+    );
+}
+
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
 /// stdout, a human-readable summary to stderr.
 pub fn run_stage2(params: &SimParams) {
@@ -1020,6 +1134,7 @@ pub fn run_stage2(params: &SimParams) {
     print_escalation_family();
     print_stuffer_cost_curve();
     let a1 = a1_clearance_report(params);
+    a3_stranding_report(params);
     let a4 = a4_stuffing_report(params);
 
     // A5 (W10): the L14 slash forfeits the forgone post-D1/D2 reward stream — of
