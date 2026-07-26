@@ -26,105 +26,65 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+// RP-2a (docs/design/DAEMON_RELAY_PRIVACY.md §16): the stem-map logic — slot
+// selection, source pinning, churn refill — moved to Rust
+// (shekyl-relay-privacy's `StemMap`; see rust/shekyl-ffi/src/dandelionpp_ffi.rs).
+// This class keeps its ABI so `levin_notify` and the `dandelionpp_map` gtests
+// compile unchanged, and forwards to the FFI. Boost UUIDs are 16 contiguous
+// bytes (`uint8_t data[16]`), so every crossing is a `reinterpret_cast`, not a
+// copy. `out_mapping_` is a shadow of the Rust map's ordered slots that backs
+// the iterator ABI; it is refreshed after every mutation. This wrapper is
+// transitional and is removed at RP-3, when `levin_notify` itself ports.
+
 #include "dandelionpp.h"
 
-#include <boost/container/small_vector.hpp>
-#include <boost/uuid/nil_generator.hpp>
-#include <chrono>
+#include <cstdint>
+#include <limits>
 
 #include "common/expect.h"
-#include "cryptonote_config.h"
-#include "crypto/crypto.h"
 
 namespace net
 {
 namespace dandelionpp
 {
-    namespace
-    {
-        constexpr const std::size_t expected_max_channels = CRYPTONOTE_NOISE_CHANNELS;
-
-        // could be in util somewhere
-        struct key_less
-        {
-            template<typename K, typename V>
-            bool operator()(const std::pair<K, V>& left, const K& right) const
-            {
-                return left.first < right;
-            }
-
-            template<typename K, typename V>
-            bool operator()(const K& left, const std::pair<K, V>& right) const
-            {
-                return left < right.first;
-            }
-        };
-
-        std::size_t select_stem(epee::span<const std::size_t> usage, epee::span<const boost::uuids::uuid> out_map)
-        {
-            assert(usage.size() < std::numeric_limits<std::size_t>::max()); // prevented in constructor
-            if (usage.size() < out_map.size())
-                return std::numeric_limits<std::size_t>::max();
-
-            // small_vector uses stack space if `expected_max_channels < capacity()`
-            std::size_t lowest = std::numeric_limits<std::size_t>::max();
-            boost::container::small_vector<std::size_t, expected_max_channels> choices;
-            static_assert(sizeof(choices) < 256, "choices is too large based on current configuration");
-
-            for (const boost::uuids::uuid& out : out_map)
-            {
-                if (!out.is_nil())
-                {
-                    const std::size_t location = std::addressof(out) - out_map.begin();
-                    if (usage[location] < lowest)
-                    {
-                        lowest = usage[location];
-                        choices = {location};
-                    }
-                    else if (usage[location] == lowest)
-                        choices.push_back(location);
-                }
-            }
-
-            switch (choices.size())
-            {
-            case 0:
-                return std::numeric_limits<std::size_t>::max();
-            case 1:
-                return choices[0];
-            default:
-                break;
-            }
-
-            return choices[crypto::rand_idx(choices.size())];
-        }
-    } // anonymous
-
     connection_map::connection_map(std::vector<boost::uuids::uuid> out_connections, const std::size_t stems)
-      : out_mapping_(std::move(out_connections)),
-        in_mapping_(),
-        usage_count_()
+      : handle_(nullptr, &shekyl_dandelionpp_map_free),
+        out_mapping_()
     {
-        // max value is used by `select_stem` as error case
+        // Preserve the original contract: `select_stem` reserved max size_t as
+        // its error sentinel, so the constructor rejected that stem count up
+        // front. Keep the throw here rather than letting the Rust map abort on
+        // the resulting allocation.
         if (stems == std::numeric_limits<std::size_t>::max())
             MONERO_THROW(common_error::kInvalidArgument, "stems value cannot be max size_t");
 
-        usage_count_.resize(stems);
-        if (stems < out_mapping_.size())
-        {
-            for (unsigned i = 0; i < stems; ++i)
-                std::swap(out_mapping_[i], out_mapping_.at(i + crypto::rand_idx(out_mapping_.size() - i)));
-
-            out_mapping_.resize(stems);
-        }
-        else
-        {
-            std::shuffle(out_mapping_.begin(), out_mapping_.end(), crypto::random_device{});
-        }
+        handle_.reset(shekyl_dandelionpp_map_new(
+            reinterpret_cast<const std::uint8_t*>(out_connections.data()),
+            out_connections.size(),
+            stems));
+        refresh_shadow();
     }
+
+    connection_map::connection_map(const connection_map& source)
+      : handle_(shekyl_dandelionpp_map_clone(source.handle_.get()), &shekyl_dandelionpp_map_free),
+        out_mapping_(source.out_mapping_)
+    {}
 
     connection_map::~connection_map() noexcept
     {}
+
+    void connection_map::refresh_shadow()
+    {
+        const std::size_t count = shekyl_dandelionpp_map_snapshot(handle_.get(), nullptr, 0);
+        out_mapping_.resize(count);
+        if (count != 0)
+        {
+            shekyl_dandelionpp_map_snapshot(
+                handle_.get(),
+                reinterpret_cast<std::uint8_t*>(out_mapping_.data()),
+                count);
+        }
+    }
 
     connection_map connection_map::clone() const
     {
@@ -133,80 +93,30 @@ namespace dandelionpp
 
     bool connection_map::update(std::vector<boost::uuids::uuid> current)
     {
-        std::sort(current.begin(), current.end());
-
-        bool replace = false;
-        for (auto& existing_out : out_mapping_)
-        {
-            const auto elem = std::lower_bound(current.begin(), current.end(), existing_out);
-            if (elem == current.end() || *elem != existing_out)
-            {
-                existing_out = boost::uuids::nil_uuid();
-                replace = true;
-            }
-            else // already using connection, remove it from candidate list
-                current.erase(elem);
-        }
-
-        if (!replace && out_mapping_.size() == usage_count_.size())
-            return false;
-
-        const std::size_t existing_outs = out_mapping_.size();
-        for (std::size_t i = 0; i < usage_count_.size() && !current.empty(); ++i)
-        {
-            const bool increase_stems = out_mapping_.size() <= i;
-            if (increase_stems || out_mapping_[i].is_nil())
-            {
-                std::swap(current.back(), current.at(crypto::rand_idx(current.size())));
-                if (increase_stems)
-                    out_mapping_.push_back(current.back());
-                else
-                    out_mapping_[i] = current.back();
-                current.pop_back();
-            }
-        }
-
-        return replace || existing_outs < out_mapping_.size();
+        const bool changed = shekyl_dandelionpp_map_update(
+            handle_.get(),
+            reinterpret_cast<const std::uint8_t*>(current.data()),
+            current.size());
+        // Slots may have been dropped, backfilled, or grown; resync the shadow.
+        refresh_shadow();
+        return changed;
     }
 
     std::size_t connection_map::size() const noexcept
     {
-        std::size_t count = 0;
-        for (const boost::uuids::uuid& connection : out_mapping_)
-        {
-            if (!connection.is_nil())
-                ++count;
-        }
-        return count;
+        return shekyl_dandelionpp_map_live_stems(handle_.get());
     }
 
     boost::uuids::uuid connection_map::get_stem(const boost::uuids::uuid& source)
     {
-        auto elem = std::lower_bound(in_mapping_.begin(), in_mapping_.end(), source, key_less{});
-        if (elem == in_mapping_.end() || elem->first != source)
-        {
-            const std::size_t index = select_stem(epee::to_span(usage_count_), epee::to_span(out_mapping_));
-            if (out_mapping_.size() < index)
-                return boost::uuids::nil_uuid();
-
-            elem = in_mapping_.emplace(elem, source, index);
-            usage_count_[index]++;
-        }
-        else if (out_mapping_.at(elem->second).is_nil()) // stem connection disconnected after mapping
-        {
-            usage_count_.at(elem->second)--;
-            const std::size_t index = select_stem(epee::to_span(usage_count_), epee::to_span(out_mapping_));
-            if (out_mapping_.size() < index)
-            {
-                in_mapping_.erase(elem);
-                return boost::uuids::nil_uuid();
-            }
-
-            elem->second = index;
-            usage_count_[index]++;
-        }
-
-        return out_mapping_[elem->second];
+        // `get_stem` pins the source to a slot (mutating usage/in-mapping) but
+        // never changes the slot set, so the shadow stays valid — no refresh.
+        boost::uuids::uuid out{};
+        shekyl_dandelionpp_map_get_stem(
+            handle_.get(),
+            reinterpret_cast<const std::uint8_t*>(&source),
+            reinterpret_cast<std::uint8_t*>(&out));
+        return out;
     }
 } // dandelionpp
 } // net

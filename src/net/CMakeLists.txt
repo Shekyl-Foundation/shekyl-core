@@ -32,5 +32,9 @@ set(net_sources dandelionpp.cpp error.cpp http.cpp i2p_address.cpp parse.cpp
 monero_find_all_headers(net_headers "${CMAKE_CURRENT_SOURCE_DIR}")
 
 monero_add_library(net ${net_sources} ${net_headers})
-target_link_libraries(net common epee ${Boost_ASIO_LIBRARY})
+# dandelionpp.cpp forwards to the Rust stem-map FFI (RP-2a). SHEKYL_FFI_LINK_LIBS
+# propagates transitively and resolves per-binary to the right Rust image
+# (daemon -> shekyl_daemon_image, everything else -> shekyl_ffi), so the daemon
+# and unit_tests both get the shekyl_dandelionpp_map_* symbols at final link.
+target_link_libraries(net common epee ${Boost_ASIO_LIBRARY} ${SHEKYL_FFI_LINK_LIBS})
 

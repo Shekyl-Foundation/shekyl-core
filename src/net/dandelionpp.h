@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "span.h"
+#include "dandelionpp_ffi.h"
 
 namespace net
 {
@@ -43,13 +44,21 @@ namespace dandelionpp
     //! Assists with mapping source -> stem and tracking connections for stem.
     class connection_map
     {
-        // Make sure to update clone method if changing members
-        std::vector<boost::uuids::uuid> out_mapping_; //<! Current outgoing uuid connection at index.
-        std::vector<std::pair<boost::uuids::uuid, std::size_t>> in_mapping_; //<! uuid source to an `out_mapping_` index.
-        std::vector<std::size_t> usage_count_;
+        // RP-2a: the map logic now lives in shekyl-relay-privacy's `StemMap`;
+        // this class is the opaque-handle wrapper `levin_notify` holds until it
+        // ports (RP-3). `handle_` owns the Rust map (freed through the FFI);
+        // `out_mapping_` shadows its ordered stem slots (nils in position) so
+        // begin()/end()/size() keep their iterator ABI. The source->slot map and
+        // per-slot usage counts moved into the Rust map. See
+        // docs/design/DAEMON_RELAY_PRIVACY.md §16.
+        std::unique_ptr<StemMapHandle, void (*)(StemMapHandle*)> handle_;
+        std::vector<boost::uuids::uuid> out_mapping_; //<! Shadow of the Rust map's ordered slots.
 
-        // Use clone method to prevent "hidden" copies.
-        connection_map(const connection_map&) = default;
+        //! Re-snapshot `out_mapping_` from the Rust map after a mutation.
+        void refresh_shadow();
+
+        // Use clone method to prevent "hidden" copies; deep-copies the handle.
+        connection_map(const connection_map&);
 
     public:
         using value_type = boost::uuids::uuid;
