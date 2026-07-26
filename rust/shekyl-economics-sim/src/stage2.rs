@@ -1022,26 +1022,35 @@ pub fn run_stage2(params: &SimParams) {
     let a1 = a1_clearance_report(params);
     let a4 = a4_stuffing_report(params);
 
-    // A5 (W10): the L14 slash forfeits a max-archiver's forgone post-D1/D2 reward
-    // stream. Take the highest per-epoch max-holdings reward across the scenario
-    // set (biggest forfeit ⇒ strongest deterrent the margin must STILL fail
-    // against). Pool = A1's flat-ledger budget (emission + fee leg); the archiver's
-    // work share is proportional (min(cap, n)/n) at the small-bond equilibrium.
+    // A5 (W10): the L14 slash forfeits the forgone post-D1/D2 reward stream — of
+    // the SLASHED SHARD only, matching the per-shard slash scope
+    // (`FOUNDATION_GENESIS_IDENTITY_SET.md` §3.2: a ShardSetCompact record's failed
+    // challenge slashes that shard's bond; other shards stay bonded). Take the
+    // highest PER-SHARD reward across the scenario set (biggest forfeit ⇒ the
+    // strongest deterrent the margin must STILL fail against). Pool = A1's
+    // flat-ledger budget (emission + fee leg); one shard's slice of n is 1/n at the
+    // small-bond equilibrium (work is proportional there — the A4 invariant).
+    // Scope consistency: only count years where the full holding is realizable
+    // (`n ≥ MAX_HOLDINGS_SHARDS`), since the exposure sums over that many shards
+    // at risk — an early-chain year with fewer shards in existence would pair a
+    // small-n per-shard reward with 4,096 shards that do not exist.
     let epy = crate::proxy::epochs_per_year();
-    let mut max_archiver_reward_per_epoch_skl = 0.0f64;
+    let mut max_shard_reward_per_epoch_skl = 0.0f64;
     for config in all_scenarios(params) {
-        for a in a1_year_aggs(params, &config).iter().filter(|a| a.n > 0) {
+        for a in a1_year_aggs(params, &config)
+            .iter()
+            .filter(|a| a.n >= MAX_HOLDINGS_SHARDS as u64)
+        {
             let pool_atomic = a
                 .emission_leg_atomic
                 .saturating_add(mul_scale(a.whole_burn_atomic, flat_25().share(a.n)));
             let pool_per_epoch_skl = (pool_atomic as f64 / COIN) / epy;
-            let share = MAX_HOLDINGS_SHARDS.min(a.n as usize) as f64 / a.n as f64;
-            max_archiver_reward_per_epoch_skl =
-                max_archiver_reward_per_epoch_skl.max(pool_per_epoch_skl * share);
+            max_shard_reward_per_epoch_skl =
+                max_shard_reward_per_epoch_skl.max(pool_per_epoch_skl / a.n as f64);
         }
     }
     let forgone_reward_skl =
-        max_archiver_reward_per_epoch_skl * crate::proxy::A5_REWARD_HORIZON_EPOCHS;
+        max_shard_reward_per_epoch_skl * crate::proxy::A5_REWARD_HORIZON_EPOCHS;
     crate::proxy::a5_proxy_report(forgone_reward_skl, SKL_FIAT_PRICE_BAND[1]);
 
     let report = Stage2Report {

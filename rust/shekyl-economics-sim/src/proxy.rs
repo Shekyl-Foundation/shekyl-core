@@ -123,20 +123,30 @@ fn binom(n: u32, k: u32) -> f64 {
 }
 
 /// The proxy's total cost per epoch, fiat: re-fetch bandwidth + the L14 slash
-/// exposure (`P(slash) · slash_loss`). `slash_loss` is the one-time loss on a
-/// sustained-failure slash — bond collateral + the forgone post-D1/D2 reward
-/// stream — passed in from the caller (the reward is the §12.2 "against the
-/// post-D1/D2 reward" input).
+/// exposure.
+///
+/// **Scope matching (load-bearing).** The margin compares a *full holding*
+/// (`MAX_HOLDINGS_SHARDS`) proxied vs held, so the exposure must be summed over
+/// the shards at risk: each shard is challenged **independently** every epoch
+/// (`CHALLENGES_PER_EPOCH`) and slashed **independently** (per-shard bonds,
+/// `FOUNDATION_GENESIS_IDENTITY_SET.md` §3.2). Hence
+/// `exposure = shards · P(m-of-n) · per_shard_loss` — pairing a *single* shard's
+/// loss against a *whole* holding's storage saving would understate the deterrent
+/// by `MAX_HOLDINGS_SHARDS`×.
+///
+/// `per_shard_slash_loss_fiat` = one shard's bond floor + that shard's forgone
+/// post-D1/D2 reward stream (§12.2 "against the post-D1/D2 reward").
 #[must_use]
 pub fn proxy_cost_per_epoch(
     fetch_fiat_per_byte: f64,
     q: f64,
-    slash_loss_fiat: f64,
+    per_shard_slash_loss_fiat: f64,
     m: u32,
     n: u32,
 ) -> f64 {
+    let shards_at_risk = MAX_HOLDINGS_SHARDS as f64;
     proxy_refetch_cost_per_epoch(fetch_fiat_per_byte)
-        + slash_prob_per_epoch(q, m, n) * slash_loss_fiat
+        + shards_at_risk * slash_prob_per_epoch(q, m, n) * per_shard_slash_loss_fiat
 }
 
 /// The W10 margin per epoch: `proxy_cost − honest_storage_cost`. **> 0 passes**
@@ -196,12 +206,26 @@ pub fn crossover_q(
     Some(hi)
 }
 
-/// Bond collateral at risk on a sustained-failure slash, SKL: the full holding's
-/// per-shard floor. Concrete (always present); the forgone reward stream is added
-/// by the caller from the sim's post-D1/D2 pool.
+/// Bond collateral at risk on **one** sustained-failure slash, SKL.
+///
+/// **Scope pinned at source (`FOUNDATION_GENESIS_IDENTITY_SET.md` §3.2).** For a
+/// **`ShardSetCompact`** record — the *market archiver* this arm models — a failed
+/// challenge on shard `s` slashes ***shard `s`'s bond*; other shards stay
+/// bonded**; the post-slash holding is *"still bonded on remaining shards"*
+/// (per-shard bonds). Only the foundation's `CompleteTree` kind takes the *whole*
+/// bond ("floor-or-whole"). So the exposure is **one** `ARCHIVAL_BOND_FLOOR`, not
+/// the holding's `4096 ×` total — a correction of ~1/`MAX_HOLDINGS_SHARDS`.
+///
+/// This *understates* nothing in the verdict (a smaller forfeit is a weaker
+/// deterrent ⇒ the proxy FAIL is a fortiori), but it is load-bearing for the
+/// remedy: it raises the crossover `q*` the gate-4 grace window must force.
+///
+/// The record-level bad interval `[E_slash, ∞)` is the *serve-credit* consequence
+/// (it blocks `good_through` until `Rebond`), **not** the collateral scope — the
+/// two are separate and must not be conflated.
 #[must_use]
 pub fn bond_at_risk_skl() -> f64 {
-    MAX_HOLDINGS_SHARDS as f64 * (ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN as f64)
+    ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN as f64
 }
 
 /// Settlement epochs of forgone reward folded into the slash loss (`~5 y` at
@@ -209,9 +233,9 @@ pub fn bond_at_risk_skl() -> f64 {
 /// the exposure prices (undiscounted — deterrence-favourable).
 pub const A5_REWARD_HORIZON_EPOCHS: f64 = 131.0;
 
-/// A5 (W10) report. `forgone_reward_skl` is a **max-archiver's** post-D1/D2
-/// reward stream over the horizon (from the sim's pool, §12.2 "against the
-/// post-D1/D2 reward"); `skl_price` prices SKL losses to the fiat margin.
+/// A5 (W10) report. `forgone_reward_skl` is **one shard's** post-D1/D2 reward
+/// stream over the horizon (per-shard, matching the §3.2 per-shard slash scope);
+/// `skl_price` prices SKL losses to the fiat margin.
 pub fn a5_proxy_report(forgone_reward_skl: f64, skl_price: f64) {
     let storage = honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR);
     eprintln!(
@@ -335,7 +359,26 @@ mod tests {
         assert!(qc.is_some_and(|q| q > 0.0 && q < 1.0));
     }
 
+    /// One shard's bond at risk in fiat (per-shard slash scope, §3.2).
     fn bond_loss_fiat(skl_price: f64) -> f64 {
-        MAX_HOLDINGS_SHARDS as f64 * (ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN as f64) * skl_price
+        bond_at_risk_skl() * skl_price
+    }
+
+    #[test]
+    fn exposure_scope_matches_holding_not_single_shard() {
+        // Scope-matching guard: the margin weighs a FULL holding proxied vs held,
+        // so the slash exposure must sum over MAX_HOLDINGS_SHARDS independently
+        // challenged shards. Pairing one shard's loss against the whole holding's
+        // storage saving would understate the deterrent by MAX_HOLDINGS_SHARDS×.
+        let per_shard = bond_loss_fiat(0.10);
+        let q = 0.9; // sustained failure ⇒ slash prob ≈ 1
+        let cost =
+            proxy_cost_per_epoch(FETCH_FIAT_PER_BYTE_BAND[0], q, per_shard, SLASH_M, SLASH_N);
+        let exposure = cost - proxy_refetch_cost_per_epoch(FETCH_FIAT_PER_BYTE_BAND[0]);
+        let single_shard_exposure = slash_prob_per_epoch(q, SLASH_M, SLASH_N) * per_shard;
+        assert!(
+            (exposure / single_shard_exposure - MAX_HOLDINGS_SHARDS as f64).abs() < 1e-6,
+            "exposure must scale by shards at risk"
+        );
     }
 }
