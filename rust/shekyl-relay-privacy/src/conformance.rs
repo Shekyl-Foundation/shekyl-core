@@ -1594,9 +1594,11 @@ pub fn simulate_two_slot_occupancy<R: RelayRng + ?Sized>(
     for _ in 0..trials {
         // Two distinct slot indices in `[0, d)`, mirroring the swap-and-pick of
         // dandelionpp.cpp:116 (second draw taken from the remaining `d − 1` and
-        // mapped around the first).
-        let s0 = usize_from(bounded_uniform(rng, d as u64));
-        let r = usize_from(bounded_uniform(rng, (d - 1) as u64));
+        // mapped around the first). `bounded_uniform` is inclusive [0, max], so the
+        // first draw uses `d - 1` (→ [0, d)) and the second uses `d - 2` (→ the
+        // remaining `d − 1` values, mapped around `s0`).
+        let s0 = usize_from(bounded_uniform(rng, (d - 1) as u64));
+        let r = usize_from(bounded_uniform(rng, (d - 2) as u64));
         let s1 = if r < s0 { r } else { r + 1 };
         let adv0 = s0 < a;
         let adv1 = s1 < a;
@@ -1611,6 +1613,103 @@ pub fn simulate_two_slot_occupancy<R: RelayRng + ?Sized>(
         both_slots: both as f64 / trials as f64,
         at_least_one_slot: at_least_one as f64 / trials as f64,
         independent_reference: effective_share * effective_share,
+    }
+}
+
+/// **Q1 layering discriminator (§12.8):** how an adversary holding `adversary_peers`
+/// slots in the origin's stem-eligible set is exposed across epochs, as a function
+/// of the set size — the number that decides "pin the set of `K`" vs. the current
+/// ~12-peer pool, turning the layering call from an argument into a measurement.
+///
+/// Each epoch the origin's `nil`-keyed stem successor is drawn uniformly from the
+/// eligible set (the `change_channels` rebuild, §12.8 G-2). The **pool** regime is
+/// `eligible_set_size = D_out` (≈12); the **pinned** regime is `= K`. Holding the
+/// adversary's *peer count* `a` fixed (not its share), this isolates the two axes
+/// that pull opposite ways under pinning:
+///
+/// - **Direct-successor exposure** — the occupancy / C1 axis, and the *dominant*
+///   one, because a captured successor identifies the origin at precision 1. The
+///   per-epoch presence is `a / set`, so shrinking `D → K` **amplifies** a captured
+///   slot's presence by `D/K`. This is the advisor-flagged risk: a single pinned
+///   adversary's cross-epoch presence rises from `~1/D` to `~1/K`.
+/// - **Cross-epoch successor diversity** — the intersection axis (§6.8). A smaller
+///   set yields fewer distinct successors, which *slows* the intersection's collapse
+///   toward `{origin}` — protective, but secondary to the direct-successor axis.
+///
+/// The decision this feeds: pinning to a small `K` is net-harmful on the dominant
+/// axis unless the pin-admission bound (`g_max`, Q4) makes holding `a` slots in `K`
+/// harder than in `D` by **more than the `D/K` amplification**.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EpochLayering {
+    /// The eligible set size (`D_out` for pool, `K` for pinned).
+    pub eligible_set_size: usize,
+    /// Adversary slots held in the eligible set (held fixed across the comparison).
+    pub adversary_peers: usize,
+    /// Epochs observed.
+    pub epochs: usize,
+    /// Per-epoch `P(adversary is the origin's successor)` = `a / eligible_set_size`.
+    pub direct_successor_rate: f64,
+    /// `P(adversary is the origin's successor in ≥ 1 of `epochs` epochs)`.
+    pub p_identified_direct: f64,
+    /// Mean number of distinct successors the origin uses across `epochs` epochs —
+    /// the cross-epoch diversity that governs the intersection collapse.
+    pub distinct_successors: f64,
+}
+
+/// Measure [`EpochLayering`] for `adversary_peers` of `eligible_set_size` over
+/// `epochs` epochs. Adversary holds indices `0..adversary_peers`.
+///
+/// # Panics
+///
+/// Panics if `trials`/`epochs` is zero, the set is empty, or `adversary_peers`
+/// exceeds `eligible_set_size`.
+#[must_use]
+pub fn simulate_epoch_layering<R: RelayRng + ?Sized>(
+    eligible_set_size: usize,
+    adversary_peers: usize,
+    epochs: usize,
+    trials: usize,
+    rng: &mut R,
+) -> EpochLayering {
+    assert!(trials > 0, "need at least one trial");
+    assert!(eligible_set_size >= 1, "eligible set must be non-empty");
+    assert!(epochs >= 1, "need at least one epoch");
+    assert!(
+        adversary_peers <= eligible_set_size,
+        "adversary cannot hold more slots than the set has"
+    );
+
+    let mut present_epochs_total = 0_u64;
+    let mut identified_trials = 0_usize;
+    let mut distinct_total = 0_u64;
+
+    for _ in 0..trials {
+        let mut present_this_trial = false;
+        let mut seen = vec![false; eligible_set_size];
+        let mut distinct = 0_u64;
+        for _ in 0..epochs {
+            // `bounded_uniform` is inclusive [0, max], so draw over set_size - 1.
+            let s = usize_from(bounded_uniform(rng, (eligible_set_size - 1) as u64));
+            if s < adversary_peers {
+                present_this_trial = true;
+                present_epochs_total += 1;
+            }
+            if !seen[s] {
+                seen[s] = true;
+                distinct += 1;
+            }
+        }
+        identified_trials += usize::from(present_this_trial);
+        distinct_total += distinct;
+    }
+
+    EpochLayering {
+        eligible_set_size,
+        adversary_peers,
+        epochs,
+        direct_successor_rate: present_epochs_total as f64 / (trials as f64 * epochs as f64),
+        p_identified_direct: identified_trials as f64 / trials as f64,
+        distinct_successors: distinct_total as f64 / trials as f64,
     }
 }
 

@@ -1775,3 +1775,81 @@ fn two_slot_occupancy_is_the_reshape_residual() {
          table is sound; which row we live on is what is deferred."
     );
 }
+
+/// **Q1 layering discriminator (§12.8) — pinning the eligible set is NOT free.**
+/// Turns the pin-vs-epoch-layering call from an argument into a number: an adversary
+/// holding a fixed peer count `a` is exposed differently in the ~12-peer pool vs a
+/// pinned set of `K`. Answers the advisor's sign question — does shrinking the set
+/// help or harm — and it harms on the dominant (direct-successor) axis by `D/K`.
+#[test]
+fn epoch_layering_pinning_amplifies_direct_successor_exposure() {
+    use shekyl_relay_privacy::conformance::simulate_epoch_layering;
+
+    const D_OUT: usize = 12; // P2P_DEFAULT_CONNECTIONS_COUNT
+    const M: usize = 30; // ~5 h of 10-min epochs
+    let trials = 200_000;
+
+    // Single adversary peer (a=1): the advisor's scenario. Pool successor ~1/12 of
+    // epochs; pinned to K ~1/K — amplified by D/K.
+    println!("\nQ1 layering: single adversary peer (a=1), M={M} epochs, D_out=12");
+    println!(
+        "{:>6} {:>10} {:>14} {:>16} {:>12}",
+        "set", "a/set", "P(id direct)", "distinct succ", "amp vs pool"
+    );
+    let pool = simulate_epoch_layering(D_OUT, 1, M, trials, &mut SplitMix64::new(0x1A1));
+    println!(
+        "{:>6} {:>10.4} {:>14.4} {:>16.2} {:>11.2}x",
+        D_OUT, pool.direct_successor_rate, pool.p_identified_direct, pool.distinct_successors, 1.0
+    );
+    let mut pinned = std::collections::BTreeMap::new();
+    for &k in &[6_usize, 4, 3, 2] {
+        let mut rng = SplitMix64::new(0x1A1 + k as u64);
+        let o = simulate_epoch_layering(k, 1, M, trials, &mut rng);
+        println!(
+            "{:>6} {:>10.4} {:>14.4} {:>16.2} {:>11.2}x",
+            k,
+            o.direct_successor_rate,
+            o.p_identified_direct,
+            o.distinct_successors,
+            o.direct_successor_rate / pool.direct_successor_rate
+        );
+        pinned.insert(k, o);
+    }
+
+    // 1. AMPLIFICATION is D/K on the direct-successor axis: pinning a single captured
+    //    slot to K=3 makes it ~4x more present than in the 12-pool.
+    let amp3 = pinned[&3].direct_successor_rate / pool.direct_successor_rate;
+    assert!(
+        (amp3 - 4.0).abs() < 0.15,
+        "K=3 should amplify direct-successor exposure ~D/K=4x, got {amp3:.2}x"
+    );
+
+    // 2. It is monotone: smaller K, larger amplification (strictly worse on this axis).
+    assert!(
+        pinned[&2].direct_successor_rate > pinned[&3].direct_successor_rate
+            && pinned[&3].direct_successor_rate > pinned[&6].direct_successor_rate,
+        "smaller K must amplify direct-successor exposure more"
+    );
+
+    // 3. The intersection axis moves the OTHER way but is secondary: pinned uses far
+    //    fewer distinct successors (protective, slows the §6.8 collapse), yet a
+    //    captured slot's precision-1 direct identification dominates.
+    assert!(
+        pinned[&3].distinct_successors < pool.distinct_successors * 0.5,
+        "pinned-K must use far fewer distinct successors than the pool"
+    );
+    assert!(
+        pinned[&3].p_identified_direct > pool.p_identified_direct,
+        "over M epochs the pinned single-adversary is identified-as-successor MORE often"
+    );
+
+    println!(
+        "\n  Pinning to K amplifies a captured slot's cross-epoch presence by D/K on\n  \
+         the DOMINANT direct-successor axis (precision-1 identification), while only\n  \
+         slowing the SECONDARY intersection axis (fewer distinct successors). So the\n  \
+         advisor's sign question resolves: shrinking the set HARMS on the axis that\n  \
+         matters. 'Pin the set' is safe ONLY if the pin-admission bound (g_max, Q4)\n  \
+         makes holding a slots in K harder than in D by MORE than D/K. K must not be\n  \
+         << D, or admission must pay for the amplification. NOT a free simplification."
+    );
+}

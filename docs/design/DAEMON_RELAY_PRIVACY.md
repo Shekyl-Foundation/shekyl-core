@@ -1856,7 +1856,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 | --- | --- | --- | --- | --- | --- |
 | W1 | `get_stem(nil)` no-op (ii) | design bug | select the alternate `out_mapping_` index explicitly, never re-call `get_stem` | none | **closed by spec** |
 | W2 | Fan-out 1→2 (i) | passive inbound supernode (§6.8) | reuse the existing 2nd `out_mapping_` entry; net against leak benefit in the §6.8 metric | fan-out cost sub-dominant to the ~86× rate cut | **closed (netted)** |
-| W3 | Both-successors-black-hole | adversary occupies *both* of the origin's 2 stem successors | re-stem to the 2nd is also dropped → fluff after the cap; the fluff recovers liveness | origin exposed iff **both** stem slots are adversarial. The two slots are drawn **without replacement** from the origin's *outbound* pool of `D_out = 12` ([`out_mapping_`](../../src/net/dandelionpp.cpp#L103), [`!m_is_income`](../../src/cryptonote_protocol/levin_notify.cpp#L152)); an adversary enters that pool only by being *selected* as an outbound peer (the costly direction). Measured (§12.6): **≈ 0 at baseline `g = f`** (~1 of 12 peers cannot fill two slots), **bounded *above* by the independent draw `(a/D)²`** (no-replacement is anti-correlated, not "worse than independence"), rising only under genuine outbound enrichment `g ≫ f` — ≈ 0.08 even at `g = 0.30`, well under the inbound `π₀ = 0.45`. | **measured (build 1)** — small, gated on the costly outbound-selection capability |
+| W3 | Both-successors-black-hole | adversary occupies *both* of the origin's 2 stem successors | re-stem to the 2nd is also dropped → fluff after the cap; the fluff recovers liveness | origin exposed iff **both** stem slots are adversarial. The two slots are drawn **without replacement** from the origin's *outbound* pool of `D_out = 12` ([`out_mapping_`](../../src/net/dandelionpp.cpp#L103), [`!m_is_income`](../../src/cryptonote_protocol/levin_notify.cpp#L152)); an adversary enters that pool only by being *selected* as an outbound peer (the costly direction). Measured (§12.6): **≈ 0 at baseline `g = f`** (~1 of 12 peers cannot fill two slots), **bounded *above* by the independent draw `(a/D)²`** (no-replacement is anti-correlated, not "worse than independence"), rising only under genuine outbound enrichment `g ≫ f` — ≈ 0.09 even at `g = 0.30`, well under the inbound `π₀ = 0.45`. | **measured (build 1)** — small, gated on the costly outbound-selection capability |
 | W3b | Single-live-stem fallback | adversary holds the origin at *one* live stem peer (induced churn / partial eclipse) | no alternate exists → fluff on embargo fire (the §12.2.7 fallback) | **every** embargo fire becomes an origin fluff for that origin — cheaper than W3 (one slot, not two), same lever (shaping the 2-slot stem set). Uncounted by §6.8. | **ceiling measured** — the single-slot occupancy the same instrument reports (§12.6) bounds it; the realized rate is gated on an induced-churn capability |
 | W3c | Churn-refilled alternate | adversary induces churn on the origin's stem peer (or *is* the dropping successor), forcing `update()` to refill the slot | `update()` fresh-draws the churned slot from the outbound pool ([dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160)) mid-epoch; reshape may then forward to a fresh draw | `≈ g` per re-stem, and **churn correlates with the reshape trigger** (a dark successor is why the embargo fires), so it is the operative case, not the edge case. Repeated induced churn re-rolls the draw. | **spec gap named** — RP-2 must make the alternate stable across churn refill (§12.5); the `g`-bound Q-10 owes must hold under *repeated* refills |
 | W4 | Loop (revisited node) | topology | once-per-tx local cap bounds re-stemming; matches the paper's "fluff on loop" | bounded by the cap | **closed by cap + local state** |
@@ -1941,10 +1941,10 @@ correction in §12.5):
 
 | `g` (outbound share) | peers `a` | **W3 = P(both slots)** | P(≥1 slot) | independent `(a/D)²` |
 | --- | --- | --- | --- | --- |
-| 0.10 (= baseline `f`) | 1 | **0.0000** | 0.154 | 0.007 |
-| 0.20 | 2 | 0.013 | 0.295 | 0.028 |
-| 0.30 | 4 | **0.077** | 0.538 | 0.111 |
-| 0.50 | 6 | 0.192 | 0.731 | 0.250 |
+| 0.10 (= baseline `f`) | 1 | **0.0000** | 0.167 | 0.007 |
+| 0.20 | 2 | 0.015 | 0.318 | 0.028 |
+| 0.30 | 4 | **0.091** | 0.576 | 0.111 |
+| 0.50 | 6 | 0.228 | 0.772 | 0.250 |
 
 Three results, each against the argued framing this section previously carried:
 
@@ -1955,10 +1955,19 @@ Three results, each against the argued framing this section previously carried:
    *distinct* slots without replacement is anti-correlated, so `W3 < (a/D)²` at
    every `g` — the "worse than independence" reading was backwards.
 3. **W3 rises with `g`, and `g` is the outbound-selection share — not `f`.**
-   Lifting W3 to ~0.08 needs `g = 0.30` (4 of 12 outbound peers); to ~0.19 needs
+   Lifting W3 to ~0.09 needs `g = 0.30` (4 of 12 outbound peers); to ~0.23 needs
    `g = 0.50`. W3b's ceiling is the `P(≥1 slot)` column, itself gated on an
    additional induced-churn capability. The magnitude of `g` is the whole
    question — see below.
+
+*Correction (numbers revised upward):* building the Q1 layering instrument (§12.8)
+surfaced an off-by-one in `simulate_two_slot_occupancy` — `bounded_uniform` is
+inclusive `[0, max]`, so the first slot was drawn over `d + 1` values, understating
+W3. Corrected, the table now matches the exact hypergeometric `C(a,2)/C(d,2)` to the
+digit (0.30 → `6/66 = 0.091`, was 0.077; 0.50 → `15/66 = 0.228`, was 0.192). The
+*direction* of all three conclusions is unchanged; the residual is slightly larger
+than first reported, which only sharpens the point that `g`, not the count, is the
+lever.
 
 **The reading, not the table, is where the honesty gap is — and it is the
 phantom one level up.** The table is a function of `g`, the adversary's share of
@@ -1975,8 +1984,8 @@ Reading `g ≈ f` here repeats, one level up, the phantom §12.5 just corrected:
 treating a *selected*, adversarially-fed pool's occupancy as its network average.
 
 **So W3's "small" verdict is conditional, and the condition is not settled here.**
-W3 ≈ 0 holds under *honest* peer selection (`g ≈ f`); the `g = 0.30 → 0.077` and
-`g = 0.50 → 0.192` rows are what an eclipse-capable adversary *buys*. W3's residual
+W3 ≈ 0 holds under *honest* peer selection (`g ≈ f`); the `g = 0.30 → 0.091` and
+`g = 0.50 → 0.228` rows are what an eclipse-capable adversary *buys*. W3's residual
 is therefore **inherited from the eclipse-resistance of outbound peer selection**
 (the anchor count, the white/gray discipline, IP-group diversity), and this
 instrument measures `W3(g)` **without bounding `g`**. That bound is a *separate
@@ -2104,23 +2113,56 @@ Grounded at source before any spec, per the arc's discipline. These four facts a
 durable independent of which pinning architecture wins; the Q-10 design (§7) sits on
 them.
 
-**G-1 — stem *selection* is public/clearnet-zone only.** `send_txs`
+**G-1 — stem *selection* is public/clearnet-zone only; and Tor is *not* safer on
+the occupancy axis — it has no occupancy mechanism at all.** `send_txs`
 ([levin_notify.cpp:840-851](../../src/cryptonote_protocol/levin_notify.cpp#L840))
 routes noise zones (Tor/I2P) through the covert noise channel and **converts a
 `stem` relay to `local`** ("Dandelion++ stem not supported over noise networks");
 only the public zone runs `dandelionpp_notify` → `get_stem` → `out_mapping_`
 selection. So the `out_mapping_` occupancy surface — W3/W3c, `g_max`, the entire
-Q-10 target — is a **clearnet mechanism**: a Tor origin injects via the noise
-channel and a public-zone node does the stem-forwarding; there is no public
-`out_mapping_` of a Tor origin to occupy. *Reconciliation with §6.5/§6.6 (verified
-at source, since those sections are already pushed):* those model the **fluff
-phase's** inbound observability, which is transport-gated at
+Q-10 target — is a **clearnet mechanism**.
+
+**Do not read "no public `out_mapping_` on Tor" as "Tor is safer on occupancy"** —
+that is the arc's first finding (a mechanism's protection is defined by the
+*specific* adversary and observable) re-committed at the transport layer, and it is
+wrong. The occupancy attack is a **peer-as-adversary** threat: the adversary is one
+of your outbound endpoints and reads what you originate. Two orthogonal threats,
+and only one gets a mechanism on Tor:
+
+- **Channel observer** (ISP, entry guard, circuit-level traffic analysis) — sees
+  the *wire*, not the content. The noise channel (constant-rate cover) defends this,
+  legitimately and arguably better than clearnet's jitter. The source comment says
+  exactly this: *"good protection against ISP adversaries, but not sybil
+  adversaries"* ([levin_notify.cpp:829-833](../../src/cryptonote_protocol/levin_notify.cpp#L829)).
+- **Peer as adversary** (the ProxyMark occupier) — is one of your
+  `CRYPTONOTE_NOISE_CHANNELS = 2` noise endpoints, **decodes** the covert stream
+  (it reassembles and forwards the tx in D++ mode), and reads your originated
+  transactions directly. The noise channel is **transparent** to it. Undefended.
+
+And it is *worse* than clearnet on this axis in two compounding ways: (i) **no
+dilution** — the origin does not `get_stem`-select one successor from a pool, it
+**broadcasts every originated tx to *both* noise endpoints**
+([send_txs:866-872](../../src/cryptonote_protocol/levin_notify.cpp#L866)), so each
+endpoint sees everything (occupying *one* already observes all — no per-epoch
+selection to evade); and (ii) **a minimal 2-endpoint target**. On clearnet the
+peer-as-adversary is diluted by `get_stem` over the ~12-pool (imperfect, `g`-bounded,
+but present); on Tor it is undiluted against a 2-of-2 structure, and the noise
+channel's genuine strength on the *other* axis is exactly what camouflages the hole.
+So the Q-10 redesign target (occupancy dilution) applies to **both** transports, and
+Tor currently has **none** — not a weaker mechanism, none.
+
+*Reconciliation with §6.5/§6.6 (verified at source; those sections are already
+pushed):* they model the **fluff phase's** inbound observability — the
+*channel-observer* axis — transport-gated at
 [levin_notify.cpp:448](../../src/cryptonote_protocol/levin_notify.cpp#L448)
-(`fluff_notify` runs per-zone; on Tor it fluffs outbound-only). That is a
-*different phase* from stem selection, so "fluff visibility is transport-gated"
-(§6.3) and "stem selection is public-only" (here) are **consistent**, not in
-tension — Tor removes the fluff-inbound observer *and* routes the origin around
-stem-occupancy entirely.
+(`fluff_notify` runs per-zone; on Tor it fluffs outbound-only). That is a *different
+phase and a different axis* from stem occupancy, so §6.5's "Tor collapses the
+inbound supernode" is correct **for the channel-observer axis** and must not be read
+as occupancy-axis protection: on the peer-as-adversary axis Tor is *weaker*, per the
+above. §6.5's "Tor is the recommended configuration" therefore carries an implicit
+axis qualifier that this grounding makes explicit — stronger on the wire/fluff
+observer, weaker on the peer-decoder — and the Q-10 occupancy work is what the Tor
+path needs *most*, not least.
 
 **G-2 — two re-roll paths, and the churn one fires on exactly the black-hole
 trigger.** (a) *Epoch boundary:* `change_channels`
@@ -2162,21 +2204,30 @@ accepted peer**, not a behavioural-floor pin.
   (behavioural-floor-gated) one. So the stem-eligibility pin must be a **separate,
   stricter layer**, and `anchors = 2 ∥ STEMS = 2` (G-3) must be **broken** — an
   anchor must not auto-confer stem-eligibility.
-- **Q1 is a *measurement* question, not a resolution.** Pinning the eligible set to
-  `K` peers and selecting `STEMS = 2` within it per epoch closes the churn re-roll
-  (G-2b: `update()` would draw from the pinned set, not the enrichable pool), but
-  the *cross-epoch* successor is then drawn from `K` instead of the ~12-peer pool.
-  Whether that helps or harms depends on a fact not yet measured: **does §6.8's
-  intersection bound need the cross-epoch successor drawn from the *full pool*, or
-  only *re-drawn at all*?** For small `K`, a pinned adversary's cross-epoch presence
-  rises from `~g` to `~1/K` conditional on holding a pinned slot — potentially
-  *worse*, and worse for exactly the steady low-rate origin §6.8 identified as the
-  exposed profile. The discriminating measurement — cross-epoch distinct-successor
-  count, pool-drawn vs. pinned-`K`, at fixed `g`-at-pin-formation — turns Q1 from an
-  argument into a number, the standard this arc holds every decision to. **Do not
-  claim pinning "folds occupancy and intersection into one `g` bound" until
-  measured:** a collapse is a simplification only if it is *conservative*; if `K` is
-  small it concentrates risk instead of bounding it.
+- **Q1 — measured (`epoch_layering_pinning_amplifies_direct_successor_exposure`):
+  pinning to a small `K` is *not* free, and the sign is negative on the axis that
+  matters.** Pinning the eligible set to `K` and selecting `STEMS = 2` within it per
+  epoch closes the churn re-roll (G-2b: `update()` draws from the pinned set, not
+  the enrichable pool), but the cross-epoch successor is then drawn from `K` instead
+  of the ~12-pool. The discriminating measurement — an adversary holding a fixed
+  peer count `a`, pool (`D = 12`) vs. pinned (`K`) — resolves the two axes:
+  - **Direct-successor exposure (occupancy / C1, dominant — precision-1 ID):**
+    per-epoch presence is `a/set`, so shrinking `D → K` **amplifies** a captured
+    slot by exactly `D/K` (measured: `K=6` → 2.00×, `K=4` → 3.01×, `K=3` → 4.01×,
+    `K=2` → 6.01×). A single pinned adversary's presence rises from `1/12` to `1/K`,
+    and its P(identified-as-successor over 30 epochs) from 0.93 to ~1.0.
+  - **Cross-epoch diversity (intersection, §6.8, secondary):** the pinned set uses
+    far fewer distinct successors (11.1 → 3.0 at `K=3`), which *slows* the §6.8
+    collapse toward `{origin}` — protective, but it does not offset the dominant
+    precision-1 direct-successor amplification.
+
+  So the earlier temptation — "pinning folds occupancy and intersection into one
+  bound, a simplification" — is **refuted by measurement**: the collapse is not
+  conservative; small `K` *concentrates* the occupancy risk (`D/K`) while only
+  helping the weaker axis. **Q1's resolution:** pinning the eligible set is safe only
+  if `K` is not `≪ D`, **or** the pin-admission bound (`g_max`, Q4) makes holding `a`
+  slots in `K` harder than in `D` by *more than `D/K`*. Admission must pay for the
+  amplification; the layering choice cannot be made without the admission bound.
 
 ---
 
