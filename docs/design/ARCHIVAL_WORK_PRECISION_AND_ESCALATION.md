@@ -28,6 +28,16 @@ the worst latency profile — invisible in early testing, structural at maturity
 which is exactly why they must be settled pre-freeze rather than discovered
 after.
 
+> **⚠️ Revised by §12.7 (A3, Stage 2) — D1's half of this claim is falsified.**
+> The binding variable is the **replication ratio** `archivers × holdings / n`,
+> **not** scale. The "bites at scale" reading silently assumed archivers grow
+> *with* the corpus; under **bootstrap-heavy** population growth (population
+> outrunning corpus) `r` crosses the co-holder cliff **from day one**, and pre-D1
+> then strands **100 %** of the budget — in precisely the window that most needs
+> archivers paid. D1 is therefore **not** latent-then-structural but
+> **earliest-biting**, which *strengthens* its urgency classification rather than
+> softening it. D2's half stands as written.
+
 ---
 
 ## 1. The two defects
@@ -1110,16 +1120,71 @@ paid** — and a large archiver population re-enters the regime at any `n` (60 k
 archivers still cross the cliff at `n = 10 k`). A corpus grows *out* of it; a
 growing archiver population grows *into* it.
 
-**Finding 3 — residual (post-D1), named for the record.** D1 does **not** abolish
-structural zeros; it **scales the cliff with holdings size**, to
-`r > ~1000 × shards_held` (the per-bond micro sum must reach one milli).
-Unreachable for a bulk holder (4,096 shards ⇒ `r > 4 M`), but a 16-shard hobbyist
-still zeroes at `r > ~16 k`. So the residual stranding exposure is **small holders
-in extreme-replication regimes** — a holdings-size effect adjacent to **D3**
-(reopen (e)), and one more reason the D3 round should reason about holdings size
-rather than treat it as incidental.
+**Finding 3 — the residual is a *quantization floor*, not a remaining defect.**
+D1 does **not** abolish structural zeros; it **scales the cliff with holdings
+size**, to `r > ~1000 × shards_held` (the per-bond micro sum must reach one
+milli). Unreachable for a bulk holder (4,096 shards ⇒ `r > 4 M`), but a 16-shard
+hobbyist still zeroes at `r > ~16 k`.
+
+**Name it correctly, or a future round will "fix" it by breaking a frozen
+constant.** Sub-milli work is **unrepresentable** under the genesis-frozen
+`WORK_MILLI_SCALE`; the small-holder zero at extreme replication is therefore the
+**consensus quantization floor**, and its honest reading is a **minimum viable
+holding threshold** — *"below this many shards, at this replication depth, your
+work does not round to a representable unit"* — not a bug awaiting a patch. It is
+**not** on the fix list. Any future proposal to eliminate it is a proposal to
+change `WORK_MILLI_SCALE`, which is frozen; the legitimate levers are holdings
+size and replication depth, both of which the archiver controls.
+
+This is nonetheless a **holdings-size** effect, and it is the third force in the
+triangle the **D3** round (reopen (e)) must resolve — see §12.8.
 
 **Joint with A1.** Stranded budget is **not burden-clearing**: any A1 clearance
 ratio is an upper bound to the extent budget fails to mint. Post-D1 the residual
 is small outside the extreme-replication corner, so A1's verdicts stand; the
 pre-D1 counterfactual is recorded only as the evidence that D1 had to land first.
+
+### 12.8 D3 round charter — the holdings-size force triangle
+
+**Status:** charter only. D3 (§8 reopen (e)) is its own design round on the
+**archival-reward** layer; this section states the problem it must start from, not
+its answer. Filed `FOLLOWUPS.md` (V3.0, pre-genesis).
+
+**Why a charter at all.** D3 entered the record as "the per-bond `curve_milli` cap
+is dodgeable at no bond cost." That framing is true but *partial*: it names one
+force acting on holdings size and would invite a fix aimed at the cap in isolation.
+Stage 2 has since measured **two more** forces pushing the opposite way. A round
+that starts from the cap alone will optimise one corner of an equilibrium.
+
+**The triangle (all three empirically anchored).**
+
+| Force | Direction on holdings | Source | Anchor |
+| --- | --- | --- | --- |
+| **Dodgeable curve cap** — `curve_milli` plateaus **per bond** while `bond_floor` scales **per shard**, so splitting holdings across many small bonds dodges the plateau at *zero* extra bond cost | **↓ pushes holdings down** (splitting pays) | §8 reopen (e); A4 | A4 `hHold` columns: capped-honest doubles the stuffer's ROI (§12.5) |
+| **Milli quantization** — a bond's per-shard micro work must sum to ≥ 1 milli, so below `~n_shards × 1000 < r` a holding scores **zero** | **↑ pushes holdings up** (too small ⇒ unrepresentable) | §12.7 Finding 3 | A3: 16-shard holder zeroes at `r > ~16 k` |
+| **Claim-cost economics** — a reward below the cost of one claim transaction is rationally never claimed, and unclaimed is *supply never created* | **↑ pushes holdings up** (too small ⇒ not worth claiming) | §12.7; `ARCHIVAL_BUDGET_SCHEDULE.md` §4 | A3 `noclm%` column; claim cost priced via the production weight predictor |
+
+**What D3 must produce.** Not "close the dodge" but **the equilibrium holdings
+size these three forces select**, and a cap design whose selected equilibrium is
+the one the network wants — *large enough* to clear quantization and claim cost,
+*without* making bond-splitting the dominant strategy. Note the forces are not
+symmetric: the cap dodge is an **attacker-and-rational-actor** incentive, while the
+other two are **floors on viability**; a fix that only raises the floors would
+push small honest archivers out, which is a reach loss (cf. §12.6's reach-vs-
+durability scoping).
+
+**Candidate levers (from reopen (e); the round should not treat this as closed).**
+Per-**persona**/principal curve application (sum a principal's bonds before the
+curve — makes the cap undodgeable and prices capture in bonded capital);
+per-**bond** minimum floors; **bond-proportional** plateaus.
+
+**Constraints the round inherits.**
+- **`WORK_MILLI_SCALE` is genesis-frozen** — the quantization floor is *not*
+  eliminable; it is a parameter of the problem, not a target (§12.7 Finding 3).
+- **Load-bearing for W9** (§12.5): D3's resolution closes the concentration regime
+  the per-output fee-floor cannot reach, so it is **paired** with reopen (c), not
+  sequenced after it.
+- **A2 (W6) and A6 are held on this round** (§12.4.1): both model the
+  bond-splitting equilibrium D3 is about to change, so they build on its outcome.
+- **Empirical anchor:** the A3 table and the A4 `hHold` sweep are the round's
+  starting data; re-run `--stage2` rather than transcribing numbers.

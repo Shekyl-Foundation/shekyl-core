@@ -1080,13 +1080,15 @@ fn a3_stranding_report(params: &SimParams) {
          large archiver population re-enters at any n. D2-without-D1 would have escalated\n\
          a pool that evaporates ENTIRELY in exactly the bootstrap window that most needs\n\
          archivers paid.\n\
-         RESIDUAL (post-D1, worth naming): D1 does not abolish structural zeros — it\n\
-         SCALES the cliff with holdings, to r > ~1000 x shards_held (the micro sum must\n\
-         reach one milli). Unreachable for a bulk holder (4096 shards ⇒ r > 4M), but a\n\
-         16-shard hobbyist still zeroes at r > ~16k — the 70% zero/no-claim column above.\n\
-         So the residual stranding exposure is SMALL holders in extreme-replication\n\
-         regimes, which is a holdings-size effect adjacent to D3. Joint with A1: stranded\n\
-         budget is not burden-clearing.",
+         RESIDUAL = a QUANTIZATION FLOOR, not a remaining defect: D1 does not abolish\n\
+         structural zeros, it SCALES the cliff with holdings to r > ~1000 x shards_held\n\
+         (the micro sum must reach one milli). Unreachable for a bulk holder (4096 shards\n\
+         ⇒ r > 4M); a 16-shard hobbyist still zeroes at r > ~16k — the 70% column above.\n\
+         Sub-milli work is UNREPRESENTABLE under the frozen WORK_MILLI_SCALE, so the\n\
+         honest name is a MINIMUM VIABLE HOLDING THRESHOLD, not a bug: eliminating it\n\
+         would mean changing a frozen constant. The archiver's levers are holdings size\n\
+         and replication depth. It is the third force in D3's holdings-size triangle.\n\
+         Joint with A1: stranded budget is not burden-clearing.",
     );
 }
 

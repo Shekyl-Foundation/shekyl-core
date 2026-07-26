@@ -100,9 +100,18 @@ sustainability is unaffected by the recalibration.
   bond-proportional plateau. **Pairs with** the reopen-(c) weight-denominated
   per-output fee-floor: the floor prices the fee-flow regime, D3 prices the
   concentration regime — each closes the regime the other cannot (§12.5).
-  **Reopen when** the escalation/fee-floor design round opens; the
-  re-evaluation shape is a joint capture-side + cost-side design pass. Target:
-  V3.0 (pre-genesis; gates the escalation freeze).
+  **Charter: `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.8** — the round must
+  start from the **holdings-size force triangle**, not the cap alone: the
+  dodgeable cap pushes holdings **down** (splitting pays), while **milli
+  quantization** (§12.7 Finding 3 — a genesis-frozen floor, **not** a fixable
+  defect) and **claim-cost economics** both push holdings **up**. D3's output is
+  the *equilibrium holdings size* those three forces select, plus a cap design
+  that selects the one the network wants — noting the asymmetry (the dodge is an
+  incentive; the other two are viability floors, so raising floors alone pushes
+  small honest archivers out = a reach loss). **Reopen when** the
+  escalation/fee-floor design round opens; the re-evaluation shape is a joint
+  capture-side + cost-side design pass. Target: V3.0 (pre-genesis; gates the
+  escalation freeze).
 
 - **WI-RPC-2b deferrals — CLI RESERVED commands awaiting their RPC
   surfaces** (added 2026-07-22; WI-RPC-2b, `feat/cli-rpc-client-surface`;
