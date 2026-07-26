@@ -490,6 +490,23 @@ decision.
   captured, and stakeholder pressure runs one way (higher). Treat the re-pin with
   **GF-7-threshold ceremony**: the adversary-advantage argument is committed
   *before* the number, and the number is decision-anchored.
+- **Reopen (d) runs PARALLEL to the shape freeze — with one named contingency on
+  the *numeric* re-pin (ruled 2026-07-26).** The decomposition: **W9** attacks the
+  **split itself**, so reopen (c) blocks anything touching `compute_burn_split` —
+  no argument. **W10** attacks **what the split purchases**, and neither of its
+  dispositions touches the share function's *form*: grace-tightening is a
+  challenge-protocol change and PoRep is a proof-system change, so the **shape**
+  (monotone · floor · asymptote-exists · banded-PL · no controller) freezes without
+  waiting on (d).
+  **The contingency — the PoRep branch reaches back into the numerics.** If the
+  joint round takes PoRep, per-replica **sealing cost** is added to honest archival,
+  which changes **A1's burden model**, which changes **which asymptote clears
+  scenario 9** — the exact arithmetic the numeric pin reads. The already-ratified
+  freeze posture absorbs this: *shape genesis-frozen now, numerics provisional to
+  the testnet re-pin*. So: **if the joint round takes the PoRep branch, A1 re-runs
+  with sealing costs BEFORE the asymptote number is pinned.** This belongs in the
+  ceremony because the re-pin **is** the capture point, and an unpriced burden
+  change is precisely what slips through a captured one.
 - **Reopens to name in the frozen text:**
   - (a) redo the width and error-bound arithmetic (F-B/F-C) if
     `MAX_HOLDINGS_SHARDS` is ever raised;
@@ -700,6 +717,20 @@ if so, in which regimes and under which storage-cost assumption?"* Its output is
 a **recommended (shape, asymptote) envelope** over the §6.1-conformant family,
 plus the wargame verdicts (W6/W9/W10). Stage 3 picks the number from the
 survivors under the §11.4 ceremony and implements it in `compute_burn_split`.
+
+> **⚠️ Amended (Stage-2 close) — "picks from the survivors" is false as written.**
+> Stage 2's finding is that **no candidate survives unconditionally**: A4/W9 and
+> A5/W10 both **FAIL** (§12.5, §12.6), so the recommended envelope is *conditional*
+> on its named companions, not a survivor set. **Stage 3's entry condition, stated
+> explicitly:** survivors exist **conditional on reopen (c) landed** (the
+> weight-denominated per-output fee-floor — load-bearing twice, for W9's profit
+> gate *and* §6.0's anti-swing property). **Stage 3 opens when that condition is
+> discharged, not before.** Reopen (d) runs parallel to the *shape* freeze, with
+> the PoRep contingency on the *numeric* re-pin (§8).
+> **Lane structure:** the **D3 implementing round** (plateau deletion + admission
+> predicate — the *reward path*) and the **(c) design round** (the fee floor — the
+> *weight/fee model*) are **different consensus surfaces**, both under rule 26,
+> **neither blocking the other**; Stage 3 waits on **both**.
 Stage 2 does **not** pin the asymptote number, and does **not** write consensus
 code — if it writes any Rust, it is `shekyl-economics-sim` only.
 
@@ -1684,3 +1715,49 @@ the slew rate is **reported**, not gated. This is the third instance of the same
 discipline in this arc (always-split as "rational"; the two-point partition proof;
 now an invented pass/fail bound) — **separating what the spec requires from what
 the test author assumed is how a made-up number gets caught before it freezes.**
+
+### 12.11 Reopen-(c) round charter — the per-output fee-floor
+
+**Status:** charter. Reopen (c) fired at §12.5; this states the problem so the
+round opens **well-posed** rather than as *"add a floor"*. Runs **parallel** to
+the D3 implementing round (different consensus surface — weight/fee model vs the
+reward path); **Stage 3 waits on both** (§12.0).
+
+**The design problem A4 actually measured.** `fee×→1` spans **2.8 → 17.8** across
+regimes because attack revenue rides **burn flow × share slope** while a flat
+per-output cost rides **neither**. Sized for late-tail, such a floor over-charges
+benign multi-output traffic ~**6×** — a cost §12.4 already refuses. So *"pick a
+number"* is not a well-posed task: **no single constant closes every regime**, and
+that is a measured property, not a tuning difficulty.
+
+**Seed candidate — a slope-indexed virtual-weight surcharge.** Let the floor scale
+with **what the attack rides**: a per-output **virtual-weight** surcharge indexed
+to the **escalation function's own local slope at current `n`**. The same function
+then has **two consumers** — it sets the staker share *and* prices the marginal
+output that moves `n` — so **cost tracks marginal capture by construction** rather
+than by calibration. Properties worth testing in the round's adversarial pass:
+
+- **Weight-denominated**, so it rides the fee market instead of rotting as a frozen
+  atomic constant (the Bitcoin-dust-limit failure), and flows through the existing
+  weight/fee/burn machinery with **zero new consensus fields** — `predict_weight`
+  and `Transaction::weight()` each gain one term, and the D-1 hoist already gives
+  both consensus-adjacent code and the sim one shared predictor.
+- **Self-closing across regimes** if the indexing holds: where the slope is flat
+  (past the knee) the surcharge vanishes and benign traffic is untaxed; where the
+  slope is steep the surcharge rises with exactly the capture it prices.
+- **Falsifiable**: re-run A4 with the surcharge live and require `ROI < 1`
+  *everywhere* in the sweep — the same gate, now against a mechanism rather than a
+  constant.
+
+**Inherited as settled — the D3 pairing is DISCHARGED, not pending.** The charter's
+earlier *"paired with D3"* language predates D3's resolution and must be restated:
+D3 resolved to **deletion + admission predicate** (§12.9), so the capture side is
+now the **total-work invariance itself** — `prem = 1`, proportional capture,
+**structural** rather than mechanism-dependent. Consequently **(c)'s burden is
+exactly and only the proportional-capture regime**, whose numbers A4's realistic
+end has **already measured**. The round inherits that as input; it does not
+re-litigate the capture side.
+
+**Constraints.** Genesis-freeze-class (weight is consensus); rule 26 design round;
+the fee-floor is **load-bearing twice** — W9's profit gate *and* §6.0's anti-swing
+property (§6.0 amendment), so one missing mechanism is two failures.
