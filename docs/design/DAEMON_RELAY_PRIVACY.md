@@ -3013,3 +3013,75 @@ against consensus, and never let the second move the first. That is the differen
 from the 39 s ghost — not a boundary the derivation "names and crosses," but a
 boundary the derivation *refuses to know about* while the layer above it does the
 reconciliation the paper always assumed some layer would.
+
+---
+
+## 16. RP-2a design round — `connection_map` → Rust (the faithful port)
+
+Short design leading the RP-2a implementation commits on `feat/rp2a-connection-map-rust`.
+
+**Scope (the ratified split, §3).** RP-2a ports the `connection_map` *logic* to
+Rust; the *selection/reputation* behaviour (the §12.5 W3c churn-stable alternate,
+the Q-10 `g_max` mechanism) is RP-2b. The two are separable at the **test
+surface**, not by contradiction: the `dandelionpp_map` gtests pin **outcome
+invariants** — size, non-nil refill drawn from the live set, even load, mapping
+consistency for unaffected links — but they read the mapper's *own* refill choice
+(`newly_mapped = *(++mapper.begin())`, [net.cpp:1911]) and never pin it to a
+specific fresh `current.back()`, and no test drops the same slot twice. So the
+W3c churn-stable change is invisible to them and needs its own repeated-churn
+sibling test (RP-2b), while the faithful port rides them unchanged.
+
+**Re-census (§12.11 first move — done).** The C++ RP-2/3/4 surface (`src/net/`,
+`levin_notify.cpp`, `tx_pool.cpp`, `src/p2p/`) is **unmoved** since RP-1 — the
+parallel staking-consensus work landed in Rust, not here — so the re-census is
+line-number verification, and every port anchor holds at source on `origin/dev`:
+`CRYPTONOTE_DANDELIONPP_STEMS = 2` (config.h:108, cap = STEMS−1 = 1); the
+fresh-draw-on-churn refill at [dandelionpp.cpp:160]; outbound-only fluff on Tor/I2P
+at [levin_notify.cpp:448]; fluff-on-expiry at [cryptonote_core.cpp:1087].
+
+**Rust owns the logic; C++ holds an opaque handle (rules 20/40).** `stem_map.rs`
+already implements the map. RP-2a reimplements `dandelionpp.cpp`'s ~210 lines of
+logic as **forwarding calls** to a map FFI in `shekyl-ffi`, and keeps
+`dandelionpp.h`'s class ABI so `levin_notify.cpp` and the `net.cpp` gtests compile
+**unchanged**. `levin_notify` must hold the map through *some* C++ handle in either
+framing — it cannot hold a bare Rust value — so preserving the existing
+`connection_map` ABI as that handle-wrapper costs **no extra C++** and buys the
+unchanged-gtest oracle. It is transitional FFI-boundary glue with a named removal
+target — **RP-3, when `levin_notify` ports** (rule 15: smallest scope, named
+deletion target). No map *logic* is reimplemented in C++.
+
+**The map FFI surface** — `ConnectionId([u8; 16])` (a Boost-UUID memcpy); every
+call site is `\pre` inside the zone strand, so the handle is single-threaded by
+external serialisation and needs no internal lock:
+
+| C++ call site | FFI |
+| --- | --- |
+| construct `{connections, stems}` (:714) | `map_new(ids, n, stems) -> *handle` |
+| `clone()` in the copy ctor (:600) | `map_clone(*handle) -> *handle` (deep copy) |
+| move-assign into the zone (:614) | pointer transfer — no FFI |
+| `update(current) -> bool` (:534) | `map_update(*handle, ids, n) -> bool` |
+| `get_stem(source) -> uuid` (:565) | `map_get_stem(*handle, id, out) -> bool` |
+| `size()` (:514) + `begin()/end()` iteration (:520) | `map_snapshot(*handle, buf, cap) -> count` |
+| destructor | `map_free(*handle)` |
+
+`get_stem` mutates (`in_mapping_`/`usage_count_` on a miss); the strand `\pre` is
+the ownership rule that keeps that safe across the FFI.
+
+**Acceptance — run the oracle *and* keep the survivor (do both).**
+
+1. The 6 `dandelionpp_map` gtests ([net.cpp:1787–2140]) pass **unchanged** against
+   the Rust-backed map — the migration oracle proving behavioural identity to the
+   deleted logic (the same C++-as-oracle discipline as the consensus port).
+   Translating them *without* first running them unchanged would validate the port
+   against a test written *from* the port.
+2. The same 6 gtests **translated to Rust** against `stem_map.rs` pass — the
+   survivor. The unchanged C++ gtests may then be retired (here or at RP-3,
+   whichever keeps the diff clean).
+3. The RP-1 `a_slot_emptied_by_an_earlier_update_is_backfilled_later` regression
+   still holds.
+
+**Handoff to RP-2b.** The W3c churn-stable alternate (§12.5) + Q-10 selection, its
+own design round, its own repeated-induced-churn sibling test + the `g`-bound, and
+the three §12.11 obligations: the background-failure-rate measurement, the
+cooldown/threshold **reopen-checkpoint** (not a confirm-only sweep), and the
+capability-accounting guard for observables the wiring newly exposes.
