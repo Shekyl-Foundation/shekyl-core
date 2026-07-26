@@ -15,6 +15,8 @@
 //! Output convention matches the rest of the binary: machine JSON to stdout,
 //! the human-readable table to stderr.
 
+use std::fmt;
+
 use serde::Serialize;
 use std::io::Write;
 
@@ -364,19 +366,23 @@ fn a1_candidate_result(
 /// opportunity-cost-rate band. `budget = emission_leg + fee_burn·share(n)`;
 /// `burden = locked-bond opportunity cost (binding) + minor storage`. Prints a
 /// stderr table, returns the data.
-fn a1_clearance_report(params: &SimParams) -> Vec<A1ScenarioResult> {
-    eprintln!(
+fn a1_clearance_report(
+    out: &mut impl fmt::Write,
+    params: &SimParams,
+) -> Result<Vec<A1ScenarioResult>, fmt::Error> {
+    writeln!(out,
         "\nA1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.\n\
          budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R{R} x n x rate.\n\
          >=1.0 keeps the staker whole every sustained year. Columns = opp-cost rate {RATES:?} (10% binding).\n\
          Storage is a minor add-on (F-G: ~100x smaller); the binding term is PRICE-INDEPENDENT (SKL vs SKL).",
         R = REPLICAS_PER_SHARD,
         RATES = OPP_COST_RATE_BAND,
-    );
-    eprintln!(
+    )?;
+    writeln!(
+        out,
         "{:<20} {:>12}   {:>24}   {:>24}",
         "scenario", "best-cand", "flat-25 ratio @rate", "best-cand ratio @rate"
-    );
+    )?;
 
     let mut results = Vec::new();
     for config in all_scenarios(params) {
@@ -400,7 +406,8 @@ fn a1_clearance_report(params: &SimParams) -> Vec<A1ScenarioResult> {
             })
             .cloned()
             .unwrap_or_else(|| flat25.clone());
-        eprintln!(
+        writeln!(
+            out,
             "{:<20} {:>12}   {:>7.2} {:>7.2} {:>7.2}   {:>7.2} {:>7.2} {:>7.2}",
             trunc(&config.name, 20),
             best.asymptote_pct
@@ -412,7 +419,7 @@ fn a1_clearance_report(params: &SimParams) -> Vec<A1ScenarioResult> {
             best.min_ratio_by_rate[0],
             best.min_ratio_by_rate[1],
             best.min_ratio_by_rate[2],
-        );
+        )?;
 
         results.push(A1ScenarioResult {
             scenario: config.name.clone(),
@@ -421,13 +428,14 @@ fn a1_clearance_report(params: &SimParams) -> Vec<A1ScenarioResult> {
             candidates,
         });
     }
-    eprintln!(
+    writeln!(
+        out,
         "  -> rate cols each = {:?} (10% binding, last). The D2 case is where the\n\
          best candidate clears (>=1.0) at 10% while flat-25 does NOT — escalation\n\
          earning its keep. A4/A5 then drop any winner that fails W9/W10.",
         OPP_COST_RATE_BAND
-    );
-    results
+    )?;
+    Ok(results)
 }
 
 fn trunc(s: &str, n: usize) -> String {
@@ -443,40 +451,45 @@ fn trunc(s: &str, n: usize) -> String {
 /// `frozen_segment_count`. Shows the shapes A1 will measure for clearance; the
 /// flat 25% status quo is the first column's `n = 0` value (all candidates floor
 /// there).
-fn print_escalation_family() {
-    eprintln!(
+fn print_escalation_family(out: &mut impl fmt::Write) -> fmt::Result {
+    writeln!(
+        out,
         "\nEscalation candidate family (§6.1 / DQ-2D) — staker share % vs n = frozen shards:\n\
          (floor 25% at n=0, saturates to asymptote at the knee; all asymptotes < 100%)"
-    );
-    eprint!("{:>8} {:>7}", "asympt%", "knee");
+    )?;
+    write!(out, "{:>8} {:>7}", "asympt%", "knee")?;
     for n in ESCALATION_PREVIEW_N {
-        eprint!("  n={n:>7}");
+        write!(out, "  n={n:>7}")?;
     }
-    eprintln!();
+    writeln!(out)?;
     // Status-quo baseline: the frozen 25% share every candidate is measured
     // against in A1 (does escalation clear where the flat share does not?).
-    eprint!("{:>8} {:>7}", "FLAT", "-");
+    write!(out, "{:>8} {:>7}", "FLAT", "-")?;
     for n in ESCALATION_PREVIEW_N {
-        eprint!("  {:>9.1}", flat_25().share_fraction(n) * 100.0);
+        write!(out, "  {:>9.1}", flat_25().share_fraction(n) * 100.0)?;
     }
-    eprintln!();
+    writeln!(out)?;
     for c in family() {
-        eprint!(
+        write!(
+            out,
             "{:>8.0} {:>7}",
             c.asymptote as f64 / 10_000.0,
             c.knee_shards
-        );
+        )?;
         for n in ESCALATION_PREVIEW_N {
-            eprint!("  {:>9.1}", c.share_fraction(n) * 100.0);
+            write!(out, "  {:>9.1}", c.share_fraction(n) * 100.0)?;
         }
-        eprintln!();
+        writeln!(out)?;
     }
-    eprintln!(
+    writeln!(
+        out,
         "  -> Stage 2 sweeps all {} candidates; A1 keeps those that clear the\n\
          burden under 0%/yr Kryder, A4/A5 drop those that fail W9/W10; Stage 3\n\
          freezes the survivor's number.",
         family().len()
-    );
+    )?;
+
+    Ok(())
 }
 
 /// A4 (W9) **cost side** — the leaf-stuffer's cost to inflate `n` by one shard,
@@ -488,9 +501,10 @@ fn print_escalation_family() {
 /// `n` is sampled as **frozen shards**; the curve-tree depth (hence FCMP proof
 /// cost) rides the total leaf count `n · SEGMENT_LEAF_COUNT`, so the cost RISES
 /// with chain size — cheapest early (the binding direction, §11.3).
-fn print_stuffer_cost_curve() {
+fn print_stuffer_cost_curve(out: &mut impl fmt::Write) -> fmt::Result {
     let rep = rucknium_shards_equivalent();
-    eprintln!(
+    writeln!(
+        out,
         "\nA4 (W9) leaf-stuffer cost — 1-in/{OUT}-out, min weight-fee @ {FPB} atomic/byte:\n\
          Monero-replication anchor (DQ-2C): the March-2024 spam bought ~{GB:.2} GB / {DAYS} days\n\
          for ~{XMR:.1} XMR — that output volume is only ~{REP} Shekyl shards' worth of leaves.\n\
@@ -501,11 +515,12 @@ fn print_stuffer_cost_curve() {
         DAYS = RUCKNIUM_DURATION_DAYS,
         XMR = RUCKNIUM_SPAM_FEES_XMR,
         REP = rep,
-    );
-    eprintln!(
+    )?;
+    writeln!(
+        out,
         "{:<14} {:>10} {:>16} {:>18}",
         "chain n(shards)", "tree_depth", "fee/tx (SKL)", "cost/shard (SKL)"
-    );
+    )?;
     for n_shards in ESCALATION_PREVIEW_N {
         // n=0 has no tree; sample the first shard so the depth/cost are defined.
         let n_shards = n_shards.max(1);
@@ -513,13 +528,19 @@ fn print_stuffer_cost_curve() {
         let depth = tree_depth_for_leaves(chain_leaves);
         let fee_tx_skl = stuffer_tx_fee_atomic(depth) as f64 / COIN;
         let cost_shard_skl = leaf_stuffer_cost_per_shard_atomic(chain_leaves) as f64 / COIN;
-        eprintln!("{n_shards:<14} {depth:>10} {fee_tx_skl:>16.6} {cost_shard_skl:>18.4}",);
+        writeln!(
+            out,
+            "{n_shards:<14} {depth:>10} {fee_tx_skl:>16.6} {cost_shard_skl:>18.4}",
+        )?;
     }
-    eprintln!(
+    writeln!(
+        out,
         "  -> cost/shard rises with chain depth (deeper tree = larger FCMP proof).\n\
          The A4 ROI gate below weighs this against the escalation Delta-pool a\n\
          stuffing staker captures: a survivor of A1 must ALSO price the stuffer out."
-    );
+    )?;
+
+    Ok(())
 }
 
 // ── A4 (W9) ROI gate — cp4b (served-work capture + coupled burden) ───────────
@@ -834,8 +855,12 @@ fn a4_candidate_result(
 /// A4 (W9) attacker-ROI gate across the scenario set (§12.2). Served-work capture
 /// with the §6.2 bond coupling; the gate is **ROI < 1 everywhere** — the
 /// executable form of "stuffing it funds it".
-fn a4_stuffing_report(params: &SimParams) -> Vec<A4ScenarioResult> {
-    eprintln!(
+fn a4_stuffing_report(
+    out: &mut impl fmt::Write,
+    params: &SimParams,
+) -> Result<Vec<A4ScenarioResult>, fmt::Error> {
+    writeln!(
+        out,
         "\nA4 — W9 output-stuffing ROI (§12.2, DQ-2C): SERVED-WORK capture (the D2 pool\n\
          is distributed by served work per bond, NOT by stake). Attacker serves the Δn\n\
          stuffed shards at r=1 and captures reward_share_floor(pool(n+Δn), their work,\n\
@@ -848,11 +873,12 @@ fn a4_stuffing_report(params: &SimParams) -> Vec<A4ScenarioResult> {
         DELTAS = A4_DELTA_SWEEP,
         H = A4_HORIZON_BAND,
         RATE = A4_OPP_RATE,
-    );
-    eprintln!(
+    )?;
+    writeln!(
+        out,
         "{:<20} {:>10} {:>14} {:>14} {:>18}",
         "scenario", "flat-25", "best@hHold4", "best@hHold512", "worst (n/Δn/H)"
-    );
+    )?;
 
     let mut results = Vec::new();
     let mut decomp_rows: Vec<(String, A4Decomp)> = Vec::new();
@@ -880,7 +906,8 @@ fn a4_stuffing_report(params: &SimParams) -> Vec<A4ScenarioResult> {
             .map(|c| c.roi_by_hholdings[last])
             .fold(0.0_f64, f64::max);
         let (wn, wd, whz) = worst_real.worst_at;
-        eprintln!(
+        writeln!(
+            out,
             "{:<20} {:>10.4} {:>14.4} {:>14.4} {:>10}/{:>5}/{:>2}",
             trunc(&config.name, 20),
             flat25.roi_by_hholdings[0],
@@ -889,7 +916,7 @@ fn a4_stuffing_report(params: &SimParams) -> Vec<A4ScenarioResult> {
             wn,
             wd,
             whz,
-        );
+        )?;
         if let Some(d) = worst_real.worst_decomp {
             decomp_rows.push((config.name.clone(), d));
         }
@@ -902,7 +929,8 @@ fn a4_stuffing_report(params: &SimParams) -> Vec<A4ScenarioResult> {
     let any_fail = results
         .iter()
         .any(|r| !r.flat25.passes || r.candidates.iter().any(|c| !c.passes));
-    eprintln!(
+    writeln!(
+        out,
         "  -> W9 gate (realistic hHold=4 end): {}. Flat-25 = 0 (no share lever): the\n\
          premium is purely the escalation's. A steeper share (higher asymptote /\n\
          tighter knee) lets the marginal stuffed shard's Δpool slice out-earn its\n\
@@ -914,9 +942,9 @@ fn a4_stuffing_report(params: &SimParams) -> Vec<A4ScenarioResult> {
         } else {
             "PASS"
         }
-    );
-    a4_print_decomposition(&decomp_rows);
-    results
+    )?;
+    a4_print_decomposition(out, &decomp_rows)?;
+    Ok(results)
 }
 
 /// Decompose the realistic-end worst config per scenario (the row the fee-floor
@@ -927,8 +955,9 @@ fn a4_stuffing_report(params: &SimParams) -> Vec<A4ScenarioResult> {
 /// The multiplier's wide spread across scenarios is the evidence that a per-
 /// output fee-floor alone cannot close every regime: revenue rides volume, the
 /// fee rides rate. The `ROI(respond)` column strips the r=1-forever assumption.
-fn a4_print_decomposition(rows: &[(String, A4Decomp)]) {
-    eprintln!(
+fn a4_print_decomposition(out: &mut impl fmt::Write, rows: &[(String, A4Decomp)]) -> fmt::Result {
+    writeln!(
+        out,
         "\nA4 decomposition — realistic-end (hHold=4) worst config per scenario. Size the\n\
          remedy against the DOMINANT term, not the ratio (§12.2, per the D-2 retraction):\n\
          revenue = Δpool-flow x capture; cost = fees + coupled bond. 'prem' = capture /\n\
@@ -937,8 +966,9 @@ fn a4_print_decomposition(rows: &[(String, A4Decomp)]) {
          (r:1→{R} after {LAG}y lag; first-order, NOT gating).",
         R = REPLICAS_PER_SHARD,
         LAG = A4_RESPONSE_LAG_YEARS,
-    );
-    eprintln!(
+    )?;
+    writeln!(
+        out,
         "{:<20} {:>13} {:>7} {:>5} {:>11} {:>9} {:>7} {:>8} {:>9}",
         "scenario",
         "Δpool/yr SKL",
@@ -949,9 +979,10 @@ fn a4_print_decomposition(rows: &[(String, A4Decomp)]) {
         "bond",
         "fee×→1",
         "ROI(resp)"
-    );
+    )?;
     for (name, d) in rows {
-        eprintln!(
+        writeln!(
+            out,
             "{:<20} {:>13.1} {:>6.2}% {:>5.1} {:>11.1} {:>9.1} {:>7.2} {:>8.1} {:>9.2}",
             trunc(name, 20),
             d.dpool_skl_per_year,
@@ -962,9 +993,10 @@ fn a4_print_decomposition(rows: &[(String, A4Decomp)]) {
             d.bond_skl,
             d.fee_mult_to_close,
             d.roi_market_responds,
-        );
+        )?;
     }
-    eprintln!(
+    writeln!(
+        out,
         "  -> Read: prem≈1.0 at the realistic end ⇒ NO concentration premium — the attack is\n\
          pure fee-flow-volume leverage (cheap stuffing unlocks a large Δpool; the attacker\n\
          takes only their proportional slice, but the pool dwarfs the stuffing cost). The\n\
@@ -975,7 +1007,9 @@ fn a4_print_decomposition(rows: &[(String, A4Decomp)]) {
          the cross-regime spread. The D3 dodge is load-bearing at the CAPPED-honest end\n\
          (prem>1, ROI ~2x higher); its undodgeable-cap fix prices concentration in bonded\n\
          capital THERE. So the pair: fee-floor for the fee-flow regime, D3 for the capped one."
-    );
+    )?;
+
+    Ok(())
 }
 
 /// Archiver-population sizes swept by A3 — shallow (`r` below the pre-fix
@@ -991,7 +1025,7 @@ const A3_ARCHIVER_BAND: [u64; 3] = [2_000, 20_000, 60_000];
 /// that is never claimed is *supply never created* (`ARCHIVAL_BUDGET_SCHEDULE.md`
 /// §4). The claim cost is one transaction at the fee floor, priced through the
 /// production weight predictor (`calibration`), not a guessed constant.
-fn a3_stranding_report(params: &SimParams) {
+fn a3_stranding_report(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
     // One claim tx (1-in/2-out) at the chain's depth and the fee floor.
     let claim_cost_atomic = {
         let n_in = shekyl_tx_weight::InputCount::clamped(1);
@@ -1004,7 +1038,8 @@ fn a3_stranding_report(params: &SimParams) {
         }
         fee
     };
-    eprintln!(
+    writeln!(
+        out,
         "\nA3 — budget stranding (§12.2): fraction of budget(E) that NEVER MINTS.\n\
          budget is a minting ENTITLEMENT — unclaimed past MAX_CLAIM_AGE_W=26 is \"supply\n\
          never created\" (ARCHIVAL_BUDGET_SCHEDULE §4). A class claims iff its reward\n\
@@ -1014,8 +1049,9 @@ fn a3_stranding_report(params: &SimParams) {
          and a structural-zero cohort's slice never mints.",
         CC = claim_cost_atomic as f64 / COIN,
         FPB = crate::calibration::FEE_PER_BYTE_ATOMIC,
-    );
-    eprintln!(
+    )?;
+    writeln!(
+        out,
         "{:<10} {:>8} {:>8}  {:>10} {:>9}  {:>11} {:>9} {:>10}",
         "archivers",
         "mean_r",
@@ -1025,7 +1061,7 @@ fn a3_stranding_report(params: &SimParams) {
         "post strand",
         "post zero%",
         "post noclm%"
-    );
+    )?;
 
     // Sweep the CORPUS TRAJECTORY, not one year: replication is
     // `archivers · holdings / n`, so the pre-fix co-holder cliff is an EARLY-chain
@@ -1035,7 +1071,7 @@ fn a3_stranding_report(params: &SimParams) {
     let aggs = a1_year_aggs(params, cfg);
     let years: Vec<&A1YearAgg> = aggs.iter().filter(|a| a.n > 0).collect();
     if years.is_empty() {
-        return;
+        return Ok(());
     }
     let picks = [0usize, years.len() / 2, years.len() - 1];
     let epy = crate::proxy::epochs_per_year();
@@ -1062,7 +1098,8 @@ fn a3_stranding_report(params: &SimParams) {
                 crate::stranding::RATIONAL_CLAIM_CADENCE_EPOCHS,
                 crate::stranding::Scoring::PostD1,
             );
-            eprintln!(
+            writeln!(
+                out,
                 "{:<10} {:>8} {:>8}  {:>9.2}% {:>8.1}%  {:>10.2}% {:>8.1}% {:>9.1}%  {label}",
                 archivers,
                 pre.mean_r,
@@ -1072,10 +1109,11 @@ fn a3_stranding_report(params: &SimParams) {
                 post.stranded_fraction * 100.0,
                 post.zero_work_fraction * 100.0,
                 post.non_claiming_fraction * 100.0,
-            );
+            )?;
         }
     }
-    eprintln!(
+    writeln!(
+        out,
         "  -> Read: the §1 Stage-0 claim is CONFIRMED, and stronger than stated — where\n\
          mean_r crosses the co-holder cliff (~1000) pre-D1 strands 100% of budget,\n\
          not 'partly': EVERY class floors to zero, so the whole epoch's entitlement is\n\
@@ -1093,18 +1131,20 @@ fn a3_stranding_report(params: &SimParams) {
          would mean changing a frozen constant. The archiver's levers are holdings size\n\
          and replication depth. It is the third force in D3's holdings-size triangle.\n\
          Joint with A1: stranded budget is not burden-clearing.",
-    );
+    )?;
+
+    Ok(())
 }
 
 /// **OQ-4** (D3 round §12.8) — re-run the A4 gate under **R2 (plateau deleted)**.
 /// Prediction: the capped column vanishes, the realistic-end numbers become the
 /// only numbers, and `fee_mult_to_close` is unchanged — because reopen (c) was
 /// sized against the realistic end already.
-fn oq4_deletion_recheck(params: &SimParams) {
+fn oq4_deletion_recheck(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
     let cfg = &all_scenarios(params)[0];
     let aggs = a1_year_aggs(params, cfg);
     let Some(a) = aggs.iter().rfind(|a| a.n > 0) else {
-        return;
+        return Ok(());
     };
     let curve = family()
         .iter()
@@ -1112,7 +1152,8 @@ fn oq4_deletion_recheck(params: &SimParams) {
         .copied()
         .unwrap_or_else(flat_25);
     let (delta, horizon) = (10_000u64, 10u64);
-    eprintln!(
+    writeln!(
+        out,
         "\nOQ-4 (D3 round §12.8) — A4 gate under PLATEAU DELETION (scenario {SC}, n={N},\n\
          steepest candidate, Δn={D}, H={H}y). Prediction: the capped column vanishes and\n\
          the realistic-end numbers become the only numbers.",
@@ -1120,8 +1161,12 @@ fn oq4_deletion_recheck(params: &SimParams) {
         N = a.n,
         D = delta,
         H = horizon,
-    );
-    eprintln!("{:<26} {:>12} {:>14}", "honest regime", "ROI", "fee x -> 1");
+    )?;
+    writeln!(
+        out,
+        "{:<26} {:>12} {:>14}",
+        "honest regime", "ROI", "fee x -> 1"
+    )?;
     for (label, sigma) in [
         (
             "kept, small bonds (h=4)",
@@ -1137,12 +1182,14 @@ fn oq4_deletion_recheck(params: &SimParams) {
         ),
     ] {
         let d = a4_decompose(a.whole_burn_atomic, a.n, sigma, &curve, delta, horizon);
-        eprintln!(
+        writeln!(
+            out,
             "{:<26} {:>12.4} {:>14.1}",
             label, d.roi, d.fee_mult_to_close
-        );
+        )?;
     }
-    eprintln!(
+    writeln!(
+        out,
         "  -> Read: deletion reproduces the small-bond row exactly — under R2 there is no\n\
          cap to dodge, so the honest-holdings axis stops mattering and A4 has ONE number\n\
          per regime instead of a naive/rational spread. fee_mult_to_close is unchanged\n\
@@ -1150,13 +1197,16 @@ fn oq4_deletion_recheck(params: &SimParams) {
          (it was sized there already). The capped row is what deletion removes: a\n\
          penalty that fell on non-optimizing honest archivers and doubled the stuffer's\n\
          relative capture."
-    );
+    )?;
+
+    Ok(())
 }
 
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
 /// stdout, a human-readable summary to stderr.
-pub fn run_stage2(params: &SimParams) {
-    eprintln!(
+pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
+    writeln!(
+        out,
         "Stage-2 archival burden trajectory (§12.1 checkpoint 1)\n\
          outputs = tx_volume x {OUTPUTS_PER_TX_NORMAL:.0} (1in/2out normal traffic); \
          n = frozen_segment_count(cumulative outputs)\n\
@@ -1164,43 +1214,46 @@ pub fn run_stage2(params: &SimParams) {
          base = {BASE:.0e} $/B/yr; funding + clearance (A1) land next\n",
         SHARD = crate::burden::SHARD_BYTES / 1.0e6,
         BASE = BASE_STORAGE_FIAT_PER_BYTE_YEAR,
-    );
-    eprintln!("Kryder band swept (DQ-2B):");
+    )?;
+    writeln!(out, "Kryder band swept (DQ-2B):")?;
     for k in KryderRate::BAND {
-        eprintln!("  - {}", k.label());
+        writeln!(out, "  - {}", k.label())?;
     }
-    eprintln!();
-    eprintln!(
+    writeln!(out)?;
+    writeln!(
+        out,
         "{:<22} {:>6} {:>14} {:>10} {:>16}",
         "scenario", "years", "final_outputs", "final_n", "final_burden$/yr@0%"
-    );
+    )?;
 
     let mut trajectories: Vec<BurdenTrajectory> = Vec::new();
     for config in all_scenarios(params) {
         let traj = burden_trajectory(params, &config);
         let final_burden = traj.years.last().map_or(0.0, |y| y.burden_fiat_stall);
         let final_outputs = traj.years.last().map_or(0, |y| y.cumulative_outputs);
-        eprintln!(
+        writeln!(
+            out,
             "{:<22} {:>6} {:>14} {:>10} {:>16.2}",
             traj.scenario, traj.sim_years, final_outputs, traj.final_frozen_shards, final_burden,
-        );
+        )?;
         trajectories.push(traj);
     }
 
-    eprintln!(
+    writeln!(
+        out,
         "\nReading: `final_n` is the D2 operand at horizon; `final_burden` is the\n\
          whole-corpus annual storage cost under the BINDING 0%/yr Kryder case.\n\
          Absolute $ is conditional on the base-price + SKL/fiat bands (N-1); the\n\
          robust signal is the burden *trajectory* vs the funding decay (A1, next)."
-    );
+    )?;
 
-    print_escalation_family();
-    print_stuffer_cost_curve();
-    let a1 = a1_clearance_report(params);
-    a3_stranding_report(params);
-    crate::distribution::oq1_probe_report();
-    crate::admission::oq2_report(&A3_ARCHIVER_BAND, &[1_011, 6_066, 10_110]);
-    oq4_deletion_recheck(params);
+    print_escalation_family(out)?;
+    print_stuffer_cost_curve(out)?;
+    let a1 = a1_clearance_report(out, params)?;
+    a3_stranding_report(out, params)?;
+    crate::distribution::oq1_probe_report(out)?;
+    crate::admission::oq2_report(out, &A3_ARCHIVER_BAND, &[1_011, 6_066, 10_110])?;
+    oq4_deletion_recheck(out, params)?;
     // A2 (W6) — now unblocked by the D3 closure. Budget from the A1-conditional
     // envelope: the strongest surviving candidate's pool at the scenario's n.
     {
@@ -1217,10 +1270,11 @@ pub fn run_stage2(params: &SimParams) {
                 .saturating_add(mul_scale(a.whole_burn_atomic, best.share(a.n)));
             let per_epoch = (pool as f64 / crate::proxy::epochs_per_year()) as u64;
             crate::redistribution::a2_report(
+                out,
                 per_epoch,
                 20_000,
                 &format!("{} n={}", trunc(&cfg.name, 18), a.n),
-            );
+            )?;
         }
     }
     {
@@ -1239,9 +1293,9 @@ pub fn run_stage2(params: &SimParams) {
             daa_target_seconds: EconomicParams::default().daa_target_seconds,
         };
         let br = base_block_reward(params.money_supply / 2, &econ).unwrap_or(0);
-        crate::swing::a6_report(&ESCALATION_PREVIEW_N, br);
+        crate::swing::a6_report(out, &ESCALATION_PREVIEW_N, br)?;
     }
-    let a4 = a4_stuffing_report(params);
+    let a4 = a4_stuffing_report(out, params)?;
 
     // A5 (W10): the L14 slash forfeits the forgone post-D1/D2 reward stream — of
     // the SLASHED SHARD only, matching the per-shard slash scope
@@ -1272,7 +1326,7 @@ pub fn run_stage2(params: &SimParams) {
     }
     // The absorption DP prices the stream forgone FROM the slash epoch, so it
     // takes the per-epoch rate rather than a horizon lump.
-    crate::proxy::a5_proxy_report(max_shard_reward_per_epoch_skl, SKL_FIAT_PRICE_BAND[1]);
+    crate::proxy::a5_proxy_report(out, max_shard_reward_per_epoch_skl, SKL_FIAT_PRICE_BAND[1])?;
 
     let report = Stage2Report {
         burden_trajectories: trajectories,
@@ -1283,9 +1337,12 @@ pub fn run_stage2(params: &SimParams) {
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(json.as_bytes()).expect("write failed");
     stdout.write_all(b"\n").expect("write failed");
-    eprintln!(
+    writeln!(
+        out,
         "\nStage-2 (burden trajectory + escalation family + A1 clearance + A4 W9 ROI) complete."
-    );
+    )?;
+
+    Ok(())
 }
 
 /// The combined `--stage2` JSON payload (grows as arms land).

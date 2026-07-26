@@ -28,6 +28,8 @@
 //! **Disposition (§12.2):** *descriptive* — quantify the redistribution; **flag**
 //! if it strands scarce holders below marginal cost.
 
+use std::fmt;
+
 use shekyl_archival_retention::{reward_share_floor, ARCHIVAL_BOND_FLOOR_ATOMIC};
 
 use crate::burden::{COIN, OPP_COST_RATE_BAND, SHARD_BYTES};
@@ -165,14 +167,20 @@ pub fn scarce_share(outcomes: &[CellOutcome], r_at_most: u64) -> f64 {
 /// `budget_per_epoch` comes from the A1-conditional envelope (the surviving
 /// candidate's pool at the scenario's `n`), so the margins are measured against
 /// the funding a survivor actually delivers.
-pub fn a2_report(budget_per_epoch: u64, archivers: u64, label: &str) {
+pub fn a2_report(
+    out: &mut impl fmt::Write,
+    budget_per_epoch: u64,
+    archivers: u64,
+    label: &str,
+) -> fmt::Result {
     // Binding case for the flag: highest opportunity-cost rate (F-G), mid price.
     let opp = OPP_COST_RATE_BAND[OPP_COST_RATE_BAND.len() - 1];
     let price = 0.10;
     let pre = score(budget_per_epoch, archivers, Scoring::PreD1, opp, price);
     let post = score(budget_per_epoch, archivers, Scoring::PostD1, opp, price);
 
-    eprintln!(
+    writeln!(
+        out,
         "\nA2 — distributional shift (W6, §12.2): does D1 bringing ex-zero bulk holders\n\
          into Σwork dilute SCARCE holders below their marginal cost? Population =\n\
          DQ-2H size classes x holding-scarcity bands {BANDS:?} (per-mille, r). The last\n\
@@ -183,13 +191,15 @@ pub fn a2_report(budget_per_epoch: u64, archivers: u64, label: &str) {
         BANDS = SCARCITY_BANDS,
         OPP = opp * 100.0,
         L = label,
-    );
-    eprintln!(
+    )?;
+    writeln!(
+        out,
         "{:>7} {:>8} {:>9} {:>12} {:>12} {:>13} {:>13} {:>9}",
         "shards", "r", "work_mil", "share PRE", "share POST", "reward SKL", "cost SKL", "margin"
-    );
+    )?;
     for (a, b) in pre.iter().zip(post.iter()) {
-        eprintln!(
+        writeln!(
+            out,
             "{:>7} {:>8} {:>9} {:>12.5} {:>12.5} {:>13.6} {:>13.6} {:>9}",
             b.cell.shards,
             b.cell.r_market,
@@ -199,13 +209,14 @@ pub fn a2_report(budget_per_epoch: u64, archivers: u64, label: &str) {
             b.reward_atomic as f64 / COIN as f64,
             b.cost_skl,
             if b.margin_skl >= 0.0 { "ok" } else { "UNDER" },
-        );
+        )?;
     }
     let s_pre = scarce_share(&pre, 50);
     let s_post = scarce_share(&post, 50);
     let stranded: Vec<&CellOutcome> = post.iter().filter(|o| o.margin_skl < 0.0).collect();
     let scarce_stranded = stranded.iter().filter(|o| o.cell.r_market <= 50).count();
-    eprintln!(
+    writeln!(
+        out,
         "  -> Scarce-holder (r<=50) aggregate share: PRE-D1 {SP:.4} -> POST-D1 {SO:.4}\n\
          (dilution {D:.2}% of their former share — the W6 quantum, DESCRIPTIVE).\n\
          Cells under water post-D1: {N} of {T} ({SS} of them scarce-holders).\n\
@@ -225,7 +236,9 @@ pub fn a2_report(budget_per_epoch: u64, archivers: u64, label: &str) {
         } else {
             "no scarce holder stranded below marginal cost"
         },
-    );
+    )?;
+
+    Ok(())
 }
 
 #[cfg(test)]

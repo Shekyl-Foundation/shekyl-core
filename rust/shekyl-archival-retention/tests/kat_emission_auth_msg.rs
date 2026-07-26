@@ -24,9 +24,24 @@
 //! **Regenerated for the D1 micro-precision fix** (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`
 //! F-E): the auth customizations bumped `-v1 → -v2` because the digested
 //! work-claim entries changed meaning (scarcity-milli → scarcity-micro), so both
-//! role digests moved. The fixture's scarcity **values** were left unchanged, so
+//! role digests moved.
+//!
+//! **The corpus *name* is historical.** `EMISSION_AUTH_MSG_V1` is a directory
+//! label fixed at the corpus's birth; the **active customizations are `-v2`**.
+//! The path was deliberately not renamed — renaming it would churn every
+//! reference for no tripwire benefit — so read `V1` as "corpus rev 1", never as
+//! "customization v1".
+//!
+//! **What "values unchanged" does and does not mean.** The fixture's scarcity
+//! numbers are **retained operands**, not micro-unit recomputes: the same
+//! integers are now *interpreted* as micro where they were milli, which is why
 //! the wire bytes — and `EXPECTED_WIRE_LEN` / `EXPECTED_WIRE_DIGEST_HEX` — did
-//! not move; only the two `auth_msg` hexes did (the isolated `-v2` consequence).
+//! not move and the only movement is the isolated `-v2` auth change. They are
+//! **not** the ×1000-scaled values a physical micro recompute would produce
+//! (other fixtures *were* rescaled where their arithmetic is under test). Holding
+//! the operands fixed is deliberate: it keeps the wire digest a stable tripwire
+//! so an unintended *format* change cannot hide behind an intended *semantic*
+//! one.
 
 use shekyl_archival_retention::hash::cshake256_32;
 use shekyl_archival_retention::{

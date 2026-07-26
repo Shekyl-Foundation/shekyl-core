@@ -38,6 +38,8 @@
 //! the **production** chain (`scarcity_micro` → `work_milli_from_micro` →
 //! `curve_milli`) so that interaction shows up rather than being assumed away.
 
+use std::fmt;
+
 use shekyl_archival_retention::{curve_milli, scarcity_micro, work_milli_from_micro};
 
 use crate::population::{reward_curve, AGE_MILLI, AGE_WEIGHT_MILLI};
@@ -189,8 +191,9 @@ const PROBE_R: [u64; 4] = [6, 100, 5_000, 100_000];
 /// OQ-1 — the provisional A2 probe. Prints per-class pool shares under the three
 /// regimes, the equivalence statistic, and the naive-fraction sweep that says how
 /// much naive play it takes before deletion measurably moves distribution.
-pub fn oq1_probe_report() {
-    eprintln!(
+pub fn oq1_probe_report(out: &mut impl fmt::Write) -> fmt::Result {
+    writeln!(
+        out,
         "\nOQ-1 (D3 round §12.8) — provisional A2 distribution probe: is deleting the\n\
          curve_milli plateau DISTRIBUTION-NEUTRAL in equilibrium? Hypothesis:\n\
          distribution(cap-deleted) == distribution(cap-kept + rational splitting).\n\
@@ -199,15 +202,16 @@ pub fn oq1_probe_report() {
          meets the quantization floor rather than being assumed free.",
         CLS = ARCHIVER_CLASSES,
         SPLIT = SPLIT_BOND_SHARDS,
-    );
-    eprintln!(
+    )?;
+    writeln!(
+        out,
         "{:<9}  {:>26}  {:>26}  {:>26}  {:>9}",
         "r_market",
         "cap-kept-NAIVE shares",
         "cap-kept-RATIONAL shares",
         "cap-DELETED shares",
         "|Δ| rat-del"
-    );
+    )?;
     for &r in &PROBE_R {
         let naive = class_pool_shares(r, Regime::NaiveCapped, 1.0);
         let rational = class_pool_shares(r, Regime::RationalBestResponse, 0.0);
@@ -218,28 +222,36 @@ pub fn oq1_probe_report() {
                 .collect::<Vec<_>>()
                 .join("/")
         };
-        eprintln!(
+        writeln!(
+            out,
             "{:<9}  {:>26}  {:>26}  {:>26}  {:>9.4}",
             r,
             fmt(&naive),
             fmt(&rational),
             fmt(&deleted),
             max_share_divergence(&rational, &deleted),
-        );
+        )?;
     }
-    eprintln!(
+    writeln!(
+        out,
         "\n  naive-fraction sweep at r={R} (divergence of mixed play from cap-DELETED):",
         R = PROBE_R[0]
-    );
+    )?;
     let deleted = class_pool_shares(PROBE_R[0], Regime::PlateauDeleted, 0.0);
-    eprint!("    f=");
+    write!(out, "    f=")?;
     for i in 0..=5 {
         let f = i as f64 / 5.0;
         let mixed = class_pool_shares(PROBE_R[0], Regime::NaiveCapped, f);
-        eprint!("{:.1}:{:.4}  ", f, max_share_divergence(&deleted, &mixed));
+        write!(
+            out,
+            "{:.1}:{:.4}  ",
+            f,
+            max_share_divergence(&deleted, &mixed)
+        )?;
     }
-    eprintln!();
-    eprintln!(
+    writeln!(out)?;
+    writeln!(
+        out,
         "  -> Read: |Δ| rat-del ≈ 0 at EVERY r CONFIRMS OQ-1 — under best-response play the\n\
          plateau distributes exactly as its own deletion would, so G-2's distributional\n\
          counter-consideration is empirically DISCHARGED: deletion is distribution-neutral\n\
@@ -253,7 +265,9 @@ pub fn oq1_probe_report() {
          who do not optimize. That is R1's distortion wearing a defense's name.\n\
          Caveat for R3: the deep-r zeros in the SplitDodge regime are why min_holding must\n\
          be sized against quantization — the dodge is self-limiting, not unconditional."
-    );
+    )?;
+
+    Ok(())
 }
 
 #[cfg(test)]

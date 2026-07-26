@@ -32,6 +32,8 @@
 //! *sustained* re-fetch failure (`P(≥m misses in n)`), which makes the deterrent
 //! **weaker**, not stronger — the free-rider is more viable, not less.
 
+use std::fmt;
+
 use std::sync::OnceLock;
 
 use shekyl_archival_retention::{
@@ -349,9 +351,14 @@ pub const A5_REWARD_HORIZON_EPOCHS: f64 = 131.0;
 /// **per epoch** (per-shard, matching the §3.2 per-shard slash scope) — the
 /// absorption DP prices the stream forgone *from the slash epoch onward*, so it
 /// needs the rate, not a horizon lump. `skl_price` converts SKL losses to fiat.
-pub fn a5_proxy_report(reward_per_epoch_skl: f64, skl_price: f64) {
+pub fn a5_proxy_report(
+    out: &mut impl fmt::Write,
+    reward_per_epoch_skl: f64,
+    skl_price: f64,
+) -> fmt::Result {
     let storage = honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR);
-    eprintln!(
+    writeln!(
+        out,
         "\nA5 — W10 proxy free-rider margin (§12.2/§11.1): GATE2-conformant cheap opening\n\
          (128-B leaf + shallow ~{RB:.0}-B segment co-path; fetch-on-demand IS service, NOT\n\
          durability). margin/epoch = proxy(re-fetch + L14 slash exposure) − honest storage.\n\
@@ -364,11 +371,12 @@ pub fn a5_proxy_report(reward_per_epoch_skl: f64, skl_price: f64) {
         STOR = storage,
         GB = max_holdings_bytes() / 1.0e9,
         SB = STORAGE_FIAT_PER_BYTE_YEAR,
-    );
-    eprintln!(
+    )?;
+    writeln!(
+        out,
         "{:<22} {:>13} {:>14} {:>13} {:>12}",
         "fetch $/GB", "refetch/epoch", "margin@q=0", "q* bond-only", "q* +reward"
-    );
+    )?;
     let bond_loss_fiat = bond_at_risk_skl() * skl_price;
     let reward_per_epoch_fiat = reward_per_epoch_skl * skl_price;
     let horizon = A5_REWARD_HORIZON_EPOCHS as u64;
@@ -390,16 +398,18 @@ pub fn a5_proxy_report(reward_per_epoch_skl: f64, skl_price: f64) {
             reward_per_epoch_fiat,
             horizon,
         );
-        eprintln!(
+        writeln!(
+            out,
             "{:<22} {:>13.6} {:>14.6} {:>13} {:>12}",
             format!("{:.2}", fp * 1.0e9),
             refetch,
             margin0,
             qc_bond.map_or("none".to_string(), |q| format!("{q:.3}")),
             qc_rew.map_or("none".to_string(), |q| format!("{q:.3}")),
-        );
+        )?;
     }
-    eprintln!(
+    writeln!(
+        out,
         "  -> W10 gate: FAILS at the current grace window (margin@q=0 < 0 — re-fetch is ~KB\n\
          vs 13.6 GB held, so honest holding is the DEARER strategy: the proxy free-rides).\n\
          'q*' = the per-epoch re-fetch-FAILURE rate the gate-4 grace window must force for\n\
@@ -409,7 +419,9 @@ pub fn a5_proxy_report(reward_per_epoch_skl: f64, skl_price: f64) {
          §11.1 disposition (NOT a D2 redesign): tighten gate-4 grace to force q ≥ q*, OR\n\
          accelerate the PoRep reopen (q→1: re-fetch cannot substitute for sealed possession\n\
          — the whole-shard/actual-possession test, a NAMED non-genesis path)."
-    );
+    )?;
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -24,6 +24,8 @@
 //! can un-freeze shards. `ARCHIVAL_REORG_DEPTH_BLOCKS` bounds how far back that
 //! reaches, so it bounds the only down-swing that exists.
 
+use std::fmt;
+
 use shekyl_archival_retention::SEGMENT_LEAF_COUNT;
 
 use crate::calibration::{
@@ -122,14 +124,19 @@ pub fn penalty_compensation_skl_per_epoch(base_block_reward_atomic: u64) -> f64 
 /// A6 report: the slew ceiling, per-epoch `Δshare` under a sustained flood, and
 /// the reorg-window reversibility bound — measured on the **steepest** candidate,
 /// since a cliff would appear there first.
-pub fn a6_report(n_samples: &[u64], base_block_reward_atomic: u64) {
+pub fn a6_report(
+    out: &mut impl fmt::Write,
+    n_samples: &[u64],
+    base_block_reward_atomic: u64,
+) -> fmt::Result {
     let curve = family()
         .iter()
         .max_by_key(|c| c.asymptote)
         .copied()
         .unwrap_or_else(crate::escalation::flat_25);
     let surge = BLOCK_WEIGHT_PENALTY_FREE;
-    eprintln!(
+    writeln!(
+        out,
         "\nA6 — swing / band width (§12.2): the empirical check on §6.0's STRUCTURAL claim\n\
          that the operand cannot swing (monotone + slow + no controller ⇒ W8 armed by\n\
          operand). Binding input is a W9 FLOOD, not organic growth — a stuffer buying\n\
@@ -144,11 +151,12 @@ pub fn a6_report(n_samples: &[u64], base_block_reward_atomic: u64) {
         RD = REORG_DEPTH_BLOCKS,
         A = curve.asymptote as f64 / 10_000.0,
         K = curve.knee_shards,
-    );
-    eprintln!(
+    )?;
+    writeln!(
+        out,
         "{:>9} {:>12} {:>14} {:>16} {:>17} {:>15}",
         "n", "Δn/epoch", "Δshare/epoch", "Δshare %pts/ep", "%pts/ep w/penalty", "reorg Δshare%pt"
-    );
+    )?;
     let mut worst_epoch_pts = 0.0_f64;
     let mut worst_reorg_pts = 0.0_f64;
     let mut worst_dn = 0u64;
@@ -165,7 +173,8 @@ pub fn a6_report(n_samples: &[u64], base_block_reward_atomic: u64) {
         worst_dn = worst_dn.max(dn_pen);
         worst_pen_pts =
             worst_pen_pts.max(delta_share(&curve, n, dn_pen) as f64 / SHARE_SCALE as f64 * 100.0);
-        eprintln!(
+        writeln!(
+            out,
             "{:>9} {:>12} {:>14} {:>15.4}% {:>16.4}% {:>14.4}%",
             n,
             dn_epoch,
@@ -173,9 +182,10 @@ pub fn a6_report(n_samples: &[u64], base_block_reward_atomic: u64) {
             pts,
             delta_share(&curve, n, dn_pen) as f64 / SHARE_SCALE as f64 * 100.0,
             ds_reorg as f64 / SHARE_SCALE as f64 * 100.0,
-        );
+        )?;
     }
-    eprintln!(
+    writeln!(
+        out,
         "  -> Read: 'Δshare %pts/ep' is the MAXIMUM the staker share can move in one\n\
          settlement epoch when an adversary floods at the surge ceiling for the whole\n\
          epoch — the worst case for §6.0's no-swing claim. Worst observed: {W:.4} points.\n\
@@ -189,8 +199,8 @@ pub fn a6_report(n_samples: &[u64], base_block_reward_atomic: u64) {
         } else {
             "see the slew reading below."
         },
-    );
-    eprintln!(
+    )?;
+    writeln!(out,
         "  -> §6.0/§6.1 SEPARATED, because they are different claims:\n\
          (a) CLIFF (structural, §6.1's actual requirement) — NOT present. The share is\n\
              monotone and a single shard never moves it discontinuously; the family's\n\
@@ -217,7 +227,9 @@ pub fn a6_report(n_samples: &[u64], base_block_reward_atomic: u64) {
         C = worst_dn as f64
             * (leaf_stuffer_cost_per_shard_atomic(SEGMENT_LEAF_COUNT) as f64 / 1.0e9),
         P = penalty_compensation_skl_per_epoch(base_block_reward_atomic),
-    );
+    )?;
+
+    Ok(())
 }
 
 #[cfg(test)]

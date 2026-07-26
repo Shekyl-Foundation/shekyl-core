@@ -729,8 +729,10 @@ mod tests {
     ///
     /// This asserts only the **fix-shape-agnostic** property (non-zero +
     /// proportional), landed here as this crate's §7 red test. Introduced
-    /// `#[ignore]`'d (red against the truncating code); un-ignored in the same
-    /// Stage-1 diff that lands the micro fix — the ratified acceptance gate.
+    /// `#[ignore]`'d (red against the truncating code) and un-ignored in the same
+    /// Stage-1 diff that landed the micro fix — the ratified acceptance gate. It
+    /// is enabled and green; the history is recorded because it is *why* the test
+    /// exists, not a pending step.
     #[test]
     fn bulk_holder_past_cliff_earns_proportional_not_zero() {
         // crowd = 1000 ⇒ r_market = 1001 > g_milli = 1000 ⇒ the pre-fix per-shard

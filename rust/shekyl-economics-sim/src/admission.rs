@@ -34,6 +34,8 @@ use shekyl_archival_retention::{
     scarcity_micro, work_milli_from_micro, MAX_HOLDINGS_SHARDS, WORK_MICRO_PER_MILLI,
 };
 
+use std::fmt;
+
 use crate::population::{AGE_MILLI, AGE_WEIGHT_MILLI};
 use crate::stranding::mean_replication;
 
@@ -132,8 +134,13 @@ pub fn split_credit_milli(holding: u64, min_holding: u64, r_market: u64) -> u64 
 
 /// OQ-2 report: the viability boundary across the A3 replication regimes, the
 /// recommended provisional floor, and the composition/clustering checks.
-pub fn oq2_report(archiver_band: &[u64], n_samples: &[u64]) {
-    eprintln!(
+pub fn oq2_report(
+    out: &mut impl fmt::Write,
+    archiver_band: &[u64],
+    n_samples: &[u64],
+) -> fmt::Result {
+    writeln!(
+        out,
         "\nOQ-2 (D3 round §12.8) — sizing the R3 minimum-holding admission floor.\n\
          Boundary (production chain, not a closed form): min_holding(r) = least h whose\n\
          h x scarcity_micro(r) reaches one milli ≈ ceil(r/1000) — the mirror of the\n\
@@ -141,29 +148,32 @@ pub fn oq2_report(archiver_band: &[u64], n_samples: &[u64]) {
          UNREPRESENTABLE rather than merely unprofitable (they lock capital into a\n\
          position the frozen scale cannot pay). Safety multiple = {SM}x.",
         SM = MIN_HOLDING_SAFETY_MULTIPLE
-    );
-    eprintln!(
+    )?;
+    writeln!(
+        out,
         "{:<10} {:>9} {:>9} {:>14} {:>14}",
         "archivers", "n", "mean_r", "min_viable_h", "split-loss@4096"
-    );
+    )?;
     let mut r_samples: Vec<u64> = Vec::new();
     for &n in n_samples {
         for &a in archiver_band {
             let r = mean_replication(a, n);
             r_samples.push(r);
             let mv = min_viable_holding(r);
-            eprintln!(
+            writeln!(
+                out,
                 "{:<10} {:>9} {:>9} {:>14} {:>14}",
                 a,
                 n,
                 r,
                 mv,
                 splitting_loss_milli(4_096, mv, r),
-            );
+            )?;
         }
     }
     let rec = recommend_min_holding(&r_samples);
-    eprintln!(
+    writeln!(
+        out,
         "  -> RECOMMENDED provisional min_holding = {REC} shards ({SM}x the worst swept\n\
          boundary). Composes with the wire cap: {OK} (must sit strictly below\n\
          MAX_HOLDINGS_SHARDS = {CAP}). Genesis-provisional NUMBER under a frozen SHAPE\n\
@@ -181,7 +191,9 @@ pub fn oq2_report(archiver_band: &[u64], n_samples: &[u64]) {
         OK = composes_with_wire_cap(rec)
             && credits_nonzero(rec, *r_samples.iter().max().unwrap_or(&1)),
         CAP = MAX_HOLDINGS_SHARDS,
-    );
+    )?;
+
+    Ok(())
 }
 
 #[cfg(test)]
