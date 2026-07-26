@@ -101,19 +101,22 @@
   measured the pin by an exhaustive equivalence sweep, and
   `archival_substrate_lmdb` covers absorb / sustained-slash /
   full-window-slide / pop-recompute at the scheduler's production site.
-  **Consequence recorded, not patched:** the window widens the
-  exit-forgiven tail from one cooldown to ~`m` epochs, and the
-  `Unbond` / `HoldingsUpdate`-drop release predicates anchor on the last
-  *served* epoch — so a persona that goes dark can exit with full
-  collateral inside the grace, where single-strike would have slashed it
-  at the next deadline. That is the pin's §3.2 deterrence-credible
-  criterion sharpened, it needs `m` settled first, and the candidate fix
-  (anchor on last-*observed*) costs an honest dark-then-exit operator a
-  full window of locked collateral — so it is routed to the Round-2
-  stressnet (`FOLLOWUPS.md` V3.1) rather than pre-provisioned (rule 21).
-  Two `db_lmdb.cpp` comments that justified the exit-forgiven tail with
-  "'stop serving and just hold' keeps being slashed every epoch" were
-  single-strike arguments and are corrected in place.
+  **Consequence — the window working as designed at end-of-life:** the
+  window widens the exit-forgiven tail, so a persona that goes dark can
+  `Unbond` with full collateral inside the grace, where single-strike
+  would have slashed it at the next deadline. Grounded in the numbers this
+  is not a new escape: the release cooldown is 2 epochs, far below
+  `m = 11`, so a departing record only rides the **same** `m − 1`
+  forgiveness envelope a still-bonded record already gets, earns nothing
+  while dark, and cannot exceed the window's tolerance without crossing
+  `m`-of-`n` and being slashed. An exit-time "clear the window" gate would
+  punish the honest crash-then-leave record identically to the adversarial
+  squeeze — they are on-chain indistinguishable — so it is a mis-fix
+  (rule 82); the exit tail is **subsumed by the `m`/`n` sizing** the
+  Round-2 stressnet already owns (`FOLLOWUPS.md` V3.1), not a separate
+  decision (rule 21). Two `db_lmdb.cpp` comments that justified the
+  exit-forgiven tail with "'stop serving and just hold' keeps being slashed
+  every epoch" were single-strike arguments and are corrected in place.
 
 - **scanner: KEM-ciphertext extra packing — vout ≥ 1 of multi-output
   txs was silently unscannable** (`fix/kem-extra-packing`; closes the
