@@ -41,7 +41,7 @@ use crate::escalation::{family, flat_25, EscalationCurve};
 use crate::population::{attacker_capped_work_milli, honest_sigma_work_milli, DQ2H_TAIL};
 use crate::scenarios::all_scenarios;
 use shekyl_archival_retention::{
-    reward_share_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, SEGMENT_LEAF_COUNT,
+    reward_share_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_HOLDINGS_SHARDS, SEGMENT_LEAF_COUNT,
 };
 
 /// Atomic units per SKL (mirrors `engine.rs`).
@@ -1021,6 +1021,28 @@ pub fn run_stage2(params: &SimParams) {
     print_stuffer_cost_curve();
     let a1 = a1_clearance_report(params);
     let a4 = a4_stuffing_report(params);
+
+    // A5 (W10): the L14 slash forfeits a max-archiver's forgone post-D1/D2 reward
+    // stream. Take the highest per-epoch max-holdings reward across the scenario
+    // set (biggest forfeit ⇒ strongest deterrent the margin must STILL fail
+    // against). Pool = A1's flat-ledger budget (emission + fee leg); the archiver's
+    // work share is proportional (min(cap, n)/n) at the small-bond equilibrium.
+    let epy = crate::proxy::epochs_per_year();
+    let mut max_archiver_reward_per_epoch_skl = 0.0f64;
+    for config in all_scenarios(params) {
+        for a in a1_year_aggs(params, &config).iter().filter(|a| a.n > 0) {
+            let pool_atomic = a
+                .emission_leg_atomic
+                .saturating_add(mul_scale(a.whole_burn_atomic, flat_25().share(a.n)));
+            let pool_per_epoch_skl = (pool_atomic as f64 / COIN) / epy;
+            let share = MAX_HOLDINGS_SHARDS.min(a.n as usize) as f64 / a.n as f64;
+            max_archiver_reward_per_epoch_skl =
+                max_archiver_reward_per_epoch_skl.max(pool_per_epoch_skl * share);
+        }
+    }
+    let forgone_reward_skl =
+        max_archiver_reward_per_epoch_skl * crate::proxy::A5_REWARD_HORIZON_EPOCHS;
+    crate::proxy::a5_proxy_report(forgone_reward_skl, SKL_FIAT_PRICE_BAND[1]);
 
     let report = Stage2Report {
         burden_trajectories: trajectories,
