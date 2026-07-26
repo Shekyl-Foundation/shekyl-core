@@ -1203,9 +1203,12 @@ had.
 
 **Live lever families (post-G-1).**
 
-1. **Per-bond friction** — minimum bond sizes, or fixed per-bond capital costs
-   that make bond *multiplication* expensive in capital rather than free. Prices
-   splitting without needing to detect it.
+1. **Per-bond friction / admission viability** — **resolved as R3, see §12.9
+   OQ-2**: not a frozen minimum size (a forecast about `r`, wrong somewhere on any
+   trajectory) but an **admission-time predicate** — admit a bond iff its holdings
+   score non-zero under the production work path at connect height
+   (`work_milli(bond) ≥ k`, `k = 1` milli, parent-block read-point). Self-sizing,
+   single-sourced with the payment path, and gaming it awards a registered zero.
 2. **Curve reshaping within the bond** — alter the plateau's shape/position, the
    only cap surface that remains enforceable.
 3. **Cap deletion (G-2) — first-class, not a straw option.** The charter must not
@@ -1268,6 +1271,39 @@ splitting zeroes out — and produced a spurious `|Δ|` of 0.73–0.80. The
 evidence **R3's `min_holding` must be sized against**: the dodge is
 **self-limiting**, not unconditional.
 
+**Partition optimality — a proposed proof REFUTED, and the stronger theorem that
+replaces it (sim `392cc36f6`).** The natural reviewer challenge is *"what about
+intermediate split sizes?"* A two-boundary argument was proposed to close it: the
+4-split viability boundary sits at `r ≈ 4·g ≈ 4 000`, the cap-binding boundary at
+`r < holdings/4 ≤ 1 024`, they never cross, so `max(unsplit, split-at-4)` is the
+full optimum. **Exhaustive search over every granularity falsifies it:**
+
+| `r` | `h` | best `k` | optimum | two-point max |
+| --- | --- | --- | --- | --- |
+| 700 | 4 096 | 243 | **5 849** | 5 120 (**−14 %**) |
+| 1 023 | 4 096 | 130 | 4 001 | 4 000 |
+| 6 | 4 096 | 23 | 682 607 | 681 984 |
+
+The boundary arithmetic is *correct*; what it misses is that the binding trade-off
+is **not** "cap binds vs split viable". It is **curve compression vs per-bond
+flooring waste** — fine bonds escape the plateau but each discards a sub-milli
+remainder, so the optimum is the **largest** granularity whose per-bond work still
+lands in the curve's linear region: an **interior** point, neither extreme. (At
+`r = 700` a 4-split discards ~712 micro across 1 024 bonds; a 243-split discards
+~4 micro across 16.)
+
+> **Corrected theorem (asserted in test).** The partition optimum **equals the
+> plateau-deleted linear value**, up to per-bond flooring residue (≤ 0.1 %). *An
+> optimising actor can always recover the linear value by choosing granularity.*
+
+That is the sharpest available statement of "the plateau is inert against an
+optimiser", and strictly stronger than the two-point claim it replaces. `|Δ| = 0`
+above is therefore measured **at the optimum**, not at sampled strategies — the
+probe's `RationalBestResponse` searches all granularities, and a test pins that the
+two-point max is *strictly beaten* at `r = 700`, so the full search is not
+gold-plating. The refuted argument is recorded rather than deleted, for the same
+reason `SplitDodge` was kept: otherwise the next reader re-derives it.
+
 **What the naive column shows.** The plateau's only observable effect is
 redistribution **from** the large class **to** smalls (`0.437/0.469/0.094` vs
 `0.040/0.229/0.731` at `r = 6`) — but strictly **over the naive fraction**. Sweep
@@ -1312,28 +1348,81 @@ told** that `min_holding` (R3) may shift the population's bond-count/holdings sh
 which changes challenge *volume* per bond even though per-window tuning is
 unaffected.
 
-#### OQ-2 — `min_holding` sized; no clustering pressure ✅ (sim `37310ff11`)
+#### OQ-2 — **dissolved**: the floor is a predicate, not a number ✅
 
-Boundary computed through the **production** chain (not the closed form, so it
-cannot drift): `min_holding(r)` = least `h` whose `h · scarcity_micro(r)` reaches
-one milli = **`ceil(r/1000)`**, the exact mirror of the cliff. Across the swept
-regimes it runs **1–8 shards**; with the 2× safety multiple:
+The sizing exercise ran (boundary `min_holding(r) = ceil(r/1000)`; swept 1–8
+shards; a 2× safety multiple would give 16) — **and the exercise is what showed the
+numeric to be the wrong instrument.** A frozen `min_holding` is a **forecast about
+`r`**, and `r` is dynamic and capacity-driven, so any number is wrong somewhere on
+the trajectory. That is precisely why the sizing kept demanding an `r`-forecast we
+do not have. **The 16-shard recommendation is struck.**
 
-> **Recommended provisional `min_holding` = 16 shards** — composes with the wire
-> cap (`< MAX_HOLDINGS_SHARDS`), covers the worst swept replication. A
-> genesis-provisional **number** under a **frozen shape** (`bond_duration`
-> posture): re-pin at testnet against *measured* replication, named reopen.
-> Under-sizing is the costly direction — an under-sized floor admits exactly the
-> zero-scoring bonds R3 exists to refuse.
+> **R3, restated: admit a bond iff its holdings score non-zero under the production
+> work path, evaluated at connect height** — literally `work_milli(bond) ≥ k`, via
+> the same `scarcity_micro` → `work_milli_from_micro` chain that *pays*.
 
-**Clustering: none, and the reason is structural.** Under **R2** credited work is
-**linear**, so bond *count* does not change total credit — the splitting incentive
-that motivated D3 is *gone*. The residual pressure runs the **other way**: each
-bond floors independently, so splitting discards sub-milli remainders.
-**Consolidation is weakly preferred; nobody is pushed to sit at the floor.**
-(Where `min_holding` divides the boundary exactly the loss is legitimately zero —
-the ideal case; the invariant asserted is *split ≤ whole*, i.e. splitting never
-pays.)
+The viability condition never needed forecasting: it is **computable from chain
+state at admission time**. Three properties follow by construction:
+
+- **Self-sizing.** The cliff moves with `r`; the floor moves with it, forever.
+- **Single-source.** The admission predicate **is** the payment predicate, so they
+  cannot drift (the F-E discipline that D1 established, applied to a second
+  consumer).
+- **Right motivation.** It converts R3 from *"pick a number"* to *"make
+  bonding-into-a-known-zero **unrepresentable**"*, which was always the point.
+
+**Manipulation analysis — recorded as decided-unless-contested.** The design target
+is *cheap computation, worthless prize*, **not** an expensive predicate: the
+validator pays the computation at every bond-connect, so expense would be a
+consensus **DoS surface**, not a tax on the manipulator. The predicate hits the
+target inherently:
+
+1. **No new oracle.** `r_market` is already consensus state the payment path
+   consumes every epoch through the same code. Admission is a second,
+   *strictly smaller-stakes* consumer of an already-priced quantity. Anyone able to
+   move `r` profitably would attack the recurring epoch-close payout instead —
+   orders of magnitude larger, and exactly the surface W9/A4 swept (moving `r`
+   means bonding real copies or minting real leaves, and inflating `r` lowers
+   scarcity payouts on those shards *including the manipulator's own*).
+2. **Per-epoch re-scoring voids admission gaming** — the killer. Depress `r`,
+   admit, restore `r`: the position then scores **zero at every subsequent close**.
+   All value flows through per-epoch scoring, which admission timing cannot touch.
+   The attacker has paid unbond/exit costs, forgone rewards, and bond churn to
+   acquire **a registered zero**. The gain is not small; it is **structurally nil**.
+3. **Prize pinned to ≈ 0.** The gate sits *at* the zero-work cliff, so the only
+   contested positions are worth ~one milli per epoch. **Consequence — keep
+   `k = 1` milli in consensus and put headroom margins in the *wallet* as
+   warnings.** A consensus `k` meaningfully above 1 lifts the gate onto positions
+   with real value, growing the prize from nil to small. No reason to donate that.
+4. **Denial is capacity-priced and routable-around.** Inflating `r` to block
+   applicants is untargeted: the applicant picks other shards, or simply holds
+   *more* of the same ones (the predicate is over the holding's **sum**). Blanket
+   denial means pushing `r` up across every viable shard set — capacity-scale
+   bonding cost — and every copy bonded lowers the griefer's own scarcity income.
+5. **Timing is killed by the read-point.** Evaluate against **parent-block state
+   (`H−1`)** — the same discipline as the `frozen_segment_count` frontier-read and
+   the M3-1 drift ruling — so intra-block ordering is irrelevant and every
+   validator computes an identical verdict. (Bonding right after a *genuine* mass
+   unbond is not manipulation; that is reading true state, and the admitted
+   position really is viable at that state.)
+6. **Validator-cheap.** One pass over the holding: at most `MAX_HOLDINGS_SHARDS`
+   (4 096) `mul_div_floor` operations — the same per-bond work epoch-close already
+   does. The asymmetry runs in the defender's favour.
+
+**Two pins for the implementing round (decided unless contested):** **`k = 1`
+milli**, and **read-point = parent-block state**. Both are rulings, not forecasts.
+**Named caveats:** the `r_market` read-point must be pinned against the M3-1
+cached-counter drift class; and the predicate eliminates **known-zero admission,
+not lifetime viability** — post-admission degradation (`r` rising later) remains
+possible, with the wallet carrying the margin warning. Genesis-frozen consensus
+**shape**, so it lands inside the R2+R3 implementing round's design surface, not as
+a rider.
+
+**Clustering (the sizing exercise's one surviving result).** None, structurally:
+under R2 credited work is **linear**, so bond count is credit-neutral — the
+splitting incentive that motivated D3 is *gone* — and independent per-bond flooring
+means splitting weakly **loses**. Consolidation is mildly preferred; nobody is
+pushed to sit at the floor.
 
 #### OQ-4 — A4 under deletion: prediction confirmed exactly ✅
 
@@ -1351,6 +1440,12 @@ The capped row is precisely what deletion removes — a penalty falling on
 non-optimizing honest archivers that *doubled* the stuffer's relative capture, and
 here pushes ROI **above 1** where deletion leaves it below.
 
+> **The `hHold` sweep column is formally RETIRED.** It was evidence for a mechanism
+> that, under R2, no longer exists; leaving it in the report invites recomputing
+> against a ghost. Under deletion the realistic end is the **only** end, and A4
+> carries one number per regime. The A4 tables in §12.5 are to be read as historical
+> — the capped column documents *why the plateau was removed*, not a live regime.
+
 #### A3 correction (found while deriving OQ-2)
 
 `mean_replication` did not clamp a class's holdings to `n`, so early-chain rows
@@ -1358,11 +1453,20 @@ credited archivers with 4,096 shards out of a 1,011-shard corpus — replication
 inflated ≈ 2.2×. Clamped. §12.7's cliff findings are **qualitatively unchanged**
 (`r` still crosses 1,000 at scale), but the early-chain `r` figures are now honest.
 
-**Round status: all five open questions discharged (OQ-1…OQ-5). R2 + R3 is the
-resolution.** Delete the plateau's reward-path application, admit at a
-quantization-sized floor (provisional 16 shards), let the wire cap + capital +
-the reopen-(c) fee-floor carry concentration pricing, record R4 (cadence)
-monitored-not-designed-for. **A2 and A6 unblock** — the probe showed distribution
-is deletion-invariant in equilibrium, so they can now build on a settled surface.
-The implementing PR inherits the §12.9 census, including the load-bearing catch
-that **`curve_milli` the function survives** for D2's escalation.
+**Round CLOSED — all five open questions discharged (OQ-1…OQ-5).** The resolution:
+
+- **R2** — delete the plateau's **reward-path application** (not `curve_milli` the
+  function; §6.1's escalation reuses the idiom).
+- **R3** — an **admission-time viability predicate**, not a frozen number:
+  `work_milli(bond) ≥ k` at connect height. Pins for the implementing round
+  (decided unless contested): **`k = 1` milli**, **parent-block read-point**.
+- **R4** — claim cadence: **monitored, not designed for** (real in principle,
+  binding nowhere yet; §12.7 G-3).
+- Concentration pricing is carried by the **wire cap + bonded capital + the
+  reopen-(c) fee-floor**, whose sizing evidence survives deletion unchanged (OQ-4).
+
+**A2 and A6 unblock**: the probe showed distribution is deletion-invariant *at the
+optimum*, so both can now build on a settled surface. The implementing PR inherits
+the §12.9 census — rule-42 digest membership, the **"C++ source-unchanged yet
+behaviourally live"** callout (mandatory PR language), the KAT/fixture regeneration
+list, and the **`curve_milli`-survives** carve-out for §6.1.
