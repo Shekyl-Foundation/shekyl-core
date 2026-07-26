@@ -4567,6 +4567,10 @@ mod tests {
             };
             let served = as_of_e_served_work(&inputs).expect("well-formed fixture");
             let work = served.work_by_bond[0];
+            // Single-shard fixture ⇒ the sole entry's micro scarcity is the whole
+            // per-bond micro sum; the wire carries micro, so verify's micro-space
+            // aggregate compare demands this exact value (D1 fix).
+            let work_micro = served.work_micro_by_bond[0];
             assert!(served.member[0] && work > 0, "fixture claimant must earn");
             let sigma = sigma_work_milli(&served.work_by_bond, &curve, &served.member);
             let reward = reward_share_floor(EM_BUDGET, curve_milli(work, &curve), sigma);
@@ -4587,7 +4591,8 @@ mod tests {
                     shard_entries: vec![ShardWorkEntry {
                         shard_id: EM_SHARD_A,
                         serve_credit_bit: true,
-                        scarcity_milli: u32::try_from(work).expect("fixture scarcity fits u32"),
+                        scarcity_micro: u32::try_from(work_micro)
+                            .expect("fixture scarcity fits u32"),
                     }],
                 }],
                 backing: MembershipOnlyBacking {

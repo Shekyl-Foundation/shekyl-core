@@ -306,7 +306,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
   while (true)
   {
     if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), 10, hf_ver ? *hf_ver : 1,
-        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*stake_ratio=*/0, /*genesis_ng_height=*/0))
+        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
       return false;
 
     size_t actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
@@ -428,7 +428,7 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
     size_t current_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
     // TODO: This will work, until size of constructed block is less then CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE
     if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, current_block_weight, fees, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), max_outs, hf_version,
-        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*stake_ratio=*/0, /*genesis_ng_height=*/0))
+        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
       return false;
   }
 
@@ -1294,7 +1294,7 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0, hf_version);
     block_reward = em_split.miner_emission;
 
-    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, 0, hf_version);
+    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, hf_version);
     block_reward += burn.miner_fee_income;
 
     tx_extra_pqc_kem_ciphertext kem_field;

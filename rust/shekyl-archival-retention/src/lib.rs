@@ -90,8 +90,8 @@ pub use claimed_epochs::{
 pub use consensus_state::{
     as_of_e_served_work, capped_work_milli, epoch_close_compute, epoch_close_due_at_height,
     epoch_close_height, good_through, market_member_at_epoch, prune_below_epoch_at_height,
-    r_market_count, settlement_epoch_at_height, shard_age_milli, shard_contribution_milli,
-    shard_work_milli, sigma_work_milli, BadInterval, CreditIndexOutOfRange, CreditPair,
+    r_market_count, settlement_epoch_at_height, shard_age_milli, shard_contribution_micro,
+    shard_work_micro, sigma_work_milli, BadInterval, CreditIndexOutOfRange, CreditPair,
     EpochCloseBond, EpochCloseInputs, EpochCloseResult, EpochCloseShard, ServeCreditRow,
     ServedWork, FOUNDATION_EXCLUDED_FROM_MARKET,
 };
@@ -129,7 +129,8 @@ pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
 pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
 pub use release_cooldown::{release_cooldown_elapsed, whole_record_last_served};
 pub use reward_arithmetic::{
-    curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_milli, BandedCurveParams,
+    curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_micro,
+    work_milli_from_micro, BandedCurveParams, WORK_MICRO_PER_MILLI, WORK_MICRO_SCALE,
     WORK_MILLI_SCALE,
 };
 pub use segment_freeze::{

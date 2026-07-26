@@ -24,6 +24,10 @@ shekyl-scanner = { path = "../shekyl-scanner" }
 # party Shekyl crate; its third-party edges (`shekyl-crypto-hash`) are already in
 # the workspace lockfile, so no new supply-chain surface (`17-dependency-discipline`).
 shekyl-wire = { path = "../shekyl-wire" }
+# Single-sourced structural tx-weight predictor + bounded I/O counts, hoisted out
+# of this crate (§12.3 D-1) so shekyl-economics-sim shares the same weight model.
+# The fee-rate layer (FeeRate/FeeDirective/convergence) stays here.
+shekyl-tx-weight = { path = "../shekyl-tx-weight" }
 # `SignBond` handler calls `build_join_market_vin` inside the StakeEngine actor
 # (keys never cross the actor boundary — rule 36). Promoted from dev-dep because
 # the production `SignBond` message handler calls it directly. No cycle:

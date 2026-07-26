@@ -24,6 +24,27 @@ const _: () = assert!(
     "WORK_MILLI_SCALE is a frozen consensus invariant (PR 1.5); changing it forks the chain"
 );
 
+/// Micro-units per milli-unit — the finer intermediate precision the per-shard
+/// scarcity term is accumulated at before the **single** floor back to milli
+/// (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` D1, F-B). Flooring each shard's
+/// `g/r` at milli (the pre-fix path) zeroed every holder of a shard past the
+/// co-holder cliff (`r_market > g_milli`); carrying `10⁻⁶` and flooring once at
+/// the aggregate confines the truncation to `< 1` micro/shard.
+pub const WORK_MICRO_PER_MILLI: u64 = 1_000;
+
+/// Fixed-point scale for the per-shard micro scarcity term (`= WORK_MILLI_SCALE
+/// · WORK_MICRO_PER_MILLI = 10⁶`). Per-entry micro is bounded by `1000·g ≤
+/// 3.5×10⁶` at the calibration-band ceiling — `u32` with ~1,200× headroom
+/// (F-C); the per-bond aggregate needs `u64` (`work_micro_by_bond`). This does
+/// **not** reopen the F-E8 `u128` width audit: `WORK_MILLI_SCALE` is untouched
+/// and every new intermediate stays inside the existing `u64`/`u128` domains.
+pub const WORK_MICRO_SCALE: u64 = WORK_MILLI_SCALE * WORK_MICRO_PER_MILLI;
+
+const _: () = assert!(
+    WORK_MICRO_SCALE == 1_000_000,
+    "WORK_MICRO_SCALE = WORK_MILLI_SCALE · WORK_MICRO_PER_MILLI; the micro path is 10⁻³ of milli"
+);
+
 /// Provisional banded PL `Curve`: decreasing slopes → plateau.
 ///
 /// Work breakpoints are fractions of `plateau_work_milli`; plateau credited work is
@@ -58,19 +79,46 @@ pub fn g_age_milli(age_milli: u64, age_weight_milli: u64) -> u64 {
     )
 }
 
-/// Scarcity milli = floor((WORK_MILLI_SCALE / r_market) * g_age_milli / WORK_MILLI_SCALE).
+/// Per-shard scarcity in **micro-units**:
+/// `floor((WORK_MICRO_SCALE / r_market) · g_age_milli / WORK_MILLI_SCALE)`
+/// `= floor(WORK_MICRO_PER_MILLI · g / r_market)`.
+///
+/// This replaces the pre-fix per-shard `scarcity_milli`, which floored `g/r` at
+/// milli and so returned `0` for every shard past the co-holder cliff
+/// (`r_market > g_milli`), zeroing bulk holders of common shards
+/// (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` D1). The micro term is summed
+/// per bond and floored to milli **once** at the aggregate
+/// ([`work_milli_from_micro`]).
+///
+/// **Rounding direction (§11.5):** the single `mul_div_floor` floors, so a
+/// sub-micro remainder is dropped — the residual always favours the protocol,
+/// never the claimant. `r_market == 0` (no market co-holder) scores `0`.
 #[must_use]
-pub fn scarcity_milli(r_market: u64, age_milli: u64, age_weight_milli: u64) -> u64 {
+pub fn scarcity_micro(r_market: u64, age_milli: u64, age_weight_milli: u64) -> u64 {
     if r_market == 0 {
         return 0;
     }
     let g = g_age_milli(age_milli, age_weight_milli);
     mul_div_floor(
-        WORK_MILLI_SCALE,
+        WORK_MICRO_SCALE,
         g,
         r_market.saturating_mul(WORK_MILLI_SCALE),
     )
     .unwrap_or(0)
+}
+
+/// The **single** floor-to-milli site (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`
+/// F-E): collapse a per-bond micro accumulator to the milli value the curve and
+/// the persisted `Σwork(E)` consume. Both epoch close and the emission verify
+/// body reach milli through this one function, so their per-shard (micro) and
+/// aggregate (milli) views cannot drift onto different scales.
+///
+/// **Rounding direction (§11.5):** integer division floors, dropping the
+/// sub-milli remainder in the protocol's favour — the same direction as every
+/// other step in the micro path.
+#[must_use]
+pub fn work_milli_from_micro(work_micro: u64) -> u64 {
+    work_micro / WORK_MICRO_PER_MILLI
 }
 
 /// Evaluate banded piecewise-linear `Curve(work_milli)` → credited work milli.

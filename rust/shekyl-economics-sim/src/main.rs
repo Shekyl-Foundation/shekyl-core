@@ -1,6 +1,16 @@
+mod admission;
 mod budget;
 mod budget_scenarios;
+mod burden;
+mod calibration;
+mod distribution;
 mod engine;
+mod escalation;
+mod population;
+mod proxy;
+mod redistribution;
+mod stranding;
+mod swing;
 // The `RecordedChainFixture` recorder is test-substrate only: it
 // generates / verifies `docs/test_vectors/economics/*.json` for the
 // `EconomicsEngine` C4 differential (`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`
@@ -9,6 +19,7 @@ mod engine;
 #[cfg(test)]
 mod record;
 mod scenarios;
+mod stage2;
 
 use budget::run_budget_scenario;
 use budget_scenarios::all_budget_scenarios;
@@ -36,6 +47,19 @@ fn main() {
 
     if std::env::args().any(|a| a == "--fb1c-c2") {
         run_fb1c_c2(&params);
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--stage2") {
+        // The I/O boundary lives here, in the binary target: the arm modules
+        // *render* into a sink (`fmt::Write`) and `main` performs the write.
+        // That keeps each report next to the model it renders — the
+        // `mode_adversarial_ratio` precedent — while the debug-macro lint's
+        // intent (no ad-hoc printing in non-binary source) is satisfied by
+        // construction rather than by exemption.
+        let mut narration = String::new();
+        stage2::run_stage2(&mut narration, &params).expect("String sink is infallible");
+        eprint!("{narration}");
         return;
     }
 

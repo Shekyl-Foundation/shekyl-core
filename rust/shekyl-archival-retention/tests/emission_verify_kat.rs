@@ -127,6 +127,15 @@ impl Fixture {
         assert!(reward > 0, "fixture reward must be wire-encodable (>0)");
         (work, reward)
     }
+
+    /// The claimant's single-shard scarcity in **micro** — the value the wire
+    /// carries per entry (the D1 fix). For this one-shard fixture it equals the
+    /// whole per-bond micro sum, so verify's micro-space aggregate compare
+    /// accepts it.
+    fn honest_scarcity_micro(&self) -> u64 {
+        let served = as_of_e_served_work(&self.inputs()).expect("well-formed fixture");
+        served.work_micro_by_bond[0]
+    }
 }
 
 fn holdings() -> HoldingsDescriptor {
@@ -137,7 +146,9 @@ fn holdings() -> HoldingsDescriptor {
 }
 
 fn honest_vin(fx: &Fixture) -> ArchivalRewardEmissionVin {
-    let (work, reward) = fx.honest_claim();
+    // `honest_claim` also asserts the fixture claimant earns and the reward is
+    // wire-encodable; the entry's per-shard scarcity comes from the micro sum.
+    let (_, reward) = fx.honest_claim();
     ArchivalRewardEmissionVin {
         p_pubkey: vec![0x11; SINGLE_KEY_CANONICAL_LEN],
         holdings: holdings(),
@@ -147,7 +158,8 @@ fn honest_vin(fx: &Fixture) -> ArchivalRewardEmissionVin {
             shard_entries: vec![ShardWorkEntry {
                 shard_id: SHARD_A,
                 serve_credit_bit: true,
-                scarcity_milli: u32::try_from(work).expect("fixture scarcity fits u32"),
+                scarcity_micro: u32::try_from(fx.honest_scarcity_micro())
+                    .expect("fixture scarcity fits u32"),
             }],
         }],
         backing: MembershipOnlyBacking {
@@ -415,7 +427,7 @@ fn work_claim_entry_polarity() {
 
     // Scarcity off by one → per-entry exactness fires.
     let mut vin = honest_vin(&fx);
-    vin.work_claim[0].shard_entries[0].scarcity_milli += 1;
+    vin.work_claim[0].shard_entries[0].scarcity_micro += 1;
     assert!(matches!(
         emission_vin_verify_claims(&vin, &ctx.as_context(), &[source(&fx)]).unwrap_err(),
         EmissionVerifyError::ScarcityMismatch {
@@ -429,7 +441,7 @@ fn work_claim_entry_polarity() {
     vin.work_claim[0].shard_entries.push(ShardWorkEntry {
         shard_id: SHARD_B,
         serve_credit_bit: true,
-        scarcity_milli: 1,
+        scarcity_micro: 1,
     });
     assert!(matches!(
         emission_vin_verify_claims(&vin, &ctx.as_context(), &[source(&fx)]).unwrap_err(),
@@ -458,7 +470,7 @@ fn work_claim_entry_polarity() {
     vin.work_claim[0].shard_entries.push(ShardWorkEntry {
         shard_id: SHARD_B,
         serve_credit_bit: false,
-        scarcity_milli: 250,
+        scarcity_micro: 250,
     });
     assert!(matches!(
         emission_vin_verify_claims(&vin, &ctx.as_context(), &[source(&fx)]).unwrap_err(),
@@ -519,7 +531,7 @@ fn no_credit_claimant_rejects() {
     vin.work_claim[0].shard_entries[0] = ShardWorkEntry {
         shard_id: SHARD_A,
         serve_credit_bit: false,
-        scarcity_milli: 0,
+        scarcity_micro: 0,
     };
     assert!(matches!(
         emission_vin_verify_claims(&vin, &ctx.as_context(), &[src]).unwrap_err(),

@@ -210,7 +210,6 @@ uint64_t shekyl_calc_burn_pct(
     uint64_t tx_baseline,
     uint64_t circulating_supply,
     uint64_t total_supply,
-    uint64_t stake_ratio,
     uint64_t burn_base_rate,
     uint64_t burn_cap);
 

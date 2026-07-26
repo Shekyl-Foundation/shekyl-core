@@ -1660,10 +1660,6 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   uint64_t median_weight = m_current_block_cumul_weight_median;
   const uint64_t tx_volume_avg = get_tx_volume_avg(block_height);
   const uint64_t circulating_supply = already_generated_coins;
-  // Claim-era staked-output aggregation is retired; with no staked-output
-  // type on the wire the ratio is identically zero. The archival-bond-based
-  // total_staked feed lands with the 2b reward-emission consensus work (C-1).
-  const uint64_t stake_ratio = 0;
 
   if (!get_block_reward(median_weight, cumulative_block_weight, already_generated_coins, base_reward, version, tx_volume_avg))
   {
@@ -1677,7 +1673,7 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   uint64_t miner_base_reward = em_split.miner_emission;
 
   // Component 2: fee burn split — miner only receives miner_fee_income
-  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, stake_ratio, version);
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, version);
   uint64_t effective_fee = burn.miner_fee_income;
 
   if(miner_base_reward + effective_fee < money_in_use)
@@ -1972,9 +1968,8 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
   size_t max_outs = 1;
   const uint64_t tx_volume_avg = get_tx_volume_avg(height);
   const uint64_t circulating_supply = already_generated_coins;
-  const uint64_t stake_ratio = 0; // claim-era source retired; see validate_miner_transaction
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, stake_ratio, genesis_ng_height);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, genesis_ng_height);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1983,7 +1978,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, stake_ratio, genesis_ng_height);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, genesis_ng_height);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     size_t coinbase_weight = get_transaction_weight(b.miner_tx);
@@ -6091,7 +6086,7 @@ leave:
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
         fee_summary, get_tx_volume_avg(blockchain_height), already_generated_coins,
-        /*stake_ratio*/ 0, connect_hf_version);
+        connect_hf_version);
 
     archival_budget_accrual = em_split.staker_emission + burn.staker_pool_amount;
     block_burn_amount = burn.actually_destroyed;

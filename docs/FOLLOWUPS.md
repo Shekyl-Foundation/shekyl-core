@@ -47,6 +47,67 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with
+  reopen (d).** The sliding-window m-of-n itself is **BUILT** (PR #368,
+  `shekyl-archival-retention/src/failure_window.rs`; `FAILURE_WINDOW_M/N`
+  config-generated at the Round-1 provisional `11`/`13`, shape frozen, numerics
+  re-pinned at the Round-2 testnet stressnet). What remains is that re-pin — and it
+  **cannot be tuned against honest transient false-slash alone**. The gate-4 grace
+  window and `m`/`n` are one design surface (`slash_prob(q, m, n)` is the shared
+  function), and **reopen (d)** — FIRED by the A5/W10 arm
+  (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6) — needs the same parameters
+  to keep the proxy-deterrence crossover `q* ≈ 0.098–0.278` reachable. Pinning for
+  false-slash alone immediately invalidates (d). One round, both objectives; if no
+  `(grace, m, n)` satisfies both, that infeasibility promotes the **PoRep** branch
+  of (d). Input: `shekyl-economics-sim::proxy` (which now **deps**
+  `FAILURE_WINDOW_M/N` rather than mirroring them). Target: **V3.0**.
+- **D3 — archival-reward per-bond `curve_milli` cap is dodgeable at no bond
+  cost** (added 2026-07-25; surfaced by A4/W9,
+  `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.5 / reopen (e), sim commits
+  `d4026efe3`+cp4c). `sigma_work_milli` applies the `curve_milli` plateau **per
+  bond entry** (`per_p_work_milli`), while `bond_floor_of` scales the bond
+  requirement **per shard** — so splitting one bonded principal's holdings into
+  many small bonds dodges the plateau at *zero* extra bond cost. A naive
+  big-bond archiver self-caps (earns ~`plateau/holdings` per shard) while a
+  splitter — attacker or savvy honest — stays in the linear region and is
+  uncapped. **Load-bearing for W9, not orthogonal:** at the fully-capped-honest
+  end the dodge ~2× the stuffer's served-work ROI (A4 `hHold=512` column). This
+  is a genesis-freeze concern (the reward-curve *shape* is frozen) at the
+  **archival-reward layer**, needing its own design round — it is not a D2
+  escalation change. **Fix space (post-charter G-1/G-2):** ~~apply the cap per
+  *persona*/principal~~ — **struck: forbidden by the privacy architecture**
+  (cross-bond linkage is a priority-#1 regression if mandatory, and unenforceable
+  if voluntary — a cap that binds only the honest), so **any cap binds at most
+  per bond**. What remains: **per-bond friction** (minimum bond size, fixed
+  per-bond capital cost making bond *multiplication* expensive), **curve
+  reshaping within the bond**, or **deleting the plateau outright** (a rule-15
+  candidate — A4 shows it is dodgeable, unenforceable above the bond, and
+  *actively harmful in the regime where it binds*, while `MAX_HOLDINGS_SHARDS`
+  already caps per-bond work and bond floors already price holdings in capital). **Pairs with** the reopen-(c) weight-denominated
+  per-output fee-floor: the floor prices the fee-flow regime, D3 prices the
+  concentration regime — each closes the regime the other cannot (§12.5).
+  **Charter: `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.8** — the round must
+  start from the **holdings-size force triangle**, not the cap alone: the
+  dodgeable cap pushes holdings **down** (splitting pays), while **milli
+  quantization** (§12.7 Finding 3 — a genesis-frozen floor, **not** a fixable
+  defect) and **claim-cost economics** both push holdings **up**. D3's output is
+  the *equilibrium holdings size* those three forces select, plus a cap design
+  that selects the one the network wants — noting the asymmetry (the dodge is an
+  incentive; the other two are viability floors, so raising floors alone pushes
+  small honest archivers out = a reach loss).
+  **✅ ROUND CLOSED (2026-07-26, §12.9)** — all five OQs discharged. Resolution:
+  **R2** delete the plateau's *reward-path application* (keep `curve_milli` itself,
+  §6.1's escalation reuses the idiom); **R3** an **admission-time viability
+  predicate** — `work_milli(bond) ≥ k` at connect height via the production chain,
+  **not** a frozen minimum size (that would be a forecast about `r`, and the sizing
+  exercise is what proved the numeric wrong), pinning **`k = 1` milli** and a
+  **parent-block read-point**; **R4** cadence monitored-not-designed-for. Evidence:
+  deletion is distribution-neutral **at the true partition optimum** (OQ-1,
+  `|Δ| = 0`), and A4's `fee_mult_to_close` is unchanged under deletion, so reopen
+  (c)'s sizing survives (OQ-4). **What remains is the implementing round**, which
+  inherits the §12.9 census: rule-42 digest regen, the *"C++ source-unchanged yet
+  behaviourally live"* PR callout, the KAT/fixture regeneration list, and the §6.1
+  idiom carve-out. Target: V3.0 (pre-genesis; gates the escalation freeze).
 - **~~KEM-ciphertext extra packing mismatch — vout ≥ 1 unscannable in
   production-built transactions~~** **CLOSED 2026-07-25**
   (`fix/kem-extra-packing`): landed exactly per the fix direction below
@@ -5358,20 +5419,59 @@ sustainability is unaffected by the recalibration.
   Rust side's gungraun benches are the house pattern). *Target: V3.1*
   (not genesis-gating; the live perf gates are T5/T6, wired 2026-07).
 
-- **Re-evaluate the inert `(1 + stake_ratio)` factor in `calc_burn_pct`
-  (spawned gate-7 iteration 5, 2026-06-11).** The gate-7 locked-supply
+- **✅ RESOLVED 2026-07-24 — DELETED (commit `7256962`). Re-evaluate the inert
+  `(1 + stake_ratio)` factor in `calc_burn_pct` (spawned gate-7 iteration 5,
+  2026-06-11).** The gate-7 locked-supply
   re-pricing ([`design/STAKER_ARCHIVAL_SIM.md`](./design/STAKER_ARCHIVAL_SIM.md)
   §*Gate 7 iteration-5 — results*) showed the derived V3 archival lock holds
   `stake_ratio` at 10⁻⁷–10⁻⁴ of `SCALE`, so the `stake_factor` term in
-  `shekyl-economics::burn::calc_burn_pct` is effectively inert — it was
+  `shekyl-economics::burn::calc_burn_pct` was effectively inert — it was
   designed for the retired tier-staking model, whose 5–35 % asserted ratios
-  inflated burn ~22 % in the legacy sim scenarios. Decide: keep (inert but
-  harmless; preserves the lever if a future lock class materializes) or
-  delete (smaller consensus surface per `15-deletion-and-debt.mdc`). This is
-  consensus burn math — it needs its own review against `00-mission.mdc`,
-  not a ride-along edit. Target: V3.1. *Reopen sooner if:* any V3.0 change
-  introduces a lock class large enough to move `stake_ratio` above ~10⁻³ of
-  `SCALE` (the gate-7 reversion threshold).
+  inflated burn ~22 % in the legacy sim scenarios. **Resolution:** the Stage-0
+  archival-economics design round *was* the "own review against `00-mission.mdc`,
+  not a ride-along edit" this item demanded — pre-genesis, on that exact burn
+  math — so the V3.1 target and the >10⁻³ reopen are **superseded**. `stake_factor`
+  (and the `stake_ratio` parameter through the FFI + C++ chain) is deleted;
+  burn rate is now `activity × supply` (F-D,
+  [`design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](./design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)).
+
+- **GENESIS-FREEZE: cap the coinbase output count in consensus (F-H, spawned
+  Stage-2 A4 grounding, 2026-07-24).** Coinbase outputs are curve-tree leaves
+  that count toward `frozen_segment_count` yet **pay no fee**, so the W9 fee-path
+  burden-coupling defense has a second, unpriced face. **Verified at source:**
+  `prevalidate_miner_transaction` / `validate_miner_transaction`
+  (`blockchain.cpp:1594`/`1634`) check output overflow, type, key validity,
+  commitment mask, and decomposed amount — **no output-*count* bound** on a
+  foreign coinbase; the honest template's `max_outs = 1` binds only the builder.
+  *Fix:* add a consensus coinbase output-count cap in
+  `prevalidate_miner_transaction`. **Recommended cap = 1** (staker pool accrues
+  off-coinbase per the `:6081` accrual; the template has only ever built 1;
+  uniform coinbase is privacy-consistent). **Principle:** decided on consensus
+  grounds — the test harness (`chaingen`/`block_reward` multi-out coinbases,
+  inherited Monero scaffolding) **conforms to the cap**, the cap is not inflated
+  for it. *Rule-21 reopen (sole trigger):* a consensus consumer that
+  structurally requires a multi-output coinbase, as its own design round. Pins
+  the state unrepresentable; forecloses the miner-stuffer channel so A4 stays
+  fee-path-only. See `design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.3 F-H.
+
+- **Remove or retain the orphaned `ActivityMetric.total_staked` observable
+  (spawned Stage-1b `stake_factor` delete, commit `7256962`, 2026-07-24).** The
+  F-D delete severed burn's only consumer of `total_staked`
+  (`LocalEconomics::burn_amount`), leaving it a **carried-but-unconsumed** field
+  in the validated `ActivityMetric` bundle. It was kept in the Stage-1b commit
+  (doc updated) rather than excised, because removal is a **validation-surface**
+  change, not a burn-lever edit — the same F-D ride-along prohibition applies.
+  *Scope:* the `ActivityMetric.total_staked` field + accessor, the
+  `StakedExceedsCirculating` structural invariant (and the `GenesisStateNonZero`
+  stake clause), and the differential fixture format (`RecordedRow.total_staked`
+  \+ `baseline_steady_state.json`) it feeds through the one non-test constructor
+  (`economics_differential.rs:145`). *Decide at:* the next differential-corpus
+  format change, or V3.1 cleanup, whichever first. *Dispositions:* **excise**
+  for fossil-freeness (drop the field + invariant, re-record the corpus) **vs.
+  retain** as a validated sampled observable if a real non-burn consumer
+  materializes (Stage-3 telemetry, a future lock class). The
+  `StakedExceedsCirculating` invariant is not theater meanwhile — it guards the
+  recorded corpus's sanity at its sole live constructor.
 
 - **Typed epoch/height parameters across the archival FFI (spawned PR 123,
   2026-06-10).** `shekyl_archival_good_through(join_settlement_epoch,

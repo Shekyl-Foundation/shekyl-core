@@ -955,7 +955,7 @@ mod tests {
                 shard_entries: vec![ShardWorkEntry {
                     shard_id: 7,
                     serve_credit_bit: true,
-                    scarcity_milli: 850,
+                    scarcity_micro: 850_000,
                 }],
             }],
             backing: MembershipOnlyBacking {

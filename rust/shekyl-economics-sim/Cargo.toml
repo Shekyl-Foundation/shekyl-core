@@ -14,5 +14,12 @@ shekyl-economics = { path = "../shekyl-economics" }
 # instead of re-asserting their values locally.
 # (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# A4 W9 stuffer: price real transaction weights through the SAME single-sourced
+# predictor the wallet fee path uses (DQ-2G dep-don't-mirror, D-1 hoist).
+shekyl-tx-weight = { path = "../shekyl-tx-weight" }
+# A4 tree-depth-from-n: `outputs_per_node` — the production curve-tree capacity
+# function — so the stuffer's FCMP proof cost rides real chain depth, not a
+# mirrored width product (DQ-2G).
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 serde = { workspace = true }
 serde_json = "1"

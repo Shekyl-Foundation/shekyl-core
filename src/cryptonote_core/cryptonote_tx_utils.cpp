@@ -116,7 +116,7 @@ namespace cryptonote
     LOG_PRINT_L2("destinations include " << num_stdaddresses << " standard addresses and " << num_subaddresses << " subaddresses");
   }
   //---------------------------------------------------------------
-  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version, uint64_t tx_volume_avg, uint64_t circulating_supply, uint64_t stake_ratio, uint64_t genesis_ng_height) {
+  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version, uint64_t tx_volume_avg, uint64_t circulating_supply, uint64_t genesis_ng_height) {
     tx.vin.clear();
     tx.vout.clear();
     tx.extra.clear();
@@ -148,7 +148,7 @@ namespace cryptonote
       ", staker_emission " << em_split.staker_emission << ", fee " << fee);
 #endif
     // Component 2: adaptive fee burn
-    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, stake_ratio, hard_fork_version);
+    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, hard_fork_version);
     block_reward += burn.miner_fee_income;
 
     // Single "dusty" output with identity-mask RCT (active from genesis on rebooted chain).
