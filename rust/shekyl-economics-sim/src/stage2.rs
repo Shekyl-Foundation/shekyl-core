@@ -38,7 +38,9 @@ use crate::calibration::{
 };
 use crate::engine::{ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve};
-use crate::population::{attacker_capped_work_milli, honest_sigma_work_milli, DQ2H_TAIL};
+use crate::population::{
+    attacker_capped_work_milli, honest_sigma_work_milli, honest_sigma_work_milli_deleted, DQ2H_TAIL,
+};
 use crate::scenarios::all_scenarios;
 use shekyl_archival_retention::{
     reward_share_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_HOLDINGS_SHARDS, SEGMENT_LEAF_COUNT,
@@ -1094,6 +1096,63 @@ fn a3_stranding_report(params: &SimParams) {
     );
 }
 
+/// **OQ-4** (D3 round §12.8) — re-run the A4 gate under **R2 (plateau deleted)**.
+/// Prediction: the capped column vanishes, the realistic-end numbers become the
+/// only numbers, and `fee_mult_to_close` is unchanged — because reopen (c) was
+/// sized against the realistic end already.
+fn oq4_deletion_recheck(params: &SimParams) {
+    let cfg = &all_scenarios(params)[0];
+    let aggs = a1_year_aggs(params, cfg);
+    let Some(a) = aggs.iter().rfind(|a| a.n > 0) else {
+        return;
+    };
+    let curve = family()
+        .iter()
+        .max_by_key(|c| c.asymptote)
+        .copied()
+        .unwrap_or_else(flat_25);
+    let (delta, horizon) = (10_000u64, 10u64);
+    eprintln!(
+        "\nOQ-4 (D3 round §12.8) — A4 gate under PLATEAU DELETION (scenario {SC}, n={N},\n\
+         steepest candidate, Δn={D}, H={H}y). Prediction: the capped column vanishes and\n\
+         the realistic-end numbers become the only numbers.",
+        SC = trunc(&cfg.name, 20),
+        N = a.n,
+        D = delta,
+        H = horizon,
+    );
+    eprintln!("{:<26} {:>12} {:>14}", "honest regime", "ROI", "fee x -> 1");
+    for (label, sigma) in [
+        (
+            "kept, small bonds (h=4)",
+            honest_sigma_work_milli(a.n, DQ2H_TAIL, 4),
+        ),
+        (
+            "kept, capped (h=512)",
+            honest_sigma_work_milli(a.n, DQ2H_TAIL, 512),
+        ),
+        (
+            "DELETED (h irrelevant)",
+            honest_sigma_work_milli_deleted(a.n, DQ2H_TAIL, 4),
+        ),
+    ] {
+        let d = a4_decompose(a.whole_burn_atomic, a.n, sigma, &curve, delta, horizon);
+        eprintln!(
+            "{:<26} {:>12.4} {:>14.1}",
+            label, d.roi, d.fee_mult_to_close
+        );
+    }
+    eprintln!(
+        "  -> Read: deletion reproduces the small-bond row exactly — under R2 there is no\n\
+         cap to dodge, so the honest-holdings axis stops mattering and A4 has ONE number\n\
+         per regime instead of a naive/rational spread. fee_mult_to_close is unchanged\n\
+         from the realistic end, so reopen (c)'s sizing evidence SURVIVES deletion\n\
+         (it was sized there already). The capped row is what deletion removes: a\n\
+         penalty that fell on non-optimizing honest archivers and doubled the stuffer's\n\
+         relative capture."
+    );
+}
+
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
 /// stdout, a human-readable summary to stderr.
 pub fn run_stage2(params: &SimParams) {
@@ -1140,6 +1199,8 @@ pub fn run_stage2(params: &SimParams) {
     let a1 = a1_clearance_report(params);
     a3_stranding_report(params);
     crate::distribution::oq1_probe_report();
+    crate::admission::oq2_report(&A3_ARCHIVER_BAND, &[1_011, 6_066, 10_110]);
+    oq4_deletion_recheck(params);
     let a4 = a4_stuffing_report(params);
 
     // A5 (W10): the L14 slash forfeits the forgone post-D1/D2 reward stream — of

@@ -1,3 +1,4 @@
+mod admission;
 mod budget;
 mod budget_scenarios;
 mod burden;

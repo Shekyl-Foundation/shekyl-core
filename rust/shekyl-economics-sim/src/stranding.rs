@@ -86,6 +86,12 @@ impl Scoring {
 
 /// Mean replication implied by network size: `archivers · holdings / n`, floored
 /// at 1. Deep replication is what pushes shards past the pre-fix cliff.
+///
+/// **Holdings are clamped to `n`** — an archiver cannot hold shards that do not
+/// exist. Without the clamp an early-chain corpus (`n` smaller than the largest
+/// class's holdings) reports replication inflated by the ratio, since the
+/// `MAX_HOLDINGS_SHARDS` class would be credited with 4,096 shards out of a
+/// 1,011-shard corpus.
 #[must_use]
 pub fn mean_replication(archivers: u64, n_shards: u64) -> u64 {
     if n_shards == 0 {
@@ -94,7 +100,7 @@ pub fn mean_replication(archivers: u64, n_shards: u64) -> u64 {
     let held: u128 = ARCHIVER_CLASSES
         .iter()
         .map(|&(per_mille, shards)| {
-            u128::from(archivers) * u128::from(per_mille) / 1000 * u128::from(shards)
+            u128::from(archivers) * u128::from(per_mille) / 1000 * u128::from(shards.min(n_shards))
         })
         .sum();
     u64::try_from(held / u128::from(n_shards))

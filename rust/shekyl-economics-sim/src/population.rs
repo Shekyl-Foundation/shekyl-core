@@ -124,6 +124,40 @@ pub fn honest_sigma_work_milli(n: u64, tail: &[(u32, u64)], holdings_per_bond: u
     sigma
 }
 
+/// **OQ-4** — honest `Σwork` under **R2 (plateau deleted)**: work runs linear to
+/// the wire cap, so there is no curve and `holdings_per_bond` becomes irrelevant to
+/// the total. Per-bond milli flooring still applies (it is the frozen quantization,
+/// not the plateau), so this is scored per bond rather than in one sum.
+///
+/// The A4 gate under deletion is this Σ instead of [`honest_sigma_work_milli`] —
+/// and it should coincide with the small-bond (uncapped) column, which is the
+/// prediction OQ-4 tests.
+#[must_use]
+pub fn honest_sigma_work_milli_deleted(n: u64, tail: &[(u32, u64)], holdings_per_bond: u64) -> u64 {
+    let holdings = holdings_per_bond.max(1);
+    let mut sigma = 0u64;
+    let mut bond_micro = 0u64;
+    let mut in_bond = 0u64;
+    for i in 0..n {
+        let r = shard_r_market(i, tail);
+        let s = scarcity_micro(r, AGE_MILLI, AGE_WEIGHT_MILLI);
+        for _ in 0..r {
+            bond_micro = bond_micro.saturating_add(s);
+            in_bond += 1;
+            if in_bond == holdings {
+                // No curve — credited work IS work (R2).
+                sigma = sigma.saturating_add(work_milli_from_micro(bond_micro));
+                bond_micro = 0;
+                in_bond = 0;
+            }
+        }
+    }
+    if in_bond > 0 {
+        sigma = sigma.saturating_add(work_milli_from_micro(bond_micro));
+    }
+    sigma
+}
+
 /// The stuffer's first-mover capped work (milli): `delta` fresh shards served at
 /// `r = 1` (sole server, age 0 → maximal scarcity), grouped into bonds of
 /// `holdings_per_bond`. The attacker picks a *small* grouping to stay under the
@@ -189,6 +223,30 @@ mod tests {
         assert!(
             capped < uncapped,
             "large bonds must be curve-capped: capped={capped} uncapped={uncapped}"
+        );
+    }
+
+    #[test]
+    fn oq4_deletion_coincides_with_the_small_bond_column() {
+        // OQ-4's prediction: under plateau deletion the capped/uncapped distinction
+        // vanishes and Σwork equals the small-bond (already-uncapped) case — so A4's
+        // realistic-end numbers become the ONLY numbers. Deletion must also be
+        // holdings-invariant, since linear work does not care how bonds are grouped
+        // (up to per-bond flooring).
+        let n = 5_000u64;
+        let small_capped = honest_sigma_work_milli(n, DQ2H_TAIL, 4);
+        let small_deleted = honest_sigma_work_milli_deleted(n, DQ2H_TAIL, 4);
+        assert_eq!(
+            small_capped, small_deleted,
+            "at small bonds the curve is inert, so deletion changes nothing"
+        );
+        // The capped column collapses onto it: deletion removes the concentration
+        // penalty a large naive bond suffered.
+        let big_capped = honest_sigma_work_milli(n, DQ2H_TAIL, 512);
+        let big_deleted = honest_sigma_work_milli_deleted(n, DQ2H_TAIL, 512);
+        assert!(
+            big_deleted > big_capped,
+            "deletion must lift the capped case: {big_deleted} !> {big_capped}"
         );
     }
 
