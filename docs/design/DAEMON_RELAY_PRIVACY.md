@@ -1557,6 +1557,7 @@ origin specifically. At 512/8 with graph distances capping around 3–4 this is
 noise against the adopted embargo, but Q-8 concentrates exactly at the origin, so when the
 profile work lands `F` should be measured **conditional on stem distance**, and
 the Q-5 testnet measurement should stratify the same way.
+
 ### 10.5 RD-4 — the stem-length support was wrong, in the seam we named
 
 **Accepted; the adopted embargo moves 112 s → 144 s.**
@@ -2353,7 +2354,7 @@ by relaying, on pain of eviction — HUMINT: you don't deny the source you can't
 you make being that source cost more than it is worth and get its work in the
 bargain). One mechanism, two edges: **admit on demonstrated propagation, evict on
 demonstrated dropping** — stem-eligibility as a standing, revocable toll paid in
-relay work. It is **transport-blind** (work, not identity), which resolves the §12.8
+relay work (the signal and the selection rule are specified in §12.11). It is **transport-blind** (work, not identity), which resolves the §12.8
 worry: onion gives *identity*-admission nothing, but *work*-admission everything, on
 both transports identically.
 
@@ -2397,6 +2398,119 @@ outbound), which bounds full-eclipse censorship. Both are dramatically better-po
 than "bound pool-share `g`," because the positive signal is doing the work on both.
 Select toward demonstrated work; pin the workers; evict the droppers; let the
 observer buy lunch and carry freight.
+
+### 12.11 The selection mechanism — epsilon-greedy over the embargo signal (exploit / explore / cool-down)
+
+§12.10 said "admit on demonstrated propagation, evict on demonstrated dropping."
+This section specifies *what the signal is* and *how selection reads it*, and every
+piece lands on a mechanism already built or fifty years old — no new oracle, no new
+constant to guess.
+
+**A. The signal is the embargo — disarm = success, fire = failure, and it cannot be
+laundered.** Three candidate success signals, and the black hole's signature in
+each:
+
+- *Handoff* (the successor ACKed the bytes): the black hole **aces** it — it
+  receives perfectly, it just does not forward. Useless.
+- *Reaches-chain (eventual)*: **laundered.** The black hole drops the tx, but an
+  upstream embargo fires and re-fluffs it, so it reaches the chain anyway — and the
+  signal credits the successor with a success the *backstop* delivered. The
+  mechanism that defeats the black hole is the same one that hides it from a
+  reaches-chain oracle. Also slow (~120 s) and validity-confounded (a low-fee tx
+  fluffs fine but never mines — not the successor's fault).
+- *Embargo state*: **un-launderable, because the fire is the detection event
+  itself, not an inference about it.** My embargo fires *precisely because* I did
+  not observe the tx diffuse in time. Fast disarm (I observed diffusion before my
+  timer, ~`F` ≈ 2 s on fluff-observation, RD-1) = the stem worked; fire = the stem
+  failed and I am now the backstop. **The backstop and the detector are one
+  mechanism** — the fire that rescues the tx is the same event that indicts the
+  successor. The reputation oracle is the embargo derived in RD-1/§13; it is not
+  validity-confounded (it measures diffusion, not mining), and it costs nothing new.
+
+**The false-positive rate is known, so "rate separates cleanly" is a number.** The
+embargo is provisioned to fire on ~10 % of *successfully-propagating* txs — the
+preemption rate, `1 − EMBARGO_FULL_TRAVEL_PROBABILITY = 0.10` (the `ε` provisioning).
+So an honest successor's fire-rate floor is ≈ 10 % (preemption) + the ambient
+downstream-black-hole rate (the **attribution gap**: my fire indicts my successor S,
+but if S is honest and forwards to a black hole T, my fire mis-attributes to S). A
+black-hole successor fires ≈ 100 %. The floor (~10–15 %) and the black-hole rate
+(~100 %) are widely separated, so the per-successor **rate** launders out *both* the
+false positives *and* the attribution noise — the same way the backstop laundered
+*in* the black hole's success. Single-event eviction was wrong; rate-threshold is
+right; and this reconfirms it from the black-hole direction.
+
+**B. Cause-blind outcome-routing, cooldown-not-eviction (the ARPANET lesson).** For
+the routing decision the drop *cause* is irrelevant — outcome is everything. A peer
+that fails to propagate fails, whether malicious, overloaded, on a dying Tor
+circuit, or on hotel wifi; from the tx's view an honestly-broken peer and a black
+hole are identical. So prefer-away is correct regardless of cause, and diagnosing
+intent is both impossible (the attribution gap) and unnecessary (the response is
+identical) — distance-vector routing never asks "malicious or congested." **There is
+no separate "malicious" handling** (that would require diagnosing intent, where
+BGP-style trust breaks): one rule — *fail → cool down → retest → aggregate the rate*
+— produces route-around-the-black-hole and forgive-the-transient as two *emergent*
+outcomes. **Cooldown-not-eviction is what makes cause-blindness fair:** honest and
+black hole are identical at the failure event (cool both down), and separate over
+time by rate (the honest peer recovers, the black hole keeps firing); retained
+history snaps the honest peer back to preference on recovery while the black hole's
+rate decays it out. This is the **aggregate** layer — it catches the *indiscriminate*
+black hole; the *selective* censor (relays most → honest-looking rate, drops the
+target → one fire) is the per-tx **reshape**'s job (§14), not the rate signal's.
+
+**C. Epsilon-greedy exploration — pure preference ossifies to a *self-inflicted
+eclipse*.** Pure exploit (`ε_explore = 0`) selects the top-2 track-record peers
+*every time* — measured: the stem graph collapses to **2 of 12 peers and stays
+there**. That is not a tendency, it is total, and it is a privacy failure disguised
+as a stability success: it collapses the origin's *eligible pool* from 12 to 2,
+which makes **full eclipse trivial** — the eclipse target (§12.10 regime 3, the one
+surviving pool-share bound) drops from "conscript ~12 of O's outbound" to "be the 2
+O actually uses." Even a small explore rate repairs it: `ε_explore = 0.05` restores
+**all 12 peers exercised**. So exploration is the anti-ossification input that keeps
+the eclipse-resistance bound *meaningful* — an ossified pool has trivial eclipse
+resistance regardless of anti-eclipse policy. This is **epsilon-greedy**, and
+`ε ≈ 0.05` is not a new guess: it is the classic RL/routing epsilon, derived against
+this exact explore/exploit trade-off fifty years ago.
+
+**The unified three-tier selection:**
+
+| tier | pool | rule | role |
+| --- | --- | --- | --- |
+| **Exploit** (majority of slots) | eligible peers | prefer embargo-disarm rate | stability / conscription (§12.10) |
+| **Explore** (`ε ≈ 0.05`, memoryless) | eligible-but-**non-top** | uniform random | restores full-pool diversity → eclipse-resistance (§12.10 regime 3); **is** the bootstrap channel — how an unproven honest peer earns its first embargo-disarm |
+| **Excluded** | cooled-down (recently-fired) | — | not eligible for *either* tier until cooldown expires |
+
+Explore *is* §12.10's re-entry cost / unknown-baseline — `ε` sets both bootstrap
+generosity and whitewash cost simultaneously, which is why the **cooled-down set is
+excluded from explore**: explore among the *unproven*, never the *failed*, or
+exploration becomes the whitewash/eviction-launderer (drop → cooldown →
+explore-re-admits-before-proven). Three adversarial edges on exploration, all
+required:
+
+1. **No re-admit on explore** — draw explore targets from eligible-non-top only,
+   never the cooled-down set (above).
+2. **Memoryless explore timing** — per-epoch probability `ε`, *not* every-`1/ε`
+   epochs; otherwise the explore-slot is a timing fingerprint (it is the slot most
+   likely to be a fresh/random peer). A direct port of D-3 (the memoryless fluff
+   delay) to the selection layer.
+3. **Diffusion-vs-concentration documented** — exploration spreads stem traffic
+   across more peers over time, trading a *small* increase in passive-observer
+   diffusion (more peers each see a little) for a *large* decrease in occupancy
+   concentration (few peers see everything). Net-correct for the threat model: it
+   helps against the **occupier** (the demonstrated ProxyMark threat, in scope) and
+   only slightly helps the **sampler** (the out-of-scope passive observer). Document
+   it so nobody later reads "exploration = more peers see my traffic" as a pure
+   regression.
+
+**What is measured vs. owed.** The `ε_explore = 0 → 2/12`, `0.05 → 12/12` result is
+from an external model; per the arc's discipline (reproduce the load-bearing number
+in our own instrument, the §13.5 lesson) it should be re-run in the crate — an
+epsilon-greedy selection instrument (`ε → distinct-peers-exercised`, plus the
+strategic-dropper `P(both-adv)` rows) parallel to `simulate_epoch_layering`. The
+parameters this specifies are the concrete form of §12.10's two bounds: **cooldown
+length + rate-decay threshold** (eviction responsiveness; the threshold clears the
+~10 %+ambient honest floor and sits well below ~100 %) and **`ε_explore` + retained
+history** (re-entry cost / bootstrap-vs-whitewash). Derive them against the
+honest-recovery vs black-hole-delay vs false-eviction trade-off — measure, don't pick.
 
 ---
 
