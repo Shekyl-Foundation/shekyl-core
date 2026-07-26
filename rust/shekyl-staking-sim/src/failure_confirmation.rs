@@ -559,16 +559,15 @@ fn run_sliding(
     let epochs = params.epochs as u32;
     let mut out = SimOutcome::default();
 
-    // The baseline grid and its miss sequence. `can_serve` is deterministic
-    // here (sliding schedules no recheck, so no RNG is drawn), which is what
-    // lets the schedule be materialized before the policy runs instead of
-    // breaking out of a fused loop.
-    let baseline_epochs: Vec<u32> = (0..epochs)
-        .filter(|epoch| epoch % params.baseline_period == 0)
-        .collect();
-    let missed: Vec<bool> = baseline_epochs
-        .iter()
-        .map(|&epoch| !can_serve(truth, epoch, avail, transient, None))
+    // The baseline miss sequence. `can_serve` is deterministic here (sliding
+    // schedules no recheck, so no RNG is drawn), which is what lets the schedule
+    // be materialized before the policy runs instead of breaking out of a fused
+    // loop. The baseline grid is the arithmetic progression 0, baseline_period,
+    // 2·baseline_period, … so baseline `index` sits at epoch
+    // `index · baseline_period` — walk it with `step_by` rather than storing it.
+    let missed: Vec<bool> = (0..epochs)
+        .step_by(params.baseline_period as usize)
+        .map(|epoch| !can_serve(truth, epoch, avail, transient, None))
         .collect();
 
     let slash_at = sliding_window_first_slash_baseline(
@@ -581,7 +580,7 @@ fn run_sliding(
     out.challenges = slash_at.map_or(missed.len(), |index| index + 1) as u64;
     if let Some(index) = slash_at {
         out.slashed = true;
-        out.slash_epoch = Some(baseline_epochs[index]);
+        out.slash_epoch = Some(index as u32 * params.baseline_period);
         out.false_slash = truth == GroundTruth::TransientOnce;
     }
     out
