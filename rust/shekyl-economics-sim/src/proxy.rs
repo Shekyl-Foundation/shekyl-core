@@ -33,7 +33,8 @@
 //! **weaker**, not stronger — the free-rider is more viable, not less.
 
 use shekyl_archival_retention::{
-    ARCHIVAL_BOND_FLOOR_ATOMIC, CHALLENGES_PER_EPOCH, MAX_HOLDINGS_SHARDS, SETTLEMENT_EPOCH_BLOCKS,
+    ARCHIVAL_BOND_FLOOR_ATOMIC, CHALLENGES_PER_EPOCH, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
+    MAX_HOLDINGS_SHARDS, SETTLEMENT_EPOCH_BLOCKS,
 };
 
 use crate::burden::{COIN, SHARD_BYTES};
@@ -73,12 +74,14 @@ pub const STORAGE_FIAT_PER_BYTE_YEAR: f64 = 1.0e-11;
 /// pays this only on the re-fetched openings, not on 13.6 GB of standing storage.
 pub const FETCH_FIAT_PER_BYTE_BAND: [f64; 2] = [1.0e-11, 1.0e-10];
 
-/// Ratified sliding-window failure-confirmation params (provisional; re-pinned at
-/// the Round-2 testnet stressnet — `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §1). A
-/// slash needs `m` misses within the last `n` baseline observations.
-pub const SLASH_M: u32 = 11;
+/// Sliding-window failure-confirmation params — **called from consensus**, not
+/// mirrored (DQ-2G). Built by PR #368 (`failure_window.rs`) after this arm first
+/// modelled them as local constants; the numerics stay provisional (shape frozen,
+/// re-pinned at the Round-2 stressnet), so depping them means this arm re-prices
+/// automatically when they move rather than silently diverging.
+pub const SLASH_M: u32 = FAILURE_WINDOW_M;
 /// … `n` window length.
-pub const SLASH_N: u32 = 13;
+pub const SLASH_N: u32 = FAILURE_WINDOW_N;
 
 /// Honest storage cost per epoch, fiat: hold the full `max_holdings_bytes` at the
 /// storage basis, prorated to one settlement epoch.
