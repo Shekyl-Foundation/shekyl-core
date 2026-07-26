@@ -506,6 +506,35 @@ fn run_escalate(
     out
 }
 
+/// The sliding-window policy itself, over an explicit **per-baseline** miss
+/// sequence (`true` = the baseline was missed): the index of the first baseline
+/// at which `m` misses fall within the trailing window of `n` observations, or
+/// `None` if the threshold is never crossed.
+///
+/// Extracted from [`run_sliding`] so the consensus implementation
+/// (`shekyl-archival-retention::failure_window`) can be tested against **this**
+/// code rather than a re-typed copy of it — the pin's m-of-n is one policy with
+/// two realizations, and the equivalence test (`sliding_window_matches_consensus_*`)
+/// is what keeps them one.
+pub fn sliding_window_first_slash_baseline(
+    missed: &[bool],
+    miss_threshold: usize,
+    window_epochs: usize,
+) -> Option<usize> {
+    let mut window: Vec<u8> = Vec::new();
+    for (index, &miss) in missed.iter().enumerate() {
+        window.push(u8::from(miss));
+        if window.len() > window_epochs {
+            window.remove(0);
+        }
+        let miss_count = window.iter().map(|&m| m as usize).sum::<usize>();
+        if miss_count >= miss_threshold {
+            return Some(index);
+        }
+    }
+    None
+}
+
 fn run_sliding(
     truth: GroundTruth,
     avail: &[bool],
@@ -514,26 +543,31 @@ fn run_sliding(
 ) -> SimOutcome {
     let epochs = params.epochs as u32;
     let mut out = SimOutcome::default();
-    let mut misses: Vec<u8> = Vec::new();
 
-    for epoch in 0..epochs {
-        if epoch % params.baseline_period != 0 {
-            continue;
-        }
-        out.challenges += 1;
-        let serve = can_serve(truth, epoch, avail, transient, None);
-        let miss = u8::from(!serve);
-        misses.push(miss);
-        if misses.len() > params.sliding_window_epochs {
-            misses.remove(0);
-        }
-        let miss_count = misses.iter().map(|&m| m as usize).sum::<usize>();
-        if miss_count >= params.miss_threshold {
-            out.slashed = true;
-            out.slash_epoch = Some(epoch);
-            out.false_slash = truth == GroundTruth::TransientOnce;
-            break;
-        }
+    // The baseline grid and its miss sequence. `can_serve` is deterministic
+    // here (sliding schedules no recheck, so no RNG is drawn), which is what
+    // lets the schedule be materialized before the policy runs instead of
+    // breaking out of a fused loop.
+    let baseline_epochs: Vec<u32> = (0..epochs)
+        .filter(|epoch| epoch % params.baseline_period == 0)
+        .collect();
+    let missed: Vec<bool> = baseline_epochs
+        .iter()
+        .map(|&epoch| !can_serve(truth, epoch, avail, transient, None))
+        .collect();
+
+    let slash_at = sliding_window_first_slash_baseline(
+        &missed,
+        params.miss_threshold,
+        params.sliding_window_epochs,
+    );
+    // Challenges are counted up to and including the slashing baseline: the
+    // policy stops testing a slashed `P`.
+    out.challenges = slash_at.map_or(missed.len(), |index| index + 1) as u64;
+    if let Some(index) = slash_at {
+        out.slashed = true;
+        out.slash_epoch = Some(baseline_epochs[index]);
+        out.false_slash = truth == GroundTruth::TransientOnce;
     }
     out
 }
@@ -1142,6 +1176,156 @@ pub fn run_full_report(axis_prefix: Option<&str>) -> FailureConfirmationReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_archival_retention::failure_window::{
+        failure_window_slashable, BaselineObservation, FailureWindowError, FAILURE_WINDOW_M,
+        FAILURE_WINDOW_N,
+    };
+
+    /// Replay the **consensus** decision over the same per-baseline miss
+    /// sequence the sim's policy sees, returning the first baseline index at
+    /// which it slashes.
+    ///
+    /// This is the consensus caller's contract in miniature: at each baseline
+    /// it hands `failure_window_slashable` the trailing window, most-recent
+    /// first. Served baselines are skipped rather than evaluated because the
+    /// consensus gate is only ever reached on a *missed* baseline (gate-2 §6:
+    /// `challenge_failed` requires no `serve_credit_bit`). That skip loses no
+    /// decision: the miss count in the window is monotone non-increasing across
+    /// a passed baseline — a pass contributes no miss and may evict one — so a
+    /// window whose newest entry is a pass can never be the *first* crossing.
+    /// The assertion below is what proves the claim rather than asserting it:
+    /// the two indices agree exactly, and the sim does evaluate those baselines.
+    fn consensus_first_slash_baseline(missed: &[bool]) -> Option<usize> {
+        let n = FAILURE_WINDOW_N as usize;
+        for (index, &miss) in missed.iter().enumerate() {
+            if !miss {
+                continue;
+            }
+            let lo = (index + 1).saturating_sub(n);
+            let observations: Vec<BaselineObservation> = (lo..=index)
+                .rev()
+                .map(|i| BaselineObservation {
+                    // Any strictly-descending epochs stand in for the real
+                    // ones; the window's arithmetic reads only `served`.
+                    settlement_epoch: i as u64,
+                    served: !missed[i],
+                })
+                .collect();
+            if failure_window_slashable(&observations).expect("well-formed window") {
+                return Some(index);
+            }
+        }
+        None
+    }
+
+    /// **Equivalence with the sim's `run_sliding` policy** — the Round-1 pin
+    /// measured its false-slash / dodge-slash properties on
+    /// [`sliding_window_first_slash_baseline`], so consensus must produce the
+    /// same slash decision for the same miss sequence or those measurements do
+    /// not describe what ships.
+    ///
+    /// Exhaustive over every miss sequence up to length 16 at the shipped
+    /// `m = 11 / n = 13` — 131 070 sequences, covering partial windows (shorter
+    /// than `n`), full windows, and the slide.
+    ///
+    /// **What this pins, and what it does not.** It pins the m-of-n arithmetic
+    /// and the exact baseline at which the slash fires. It pins *nothing* about
+    /// the consensus **observability filter** (which epochs are baseline
+    /// observations at all): the sim has no such concept — every baseline in
+    /// its grid is an observation by construction. That filter is novel
+    /// consensus semantics with no sim counterpart and carries its own tests in
+    /// `failure_window.rs` (epoch gaps) and the C++ substrate KATs (bonded-but-
+    /// untested epochs, the forfeited add epoch, the reinstatement boundary).
+    #[test]
+    fn sliding_window_matches_consensus_exhaustively_to_length_16() {
+        let m = FAILURE_WINDOW_M as usize;
+        let n = FAILURE_WINDOW_N as usize;
+        let mut slashing_sequences = 0u32;
+        for len in 1..=16usize {
+            for bits in 0u32..(1u32 << len) {
+                let missed: Vec<bool> = (0..len).map(|i| bits & (1 << i) != 0).collect();
+                let sim = sliding_window_first_slash_baseline(&missed, m, n);
+                let consensus = consensus_first_slash_baseline(&missed);
+                assert_eq!(
+                    sim, consensus,
+                    "policy divergence at len={len} bits={bits:#x} missed={missed:?}"
+                );
+                if sim.is_some() {
+                    slashing_sequences += 1;
+                }
+            }
+        }
+        // Guard against a vacuous pass (e.g. an `m` so high nothing slashes):
+        // the sweep must actually exercise both verdicts.
+        assert!(
+            slashing_sequences > 0,
+            "no sequence slashed — sweep vacuous"
+        );
+        assert!(
+            slashing_sequences < (1u32 << 17) - 2,
+            "every sequence slashed — sweep vacuous"
+        );
+    }
+
+    /// The two properties the Round-1 pin names by number, checked on the
+    /// consensus side through the sim's own policy function.
+    #[test]
+    fn transient_absorbed_and_mostly_offline_dodge_slashed() {
+        let m = FAILURE_WINDOW_M as usize;
+        let n = FAILURE_WINDOW_N as usize;
+
+        // Isolated transient inside a long clean run — no slash, either side.
+        let mut missed = vec![false; 200];
+        missed[97] = true;
+        assert_eq!(sliding_window_first_slash_baseline(&missed, m, n), None);
+        assert_eq!(consensus_first_slash_baseline(&missed), None);
+
+        // Even a transient outage spanning m − 1 consecutive baselines (above
+        // the p99 single-outage span `m` was sized over) is absorbed.
+        let mut missed = vec![false; 200];
+        for slot in missed.iter_mut().skip(50).take(m - 1) {
+            *slot = true;
+        }
+        assert_eq!(sliding_window_first_slash_baseline(&missed, m, n), None);
+        assert_eq!(consensus_first_slash_baseline(&missed), None);
+
+        // Mostly-offline dodge-P: every baseline missed (pin §1 dodge slash =
+        // 1.000). Fires at the m-th baseline, index m − 1, on both sides.
+        let missed = vec![true; 200];
+        assert_eq!(
+            sliding_window_first_slash_baseline(&missed, m, n),
+            Some(m - 1)
+        );
+        assert_eq!(consensus_first_slash_baseline(&missed), Some(m - 1));
+    }
+
+    /// The monotonicity claim `consensus_first_slash_baseline` relies on, made
+    /// explicit: the consensus gate refuses a window whose newest entry is a
+    /// pass, and that refusal is never a lost slash.
+    #[test]
+    fn a_passed_baseline_is_never_the_first_crossing() {
+        let m = FAILURE_WINDOW_M as usize;
+        let n = FAILURE_WINDOW_N as usize;
+        // A window that reaches m only counting a trailing pass cannot exist:
+        // build the worst case (n − 1 misses then a pass) and confirm the sim
+        // slashed strictly earlier, at a missed baseline.
+        let mut missed = vec![true; n - 1];
+        missed.push(false);
+        let sim = sliding_window_first_slash_baseline(&missed, m, n).expect("slashes");
+        assert!(missed[sim], "sim fired on a passed baseline");
+        assert_eq!(sim, m - 1);
+
+        // And the consensus gate is loud, not silently false, if a caller ever
+        // hands it such a window.
+        let observations = vec![
+            BaselineObservation::served(100),
+            BaselineObservation::missed(99),
+        ];
+        assert_eq!(
+            failure_window_slashable(&observations),
+            Err(FailureWindowError::HeadNotAMiss)
+        );
+    }
 
     #[test]
     fn exponential_residual_start_matches_closed_form() {
