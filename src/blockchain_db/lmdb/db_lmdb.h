@@ -28,6 +28,7 @@
 
 #include <atomic>
 #include <functional>
+#include <unordered_map>
 
 #include "blockchain_db/blockchain_db.h"
 #include "cryptonote_basic/blobdatatype.h" // for type blobdata
@@ -650,22 +651,32 @@ private:
   /// re-decode per query.
   bool archival_bond_holds_shard_of(const crypto::hash& p_id,
     const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id, uint64_t at_height) const;
+  /// Call-scoped memo of per-settlement-epoch challenge seal-block hashes, keyed
+  /// by seal-block HEIGHT. The seal hash a baseline observation derives from is a
+  /// function of the epoch (via H_open), not the shard, so a single instance
+  /// shared across a whole process_archival_slash_for_epoch scan lets every
+  /// record's shards reuse the handful of seal-block reads instead of each
+  /// re-fetching them. Memoizing is exactly behaviour-preserving: a committed
+  /// height's block hash is immutable within the scan's write txn, so a null
+  /// cache (direct callers) evaluates identically, just without the reuse.
+  using ArchivalSealHashCache = std::unordered_map<uint64_t, crypto::hash>;
   /// Was a baseline challenge POSED to (p_id, shard_id) at this settlement
   /// epoch, and has its outcome resolved? The observability predicate the
   /// sliding-window failure confirmation counts over — a bonded-but-untested
   /// epoch is not an observation and can never be counted as a miss
-  /// (ARCHIVAL_FAILURE_CONFIRMATION_PIN.md §1).
+  /// (ARCHIVAL_FAILURE_CONFIRMATION_PIN.md §1). `seal_cache`, when non-null,
+  /// memoizes the epoch's seal-block hash across the caller's shard loop.
   bool archival_baseline_observed_at_epoch(uint64_t block_height, const crypto::hash& p_id,
     const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
-    uint64_t settlement_epoch) const;
+    uint64_t settlement_epoch, ArchivalSealHashCache* seal_cache = nullptr) const;
   /// Gather this (P, shard)'s trailing observation window and ask Rust whether
   /// it is a slashable m-of-n failure. Reads LMDB; decides nothing.
   bool archival_failure_window_slashable(uint64_t block_height, const crypto::hash& p_id,
     const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
-    uint64_t settlement_epoch) const;
+    uint64_t settlement_epoch, ArchivalSealHashCache* seal_cache = nullptr) const;
   bool archival_challenge_failed_at_height(uint64_t block_height, const crypto::hash& p_id,
     const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
-    uint64_t settlement_epoch) const;
+    uint64_t settlement_epoch, ArchivalSealHashCache* seal_cache = nullptr) const;
 
 public:
   // Single-slash load-modify-store helper. Production caller is the private
