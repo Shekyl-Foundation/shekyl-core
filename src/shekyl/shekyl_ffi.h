@@ -2343,8 +2343,11 @@ uint8_t shekyl_archival_slash_open_interval_to_append(
 
 /// Window parameters from the one authority (config/consensus_constants.json →
 /// shekyl-archival-retention). Read here rather than from a generated header
-/// constant so a Round-2 stressnet re-pin moves exactly one file and there is no
-/// cross-language drift pair. `serve_budget_out` is `n - m`: once the gather has
+/// constant so there is no cross-language drift pair: m/n exist in exactly one
+/// place, and C++ holds no second copy to keep aligned. (A Round-2 re-pin still
+/// touches two sites by design — the JSON value plus the Round-1 sentinel
+/// const-assert in failure_window.rs; see that module.) `serve_budget_out` is
+/// `n - m`: once the gather has
 /// seen more than that many PASSED observations, m is unreachable and the
 /// look-back can stop reading LMDB (the arithmetic is Rust-side by design).
 /// Returns SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL on a null out-pointer.

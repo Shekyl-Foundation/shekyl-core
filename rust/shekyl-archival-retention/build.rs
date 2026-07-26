@@ -135,25 +135,29 @@ fn main() {
     // Sliding-window m-of-n failure confirmation (ARCHIVAL_FAILURE_CONFIRMATION_PIN
     // §1). Shape genesis-frozen; numerics provisional at the Round-1 values,
     // re-pinned at the Round-2 stressnet — the bond_duration precedent.
-    let failure_window_m = map
-        .get("archival_failure_window_m")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or_else(|| {
+    //
+    // Read at the width they are EMITTED and crossed at (`u32`, the
+    // shekyl_archival_failure_window_params accessor), so an out-of-range re-pin
+    // names itself here instead of surfacing as an opaque "literal out of range"
+    // in the generated file. Converting on read rather than bound-checking after
+    // is what makes both values structurally in-range: a check on `n` alone would
+    // bound `m` only transitively through `n >= m` below, so reordering or
+    // dropping that check would silently un-bound `m`.
+    let failure_window_param = |key: &str| -> u32 {
+        let raw = map
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_else(|| panic!("missing {key} in {}", config_path.display()));
+        u32::try_from(raw).unwrap_or_else(|_| {
             panic!(
-                "missing archival_failure_window_m in {}",
+                "{key} ({raw}) exceeds u32 in {} — the failure-window FFI accessor \
+                 is u32-wide",
                 config_path.display()
             )
-        });
-
-    let failure_window_n = map
-        .get("archival_failure_window_n")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or_else(|| {
-            panic!(
-                "missing archival_failure_window_n in {}",
-                config_path.display()
-            )
-        });
+        })
+    };
+    let failure_window_m = failure_window_param("archival_failure_window_m");
+    let failure_window_n = failure_window_param("archival_failure_window_n");
 
     // Shape invariants, not tunables: `m == 0` would slash a `P` that never
     // missed, and `n < m` would make the threshold unreachable — a silently
@@ -163,15 +167,6 @@ fn main() {
         panic!(
             "archival_failure_window_m must be >= 1 in {} (m = 0 slashes a P that \
              never missed a baseline)",
-            config_path.display()
-        );
-    }
-    // Emitted as `u32` (the FFI accessor's width); an out-of-range re-pin must
-    // name itself here rather than as an opaque "literal out of range" in the
-    // generated file.
-    if failure_window_n > u64::from(u32::MAX) {
-        panic!(
-            "archival_failure_window_n ({failure_window_n}) exceeds u32 in {}",
             config_path.display()
         );
     }

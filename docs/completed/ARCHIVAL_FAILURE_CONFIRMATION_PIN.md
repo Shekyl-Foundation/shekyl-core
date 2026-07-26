@@ -285,11 +285,17 @@ independent knob and no independent decision; Round-2 owns it only in that it ow
 The code comments at both slash-scan sites in `db_lmdb.cpp` state this rather than
 repeating the retired single-strike rationale.
 
-**Round-2 re-pin is a one-file edit.** `m`/`n` live in `config/consensus_constants.json`;
-`build.rs` refuses `m = 0` and `n < m`, and a Rust const-assert pins the shipped pair to
-the Round-1 values so a re-pin is deliberate. The C++ reads both through the FFI rather
-than a generated header constant, so there is no cross-language drift pair. The KATs
-derive their epochs from the FFI values and survive a re-pin.
+**Round-2 re-pin: one authority, and a deliberate two-site edit.** `m`/`n` live in
+`config/consensus_constants.json` and nowhere else — the C++ reads both through the FFI
+rather than a generated header constant, so there is **no cross-language drift pair** to
+keep aligned. Re-pinning them touches **two** sites, by design: the JSON value, and the
+Round-1 sentinel const-assert in `failure_window.rs` that pins the shipped pair. The
+sentinel is the `bond_floor` idiom — it exists so a genesis-sensitive numerics change
+cannot happen incidentally (this JSON carries ~20 constants for many crates), and it
+fails the build naming this document until the new values are acknowledged. `build.rs`
+additionally refuses `m = 0`, `n < m`, and a pair too wide for the FFI accessor, and a
+second const-assert holds `n` inside the retention ceiling (§3.2). The KATs derive their
+epochs from the FFI values and survive a re-pin without edits.
 
 ---
 

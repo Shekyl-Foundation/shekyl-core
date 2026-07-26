@@ -96,8 +96,11 @@
   structural. `m = 11` / `n = 13` are the Round-1 **provisional**
   values in `config/consensus_constants.json` (shape genesis-frozen,
   numerics re-pinned at the Round-2 stressnet — the `bond_duration`
-  precedent); C++ reads them through the FFI, so a re-pin moves one
-  file. The consensus decision is held equal to the sim policy that
+  precedent); C++ reads them through the FFI, so there is no
+  cross-language drift pair, and a re-pin is a deliberate two-site edit
+  (the JSON value plus the Round-1 sentinel const-assert that pins the
+  shipped pair — the `bond_floor` idiom). The consensus decision is held
+  equal to the sim policy that
   measured the pin by an exhaustive equivalence sweep, and
   `archival_substrate_lmdb` covers absorb / sustained-slash /
   full-window-slide / pop-recompute at the scheduler's production site.

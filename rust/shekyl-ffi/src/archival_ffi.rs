@@ -1841,8 +1841,12 @@ pub const SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL: u8 = 2;
 ///
 /// The C++ slash scan reads them here rather than from a generated header
 /// constant so there is no cross-language drift pair to keep aligned: `m` and
-/// `n` are re-pinned at the Round-2 stressnet, and a re-pin must move exactly
-/// one file.
+/// `n` exist in exactly one place, and C++ holds no second copy. The Round-2
+/// re-pin itself still touches two sites by design — the JSON value plus the
+/// Round-1 sentinel const-assert in
+/// [`shekyl_archival_retention::failure_window`] that pins the shipped pair
+/// (the `bond_floor` idiom, so a genesis-sensitive numerics change cannot
+/// happen incidentally).
 ///
 /// - `m_out` — misses required inside the window to slash.
 /// - `n_out` — baseline observations the miss count is taken over; the caller's
