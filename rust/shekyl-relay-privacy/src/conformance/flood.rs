@@ -164,11 +164,16 @@ pub fn simulate_diffusion_first_spy<R: RelayRng + ?Sized>(
 
     for _ in 0..trials {
         let mut adjacency: Vec<Vec<usize>> = vec![Vec::with_capacity(peers); flood.nodes];
+        // Each node initiates `peers` *distinct* non-self edges (redraw on a
+        // self-hit or a repeat), so every node's effective degree is fixed by
+        // `FloodParams`, not by the collision rate. Same model as
+        // `simulate_fluff_return`.
         for node in 0..flood.nodes {
-            for _ in 0..peers {
-                let other = usize::try_from(bounded_uniform(rng, (flood.nodes - 1) as u64))
-                    .expect("bounded");
-                if other != node {
+            let mut initiated: Vec<usize> = Vec::with_capacity(peers);
+            while initiated.len() < peers {
+                let other = usize_from(bounded_uniform(rng, (flood.nodes - 1) as u64));
+                if other != node && !initiated.contains(&other) {
+                    initiated.push(other);
                     adjacency[node].push(other);
                     adjacency[other].push(node);
                 }

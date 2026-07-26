@@ -24,7 +24,7 @@ use shekyl_relay_privacy::{DelayFamily, EmbargoTimer, SplitMix64};
 fn tor_collapses_the_supernode_diffusion_observer() {
     use shekyl_relay_privacy::conformance::{simulate_transport_observation, Transport};
 
-    println!("\nSupernode diffusion observer: clearnet vs Tor (256 nodes, 8 peers)");
+    println!("\nSupernode diffusion observer: clearnet vs Tor (512 nodes, 8 peers)");
     println!(
         "{:>7} {:>10} {:>18} {:>14}",
         "dial φ", "transport", "observed fraction", "first-spy π₀"

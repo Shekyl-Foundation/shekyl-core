@@ -635,15 +635,15 @@ a number:
 `simulate_transport_observation` measures exactly the delta the §6.3 source fact
 produces, for the paper's primary adversary — a supernode that opens cheap
 *inbound* edges to a fraction of honest nodes and runs the first-spy estimator
-(256 nodes, 8 peers, `tor_collapses_the_supernode_diffusion_observer`):
+(512 nodes, 8 peers, `tor_collapses_the_supernode_diffusion_observer`):
 
 | supernode reach | transport | fluff observed | first-spy π₀ |
 | --- | --- | --- | --- |
-| dials 5 % | clearnet | 1.0000 | 0.113 |
+| dials 5 % | clearnet | 1.0000 | 0.1155 |
 | dials 5 % | **Tor/I2P** | **0.0000** | **0.000** |
-| dials 10 % | clearnet | 1.0000 | 0.198 |
+| dials 10 % | clearnet | 1.0000 | 0.1967 |
 | dials 10 % | **Tor/I2P** | **0.0000** | **0.000** |
-| dials 30 % | clearnet | 1.0000 | 0.451 |
+| dials 30 % | clearnet | 1.0000 | 0.4463 |
 | dials 30 % | **Tor/I2P** | **0.0000** | **0.000** |
 
 The delta is stark and structural: a clearnet supernode observes **every** fluff

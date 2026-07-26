@@ -100,10 +100,14 @@ pub fn simulate_transport_observation<R: RelayRng + ?Sized>(
         // clearnet flood we also need the reverse (who dialed u).
         let mut out: Vec<Vec<usize>> = vec![Vec::with_capacity(peers); n];
         let mut inbound: Vec<Vec<usize>> = vec![Vec::new(); n];
+        // Each node dials `peers` *distinct* non-self others (redraw on a
+        // self-hit or a repeat), so the effective out-degree is exactly `peers`
+        // — the topology is fixed by `FloodParams`, not by the self-hit rate.
+        // Same fixed-degree model as `simulate_fluff_return`.
         for (u, out_u) in out.iter_mut().enumerate() {
-            for _ in 0..peers {
+            while out_u.len() < peers {
                 let v = usize::try_from(bounded_uniform(rng, (n - 1) as u64)).expect("bounded");
-                if v != u {
+                if v != u && !out_u.contains(&v) {
                     out_u.push(v);
                     inbound[v].push(u);
                 }
