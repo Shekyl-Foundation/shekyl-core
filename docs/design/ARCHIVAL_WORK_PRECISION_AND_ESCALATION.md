@@ -350,12 +350,14 @@ argument for it over a participation-derived signal:
 >    the property that actually matters here.** This section's scope is *swings*:
 >    pump-and-dump, whale diving, reflexive feedback — manipulation that profits
 >    from a **reversal**. The lever A6 found can only **accelerate the monotone
->    ratchet**: `+1.41` points/epoch at the block-weight surge ceiling against
->    `−0.10` at the *full* reorg bound, one-directional always. No reversal, no
+>    ratchet**: `+1.41` (penalty-free) to `+2.82` points/epoch at the block-weight
+>    ceiling against `−0.10` at the *full* reorg bound, one-directional always. No reversal, no
 >    oscillation, no whipsaw. **W8 stays armed by operand.**
 > 2. **Acceleration: economically closed — and *conditionally*.** The slew is real
 >    (a W9 flood buys `n` at the block-weight ceiling: ~2 708 shards/epoch
->    early-chain, ~44 922 SKL/epoch in fees) and it is closed by **price**, not by
+>    early-chain penalty-free — **`+1.41` pts/epoch**, or **`+2.82`** if the flooder
+>    also compensates the miner-reward penalty to use the legal `2×` limit,
+>    ~44 922 SKL/epoch in fees alone) and it is closed by **price**, not by
 >    structure — specifically by the **reopen-(c) per-output fee-floor**. Until (c)
 >    lands, **it is open**: A4's own tables say the flood driving this slew *profits
 >    today* (ROI 2.8×–17.8×). So this claim now carries an explicit dependency —

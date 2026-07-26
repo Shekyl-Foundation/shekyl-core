@@ -37,9 +37,32 @@ use crate::escalation::{family, EscalationCurve, SHARE_SCALE};
 pub const BLOCK_WEIGHT_FLOOR: u64 = 300_000;
 
 /// Short-term surge factor over the long-term median
-/// (`CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR`) — the ceiling a flood can
-/// reach in a burst before the median catches up.
+/// (`CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR`).
 pub const BLOCK_WEIGHT_SURGE_FACTOR: u64 = 50;
+
+/// **Measured**, not derived (`blockchain.cpp::update_next_cumulative_weight_limit`,
+/// the ArticMine-2021 algorithm, simulated over a full epoch):
+///
+/// - `effective_median = min(max(LTM_eff, short_term_median), 50 · LTM_eff)`
+/// - `block_weight_limit = effective_median · 2`
+///
+/// so a flood ratchets `effective_median` up (it is the median of the last 100
+/// actual weights) until it saturates at `50 · LTM_eff`, reaching the ceiling in
+/// **~300 blocks** — 3 % of an epoch, negligible. The **penalty-free** ceiling is
+/// the effective median itself; blocks above it up to `2×` are legal but cost the
+/// miner a reward penalty the flooder must compensate.
+///
+/// **The long-term median does not move within an epoch**, which is what makes the
+/// surge sustainable: each block's long-term weight is clamped to `1.7 · LTM_eff`
+/// (`get_next_long_term_block_weight`), and 10 000 elevated blocks cannot shift a
+/// 100 000-block median. Simulation confirms `LTM = 300 000` at epoch end.
+pub const BLOCK_WEIGHT_PENALTY_FREE: u64 = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SURGE_FACTOR;
+
+/// The legal per-block ceiling: `2 ×` the effective median. Using it costs the
+/// miner-reward penalty, so a flooder pays for the extra capacity twice (fees and
+/// penalty compensation) — but it is available, and it is **double** what a
+/// penalty-free model predicts.
+pub const BLOCK_WEIGHT_MAX: u64 = BLOCK_WEIGHT_PENALTY_FREE * 2;
 
 /// Settlement epoch length, blocks (`SETTLEMENT_EPOCH_BLOCKS`).
 pub const EPOCH_BLOCKS: u64 = 10_000;
@@ -87,7 +110,7 @@ pub fn a6_report(n_samples: &[u64]) {
         .max_by_key(|c| c.asymptote)
         .copied()
         .unwrap_or_else(crate::escalation::flat_25);
-    let surge = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SURGE_FACTOR;
+    let surge = BLOCK_WEIGHT_PENALTY_FREE;
     eprintln!(
         "\nA6 — swing / band width (§12.2): the empirical check on §6.0's STRUCTURAL claim\n\
          that the operand cannot swing (monotone + slow + no controller ⇒ W8 armed by\n\
@@ -105,27 +128,32 @@ pub fn a6_report(n_samples: &[u64]) {
         K = curve.knee_shards,
     );
     eprintln!(
-        "{:>9} {:>12} {:>14} {:>16} {:>16}",
-        "n", "Δn/epoch", "Δshare/epoch", "Δshare %pts/ep", "reorg Δshare%pt"
+        "{:>9} {:>12} {:>14} {:>16} {:>17} {:>15}",
+        "n", "Δn/epoch", "Δshare/epoch", "Δshare %pts/ep", "%pts/ep w/penalty", "reorg Δshare%pt"
     );
     let mut worst_epoch_pts = 0.0_f64;
     let mut worst_reorg_pts = 0.0_f64;
     let mut worst_dn = 0u64;
+    let mut worst_pen_pts = 0.0_f64;
     for &n in n_samples {
         let dn_epoch = max_shards_per_window(EPOCH_BLOCKS, surge, n);
+        let dn_pen = max_shards_per_window(EPOCH_BLOCKS, BLOCK_WEIGHT_MAX, n);
         let dn_reorg = max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n);
         let ds_epoch = delta_share(&curve, n, dn_epoch);
         let ds_reorg = delta_share(&curve, n, dn_reorg);
         let pts = ds_epoch as f64 / SHARE_SCALE as f64 * 100.0;
         worst_epoch_pts = worst_epoch_pts.max(pts);
         worst_reorg_pts = worst_reorg_pts.max(ds_reorg as f64 / SHARE_SCALE as f64 * 100.0);
-        worst_dn = worst_dn.max(dn_epoch);
+        worst_dn = worst_dn.max(dn_pen);
+        worst_pen_pts =
+            worst_pen_pts.max(delta_share(&curve, n, dn_pen) as f64 / SHARE_SCALE as f64 * 100.0);
         eprintln!(
-            "{:>9} {:>12} {:>14} {:>15.4}% {:>15.4}%",
+            "{:>9} {:>12} {:>14} {:>15.4}% {:>16.4}% {:>14.4}%",
             n,
             dn_epoch,
             ds_epoch,
             pts,
+            delta_share(&curve, n, dn_pen) as f64 / SHARE_SCALE as f64 * 100.0,
             ds_reorg as f64 / SHARE_SCALE as f64 * 100.0,
         );
     }
@@ -150,7 +178,9 @@ pub fn a6_report(n_samples: &[u64]) {
              monotone and a single shard never moves it discontinuously; the family's\n\
              `no_cliff_bounded_slope` test pins that, and the reorg column shows the only\n\
              down-swing reaches {RDP:.4} points. W8 stands armed BY OPERAND.\n\
-         (b) ADVERSARIAL SLEW RATE (economic) — {W:.4} points per epoch is the CEILING a\n\
+         (b) ADVERSARIAL SLEW RATE (economic) — {W:.4} pts/epoch penalty-free, {WP:.4}\n\
+             pts/epoch if the flooder also compensates the miner penalty (the legal 2x\n\
+             limit). MEASURED against blockchain.cpp's ArticMine algorithm, not derived. a\n\
              flood can force, at maximum effort, early-chain. That is a rate, not a cliff,\n\
              and it is bounded, monotone and one-directional — but it is NOT invisible,\n\
              which is the honest correction to a purely structural reading of §6.0.\n\
@@ -161,6 +191,7 @@ pub fn a6_report(n_samples: &[u64]) {
              knowing that, rather than on the stronger claim that no lever exists.",
         RDP = worst_reorg_pts,
         W = worst_epoch_pts,
+        WP = worst_pen_pts,
         C = worst_dn as f64
             * (leaf_stuffer_cost_per_shard_atomic(SEGMENT_LEAF_COUNT) as f64 / 1.0e9),
     );
