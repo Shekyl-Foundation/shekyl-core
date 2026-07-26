@@ -31,10 +31,12 @@
 // (shekyl-relay-privacy's `StemMap`; see rust/shekyl-ffi/src/dandelionpp_ffi.rs).
 // This class keeps its ABI so `levin_notify` and the `dandelionpp_map` gtests
 // compile unchanged, and forwards to the FFI. Boost UUIDs are 16 contiguous
-// bytes (`uint8_t data[16]`), so every crossing is a `reinterpret_cast`, not a
-// copy. `out_mapping_` is a shadow of the Rust map's ordered slots that backs
-// the iterator ABI; it is refreshed after every mutation. This wrapper is
-// transitional and is removed at RP-3, when `levin_notify` itself ports.
+// bytes (`uint8_t data[16]`) matching Rust's `ConnectionId([u8; 16])`, so each
+// crossing hands over a `reinterpret_cast`ed raw pointer with no per-element
+// conversion — the bytes are bulk-copied into (and back out of) the Rust map's
+// owned buffers. `out_mapping_` is a shadow of the Rust map's ordered slots
+// that backs the iterator ABI; it is refreshed after every mutation. This
+// wrapper is transitional and is removed at RP-3, when `levin_notify` ports.
 
 #include "dandelionpp.h"
 
@@ -47,6 +49,13 @@ namespace net
 {
 namespace dandelionpp
 {
+    // The FFI boundary reinterpret_casts `boost::uuids::uuid` to raw bytes and
+    // relies on `vector<uuid>` being a tight 16-byte-stride buffer. Pin that ABI
+    // assumption so a Boost upgrade or config change cannot silently break it.
+    static_assert(
+        sizeof(boost::uuids::uuid) == 16,
+        "connection_map FFI assumes a 16-byte boost::uuids::uuid");
+
     connection_map::connection_map(std::vector<boost::uuids::uuid> out_connections, const std::size_t stems)
       : handle_(nullptr, &shekyl_dandelionpp_map_free),
         out_mapping_(),

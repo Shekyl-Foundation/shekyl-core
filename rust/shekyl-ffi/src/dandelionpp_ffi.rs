@@ -66,6 +66,10 @@ pub struct StemMapHandle {
 /// # Safety
 /// `ids` must point to at least `n * 16` readable bytes (or be null with `n == 0`).
 unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
+    // Contract: `ids` is null only when `n == 0`. A null with `n > 0` is a caller
+    // bug — catch it in debug; stay UB-free in release by returning the empty set
+    // rather than forming a slice from null.
+    debug_assert!(n == 0 || !ids.is_null(), "read_ids: null ids with n > 0");
     if n == 0 || ids.is_null() {
         return Vec::new();
     }
@@ -84,6 +88,10 @@ unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
 /// # Safety
 /// `p` must point to 16 readable bytes.
 unsafe fn read_source(p: *const u8) -> Option<ConnectionId> {
+    // A null pointer is a caller bug — the nil *bytes* (all zero) are the
+    // local-origin sentinel, not a null pointer. Catch it in debug; stay
+    // UB-free in release.
+    debug_assert!(!p.is_null(), "read_source: null source pointer");
     if p.is_null() {
         return None;
     }
