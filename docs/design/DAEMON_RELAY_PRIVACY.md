@@ -2157,7 +2157,10 @@ a missing pool. The correction came from grounding Tor first, exactly as Q4 requ
 So the `D/K` pinning analysis (§12.8 Q1) applies on Tor too, with `D_tor ≈ 12`, *plus*
 the 2× broadcast; and the Q-10 occupancy work is still what the Tor path needs
 *most*, because the broadcast doubles the exposure and the noise channel's genuine
-strength on the *other* axis is exactly what camouflages it.
+strength on the *other* axis is exactly what camouflages it. And the broadcast is not
+a Tor property to patch but a **fork artifact** — the covert path lost the selection
+the public path has — so the fix is not a Tor-specific tweak but the *one unified
+mechanism* of §12.9, under which the broadcast disappears as a consequence.
 
 *Reconciliation with §6.5/§6.6 (verified at source; those sections are already
 pushed):* they model the **fluff phase's** inbound observability — the
@@ -2265,11 +2268,64 @@ accepted peer**, not a behavioural-floor pin.
   before). **The honest possible outcome:** no admission filter beats `D/K` on a
   broadcast-to-2 target keying only on forgeable-onion-address-plus-behaviour — in
   which case Q4's answer for Tor is *not* a `g_max` number but a **structural
-  finding**: the occupancy fix is architectural, not policy. And grounding (G-1) has
-  already sharpened *which* structure — not "give Tor a pool" (it has ~12), but
-  **reduce the broadcast-to-2** (select one noise channel per tx, like `get_stem`),
-  *if* broadcasting to both is not load-bearing for the cover-traffic uniformity or
-  reliability. That "is broadcast load-bearing?" question is the first thing Q4 grounds.
+  finding**: the occupancy fix is architectural, not policy — and §12.9 states what
+  that architecture is. (The "is broadcast load-bearing for cover uniformity?"
+  question raised in an earlier draft is **resolved and closed**: `send_noise` pads
+  every channel to a constant rate on its own timer
+  [levin_notify.cpp:663](../../src/cryptonote_protocol/levin_notify.cpp#L663), so
+  broadcast-to-2 buys *nothing* on the observation axis — it is a fork artifact, not
+  a cover feature. See §12.9.)
+
+### 12.9 The transport is a *parameter*, not a *branch* — one mechanism, no fork
+
+The decomposition the whole occupancy arc lands on: **medium is observation,
+mechanism is robustness, and they are orthogonal axes.** The medium (public vs
+Tor/I2P) does exactly one thing — expose or hide the *wire* to an *external*
+observer — and that is entirely on the axis §6.9 scoped out. The mechanism
+(selection dilutes occupancy, embargo backstops black-holes, reshape routes around
+droppers, admission bounds `g_max`) is the robustness axis, and it is **medium-blind
+by construction**: it was never about the thing the medium changes. So "does the
+mechanism need a Tor version?" is malformed — the medium doesn't touch the axis the
+mechanism operates on.
+
+**The `MWARNING("Dandelion++ stem not supported over noise networks")`
+([levin_notify.cpp:849](../../src/cryptonote_protocol/levin_notify.cpp#L849)) is the
+fork point** — the line where the inherited design said "I am a separate path now,"
+and everything downstream of it is a *second copy diverging from the first*: no
+`get_stem` selection, no embargo, no reshape, broadcast-to-2 instead of send-to-one.
+**The demonstrated attack exists because of that fork**: the split let the covert
+path *lose the occupancy dilution the public path had*. And the reference's stated
+obstacle — "the mempool/stempool needs to know the zone a tx originated from to work
+properly" ([levin_notify.cpp:836-838](../../src/cryptonote_protocol/levin_notify.cpp#L836))
+— is *fork-reconciliation bookkeeping*: it is hard only because there are two paths
+to keep agreeing about origin-zone. It largely dissolves under one mechanism, where
+the zone is not a branch but a **parameter** telling the single mechanism which pool
+to select from and which admission signal to read.
+
+**The architecture, stated once:** one medium-blind occupancy/robustness mechanism —
+select a successor from the origin's outbound pool, embargo-backstop, reshape,
+admission-bound `g_max` — running identically regardless of origin zone. The **only**
+legitimately medium-dependent input is *what admission keys on*, because the
+transport exposes a different identifier (onion carries no position; IP carries
+broken position). That is a **parameter to the one mechanism, not a fork of it**:
+"the mechanism, reading whatever identifier this transport provides," never "public
+mechanism + Tor mechanism." Everything else — selection, embargo, reshape, the
+`g_max` bound itself — is transport-invisible. Under this mechanism the broadcast-to-2
+disappears as a *consequence* (the unified mechanism selects, like the public path;
+the constant-rate cover traffic then simply wraps the *selected* send on Tor, an
+orthogonal transport-layer concern on the observation axis).
+
+**Why this is the structural-enforcement move, not a preference.** Same discipline
+as the `derive.rs` block-time guard and the no-wire-position-field HALT: do not rely
+on two copies of a protocol staying in sync by review vigilance — make them **one
+copy**, so "the covert path forgot what the public path does" is not a state that can
+occur. Unifying deletes the fork, and with it deletes the entire *category* of the
+demonstrated attack. It also collapses Q4: it is a **single admission problem** — one
+mechanism to bound, reading a transport-dependent signal — not a per-transport pair
+to keep in sync. *(Implementation is RP-2+: unify the stem mechanism onto the
+anonymity zone, replacing the `MWARNING` fork; the zone survives only as the
+pool-and-signal parameter. The `g_max` admission bound Q4 owes is then one bound,
+parameterized by the identifier the transport exposes.)*
 
 ---
 
