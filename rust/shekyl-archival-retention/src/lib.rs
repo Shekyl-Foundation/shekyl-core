@@ -78,7 +78,7 @@ pub use bond_wire::{
     HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS, VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use challenge::{
-    challenge_fire_height, challenge_leaf_index, challenge_seal_height,
+    challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
     SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
 };

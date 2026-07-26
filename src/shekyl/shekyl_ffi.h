@@ -1764,6 +1764,12 @@ uint64_t shekyl_archival_epoch_close_processing_height(uint64_t settlement_epoch
 uint64_t shekyl_archival_challenge_resolution_blocks(void);
 uint64_t shekyl_archival_epoch_slash_deadline_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_challenge_seal_height(uint64_t h_open);
+/// 1 iff the epoch's challenge seal block is committed at chain_height (block
+/// count, m_db->height()) — i.e. H_seal = challenge_seal_height(h_open) <
+/// chain_height. The serve-credit gate calls this before reading
+/// block_hash(H_seal), so a future-epoch response is rejected by predicate
+/// rather than by catching a BLOCK_DNE throw.
+uint8_t shekyl_archival_challenge_seal_on_chain(uint64_t h_open, uint64_t chain_height);
 uint64_t shekyl_archival_challenge_fire_height(
     uint64_t h_open,
     uint64_t h_close,

@@ -13,17 +13,17 @@ use std::io::Cursor;
 
 use shekyl_archival_retention::{
     as_of_e_served_work, bond_post_block_unique, capped_work_milli, challenge_fire_height,
-    challenge_leaf_chunk_bounds, challenge_seal_height, claim_window_floor,
-    claimed_epochs_check_and_set, effective_settlement_epoch_blocks, emission_block_claims_unique,
-    emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
-    emission_vin_verify_claims, epoch_close_compute, epoch_close_due_at_height, epoch_close_height,
-    failure_window_slashable, frozen_segment_count, good_through, holdings_update_add_connect,
-    holdings_update_drop_connect, holdings_update_pop, p_canonical_id_from_hybrid_pubkey,
-    prune_below_epoch_at_height, rebond_connect, rebond_pop, serve_credit_epoch_ok,
-    settlement_epoch_at_height, settlement_epoch_blocks_overridden, slash_open_interval_to_append,
-    unbond_connect, unbond_pop, verify_bond_post_ct_balance, verify_holdings_update_add,
-    verify_holdings_update_drop, verify_join_market_bond_post, verify_leaf_index,
-    verify_rebond_bond_post, verify_segment_path, verify_unbond_bond_post,
+    challenge_leaf_chunk_bounds, challenge_seal_height, challenge_seal_on_chain,
+    claim_window_floor, claimed_epochs_check_and_set, effective_settlement_epoch_blocks,
+    emission_block_claims_unique, emission_vin_verify, emission_vin_verify_auth,
+    emission_vin_verify_backing, emission_vin_verify_claims, epoch_close_compute,
+    epoch_close_due_at_height, epoch_close_height, failure_window_slashable, frozen_segment_count,
+    good_through, holdings_update_add_connect, holdings_update_drop_connect, holdings_update_pop,
+    p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height, rebond_connect, rebond_pop,
+    serve_credit_epoch_ok, settlement_epoch_at_height, settlement_epoch_blocks_overridden,
+    slash_open_interval_to_append, unbond_connect, unbond_pop, verify_bond_post_ct_balance,
+    verify_holdings_update_add, verify_holdings_update_drop, verify_join_market_bond_post,
+    verify_leaf_index, verify_rebond_bond_post, verify_segment_path, verify_unbond_bond_post,
     whole_record_last_served, ArchivalBondPostVin, ArchivalRewardEmissionVin,
     ArchivalServeCreditResponse, BadInterval, BaselineObservation, BondCtBalanceError,
     BondPostError, BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
@@ -489,6 +489,17 @@ pub extern "C" fn shekyl_archival_epoch_slash_deadline_height(settlement_epoch: 
 #[no_mangle]
 pub extern "C" fn shekyl_archival_challenge_seal_height(h_open: u64) -> u64 {
     challenge_seal_height(h_open)
+}
+
+/// Is the epoch's challenge seal block committed at `chain_height`? (1 = on
+/// chain, 0 = not yet.) `chain_height` is the block count (`m_db->height()`), so
+/// the seal (`H_seal = challenge_seal_height(h_open)`) is on chain iff
+/// `H_seal < chain_height`. The serve-credit gate calls this before reading
+/// `block_hash(H_seal)`, so a future-epoch (attacker-chosen `settlement_epoch`)
+/// input is rejected by predicate rather than by catching a `BLOCK_DNE` throw.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_challenge_seal_on_chain(h_open: u64, chain_height: u64) -> u8 {
+    u8::from(challenge_seal_on_chain(h_open, chain_height))
 }
 
 /// Beacon fire height `H_fire` for `(P, shard, E)` (gate-2 §3.4).

@@ -32,14 +32,14 @@
 //!
 //! Single-source rule (audit doc §2.2): predicates that already exist in Rust
 //! are *called*, never re-implemented — [`serve_credit_epoch_ok`] (step 4),
-//! [`challenge_fire_height`] (step 8), [`challenge_leaf_chunk_bounds`]
+//! [`challenge_seal_on_chain`] (step 6b), [`challenge_leaf_chunk_bounds`]
 //! (step 11). The crypto/path/sig verify (step 14) is already Rust and
 //! already KAT'd (gate-2); it enters as a marshaled boolean, not re-audited
 //! here.
 
 use std::collections::BTreeSet;
 
-use crate::challenge::challenge_fire_height;
+use crate::challenge::challenge_seal_on_chain;
 use crate::segment_freeze::challenge_leaf_chunk_bounds;
 use crate::serve_eligibility::serve_credit_epoch_ok;
 use crate::wire::{
@@ -132,8 +132,10 @@ pub struct ServeCreditGateInputs<'a> {
     /// `H_close` — C++ derives via `shekyl_archival_epoch_close_height(E)`.
     pub h_close: u64,
     /// Step 7 (`:4288`): the seal-block hash iff
-    /// `get_block_hash_from_height(H_seal)` succeeded (`None` = the load
-    /// threw; the C++ rejects before any fire-height derivation).
+    /// `get_block_hash_from_height(H_seal)` succeeded. With the seal-on-chain
+    /// guard (step 6b) rejecting the not-yet-committed case first, `None` here is
+    /// a load that threw at a *committed* height — genuine DB corruption, not a
+    /// future epoch.
     pub seal_hash: Option<[u8; 32]>,
     /// Step 9 (`:4312`): `archival_bond_holds_shard(P, shard, H_fire)`.
     ///
@@ -189,16 +191,16 @@ pub enum GateReject {
     NotGoodThrough,
     /// `:4281` — "past credit deadline H_close".
     PastCreditDeadline,
+    /// `blockchain.cpp` — "seal block … at or beyond chain height … (not yet
+    /// committed)". The Rust-authoritative seal-on-chain guard
+    /// ([`challenge_seal_on_chain`]) added after the pinned substrate: a
+    /// future-epoch `settlement_epoch` puts `H_seal` at or beyond the tip, so it
+    /// is rejected before the seal read (between the deadline, step 6, and the
+    /// seal load, step 7). The C++ calls the same predicate through
+    /// `shekyl_archival_challenge_seal_on_chain`.
+    SealBlockNotYetCommitted,
     /// `:4292` — "cannot load seal block hash at height H_seal".
     SealHashUnavailable,
-    /// `:4308` — "challenge fire height derivation failed"
-    /// (`H_fire == 0 || H_fire > H_close`). Defensive dead branch under the
-    /// pinned epoch formulas — unreachable through live C++ (step 7's seal
-    /// load shields the saturating-overflow epochs), so its vectors are
-    /// mirror-only in the fixture (`cpp_reachable: false`); there is no live
-    /// C++ behavior at this state to prove equivalence against, and the
-    /// §5 FFI-reopen criterion is not triggered by it.
-    FireHeightDerivationFailed,
     /// `:4314` — "shard not in bond holdings at H_fire" (the WS-1 site).
     ShardNotHeldAtFire,
     /// `:4323` — "shard registry substrate not available at H_fire".
@@ -294,26 +296,27 @@ pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs<'_>) -> GateVer
         return Reject(R::PastCreditDeadline);
     }
 
-    // Step 7 (:4288): seal block hash loadable at H_seal.
-    let Some(seal_hash) = inputs.seal_hash else {
-        return Reject(R::SealHashUnavailable);
-    };
-
-    // Step 8 (:4297–4310): H_fire derivation — the same Rust function the
-    // C++ calls through `shekyl_archival_challenge_fire_height` — plus the
-    // (0, H_close] guard shared with the slash-eligibility consumer (WS-1
-    // h_fire symmetry).
-    let h_fire = challenge_fire_height(
-        inputs.h_open,
-        inputs.h_close,
-        &seal_hash,
-        &inputs.p_canonical_id,
-        inputs.shard_id,
-        inputs.settlement_epoch,
-    );
-    if h_fire == 0 || h_fire > inputs.h_close {
-        return Reject(R::FireHeightDerivationFailed);
+    // Step 6b: seal-on-chain — the same Rust predicate the C++ calls through
+    // `shekyl_archival_challenge_seal_on_chain`, called directly here (one
+    // source, no re-derivation). A future-epoch input whose `H_seal` is at or
+    // beyond the tip is rejected before the seal load below, which can then only
+    // fail on genuine corruption.
+    if !challenge_seal_on_chain(inputs.h_open, inputs.current_height) {
+        return Reject(R::SealBlockNotYetCommitted);
     }
+
+    // Step 7 (:4288): seal block hash loadable at H_seal.
+    if inputs.seal_hash.is_none() {
+        return Reject(R::SealHashUnavailable);
+    }
+
+    // Step 8 (:4297–4310): the C++ derives H_fire here (via
+    // `shekyl_archival_challenge_fire_height`) for the "at H_fire" reads below,
+    // but it carries no decision — H_fire is in (0, H_close] for every
+    // well-formed epoch, so the range guard that once lived here is gone (see
+    // `challenge_fire_height`'s reopen criterion). The mirror does not reproduce
+    // the derivation because it is not decision-relevant; the reads arrive as
+    // marshaled bools (`held_at_fire`, `registry_present_at_fire`).
 
     // Step 9 (:4312): holds-shard-at-H_fire (WS-1 as-of read; see the
     // `held_at_fire` field docs for the corrected-substrate note).
@@ -542,6 +545,11 @@ mod tests {
                 |i| i.current_height = 1_010_000,
                 GateReject::PastCreditDeadline,
             ),
+            (
+                // current_height == H_open ≤ H_seal: seal block not yet on chain.
+                |i| i.current_height = i.h_open,
+                GateReject::SealBlockNotYetCommitted,
+            ),
             (|i| i.seal_hash = None, GateReject::SealHashUnavailable),
             (|i| i.held_at_fire = false, GateReject::ShardNotHeldAtFire),
             (
@@ -591,6 +599,22 @@ mod tests {
     }
 
     #[test]
+    fn gate_seal_on_chain_boundary_is_h_seal() {
+        // current_height == H_seal: the seal block index is one past the tip
+        // (chain_height is the block count), so it is not yet on chain and the
+        // gate rejects; + 1 puts the seal on chain and the gate proceeds.
+        let h_seal = crate::challenge::challenge_seal_height(accepting_inputs().h_open);
+        let mut inputs = accepting_inputs();
+        inputs.current_height = h_seal;
+        assert_eq!(
+            serve_credit_gate_decision(&inputs),
+            GateVerdict::Reject(GateReject::SealBlockNotYetCommitted)
+        );
+        inputs.current_height = h_seal + 1;
+        assert_eq!(serve_credit_gate_decision(&inputs), GateVerdict::Accept);
+    }
+
+    #[test]
     fn gate_credit_deadline_boundary_is_h_close_inclusive() {
         // current_height == H_close accepts (`>` in the C++), + 1 rejects.
         let mut inputs = accepting_inputs();
@@ -600,20 +624,6 @@ mod tests {
         assert_eq!(
             serve_credit_gate_decision(&inputs),
             GateVerdict::Reject(GateReject::PastCreditDeadline)
-        );
-    }
-
-    #[test]
-    fn gate_fire_guard_fires_only_on_degenerate_heights() {
-        // Mirror-only territory (see `GateReject::FireHeightDerivationFailed`
-        // docs): under the pinned epoch formulas the guard is defensive dead
-        // code; a degenerate H_close ≤ H_seal marshaled in trips it.
-        let mut inputs = accepting_inputs();
-        inputs.h_close = inputs.h_open; // span 0: h_fire = h_seal + 1 > h_close
-        inputs.current_height = inputs.h_open;
-        assert_eq!(
-            serve_credit_gate_decision(&inputs),
-            GateVerdict::Reject(GateReject::FireHeightDerivationFailed)
         );
     }
 

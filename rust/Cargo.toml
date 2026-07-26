@@ -34,6 +34,15 @@ members = [
     # statistics utility both it and `shekyl-crypto-pq` reuse (rule 18).
     "shekyl-standoff",
     "shekyl-stats",
+
+    # Daemon relay-privacy timing core (Dandelion++ epoch/stem/fluff/embargo
+    # draws + the stem map), derived from the paper rather than inherited as
+    # `#define`s. Standalone measurement instrument: links nothing, replaces
+    # nothing, and precedes any decision to move the C++ relay path. Shares
+    # `shekyl-stats` with `shekyl-standoff` under the same `conformance`
+    # feature split.
+    "shekyl-relay-privacy",
+
     "shekyl-archival-retention",
     "shekyl-engine-rpc",
 

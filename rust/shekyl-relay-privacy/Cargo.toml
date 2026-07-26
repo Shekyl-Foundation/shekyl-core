@@ -1,0 +1,33 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-relay-privacy"
+description = "Daemon relay-privacy timing core: the Dandelion++ epoch/stem/fluff/embargo draws and the stem map, derived from the paper rather than inherited as constants, with feature-gated goodness-of-fit conformance."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Default build is the derivation + draws + stem map: integer-only at draw
+# time, dependency-free, the path the daemon would eventually link. The
+# `conformance` feature pulls the statistics utility and compiles the
+# goodness-of-fit grading + timeline measurement machinery, which is float-
+# bearing and test/diagnostic only. Same split as `shekyl-standoff`.
+default = []
+conformance = ["dep:shekyl-stats"]
+
+[dependencies]
+shekyl-stats = { path = "../shekyl-stats", optional = true }
+
+[dev-dependencies]
+# The conformance instruments are the point of this crate's test surface, so
+# the test build always enables them.
+shekyl-relay-privacy = { path = ".", features = ["conformance"] }
+
+[lints]
+workspace = true
