@@ -1201,6 +1201,28 @@ pub fn run_stage2(params: &SimParams) {
     crate::distribution::oq1_probe_report();
     crate::admission::oq2_report(&A3_ARCHIVER_BAND, &[1_011, 6_066, 10_110]);
     oq4_deletion_recheck(params);
+    // A2 (W6) — now unblocked by the D3 closure. Budget from the A1-conditional
+    // envelope: the strongest surviving candidate's pool at the scenario's n.
+    {
+        let cfg = &all_scenarios(params)[0];
+        let aggs = a1_year_aggs(params, cfg);
+        if let Some(a) = aggs.iter().rfind(|a| a.n > 0) {
+            let best = family()
+                .iter()
+                .max_by_key(|c| c.asymptote)
+                .copied()
+                .unwrap_or_else(flat_25);
+            let pool = a
+                .emission_leg_atomic
+                .saturating_add(mul_scale(a.whole_burn_atomic, best.share(a.n)));
+            let per_epoch = (pool as f64 / crate::proxy::epochs_per_year()) as u64;
+            crate::redistribution::a2_report(
+                per_epoch,
+                20_000,
+                &format!("{} n={}", trunc(&cfg.name, 18), a.n),
+            );
+        }
+    }
     let a4 = a4_stuffing_report(params);
 
     // A5 (W10): the L14 slash forfeits the forgone post-D1/D2 reward stream — of

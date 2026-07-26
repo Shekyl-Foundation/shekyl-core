@@ -8,6 +8,7 @@ mod engine;
 mod escalation;
 mod population;
 mod proxy;
+mod redistribution;
 mod stranding;
 // The `RecordedChainFixture` recorder is test-substrate only: it
 // generates / verifies `docs/test_vectors/economics/*.json` for the
