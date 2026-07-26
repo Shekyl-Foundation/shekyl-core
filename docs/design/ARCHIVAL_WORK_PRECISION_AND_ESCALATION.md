@@ -681,7 +681,7 @@ Grounded in `shekyl-economics-sim`:
 | --- | --- | --- | --- |
 | **A1 burden clearance** | Does the escalated pool keep the staker's reward above the cost of their **growing locked-bond capital** through the fee era? (F-G: storage alone is trivially met) | `budget_skl(candidate)` vs `opp_cost_skl(n, rate) + storage/price`, over the trajectory, ∀ opp-cost rate in the band | **Report** the (rate, shape, scenario) region where `budget ≥ burden` sustained; a shape "clears" iff it holds under the **binding 10%/yr** rate (and 0%/yr Kryder for the minor storage term). The dominant term is price-independent |
 | **A2 distributional shift (W6)** | The D1 fix moves ex-zero bulk holders into `Σwork`, diluting scarce-holders' shares of a fixed budget | Scarce-holder share pre- vs post-D1 across the archiver distribution | **Descriptive** — quantify the redistribution; **flag** if it strands scarce holders below their marginal cost |
-| **A3 stranding** | What fraction of diverted budget goes unminted? | Σ unclaimed `reward_P` past `MAX_CLAIM_AGE_W = 26` epochs ÷ Σ budget | **Report** the stranded fraction; joint with A1 (stranded budget is not burden-clearing) |
+| **A3 stranding** | What fraction of diverted budget goes unminted? | Σ unclaimed `reward_P` past `MAX_CLAIM_AGE_W = 26` epochs ÷ Σ budget | ✅ **REPORTED** (Stage 2, cp5b; §12.7). Pre-D1 strands **100%** past the co-holder cliff (an **early-chain** regime) — the §1 Stage-0 claim confirmed and stronger than stated; post-D1 ≈ 0 except a **residual**: D1 *scales* the cliff to `r > ~1000 × shards_held`, so small holders still zero at extreme replication. Joint with A1: stranded budget is not burden-clearing |
 | **A4 output-stuffing (W9)** | Does stuffing pay the attacker — is there an early-chain regime where their manipulation profits? | **attacker ROI** = marginal captured revenue (their **served-work first-mover slice** of the Δpool over the horizon) ÷ marginal cost (weight-fees + the coupled bond). ⚠️ **Retraction (§12.5):** the ratified D-2 wording "*stake-fraction* of the Δpool" was wrong at source — the staker pool distributes by **capped served work per bond** (`reward_share_floor`), *not* by stake; the capture term was written without re-walking the disbursement path. The correction makes the attack **stronger** (r=1 first-mover work-capture is a sharper lever than any stake fraction). On `scenario_4`(output-variant) × `scenario_7`(bootstrap); `Δshare/Δburden` reported as a coherence **diagnostic** | **Pass** iff attacker **ROI < 1** everywhere in the sweep — the executable form of "stuffing it funds it" (§6.2); calibrated to the March-2024 profile (DQ-2C). **Result: FAILS (§12.5)** → the §11.3 rule-21 per-output fee-floor reopen (c, FIRED) + the D3 companion (reopen e), **not** a D2 redesign |
 | **A5 proxy free-riding (W10)** | Does the §7.4 fetch-cost-vs-deadline margin still bind after D1 restores bulk pay and D2 escalates the pool? | **margin** = expected proxy cost/epoch − honest storage cost/epoch, where proxy cost includes within-grace re-fetch feasibility (gate-4 window) **and** the L14 challenge-failure exposure; against the **post-D1/D2** reward on ~13.6 GB held | **Pass** iff margin `> 0` (§7.4: "if re-fetch is cheap, the challenge *is* the free-rider equilibrium"). Fail → tighten gate-4 grace or accelerate PoRep reopen (§11.1), **not** a D2 redesign |
 | **A6 swing / band width (§6.0)** | Is the lift a wide-but-slow band, not a cliff? | `d(share)/d(n)` across the sweep | **Report** the rate; **flag** any cliff (bounded-slope is the §6.1 requirement) |
@@ -910,6 +910,31 @@ per-output fee-floor for W9; gate-4/PoRep for W10), never a D2 redesign.
 Registration: the Stage-2 sim build gets an `IMPLEMENTATION_INDEX.md` row at
 birth (rule 94); this design round does not (it lives in this doc).
 
+#### 12.4.1 Arm status (synthesis — live as of cp5b)
+
+| Arm | Status | Result / disposition |
+| --- | --- | --- |
+| **A1** clearance | ✅ reported | Escalation earns its keep in the far tail: scenario 9 flat-25 **0.66×** (fails) vs best candidate **2.36×** (clears) at the binding 10 % opportunity-cost rate, 0 %/yr Kryder. Non-event while emission dominates. |
+| **A2** distribution (W6) | ⏸️ **held on D3** | Rides the bond-splitting equilibrium D3 destabilized (§8 reopen (e)); building it on the current cap semantics would model a surface under revision. |
+| **A3** stranding | ✅ reported (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff (early-chain regime) — §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside a residual: the cliff **scales** to `r > ~1000 × shards_held`, so small holders still zero at extreme replication. |
+| **A4** output-stuffing (W9) | 🔴 **FAILS** (§12.5) | Served-work ROI **2.8×–17.8×** at the rational honest equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. → reopen (c) **FIRED** (weight-denominated per-output fee-floor) **+ D3** (reopen (e)). |
+| **A5** proxy free-riding (W10) | 🔴 **FAILS** (§12.6) | Margin negative at the current grace: re-fetching a ~3 KB opening beats holding 13.6 GB by **4–40×**. Crossover `q* ≈ 0.088–0.26`. → reopen (d) **FIRED** (tighten gate-4 grace, or accelerate PoRep). |
+| **A6** swing / band width | ⏸️ **held on D3** | Same dependency as A2; the `d(share)/d(n)` reading is already bounded-slope by construction (§6.1, `no_cliff_bounded_slope` test). |
+
+**Survivor envelope — not yet emittable, and that is the finding.** Stage 2 was to
+hand Stage 3 the `(shape, asymptote)` survivors that clear A1 under the pessimistic
+Kryder floor *without* failing W9/W10. **Both wargame arms fail**, so no candidate
+survives on the escalation's own terms: the escalation is *securable but not free*.
+The envelope is therefore **conditional on its two companions landing** — the
+weight-denominated per-output fee-floor (reopen (c)) and the gate-4-grace/PoRep
+decision (reopen (d)), with **D3** (reopen (e)) load-bearing for the first. Stage 3
+inherits these as **hard inputs**, not options; per §8 none of them is a D2 redesign.
+
+**Cross-arm coordination.** Reopen (d) and the (unbuilt, pinned) sliding-window
+`m`-of-`n` failure-confirmation are **one design surface** — `slash_prob(q, m, n)`
+is shared, so `m`/`n` chosen for honest false-slash alone moves `q*` and
+invalidates (d). They must be tuned in a single round (see §12.6).
+
 ### 12.5 A4 (W9) result — the escalation fails the stuffing gate; reopen (c) FIRED
 
 **Built:** cp4a (`11452248f`, leaf-stuffer cost via the production `predict_weight`
@@ -1053,3 +1078,48 @@ rework. Both belong in **one** round — false-slash ≤ target **and** `q*` rea
 at an implementable grace — with this arm's crossover surface as its input. If no
 `(grace, m, n)` satisfies both, that infeasibility is itself the finding and it
 promotes the **PoRep** branch over grace-tightening.
+
+### 12.7 A3 (stranding) result — the §1 coupling claim confirmed, and stronger
+
+**Built:** cp5b (`9a7071ead`, `shekyl-economics-sim::stranding`). Scored under
+**both** work scorings, so the Stage-0 coupling claim is evidence, not assertion.
+Post-D1 is **called** through the production chain (`scarcity_micro` →
+`work_milli_from_micro` → `curve_milli` → `reward_share_floor`); the pre-D1
+counterfactual is re-expressed and labelled as such, D1 having deleted it from
+production (a *deleted* function's counterfactual is not a live mirror, DQ-2G).
+
+**What strands.** `budget(E)` is a **minting entitlement**: unclaimed past
+`MAX_CLAIM_AGE_W = 26` it is *"supply never created"* (`ARCHIVAL_BUDGET_SCHEDULE.md`
+§4, ratified). Two channels are modelled — **structural-zero work** (nothing
+claimable) and **rational non-claim** (reward below the cost of one claim
+transaction, priced through the production weight predictor, not a guessed
+constant).
+
+**Finding 1 — the §1 claim holds, and understates.** §1 says D2-without-D1 *"would
+enlarge a pool that **partly** evaporates."* Measured: wherever mean replication
+crosses the co-holder cliff (`r_market > g_milli ≈ 1000`), pre-D1 strands
+**100%** of the epoch's budget — *every* class floors to zero, so the whole
+entitlement is supply-never-created. The coupling was real and the direction was
+right; only the magnitude was understated.
+
+**Finding 2 — the cliff is an *early-chain* regime.** Replication is *derived*
+(`archivers · holdings / n`), not pinned, which is what exposed this: early on,
+few shards exist and many archivers hold them, so `r ≫ 1000`. The defect
+therefore bit hardest in exactly the **bootstrap window that most needs archivers
+paid** — and a large archiver population re-enters the regime at any `n` (60 k
+archivers still cross the cliff at `n = 10 k`). A corpus grows *out* of it; a
+growing archiver population grows *into* it.
+
+**Finding 3 — residual (post-D1), named for the record.** D1 does **not** abolish
+structural zeros; it **scales the cliff with holdings size**, to
+`r > ~1000 × shards_held` (the per-bond micro sum must reach one milli).
+Unreachable for a bulk holder (4,096 shards ⇒ `r > 4 M`), but a 16-shard hobbyist
+still zeroes at `r > ~16 k`. So the residual stranding exposure is **small holders
+in extreme-replication regimes** — a holdings-size effect adjacent to **D3**
+(reopen (e)), and one more reason the D3 round should reason about holdings size
+rather than treat it as incidental.
+
+**Joint with A1.** Stranded budget is **not burden-clearing**: any A1 clearance
+ratio is an upper bound to the extent budget fails to mint. Post-D1 the residual
+is small outside the extreme-replication corner, so A1's verdicts stand; the
+pre-D1 counterfactual is recorded only as the evidence that D1 had to land first.
