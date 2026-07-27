@@ -1648,6 +1648,59 @@ the §12.9 census — rule-42 digest membership, the **"C++ source-unchanged yet
 behaviourally live"** callout (mandatory PR language), the KAT/fixture regeneration
 list, and the **`curve_milli`-survives** carve-out for §6.1.
 
+#### 12.9.1 Implementing round — **R2 + R3 BUILT**
+
+Both landed on `feat/archival-d3-reward-path`, split on the consensus/FFI
+boundary. R2 deleted the plateau's reward-path application at all **three**
+production sites (`consensus_state.rs`, `emission_verify.rs`, `archival_ffi.rs` —
+the census undercounted twice before grounding caught the third), retired
+`EpochCloseInputs.curve`, and deleted the generated constants and config keys.
+Production now names the per-`P` term honestly as `credited_work_milli` (linear
+membership gate; C ABI `out_credited_work_milli`). The banded-PL
+`curve_milli` / `BandedCurveParams` remain **sim/counterfactual only**. The
+rule-42 digest claim was **retracted on verification** — the C++ generator
+requires 13 keys, none of them plateau, so no bump was owed.
+
+R3 shipped as `shekyl-archival-retention::admission` with a dedicated FFI module
+(`archival_admission_ffi.rs`), attached **alongside** the JoinMarket vin verify
+(the `bond_post_block_unique` idiom) rather than threaded through it, so no
+existing signature moved. The last-settled epoch key and age derivation live in
+Rust (`last_settled_epoch_as_of_parent`, `parent_state_shards_from_gather`); C++
+only marshals LMDB rows. Both ratified pins hold: `k = 1` milli, parent-block
+read-point. Two things the build surfaced that this round did **not** anticipate,
+both now load-bearing:
+
+1. **The applicant counts itself — `r_market + 1`.** `shard_work_micro` returns
+   `0` for `r_market == 0` (correct on the paying path: a bond with no serve
+   credit is not in the market). Scored naively, the predicate inverts twice
+   over: the first archiver on a rare shard — the *maximal-scarcity, most
+   valuable* participant — is refused, and at genesis, where no epoch has closed
+   and every `r_market` reads `0`, **no bond is ever admissible** while serve
+   credit cannot be earned without bonding. `r_market` counts every `P` with a
+   serve-credit row, which includes the applicant once it serves, so `+1` is the
+   correct model and not a bootstrap patch. Both failures are pinned as tests.
+
+2. **The gather's two fields have different read-points, and the weaker
+   governs.** `r_market` is *settled-epoch* state — written at epoch close, fixed
+   for a whole epoch, ordering-immune by construction. `age_milli` is
+   *height-derived*, and a shard's freeze height can be written by the very block
+   under validation. So the parent-height discipline is required **because of the
+   age term**, which is why the gather type is named for the parent block rather
+   than the settled epoch. Naming it for the epoch would have been precise about
+   `r_market`, wrong about `age_milli`, and would have told the dispatch author to
+   pass the wrong height.
+
+`CompleteTree` is admitted without a gather, on **dominance, not triviality**: it
+holds a superset of every compact holding. The honest limitation is recorded
+rather than hidden — it *can* score zero where the corpus is smaller than its
+replication, but there *every* position scores zero, so refusing the whole-corpus
+holder would refuse the entire market. That is a corpus-scale pathology, not the
+per-bond mistake the gate catches. The short-circuit is also what keeps the
+predicate bounded: scoring it would mean reading the whole corpus, the one
+unbounded path in the design.
+
+**R4** stays monitored, not designed for. **Stage 3 remains gated on reopen (c).**
+
 ### 12.10 A2 (W6) and A6 (swing) results — the last two arms
 
 Both unblocked by the D3 closure (§12.9); deletion removed the behavioural axis

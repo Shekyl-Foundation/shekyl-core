@@ -118,13 +118,15 @@ fn curve_milli_golden_banded_pl() {
 
 #[test]
 fn reward_share_floor_golden() {
-    // floor(budget·capped / sigma); dust stays unminted.
+    // floor(budget·credited / sigma); dust stays unminted. The numerator is
+    // the claimant's CREDITED term (membership-gated, linear since D3/R2) --
+    // `reward_share_floor` itself is generic in it.
     assert_eq!(reward_share_floor(1_000_000, 8_000, 8_000), 1_000_000); // sole claimer
     assert_eq!(reward_share_floor(1_000, 1_000, 3_000), 333); // 1 of 3 equal
-    assert_eq!(reward_share_floor(1_000, 0, 3_000), 0); // zero capped
+    assert_eq!(reward_share_floor(1_000, 0, 3_000), 0); // zero credited
     assert_eq!(reward_share_floor(1_000, 1_000, 0), 0); // zero denominator
 
-    // High-value vector forcing the u128 path (budget·capped overflows u64).
+    // High-value vector forcing the u128 path (budget·credited overflows u64).
     assert_eq!(
         reward_share_floor(10_000_000_000_000_000_000, 8_000, 24_000),
         3_333_333_333_333_333_333
@@ -139,10 +141,11 @@ fn reward_share_floor_conserves_supply_with_burned_dust() {
     // shortfall is strictly below the claimer count.
     for n in [2u64, 3, 7, 25, 100] {
         let budget = 1_000_000u64;
-        // Equal claimers: each capped term is the same, denominator is n·capped.
-        let capped = 8_000u64;
-        let sigma = capped * n;
-        let per = reward_share_floor(budget, capped, sigma);
+        // Equal claimers: each credited term is the same, denominator is
+        // n·credited.
+        let credited = 8_000u64;
+        let sigma = credited * n;
+        let per = reward_share_floor(budget, credited, sigma);
         let minted = per * n;
         assert!(minted <= budget, "n={n}: minted {minted} > budget {budget}");
         let dust = budget - minted;

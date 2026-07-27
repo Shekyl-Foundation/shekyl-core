@@ -541,12 +541,12 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   EXPECT_EQ(db.get_archival_r_market(9, settlement_epoch), 1u);
   EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch + 1), 0u);
   // Exact-sigma PF-8 pin (KAT-pinned constants: age_weight = 2000,
-  // plateau = 8000/16000 milli, WORK_MILLI_SCALE = 1000):
+  // WORK_MILLI_SCALE = 1000):
   //   shard 7: age = floor(3/4 epochs · 1000) = 750, g = 1000 + 2000·750/1000
   //            = 2500, scarcity(r=2) = 1000·2500/2000 = 1250
   //   shard 9: no segment, age = 0, scarcity(r=1) = 1000
-  //   work_p1 = 1250, work_p2 = 1250 + 1000 = 2250; both below the first
-  //   curve breakpoint (4000), so Curve is identity: sigma = 3500.
+  //   work_p1 = 1250, work_p2 = 1250 + 1000 = 2250; both members, and
+  //   credited work is linear in work (D3/R2), so sigma = 3500.
   // An H-position swap collapses shard-7 age to 0 (scarcity 500), giving
   // sigma = 2000 — nonzero, so only this exact pin distinguishes it.
   const uint64_t sigma = db.get_archival_sigma_work_milli(settlement_epoch);
@@ -581,9 +581,11 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
 //    and its rows — gathered by the same shared routine the close used —
 //    drive shekyl_archival_emission_epoch_work to each P's exact term in
 //    the persisted sigma.
-// 2. Sum-of-capped == persisted sigma (M-2 supply conservation at the
-//    substrate layer): Σ_P Curve(work_P) over the claimants equals the
-//    stored denominator exactly.
+// 2. Sum-of-credited == persisted sigma (M-2 supply conservation at the
+//    substrate layer): Σ_P credited_work_milli(work_P, member_P) over the
+//    claimants equals the stored denominator exactly. D3/R2 deleted the
+//    plateau from the reward path, so the term is membership-gated and
+//    LINEAR in work — not a cap.
 // 3. Live-descriptor immunity (WS-1 §5): mutating tip holdings after the
 //    close — the M2-1 drop-after-serve mutation — leaves every snapshot
 //    output bit-identical. Holdings never enter the work channel.
@@ -613,7 +615,7 @@ TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity
   // what PR-E3's verify shim will do: FFI pointers into the snapshot's
   // vectors, by value, no callbacks (Q7).
   const auto emission_work = [&](const crypto::hash& p, uint64_t& out_work,
-    uint64_t& out_capped, size_t& out_claimant_idx) {
+    uint64_t& out_credited, size_t& out_claimant_idx) {
     ArchivalEmissionEpochSnapshot snap;
     lmdb.gather_archival_emission_epoch_snapshot(p, settlement_epoch, snap);
 
@@ -646,17 +648,17 @@ TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity
     ffi.credit_pairs_len = pairs.size();
     ffi.claimant_bond_idx = snap.claimant_bond_idx;
 
-    return shekyl_archival_emission_epoch_work(&ffi, &out_work, &out_capped);
+    return shekyl_archival_emission_epoch_work(&ffi, &out_work, &out_credited);
   };
 
-  uint64_t work_p1 = 0, capped_p1 = 0;
-  uint64_t work_p2 = 0, capped_p2 = 0;
-  uint64_t work_none = 0, capped_none = 0;
+  uint64_t work_p1 = 0, credited_p1 = 0;
+  uint64_t work_p2 = 0, credited_p2 = 0;
+  uint64_t work_none = 0, credited_none = 0;
   size_t idx_p1 = 0, idx_p2 = 0, idx_none = 0;
 
-  ASSERT_EQ(emission_work(p1, work_p1, capped_p1, idx_p1), SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
-  ASSERT_EQ(emission_work(p2, work_p2, capped_p2, idx_p2), SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
-  ASSERT_EQ(emission_work(p_no_credit, work_none, capped_none, idx_none),
+  ASSERT_EQ(emission_work(p1, work_p1, credited_p1, idx_p1), SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
+  ASSERT_EQ(emission_work(p2, work_p2, credited_p2, idx_p2), SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
+  ASSERT_EQ(emission_work(p_no_credit, work_none, credited_none, idx_none),
     SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
 
   // Property 1 exact per-P pins (arithmetic per the PF-8 comment above).
@@ -664,18 +666,19 @@ TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity
   EXPECT_NE(idx_p2, SIZE_MAX);
   EXPECT_NE(idx_p1, idx_p2);
   EXPECT_EQ(work_p1, 1250u);
-  EXPECT_EQ(capped_p1, 1250u);
+  EXPECT_EQ(credited_p1, 1250u);
   EXPECT_EQ(work_p2, 2250u);
-  EXPECT_EQ(capped_p2, 2250u);
+  EXPECT_EQ(credited_p2, 2250u);
 
   // No-credit claimant: sentinel index, zero outputs, OK status.
   EXPECT_EQ(idx_none, SIZE_MAX);
   EXPECT_EQ(work_none, 0u);
-  EXPECT_EQ(capped_none, 0u);
+  EXPECT_EQ(credited_none, 0u);
 
-  // Property 2: M-2 supply conservation — sum of capped terms is the
-  // persisted denominator exactly.
-  EXPECT_EQ(capped_p1 + capped_p2, sigma);
+  // Property 2: M-2 supply conservation — the sum of the CREDITED terms
+  // (membership-gated and linear since D3/R2, not capped) is the persisted
+  // denominator exactly.
+  EXPECT_EQ(credited_p1 + credited_p2, sigma);
 
   // Property 3: live-descriptor immunity. p2 drops shard 9 from its tip
   // holdings after the close — the exact M2-1 drop-after-serve mutation.
@@ -686,12 +689,12 @@ TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
-  uint64_t work_p2_after = 0, capped_p2_after = 0;
+  uint64_t work_p2_after = 0, credited_p2_after = 0;
   size_t idx_p2_after = 0;
-  ASSERT_EQ(emission_work(p2, work_p2_after, capped_p2_after, idx_p2_after),
+  ASSERT_EQ(emission_work(p2, work_p2_after, credited_p2_after, idx_p2_after),
     SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
   EXPECT_EQ(work_p2_after, work_p2);
-  EXPECT_EQ(capped_p2_after, capped_p2);
+  EXPECT_EQ(credited_p2_after, credited_p2);
   EXPECT_EQ(idx_p2_after, idx_p2);
 }
 

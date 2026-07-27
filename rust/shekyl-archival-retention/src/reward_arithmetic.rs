@@ -45,10 +45,14 @@ const _: () = assert!(
     "WORK_MICRO_SCALE = WORK_MILLI_SCALE · WORK_MICRO_PER_MILLI; the micro path is 10⁻³ of milli"
 );
 
-/// Provisional banded PL `Curve`: decreasing slopes → plateau.
+/// Banded piecewise-linear curve shape — **sim / counterfactual only (D3/R2)**.
 ///
-/// Work breakpoints are fractions of `plateau_work_milli`; plateau credited work is
-/// `plateau_value_milli`. Default shape matches the float sim (`reward.rs`).
+/// The production reward path is **linear in work**
+/// ([`crate::consensus_state::credited_work_milli`]). This type remains so
+/// `shekyl-economics-sim` and `shekyl-staking-sim` can compare plateau-present
+/// vs plateau-deleted regimes; it is **not** consumed by epoch-close, emission
+/// verify, or admission. Work breakpoints are fractions of `plateau_work_milli`;
+/// plateau credited work is `plateau_value_milli`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BandedCurveParams {
     pub plateau_work_milli: u64,
@@ -108,10 +112,10 @@ pub fn scarcity_micro(r_market: u64, age_milli: u64, age_weight_milli: u64) -> u
 }
 
 /// The **single** floor-to-milli site (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`
-/// F-E): collapse a per-bond micro accumulator to the milli value the curve and
-/// the persisted `Σwork(E)` consume. Both epoch close and the emission verify
-/// body reach milli through this one function, so their per-shard (micro) and
-/// aggregate (milli) views cannot drift onto different scales.
+/// F-E): collapse a per-bond micro accumulator to the milli value the persisted
+/// `Σwork(E)` and emission numerator consume. Both epoch close and the emission
+/// verify body reach milli through this one function, so their per-shard (micro)
+/// and aggregate (milli) views cannot drift onto different scales.
 ///
 /// **Rounding direction (§11.5):** integer division floors, dropping the
 /// sub-milli remainder in the protocol's favour — the same direction as every
@@ -122,6 +126,9 @@ pub fn work_milli_from_micro(work_micro: u64) -> u64 {
 }
 
 /// Evaluate banded piecewise-linear `Curve(work_milli)` → credited work milli.
+///
+/// **Sim / counterfactual only** — see [`BandedCurveParams`]. Production uses
+/// linear [`crate::consensus_state::credited_work_milli`].
 #[must_use]
 pub fn curve_milli(work_milli: u64, params: &BandedCurveParams) -> u64 {
     if work_milli == 0 || params.plateau_value_milli == 0 {
@@ -172,13 +179,16 @@ pub fn mul_div_floor(a: u64, b: u64, d: u64) -> Option<u64> {
     u64::try_from(q).ok()
 }
 
-/// Per-P reward: `floor(budget * capped / sigma_work)`; dust stays unminted.
+/// Per-P reward: `floor(budget * credited / sigma_work)`; dust stays unminted.
+///
+/// `credited_milli` is the membership-gated linear term
+/// ([`crate::consensus_state::credited_work_milli`]), not a plateau-capped value.
 #[must_use]
-pub fn reward_share_floor(budget: u64, capped_milli: u64, sigma_work_milli: u64) -> u64 {
-    if sigma_work_milli == 0 || capped_milli == 0 {
+pub fn reward_share_floor(budget: u64, credited_milli: u64, sigma_work_milli: u64) -> u64 {
+    if sigma_work_milli == 0 || credited_milli == 0 {
         return 0;
     }
-    mul_div_floor(budget, capped_milli, sigma_work_milli).unwrap_or(0)
+    mul_div_floor(budget, credited_milli, sigma_work_milli).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -206,7 +216,7 @@ mod tests {
     #[test]
     fn reward_share_sums_to_budget_when_single_claimer() {
         let budget = 1_000_000u64;
-        let capped = 8_000u64;
-        assert_eq!(reward_share_floor(budget, capped, capped), budget);
+        let credited = 8_000u64;
+        assert_eq!(reward_share_floor(budget, credited, credited), budget);
     }
 }

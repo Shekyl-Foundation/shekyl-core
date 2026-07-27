@@ -5110,6 +5110,59 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     return false;
   }
 
+  // D3/R3 admission viability (JoinMarket only — rebond/HU-add are monotone
+  // in credited work; HU-drop is left ungated so we do not trap exit-ward
+  // capital). Predicate + epoch key + age live in Rust; C++ only marshals
+  // LMDB rows. parent_height = chain_height - 1 (tip would self-score).
+  // Full rationale: shekyl-archival-retention::admission.
+  {
+    const uint64_t parent_height = chain_height ? chain_height - 1 : 0;
+    std::vector<uint64_t> adm_r_market;
+    std::vector<uint64_t> adm_freeze_heights;
+    // uint8_t, not bool: std::vector<bool> is a bitset specialization with no
+    // contiguous bool* to hand across the ABI. Rust reads each byte as != 0.
+    std::vector<uint8_t> adm_has_segment;
+    if (bond.holdings.kind != archival_holdings_kind::CompleteTree)
+    {
+      const uint64_t settled_epoch =
+        shekyl_archival_last_settled_epoch_as_of_parent(parent_height);
+      adm_r_market.reserve(bond.holdings.shard_ids.size());
+      adm_freeze_heights.reserve(bond.holdings.shard_ids.size());
+      adm_has_segment.reserve(bond.holdings.shard_ids.size());
+      for (const uint64_t shard_id : bond.holdings.shard_ids)
+      {
+        adm_r_market.push_back(m_db->get_archival_r_market(shard_id, settled_epoch));
+        // The RETURN VALUE is the presence bit and must be marshaled: a shard
+        // with no frozen segment scores age 0 in the reward path, and
+        // freeze_height 0 is a legitimate genesis-band value, so presence
+        // cannot be recovered from the height. Dropping this bit would score
+        // an unfrozen shard at MAXIMUM age (age_epochs == chain_epochs) where
+        // the reward path scores zero, over-scoring the holding.
+        uint64_t freeze = 0;
+        const bool has_segment = m_db->archival_shard_freeze_height(shard_id, freeze);
+        adm_freeze_heights.push_back(freeze);
+        adm_has_segment.push_back(has_segment ? 1u : 0u);
+      }
+    }
+    const uint8_t adm_rc = shekyl_archival_check_bond_admission(
+      static_cast<uint8_t>(bond.holdings.kind),
+      bond.holdings.shard_ids.size(),
+      adm_r_market.empty() ? nullptr : adm_r_market.data(),
+      adm_r_market.size(),
+      adm_freeze_heights.empty() ? nullptr : adm_freeze_heights.data(),
+      adm_freeze_heights.size(),
+      adm_has_segment.empty() ? nullptr : adm_has_segment.data(),
+      adm_has_segment.size(),
+      parent_height);
+    if (adm_rc != SHEKYL_ARCHIVAL_ADMISSION_OK)
+    {
+      MERROR_VER("Archival JoinMarket rejected: "
+        << shekyl_archival_admission_err_string(adm_rc)
+        << " (admission code " << static_cast<unsigned>(adm_rc) << ")");
+      return false;
+    }
+  }
+
   // Credit-path authorization (gate-4 §3.5 step 5, the debit selection's
   // twin): bond_debit == 0 paths authorize with the IDENTITY key P_pubkey.
   if (auth_pubkey != bond.hybrid_public_key)

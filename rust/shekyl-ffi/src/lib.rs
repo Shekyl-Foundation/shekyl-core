@@ -103,6 +103,9 @@ pub mod pow_randomx_ffi;
 
 // Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
 pub mod archival_ffi;
+// D3/R3 bond-admission viability (kept separate so archival_ffi does not keep
+// absorbing every archival surface).
+pub mod archival_admission_ffi;
 
 // General CT cleartext-balance verification FFI (`GENESIS_TX_WIRE_FORMAT.md` §2.3).
 pub mod ct_balance_ffi;

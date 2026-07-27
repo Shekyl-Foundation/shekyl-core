@@ -1889,6 +1889,57 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
     uint64_t bond_debit,
     uint8_t record_exists);
 
+// D3/R3 admission viability gate (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
+// §12.9). Its own error space — a separate consensus predicate called
+// alongside the vin verify, not part of it. The numeric codes below are
+// single-sourced from shekyl-archival-retention::admission::codes; the reason
+// STRINGS come from admission::admission_code_cstr -- the one table -- surfaced
+// here as shekyl_archival_admission_err_string. `codes` carries no strings, and
+// the FFI holds no second table of its own.
+#define SHEKYL_ARCHIVAL_ADMISSION_OK                            0
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR                  1
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_HOLDINGS_KIND             2
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH           3
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_BELOW_FLOOR               4
+// Gather columns ragged among THEMSELVES -- distinct from _GATHER_MISMATCH,
+// which compares the gather to the vin. Two different caller bugs, so two
+// codes: sharing one would force a reason string too vague to help either.
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_COLUMNS            5
+
+/// Settlement epoch whose archival_r_market rows are readable as of the parent
+/// block. C++ uses this as the LMDB key; do not re-derive E-1 in the daemon.
+uint64_t shekyl_archival_last_settled_epoch_as_of_parent(uint64_t parent_height);
+
+/// NUL-terminated static reason for an admission code (do not free). Distinguishes
+/// marshal failures from the below-floor verdict.
+const char* shekyl_archival_admission_err_string(uint8_t code);
+
+/// Refuse a bond whose holdings credit no work: admission runs the SAME chain
+/// that pays (shard_work_micro -> work_milli_from_micro).
+///
+/// r_market_* / freeze_height_* / has_segment_* are ALL parallel to the vin's
+/// shard list; key r_market with
+/// shekyl_archival_last_settled_epoch_as_of_parent(parent_height). A missing
+/// r_market row marshals as 0 (Rust scores r_market+1). parent_height MUST be
+/// chain_height - 1. CompleteTree: vin_shard_count = 0 and NULL arrays.
+///
+/// has_segment_* MUST be the real presence bit -- the RETURN VALUE of
+/// archival_shard_freeze_height, not inferred from the height. A shard with no
+/// frozen segment scores age_milli = 0, matching the reward path's
+/// shard_contribution_micro; and freeze_height 0 is a legitimate genesis-band
+/// value, so presence cannot be recovered from the height. Passing true with a
+/// defaulted 0 height scores the MAXIMUM age where the reward path scores zero.
+uint8_t shekyl_archival_check_bond_admission(
+    uint8_t holdings_kind,
+    size_t vin_shard_count,
+    const uint64_t* r_market_ptr,
+    size_t r_market_len,
+    const uint64_t* freeze_height_ptr,
+    size_t freeze_height_len,
+    const uint8_t* has_segment_ptr,
+    size_t has_segment_len,
+    uint64_t parent_height);
+
 // Unbond bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
 // P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18,
 // 20, 21, and 22 are Unbond-semantic; 19 (LEN_OVERFLOW) and 23
@@ -2577,15 +2628,17 @@ struct shekyl_archival_emission_epoch_snapshot
 };
 
 /// Claimant work over the as-of-E snapshot: writes P's `work_P(E)` milli to
-/// `out_work_milli` and its `Curve(work_P)` term to `out_capped_work_milli` —
-/// the emission verify numerator (REWARD_EMISSION_VIN_PLAN.md §8.0.2 step 4).
+/// `out_work_milli` and its membership-gated credited term to
+/// `out_credited_work_milli` — the emission verify numerator
+/// (REWARD_EMISSION_VIN_PLAN.md §8.0.2 step 4). D3/R2: credited work is linear
+/// in work (no plateau); non-members credit zero.
 ///
 /// Sources via the same single sourcing function whose output built the
 /// persisted Σwork(E) denominator at close, over the same frozen gather, so
-/// the capped output is P's exact per-P term of that denominator by
+/// the credited output is P's exact per-P term of that denominator by
 /// construction (WS-1 §5.5). Note this is the numerator only: it does NOT
 /// consult `snapshot->sigma_work_milli` — an empty epoch persists
-/// Σwork(E) == 0 while this may still return a positive capped term, so the
+/// Σwork(E) == 0 while this may still return a positive credited term, so the
 /// consumer MUST divide through the persisted denominator (reward is 0 when
 /// Σwork(E) == 0). Both outputs are
 /// zero when P has no credit row in E or is not a market member at E. Errors
@@ -2593,7 +2646,7 @@ struct shekyl_archival_emission_epoch_snapshot
 uint8_t shekyl_archival_emission_epoch_work(
     const struct shekyl_archival_emission_epoch_snapshot* snapshot,
     uint64_t* out_work_milli,
-    uint64_t* out_capped_work_milli);
+    uint64_t* out_credited_work_milli);
 
 /* ---------------------------------------------------------------------------
  * C-1 emission-vin verify FFI (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 items

@@ -12,27 +12,28 @@
 use std::io::Cursor;
 
 use shekyl_archival_retention::{
-    as_of_e_served_work, bond_post_block_unique, capped_work_milli, challenge_fire_height,
+    as_of_e_served_work, bond_post_block_unique, challenge_fire_height,
     challenge_leaf_chunk_bounds, challenge_seal_height, challenge_seal_on_chain,
-    claim_window_floor, claimed_epochs_check_and_set, effective_settlement_epoch_blocks,
-    emission_block_claims_unique, emission_vin_verify, emission_vin_verify_auth,
-    emission_vin_verify_backing, emission_vin_verify_claims, epoch_close_compute,
-    epoch_close_due_at_height, epoch_close_height, failure_window_slashable, frozen_segment_count,
-    good_through, holdings_update_add_connect, holdings_update_drop_connect, holdings_update_pop,
-    p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height, rebond_connect, rebond_pop,
-    serve_credit_epoch_ok, settlement_epoch_at_height, settlement_epoch_blocks_overridden,
-    slash_open_interval_to_append, unbond_connect, unbond_pop, verify_bond_post_ct_balance,
-    verify_holdings_update_add, verify_holdings_update_drop, verify_join_market_bond_post,
-    verify_leaf_index, verify_rebond_bond_post, verify_segment_path, verify_unbond_bond_post,
-    whole_record_last_served, ArchivalBondPostVin, ArchivalRewardEmissionVin,
-    ArchivalServeCreditResponse, BadInterval, BaselineObservation, BondCtBalanceError,
-    BondPostError, BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
-    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
-    EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
-    HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError, RebondPopError,
-    RewardCommit, ShardSet, ShardSetError, UnbondConnectError, UnbondPopError, WireError,
-    CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
-    HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
+    claim_window_floor, claimed_epochs_check_and_set, credited_work_milli,
+    effective_settlement_epoch_blocks, emission_block_claims_unique, emission_vin_verify,
+    emission_vin_verify_auth, emission_vin_verify_backing, emission_vin_verify_claims,
+    epoch_close_compute, epoch_close_due_at_height, epoch_close_height, failure_window_slashable,
+    frozen_segment_count, good_through, holdings_update_add_connect, holdings_update_drop_connect,
+    holdings_update_pop, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
+    rebond_connect, rebond_pop, serve_credit_epoch_ok, settlement_epoch_at_height,
+    settlement_epoch_blocks_overridden, slash_open_interval_to_append, unbond_connect, unbond_pop,
+    verify_bond_post_ct_balance, verify_holdings_update_add, verify_holdings_update_drop,
+    verify_join_market_bond_post, verify_leaf_index, verify_rebond_bond_post, verify_segment_path,
+    verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin,
+    ArchivalRewardEmissionVin, ArchivalServeCreditResponse, BadInterval, BaselineObservation,
+    BondCtBalanceError, BondPostError, BondPostKind, BondTerm, ClaimantBondRecord,
+    ClaimedEpochsError, CreditPair, EmissionEpochSource, EmissionVerifyContext,
+    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
+    HoldingsKind, HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError,
+    RebondPopError, RewardCommit, ShardSet, ShardSetError, UnbondConnectError, UnbondPopError,
+    WireError, CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
+    FAILURE_WINDOW_SERVE_BUDGET, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -2399,17 +2400,17 @@ pub struct ShekylArchivalEmissionEpochSnapshot {
 }
 
 /// Claimant work over the as-of-`E` snapshot: `work_P(E)` milli and its
-/// `Curve(work_P)` term — the emission verify numerator
+/// membership-gated credited term — the emission verify numerator
 /// (`REWARD_EMISSION_VIN_PLAN.md` §8.0.2 step 4).
 ///
 /// Sources via [`as_of_e_served_work`], the same single sourcing function
 /// whose output built the persisted `Σwork(E)` denominator at close, over the
-/// same frozen gather — so `out_capped_work_milli` is `P`'s exact per-P term
+/// same frozen gather — so `out_credited_work_milli` is `P`'s exact per-P term
 /// of that denominator by construction (WS-1 §5.5: sourcing divergence, the
 /// M-2 silent over/under-mint, is unrepresentable rather than tested-against).
 /// This is the numerator only — it does not read `snapshot.sigma_work_milli`,
 /// so an empty epoch persists
-/// `Σwork(E) == 0` while this may return a positive capped term; the consumer
+/// `Σwork(E) == 0` while this may return a positive credited term; the consumer
 /// divides through the persisted denominator (reward is 0 at `Σwork(E) == 0`,
 /// enforced by `reward_share_floor`).
 ///
@@ -2424,19 +2425,19 @@ pub struct ShekylArchivalEmissionEpochSnapshot {
 /// `snapshot` must point to a valid struct whose array pointers satisfy their
 /// stated lengths for the duration of the call, including each bond's
 /// interval buffer per its embedded lengths. `out_work_milli` and
-/// `out_capped_work_milli` must be writable.
+/// `out_credited_work_milli` must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_emission_epoch_work(
     snapshot: *const ShekylArchivalEmissionEpochSnapshot,
     out_work_milli: *mut u64,
-    out_capped_work_milli: *mut u64,
+    out_credited_work_milli: *mut u64,
 ) -> u8 {
-    if snapshot.is_null() || out_work_milli.is_null() || out_capped_work_milli.is_null() {
+    if snapshot.is_null() || out_work_milli.is_null() || out_credited_work_milli.is_null() {
         return SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR;
     }
     unsafe {
         *out_work_milli = 0;
-        *out_capped_work_milli = 0;
+        *out_credited_work_milli = 0;
     }
     let snap = unsafe { &*snapshot };
 
@@ -2477,13 +2478,12 @@ pub unsafe extern "C" fn shekyl_archival_emission_epoch_work(
     };
 
     let work = served.work_by_bond[snap.claimant_bond_idx];
-    // The single-sourced per-P capped term: non-members and zero-work members
-    // contribute nothing to the stored denominator, so their capped term is
-    // zero here too.
-    let capped = capped_work_milli(work, served.member[snap.claimant_bond_idx], &inputs.curve);
+    // Single-sourced per-P credited term: non-members contribute nothing to
+    // the stored denominator, so their credited term is zero here too.
+    let credited = credited_work_milli(work, served.member[snap.claimant_bond_idx]);
     unsafe {
         *out_work_milli = work;
-        *out_capped_work_milli = capped;
+        *out_credited_work_milli = credited;
     }
     SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK
 }
@@ -3123,10 +3123,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_archival_retention::{
-        BandedCurveParams, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-        ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, SETTLEMENT_EPOCH_BLOCKS,
-    };
+    use shekyl_archival_retention::{ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, SETTLEMENT_EPOCH_BLOCKS};
     use std::ptr;
 
     #[test]
@@ -4112,10 +4109,6 @@ mod tests {
             close_block_height: 5 * SETTLEMENT_EPOCH_BLOCKS,
             settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
             age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-            curve: BandedCurveParams {
-                plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-                plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-            },
             bonds: &rust_bonds,
             shards: &rust_shards,
             credit_pairs: &rust_pairs,
@@ -4237,40 +4230,40 @@ mod tests {
             claimant_bond_idx,
         };
 
-        let mut capped_terms: Vec<u64> = Vec::with_capacity(bonds.len());
+        let mut credited_terms: Vec<u64> = Vec::with_capacity(bonds.len());
         for idx in 0..bonds.len() {
             let snap = snapshot_for(idx);
             let mut work = u64::MAX;
-            let mut capped = u64::MAX;
+            let mut credited = u64::MAX;
             let code = unsafe {
                 shekyl_archival_emission_epoch_work(
                     ptr::from_ref(&snap),
                     ptr::from_mut(&mut work),
-                    ptr::from_mut(&mut capped),
+                    ptr::from_mut(&mut credited),
                 )
             };
             assert_eq!(code, SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
             if idx >= 2 {
                 assert_eq!(work, 0, "non-member bond {idx} must have zero work");
                 assert_eq!(
-                    capped, 0,
-                    "non-member bond {idx} must have zero capped term"
+                    credited, 0,
+                    "non-member bond {idx} must have zero credited term"
                 );
             } else {
                 assert!(work > 0, "member bond {idx} must have nonzero work");
             }
-            capped_terms.push(capped);
+            credited_terms.push(credited);
         }
-        let capped_sum: u64 = capped_terms.iter().sum();
+        let credited_sum: u64 = credited_terms.iter().sum();
         assert_eq!(
-            capped_sum, sigma,
-            "sum of per-P capped terms must equal the persisted Σwork(E)"
+            credited_sum, sigma,
+            "sum of per-P credited terms must equal the persisted Σwork(E)"
         );
         // Reuse the per-bond terms already computed above rather than
         // re-invoking the FFI: the two members must differ for the identity to
         // be non-trivial.
         assert_ne!(
-            capped_terms[0], capped_terms[1],
+            credited_terms[0], credited_terms[1],
             "fixture must produce distinct per-P terms for the identity to be non-trivial"
         );
 
@@ -4278,33 +4271,33 @@ mod tests {
         // construction, OK status.
         let snap = snapshot_for(usize::MAX);
         let mut work = u64::MAX;
-        let mut capped = u64::MAX;
+        let mut credited = u64::MAX;
         let code = unsafe {
             shekyl_archival_emission_epoch_work(
                 ptr::from_ref(&snap),
                 ptr::from_mut(&mut work),
-                ptr::from_mut(&mut capped),
+                ptr::from_mut(&mut credited),
             )
         };
         assert_eq!(code, SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
         assert_eq!(work, 0);
-        assert_eq!(capped, 0);
+        assert_eq!(credited, 0);
 
         // Out-of-range claimant index (not the SIZE_MAX sentinel) rejects and
         // zeroes outputs.
         let snap = snapshot_for(bonds.len());
         let mut work = u64::MAX;
-        let mut capped = u64::MAX;
+        let mut credited = u64::MAX;
         let code = unsafe {
             shekyl_archival_emission_epoch_work(
                 ptr::from_ref(&snap),
                 ptr::from_mut(&mut work),
-                ptr::from_mut(&mut capped),
+                ptr::from_mut(&mut credited),
             )
         };
         assert_eq!(code, SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE);
         assert_eq!(work, 0, "failure path must not leave stale outputs");
-        assert_eq!(capped, 0);
+        assert_eq!(credited, 0);
     }
 
     /// The close-processing boundary wrapper single-sources
@@ -4479,7 +4472,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use shekyl_archival_retention::{
-        curve_milli, reward_share_floor, sigma_work_milli, EmissionAuthRole, MembershipOnlyBacking,
+        reward_share_floor, sigma_work_milli, EmissionAuthRole, MembershipOnlyBacking,
         ShardWorkEntry, WorkEpochClaim,
     };
     use shekyl_crypto_pq::derivation::hash_pqc_public_key;
@@ -4513,10 +4506,6 @@ mod tests {
     impl EmissionFfiFixture {
         fn build() -> Self {
             let close = epoch_close_height(EM_EPOCH).expect("fixture epoch closes");
-            let curve = BandedCurveParams {
-                plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-                plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-            };
             let bonds = [
                 EpochCloseBond {
                     join_settlement_epoch: 1,
@@ -4560,7 +4549,6 @@ mod tests {
                 close_block_height: close,
                 settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
                 age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-                curve,
                 bonds: &bonds,
                 shards: &shards,
                 credit_pairs: &pairs,
@@ -4572,8 +4560,9 @@ mod tests {
             // aggregate compare demands this exact value (D1 fix).
             let work_micro = served.work_micro_by_bond[0];
             assert!(served.member[0] && work > 0, "fixture claimant must earn");
-            let sigma = sigma_work_milli(&served.work_by_bond, &curve, &served.member);
-            let reward = reward_share_floor(EM_BUDGET, curve_milli(work, &curve), sigma);
+            let sigma = sigma_work_milli(&served.work_by_bond, &served.member);
+            // D3/R2: no plateau in the reward path — the credited term is the work.
+            let reward = reward_share_floor(EM_BUDGET, work, sigma);
             assert!(reward > 0, "fixture reward must be wire-encodable (>0)");
 
             let scheme = HybridEd25519MlDsa;

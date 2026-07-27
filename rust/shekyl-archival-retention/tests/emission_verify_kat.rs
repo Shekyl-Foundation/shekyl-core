@@ -22,11 +22,10 @@ use shekyl_archival_retention::emission_verify::{
 };
 use shekyl_archival_retention::CreditPair as Pair;
 use shekyl_archival_retention::{
-    as_of_e_served_work, curve_milli, epoch_close_height, reward_share_floor, sigma_work_milli,
-    ArchivalRewardEmissionVin, BandedCurveParams, EpochCloseBond, EpochCloseInputs,
-    EpochCloseShard, HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardSet,
-    ShardWorkEntry, WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W,
-    SETTLEMENT_EPOCH_BLOCKS,
+    as_of_e_served_work, credited_work_milli, epoch_close_height, reward_share_floor,
+    sigma_work_milli, ArchivalRewardEmissionVin, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardSet, ShardWorkEntry,
+    WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_archival_retention::{EmissionAuthRole, RewardCommit, EMISSION_KAT_SHAPE};
 use shekyl_crypto_pq::derivation::hash_pqc_public_key;
@@ -52,7 +51,6 @@ struct Fixture {
     bonds: Vec<EpochCloseBond<'static>>,
     shards: Vec<EpochCloseShard>,
     pairs: Vec<Pair>,
-    curve: BandedCurveParams,
 }
 
 impl Fixture {
@@ -93,7 +91,6 @@ impl Fixture {
                     shard_idx,
                 })
                 .collect(),
-            curve: BandedCurveParams::default_provisional(),
         }
     }
 
@@ -103,7 +100,6 @@ impl Fixture {
             close_block_height: epoch_close_height(self.epoch).expect("close height"),
             settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
             age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-            curve: self.curve,
             bonds: &self.bonds,
             shards: &self.shards,
             credit_pairs: &self.pairs,
@@ -114,7 +110,7 @@ impl Fixture {
     /// derived through the same sourcing function the verify recomputes with.
     fn persisted_sigma(&self) -> u64 {
         let served = as_of_e_served_work(&self.inputs()).expect("well-formed fixture");
-        sigma_work_milli(&served.work_by_bond, &self.curve, &served.member)
+        sigma_work_milli(&served.work_by_bond, &served.member)
     }
 
     /// Claimant's honest `(work_P, expected reward)` under [`Self::persisted_sigma`].
@@ -122,8 +118,13 @@ impl Fixture {
         let served = as_of_e_served_work(&self.inputs()).expect("well-formed fixture");
         let work = served.work_by_bond[0];
         assert!(served.member[0] && work > 0, "fixture claimant must earn");
-        let capped = curve_milli(work, &self.curve);
-        let reward = reward_share_floor(BUDGET, capped, self.persisted_sigma());
+        // D3/R2: the plateau no longer gates the reward path, so the credited term
+        // is the work itself for a member. Derived by **calling** the production
+        // function rather than restating its result: `credited = work` would be a
+        // mirror that keeps passing if the membership gate ever changes, which is
+        // exactly the drift this fixture exists to catch.
+        let credited = credited_work_milli(work, served.member[0]);
+        let reward = reward_share_floor(BUDGET, credited, self.persisted_sigma());
         assert!(reward > 0, "fixture reward must be wire-encodable (>0)");
         (work, reward)
     }

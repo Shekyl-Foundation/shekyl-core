@@ -25,6 +25,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod admission;
 pub mod bond_connect;
 pub mod bond_ct_balance;
 pub mod bond_duration;
@@ -52,6 +53,12 @@ pub mod serve_credit_decisions;
 pub mod serve_eligibility;
 pub mod wire;
 
+pub use admission::codes as admission_codes;
+pub use admission::{
+    admission_code_cstr, admission_code_static_str, check_admission, check_admission_of,
+    credited_work_at_admission, parent_state_shards_from_gather, AdmissionError, AdmissionShard,
+    ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
+};
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,
     holdings_update_pop, is_clean_interval_close, rebond_connect, rebond_pop,
@@ -64,8 +71,7 @@ pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondT
 pub use bond_duration::{bond_duration, ShardAgeAtAdd};
 pub use bond_floor::{
     bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REORG_DEPTH_BLOCKS,
-    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS,
+    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS,
     MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
 };
 pub use bond_post::{
@@ -88,12 +94,12 @@ pub use claimed_epochs::{
     MAX_CLAIMED_EPOCH_ENTRIES,
 };
 pub use consensus_state::{
-    as_of_e_served_work, capped_work_milli, epoch_close_compute, epoch_close_due_at_height,
-    epoch_close_height, good_through, market_member_at_epoch, prune_below_epoch_at_height,
-    r_market_count, settlement_epoch_at_height, shard_age_milli, shard_contribution_micro,
-    shard_work_micro, sigma_work_milli, BadInterval, CreditIndexOutOfRange, CreditPair,
-    EpochCloseBond, EpochCloseInputs, EpochCloseResult, EpochCloseShard, ServeCreditRow,
-    ServedWork, FOUNDATION_EXCLUDED_FROM_MARKET,
+    as_of_e_served_work, credited_work_milli, epoch_close_compute, epoch_close_due_at_height,
+    epoch_close_height, good_through, last_settled_epoch_as_of_parent, market_member_at_epoch,
+    prune_below_epoch_at_height, r_market_count, settlement_epoch_at_height, shard_age_milli,
+    shard_contribution_micro, shard_work_micro, sigma_work_milli, BadInterval,
+    CreditIndexOutOfRange, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseResult,
+    EpochCloseShard, ServeCreditRow, ServedWork, FOUNDATION_EXCLUDED_FROM_MARKET,
 };
 pub use conservation::{verify_conservation_snapshot, ConservationError, ConservationSnapshot};
 pub use constants::{
