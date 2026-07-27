@@ -33,6 +33,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <set>
 #include <tuple>

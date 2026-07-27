@@ -966,19 +966,33 @@ mod tests {
     }
 
     #[test]
-    fn survival_quantile_is_exact_at_the_table_boundaries() {
-        // A degenerate one-outcome table: everything is at 0, so any rate is
-        // satisfied immediately — this is the boundary the u128 accumulation
-        // exists to keep exact (masses partition 2^64, not 2^64 - 1).
+    fn survival_quantile_handles_both_rate_extremes() {
+        // A geometric with mean 1 tick, so `p = 1/2` and the mass decays fast
+        // enough that both ends of the `one_in` range are reachable in a short
+        // table. (Not a degenerate one-outcome table — the support is still
+        // {0, 1, 2, ...}; what is being pinned here is the walk's behaviour at
+        // the extremes of the *rate*, not of the distribution.)
         let t = EmbargoTimer::geometric_from_ticks(1, 1_000);
+
+        // Loosest possible budget: `one_in = 1` permits the whole domain as
+        // tail, so the first outcome satisfies it and the walk exits on its
+        // first iteration.
         assert_eq!(
             t.judge_failed_after_secs(1),
             0,
-            "1-in-1 is the first outcome"
+            "a 1-in-1 budget is already met at k = 0"
         );
-        // And a rate finer than the table's resolution still terminates inside
-        // the table rather than running past its support.
+
+        // Tightest: `2^64 / u64::MAX` truncates to a single quantum, a budget no
+        // outcome clears until the tail is all but exhausted. The walk must
+        // still terminate *inside* the table — its top outcome is the fallback —
+        // rather than run past the support. This is the case the u128
+        // accumulation keeps exact, since the masses partition 2^64 rather than
+        // 2^64 - 1 and a u64 subtraction would wrap at the last bin.
         let fine = t.judge_failed_after_secs(u64::MAX);
-        assert!(fine > 0, "a vanishing tail budget must land in the table");
+        assert!(
+            fine > 0,
+            "a vanishing tail budget must land deep in the table"
+        );
     }
 }

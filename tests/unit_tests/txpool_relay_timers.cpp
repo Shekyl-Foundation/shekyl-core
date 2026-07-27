@@ -24,9 +24,15 @@
 
 #include "gtest/gtest.h"
 
+#include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <functional>
+#include <limits>
+#include <tuple>
 #include <unordered_map>
+#include <vector>
 
 #include "blockchain_db/testdb.h"
 #include "cryptonote_basic/cryptonote_basic.h"
