@@ -3152,6 +3152,21 @@ the three §12.11 obligations: the background-failure-rate measurement, the
 cooldown/threshold **reopen-checkpoint** (not a confirm-only sweep), and the
 capability-accounting guard for observables the wiring newly exposes.
 
+**And one carried from RP-2a's review: the two nil meanings stay distinguished by
+field, never merged.** At the FFI boundary the nil UUID / `None` carries *two*
+meanings — "this stem slot is absent (disconnected)" and "this transaction
+originated locally" — the same byte value disambiguated only by *which field it
+appears in* (a slot position versus `get_stem`'s source argument). That is sound
+today precisely because the two never occupy the same field, and RP-2a keeps them
+apart structurally (`map_snapshot` emits slot-position nils; `source_from_bytes`
+interprets the source argument; a null pointer is neither and fails closed). The
+re-stem / churn-stable-alternate logic is exactly where the temptation to unify
+them appears — a single "is it nil?" test spanning both roles. It must not:
+conflating "no live peer here" with "the origin is us" is a silent routing bug
+wearing a legal type, which is the one failure class this seam's design has spent
+its whole review budget eliminating. RP-2b keeps the two roles in distinct fields
+(or distinct types), and says so in its design.
+
 ---
 
 ## 17. RP-4 design round — the embargo cut (F-1/F-2/F-3 → Rust)
