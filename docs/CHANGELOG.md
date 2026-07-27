@@ -143,6 +143,29 @@
 
 ### Changed
 
+- **docs: verified-complete archive policy + Batch 1 relocate.**
+  Wrote the durable policy (previously commit-message-only) into
+  [`docs/design/IMPLEMENTATION_INDEX.md`](design/IMPLEMENTATION_INDEX.md)
+  §8, with eligibility triad, living-SoT hold rule, move checklist, and
+  Batches 2–3 / hold ledger. Moved four closed historical records to
+  `docs/completed/` after self-check + code verify: `ARCHIVAL_REWARD_GATE_M1.md`
+  (RETIRED #346), `ARCHIVAL_COVER_DRAW.md` (RETIRED),
+  `REWARD_EMISSION_E3_GATING_ROUND.md` (round CLOSED),
+  `ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` (mechanism deleted; X-1…X-3 CLOSED).
+  Inbound/outbound relative links and path citations repaired
+  (`FOLLOWUPS`, `RELEASE_CHECKLIST`, living design SoTs, `shekyl-standoff`
+  module docs). Stage 0 / Stage 1 PR 4–7 and closed-audit pins remain
+  follow-up batches per the ledger.
+- **docs: `CONFIDENTIAL_STAKING` supersession hardening (agent-misread).**
+  The retired confidential-claim / 3C / entitlement staking body moved to
+  [`docs/completed/CONFIDENTIAL_STAKING.md`](completed/CONFIDENTIAL_STAKING.md)
+  with a loud non-SoT banner. A short redirect stub remains at
+  [`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md)
+  naming the living authoritative surfaces (`PHASE_2B_STAKE_LIFECYCLE`,
+  `PRINCIPAL_STAKE_LIFECYCLE`, `REWARD_EMISSION_LEG`, bond/firewall docs) so
+  basename greps under `docs/design/` hit the tombstone instead of ~1300
+  lines of obsolete design that read as current. Index §8 records the
+  superseded-with-stub pattern.
 - **proofs: tx-proof wire format carries per-entry vout indices**
   (WI-RPC-3; pre-genesis wire change, no compatibility shim per rule
   60). Outbound/inbound per-output entries grew a `vout_index[u32 LE]`
@@ -3557,7 +3580,7 @@
     no-credit sentinel with zero work.
 
 - **emission: E3 gating design round closed — leg design complete**
-  ([`REWARD_EMISSION_E3_GATING_ROUND.md`](design/REWARD_EMISSION_E3_GATING_ROUND.md)).
+  ([`REWARD_EMISSION_E3_GATING_ROUND.md`](completed/REWARD_EMISSION_E3_GATING_ROUND.md)).
   Pre-flight found PR-E2 already landed (stale-doc corrections to
   `IMPLEMENTATION_INDEX.md` / `REWARD_EMISSION_VIN_PLAN.md`); policy trio
   closed (Q3 vacuous at arity 1; Q11 same-tx backing+fee ACCEPT with
@@ -3838,7 +3861,7 @@
   while provisional the gate runs as identity, so only a post-seal
   stressnet exercises the activation boundary live before genesis.
 - **archival: M1 reward gate implemented — steps 1–5 of the §11.9
-  pinned sequence** ([`ARCHIVAL_REWARD_GATE_M1.md`](design/ARCHIVAL_REWARD_GATE_M1.md)
+  pinned sequence** ([`ARCHIVAL_REWARD_GATE_M1.md`](completed/ARCHIVAL_REWARD_GATE_M1.md)
   §11.10 implementation record). Executed on
   `feat/m1-reward-gate-design` after the pre-flight pass held the §6
   enumeration at the audit pin (re-verified post-WI-4-merge at
@@ -3873,7 +3896,7 @@
   the segment-freeze pipeline design round opens (§1.3 condition).
 
 - **docs: M1 reward-gate consensus rule — design rounds 1–3 spec + closure**
-  ([`ARCHIVAL_REWARD_GATE_M1.md`](design/ARCHIVAL_REWARD_GATE_M1.md)).
+  ([`ARCHIVAL_REWARD_GATE_M1.md`](completed/ARCHIVAL_REWARD_GATE_M1.md)).
   The WI-4 launch posture's cold-start refusal in consensus-rule form:
   zero reward accrual for every persona in epochs where
   `shard_count < K_COVER`, enforced as a uniform zero-at-top factor in

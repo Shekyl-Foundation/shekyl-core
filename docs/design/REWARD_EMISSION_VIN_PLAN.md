@@ -698,7 +698,7 @@ semantic validation — it transports bytes the Rust codec owns.
 > and the C++ oracle `VARIANT_TAG` **`0x06`** to the C-1 dispatch
 > (`emission_wire.rs:44–46`), because under gate-last the whitelist rejects the
 > vin on both mempool and block paths, so an early inert C++ struct buys nothing.
-> See [`REWARD_EMISSION_E3_GATING_ROUND.md`](REWARD_EMISSION_E3_GATING_ROUND.md)
+> See [`REWARD_EMISSION_E3_GATING_ROUND.md`](../completed/REWARD_EMISSION_E3_GATING_ROUND.md)
 > §1.2.
 
 Inert: `check_inputs_types_supported` continues to reject the type until

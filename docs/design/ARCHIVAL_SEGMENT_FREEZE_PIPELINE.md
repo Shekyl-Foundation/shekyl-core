@@ -3,7 +3,7 @@
 > **⚠️ `K_COVER` RETIREMENT NOTICE (2026-07-19, PR #346).** This document
 > was opened as an obligation of the M1 reward-gate design round and
 > describes the freeze writer as feeding "the M1 gate". **That gate is
-> retired and its machinery deleted** ([`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md)
+> retired and its machinery deleted** ([`ARCHIVAL_REWARD_GATE_M1.md`](../completed/ARCHIVAL_REWARD_GATE_M1.md)
 > §13); the M1 gate PR referenced in the status line below will never merge.
 >
 > **The pipeline itself is unaffected and remains load-bearing.** Freeze
@@ -596,7 +596,7 @@ extending `archival_substrate_lmdb.cpp`):**
 
 ## Related documents
 
-- [`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md) §1.3 —
+- [`ARCHIVAL_REWARD_GATE_M1.md`](../completed/ARCHIVAL_REWARD_GATE_M1.md) §1.3 —
   the obligations O-1..O-3 this round discharges (§3); the gate PR
   merge condition this round's opening satisfies.
 - [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) §7.2 — segment

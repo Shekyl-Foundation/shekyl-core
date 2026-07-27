@@ -3,7 +3,7 @@
 > ## ⚠️ `K_COVER` RETIREMENT NOTICE (2026-07-19, PR #346) — read before acting on anything below
 >
 > **The M1 `K_COVER` reward gate is RETIRED and its machinery is deleted
-> from production code** ([`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md)
+> from production code** ([`ARCHIVAL_REWARD_GATE_M1.md`](../completed/ARCHIVAL_REWARD_GATE_M1.md)
 > §13). Reward withholding is legitimate only as the consequence of an
 > action the individual controls (slash, membership onset, holdings shape,
 > claim expiry, zero work); a collective gate that zeroes every persona's

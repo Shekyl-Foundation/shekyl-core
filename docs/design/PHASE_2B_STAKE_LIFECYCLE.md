@@ -267,7 +267,7 @@ posture changes (§0.10).
 
 **Lock-view pin (canonical-height alignment).** The wallet's `stake_lock_until` /
 `eff_lock` view **must derive from `eligible_height`** — the canonical
-`creation_height ≜ eligible_height` ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md)
+`creation_height ≜ eligible_height` ([`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md)
 §2 canonical block), **not** the mining height — or the wallet's local lock view drifts
 from consensus by the `MIN_AGE` deferral. UX disclosure: "lock begins when the stake
 matures, ~`MIN_AGE` blocks after confirmation" (upstream §6.4.3 warm-up).
@@ -304,7 +304,7 @@ intent unchanged: `StakeEngine::Error: Into<StakeEngineError>` (CL-3),
 stake-output and claim-tx wire shapes (owned upstream by the consensus design).
 
 **3C-specific scanner/merge scope (re-run targets — now concrete).** Under the locked
-separate-staking-subtree design ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md)
+separate-staking-subtree design ([`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md)
 §6.4.3, [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §15):
 
 - The scanner path-tracks membership in a **second tree** — the staking subtree — in
@@ -356,7 +356,7 @@ Implementation (Stage 3 code merge) remains gated on Round 3 (threat-model exhau
 ### 0.10 Confidential-rebase delta (new)
 
 The single source of the reopen. Wallet-relevant facts inherited from the
-confidential consensus design ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §2.3):
+confidential consensus design ([`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §2.3):
 
 - **Secret material in the stake actor (in memory, never at rest):** per-stake
   `amount` and Pedersen mask `z` only — **not** spend secret `x` (§3.3.1). The
@@ -365,7 +365,7 @@ confidential consensus design ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKI
   stake region (§4.2 dissolution). Per-epoch claim tags are **`N_{i,S} = x_i · G_S`** with
   `x = ho + b` derived transiently when needed.
   Public base
-  `G_S = hash_to_ec("shekyl-stake-nullifier-base" ‖ S_le64)` ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md)
+  `G_S = hash_to_ec("shekyl-stake-nullifier-base" ‖ S_le64)` ([`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md)
   §6.3–§6.4) — **no** separate `nullifier_seed` on `OutputSecrets`. Wallet must pin
   `G_S` domain + KAT and the claim prove/verify surface (R0-D1, §8.5). These are wallet
   secrets; they live **in memory only** (re-derived, never sealed) and never cross RPC or
@@ -387,16 +387,16 @@ must be **closed or explicitly deferred** before Round 0 closes.
 
 | ID | Finding | Disposition (Round 0 pin) |
 |----|---------|-------------------------|
-| **R0-D1** | Claim nullifiers use **`N_S = x·G_S`** (spend secret `x` already in witness/`OutputSecrets`; no new HKDF field). Resync recomputes `{ x·G_S : S ∈ accrued_epochs }` and intersects the chain stake-claim nullifier set (§4.2, §5.2). | **Block implementation** on upstream [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §13 item 7 + §6.4 **(B)** (claim prove/verify, B1 preferred) + wallet §8.5 (`G_S` KAT). **Dissolves** prior `nullifier_seed` HKDF pin unless B1 infeasible (§6.3 fallback). |
+| **R0-D1** | Claim nullifiers use **`N_S = x·G_S`** (spend secret `x` already in witness/`OutputSecrets`; no new HKDF field). Resync recomputes `{ x·G_S : S ∈ accrued_epochs }` and intersects the chain stake-claim nullifier set (§4.2, §5.2). | **Block implementation** on upstream [`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §13 item 7 + §6.4 **(B)** (claim prove/verify, B1 preferred) + wallet §8.5 (`G_S` KAT). **Dissolves** prior `nullifier_seed` HKDF pin unless B1 infeasible (§6.3 fallback). |
 | **R0-D2** | §4.2 "resync re-derives opening → no backlog loss" is **overbroad**. Pending (`PendingBroadcast` / `Unconfirmed`) stakes need `TxMetaBlock` / `PendingTxEngine`; confirmed stakes need scan + pinned derivation; **`claimed_epochs` must be rebuilt** from chain nullifier set ∩ locally derived `N_{i,S}`**, not only from persisted set. | **Pin §4.2 + §5.2** post-resync reconciliation pass. |
 | **R0-D3** | Actor secret transport: `RegisterPendingStake(StakeInstance)` with `opening` in `ask` payloads must not be loggable plaintext in the mailbox. | **Pin §4.7** — opening is **never persisted/sealed** (§4.2 dissolution): `Restore` **re-derives** it in-task, `Snapshot` carries **no** opening, and `RegisterPendingStake` moves a `Secret<StakeOpening>` **in-process** from the orchestrator build context (zeroized, non-`Debug`, never logged — an in-RAM secret move, not a sealed disk blob). List/query messages return `StakeView` only. |
 | **R0-D4** | Claim construction needs `x`, `z`, `a`, epoch set `S`, public `M` — must not duplicate openings in `PendingTxEngine`. | **Pin §4.6–§4.7** — `prepare_claim_build` returns stake-side material (`amount`, `z`, …); orchestrator derives **`x` transiently** from `KeyEngine` (`b`) + `ho` (output derivation) and feeds a **single** zeroized prover bundle to `PendingTxEngine` + `KeyEngine`. **`x` not in `StakeOpening`** (§3.3.1). |
 | **R0-D8** | Persisting `x = ho + b` in `StakeOpening` duplicates **theft-grade** spend authority already held by `KeyEngine`; sealed-region compromise escalates from reward-claim forgery to principal spend. | **Rejected** (Round 1). `StakeOpening = (amount, z)` only; `x` derived at claim/resync (§3.3.1, §8.8). Reopen only if measured derivation cost is prohibitive across the full stake set on resync — not expected (§8.8). |
 | **R0-D5** | `EconomicsEngine::rate_at_epoch` is proposed but `pool_weighted_total()` still exists; [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) still cites pool denominator for Phase 2b. | **Finalized Round 2 (§8.6, 2026-06-05):** `rate_at_epoch` semantics pinned (7 pins); `pool_weighted_total` retired across all 7 boundaries-doc sites (delete, not renarrate — rule 15; sole consumer eliminated, verified at source). **Stage 3 co-lands** the code: trait method swap + grep-retire enumeration in §8.6. |
-| **R0-D6** | [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §7: accrued epochs remain claimable **after unstake**; FSM `FullyUnstaked` must not foreclose claims. | **Pin §3.1** — `principal_spent: bool` on instance or remain in claimable-equivalent state until `claimed_epochs` exhausted. |
+| **R0-D6** | [`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §7: accrued epochs remain claimable **after unstake**; FSM `FullyUnstaked` must not foreclose claims. | **Pin §3.1** — `principal_spent: bool` on instance or remain in claimable-equivalent state until `claimed_epochs` exhausted. |
 | **R0-D7** | `RateEpochObserved { rho, band_sum }` is not a rename of `AccrualRecord` — retire `StakerPoolState::estimate_reward` pool-division path to avoid accidental reintroduction. | **Pin §4.3** — new `RateEpochRecord` type; explicit deletion target in Stage 3 grep plan. |
 
-**Round 0 close checklist:** §0.1–§0.8 re-walked against [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md); R0-D1–D8 rows dispositioned in-doc; §8.0 blocking posture confirmed (§8.0).
+**Round 0 close checklist:** §0.1–§0.8 re-walked against [`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md); R0-D1–D8 rows dispositioned in-doc; §8.0 blocking posture confirmed (§8.0).
 
 ---
 
@@ -520,7 +520,7 @@ on the retired claim wire; extending `band_sum` reward servo in wallet code.
 Authoritative economics/identity spec:
 [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*Pay-for-service rebasing*;
 [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) soundness pass + gate ledger.
-Principal carry-forward pins still in [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md)
+Principal carry-forward pins still in [`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md)
 where not superseded below.
 
 **Principal (§2.4 — admission wire closed bonds-only, 2026-06-11):**
@@ -1424,7 +1424,7 @@ broad wiring (see [`docs/completed/ATOMIC_UNITS_NEWTYPE.md`](../completed/ATOMIC
 
 **Claim batching / timing (privacy):** claiming the **full unclaimed window** in one tx
 (`MAX_EPOCHS_PER_CLAIM` permitting) is the **production default** — it removes the
-partial-timing tell, tightens [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §6.2,
+partial-timing tell, tightens [`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §6.2,
 and reduces **per-stake claim-sequence** correlation (tier + contiguous epoch windows
 accumulate across drip claims). `MAX_EPOCHS_PER_CLAIM = 1` is test-mode only. If a
 backlog requires multiple txs, avoid fixed epoch-boundary broadcast cadence; Dandelion++
@@ -1670,7 +1670,7 @@ subsystem. Existing `shekyl-staking` entitlement code is **exploratory / deletio
 target** until rebased reward modules replace it.
 
 **Upstream carry-forward:** principal commitment + range proof pins from
-[`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §14 (servo history, `ρ_cap`
+[`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §14 (servo history, `ρ_cap`
 where still load-bearing on non-reward surfaces). **Upstream superseded for genesis
 reward path:** §6.4 **(A)** entitlement + **(C)** claim `h_bind` tier multiplier wire.
 
@@ -1695,7 +1695,7 @@ criteria.
 **Considered:** Model claim as a normal FCMP spend; use `x·Hp(O)` for double-claim;
 re-stake principal in the same tx — avoids claim-mode SAL and a separate nullifier table.
 
-**Rejected** ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §6.4.4):
+**Rejected** ([`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §6.4.4):
 
 - Worsens **(C)** — new stake must inherit hidden tier/`eff_lock` from the spent leaf.
 - Remodels accrual; breaks claim/unstake decoupling (§7 upstream).
@@ -1752,7 +1752,7 @@ in §2.3.
 - `N_S = x · G_S` with `x = ho + b` derived transiently (`KeyEngine` + output derivation —
   **not** stored in `StakeOpening`; §3.3.1).
 - `G_S = hash_to_ec("shekyl-stake-nullifier-base" ‖ S_le64)` — domain separator + encoding
-  KAT-locked ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §6.3–§6.4).
+  KAT-locked ([`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §6.3–§6.4).
 - Wallet recomputes `{ x·G_S }` on rescan/resync and intersects the **stake-claim**
   nullifier set (§4.2, §5.2) — not the spent key-image set.
 - Claim prove/verify is a **new surface** (staking-subtree membership + **`h_bind`** + **(A)**
@@ -1770,7 +1770,7 @@ Wallet tracks closure; does not invent consensus constants.
 Re-derive `(amount, z)` from the staked output on hydration (the authoritative path, not
 a cache rebuild), held in memory for the session; derive `x = ho + b` transiently at
 claim build. `z = OutputSecrets.z` (plain-Pedersen `C_stake`, verified at source —
-[`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §"Pinned commitment construction"),
+[`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §"Pinned commitment construction"),
 so the opening recovers from the staked output alone. Security over resync convenience at
 two grades: no theft-grade `x` and no claim-grade `(amount, z)` at rest.
 
@@ -1944,7 +1944,7 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 - [x] **R0-D1–D8** dispositioned (§0.11) — implementation gates named in §8.5–§8.8
 - [x] `StakeState` FSM + transition table signed off (Rounds 1–2), incl. post-unstake claims (R0-D6) — pending-claim model + discard + `Accruing`/`Claimable` pinned in **§3.4** (2026-06-04)
 - [x] **Reconciliation rules incl. nullifier-reorg rewind — wallet design signed off (§5; Rounds 1–2, split 2026-06-05):** the §3.4 claim confirm/reorg leg verifies via the **single full-rebuild** un-claim mechanism (§5.2: `claimed_epochs = {S ∈ window : x·G_S ∈ post-reorg chain set}`, no per-epoch height — in-session reorg and post-`Restore` are **one operation**); reorg persists `ledger → stake → persist` with **no transactional atomicity**, self-healing via rebuild-on-reopen (§5.2 step 4); cross-engine ordering pinned (§5.3). The **§4.7 message-protocol leg is discharged** (2026-06-04): reorg folded onto `ApplyStakeEvents { reorg_rewind }` (D1) with clear-all/replay-all full-surviving-set semantics (D2), `OwnNullifierObserved` re-delivered by the scanner; D1–D4 pinned in §4.7. **No further wallet design work remains on §5.**
-- [x] **§5 reorg reconciliation — forward-rebuild only; no reversal work (clarified 2026-06-05):** §5 does **no** reversal. On reorg it rebuilds `claimed_epochs` forward from the canonical post-reorg chain (derive-don't-accumulate; the incremental-reversal alternative was rejected — §5.2). Its reliance on daemon reorg correctness (that the chain it rebuilds from has reverted the stake-claim nullifier set) is **baseline daemon correctness**, identical to the spend path's reliance on spent-key-image revert when a spend is reorged-then-respent — not a §5-specific dependency or carry. The daemon's `pop_block` reversal ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §11) is inherited-architecture consensus code, gated with the rest of the unimplemented confidential mechanism (§8.0), not the wallet's to track. Wallet-side robustness across adversarial reorg shapes is verified at Stage-3 integration via §7.4 T6.
+- [x] **§5 reorg reconciliation — forward-rebuild only; no reversal work (clarified 2026-06-05):** §5 does **no** reversal. On reorg it rebuilds `claimed_epochs` forward from the canonical post-reorg chain (derive-don't-accumulate; the incremental-reversal alternative was rejected — §5.2). Its reliance on daemon reorg correctness (that the chain it rebuilds from has reverted the stake-claim nullifier set) is **baseline daemon correctness**, identical to the spend path's reliance on spent-key-image revert when a spend is reorged-then-respent — not a §5-specific dependency or carry. The daemon's `pop_block` reversal ([`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §11) is inherited-architecture consensus code, gated with the rest of the unimplemented confidential mechanism (§8.0), not the wallet's to track. Wallet-side robustness across adversarial reorg shapes is verified at Stage-3 integration via §7.4 T6.
 - [x] Persistence schema signed off (§4.2) with version-bump plan — **opening persistence DISSOLVED (2026-06-04):** no sealed `opening` region; persist public fields + `claimed_epochs` only; opening re-derived on hydration (§3.3.1 / §8.8). Was decided-in-principle → gate-confirmed-at-source (`z = OutputSecrets.z`) → **now landed** across §3.3.1 / §4.1 / §4.2 / §4.7 / §8.8.
 - [x] User method signatures signed off (§6). **Batch landed (2026-06-05):** owner-grade `StakeView` pinned (per-stake `claimable` + `claimed_epochs` + `unlock_height`) with the owner-grade caveat and a **distinct** lens-3 redaction that names `claimable`/`claimed_epochs` as the **derived-value** class the secret-class redaction does not cover (Fork A); `StakeFilter` made **total 1:1 over `StakeState`** + `All` sentinel (item 5); abandon-claim discard wiring keyed on an **orchestrator-held** `ReservationId → (stake_id, epochs)` map — `PendingTx` carries no claim discriminator (verified at source, stays spend-pure; item 3); pre-stake projection omission documented (item 4); FA-1 regrounded to single-static-address + independent-accounts reopen-pointer (Fork B); stale §3.3 opening doc-comment fixed (item 1). **`AtomicUnits` landed (2026-06-05):** §6 `claimable` / `claimable_rewards` + `StakeOpening.amount` carry the `AtomicUnits` domain newtype from `shekyl-units` (interim PR before broad wiring; see [`ATOMIC_UNITS_NEWTYPE.md`](../completed/ATOMIC_UNITS_NEWTYPE.md)). The §6 method set and amount type are both signed off.
 - [x] `StakeEngine` message protocol signed off (§4.7), incl. sealed transport + `PrepareClaimBuild` (R0-D3, R0-D4) — **D1–D4 pinned (2026-06-04):** reorg folded onto `ApplyStakeEvents { reorg_rewind }` (no `RewindTo`; rewind-first, one uninterruptible turn); clear-all/replay-all full-surviving-set, heights in scanner; `claim_pending_epochs` lifecycle = `PrepareClaimBuild` side-effect + `AbandonClaim` (claim_pending only, never claimed); `Snapshot` excludes `claim_pending_epochs`, `Restore` starts it empty
@@ -1952,7 +1952,7 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 - [x] **`G_S` + claim linkability + `MAX_EPOCHS_PER_CLAIM`** pinned with **(B)** (§8.5 / upstream §6.4.2)
 - [x] **Tier/window / multiplier integrity** — upstream **(C)** closed on **3C** (staking subtree + `h_bind`, window arithmetic); **(A)** reserve-DLEQ + bounded remainder; impl Round 2
 - [x] `EconomicsEngine::rate_at_epoch` + boundaries doc amendment (§8.6) **— finalized (2026-06-05).** Seven pins: rate-epoch *index* (not height); returns public `ρ_e` as fixed-point `u64` (a rate, not `AtomicUnits`; consensus-defined scale); fallible with `Ok(0)`≠`Err` (un-overloads `pool_weighted_total`'s `0`); consensus-derived from on-chain `band_sum`, not wallet-recomputed; the `AtomicUnits` crossing is the yield product `own_weight·K_S`; no per-stake state (§8.2). **`pool_weighted_total` retired (delete, not renarrate — rule 15):** its sole named consumer (`projected_yield`'s pool denominator) was eliminated by the confidential redesign, verified at source in *both* the trait rustdoc and `V3_ENGINE_TRAIT_BOUNDARIES.md`; reopen-criterion is rule-21-shaped. Boundaries doc amended across all 7 sites (§2.7 Ownership, method sketch, consumer narrative, discipline-test example, three classification tables) — framed "retired pending Stage-3 code removal." Code removal + `active_weighted_stake` repurposing enumerated in §8.6 for Stage 3.
-- [x] **Upstream consensus Round 1 closed** (§8.0; [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §14)
+- [x] **Upstream consensus Round 1 closed** (§8.0; [`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §14)
 - [x] **Round 3 agenda pre-staged (2026-06-05, §7.4):** adversary models A1–A4; threat-exhaustion agenda T1–T9; wider-substrate audit seed G1–G10 (Principle 6). All items `OPEN` — pre-stage sets the surface, does not close it (Principle 5).
 - [x] **Round 3 wargaming executed (2026-06-05, §7.5):** every §7.4 T1–T9 + G1–G10 item driven to a disposition, **plus** privacy-crypto-survey additions T10–T14 / G11–G13 (Zcash shielded-set + counterfeiting, Monero burning-bug / malicious-remote-node / temporal-analysis / wallet2-fingerprint, MimbleWimble graph-reconstruction, Janus). Each disposition is mitigated / FOLLOWUP+trigger / cross-track / priority-reject per rule 21. Residuals (§7.5.2): 7 FOLLOWUPS (V3.1), 2 cross-track asks (T3, T10; **T11 resolved at source**), 5 Stage-3 pins, 1 priority-reject (G10), 3 N/A.
 - [x] **First clean close recorded in §9 (2026-06-05).** The candidate gating finding — **T11** (stake↔unstake commitment re-randomization) — was investigated and **resolved at source** (§7.5.1 #2: unstake is an unlinkable FCMP++ membership spend appending a fresh output; the literal `C_stake` is never re-published — no point-equality link, no Priority-2 finding).
@@ -1980,7 +1980,7 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 |-----|-----|
 | [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) | **Genesis reward substrate** — pay-for-service rebasing, `P`, per-shard bonds, `Σwork` servo |
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Economics sim + soundness pass (Tier 1 gate) |
-| [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) | Principal lock / `C_stake` / unstake membership carry-forward; **§6.4 (A) entitlement claim wire retired** for genesis |
+| [`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) | Principal lock / `C_stake` / unstake membership carry-forward; **§6.4 (A) entitlement claim wire retired** for genesis |
 | [`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md) | **Superseded** — history only |
 | [`FOLLOWUPS.md`](../FOLLOWUPS.md) | Phase 2b planning + Stage 3 rows |
 | [`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) | Phase 2b scope |

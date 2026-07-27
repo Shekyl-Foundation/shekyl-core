@@ -1353,7 +1353,7 @@ assumed.
 
 The GF-4b lineage filter already classifies output lineage and structurally drops
 `ExternalTransfer` from emission backing
-([`ARCHIVAL_GF4B_BACKING_LINEAGE.md`](ARCHIVAL_GF4B_BACKING_LINEAGE.md); possession of a
+([`ARCHIVAL_GF4B_BACKING_LINEAGE.md`](../design/ARCHIVAL_GF4B_BACKING_LINEAGE.md); possession of a
 `BackingSet` is proof). Aiming the same filter at the two optional-crossing funding paths
 (`HoldingsUpdate`-add, credit-bearing `Rebond`) makes **self-funding the only thing an
 honest wallet can build** — converting the optional crossings into named deviations and
@@ -1385,18 +1385,18 @@ composition question is **finite** — a tractable instrument, not a research pr
 
 ## Related documents
 
-- [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §12.5–12.8 — F-D3 mechanism, F-D6
+- [`ARCHIVAL_FIREWALL_GATE6.md`](../design/ARCHIVAL_FIREWALL_GATE6.md) §12.5–12.8 — F-D3 mechanism, F-D6
   anti-drift, R4 joint grade.
-- [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](ARCHIVAL_BOND_WI4_MEASUREMENT.md) — the inherited
+- [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](../design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) — the inherited
   threshold shape (`r < 2`), regime splitting, exchangeability pin, conditional-seal posture.
-- [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) §5.1 — threshold-precedes-
+- [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](../design/ARCHIVAL_BOND_2C_GF7_HOOKS.md) §5.1 — threshold-precedes-
   grading ordering.
 - [`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md) §9.3 / §4 — the `K_COVER`
   provisional-sentinel pattern this doc's §5.4 mirrors (sentinel ⇔ 0, compile-time refusal,
   PF-9 seal-before-stressnet ordering).
-- [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §2.2 — the L16 floor under
+- [`ARCHIVAL_TIMING_CONSTANTS.md`](../design/ARCHIVAL_TIMING_CONSTANTS.md) §2.2 — the L16 floor under
   `RELEASE_COOLDOWN_EPOCHS`.
-- [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L13/§L17/§L18 — population attractor,
+- [`STAKER_ARCHIVAL_SIM.md`](../design/STAKER_ARCHIVAL_SIM.md) §L13/§L17/§L18 — population attractor,
   swan table, the reconciled mobility model.
 - [`FOLLOWUPS.md`](../FOLLOWUPS.md) — swan-2/W8 synchronized-exit wargame (this doc converted its
   mechanism question into the §5.3 predicate; closed as posed by round 4 — the wargame's

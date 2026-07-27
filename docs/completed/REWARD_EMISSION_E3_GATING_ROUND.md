@@ -11,8 +11,8 @@ current `dev` (§7.1, §8).
 **Process:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (A2 audit-against-actual-code; the pre-flight substrate re-check).
 Dispositions follow [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
-**Spec of record:** [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md);
-**plan:** [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) §8.
+**Spec of record:** [`REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md);
+**plan:** [`REWARD_EMISSION_VIN_PLAN.md`](../design/REWARD_EMISSION_VIN_PLAN.md) §8.
 
 This round exists because the pre-flight substrate re-check of the reward-emission
 leg (opened as a "PR-E2 design round") found the premise stale: **PR-E2 has
@@ -876,7 +876,7 @@ merge blockers green, dispatch anchors confirmed, two findings — both
 dispositioned same day. F-C1b (`VARIANT_TAG 0x06 → 0x04`) **ratified**
 (§9.4). F-C1a (`budget(E)` production source) ratified in direction but
 **gated on a spec-first round**:
-[`ARCHIVAL_BUDGET_SCHEDULE.md`](ARCHIVAL_BUDGET_SCHEDULE.md) pins the
+[`ARCHIVAL_BUDGET_SCHEDULE.md`](../design/ARCHIVAL_BUDGET_SCHEDULE.md) pins the
 redirect-the-write straddle transition, reorg-across-fork symmetry, and
 zero-budget-epoch handling (§9.3 disposition); **item 4 does not open
 until that spec is ratified.**
@@ -1002,7 +1002,7 @@ blocks the cut (§9.3, `budget(E)` has no production source) and one stale
 consensus-facing pin that needs a ratified correction before the wire
 freezes around it (§9.4, the `VARIANT_TAG 0x06`). *Both dispositioned
 2026-07-08 — see the ratification boxes in §9.3 (spec-first:
-[`ARCHIVAL_BUDGET_SCHEDULE.md`](ARCHIVAL_BUDGET_SCHEDULE.md)) and §9.4
+[`ARCHIVAL_BUDGET_SCHEDULE.md`](../design/ARCHIVAL_BUDGET_SCHEDULE.md)) and §9.4
 (`0x04` ratified).*
 
 ### 9.1 Merge-blocker status — all green
@@ -1100,7 +1100,7 @@ design round on the economics doc with `STAKER_ARCHIVAL_SIM.md` re-run.
 > runs pre-flip recording budget for burned inflow. Budget is the other
 > half of the supply-conservation equation the M-2 arc protected, so it
 > gets what the emission half got: a spec —
-> [`ARCHIVAL_BUDGET_SCHEDULE.md`](ARCHIVAL_BUDGET_SCHEDULE.md) (gate 1),
+> [`ARCHIVAL_BUDGET_SCHEDULE.md`](../design/ARCHIVAL_BUDGET_SCHEDULE.md) (gate 1),
 > pinning the straddle transition (§2), the three pop-symmetric writes
 > (§3), expiry under-mint (§4), zero-budget epochs as structurally
 > non-claimable via the M1 §2.3 positivity path with the builder's

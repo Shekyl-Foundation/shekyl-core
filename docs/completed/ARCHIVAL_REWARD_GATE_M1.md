@@ -18,7 +18,7 @@ record): the §6 pinned sequence executed steps 1–5 on
 pin, on the §1.3 second branch (fixture rows). The §1.3 merge
 condition is satisfied: the segment-freeze pipeline design round
 OPENED 2026-07-06
-([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md),
+([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](../design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md),
 round 1 draft carrying the O-1..O-3 discharge arguments in its §3).
 `K_COVER` sealing was gated on the §14.4 partition run; that run is
 RATIFIED — PARTITION-PASS, no pins (2026-07-11, PR #291, WI-4 §14.4
@@ -222,7 +222,7 @@ parallel.
 
 **Condition satisfied (2026-07-06):** the pipeline design round
 opened as
-[`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
+[`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](../design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
 (round 1 draft). Its §3 carries the O-1..O-3 discharge arguments —
 freezing as a first-crossing rule over the consensus curve-tree leaf
 count, inheriting determinism/monotonicity/pop-symmetry from the

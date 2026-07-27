@@ -1,7 +1,7 @@
 # Archival budget schedule (gate 1) — `budget(E)` production
 
 **Status:** RATIFIED 2026-07-08 — spec-first round opened same day per the
-F-C1a ratification ([`REWARD_EMISSION_E3_GATING_ROUND.md`](REWARD_EMISSION_E3_GATING_ROUND.md)
+F-C1a ratification ([`REWARD_EMISSION_E3_GATING_ROUND.md`](../completed/REWARD_EMISSION_E3_GATING_ROUND.md)
 §9.3: direction ratified — accumulator, frozen-close-row, under-mint-on-expiry),
 refined through review (provenance/source-chain verification, §6
 integer-determinism pins, §2.2 coinbase-foreclosure pin + KAT B5, servo-scale

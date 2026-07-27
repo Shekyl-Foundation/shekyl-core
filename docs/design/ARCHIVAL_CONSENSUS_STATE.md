@@ -192,7 +192,7 @@ per-`P` cap is nonlinear. Reorg revert order must match the chosen path (§6).
 
 **There is no reward gate in the close compute.** The M1 `K_COVER`
 cold-start refusal was retired on 2026-07-19 (PR #346) and its
-machinery deleted; see [`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md)
+machinery deleted; see [`ARCHIVAL_REWARD_GATE_M1.md`](../completed/ARCHIVAL_REWARD_GATE_M1.md)
 §13. No collective factor multiplies or zeroes §3.3 `R_market` or §3.5
 `Σwork`; the close compute derives them directly from member-credited
 work. Reward withholding is legitimate only as the consequence of an
@@ -409,7 +409,7 @@ servo/emission-cadence need + privacy review — not F1 portfolio axis.
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; participation attractor |
 | [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) | Gate 4 — join-Market, bond-post wire |
 | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Gate 6 — `P`↔principal firewall (parallel) |
-| [`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md) | M1 cold-start gate — zero-at-top factor over §3.3/§3.5 (§3.6) |
+| [`ARCHIVAL_REWARD_GATE_M1.md`](../completed/ARCHIVAL_REWARD_GATE_M1.md) | M1 cold-start gate — zero-at-top factor over §3.3/§3.5 (§3.6) |
 
 ---
 

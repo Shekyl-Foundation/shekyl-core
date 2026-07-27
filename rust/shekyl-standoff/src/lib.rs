@@ -9,7 +9,7 @@
 //! principal-side re-appearance it would decorrelate against has no on-chain
 //! observable, and Gate-6 §12.9 re-homed the seam to the off-chain crossing —
 //! the exit mechanism was deleted at decision 5's scope,
-//! `docs/design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §15.4/§15.5.)
+//! `docs/completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §15.4/§15.5.)
 //! The timing draw yields a single scalar `spread`: there is no separate
 //! consumer to single-source, because there is no second event to place the
 //! bond post against.

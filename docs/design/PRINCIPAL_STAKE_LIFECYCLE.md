@@ -696,7 +696,7 @@ toward "already structural, use it," not "unify two call sites."**
 **Correction (2026-07-01) — the `C_min` "residual/gate" was a pre-sim phantom; retracted.**
 The framing that stood here — a "2d-1 earnings-ramp `C_min` sizing" as the load-bearing residual
 this thread waits on — elevated `C_min` (a **speculative planning variable written in
-[`ARCHIVAL_COVER_DRAW.md`](ARCHIVAL_COVER_DRAW.md) *before the sim was run***) to a definitive
+[`ARCHIVAL_COVER_DRAW.md`](../completed/ARCHIVAL_COVER_DRAW.md) *before the sim was run***) to a definitive
 open gate. It is not one. The **definitive authority is the sim**
 ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)), which took the design in a different
 direction and does **not track a runway `C_min` at all**. What is actually determined:

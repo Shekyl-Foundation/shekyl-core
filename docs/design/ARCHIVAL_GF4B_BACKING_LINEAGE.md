@@ -65,7 +65,7 @@ design constraints untouched).
 | `run_dual_extractor` sees the full `ScannableBlock` (header + miner tx + non-miner txs) and already iterates `Input::BondPost` against the bonded union's id set — the classification seam exists | `engine/pscan/scan_step.rs` (`run_dual_extractor`) |
 | `PSCAN_STATE_VERSION` is **4**; loads refuse on mismatch (no migration, rule 15); snapshot check is CI-enforced | `shekyl-engine-state/src/pscan_state.rs`, `schema_snapshot.rs`, `.github/workflows/schema-snapshot.yml` |
 | Backing **arity is exactly 1** (wire pin); "the GF-4b sweep design feeds exactly one designated backing output (bond-post change at bootstrap, mint output at steady state)" | `rust/shekyl-archival-retention/src/emission_wire.rs` (single-input pin) |
-| **Q11 ratified ACCEPT** (E3 gating round §2.2): backing validity anchors at the reference tree root, **not** "output still unspent"; consensus is lineage-blind *and* spend-blind for backing | [`REWARD_EMISSION_E3_GATING_ROUND.md`](REWARD_EMISSION_E3_GATING_ROUND.md) §2.2 |
+| **Q11 ratified ACCEPT** (E3 gating round §2.2): backing validity anchors at the reference tree root, **not** "output still unspent"; consensus is lineage-blind *and* spend-blind for backing | [`REWARD_EMISSION_E3_GATING_ROUND.md`](../completed/REWARD_EMISSION_E3_GATING_ROUND.md) §2.2 |
 
 ### 2.1 Discrepancy list (docs ↔ code, the Phase-0 deliverable)
 

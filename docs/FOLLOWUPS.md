@@ -1579,7 +1579,7 @@ sustainability is unaffected by the recalibration.
     and quantizes** the cohort onto ≤2 epoch-boundary heights — not a smear
     but its opposite (anti-smear: intra-epoch dispersion erased,
     cohort concentrated)
-    ([`design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](./design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md)
+    ([`completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](./completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md)
     §3 anchor-quantization lemma). The release-queue question is likewise
     pre-committed as the §5.3 predicate `max((N_t − 1)/ρ_x, 2 × SEB) ≤ N_x·σ_L`
     (the X-3 anchor-merge floor, review round 3 F-W6, makes its LHS
@@ -4953,7 +4953,7 @@ sustainability is unaffected by the recalibration.
 - **Serve-credit C++ consensus decisions — Rust equivalence audit +
   standing KAT (the flip is V3.1, filed separately there)** (surfaced
   2026-07-08, C-1 pre-flight decision-placement review,
-  [`REWARD_EMISSION_E3_GATING_ROUND.md`](./design/REWARD_EMISSION_E3_GATING_ROUND.md)
+  [`REWARD_EMISSION_E3_GATING_ROUND.md`](./completed/REWARD_EMISSION_E3_GATING_ROUND.md)
   §9.5; audit/flip decoupling ratified same day). Three archival vin
   consensus decisions are C++ if-checks made directly against LMDB: the
   serve-credit `(P,s,E)` dedup (`blockchain.cpp:4247`), the
@@ -5030,7 +5030,7 @@ sustainability is unaffected by the recalibration.
 
 - **Emission regtest end-to-end — the E4/E5 gate** (surfaced 2026-07-09,
   C-1 commit-block 6,
-  [`REWARD_EMISSION_E3_GATING_ROUND.md`](./design/REWARD_EMISSION_E3_GATING_ROUND.md)
+  [`REWARD_EMISSION_E3_GATING_ROUND.md`](./completed/REWARD_EMISSION_E3_GATING_ROUND.md)
   §9.5 item 8). An emission claim accepted-and-applied on a regtest
   chain through the real C-1 path (whitelist → CT semantics → dispatch
   verify → block-level `(P,E)` pass → connect arm → WS-2 single writer).

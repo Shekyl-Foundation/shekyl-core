@@ -268,7 +268,7 @@ same sitting, instead of waiting to be caught one at a time:
   lineage-era justification ("stealth so the reward can't be traced onward to the
   principal") is met by construction under FCMP++ on F-W10's grounds: reward-output
   spends are unenumerable and carry no `P`-typing on the wire
-  ([`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md) §16.1).
+  ([`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](../completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md) §16.1).
   **Re-anchored, not retired** — the bullet survives because its mechanism never needed
   the graph.
 - **Unbond refund: HALF-PHANTOM — the factual phrasing is the visible-graph intuition
@@ -2455,7 +2455,7 @@ gate — **FIRED 2026-07-15** (§12.5). The window derivation is the build seque
 committed **before** any exit sweep runs and before `draw_exit_gap` code lands (GF7_HOOKS §5.1:
 threshold before grading; a failed sweep is a decorrelation-redesign signal, never a move-the-bar
 signal). **The derivation is committed:**
-[`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md) (2026-07-15) —
+[`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](../completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md) (2026-07-15) —
 anchor formula from named consts (§1.1), two-regime split (steady-state X-1 lower bound vs
 crisis-cohort X-2 upper bound), the anchor-quantization lemma (a-priori: the cooldown delays and
 *quantizes*, does not smear), the §5.3 predicate making the W8 question decidable,

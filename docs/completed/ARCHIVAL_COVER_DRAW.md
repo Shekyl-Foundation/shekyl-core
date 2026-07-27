@@ -88,7 +88,7 @@ decided.)*
 
 > **Correction (2026-07-01) — `C_min` pinned post-sim; the "pending the 2d-1 ramp" language
 > below is superseded.** `C_min` was scoped here (pre-sim) as a runway floor whose *final value
-> awaited the 2d-1 earnings-ramp sizing*. The sim ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md))
+> awaited the 2d-1 earnings-ramp sizing*. The sim ([`STAKER_ARCHIVAL_SIM.md`](../design/STAKER_ARCHIVAL_SIM.md))
 > is the definitive authority and took a different direction — it does **not** track a runway
 > `C_min`. Disposition: **`C_min = 1 rung = 0.75 SKL`** (`= ARCHIVAL_BOND_FLOOR`, gate-4-pinned and
 > fixed — §2.3), sim-supported (the `--cover` harness shows even `k = 0` / the `cover == 0` opt-out

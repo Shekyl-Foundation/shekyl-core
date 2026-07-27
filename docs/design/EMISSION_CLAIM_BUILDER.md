@@ -47,7 +47,7 @@ half of the E4 merge gate:
 > through the real C-1 consensus path** — not E3's Rust KAT.
 > ([`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) §3.0)
 
-The regtest e2e (part 2, [`REWARD_EMISSION_E3_GATING_ROUND.md`](REWARD_EMISSION_E3_GATING_ROUND.md)
+The regtest e2e (part 2, [`REWARD_EMISSION_E3_GATING_ROUND.md`](../completed/REWARD_EMISSION_E3_GATING_ROUND.md)
 §9.5 item 8) is **blocked on this builder** because a hand-rolled test
 builder would exercise a parallel path — the opposite of what the e2e
 exists to prove (`docs/FOLLOWUPS.md`, V3.0 queue, "Emission regtest
