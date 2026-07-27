@@ -81,10 +81,21 @@ unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
     };
     let bytes = slice::from_raw_parts(ids, byte_len);
     (0..n)
-        .map(|i| {
+        .filter_map(|i| {
             let mut b = [0u8; 16];
             b.copy_from_slice(&bytes[i * 16..i * 16 + 16]);
-            ConnectionId::from_bytes(b)
+            // NIL is the absent-slot / local-origin sentinel; it must never enter
+            // the map as a live peer (a nil "peer" would snapshot back as nil
+            // bytes and be indistinguishable from an empty slot). A caller
+            // including it in the connection list is a bug: catch it in debug,
+            // drop it in release.
+            let is_nil = b == NIL;
+            debug_assert!(!is_nil, "read_ids: NIL uuid in the connection list");
+            if is_nil {
+                None
+            } else {
+                Some(ConnectionId::from_bytes(b))
+            }
         })
         .collect()
 }
@@ -489,4 +500,10 @@ mod tests {
             shekyl_dandelionpp_map_free(h); // null free is a no-op
         }
     }
+
+    // Note: the NIL-in-connection-list guard (read_ids) can't be unit-tested —
+    // the debug_assert fires inside an `extern "C"` (nounwind) function under the
+    // workspace's `panic = "abort"`, so it aborts rather than unwinds and
+    // `#[should_panic]` can't catch it. The filter (`filter_map` dropping nil) is
+    // correct by construction; valid-input behaviour is covered by the oracle.
 }
