@@ -359,12 +359,18 @@ argument for it over a participation-derived signal:
 >    also compensates the miner-reward penalty to use the legal `2×` limit,
 >    ~45 k SKL/epoch in fees) and it is closed by **price**, not by structure. The
 >    measurement splits it into **two tiers with two different closers**:
->    - **penalty-free tier (`+1.41`)** — closed by the **reopen-(c) per-output
->      fee-floor**, and **open until (c) lands**: A4's own tables say the flood
->      driving it *profits today* (ROI 2.8×–17.8×). This is the conditional layer,
->      and it is why **one missing mechanism would leave two failures** — W9's
->      profit gate *and* this anti-swing property. Stage 3 must freeze the shape
->      seeing that dependency **named**.
+>    - **penalty-free tier (`+1.41`)** — ~~closed by the **reopen-(c) per-output
+>      fee-floor**, and **open until (c) lands**~~ **REOPENED AS ITS OWN ITEM
+>      (2026-07-27): see §12.11.1.** Reopen (c) is closed with **no mechanism**
+>      (§12.11), so this tier has **no fee-floor closer** — but it does not need
+>      one, because it never depended on stuffing being *profitable*: an
+>      unprofitable stuffer (or a grudge-donor) can still move `n`. The live
+>      question is the **rate**, and the expected closer is **structural**:
+>      `frozen_segment_count` is monotone non-decreasing, reversible only to reorg
+>      depth, so there is **no oscillation to arbitrage** — only one-directional
+>      drift the escalation is designed to track. "**One missing mechanism, two
+>      failures**" is therefore **half-retired**: W9's profit gate is gone, and
+>      this is the surviving half, to be discharged on its own terms.
 >    - **legal-`2×` tier (`+2.82`)** — closed **already, independently of (c)**, by
 >      the block-reward penalty: at `B = 2M` the production formula
 >      (`get_block_reward`) pays the miner *exactly zero*, so the flooder must fund
@@ -425,7 +431,11 @@ The constraints §6.0 and the operand imply, to be pinned at Stage 3:
 > **§12.10 consequence (A6).** The **no-controller** constraint survives with a
 > *shifted justification*. It was: smoothness inherited from an operand that
 > cannot move. It is now: **the operand moves only monotonically, at a bounded and
-> depth-falling slew, at a price the reopen-(c) fee floor makes unprofitable** —
+> depth-falling slew, at a price that already does not pay** (2026-07-27: the
+> clause originally read "*at a price the reopen-(c) fee floor makes
+> unprofitable*"; (c) closed with **no mechanism**, §12.11 — stuffing is
+> **negative-sum without any floor**, so this justification is *strengthened*,
+> not weakened: the ratchet does not pay on its own economics) —
 > and a rate-limiter would only slow a *paid, one-way ratchet that already does not
 > pay*, while adding exactly the stateful machinery this section forbids. Same
 > conclusion; honest premises.
@@ -493,7 +503,10 @@ decision.
 - **Reopen (d) runs PARALLEL to the shape freeze — with one named contingency on
   the *numeric* re-pin (ruled 2026-07-26).** The decomposition: **W9** attacks the
   **split itself**, so reopen (c) blocks anything touching `compute_burn_split` —
-  no argument. **W10** attacks **what the split purchases**, and neither of its
+  no argument. **(Amended 2026-07-27: reopen (c) is CLOSED with no mechanism
+  (§12.11), so it blocks nothing. W9 does not attack the split — the stuffer is
+  negative-sum under no-exclusivity — and the §6.0 rate residual that outlived it
+  is tracked at §12.11.1, which likewise does not touch `compute_burn_split`.)** **W10** attacks **what the split purchases**, and neither of its
   dispositions touches the share function's *form*: grace-tightening is a
   challenge-protocol change and PoRep is a proof-system change, so the **shape**
   (monotone · floor · asymptote-exists · banded-PL · no controller) freezes without
@@ -516,7 +529,16 @@ decision.
   - (c) **a per-output fee-floor term** pricing the perpetual set-growth
     externality at output creation (§11.3) — out of this round's pinned scope
     (staker share only), **trigger:** the W9 sweep showing weight-fees alone do
-    not clear cost-of-burden. **🔴 FIRED (Stage 2 · A4 · cp4b `d4026efe3`, cp4c).**
+    not clear cost-of-burden. **✅ CLOSED — NO MECHANISM (2026-07-27, §12.11).**
+    The trigger fired on a **mismeasurement** and is retracted: A4 asked *"is
+    stuffing profitable"*, but `ROI > 1` is the definition of a working archival
+    incentive; the exploit question is excess return over honest archiving, and
+    with **no exclusivity** in the shard market the stuffer funds `(1 − w_a)` of
+    the lift for competitors who spent nothing — **negative-sum, anti-scaling**.
+    There is no externality left for a floor to price, and a floor would have
+    **taxed protective cover traffic** (§12.11 privacy axis). **No fee floor
+    ships; Stage 3 loses this input.** Historical record of the FIRED reasoning
+    follows. 🔴 ~~FIRED (Stage 2 · A4 · cp4b `d4026efe3`, cp4c).~~
     The W9 served-work sweep fails ROI < 1 even at the rational honest
     equilibrium (2.8× baseline → 17.8× late-tail; §12.5). Promoted from named
     reopen to a **Stage-3 hard input**, denominated in **weight** (a per-output
@@ -560,7 +582,7 @@ decision.
 | W6 | Distributional dilution: D1 fix moves ex-zero archivers into `Σwork`, shrinking scarce-holders' shares of fixed budget | Stage-2 sim models the shift, not just aggregate lift | ⏳ sim-arm scope |
 | W7 | Cached `frozen_segment_count` drift at the D2 read-point | Pinned read through frontier-check (M1 §11.8 M3-1) | ✅ carried |
 | W8 | **Fast-swing** manipulation of the staker share (pump-and-dump, whale dive, reflexive feedback) | The operand is monotone + slow + predictable (§6.0) and the function is a pure map of `n` with no controller (§6.1) — pump/dump/whale have **no lever** on a monotone chain-state operand; the only lever is the durable one (W9) | ✅ by operand (fast-swing has no lever) |
-| W9 | **Durable output-stuffing** — mint outputs to inflate leaf count → segment-freeze rate → `n` → share, permanently (the ratchet cuts both ways, §6.2). Not covered by `DESIGN_CONCEPTS.md` §6, which keys the stuffer's cost to `tx_volume` (a tx count) via the sqrt damper, which does not escalate against output count. **Live precedent**: Monero's suspected March-2024 output-flood; Bitcoin's 2015 dust floods (§11.3) | Burden-coupling: the operand *is* the funded quantity, so a stuffer raises the share and the real cost (a permanent ~3.33 MB shard held forever) in the coupled ratio — "manipulating an honest measure of the funded quantity mostly funds the quantity"; only weight-fees escalate against outputs | 🔴 **FAILS** (Stage 2, A4 cp4b/cp4c). Served-work ROI is 2.8×–17.8× at the rational honest equilibrium (§12.5): the coupled bond burden is real but ~1% of cost, and the weight-fee at the `300`/byte floor is cheap against the Δpool a flood unlocks. Diagnosis: **pure fee-flow-volume leverage** (first-mover premium ≈ 1.0 — *not* a concentration attack at the realistic end); the cross-regime `fee×→1` spread (2.8→17.8) is volume/share-slope, so a floor cannot be one number. Disposition: reopen (c) **FIRED** — weight-denominated per-output fee-floor + the **D3** capture-side companion (reopen (e)); **not** a D2 redesign (§8). |
+| W9 | **Durable output-stuffing** — mint outputs to inflate leaf count → segment-freeze rate → `n` → share, permanently (the ratchet cuts both ways, §6.2). Not covered by `DESIGN_CONCEPTS.md` §6, which keys the stuffer's cost to `tx_volume` (a tx count) via the sqrt damper, which does not escalate against output count. **Live precedent**: Monero's suspected March-2024 output-flood; Bitcoin's 2015 dust floods (§11.3) | Burden-coupling: the operand *is* the funded quantity, so a stuffer raises the share and the real cost (a permanent ~3.33 MB shard held forever) in the coupled ratio — "manipulating an honest measure of the funded quantity mostly funds the quantity"; only weight-fees escalate against outputs | 🔴 **FAILS** (Stage 2, A4 cp4b/cp4c). Served-work ROI is 2.8×–17.8× at the rational honest equilibrium (§12.5): the coupled bond burden is real but ~1% of cost, and the weight-fee at the `300`/byte floor is cheap against the Δpool a flood unlocks. Diagnosis: **pure fee-flow-volume leverage** (first-mover premium ≈ 1.0 — *not* a concentration attack at the realistic end); the cross-regime `fee×→1` spread (2.8→17.8) is volume/share-slope, so a floor cannot be one number. Disposition: ~~reopen (c) **FIRED** — weight-denominated per-output fee-floor~~ **RETRACTED 2026-07-27 → ✅ CLEARS (§12.11)**: the FAIL measured *profit*, not *theft*. Netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales**; reopen (c) is **CLOSED with NO MECHANISM**. The **D3** capture-side companion (reopen (e)) landed independently (§12.9.1, PR #371). |
 | W10 | **Proxy free-riding on the on-demand-serving ruling** (§11.1) — a thin proxy re-fetches challenged data cheaply within the gate-4 grace window instead of holding it; D1 now *pays* that profile (was zero under truncation) and D2 escalates the pool it drains, re-pricing the §7.4 free-rider equilibrium that was closed under the old economics | Fetch-cost-vs-deadline margin must still bind (the §7.4/L14 judgment). If the Stage-2 arm shows it doesn't: tighten the gate-4 grace window or accelerate the PoRep reopen (the doc's own named economics-reopens) — **not** redesign D2 | 🔴 **FAILS** (Stage 2, A5 cp5a; §12.6). The margin is negative at the current grace: the challenge is a cheap ~3 KB opening (GATE2 §0–3: *fetch-on-demand IS service*), re-fetchable for ≪ the cost of holding 13.6 GB. Disposition (§8 reopen (d), **FIRED**): tighten gate-4 grace to force `q ≥ q* ≈ 0.098–0.278`, or accelerate PoRep (`q→1`) — **not** a D2 redesign. |
 
 ---
@@ -651,6 +673,17 @@ Stage 3**: a per-output fee-floor term pricing the perpetual externality at
 creation — trigger: the W9 sweep showing weight-fees alone do not clear
 cost-of-burden (§8).
 
+> **⚠️ CLOSED 2026-07-27 (§12.11) — the transfer is partial, and the half that
+> does not transfer is the decisive one.** The March-2024 incident transfers its
+> **cost profile** (the DQ-2C calibration, which remains valid) but **not** its
+> **privacy mechanism**: Rucknium's black-marble attack poisons a *decoy ring*,
+> and FCMP++ has no rings — whole-tree membership plus a single admissible output
+> type (`CTTypeFcmpPlusPlusPqc`, enforced at
+> `tx_verification_utils.cpp:124`) means a flood cannot re-partition the
+> anonymity set. Under Shekyl a generic flood is **paid cover traffic**, so the
+> fee floor contemplated here would have **taxed the protective traffic**. No
+> mechanism ships.
+
 ### 11.4 Caution — burn redirection's political economy: the asymptote is the capture point (→ §8 ceremony)
 
 Ethereum has repeatedly declined to redirect EIP-1559 burn toward public goods
@@ -731,6 +764,19 @@ survivors under the §11.4 ceremony and implements it in `compute_burn_split`.
 > predicate — the *reward path*) and the **(c) design round** (the fee floor — the
 > *weight/fee model*) are **different consensus surfaces**, both under rule 26,
 > **neither blocking the other**; Stage 3 waits on **both**.
+>
+> **⚠️ SUPERSEDED (2026-07-27, §12.11) — the (c) half of this entry condition is
+> DISCHARGED BY CLOSURE, not by landing a mechanism.** W9's profit gate was a
+> **mismeasurement**: A4 tested *"is stuffing profitable"* when the exploit
+> question is *"is stuffing more profitable than honest archiving"*, and on the
+> no-exclusivity accounting the stuffer is **negative-sum**. Reopen (c) is
+> **CLOSED with NO MECHANISM**; there is no fee floor to wait for and **no (c)
+> lane to run**. What survives is the *other* half of "load-bearing twice" —
+> §6.0's anti-swing property, which never depended on stuffing being profitable
+> and is now the lone residual, tracked at **§12.11.1 (OPEN)**. **D3 is
+> implemented** (§12.9.1, PR #371). Stage 3's remaining gate is §12.11.1's
+> disposition, expected to close structurally on `frozen_segment_count`
+> monotonicity.
 Stage 2 does **not** pin the asymptote number, and does **not** write consensus
 code — if it writes any Rust, it is `shekyl-economics-sim` only.
 
@@ -766,7 +812,7 @@ Grounded in `shekyl-economics-sim`:
 | **A1 burden clearance** | Does the escalated pool keep the staker's reward above the cost of their **growing locked-bond capital** through the fee era? (F-G: storage alone is trivially met) | `budget_skl(candidate)` vs `opp_cost_skl(n, rate) + storage/price`, over the trajectory, ∀ opp-cost rate in the band | **Report** the (rate, shape, scenario) region where `budget ≥ burden` sustained; a shape "clears" iff it holds under the **binding 10%/yr** rate (and 0%/yr Kryder for the minor storage term). The dominant term is price-independent |
 | **A2 distributional shift (W6)** | The D1 fix moves ex-zero bulk holders into `Σwork`, diluting scarce-holders' shares of a fixed budget | Scarce-holder share pre- vs post-D1 across the archiver distribution | **Descriptive** — quantify the redistribution; **flag** if it strands scarce holders below their marginal cost |
 | **A3 stranding** | What fraction of diverted budget goes unminted? | Σ unclaimed `reward_P` past `MAX_CLAIM_AGE_W = 26` epochs ÷ Σ budget | ✅ **REPORTED** (Stage 2, cp5b; §12.7). Pre-D1 strands **100%** past the co-holder cliff (an **early-chain** regime) — the §1 Stage-0 claim confirmed and stronger than stated; post-D1 ≈ 0 except a **residual**: D1 *scales* the cliff to `r > ~1000 × shards_held`, so small holders still zero at extreme replication. Joint with A1: stranded budget is not burden-clearing |
-| **A4 output-stuffing (W9)** | Does stuffing pay the attacker — is there an early-chain regime where their manipulation profits? | **attacker ROI** = marginal captured revenue (their **served-work first-mover slice** of the Δpool over the horizon) ÷ marginal cost (weight-fees + the coupled bond). ⚠️ **Retraction (§12.5):** the ratified D-2 wording "*stake-fraction* of the Δpool" was wrong at source — the staker pool distributes by **capped served work per bond** (`reward_share_floor`), *not* by stake; the capture term was written without re-walking the disbursement path. The correction makes the attack **stronger** (r=1 first-mover work-capture is a sharper lever than any stake fraction). On `scenario_4`(output-variant) × `scenario_7`(bootstrap); `Δshare/Δburden` reported as a coherence **diagnostic** | **Pass** iff attacker **ROI < 1** everywhere in the sweep — the executable form of "stuffing it funds it" (§6.2); calibrated to the March-2024 profile (DQ-2C). **Result: FAILS (§12.5)** → the §11.3 rule-21 per-output fee-floor reopen (c, FIRED) + the D3 companion (reopen e), **not** a D2 redesign |
+| **A4 output-stuffing (W9)** | Does stuffing pay the attacker — is there an early-chain regime where their manipulation profits? | **attacker ROI** = marginal captured revenue (their **served-work first-mover slice** of the Δpool over the horizon) ÷ marginal cost (weight-fees + the coupled bond). ⚠️ **Retraction (§12.5):** the ratified D-2 wording "*stake-fraction* of the Δpool" was wrong at source — the staker pool distributes by **capped served work per bond** (`reward_share_floor`), *not* by stake; the capture term was written without re-walking the disbursement path. The correction makes the attack **stronger** (r=1 first-mover work-capture is a sharper lever than any stake fraction). On `scenario_4`(output-variant) × `scenario_7`(bootstrap); `Δshare/Δburden` reported as a coherence **diagnostic** | **Pass** iff attacker **ROI < 1** everywhere in the sweep — the executable form of "stuffing it funds it" (§6.2); calibrated to the March-2024 profile (DQ-2C). ~~**Result: FAILS (§12.5)**~~ **→ RETRACTED 2026-07-27 (§12.11): the GATE ITSELF was wrong.** "ROI < 1" tests whether archiving *pays*, and it must — `ROI > 1` is the definition of a working archival incentive. The exploit question is **excess return over honest archiving**, on which the stuffer strictly loses (they pay to manufacture burden an honest archiver is handed free, then keep only `w_a` of the lift). Reopen (c) **CLOSED, no mechanism**; the D3 companion (reopen e) landed separately (§12.9.1). |
 | **A5 proxy free-riding (W10)** | Does the §7.4 fetch-cost-vs-deadline margin still bind after D1 restores bulk pay and D2 escalates the pool? | **margin** = expected proxy cost/epoch − honest storage cost/epoch, where proxy cost includes within-grace re-fetch feasibility (gate-4 window) **and** the L14 challenge-failure exposure; against the **post-D1/D2** reward on ~13.6 GB held | **Pass** iff margin `> 0` (§7.4: "if re-fetch is cheap, the challenge *is* the free-rider equilibrium"). Fail → tighten gate-4 grace or accelerate PoRep reopen (§11.1), **not** a D2 redesign |
 | **A6 swing / band width (§6.0)** | Is the lift a wide-but-slow band, not a cliff? | `d(share)/d(n)` across the sweep | **Report** the rate; **flag** any cliff (bounded-slope is the §6.1 requirement) |
 
@@ -1004,9 +1050,9 @@ models (each cell links its section).
 | **A1** clearance | ✅ **clears** | Escalation earns its keep in the far tail: scenario 9 flat-25 **0.66×** (fails) vs best candidate **2.36×** at the binding 10 % opportunity-cost rate, 0 %/yr Kryder. A non-event while emission dominates. |
 | **A2** distribution (W6) | ✅ **clears** (§12.10) | Scarce-holder share `1.0000 → 0.9998` — **0.02 %** dilution, **zero** scarce holders stranded below marginal cost. |
 | **A3** stranding | ✅ **reported** (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff — the §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside the quantization corner. |
-| **A4** stuffing (W9) | 🔴 **FAILS** (§12.5) | Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6671**, `fee×→1` **0.7** (§12.9 OQ-4). |
+| **A4** stuffing (W9) | ~~🔴 FAILS~~ → ✅ **CLEARS (§12.11)** | **Verdict retracted 2026-07-27**: the arm measured *profit*, not *theft*; netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales**. Figures below are historical. Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6671**, `fee×→1` **0.7** (§12.9 OQ-4). |
 | **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching a ~3 KB opening beats holding 13.6 GB by **4–40×**; crossover `q* ≈ 0.098–0.278`. |
-| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts. Adversarial slew ceiling **1.41 pts/epoch penalty-free** (closed **economically** by reopen (c)) or **2.82 pts/epoch at the legal 2× limit** — the latter already priced out by the block-reward penalty (~10.24 M SKL/epoch, **114×** the fees). See the §6.0 amendment. |
+| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts. Adversarial slew ceiling **1.41 pts/epoch penalty-free** (~~closed **economically** by reopen (c)~~ — **(c) is closed with no mechanism (§12.11); this tier is now the lone open residual, §12.11.1**, expected to close structurally on `frozen_segment_count` monotonicity) or **2.82 pts/epoch at the legal 2× limit** — the latter already priced out by the block-reward penalty (~10.24 M SKL/epoch, **114×** the fees). See the §6.0 amendment. |
 
 **The through-line: one theorem, three independent confirmations.** A4's
 `prem ≈ 1.0`, OQ-1's `|Δ| = 0` at the partition optimum, and A2's `0.02 %`
@@ -1017,14 +1063,27 @@ them as one mechanism verified three ways, not three small numbers.
 **The survivor envelope is CONDITIONAL — and that is Stage 2 succeeding.** Stage 2
 was to hand Stage 3 the `(shape, asymptote)` survivors clearing A1 without failing
 W9/W10. **Both wargame arms fail**, so no candidate survives on the escalation's
-own terms: the escalation is **securable but not free**. The envelope is
+own terms: the escalation is **securable but not free**.
+
+> **⚠️ Amended 2026-07-27 (§12.11): "both wargame arms fail" no longer holds.**
+> **W9's FAIL is RETRACTED** — it measured *profit*, and profit is not theft. The
+> exploit question is excess return over honest archiving, and on that question
+> stuffing **strictly loses** (no exclusivity ⇒ the stuffer funds `(1 − w_a)` of
+> the lift for competitors who spent nothing). Only **W10** still fails, so the
+> envelope is conditional on **one** companion — reopen (d) — not two. The envelope is
 conditional on its two companions, which Stage 3 inherits as **hard inputs, not
 options**:
 
-1. **Reopen (c) — weight-denominated per-output fee-floor.** Now load-bearing
+1. ~~**Reopen (c) — weight-denominated per-output fee-floor.** Now load-bearing
    **twice over**: it closes W9's profit gate (§12.5) *and* it is what closes
    §6.0's anti-swing property (§12.10 / §6.0 amendment). **One missing mechanism
-   would be two failures.**
+   would be two failures.**~~ — **STRUCK 2026-07-27 (§12.11): reopen (c) is
+   CLOSED with NO MECHANISM.** The W9 profit gate is **retracted** — `ROI > 1` is
+   the definition of a working archival incentive, not a vulnerability, and
+   netted for the no-exclusivity subsidy the stuffer is **negative-sum**. "Load-
+   bearing twice" is therefore **half-retired**: only §6.0's anti-swing property
+   survives, and it is now its own open item (**§12.11.1**), not a fee-floor
+   dependency. Stage 3 **loses this hard input**.
 2. **Reopen (d) — gate-4 grace tightening to `q ≥ q*`, or PoRep** (§12.6).
 3. **D3 — resolved** (§12.9): plateau deleted, admission predicate, cadence
    monitored. Its outcome is *already folded into* the numbers above.
@@ -1062,6 +1121,14 @@ than corrective: the Round-2 re-pin will re-price the arm instead of silently
 diverging from it.
 
 ### 12.5 A4 (W9) result — the escalation fails the stuffing gate; reopen (c) FIRED
+
+> **⚠️ SUPERSEDED 2026-07-27 by §12.11 — verdict RETRACTED, measurements retained.**
+> This section's numbers are sound; its **verdict is not**. It gates on
+> `ROI < 1`, which asks whether archiving pays — and it must. The exploit
+> question is *excess* return over honest archiving, and the stuffer pays to
+> manufacture burden the honest archiver receives free while keeping only `w_a`
+> of a lift they funded entirely. **Reopen (c) is CLOSED with NO MECHANISM.**
+> Read what follows as the measurement record, **not** as a live disposition.
 
 **Built:** cp4a (`11452248f`, leaf-stuffer cost via the production `predict_weight`
 hoist, D-1), cp4b (`d4026efe3`, served-work ROI + the DQ-2H population), cp4c
@@ -1353,9 +1420,12 @@ had.
   it — and it **removes what the first draft listed as the leading candidate**.
 - **`WORK_MILLI_SCALE` is genesis-frozen** — the quantization floor is *not*
   eliminable; it is a parameter of the problem, not a target (§12.7 Finding 3).
-- **Load-bearing for W9** (§12.5): D3 closes the concentration regime the
+- ~~**Load-bearing for W9** (§12.5): D3 closes the concentration regime the
   per-output fee-floor cannot reach, so it is **paired** with reopen (c), not
-  sequenced after it.
+  sequenced after it.~~ **STRUCK 2026-07-27 (§12.11): there is no partner.** The
+  fee floor never shipped — W9's FAIL was a mismeasurement of profit-vs-theft —
+  so D3 was never half of a pair. It stands on its own merits (a bond must not be
+  admitted into a position the frozen scale cannot pay) and landed at §12.9.1.
 
 **Live lever families (post-G-1).**
 
@@ -1613,6 +1683,9 @@ Deletion reproduces the small-bond row **bit-for-bit**: with no cap to dodge the
 honest-holdings axis stops mattering, and A4 has *one* number per regime instead
 of a naive/rational spread. **`fee_mult_to_close` is unchanged**, so reopen (c)'s
 sizing evidence **survives deletion** (it was sized at the realistic end already).
+*(2026-07-27: this remains a true statement about the measurement, but it now
+sizes nothing — reopen (c) closed with no mechanism, §12.11. Retained as evidence
+that deletion was orthogonal to the fee-flow regime, not as a live input.)*
 The capped row is precisely what deletion removes — a penalty falling on
 non-optimizing honest archivers that *doubled* the stuffer's relative capture, and
 here pushes ROI **above 1** where deletion leaves it below.
@@ -1639,8 +1712,11 @@ inflated ≈ 2.2×. Clamped. §12.7's cliff findings are **qualitatively unchang
   (decided unless contested): **`k = 1` milli**, **parent-block read-point**.
 - **R4** — claim cadence: **monitored, not designed for** (real in principle,
   binding nowhere yet; §12.7 G-3).
-- Concentration pricing is carried by the **wire cap + bonded capital + the
-  reopen-(c) fee-floor**, whose sizing evidence survives deletion unchanged (OQ-4).
+- Concentration pricing is carried by the **wire cap + bonded capital** ~~+ the
+  reopen-(c) fee-floor~~ *(the fee-floor leg struck 2026-07-27: (c) closed with no
+  mechanism, §12.11. The first two carry it alone, which OQ-4 already showed —
+  the sizing evidence was orthogonal to deletion, and is now orthogonal to
+  everything shipping.)*
 
 **A2 and A6 unblock**: the probe showed distribution is deletion-invariant *at the
 optimum*, so both can now build on a settled surface. The implementing PR inherits
@@ -1699,7 +1775,9 @@ per-bond mistake the gate catches. The short-circuit is also what keeps the
 predicate bounded: scoring it would mean reading the whole corpus, the one
 unbounded path in the design.
 
-**R4** stays monitored, not designed for. **Stage 3 remains gated on reopen (c).**
+**R4** stays monitored, not designed for. ~~**Stage 3 remains gated on reopen
+(c).**~~ — **(c) CLOSED with no mechanism 2026-07-27 (§12.11).** Stage 3's lone
+remaining input is **§12.11.1** (the §6.0 anti-swing residual).
 
 ### 12.10 A2 (W6) and A6 (swing) results — the last two arms
 
@@ -1751,8 +1829,17 @@ down-swing bounded at `0.1014` points. Economically, the slew ceiling has **two
 tiers, closed by two different mechanisms** — which the first pass conflated:
 
 - **Penalty-free** (`≤` the effective median): **`1.41` pts/epoch**, ~`45 k`
-  SKL/epoch in stuffing fees. **Closed by the reopen-(c) fee-floor, and open until
-  it lands** — this is the conditional layer.
+  SKL/epoch in stuffing fees. ~~**Closed by the reopen-(c) fee-floor, and open
+  until it lands** — this is the conditional layer.~~ **AMENDED 2026-07-27
+  (§12.11 / §12.11.1): there is no fee floor to wait for.** Reopen (c) closed
+  with **no mechanism**, so this tier has **no economic closer** — and it never
+  needed one, because the anti-swing property does not depend on stuffing being
+  *profitable*: a negative-sum stuffer, or a grudge-donor indifferent to loss,
+  can still buy this slew. The live question is the **rate**, not the price, and
+  the expected closer is **structural** — `frozen_segment_count` is monotone
+  non-decreasing and reversible only to reorg depth, so there is no oscillation
+  to arbitrage, only one-directional drift the escalation is built to track.
+  **This is the lone open residual: §12.11.1.**
 - **Legal `2×` limit**: **`2.82` pts/epoch**, ~`90 k` SKL/epoch in fees **plus
   ~`10.24 M` SKL/epoch of miner-reward penalty compensation** — at `B = 2M` the
   production formula pays the miner *exactly zero*, so the flooder funds the whole
@@ -1769,48 +1856,130 @@ discipline in this arc (always-split as "rational"; the two-point partition proo
 now an invented pass/fail bound) — **separating what the spec requires from what
 the test author assumed is how a made-up number gets caught before it freezes.**
 
-### 12.11 Reopen-(c) round charter — the per-output fee-floor
+### 12.11 (RESOLVED) — Reopen (c) closes: NO MECHANISM, on the no-exclusivity accounting
 
-**Status:** charter. Reopen (c) fired at §12.5; this states the problem so the
-round opens **well-posed** rather than as *"add a floor"*. Runs **parallel** to
-the D3 implementing round (different consensus surface — weight/fee model vs the
-reward path); **Stage 3 waits on both** (§12.0).
+**Disposition: reopen (c) is closed with no fee-floor mechanism.** The `T`-first
+re-analysis showed the threat (c) was chartered against does not survive contact
+with the system's *existing* design. This is prior work doing its job: FCMP++
+whole-tree membership, output uniformity, the scarcity hyperbola (Stage 1), and
+the no-exclusivity structure of the shard market jointly make output-stuffing a
+*non-exploit*, so there is nothing for a fee floor to price. (c) is retired;
+**Stage 3 loses this hard input** and gets simpler.
 
-**The design problem A4 actually measured.** `fee×→1` spans **2.8 → 17.8** across
-regimes because attack revenue rides **burn flow × share slope** while a flat
-per-output cost rides **neither**. Sized for late-tail, such a floor over-charges
-benign multi-output traffic ~**6×** — a cost §12.4 already refuses. So *"pick a
-number"* is not a well-posed task: **no single constant closes every regime**, and
-that is a measured property, not a tuning difficulty.
+#### The accounting that closes it — three stuffer strategies, all self-refuting
 
-**Seed candidate — a slope-indexed virtual-weight surcharge.** Let the floor scale
-with **what the attack rides**: a per-output **virtual-weight** surcharge indexed
-to the **escalation function's own local slope at current `n`**. The same function
-then has **two consumers** — it sets the staker share *and* prices the marginal
-output that moves `n` — so **cost tracks marginal capture by construction** rather
-than by calibration. Properties worth testing in the round's adversarial pass:
+1. **Raise `n`, serve nothing (shed the burden).** The share-lift is distributed
+   by *served work*
+   ([`consensus_state.rs::market_member_at_epoch`](../../rust/shekyl-archival-retention/src/consensus_state.rs)
+   → `Σwork`). A stuffer serving none of the new work collects only `w_a` of the
+   lift on their **pre-existing** holdings, while every other archiver collects
+   `(1 − w_a)` for free. The stuffer pays 100 % of the cost to buy the whole
+   market a raise. Pure subsidy — and note the sign: **the most-shedding case is
+   the most-subsidizing, not the most dangerous.** This corrects the prior
+   framing that named separability "the exploit if it survives"; that had the
+   sign backwards.
+2. **Raise `n`, serve the created shards.** Strictly dominated by honest
+   archiving: identical organic demand is available at **zero** creation cost, so
+   paying to manufacture demand you then serve is pure loss against serving what
+   already exists.
+3. **Cherry-pick rare shards.** No exclusivity — any shard created is servable by
+   any archiver — so no rare position is capturable. And raising `n` does not
+   dilute rare-shard value: scarcity pays on `1/r`, and adding *common* shards
+   adds no co-holders to the rare one, so its yield is undiminished. Marginal
+   common data has ≈ zero marginal contribution **by construction** — the Stage-1
+   hyperbola pricing marginal contribution, doing exactly its job. Bulk-stuffed
+   outputs are common-by-construction, the opposite of rare.
 
-- **Weight-denominated**, so it rides the fee market instead of rotting as a frozen
-  atomic constant (the Bitcoin-dust-limit failure), and flows through the existing
-  weight/fee/burn machinery with **zero new consensus fields** — `predict_weight`
-  and `Transaction::weight()` each gain one term, and the D-1 hoist already gives
-  both consensus-adjacent code and the sim one shared predictor.
-- **Self-closing across regimes** if the indexing holds: where the slope is flat
-  (past the knee) the surcharge vanishes and benign traffic is untaxed; where the
-  slope is steep the surcharge rises with exactly the capture it prices.
-- **Falsifiable**: re-run A4 with the surcharge live and require `ROI < 1`
-  *everywhere* in the sweep — the same gate, now against a mechanism rather than a
-  constant.
+**The theorem under all three.** Because there is no exclusivity, every unit the
+stuffer spends to move `n` lifts a pool that pays `(1 − w_a)` of the lift to
+participants who spent nothing. The stuffer is always the **worst-positioned**
+actor to profit from their own stuffing: the play is **negative-sum for the
+stuffer** at any market size above trivial, and it **anti-scales** — the
+healthier the market, the worse the trade. *You cannot out-compete free by
+paying.*
 
-**Inherited as settled — the D3 pairing is DISCHARGED, not pending.** The charter's
-earlier *"paired with D3"* language predates D3's resolution and must be restated:
-D3 resolved to **deletion + admission predicate** (§12.9), so the capture side is
-now the **total-work invariance itself** — `prem = 1`, proportional capture,
-**structural** rather than mechanism-dependent. Consequently **(c)'s burden is
-exactly and only the proportional-capture regime**, whose numbers A4's realistic
-end has **already measured**. The round inherits that as input; it does not
-re-litigate the capture side.
+#### Privacy axis (priority #1) — confirms the closure and inverts the concern
 
-**Constraints.** Genesis-freeze-class (weight is consensus); rule 26 design round;
-the fee-floor is **load-bearing twice** — W9's profit gate *and* §6.0's anti-swing
-property (§6.0 amendment), so one missing mechanism is two failures.
+Proofs anchor to the whole accumulated tree at a reference height
+(`CURVE_TREE_CLIENT.md` §5.1 `select_reference_height`: `tip − REF_ANCHOR_AGE`;
+`MIN`/`MAX_AGE` is reorg/staleness control, **not** an anonymity-set bound), and
+`CTTypeFcmpPlusPlusPqc` is the only admissible output type — enforced at
+consensus in
+[`tx_verification_utils.cpp:124`](../../src/cryptonote_core/tx_verification_utils.cpp#L124)
+(and `:141`), not merely described in an RPC schema. So there is no narrow window
+a burst can dominate, and uniform outputs cannot be re-partitioned into
+flood/not-flood by a third party.
+
+A generic flood is therefore **paid cover traffic**. A flood made legible enough
+to subtract from others' privacy identifies only itself, revealing to a
+whole-tree observer only *"not-you"* — free information. **A fee floor would have
+taxed the cover traffic this analysis shows is protective.** The Rucknium
+black-marble attack transfers its *cost profile* (the W9 calibration, DQ-2C) but
+**not** its privacy mechanism: FCMP++ membership plus output uniformity deletes
+the ring-side half outright.
+
+#### A4's W9 "FAIL" — RETRACTED and re-labeled
+
+A4 measured `ROI > 1` and recorded it as a vulnerability. **`ROI > 1` is the
+definition of a working archival incentive** — it is why anyone archives at all.
+The exploit question is not *"is stuffing profitable"* but *"does the stuffer
+earn more per unit of genuine work than an honest archiver"*, and netted for the
+no-exclusivity subsidy that question resolves **negative-sum for the stuffer**.
+
+The W9 FAIL is **superseded** by this accounting. The prior §12.4 / §12.5 /
+§12.10 W9 rows are **historical**: they record a real measurement of profit, and
+profit was never the theft question. **Do not re-open (c) off the stale FAIL.**
+
+#### Method note
+
+The **A4′ excess-return sweep** drafted for this round (`R_stuffer / W_stuffer`
+vs `R_honest / W_honest` across the A4 sweep) was **demoted before building**:
+the no-exclusivity ledger closes the question analytically, so the sweep would
+confirm an accounting identity rather than discover a boundary. Recorded as an
+instance of *check the ledger before measuring it* — the exact reverse of the D1
+lesson, where the arithmetic **hid** the defect; here the arithmetic **reveals
+the non-defect**.
+
+---
+
+### 12.11.1 (OPEN) — the §6.0 anti-swing dependency does **not** close with (c)
+
+**This is the one thing that stood where (c) stood and does not fall with it.**
+§6.0's anti-swing property never depended on stuffing being *profitable* — it
+depends on the **rate** at which `n` can move, and an unprofitable stuffer (or
+Actor 2, the grudge-donor, who is indifferent to negative-sum) can still move `n`
+fast. (c)'s closure therefore leaves this live, and it now needs its own
+disposition rather than inheriting one.
+
+**Candidate resolution — to check, not assume: monotonicity already satisfies
+it.** The manipulation §6.0 exists to prevent is the *reversible* kind —
+pump-and-dump, whale churn — which needs a lever that swings **both ways**.
+`frozen_segment_count` is monotone non-decreasing
+(`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` **O-2, per-branch monotonicity**: "leaf
+count is non-decreasing on a single branch (connects only append; pops are branch
+switches), so `frozen_segment_count` is non-decreasing and rows are never
+deleted on one branch"), and the only decrease path is **O-3 pop-symmetry** — a
+branch switch, i.e. reorg. There is no oscillation to exploit: an attacker can
+push `n` up (funded, non-exclusive, negative-sum per §12.11) but **cannot pull it
+back** to run the other side of a swing. What remains is *one-directional drift*,
+which the escalation **should** follow because it tracks genuine burden growth —
+that is the mechanism working, not being manipulated.
+
+**What must be written before this closes.** The argument above, verified against
+source end-to-end — specifically (i) that **no path exists to decrease `n` faster
+than reorg depth** (O-3 is the only deletion rule; confirm no other writer trims
+`frozen_segment_count`), and (ii) that the up-only slew — bounded by the A6
+measurement at **1.41 pts/epoch penalty-free** and **2.82 pts/epoch at the legal
+2× limit**, hardening with tree depth — is drift the escalation is *designed to
+track* rather than a swing to arbitrage. If both hold, §6.0 closes **structurally**
+(monotonicity + no-reversal) with **no** slew-control mechanism, mirroring (c)'s
+no-mechanism resolution. If an `n`-decrease path deeper than reorg exists, **that
+path — not a fee floor — is the thing to close.**
+
+**Status: OPEN**, single named residual, expected to close on the monotonicity
+argument. Blocks nothing in Stage 3's *shape* (the no-controller constraint is
+unaffected); it feeds Stage 3's **confidence** that the frozen shape needs no
+swing-damper. Note the §6.0 amendment's "**load-bearing twice**" framing is now
+**half-retired**: W9's profit gate is gone (§12.11), and this is the surviving
+half — so "one missing mechanism is two failures" no longer holds, and §6.0 must
+be discharged on its own terms.

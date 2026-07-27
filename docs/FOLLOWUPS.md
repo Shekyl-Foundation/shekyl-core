@@ -83,9 +83,13 @@ sustainability is unaffected by the recalibration.
   reshaping within the bond**, or **deleting the plateau outright** (a rule-15
   candidate — A4 shows it is dodgeable, unenforceable above the bond, and
   *actively harmful in the regime where it binds*, while `MAX_HOLDINGS_SHARDS`
-  already caps per-bond work and bond floors already price holdings in capital). **Pairs with** the reopen-(c) weight-denominated
+  already caps per-bond work and bond floors already price holdings in capital). ~~**Pairs with** the reopen-(c) weight-denominated
   per-output fee-floor: the floor prices the fee-flow regime, D3 prices the
-  concentration regime — each closes the regime the other cannot (§12.5).
+  concentration regime — each closes the regime the other cannot (§12.5).~~
+  **Pairing STRUCK 2026-07-27: there is no fee floor.** Reopen (c) closed with
+  **no mechanism** (§12.11) — the fee-flow regime needed no closer, because the
+  W9 FAIL measured *profit* rather than *theft* and the stuffer is negative-sum
+  under no-exclusivity. D3 stands alone, and it landed (below).
   **Charter: `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.8** — the round must
   start from the **holdings-size force triangle**, not the cap alone: the
   dodgeable cap pushes holdings **down** (splitting pays), while **milli
@@ -126,7 +130,14 @@ sustainability is unaffected by the recalibration.
   without bonding; and **the gather's two fields have different read-points** —
   `r_market` is settled-epoch and ordering-immune by construction, `age_milli` is
   height-derived, so the parent-height discipline is required *because of the age
-  term*. **Only reopen (c) now gates Stage 3.**
+  term*. ~~**Only reopen (c) now gates Stage 3.**~~ — **(c) CLOSED with no
+  mechanism 2026-07-27** (§12.11): the W9 FAIL is retracted as a mismeasurement
+  (profit ≠ theft; the stuffer funds `(1 − w_a)` of the lift for competitors who
+  spent nothing, so the play is negative-sum and anti-scales). **Stage 3's lone
+  remaining input is §12.11.1** — the §6.0 anti-swing residual, which never
+  depended on stuffing being profitable and is expected to close structurally on
+  `frozen_segment_count` monotonicity (no oscillation to arbitrage; reversible
+  only to reorg depth).
 - **~~KEM-ciphertext extra packing mismatch — vout ≥ 1 unscannable in
   production-built transactions~~** **CLOSED 2026-07-25**
   (`fix/kem-extra-packing`): landed exactly per the fix direction below
