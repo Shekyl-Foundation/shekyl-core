@@ -541,12 +541,12 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   EXPECT_EQ(db.get_archival_r_market(9, settlement_epoch), 1u);
   EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch + 1), 0u);
   // Exact-sigma PF-8 pin (KAT-pinned constants: age_weight = 2000,
-  // plateau = 8000/16000 milli, WORK_MILLI_SCALE = 1000):
+  // WORK_MILLI_SCALE = 1000):
   //   shard 7: age = floor(3/4 epochs · 1000) = 750, g = 1000 + 2000·750/1000
   //            = 2500, scarcity(r=2) = 1000·2500/2000 = 1250
   //   shard 9: no segment, age = 0, scarcity(r=1) = 1000
-  //   work_p1 = 1250, work_p2 = 1250 + 1000 = 2250; both below the first
-  //   curve breakpoint (4000), so Curve is identity: sigma = 3500.
+  //   work_p1 = 1250, work_p2 = 1250 + 1000 = 2250; both members, and
+  //   credited work is linear in work (D3/R2), so sigma = 3500.
   // An H-position swap collapses shard-7 age to 0 (scarcity 500), giving
   // sigma = 2000 — nonzero, so only this exact pin distinguishes it.
   const uint64_t sigma = db.get_archival_sigma_work_milli(settlement_epoch);
@@ -581,9 +581,11 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
 //    and its rows — gathered by the same shared routine the close used —
 //    drive shekyl_archival_emission_epoch_work to each P's exact term in
 //    the persisted sigma.
-// 2. Sum-of-capped == persisted sigma (M-2 supply conservation at the
-//    substrate layer): Σ_P Curve(work_P) over the claimants equals the
-//    stored denominator exactly.
+// 2. Sum-of-credited == persisted sigma (M-2 supply conservation at the
+//    substrate layer): Σ_P credited_work_milli(work_P, member_P) over the
+//    claimants equals the stored denominator exactly. D3/R2 deleted the
+//    plateau from the reward path, so the term is membership-gated and
+//    LINEAR in work — not a cap.
 // 3. Live-descriptor immunity (WS-1 §5): mutating tip holdings after the
 //    close — the M2-1 drop-after-serve mutation — leaves every snapshot
 //    output bit-identical. Holdings never enter the work channel.
@@ -673,8 +675,9 @@ TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity
   EXPECT_EQ(work_none, 0u);
   EXPECT_EQ(credited_none, 0u);
 
-  // Property 2: M-2 supply conservation — sum of capped terms is the
-  // persisted denominator exactly.
+  // Property 2: M-2 supply conservation — the sum of the CREDITED terms
+  // (membership-gated and linear since D3/R2, not capped) is the persisted
+  // denominator exactly.
   EXPECT_EQ(credited_p1 + credited_p2, sigma);
 
   // Property 3: live-descriptor immunity. p2 drops shard 9 from its tip

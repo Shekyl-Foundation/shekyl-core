@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn reward_share_sums_to_budget_when_single_claimer() {
         let budget = 1_000_000u64;
-        let capped = 8_000u64;
-        assert_eq!(reward_share_floor(budget, capped, capped), budget);
+        let credited = 8_000u64;
+        assert_eq!(reward_share_floor(budget, credited, credited), budget);
     }
 }

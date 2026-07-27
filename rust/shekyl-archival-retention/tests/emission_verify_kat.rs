@@ -22,8 +22,8 @@ use shekyl_archival_retention::emission_verify::{
 };
 use shekyl_archival_retention::CreditPair as Pair;
 use shekyl_archival_retention::{
-    as_of_e_served_work, epoch_close_height, reward_share_floor, sigma_work_milli,
-    ArchivalRewardEmissionVin, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    as_of_e_served_work, credited_work_milli, epoch_close_height, reward_share_floor,
+    sigma_work_milli, ArchivalRewardEmissionVin, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
     HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardSet, ShardWorkEntry,
     WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
@@ -118,9 +118,12 @@ impl Fixture {
         let served = as_of_e_served_work(&self.inputs()).expect("well-formed fixture");
         let work = served.work_by_bond[0];
         assert!(served.member[0] && work > 0, "fixture claimant must earn");
-        // D3/R2: the plateau no longer gates the reward path — credited work is the
-        // work itself (membership is applied by `credited_work_milli`).
-        let credited = work;
+        // D3/R2: the plateau no longer gates the reward path, so the credited term
+        // is the work itself for a member. Derived by **calling** the production
+        // function rather than restating its result: `credited = work` would be a
+        // mirror that keeps passing if the membership gate ever changes, which is
+        // exactly the drift this fixture exists to catch.
+        let credited = credited_work_milli(work, served.member[0]);
         let reward = reward_share_floor(BUDGET, credited, self.persisted_sigma());
         assert!(reward > 0, "fixture reward must be wire-encodable (>0)");
         (work, reward)
