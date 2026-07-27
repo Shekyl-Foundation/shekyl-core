@@ -58,12 +58,28 @@
 //!    *more* of the same ones (the predicate is over the holding's **sum**), and
 //!    every copy the griefer bonds lowers their own scarcity income.
 //! 4. **Timing is killed by the read-point** — see [`ParentStateHoldings`].
-//! 5. **Validator cost is bounded, and here is why:** the compact case walks at
-//!    most `MAX_HOLDINGS_SHARDS` entries — the same per-bond work epoch close
-//!    already does — and the whole-corpus case walks **none**, because it
-//!    short-circuits ([`check_admission`]). Without that short-circuit a
-//!    `CompleteTree` admission would have to gather every shard in the corpus,
-//!    which is the one genuinely unbounded path in this predicate.
+//! 5. **Validator cost is bounded, and here is the actual number:** the caller
+//!    does **two** LMDB point lookups per held shard (the `r_market` row and the
+//!    segment freeze height), so at `MAX_HOLDINGS_SHARDS = 4096` one bond post
+//!    costs at most ~8k point reads. Real, but not a cheap DoS: every shard in
+//!    the holding is priced at a full `ARCHIVAL_BOND_FLOOR_ATOMIC` of locked
+//!    collateral, and the tx carries a PQC signature and pays weight fees. The
+//!    arithmetic itself is a single pass. The whole-corpus case walks **none**,
+//!    because it short-circuits ([`check_admission`]) — without that
+//!    short-circuit a `CompleteTree` admission would have to gather every shard
+//!    on the chain, the one genuinely unbounded path here.
+//!
+//! ## Scope: `JoinMarket` only
+//!
+//! Rebond pins its post-holdings as a **superset** of the record
+//! ([`crate::bond_post::verify_rebond_bond_post`] Pin 1) and HoldingsUpdate-add
+//! only adds, so both are **monotone in credited work** and cannot turn a viable
+//! position into a zero — there is no bypass through them. HoldingsUpdate-**drop**
+//! can reduce work and is left ungated *on purpose*: refusing an **entry** into a
+//! zero costs the applicant nothing (they never entered, and are free to pick a
+//! different holding), whereas refusing an **exit-ward** move would trap capital
+//! in a larger position than the holder wants and force a full `Unbond` where
+//! they asked for a partial one. The gate protects reach; it must not tax it.
 
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
 use crate::consensus_state::shard_work_micro;

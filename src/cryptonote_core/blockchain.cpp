@@ -5125,6 +5125,16 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
   // CompleteTree holds every shard, so it dominates any compact holding and is
   // decided without a gather (which would otherwise mean reading the whole
   // corpus — the only unbounded path in the predicate).
+  //
+  // JoinMarket ONLY, and deliberately. Rebond pins its post-holdings as a
+  // SUPERSET of the record (bond_post.rs Pin 1) and HoldingsUpdate-add only
+  // adds, so both are monotone in credited work and cannot turn a viable
+  // position into a zero — there is no bypass through them. HoldingsUpdate-drop
+  // can reduce work, and is left ungated on purpose: refusing an ENTRY into a
+  // zero costs the applicant nothing (they never entered, and can pick a
+  // different holding), but refusing an EXIT-ward move would trap capital in a
+  // larger position than the holder wants and force a full Unbond where they
+  // asked for a partial one. The gate protects reach; it must not tax it.
   {
     const uint64_t parent_height = chain_height ? chain_height - 1 : 0;
     std::vector<uint64_t> adm_r_market;
@@ -5135,13 +5145,17 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       // settled epoch. Before the first close there is none, and every shard
       // reads 0 — which Rust scores as maximal scarcity, not as a zero, because
       // the applicant counts itself.
+      // Epoch E covers [E*SEB, (E+1)*SEB) and closes at (E+1)*SEB, so the epoch
+      // containing the parent has settled everything strictly below it. No
+      // special case at epoch 0: get_archival_r_market returns 0 on NOTFOUND,
+      // which is exactly what a pre-first-close chain should read.
       const uint64_t parent_epoch = shekyl_archival_settlement_epoch_at_height(parent_height);
       const uint64_t settled_epoch = parent_epoch ? parent_epoch - 1 : 0;
       adm_r_market.reserve(bond.holdings.shard_ids.size());
       adm_freeze_heights.reserve(bond.holdings.shard_ids.size());
       for (const uint64_t shard_id : bond.holdings.shard_ids)
       {
-        adm_r_market.push_back(parent_epoch ? m_db->get_archival_r_market(shard_id, settled_epoch) : 0);
+        adm_r_market.push_back(m_db->get_archival_r_market(shard_id, settled_epoch));
         uint64_t freeze = 0;
         m_db->archival_shard_freeze_height(shard_id, freeze);
         adm_freeze_heights.push_back(freeze);
