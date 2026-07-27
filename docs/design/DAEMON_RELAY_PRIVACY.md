@@ -3313,3 +3313,131 @@ sites, matching:
    assumed, during implementation; any that does is re-pinned to the derived value
    with the reason recorded.
 5. The daemon builds and the existing `tx_pool` / relay tests pass.
+
+---
+
+## 18. RP-3 design round — the scheduler cut (F-4/F-5 → Rust)
+
+Short design leading the RP-3 implementation commits on
+`feat/rp3-levin-scheduler-rust`. This is the arc's last port and its last two
+findings.
+
+**Scope and the two decisions already taken.** The relay *loop* moves to Rust
+(not "C++ keeps the loop and asks Rust for decisions"), and **Rust owns the zone
+state** — `contexts` and their fluff queues, the map, and every timer. C++ keeps
+what it is uniquely good at and what no Rust implementation exists for: epee
+binary serialization, levin framing, fragmentation, padding, and the socket.
+`levin_notify` becomes the transport shim §3 always said it would.
+
+### 18.1 Re-census (at source, on `dev` @ `41ee2c41f`)
+
+The surface is **unmoved** since RP-1: no commit has touched `levin_notify.{cpp,h}`
+or `tests/unit_tests/levin.cpp`. Two findings change the round's shape, and the
+first corrects a claim made earlier in this arc.
+
+**The 33-gtest oracle survives — the earlier reading was wrong.** It looked like
+the tests were asio-coupled beyond rescue: they construct
+`cryptonote::levin::notify{io_service_, …}` with their own `io_context` and pump
+it with `run_one()`, which a Rust-owned loop would not be on. But the pumping
+drains the **transport** queue, not the timers. The tests never wait on a timer
+at all: `levin_notify.h:108–115` declares `run_epoch()`, `run_stems()` and
+`run_fluff()`, each commented *"Only use in testing"*, the suite calls them **36
+times**, and it manipulates a `steady_timer` **zero** times. The oracle is
+timing-independent by construction — it forces each scheduled step and asserts on
+*routing and payload* (`fluff_without_padding`: nine of ten contexts get exactly
+one send, the source gets none, `dandelionpp_fluff` is set). So the 33 tests
+remain a free regression oracle across the cut, provided the Rust scheduler
+exposes equivalent force-step entry points for those three hooks to forward to.
+That is a **requirement on the Rust design**, and it is cheap: the crate's state
+machines are already pure `&mut self` steps that return deadlines.
+
+**RP-3 owns F-4 and F-5, so this is a correction and not only a port.** The fluff
+delay is still drawn in C++ from `crypto::random_poisson_subseconds`
+([`levin_notify.cpp:439–440`](../../src/cryptonote_protocol/levin_notify.cpp#L439-L440),
+means at [`:75–90`](../../src/cryptonote_protocol/levin_notify.cpp#L75-L90)) —
+F-4, "the same distribution defect as F-2, on the timer every node applies to
+every transaction", and with it F-5, the flood that is ~7× slower than it needs
+to be (13.75 s vs 2.25 s p90 first passage). Both are **High**. RP-4 closed
+F-1/F-2/F-3; this closes the pair that touches every transaction on every node,
+and `FluffScheduler` already holds the corrected draw. Because the gtests assert
+routing rather than delays, that deliberate behaviour change does not threaten
+them — the same reason RP-4's correction needed no unchanged-behaviour oracle.
+
+### 18.2 What moves, what stays, and the seam
+
+`notify`'s public API is the contract that must survive verbatim — callers and
+all 33 tests bind to it: `get_status`, `new_out_connection`,
+`on_handshake_complete`, `on_connection_close`, `send_txs`, and the three `run_*`
+hooks. Each becomes a forwarding call onto a Rust zone handle, exactly as
+`connection_map` became a forwarding wrapper in RP-2a.
+
+Rust calls back out through the surface §4 sketched, now verified at source:
+
+| Outward call | Site |
+| --- | --- |
+| `p2p.foreach_connection(cb)` — connection snapshot | [`:109`](../../src/cryptonote_protocol/levin_notify.cpp#L109), [`:151`](../../src/cryptonote_protocol/levin_notify.cpp#L151) |
+| `p2p.send(blob, id)` | [`:211`](../../src/cryptonote_protocol/levin_notify.cpp#L211), [`:666`](../../src/cryptonote_protocol/levin_notify.cpp#L666) |
+| `p2p.get_out_connections_count()` | [`:758`](../../src/cryptonote_protocol/levin_notify.cpp#L758) |
+| `core->get_current_blockchain_height()` / `is_synchronized()` | [`:133`](../../src/cryptonote_protocol/levin_notify.cpp#L133), [`:134`](../../src/cryptonote_protocol/levin_notify.cpp#L134) |
+| `core->on_transactions_relayed(txs, method)` | [`:562`](../../src/cryptonote_protocol/levin_notify.cpp#L562), [`:581`](../../src/cryptonote_protocol/levin_notify.cpp#L581), [`:853`](../../src/cryptonote_protocol/levin_notify.cpp#L853) |
+
+Message construction (`make_payload_send_txs`: epee serialization plus padding to
+the next boundary) stays C++ and is called *by* Rust with the peer set it chose.
+Batching **content** is transport; batching **time** is privacy — the split
+`schedule.rs` has asserted from the start.
+
+**Concurrency: the Rust task replaces the strand.** Today every mutation is
+serialized by `zone->strand`, and connection events arrive on asio threads. With
+Rust owning the state, the zone task becomes the sole serializer — a stronger
+guarantee than the strand, because it is enforced by ownership rather than by
+each handler remembering its `\pre`. The RP-2a map contract inverts cleanly with
+it: "no internal lock because the zone strand serializes" becomes "no internal
+lock because the Rust task owns it". The design obligation is the handoff — every
+C++-side event (`on_handshake_complete`, `on_connection_close`, `send_txs`) must
+enqueue to that task rather than mutate anything, and the FFI must make the
+mutating path the only path.
+
+**Retraction (rule: a dropped path is documented, and every artifact reflects
+it).** `schedule.rs`'s module doc and §3 both record the opposite position — *"a
+Rust core that demanded its own reactor would mean reconciling two event loops
+for no gain. The caller arms whatever timer it already has."* That was written
+when C++ was assumed to keep the loop; moving it *replaces* the loop rather than
+duplicating it, so the reasoning does not survive its premise. What **does**
+survive, and should be said louder, is the rest of that module's claim: the state
+machines own *when* and never *how*, and remain pure steps that return deadlines.
+That property is exactly what keeps the `run_*` hooks — and therefore the
+oracle — available. RP-3 rewrites the paragraph rather than deleting the idea.
+
+`tokio` is already in the daemon image (`shekyl-daemon-rpc`, `features = ["full"]`),
+so the runtime is not a new dependency under the single-image contract.
+
+### 18.3 Proposed split
+
+The Dandelion++ path and the covert-traffic path are separable, and only the
+first carries findings:
+
+- **RP-3a** — the zone, epoch/fluff/stem scheduling, and the map's ownership move
+  to Rust; **F-4/F-5 close here**. The C++ noise channels keep working by reading
+  the ordered slot snapshot RP-2a already exposes (`levin_notify.cpp:520` binds
+  `channels[i]` to slot `i`; `map_snapshot` is that call).
+- **RP-3b** — the noise channels follow, and the snapshot seam is deleted with
+  them.
+
+Noise is conditionally active (`if (zone->noise.empty()) return`) and carries its
+own strand-per-channel model, so it is genuinely a second subsystem rather than
+an arbitrary cut. The split is a proposal, not a decision: it stands or falls on
+whether 3a lands cleanly with the snapshot seam intact.
+
+### 18.4 Acceptance
+
+1. **The 33 `levin_notify` gtests pass unchanged**, through `run_epoch` /
+   `run_stems` / `run_fluff` forwarding into the Rust scheduler. This is the
+   round's primary oracle and the reason the riskiest step is tractable.
+2. The corrected fluff delay is the crate's (`FluffScheduler`), and the C++
+   `random_poisson_subseconds` draw is deleted — F-4/F-5 closed, with the
+   derivation guarded at its sites per the STEMS=2 precedent.
+3. `crypto::random_poisson_subseconds`' remaining users are enumerated, as RP-4
+   did for `random_poisson_seconds`; anything left is named with its round.
+4. The zone task is the only writer of zone state — asserted structurally (no
+   C++ path mutates it) rather than by convention.
+5. `schedule.rs`'s "No async runtime" section reflects what shipped.
