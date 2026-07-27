@@ -6,9 +6,21 @@ This document captures design decisions, deferred work, and architectural direct
 
 ## LMDB Storage Layer: `heed` Migration
 
-### Status: Deferred from V3
+### Status: **SUPERSEDED (2026-07-27)** for engine choice and destination architecture
 
-### What
+**Authoritative program:** [`docs/design/DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)
+(`DRS-*` family). Preferred destination is **redb** (Rust-native) behind
+**decomposed** validation surfaces (C++ decompose vs LMDB **first**), Path B
+long-term, LMDB as temporary logical oracle during engine swap only. DRS-D2
+(redb-only genesis) has **named reopen criteria** (genesis-on-LMDB bridge).
+`heed` is **not** the stepping stone. **DRS-0 is blocked** until DRS-P0
+re-censuses schema + atomicity docs (currently stale).
+
+The historical text below is retained so the V4 deferral rationale (especially
+**no split writers on one LMDB env**) is not lost — those constraints still
+apply to any oracle/shadow phase.
+
+### What (historical)
 
 Replace the current C++ `BlockchainLMDB` class (which accesses LMDB via raw `mdb_*` C API calls) with Rust's `heed` crate, eliminating the C FFI round-trip for all blockchain database operations.
 

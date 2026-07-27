@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Daemon chain-store design (`DRS-*`) — gap-close.** SoT
+  [`docs/design/DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md):
+  mission-ordered **Tier A/B success criteria**; D2-reopen as first-class
+  Tier-A LMDB genesis; **D10 reconstructible state mandatory** for redb
+  genesis; IBD floor sketch (≤1.25× LMDB); **97-method surface map**;
+  writer/reader concurrency rules; **P0a–P0d** multi-PR envelope. Engine
+  swap not started; P0/BENCH/C may open.
+
 - **Transaction proofs and reserve proofs across the wallet stack**
   (WI-RPC-3; Phase 2c, `feat/wallet-rpc-proofs`). The `shekyl-proofs`
   DLEQ primitives are projected through the Engine
