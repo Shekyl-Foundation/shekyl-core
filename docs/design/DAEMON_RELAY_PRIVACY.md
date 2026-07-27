@@ -3479,7 +3479,27 @@ whether 3a lands cleanly with the snapshot seam intact.
    the configured averages with the outbound halved, and a seeded deadline
    sequence is pinned so *any* rewire of the draw fails the test. Armed trigger,
    not documentation — this is the one gain the routing oracle cannot see, and
-   it is the gain the `lib.rs` seal was broken to obtain. The gtests are silent on
+   it is the gain the `lib.rs` seal was broken to obtain.
+
+   **Generalised, after the negative control found a hole in this very oracle.**
+   Wiring back to `inherited()` failed the family check and the frozen sequence —
+   and *passed* the mean check, correctly, because F-4 is a **same-mean
+   distribution swap**. The mean assertion is a distribution assertion and looks
+   like the rigorous behavioural choice; it is blind, because the defect lives in
+   the variance (CV ≈ 1 vs ≈ 0.2) and a mean integrates variance away. Had only
+   that assertion been written, F-4 would have shipped through its own oracle.
+
+   That is not specific to distributions. A defect that survived in production
+   survived *because it produces plausible behaviour on the obvious metric* —
+   F-4 lasted years in the inherited tree by being mean-correct, so its
+   camouflage **is** the obvious metric. For **every remaining RP-3 correction**:
+   assert on the axis where the defect lives rather than where measurement is
+   easiest, and **run the negative control** — reintroduce the defect, confirm
+   the oracle fails, and confirm *which* assertions fail. An assertion that stays
+   green is blind, and identifying the blind one is worth more than adding a
+   fourth.
+
+   The gtests are silent on
    delays by construction, so they cannot witness F-4/F-5 — deliberately, and
    that is what makes them a clean routing oracle across a mixed
    port-plus-correction: they cover exactly the axis that must not change and say
