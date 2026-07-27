@@ -1891,8 +1891,10 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 
 // D3/R3 admission viability gate (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
 // §12.9). Its own error space — a separate consensus predicate called
-// alongside the vin verify, not part of it. Codes and reason strings are
-// single-sourced from shekyl-archival-retention::admission::codes.
+// alongside the vin verify, not part of it. The numeric codes below are
+// single-sourced from shekyl-archival-retention::admission::codes; the reason
+// STRINGS come separately from admission::admission_code_static_str, surfaced
+// here as shekyl_archival_admission_err_string (codes carries no strings).
 #define SHEKYL_ARCHIVAL_ADMISSION_OK                            0
 #define SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR                  1
 #define SHEKYL_ARCHIVAL_ADMISSION_ERR_HOLDINGS_KIND             2
@@ -1910,10 +1912,18 @@ const char* shekyl_archival_admission_err_string(uint8_t code);
 /// Refuse a bond whose holdings credit no work: admission runs the SAME chain
 /// that pays (shard_work_micro -> work_milli_from_micro).
 ///
-/// r_market_* / freeze_height_* are parallel to the vin's shard list; key
-/// r_market with shekyl_archival_last_settled_epoch_as_of_parent(parent_height).
-/// A missing row marshals as 0 (Rust scores r_market+1). parent_height MUST be
+/// r_market_* / freeze_height_* / has_segment_* are ALL parallel to the vin's
+/// shard list; key r_market with
+/// shekyl_archival_last_settled_epoch_as_of_parent(parent_height). A missing
+/// r_market row marshals as 0 (Rust scores r_market+1). parent_height MUST be
 /// chain_height - 1. CompleteTree: vin_shard_count = 0 and NULL arrays.
+///
+/// has_segment_* MUST be the real presence bit -- the RETURN VALUE of
+/// archival_shard_freeze_height, not inferred from the height. A shard with no
+/// frozen segment scores age_milli = 0, matching the reward path's
+/// shard_contribution_micro; and freeze_height 0 is a legitimate genesis-band
+/// value, so presence cannot be recovered from the height. Passing true with a
+/// defaulted 0 height scores the MAXIMUM age where the reward path scores zero.
 uint8_t shekyl_archival_check_bond_admission(
     uint8_t holdings_kind,
     size_t vin_shard_count,
@@ -1921,6 +1931,8 @@ uint8_t shekyl_archival_check_bond_admission(
     size_t r_market_len,
     const uint64_t* freeze_height_ptr,
     size_t freeze_height_len,
+    const uint8_t* has_segment_ptr,
+    size_t has_segment_len,
     uint64_t parent_height);
 
 // Unbond bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md

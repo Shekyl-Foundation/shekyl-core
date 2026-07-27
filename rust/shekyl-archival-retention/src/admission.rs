@@ -193,6 +193,25 @@ pub enum AdmissionError {
         /// Entries supplied in the parent-state gather.
         gathered: usize,
     },
+    /// The marshaled gather's **columns disagree with each other**.
+    ///
+    /// Distinct from [`Self::GatherLengthMismatch`], which compares the gather to
+    /// the *vin*. Here the caller's own parallel arrays are ragged, so there is no
+    /// single "gathered" length to report — collapsing them to a max/min would
+    /// discard exactly the fact a debugger needs, namely *which column is short*.
+    /// Every length is carried instead.
+    #[error(
+        "admission gather columns disagree: r_market={r_market}, \
+         freeze_heights={freeze_heights}, has_segment={has_segment}"
+    )]
+    GatherColumnLengthMismatch {
+        /// Length of the `r_market` column.
+        r_market: usize,
+        /// Length of the `freeze_heights` column.
+        freeze_heights: usize,
+        /// Length of the `has_segment` column.
+        has_segment: usize,
+    },
 }
 
 impl AdmissionError {
@@ -201,7 +220,9 @@ impl AdmissionError {
     pub const fn code(self) -> u8 {
         match self {
             Self::BelowViabilityFloor { .. } => codes::ERR_BELOW_FLOOR,
-            Self::GatherLengthMismatch { .. } => codes::ERR_GATHER_MISMATCH,
+            Self::GatherLengthMismatch { .. } | Self::GatherColumnLengthMismatch { .. } => {
+                codes::ERR_GATHER_MISMATCH
+            }
         }
     }
 
@@ -215,6 +236,10 @@ impl AdmissionError {
             }
             Self::GatherLengthMismatch { .. } => {
                 "admission gather length does not match the vin's shard list"
+            }
+            Self::GatherColumnLengthMismatch { .. } => {
+                "admission gather columns disagree with each other \
+                 (r_market / freeze_heights / has_segment)"
             }
         }
     }
@@ -252,27 +277,53 @@ impl ParentStateHoldings<'_> {
 ///
 /// C++ owns the I/O; this owns the **age derivation** (parent height + freeze
 /// height + SEB schedule) so the daemon cannot re-implement `shard_age_milli`
-/// or pass a tip-dated age by accident at this layer. Parallel-array length
-/// disagreement is a gather mismatch.
+/// or pass a tip-dated age by accident at this layer.
+///
+/// ## `has_segment` is a column, not a sentinel
+///
+/// A shard with **no frozen segment** scores `age_milli = 0` — exactly as the
+/// reward path does ([`crate::consensus_state::shard_contribution_micro`], whose
+/// age term is `if shard.has_segment { shard_age_milli(..) } else { 0 }`). That
+/// fact **cannot be recovered from `freeze_height` alone**: `0` is a legitimate
+/// genesis-band freeze height (the "oldest" sentinel → longest horizon), so a
+/// missing row and a genesis-frozen shard are indistinguishable by value. Worse,
+/// defaulting a missing row to `0` yields `age_epochs == chain_epochs` and so the
+/// **maximum** age — the reward path's zero becomes admission's maximum, which
+/// over-scores the holding and admits bonds the pay path would score lower.
+///
+/// Passing the presence bit explicitly is what keeps admission and payment the
+/// same computation. Encoding it as a magic freeze height (e.g. defaulting to
+/// `parent_height` so the `close <= freeze` branch fires) would produce the right
+/// number today by writing a false fact into the data, and would rot the moment
+/// anything else reads that column.
 pub fn parent_state_shards_from_gather(
     r_market: &[u64],
     freeze_heights: &[u64],
+    has_segment: &[bool],
     parent_height: u64,
 ) -> Result<Vec<AdmissionShard>, AdmissionError> {
-    if r_market.len() != freeze_heights.len() {
-        return Err(AdmissionError::GatherLengthMismatch {
-            vin_shards: r_market.len().max(freeze_heights.len()),
-            gathered: r_market.len().min(freeze_heights.len()),
+    if r_market.len() != freeze_heights.len() || r_market.len() != has_segment.len() {
+        return Err(AdmissionError::GatherColumnLengthMismatch {
+            r_market: r_market.len(),
+            freeze_heights: freeze_heights.len(),
+            has_segment: has_segment.len(),
         });
     }
     let seb = effective_settlement_epoch_blocks();
     Ok(r_market
         .iter()
         .zip(freeze_heights.iter())
-        .map(|(&r_market, &freeze_height)| AdmissionShard {
-            r_market,
-            age_milli: shard_age_milli(parent_height, freeze_height, seb),
-        })
+        .zip(has_segment.iter())
+        .map(
+            |((&r_market, &freeze_height), &has_segment)| AdmissionShard {
+                r_market,
+                age_milli: if has_segment {
+                    shard_age_milli(parent_height, freeze_height, seb)
+                } else {
+                    0
+                },
+            },
+        )
         .collect())
 }
 
@@ -527,6 +578,60 @@ mod tests {
         );
     }
 
+    /// **The age term must match the reward path on BOTH branches.** A shard with
+    /// no frozen segment scores `age_milli = 0` at payment
+    /// ([`crate::consensus_state::shard_contribution_micro`]), so it must score 0
+    /// here too.
+    ///
+    /// This is the single-source property at its sharpest, because the failure is
+    /// silent and inverted: `freeze_height = 0` is a *legitimate* genesis-band
+    /// value, so a missing row cannot be detected from the height alone — and
+    /// defaulting it to `0` gives `age_epochs == chain_epochs`, i.e. the
+    /// **maximum** age where payment gives zero. Admission would then over-score
+    /// and admit bonds the pay path scores lower.
+    #[test]
+    fn an_unfrozen_shard_scores_zero_age_exactly_as_the_reward_path_does() {
+        const SEB: u64 = crate::constants::SETTLEMENT_EPOCH_BLOCKS;
+        let parent_height = SEB * 40;
+
+        // Same freeze height, differing only in whether a segment exists.
+        let unfrozen =
+            parent_state_shards_from_gather(&[7], &[0], &[false], parent_height).expect("gather");
+        let frozen =
+            parent_state_shards_from_gather(&[7], &[0], &[true], parent_height).expect("gather");
+
+        assert_eq!(
+            unfrozen[0].age_milli, 0,
+            "no segment must score zero age, as shard_contribution_micro does"
+        );
+        assert_eq!(
+            frozen[0].age_milli,
+            shard_age_milli(parent_height, 0, SEB),
+            "a frozen shard must score the production age term unchanged"
+        );
+        assert!(
+            frozen[0].age_milli > 0,
+            "fixture must actually separate the branches, or it proves nothing"
+        );
+    }
+
+    /// Ragged gather columns name every length, so a debugger can see *which*
+    /// column is short rather than a max/min that discards it.
+    #[test]
+    fn ragged_gather_columns_report_all_three_lengths() {
+        let err = parent_state_shards_from_gather(&[1, 2, 3], &[0, 0], &[true], 0)
+            .expect_err("ragged columns must fail closed");
+        assert_eq!(
+            err,
+            AdmissionError::GatherColumnLengthMismatch {
+                r_market: 3,
+                freeze_heights: 2,
+                has_segment: 1,
+            }
+        );
+        assert_eq!(err.code(), codes::ERR_GATHER_MISMATCH);
+    }
+
     /// A whole-corpus holding is admitted without a gather — dominance, and the
     /// only way to keep the predicate's cost bounded.
     #[test]
@@ -559,12 +664,13 @@ mod tests {
     fn parent_state_shards_from_gather_derives_age_and_rejects_parallel_mismatch() {
         let r = [0u64, 1];
         let freeze = [0u64, 0];
-        let shards = parent_state_shards_from_gather(&r, &freeze, 0).expect("parallel");
+        let seg = [true, true];
+        let shards = parent_state_shards_from_gather(&r, &freeze, &seg, 0).expect("parallel");
         assert_eq!(shards.len(), 2);
         assert_eq!(shards[0].age_milli, 0);
         assert!(matches!(
-            parent_state_shards_from_gather(&[1], &[0, 0], 0),
-            Err(AdmissionError::GatherLengthMismatch { .. })
+            parent_state_shards_from_gather(&[1], &[0, 0], &[true], 0),
+            Err(AdmissionError::GatherColumnLengthMismatch { .. })
         ));
         assert_eq!(
             AdmissionError::BelowViabilityFloor { credited_milli: 0 }.code(),

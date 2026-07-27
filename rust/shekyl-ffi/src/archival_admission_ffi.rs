@@ -62,10 +62,19 @@ pub extern "C" fn shekyl_archival_admission_err_string(code: u8) -> *const c_cha
 /// Marshaled facts (C++ owns the LMDB I/O, Rust decides — the same split as
 /// `shekyl_archival_verify_join_market_bond_post`): `r_market_*` is the
 /// per-shard `archival_r_market` row for
-/// [`shekyl_archival_last_settled_epoch_as_of_parent`], and `freeze_height_*`
-/// the per-shard segment freeze height, both **parallel to the vin's shard
-/// list**. A shard with no row marshals as `0` (load-bearing: Rust scores
+/// [`shekyl_archival_last_settled_epoch_as_of_parent`], `freeze_height_*` the
+/// per-shard segment freeze height, and `has_segment_*` whether that segment
+/// row exists at all — **all three parallel to the vin's shard list**. A shard
+/// with no `r_market` row marshals as `0` (load-bearing: Rust scores
 /// `r_market + 1`, so a never-served shard is maximal scarcity, not a zero).
+///
+/// **`has_segment_*` is required and must be the real presence bit** — i.e. the
+/// return value of `archival_shard_freeze_height`, not a guess derived from the
+/// height. A shard with no frozen segment scores `age_milli = 0`, matching
+/// `shard_contribution_micro`; and `freeze_height = 0` is a *legitimate*
+/// genesis-band value, so presence cannot be recovered from the height. Passing
+/// `true` with a defaulted `0` height would score the **maximum** age where the
+/// reward path scores zero, over-scoring the holding.
 ///
 /// **`parent_height` must be the parent block's height (`chain_height − 1`).**
 /// `chain_height` at the dispatch is `m_db->height()`, the block being
@@ -79,9 +88,15 @@ pub extern "C" fn shekyl_archival_admission_err_string(code: u8) -> *const c_cha
 /// `vin_shard_count = 0` and null arrays.
 ///
 /// # Safety
-/// `r_market_ptr` must be valid for `r_market_len` `u64`s and
-/// `freeze_height_ptr` for `freeze_height_len` `u64`s, or null when the
-/// corresponding len is 0.
+/// `r_market_ptr` must be valid for `r_market_len` `u64`s, `freeze_height_ptr`
+/// for `freeze_height_len` `u64`s, and `has_segment_ptr` for `has_segment_len`
+/// `u8`s, or null when the corresponding len is 0.
+///
+/// `has_segment` crosses as `u8` rather than `bool` deliberately: every byte is
+/// a valid `u8` and is read as `!= 0`, so a malformed marshal is harmless —
+/// whereas a `bool` holding anything but `0`/`1` is instant UB on the Rust side.
+/// It also keeps the caller clear of `std::vector<bool>`, which is a bitset
+/// specialization with no contiguous `bool*` to hand across the ABI.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_check_bond_admission(
     holdings_kind: u8,
@@ -90,6 +105,8 @@ pub unsafe extern "C" fn shekyl_archival_check_bond_admission(
     r_market_len: usize,
     freeze_height_ptr: *const u64,
     freeze_height_len: usize,
+    has_segment_ptr: *const u8,
+    has_segment_len: usize,
     parent_height: u64,
 ) -> u8 {
     let kind = match HoldingsKind::from_u8(holdings_kind) {
@@ -99,6 +116,7 @@ pub unsafe extern "C" fn shekyl_archival_check_bond_admission(
 
     if (r_market_ptr.is_null() && r_market_len != 0)
         || (freeze_height_ptr.is_null() && freeze_height_len != 0)
+        || (has_segment_ptr.is_null() && has_segment_len != 0)
     {
         return SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR;
     }
@@ -114,8 +132,21 @@ pub unsafe extern "C" fn shekyl_archival_check_bond_admission(
     } else {
         unsafe { std::slice::from_raw_parts(freeze_height_ptr, freeze_height_len) }
     };
+    let has_segment: Vec<bool> = if has_segment_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(has_segment_ptr, has_segment_len) }
+            .iter()
+            .map(|&b| b != 0)
+            .collect()
+    };
 
-    let shards = match parent_state_shards_from_gather(r_market, freeze_heights, parent_height) {
+    let shards = match parent_state_shards_from_gather(
+        r_market,
+        freeze_heights,
+        &has_segment,
+        parent_height,
+    ) {
         Ok(s) => s,
         Err(e) => return e.code(),
     };
@@ -143,6 +174,7 @@ mod tests {
         let kind = HoldingsKind::ShardSetCompact as u8;
         let call = |r: &[u64]| {
             let freeze = vec![0u64; r.len()];
+            let seg = vec![1u8; r.len()];
             unsafe {
                 shekyl_archival_check_bond_admission(
                     kind,
@@ -151,6 +183,8 @@ mod tests {
                     r.len(),
                     freeze.as_ptr(),
                     freeze.len(),
+                    seg.as_ptr(),
+                    seg.len(),
                     0,
                 )
             }
@@ -169,6 +203,8 @@ mod tests {
                     0,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    0,
                     0,
                 )
             },
@@ -177,6 +213,7 @@ mod tests {
 
         let r = [999u64, 999];
         let freeze = [0u64];
+        let seg = [1u8, 1u8];
         assert_eq!(
             unsafe {
                 shekyl_archival_check_bond_admission(
@@ -186,6 +223,8 @@ mod tests {
                     r.len(),
                     freeze.as_ptr(),
                     freeze.len(),
+                    seg.as_ptr(),
+                    seg.len(),
                     0,
                 )
             },
@@ -194,7 +233,17 @@ mod tests {
         );
         assert_eq!(
             unsafe {
-                shekyl_archival_check_bond_admission(kind, 1, r.as_ptr(), 2, freeze.as_ptr(), 2, 0)
+                shekyl_archival_check_bond_admission(
+                    kind,
+                    1,
+                    r.as_ptr(),
+                    2,
+                    freeze.as_ptr(),
+                    2,
+                    seg.as_ptr(),
+                    2,
+                    0,
+                )
             },
             SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH,
             "gather that does not match the vin's shard count"
@@ -208,6 +257,8 @@ mod tests {
                     1,
                     freeze.as_ptr(),
                     1,
+                    seg.as_ptr(),
+                    1,
                     0,
                 )
             },
@@ -217,6 +268,8 @@ mod tests {
             unsafe {
                 shekyl_archival_check_bond_admission(
                     9,
+                    0,
+                    std::ptr::null(),
                     0,
                     std::ptr::null(),
                     0,
