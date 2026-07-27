@@ -3,8 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! FFI surface for the Dandelion++ stem map (`shekyl-relay-privacy`'s
-//! [`StemMap`]) — RP-2a of `docs/design/DAEMON_RELAY_PRIVACY.md`.
+//! FFI surface for the daemon's Dandelion++ relay path, backed by
+//! `shekyl-relay-privacy`. Two boundaries live here:
+//!
+//! - **The stem map** ([`StemMap`]) — RP-2a of
+//!   `docs/design/DAEMON_RELAY_PRIVACY.md` §16. An opaque handle, because the
+//!   map is per-epoch, per-connection state.
+//! - **The embargo timer** ([`shekyl_dandelionpp_embargo_draw_seconds`]) — RP-4,
+//!   §17. One call, no handle: the embargo distribution is a protocol constant.
 //!
 //! This is the opaque-handle boundary the C++ `net::dandelionpp::connection_map`
 //! forwards to once its ~210 lines of logic move to Rust. The C++ class keeps
@@ -31,9 +37,12 @@
 //!   nils included (`None` → nil-uuid), because a consumer indexes the parallel
 //!   noise channel by position.
 
+use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::RelayRng;
+use shekyl_relay_privacy::schedule::{EmbargoTimer, PROPAGATION_FALSE_FAIL_ONE_IN};
 use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap};
 use std::slice;
+use std::sync::OnceLock;
 
 /// The nil UUID (`boost::uuids::nil_uuid()`) the C++ used as an absent-slot and
 /// local-origin sentinel. At the boundary it maps to Rust's `None`; it never
@@ -311,6 +320,71 @@ pub unsafe extern "C" fn shekyl_dandelionpp_map_free(handle: *mut StemMapHandle)
     }
 }
 
+// --- the embargo timer (RP-4, §17) --------------------------------------------
+
+/// The adopted embargo timer, built once per process.
+///
+/// Unlike the stem map there is no handle: the embargo distribution is a
+/// *protocol constant*, not per-connection state. The table is immutable once
+/// built and its construction is a pure recurrence over frozen parameters, so a
+/// singleton is the whole of the state this boundary needs.
+static EMBARGO: OnceLock<EmbargoTimer> = OnceLock::new();
+
+fn embargo_timer() -> &'static EmbargoTimer {
+    EMBARGO.get_or_init(|| EmbargoTimer::adopted(&DandelionParams::inherited()))
+}
+
+/// Draw one Dandelion++ embargo duration, in **seconds**.
+///
+/// This is the timer whose expiry fluffs a stem transaction the node has not
+/// seen re-broadcast — the black-hole backstop. It replaces the inherited
+/// `crypto::random_poisson_seconds{39s}` draw, which was wrong three ways
+/// (§17): the 39 s did not follow from its own stated derivation (F-1), a
+/// Poisson was drawn under a derivation assuming exponential survival, so the
+/// backstop never fired (F-2), and the closed form substituted `E[K]` into an
+/// expression in `K(K-1)` (F-3). The adopted timer is the exact discrete
+/// survival solve — **144 s**, memoryless — and its table, not a
+/// platform-defined `std::poisson_distribution`, *is* the distribution.
+///
+/// Seconds because the caller stores a whole-second `time_t` deadline. The
+/// conversion rounds **up**: under-provisioning the embargo fluffs prematurely,
+/// which is the privacy-losing direction (the D-5 asymmetry), so a truncation
+/// that shaved up to 999 ms off every draw would err the wrong way.
+///
+/// **A 0 s draw is legitimate and intended.** A memoryless geometric has support
+/// `{0, 1, 2, ...}`, so ~`1/(mean_ticks+1)` ≈ 0.17 % of draws expire at once and
+/// the transaction fluffs immediately. That is a real change from the inherited
+/// `Poisson(39 s)`, which produced 0 with probability `e^-39` — effectively
+/// never — and it is *not* patched here: the table is the distribution the
+/// survival solve derived and the golden vector pins, so flooring it at the
+/// boundary would ship something other than what was derived and tested. The
+/// preemption profile (§10) already prices this self-fluff.
+#[no_mangle]
+pub extern "C" fn shekyl_dandelionpp_embargo_draw_seconds() -> u64 {
+    let mut rng = SecureRelayRng;
+    embargo_timer().deadline(0, &mut rng).div_ceil(1_000)
+}
+
+/// How long a sender must wait before a transaction it has still not seen may be
+/// judged to have failed — **seconds**, derived from the embargo distribution.
+///
+/// A stem transaction is invisible to its sender until it fluffs, so this
+/// deadline is a quantile of the embargo, not a free-standing timeout. It is
+/// provisioned at [`PROPAGATION_FALSE_FAIL_ONE_IN`]: at most 1 in 100 embargoes
+/// is still running when the verdict is reached.
+///
+/// The inherited wallet instead took `3/2 ×` the (wrong) 39 s mean. Two problems,
+/// and the second outlives the first: a bare multiple of the mean is only the
+/// ~78th percentile of a memoryless distribution, so roughly a fifth of
+/// black-holed transactions were judged failed while their backstop was still
+/// running — and a false verdict is not cosmetic, because the sender releases
+/// the inputs it had reserved and may re-spend them. Carrying the `3/2` onto the
+/// corrected 144 s mean would have preserved that defect exactly.
+#[no_mangle]
+pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
+    u64::from(embargo_timer().judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,6 +579,52 @@ mod tests {
             assert!(h.is_null(), "usize::MAX stems must return null, not abort");
             shekyl_dandelionpp_map_free(h); // null free is a no-op
         }
+    }
+
+    #[test]
+    fn embargo_boundary_hands_out_the_adopted_timer_not_the_inherited_39s() {
+        // The wiring mistake this pins: reaching for `EmbargoTimer::inherited()`
+        // (the 39 s ghost) instead of `adopted()` would compile, draw plausible
+        // numbers, and silently reinstate F-1/F-2/F-3.
+        let t = embargo_timer();
+        assert_eq!(t.mean_secs(), 144, "the adopted exact-solve embargo");
+        assert_ne!(
+            t.mean_secs(),
+            EmbargoTimer::inherited().mean_secs(),
+            "must not be the inherited 39 s"
+        );
+        assert_eq!(
+            t.distribution(),
+            shekyl_relay_privacy::DelayFamily::Geometric,
+            "memoryless — a Poisson here is F-2 reinstated"
+        );
+    }
+
+    #[test]
+    fn embargo_draws_match_the_adopted_distribution() {
+        // What the boundary must preserve is the *distribution*, not a floor.
+        // A memoryless geometric has support {0, 1, 2, ...}, so a 0 s draw is
+        // legitimate and occurs at ~1/(mean_ticks+1) ≈ 0.17% — rare, and part
+        // of the derived survival solve. Clamping it here would make shipped
+        // behaviour diverge from the golden-vector-pinned table, which is the
+        // exact class of defect §17 exists to remove; if a 0 draw were wrong it
+        // would be wrong in the derivation, not at the seam.
+        const N: u64 = 4096;
+        let mut total = 0_u64;
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..N {
+            let s = shekyl_dandelionpp_embargo_draw_seconds();
+            total += s;
+            seen.insert(s);
+        }
+        let mean = total / N;
+        // ~13 sigma of slack at this sample size: catches a wrong timer or a
+        // collapsed RNG, never flakes on an honest one.
+        assert!(
+            (115..=175).contains(&mean),
+            "draw mean {mean}s is not the adopted 144s distribution"
+        );
+        assert!(seen.len() > 1, "draws did not vary: {seen:?}");
     }
 
     // Note: the NIL-in-connection-list guard (read_ids) can't be unit-tested —

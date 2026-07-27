@@ -461,3 +461,99 @@ TEST(txpool_ref_age, template_seed_refused_for_too_recent_reference)
   ASSERT_NE(it, fx.bap.txpool.m_input_cache.end());
   EXPECT_FALSE(std::get<0>(it->second));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RP-4 (DAEMON_RELAY_PRIVACY.md sec 17.1): the embargo and MIN_RELAY_TIME are
+// disjoint timers, and that must stay true.
+//
+// get_relayable_transactions dispatches on relay *method*: stem/forward are
+// gated solely by `last_relayed_time > now` — which for a stemmed tx IS its
+// embargo deadline — while get_relay_delay/MIN_RELAY_TIME gates only
+// local/fluff/block. That disjointness is why lengthening the embargo from the
+// inherited 39s to the derived 144s cannot race the re-broadcast interval, even
+// though the origin-alone black-hole recovery p90 (~331s) now exceeds
+// MIN_RELAY_TIME (300s).
+//
+// It is armed here rather than left as prose because a future edit that folded
+// stem into the get_relay_delay branch would reintroduce the race silently: the
+// daemon would still relay, just at the wrong time, and no existing test looks.
+// The discriminating case is a stem tx whose embargo has *just* expired — the
+// two branches disagree there, so it fails loudly if they are ever merged.
+// ─────────────────────────────────────────────────────────────────────────────
+namespace
+{
+  // A pool holding one tx with the given relay method and timers.
+  struct RelayTimerFixture
+  {
+    BlockchainAndPool bap;
+    RefAgeTestDB* db;
+    crypto::hash txid;
+    cryptonote::blobdata blob;
+
+    RelayTimerFixture() : db(new RefAgeTestDB(300)), txid(make_txid(0x77)),
+                          blob(make_minimal_tx_blob()) {}
+
+    bool init() { return init_blockchain(bap.bc, db); }
+
+    void put(relay_method method, time_t receive_time, time_t last_relayed_time)
+    {
+      txpool_tx_meta_t meta = make_meta(100, receive_time);
+      meta.set_relay_method(method);
+      meta.last_relayed_time = last_relayed_time;
+      meta.relayed = true;
+      db->add_txpool_tx(txid, {blob.data(), blob.size()}, meta);
+    }
+
+    bool relayable()
+    {
+      std::vector<std::tuple<crypto::hash, cryptonote::blobdata, relay_method>> txs;
+      bap.txpool.get_relayable_transactions(txs);
+      for (const auto& t : txs)
+        if (std::get<0>(t) == txid)
+          return true;
+      return false;
+    }
+  };
+}
+
+TEST(txpool_relay_timers, stem_is_gated_by_its_embargo_not_min_relay_time)
+{
+  const time_t now = time(nullptr);
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+
+  // The discriminating case: a stem tx whose embargo expired a moment ago. The
+  // embargo says "relay now"; MIN_RELAY_TIME (300s since it was set) says
+  // "wait". Only the embargo may govern a stem tx, so it must be relayable.
+  fx.put(relay_method::stem, now - 10, now - 1);
+  EXPECT_TRUE(fx.relayable())
+    << "an expired embargo must release the tx immediately; if MIN_RELAY_TIME "
+       "gated stem txs this would wait ~300s and the sec 17.1 reconciliation "
+       "would be broken";
+}
+
+TEST(txpool_relay_timers, stem_under_embargo_is_held_however_old_the_tx_is)
+{
+  const time_t now = time(nullptr);
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+
+  // Received long ago (well past MIN_RELAY_TIME) but the embargo deadline is
+  // still in the future: age must not release it. The deadline is the gate.
+  fx.put(relay_method::stem, now - 100000, now + 3600);
+  EXPECT_FALSE(fx.relayable())
+    << "a stem tx must stay held until its embargo deadline passes";
+}
+
+TEST(txpool_relay_timers, fluff_still_obeys_min_relay_time)
+{
+  const time_t now = time(nullptr);
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+
+  // The other half of the disjointness: a just-relayed fluff tx is held by
+  // get_relay_delay/MIN_RELAY_TIME, which the embargo change must not disturb.
+  fx.put(relay_method::fluff, now, now);
+  EXPECT_FALSE(fx.relayable())
+    << "a fluff tx relayed just now must wait out MIN_RELAY_TIME";
+}

@@ -2886,6 +2886,36 @@ uint64_t shekyl_pow_randomx_v2_seed_epoch_blocks(void);
 /// from the mainnet defaults); the daemon logs a startup warning.
 bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 
+// ── Dandelion++ stem embargo (RP-4, DAEMON_RELAY_PRIVACY.md sec 17) ─────────
+//
+// There is no embargo constant in C++ any more, and that is the point. The
+// inherited CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE = 39 did not follow from the
+// derivation printed beside it (its own formula gives 16.61 s; 39 s reproduces
+// only if log10 is read for ln), and it was drawn from a Poisson under a
+// derivation assuming exponential survival, so the backstop never fired. Value
+// and distribution now both come from shekyl-relay-privacy's EmbargoTimer,
+// whose integer table *is* the distribution: reviewable, identical on every
+// platform, golden-vector pinned — none of which holds for the
+// implementation-defined std::poisson_distribution.
+//
+// Do not reintroduce a C++-side embargo constant or multiplier. If a number is
+// needed here, derive it in the crate and export it, so the number and its
+// reason cannot drift apart again.
+
+/// One embargo duration in seconds, drawn from the adopted memoryless
+/// distribution (mean 144 s). A 0 s draw is legitimate and rare (~0.17 %): the
+/// geometric support includes 0 and the table is not clamped at the boundary,
+/// so what ships is what was derived and tested.
+uint64_t shekyl_dandelionpp_embargo_draw_seconds(void);
+
+/// How long to wait before judging a still-unseen transaction failed, in
+/// seconds — a quantile of the embargo distribution (at most 1 in 100 embargoes
+/// still running), not a multiple of its mean. A stem transaction is invisible
+/// to its sender until it fluffs, so a shorter deadline declares healthy
+/// transactions dead while their backstop is still running, and the sender then
+/// releases the inputs it had reserved.
+uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
+
 } // extern "C"
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and

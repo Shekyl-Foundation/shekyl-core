@@ -128,6 +128,27 @@ pub struct FluffScheduler {
     pending: BTreeMap<ConnectionId, Millis>,
 }
 
+/// Walk a quantized table's masses until the remaining tail is within budget.
+///
+/// The masses partition `2^64` exactly (see `quantized_mass`), so the tail after
+/// outcome `k` is `2^64 - cumulative`, computed in `u128` to avoid the boundary
+/// case where the whole domain is one value.
+fn survival_quantile(max_support: u64, mass: impl Fn(u64) -> u64, one_in: u64) -> u64 {
+    assert!(one_in > 0, "false-fail rate must be a positive 1/n");
+    const TOTAL: u128 = 1_u128 << 64;
+    let allowed_tail = TOTAL / u128::from(one_in);
+
+    let mut cumulative: u128 = 0;
+    for k in 0..=max_support {
+        cumulative += u128::from(mass(k));
+        if TOTAL - cumulative <= allowed_tail {
+            return k;
+        }
+    }
+    // The table is finite, so its own top outcome always satisfies the bound.
+    max_support
+}
+
 /// One of the two delay tables, chosen at construction.
 ///
 /// Shared by [`FluffScheduler`], [`EmbargoTimer`], and the flood instruments in
@@ -160,6 +181,28 @@ impl DelayTable {
         match self {
             Self::Poisson(_) => DelayFamily::Poisson,
             Self::Geometric(_) => DelayFamily::Geometric,
+        }
+    }
+
+    /// The smallest tick count `t` for which at most `1 / one_in` of the mass
+    /// remains **above** `t` — the exact survival quantile of the shipped table.
+    ///
+    /// Computed from the table's own quantized masses, which partition `2^64`
+    /// exactly. That makes it integer, identical on every platform, and — the
+    /// part that matters — faithful to the table's *truncation*. Reading the
+    /// quantile off an idealised continuous tail instead would be the same
+    /// species of error as F-1: a number that does not follow from the
+    /// distribution actually shipped.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `one_in` is zero.
+    pub(crate) fn survival_quantile_ticks(&self, one_in: u64) -> u64 {
+        match self {
+            Self::Poisson(t) => survival_quantile(t.max_support(), |k| t.quantized_mass(k), one_in),
+            Self::Geometric(t) => {
+                survival_quantile(t.max_support(), |k| t.quantized_mass(k), one_in)
+            }
         }
     }
 
@@ -351,6 +394,27 @@ pub type EmbargoDistribution = DelayFamily;
 ///
 /// See [`crate::derive`] for the exact equation and [`crate::geometric`] for
 /// why the distribution family differs from the inherited Poisson.
+///
+/// # The shipped value, and why it is not 39 s
+///
+/// The daemon draws from [`Self::adopted`] — **mean 144 s, memoryless** — and
+/// carries no embargo constant of its own (`DAEMON_RELAY_PRIVACY.md` §17). It
+/// replaced an inherited `39 s` that was wrong three ways, each of which this
+/// type is shaped to prevent recurring:
+///
+/// - The 39 s did not follow from the derivation printed beside it: that
+///   formula, over its own stated `k=5, ep=0.10, hop=175 ms`, gives 16.61 s.
+///   39 s reproduces only if `log10` is read for `ln`. **F-1.**
+/// - It was drawn from a Poisson while the derivation assumed *exponential*
+///   survival, so the backstop measurably never fired. **F-2.**
+/// - The closed form substituted `E[K]` into an expression in `K(K-1)`; stem
+///   length is geometric, so `E[K(K-1)] = 2·E[K](E[K]-1)` and the value
+///   under-provisioned at every `q`. The exact solve gives 144 s. **F-3.**
+///
+/// The lesson the type encodes: a timing constant and its derivation must live
+/// in the same place. Anything that needs a number from this distribution
+/// derives it here — see [`Self::judge_failed_after_secs`] — rather than
+/// applying a multiplier at the call site.
 #[derive(Debug, Clone)]
 pub struct EmbargoTimer {
     table: DelayTable,
@@ -368,6 +432,19 @@ pub struct EmbargoTimer {
 /// instantly for no reason other than rounding. Quarter seconds put the
 /// discretization error below the effect being measured.
 pub const DEFAULT_EMBARGO_TICK_MILLIS: u64 = 250;
+
+/// The false-fail rate a sender's "this transaction failed" deadline is
+/// provisioned at: **at most 1 in 100** embargoes is still running when a
+/// still-unseen transaction is judged failed.
+///
+/// The rate is the decision; the seconds follow from it via
+/// [`EmbargoTimer::judge_failed_after_secs`] over the shipped table. Stating it
+/// this way is deliberate — a bare multiple of the mean (the inherited wallet
+/// used `3/2`) is only the ~78th percentile of a memoryless distribution, so it
+/// silently mislabels roughly a fifth of black-holed transactions as failed and
+/// un-reserves their inputs. One in a hundred is the point where the deadline
+/// stops being a coin-flip against the backstop it is waiting for.
+pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
 
 impl EmbargoTimer {
     /// The configuration this crate recommends shipping: exact discrete survival
@@ -559,6 +636,29 @@ impl EmbargoTimer {
     }
 
     /// Draw an embargo deadline relative to `now`.
+    /// How long a sender must wait before a transaction it has still not seen
+    /// may be judged to have failed, at a stated false-fail rate of `1 / one_in`.
+    ///
+    /// A transaction under embargo is invisible to its sender until the backstop
+    /// fires (it is not yet in the broadcast category), so any "did it fail?"
+    /// deadline is a quantile of *this* distribution. Set it too low and a
+    /// perfectly healthy transaction is declared failed while its backstop is
+    /// still running — which is worse than it sounds, because the sender then
+    /// releases the inputs it had reserved and may re-spend them.
+    ///
+    /// Provisioned from the shipped table (see
+    /// [`DelayTable::survival_quantile_ticks`]) and rounded **up** to whole
+    /// seconds, so the wait never comes in under the stated rate.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `one_in` is zero.
+    #[must_use]
+    pub fn judge_failed_after_secs(&self, one_in: u64) -> u32 {
+        let ticks = self.table.survival_quantile_ticks(one_in);
+        u32::try_from(ticks.saturating_mul(self.tick_millis).div_ceil(1_000)).unwrap_or(u32::MAX)
+    }
+
     pub fn deadline<R: RelayRng + ?Sized>(&self, now: Millis, rng: &mut R) -> Millis {
         let ticks = self.table.draw(rng);
         now.saturating_add(ticks.saturating_mul(self.tick_millis))
@@ -810,5 +910,54 @@ mod tests {
             let t = c.next_send(500, &mut rng);
             assert!((10_500..=15_500).contains(&t), "noise send at {t}");
         }
+    }
+
+    #[test]
+    fn propagation_timeout_follows_from_the_shipped_table() {
+        let t = EmbargoTimer::adopted(&DandelionParams::inherited());
+        let secs = t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
+        println!(
+            "adopted embargo mean {}s -> judge-failed-after {}s (1 in {})",
+            t.mean_secs(),
+            secs,
+            PROPAGATION_FALSE_FAIL_ONE_IN
+        );
+
+        // The point of the deadline is to outlast the backstop it is waiting
+        // for. A bare multiple of the mean does not: the inherited wallet's
+        // 3/2 lands at the ~78th percentile of a memoryless distribution.
+        assert!(
+            secs > t.mean_secs(),
+            "a 1-in-100 wait must exceed the mean ({secs}s vs {}s)",
+            t.mean_secs()
+        );
+        // Must clear the origin-alone black-hole recovery p90 (~331 s, §10),
+        // which is exactly the case a sender would otherwise mislabel.
+        assert!(
+            secs >= 331,
+            "must outlast the origin-alone recovery p90, got {secs}s"
+        );
+        // Tightening the stated rate must lengthen the wait, monotonically.
+        assert!(
+            t.judge_failed_after_secs(1_000) > secs,
+            "a 1-in-1000 deadline must wait longer than 1-in-100"
+        );
+    }
+
+    #[test]
+    fn survival_quantile_is_exact_at_the_table_boundaries() {
+        // A degenerate one-outcome table: everything is at 0, so any rate is
+        // satisfied immediately — this is the boundary the u128 accumulation
+        // exists to keep exact (masses partition 2^64, not 2^64 - 1).
+        let t = EmbargoTimer::geometric_from_ticks(1, 1_000);
+        assert_eq!(
+            t.judge_failed_after_secs(1),
+            0,
+            "1-in-1 is the first outcome"
+        );
+        // And a rate finer than the table's resolution still terminates inside
+        // the table rather than running past its support.
+        let fine = t.judge_failed_after_secs(u64::MAX);
+        assert!(fine > 0, "a vanishing tail budget must land in the table");
     }
 }
