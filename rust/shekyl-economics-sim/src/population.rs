@@ -35,12 +35,12 @@ use shekyl_archival_retention::{
     curve_milli, scarcity_micro, work_milli_from_micro, BandedCurveParams,
 };
 
-/// Provisional consensus reward curve — the same `from_sim_cap_milli(8_000)`
+/// Provisional consensus reward curve — the same `from_plateau_value(8_000)`
 /// (`plateau_work = 16_000`, `plateau_value = 8_000`) `epoch_close_compute`'s
 /// tests and `EpochCloseInputs` default pin.
 #[must_use]
 pub fn reward_curve() -> BandedCurveParams {
-    BandedCurveParams::from_sim_cap_milli(8_000)
+    BandedCurveParams::from_plateau_value(8_000)
 }
 
 /// Shard age in the scarcity term. Pinned to **0** — the attacker-favouring
