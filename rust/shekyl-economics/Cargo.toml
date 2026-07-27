@@ -10,6 +10,11 @@ build = "build.rs"
 
 [dependencies]
 thiserror.workspace = true
+# Banded piecewise-linear shape primitive shared with the archival reward curve
+# (§6.1 pins the D2 escalation as banded-PL "per the curve_milli precedent").
+# `shekyl-units` is foundational, so this keeps economics free of the FCMP/PQC
+# stack that `shekyl-archival-retention` would drag in.
+shekyl-units = { path = "../shekyl-units" }
 serde.workspace = true
 # Blake2b-256 backs the `CalibrationStamp.params_digest` canonical
 # parameter digest (`digest.rs`). `blake2 = "0.10"` is already a

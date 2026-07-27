@@ -19,6 +19,7 @@ pub mod burn;
 pub mod digest;
 pub mod emission;
 pub mod emission_share;
+pub mod escalation;
 pub mod params;
 pub mod release;
 
