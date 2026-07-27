@@ -2905,7 +2905,12 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 /// One embargo duration in seconds, drawn from the adopted memoryless
 /// distribution (mean 144 s). A 0 s draw is legitimate and rare (~0.17 %): the
 /// geometric support includes 0 and the table is not clamped at the boundary,
-/// so what ships is what was derived and tested.
+/// so what ships is what was derived and tested. A zero draw does not mean "fire
+/// this instant" — deadlines are whole seconds, so it resolves to the earliest
+/// one that does not under-provision (the next second boundary; see
+/// cryptonote::detail::embargo_deadline). Rounding it down instead would put the
+/// deadline up to ~999 ms in the past, which shortens an embargo, and a shorter
+/// embargo is the privacy-losing direction at every draw value including zero.
 uint64_t shekyl_dandelionpp_embargo_draw_seconds(void);
 
 /// How long to wait before judging a still-unseen transaction failed, in

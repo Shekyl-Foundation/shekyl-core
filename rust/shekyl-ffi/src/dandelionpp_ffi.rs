@@ -355,13 +355,23 @@ fn embargo_timer() -> &'static EmbargoTimer {
 /// that shaved up to 999 ms off every draw would err the wrong way.
 ///
 /// **A 0 s draw is legitimate and intended.** A memoryless geometric has support
-/// `{0, 1, 2, ...}`, so ~`1/(mean_ticks+1)` ≈ 0.17 % of draws expire at once and
-/// the transaction fluffs immediately. That is a real change from the inherited
-/// `Poisson(39 s)`, which produced 0 with probability `e^-39` — effectively
-/// never — and it is *not* patched here: the table is the distribution the
-/// survival solve derived and the golden vector pins, so flooring it at the
-/// boundary would ship something other than what was derived and tested. The
-/// preemption profile (§10) already prices this self-fluff.
+/// `{0, 1, 2, ...}`, so ~`1/(mean_ticks+1)` ≈ 0.17 % of draws are zero — the
+/// distribution's minimum, honoured rather than clamped. That is a real change
+/// from the inherited `Poisson(39 s)`, which produced 0 with probability
+/// `e^-39` — effectively never — and it is *not* patched here: the table is the
+/// distribution the survival solve derived and the golden vector pins, so
+/// flooring it at the boundary would ship something other than what was derived
+/// and tested. The preemption profile (§10) already prices this self-fluff.
+///
+/// What "zero" means downstream, stated precisely because it is easy to overread
+/// as "fluffs this instant": the daemon stores whole-second deadlines, so a
+/// zero draw resolves to the *earliest deadline that does not under-provision* —
+/// the next second boundary (`cryptonote::detail::embargo_deadline`). The
+/// deadline is never earlier than `now + draw`, uniformly and including at zero.
+/// Rounding a zero draw *down* instead would place the deadline up to ~999 ms in
+/// the past, which is under-provisioning by the same asymmetry this boundary
+/// rounds up to avoid — a shorter embargo is the privacy-losing direction, and
+/// that does not stop being true because the draw was small.
 #[no_mangle]
 pub extern "C" fn shekyl_dandelionpp_embargo_draw_seconds() -> u64 {
     let mut rng = SecureRelayRng;
