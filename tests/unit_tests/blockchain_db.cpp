@@ -110,7 +110,7 @@ protected:
       bl.prev_id = prev_id;
       bl.nonce = 12345;
       bl.curve_tree_root = crypto::null_hash;
-      if (!construct_miner_tx(0, 0, 0, 500, 0, miner_acc.get_keys().m_account_address, bl.miner_tx))
+      if (!construct_miner_tx(0, 0, 0, 500, 0, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, bl.miner_tx))
         throw std::runtime_error("BlockchainDBTest: construct_miner_tx failed");
       bl.miner_tx.invalidate_hashes();
       blobdata bd;

@@ -239,7 +239,7 @@ namespace test
     make_miner_transaction(cryptonote::account_public_address const& to)
     {
         cryptonote::transaction tx{};
-        if (!cryptonote::construct_miner_tx(0, 0, 5000, 500, 500, to, tx))
+        if (!cryptonote::construct_miner_tx(0, 0, 5000, 500, 500, /*frozen_segment_count=*/0, to, tx))
             throw std::runtime_error{"transaction construction error"};
 
         crypto::hash id{0};

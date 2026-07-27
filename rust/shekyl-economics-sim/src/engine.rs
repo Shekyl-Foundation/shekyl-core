@@ -141,7 +141,10 @@ impl Default for SimParams {
             release_max: 1_300_000,
             burn_base_rate: 500_000,
             burn_cap: 900_000,
-            staker_pool_share: 250_000,
+            // The consensus share (the escalation floor) deps the shipped
+            // config rather than mirroring it: a literal here could drift
+            // from what consensus actually pays (dep-don't-mirror).
+            staker_pool_share: EconomicParams::default().staker_pool_share,
             staker_emission_share: 150_000,
             staker_emission_decay: 900_000,
         }

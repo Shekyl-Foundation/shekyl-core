@@ -631,7 +631,15 @@ pub struct ShekylBurnSplit {
     pub actually_destroyed: u64,
 }
 
-/// Compute the three-way fee split for a block.
+/// Compute the three-way fee split for a block, with a caller-supplied flat
+/// share.
+///
+/// Consensus C++ no longer calls this (Stage 3b routes every burn split
+/// through [`shekyl_compute_burn_split_escalated`]); it is retained as the
+/// differential oracle for the genesis-neutrality pin — the bit-identity test
+/// compares the escalated path against this one at the shipped
+/// parameterization. It holds no share constant of its own (the share is an
+/// argument), so keeping it duplicates no fact.
 #[no_mangle]
 pub extern "C" fn shekyl_compute_burn_split(
     total_fees: u64,

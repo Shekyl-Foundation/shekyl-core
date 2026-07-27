@@ -41,7 +41,7 @@ namespace
     const account_public_address& miner_address, std::vector<size_t>& block_weights, size_t target_tx_weight,
     size_t target_block_weight, uint64_t fee = 0)
   {
-    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, fee, miner_address, miner_tx, blobdata(), 999, 1,
+    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, fee, /*frozen_segment_count=*/0, miner_address, miner_tx, blobdata(), 999, 1,
         /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
       return false;
 

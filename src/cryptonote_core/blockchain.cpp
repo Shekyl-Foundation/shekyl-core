@@ -1662,7 +1662,7 @@ uint64_t Blockchain::parent_frozen_segment_count(uint64_t block_height) const
 }
 //------------------------------------------------------------------
 // This function validates the miner transaction reward
-bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version)
+bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   const uint64_t block_height = std::get<txin_gen>(b.miner_tx.vin[0]).height;
@@ -1703,8 +1703,11 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height, genesis_ng_height, version);
   uint64_t miner_base_reward = em_split.miner_emission;
 
-  // Component 2: fee burn split — miner only receives miner_fee_income
-  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, version);
+  // Component 2: fee burn split — miner only receives miner_fee_income.
+  // frozen_segment_count is the caller's parent-state read (the asserting
+  // read-point above); the escalated share cannot reach miner_fee_income
+  // (§12.11.1 Leg 1), so this stays the security-budget-preserving split.
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, frozen_segment_count, version);
   uint64_t effective_fee = burn.miner_fee_income;
 
   if(miner_base_reward + effective_fee < money_in_use)
@@ -1930,7 +1933,12 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   const uint64_t tx_volume_avg = get_tx_volume_avg(height);
   const uint64_t circulating_supply = already_generated_coins;
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, genesis_ng_height);
+  // D2 escalation operand, computed ONCE and passed to BOTH construct_miner_tx
+  // calls: the retry below re-prices the coinbase after the weight changes, and
+  // a second read there could price against a different n than the first pass
+  // (criterion #1 — template and connect must agree by construction).
+  const uint64_t frozen_segment_count = parent_frozen_segment_count(height);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, genesis_ng_height);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1939,7 +1947,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, genesis_ng_height);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, genesis_ng_height);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     size_t coinbase_weight = get_transaction_weight(b.miner_tx);
@@ -6014,7 +6022,12 @@ leave:
   TIME_MEASURE_START(vmt);
   uint64_t base_reward = 0;
   uint64_t already_generated_coins = blockchain_height ? m_db->get_block_already_generated_coins(blockchain_height - 1) : 0;
-  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version()))
+  // D2 escalation operand, read ONCE at parent state (the helper throws if the
+  // tree has already grown for this block) and shared by the money check below
+  // and the staker-inflow accrual — the same single-read discipline as
+  // base_reward (F-B1c): verify's operand IS the accrual's operand.
+  const uint64_t frozen_segment_count = parent_frozen_segment_count(blockchain_height);
+  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), frozen_segment_count))
   {
     MERROR_VER("Block with id: " << id << " has incorrect miner transaction");
     bvc.m_verifivation_failed = true;
@@ -6095,7 +6108,7 @@ leave:
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
         fee_summary, get_tx_volume_avg(blockchain_height), already_generated_coins,
-        connect_hf_version);
+        frozen_segment_count, connect_hf_version);
 
     archival_budget_accrual = em_split.staker_emission + burn.staker_pool_amount;
     block_burn_amount = burn.actually_destroyed;
