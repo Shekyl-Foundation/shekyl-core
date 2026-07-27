@@ -383,9 +383,20 @@ pub extern "C" fn shekyl_dandelionpp_embargo_draw_seconds() -> u64 {
 /// running — and a false verdict is not cosmetic, because the sender releases
 /// the inputs it had reserved and may re-spend them. Carrying the `3/2` onto the
 /// corrected 144 s mean would have preserved that defect exactly.
+/// Derived once per process and cached: the quantile is a pure function of the
+/// frozen parameter set, so re-walking the table per call would recompute an
+/// answer that cannot change. Note what is *not* done — returning the
+/// `ADOPTED_PROPAGATION_TIMEOUT_SECS` pin directly. The pin is a drift
+/// guardrail, downstream of the derivation; shipping it as the value would put a
+/// literal on the production path and demote the derivation to a test, which is
+/// structurally the 39 s ghost this round removed. Deriving once costs one table
+/// walk at first use and keeps the number downstream of its reason.
 #[no_mangle]
 pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
-    u64::from(embargo_timer().judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN))
+    static TIMEOUT_SECS: OnceLock<u64> = OnceLock::new();
+    *TIMEOUT_SECS.get_or_init(|| {
+        u64::from(embargo_timer().judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN))
+    })
 }
 
 #[cfg(test)]
