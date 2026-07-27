@@ -43,6 +43,28 @@
 //!    (§6.0), and a controller would add exactly the stateful machinery that
 //!    section rejects.
 //!
+//! # The safety guarantee constraint 2 buys: **strictly no one is worse off**
+//!
+//! Constraint 2 is easy to read as a bound and easy to under-sell. It is the
+//! strongest safety claim available about this freeze, so state it as the
+//! guarantee it is:
+//!
+//! > **The escalation can only ever raise the staker share above today's value,
+//! > never lower it below. At every `n`, and for every parameterization this
+//! > module accepts, no archiver is worse off than under the flat 25 %.**
+//!
+//! That is *structural*, not per-case: the floor is the value being replaced, and
+//! [`staker_pool_share_at`] is monotone from it. So the entire class of question
+//! *"did the escalation take something from someone?"* is **foreclosed** rather
+//! than answered case by case — the same posture as the no-exclusivity accounting
+//! that closed reopen (c) (§12.11). A future reviewer or stakeholder asking who
+//! lost out under the escalation can be answered from the shape alone, without
+//! re-deriving a distribution.
+//!
+//! The corollary matters for the still-open numeric: this guarantee holds for
+//! **any** asymptote the ceremony eventually pins, because it depends only on the
+//! floor and monotonicity. Pinning the number cannot retract it.
+//!
 //! # Why no rate-limiter, restated on its final footing
 //!
 //! The justification shifted twice and landed harder than it started. It was
@@ -179,6 +201,38 @@ mod tests {
         // And never below it, anywhere.
         for n in [0u64, 1, 7, 1_000, 99_999, 100_000, 10_000_000] {
             assert!(staker_pool_share_at(n, &p) >= p.floor_share);
+        }
+    }
+
+    /// **The strict-improvement guarantee, made executable.** No archiver is
+    /// worse off than under the flat 25 % — at any `n`, under *any* parameters
+    /// this module accepts, including ones the ceremony has not pinned yet.
+    ///
+    /// Swept over a grid of floors/knees/asymptotes rather than the fixture,
+    /// because the claim is about the shape's whole accepted domain: if it held
+    /// only for one parameterization it would be a coincidence, not a guarantee,
+    /// and the numeric is still open.
+    #[test]
+    fn no_one_is_ever_worse_off_than_the_flat_share() {
+        const TODAY: u64 = 250_000;
+        for knee in [1u64, 2, 1_000, 25_000, 100_000, 250_000] {
+            for asymptote in [TODAY, 400_000, 750_000, 900_000, SCALE - 1] {
+                let p = EscalationParams {
+                    floor_share: TODAY,
+                    knee_n: knee,
+                    asymptote_share: asymptote,
+                };
+                assert!(p.is_well_formed(), "fixture must be accepted: {p:?}");
+                for n in [0u64, 1, knee / 2, knee - 1, knee, knee + 1, u64::MAX] {
+                    let s = staker_pool_share_at(n, &p);
+                    assert!(
+                        s >= TODAY,
+                        "escalation went BELOW today's flat share: n={n} \
+                         params={p:?} share={s}"
+                    );
+                    assert!(s < SCALE, "deflation channel deleted: n={n} share={s}");
+                }
+            }
         }
     }
 

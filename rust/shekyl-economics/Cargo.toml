@@ -28,5 +28,11 @@ blake2 = { workspace = true }
 [build-dependencies]
 serde_json = "1"
 
+[dev-dependencies]
+# Test-only: exercises the `try_from` deserialization door that rejects a
+# malformed escalation asymptote (params.rs). Not a runtime dependency —
+# consensus never parses JSON.
+serde_json = "1"
+
 [lints]
 workspace = true

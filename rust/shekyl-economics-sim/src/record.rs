@@ -159,6 +159,9 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         emission_speed_factor_per_minute: sim.emission_speed_factor_per_minute,
         final_subsidy_per_minute: sim.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
+        // Escalation numerics come from the shipped config: the sim must never
+        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
+        ..EconomicParams::default()
     };
 
     let blocks_per_year = sim.blocks_per_year;

@@ -43,7 +43,16 @@
 //! round-trip test and the C4 fixtures (which call this same function —
 //! there is no second encoder).
 //!
-//! # Canonical byte layout (format version `0x01`)
+//! # Canonical byte layout (format version `0x02`)
+//!
+//! **`0x01` → `0x02` (Stage 3a):** the D2 escalation added
+//! `escalation_knee_n` and `escalation_asymptote_share`. They are appended, so
+//! every prior offset is unchanged — but appending is still a layout change, and
+//! the whole point of the version tag is that a fixture produced under `0x01`
+//! must **fail loudly** rather than silently match a preimage that no longer
+//! covers every consensus-relevant parameter. The escalation numbers select the
+//! staker/burn split, so a digest that omitted them would let two nodes agree on
+//! a stale calibration stamp while computing different splits.
 //!
 //! The preimage is exactly **81 bytes**, hashed with `Blake2b<U32>`:
 //!
@@ -60,6 +69,8 @@
 //! | 57     | 8     | `emission_speed_factor_per_minute` | u64 LE              |
 //! | 65     | 8     | `final_subsidy_per_minute`         | u64 LE              |
 //! | 73     | 8     | `daa_target_seconds`               | u64 LE              |
+//! | 81     | 8     | `escalation_knee_n`                | u64 LE              |
+//! | 89     | 8     | `escalation_asymptote_share`       | u64 LE              |
 //!
 //! The field order mirrors the [`EconomicParams`] struct declaration.
 //! **Adding, removing, or reordering a field is a breaking layout
@@ -75,12 +86,12 @@ use crate::params::EconomicParams;
 /// Format-version tag prefixed to the digest preimage. Bump on any
 /// change to the field set, order, or widths in the [module
 /// docs](self) byte-layout table.
-pub const DIGEST_FORMAT_VERSION: u8 = 0x01;
+pub const DIGEST_FORMAT_VERSION: u8 = 0x02;
 
 /// Length in bytes of the canonical digest preimage (`1` version tag +
 /// `10 × 8` u64 fields). Exposed for the round-trip test's
 /// fixed-buffer assertion.
-pub const DIGEST_PREIMAGE_LEN: usize = 1 + 10 * 8;
+pub const DIGEST_PREIMAGE_LEN: usize = 1 + 12 * 8;
 
 /// Serialize `params` to the canonical fixed-width little-endian
 /// preimage documented in the [module docs](self).
@@ -105,6 +116,8 @@ fn canonical_preimage(params: &EconomicParams) -> [u8; DIGEST_PREIMAGE_LEN] {
     put(params.emission_speed_factor_per_minute);
     put(params.final_subsidy_per_minute);
     put(params.daa_target_seconds);
+    put(params.escalation_knee_n);
+    put(params.escalation_asymptote_share);
     debug_assert_eq!(off, DIGEST_PREIMAGE_LEN);
     buf
 }
@@ -143,6 +156,8 @@ mod tests {
             emission_speed_factor_per_minute: 0x7172_7374_7576_7778,
             final_subsidy_per_minute: 0x8182_8384_8586_8788,
             daa_target_seconds: 0x9192_9394_9596_9798,
+            escalation_knee_n: 0xA1A2_A3A4_A5A6_A7A8,
+            escalation_asymptote_share: 0xB1B2_B3B4_B5B6_B7B8,
         };
         let buf = canonical_preimage(&p);
         assert_eq!(buf[0], DIGEST_FORMAT_VERSION);

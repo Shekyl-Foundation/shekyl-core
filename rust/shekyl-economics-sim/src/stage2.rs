@@ -187,6 +187,9 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
         final_subsidy_per_minute: params.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
+        // Escalation numerics come from the shipped config: the sim must never
+        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
+        ..EconomicParams::default()
     };
     let total_blocks = params.blocks_per_year * config.sim_years;
     let money_supply = u128::from(params.money_supply);
@@ -1291,6 +1294,9 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
             emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
             final_subsidy_per_minute: params.final_subsidy_per_minute,
             daa_target_seconds: EconomicParams::default().daa_target_seconds,
+            // Escalation numerics come from the shipped config: the sim must never
+            // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
+            ..EconomicParams::default()
         };
         let br = base_block_reward(params.money_supply / 2, &econ).unwrap_or(0);
         crate::swing::a6_report(out, &ESCALATION_PREVIEW_N, br)?;

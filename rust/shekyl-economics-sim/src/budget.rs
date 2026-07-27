@@ -149,6 +149,9 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
         final_subsidy_per_minute: params.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
+        // Escalation numerics come from the shipped config: the sim must never
+        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
+        ..EconomicParams::default()
     };
 
     let money_supply = params.money_supply as u128;
