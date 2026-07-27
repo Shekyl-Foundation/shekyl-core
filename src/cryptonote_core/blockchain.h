@@ -1470,6 +1470,29 @@ namespace cryptonote
     bool prevalidate_miner_transaction(const block& b, uint64_t height, uint8_t hf_version);
 
     /**
+     * @brief reads the D2 escalation operand n = frozen_segment_count at parent-block state
+     *
+     * The staker-share escalation (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
+     * §6.2) is a pure map of the frozen-segment count derived from the curve
+     * tree's leaf count, and the count MUST be the parent block's: reading tip
+     * state after the tree has grown would let a block move its own split.
+     * add_block advances the chain height and grows the tree in one write txn,
+     * and pop_block trims both in one write txn, so
+     * m_db->height() == block_height is equivalent to "the tree has not yet
+     * grown for this block" — the check proves the read is parent-state.
+     *
+     * Throws (rather than logging) on violation: template and connect must
+     * price the coinbase against the same n, and a divergence produces blocks
+     * that fail validate_miner_transaction's exact-equality money check — a
+     * chain halt, not a warning.
+     *
+     * @param block_height height of the block being built or validated
+     *
+     * @return frozen_segment_count at the parent of block_height
+     */
+    uint64_t parent_frozen_segment_count(uint64_t block_height) const;
+
+    /**
      * @brief validates a miner (coinbase) transaction
      *
      * This function makes sure that the miner calculated his reward correctly

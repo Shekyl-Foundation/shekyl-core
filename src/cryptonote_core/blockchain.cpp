@@ -1630,6 +1630,37 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   return true;
 }
 //------------------------------------------------------------------
+// D2 escalation operand read-point (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
+// §6.2): n = frozen_segment_count at PARENT-block state, derived from the
+// curve-tree leaf count. add_block advances the chain height and grows the
+// tree in the same write txn, and pop_block trims both in the same write txn
+// (see the pop invariant comment in blockchain_db.cpp), so
+// m_db->height() == block_height is EQUIVALENT to "the tree has not yet grown
+// for this block" — the leaf count read below is the parent's, by
+// construction, on every surviving path (the prev_block template path that
+// could not satisfy this was deleted; see create_block_template).
+//
+// The check is load-bearing at CONNECT: handle_block_to_main_chain computes n
+// before validate_miner_transaction and m_db->add_block, and a refactor that
+// moves the read past add_block (the M3-1 cached-counter drift class) must
+// stop the node here, not skew the split. At TEMPLATE build it is a tripwire
+// only — create_block_template sets height = m_db->height() itself, so the
+// guarantee there comes from using the same expression, not from this check;
+// its value is refusing any future reintroduction of a non-tip parent, which
+// is exactly how the deleted prev_block path would have violated it.
+uint64_t Blockchain::parent_frozen_segment_count(uint64_t block_height) const
+{
+  LOG_PRINT_L3("Blockchain::" << __func__);
+  CRITICAL_REGION_LOCAL(m_blockchain_lock);
+  const uint64_t db_height = m_db->height();
+  CHECK_AND_ASSERT_THROW_MES(db_height == block_height,
+    "escalation operand read-point violated: template and connect must read "
+    "n = frozen_segment_count at the same parent state, but m_db->height() ("
+    << db_height << ") != block_height (" << block_height
+    << ") — the curve tree has already grown past this block's parent");
+  return shekyl_archival_frozen_segment_count(m_db->get_curve_tree_leaf_count());
+}
+//------------------------------------------------------------------
 // This function validates the miner transaction reward
 bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version)
 {
