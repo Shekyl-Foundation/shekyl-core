@@ -2910,10 +2910,12 @@ uint64_t shekyl_dandelionpp_embargo_draw_seconds(void);
 
 /// How long to wait before judging a still-unseen transaction failed, in
 /// seconds — a quantile of the embargo distribution (at most 1 in 100 embargoes
-/// still running), not a multiple of its mean. A stem transaction is invisible
-/// to its sender until it fluffs, so a shorter deadline declares healthy
-/// transactions dead while their backstop is still running, and the sender then
-/// releases the inputs it had reserved.
+/// still running), not a multiple of its mean. On the adopted table that is
+/// exactly 664 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
+/// pinned so the wait cannot drift from the distribution. A stem transaction is
+/// invisible to its sender until it fluffs, so a shorter deadline declares
+/// healthy transactions dead while their backstop is still running, and the
+/// sender then releases the inputs it had reserved.
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 
 } // extern "C"

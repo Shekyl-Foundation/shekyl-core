@@ -1038,8 +1038,11 @@ namespace cryptonote
 
           if (meta.dandelionpp_stem)
           {
+            // Cast: the FFI returns uint64_t; std::chrono::seconds::rep is
+            // signed and list-init would be a narrowing conversion on some libcs.
             meta.last_relayed_time = std::chrono::system_clock::to_time_t(
-              now + std::chrono::seconds{shekyl_dandelionpp_embargo_draw_seconds()});
+              now + std::chrono::seconds{static_cast<std::chrono::seconds::rep>(
+                shekyl_dandelionpp_embargo_draw_seconds())});
             next_relay = std::min(next_relay, meta.last_relayed_time);
           }
           else

@@ -3191,6 +3191,7 @@ mirror image — and sets the precedent this round follows (below). The rest hol
 | The 39 s constant | `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE` (`cryptonote_config.h`) |
 | The F-1 ghost, in prose | the derivation comment, [tx_pool.cpp:66–86](../../src/cryptonote_core/tx_pool.cpp#L66) — its own formula over `k=5, ep=0.10, hop=175 ms` gives **16.61 s**; 39 s reproduces only under `log10` for `ln` |
 | The F-2 draw | `crypto::random_poisson_seconds embargo_duration{…}` ([tx_pool.cpp:1031](../../src/cryptonote_core/tx_pool.cpp#L1031)), applied at [:1053](../../src/cryptonote_core/tx_pool.cpp#L1053) |
+| The wallet consumer | `tx_propagation_timeout = EMBARGO_AVERAGE * 3/2` ([wallet2.cpp](../../src/wallet/wallet2.cpp)) — second consumer of the constant; on expiry marks the transfer failed and un-spends key images |
 | The other timer | `MIN_RELAY_TIME = 300` ([tx_pool.cpp:94](../../src/cryptonote_core/tx_pool.cpp#L94)) |
 | The Rust primitive | `EmbargoTimer::{adopted, inherited, geometric_with_tick, …}` (`schedule.rs`) — already landed, unmoved |
 
@@ -3244,19 +3245,33 @@ distribution in C++ would re-create debt the migration must pay down (rules
 distribution, and the derivation all come from one place.
 
 **The seam is smaller than RP-2a's — no handle.** The map needed one because it
-holds per-epoch, per-connection state; the embargo distribution is a protocol
-constant. One export suffices, backed by a process-wide `OnceLock<EmbargoTimer>`
-(the table is immutable once built) and the same `OsRng` the map FFI uses:
+holds per-epoch, per-connection state; the embargo distribution is node-local
+**policy** (not consensus), fixed for a given parameter set. Two exports share a
+process-wide `OnceLock<EmbargoTimer>` (the table is immutable once built) and
+the same `OsRng` the map FFI uses:
 
 | C++ call site | FFI |
 | --- | --- |
-| `embargo_duration()` per stem tx ([tx_pool.cpp:1053](../../src/cryptonote_core/tx_pool.cpp#L1053)) | `shekyl_dandelionpp_embargo_draw_seconds() -> u64` |
+| `embargo_duration()` per stem tx ([tx_pool.cpp](../../src/cryptonote_core/tx_pool.cpp)) | `shekyl_dandelionpp_embargo_draw_seconds() -> u64` |
+| `tx_propagation_timeout` in `wallet2` ([wallet2.cpp](../../src/wallet/wallet2.cpp)) | `shekyl_dandelionpp_propagation_timeout_seconds() -> u64` |
 
 `crypto::random_poisson_seconds embargo_duration{…}` and the
-`CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE` constant are then **deleted** — the
-constant has no other consumer, and leaving a stale 39 s next to a Rust-owned
-144 s is exactly the ghost this round exists to remove (rule 15: delete, don't
-deprecate).
+`CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE` constant are then **deleted**. The
+constant had **two** consumers at re-census: the daemon draw, and the wallet's
+`EMBARGO_AVERAGE * 3/2` failed-transfer wait (which un-spends reserved inputs
+on expiry). Leaving a stale 39 s next to a Rust-owned 144 s is exactly the ghost
+this round exists to remove (rule 15: delete, don't deprecate).
+
+**Wallet wait is a quantile of the same table, not a multiple of the mean.** A
+stem transaction is invisible to its sender until it fluffs, so "has it failed?"
+is a survival question on the embargo. The inherited `3/2 × mean` is only the
+~78th percentile of a memoryless distribution — under F-2 the backstop never
+fired so the blunt verdict was moot; once the backstop fires, a short deadline
+declares healthy transactions dead mid-recovery. The rate is policy:
+`PROPAGATION_FALSE_FAIL_ONE_IN = 100` (at most 1 in 100 embargoes still running).
+On the adopted table that is exactly **`ADOPTED_PROPAGATION_TIMEOUT_SECS = 664`**,
+pinned by test at the crate and the FFI so the seconds cannot drift from the
+table (the F-1 class again if left as a loose bound).
 
 **This round has no unchanged-gtest oracle, and that is not an oversight.**
 RP-2a was a *faithful port*, so "the 6 gtests pass unchanged" was the correct
@@ -3286,10 +3301,15 @@ sites, matching:
 
 1. The crate's existing derivation gates still hold (analytic ↔ simulator,
    the F-1/F-2/F-3 executable assertions, golden vector).
-2. **The disjoint-timer invariant is armed**, not merely documented: a test that
-   a tx in `stem` state is gated by its embargo deadline and *never* by
-   `get_relay_delay`/`MIN_RELAY_TIME`, so the §15.4 reconciliation cannot rot.
-3. No C++ test depends on the old 39 s value or the Poisson shape — verified, not
+2. **The disjoint-timer invariant is armed**, not merely documented: tests in
+   `tests/unit_tests/txpool_relay_timers.cpp` that a tx in `stem` state is gated
+   by its embargo deadline and *never* by `get_relay_delay`/`MIN_RELAY_TIME`, so
+   the §15.4 reconciliation cannot rot.
+3. **The wallet propagation timeout is pinned**:
+   `judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN)` equals
+   `ADOPTED_PROPAGATION_TIMEOUT_SECS` (664) at the crate and the FFI export — not
+   a loose bound that can drift when the table or rate changes.
+4. No C++ test depends on the old 39 s value or the Poisson shape — verified, not
    assumed, during implementation; any that does is re-pinned to the derived value
    with the reason recorded.
-4. The daemon builds and the existing `tx_pool` / relay tests pass.
+5. The daemon builds and the existing `tx_pool` / relay tests pass.

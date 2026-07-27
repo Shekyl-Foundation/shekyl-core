@@ -10,7 +10,9 @@
 //!   `docs/design/DAEMON_RELAY_PRIVACY.md` §16. An opaque handle, because the
 //!   map is per-epoch, per-connection state.
 //! - **The embargo timer** ([`shekyl_dandelionpp_embargo_draw_seconds`]) — RP-4,
-//!   §17. One call, no handle: the embargo distribution is a protocol constant.
+//!   §17. One call, no handle: the embargo distribution is a node-local policy
+//!   constant (relay timing is not consensus), fixed for all nodes that share
+//!   the adopted parameters.
 //!
 //! This is the opaque-handle boundary the C++ `net::dandelionpp::connection_map`
 //! forwards to once its ~210 lines of logic move to Rust. The C++ class keeps
@@ -324,10 +326,11 @@ pub unsafe extern "C" fn shekyl_dandelionpp_map_free(handle: *mut StemMapHandle)
 
 /// The adopted embargo timer, built once per process.
 ///
-/// Unlike the stem map there is no handle: the embargo distribution is a
-/// *protocol constant*, not per-connection state. The table is immutable once
-/// built and its construction is a pure recurrence over frozen parameters, so a
-/// singleton is the whole of the state this boundary needs.
+/// Unlike the stem map there is no handle: the embargo distribution is
+/// node-local **policy** (not consensus), fixed for a given parameter set rather
+/// than per-connection state. The table is immutable once built and its
+/// construction is a pure recurrence over frozen parameters, so a singleton is
+/// the whole of the state this boundary needs.
 static EMBARGO: OnceLock<EmbargoTimer> = OnceLock::new();
 
 fn embargo_timer() -> &'static EmbargoTimer {
@@ -388,6 +391,7 @@ pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_relay_privacy::schedule::ADOPTED_PROPAGATION_TIMEOUT_SECS;
 
     fn id(byte: u8) -> [u8; 16] {
         let mut b = [0u8; 16];
@@ -625,6 +629,22 @@ mod tests {
             "draw mean {mean}s is not the adopted 144s distribution"
         );
         assert!(seen.len() > 1, "draws did not vary: {seen:?}");
+    }
+
+    #[test]
+    fn propagation_timeout_boundary_hands_out_the_pinned_seconds() {
+        // The wallet's failed-transfer wait is load-bearing (releases reserved
+        // inputs). It must match the crate pin exactly — a "around 11 minutes"
+        // bound would let the rate, table, or rounding drift the way F-1 did.
+        assert_eq!(
+            shekyl_dandelionpp_propagation_timeout_seconds(),
+            u64::from(ADOPTED_PROPAGATION_TIMEOUT_SECS),
+            "FFI timeout must equal ADOPTED_PROPAGATION_TIMEOUT_SECS ({ADOPTED_PROPAGATION_TIMEOUT_SECS})"
+        );
+        assert_eq!(
+            embargo_timer().judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN),
+            ADOPTED_PROPAGATION_TIMEOUT_SECS,
+        );
     }
 
     // Note: the NIL-in-connection-list guard (read_ids) can't be unit-tested —

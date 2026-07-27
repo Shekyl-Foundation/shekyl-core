@@ -444,7 +444,23 @@ pub const DEFAULT_EMBARGO_TICK_MILLIS: u64 = 250;
 /// silently mislabels roughly a fifth of black-holed transactions as failed and
 /// un-reserves their inputs. One in a hundred is the point where the deadline
 /// stops being a coin-flip against the backstop it is waiting for.
+///
+/// On the adopted embargo that rate is exactly
+/// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`] (664 s). Pin the seconds, not only the
+/// rate: the same F-1 class of defect reappears if the wait is left as a loose
+/// bound that can drift when the table, tick, or rounding changes.
 pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
+
+/// Sender "still unseen → failed" wait on the **adopted** embargo, in seconds,
+/// at [`PROPAGATION_FALSE_FAIL_ONE_IN`].
+///
+/// This is the exact output of
+/// `EmbargoTimer::adopted(...).judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN)`
+/// today: table survival quantile, tick conversion rounded **up**. It is not a
+/// free-standing timeout and must not be retuned here — change the rate or the
+/// embargo derivation, then update this pin when the test says the seconds
+/// moved. See `DAEMON_RELAY_PRIVACY.md` §17.
+pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 664;
 
 impl EmbargoTimer {
     /// The configuration this crate recommends shipping: exact discrete survival
@@ -635,7 +651,6 @@ impl EmbargoTimer {
         self.table.is_truncated()
     }
 
-    /// Draw an embargo deadline relative to `now`.
     /// How long a sender must wait before a transaction it has still not seen
     /// may be judged to have failed, at a stated false-fail rate of `1 / one_in`.
     ///
@@ -648,7 +663,9 @@ impl EmbargoTimer {
     ///
     /// Provisioned from the shipped table (see
     /// [`DelayTable::survival_quantile_ticks`]) and rounded **up** to whole
-    /// seconds, so the wait never comes in under the stated rate.
+    /// seconds, so the wait never comes in under the stated rate. On the adopted
+    /// timer at [`PROPAGATION_FALSE_FAIL_ONE_IN`] the result is pinned as
+    /// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`].
     ///
     /// # Panics
     ///
@@ -659,6 +676,11 @@ impl EmbargoTimer {
         u32::try_from(ticks.saturating_mul(self.tick_millis).div_ceil(1_000)).unwrap_or(u32::MAX)
     }
 
+    /// Draw an embargo deadline relative to `now`, in monotonic milliseconds.
+    ///
+    /// The draw is the table's tick count times this timer's tick; callers that
+    /// store a whole-second `time_t` should round **up** when converting
+    /// (under-provisioning fluffs early — the privacy-losing direction).
     pub fn deadline<R: RelayRng + ?Sized>(&self, now: Millis, rng: &mut R) -> Millis {
         let ticks = self.table.draw(rng);
         now.saturating_add(ticks.saturating_mul(self.tick_millis))
@@ -916,16 +938,15 @@ mod tests {
     fn propagation_timeout_follows_from_the_shipped_table() {
         let t = EmbargoTimer::adopted(&DandelionParams::inherited());
         let secs = t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
-        println!(
-            "adopted embargo mean {}s -> judge-failed-after {}s (1 in {})",
-            t.mean_secs(),
-            secs,
-            PROPAGATION_FALSE_FAIL_ONE_IN
-        );
 
-        // The point of the deadline is to outlast the backstop it is waiting
-        // for. A bare multiple of the mean does not: the inherited wallet's
-        // 3/2 lands at the ~78th percentile of a memoryless distribution.
+        // Exact pin: the number and the table must not drift apart. A loose
+        // bound would re-admit F-1 (a timing figure that does not follow from
+        // the distribution actually shipped).
+        assert_eq!(
+            secs, ADOPTED_PROPAGATION_TIMEOUT_SECS,
+            "adopted 1-in-{PROPAGATION_FALSE_FAIL_ONE_IN} wait moved: got {secs}s, pin is {ADOPTED_PROPAGATION_TIMEOUT_SECS}s — update the pin only with the derivation"
+        );
+        // Sanity relative to the backstop the deadline is waiting on.
         assert!(
             secs > t.mean_secs(),
             "a 1-in-100 wait must exceed the mean ({secs}s vs {}s)",
