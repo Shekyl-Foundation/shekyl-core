@@ -19,10 +19,15 @@
 //! observes a delay. The randomized timing that *is* the privacy mechanism has
 //! no test at all.
 //!
-//! This crate is the measurement instrument and the corrected primitives. It
-//! is deliberately standalone: it links nothing, replaces nothing, and changes
-//! no daemon behaviour. The design it feeds is
-//! `docs/design/DAEMON_RELAY_PRIVACY.md`, which landed with it.
+//! This crate is the measurement instrument **and** the production primitives
+//! for the daemon relay-privacy rewrite (`docs/design/DAEMON_RELAY_PRIVACY.md`).
+//!
+//! **Boundary as of RP-2a.** Timing/measurement helpers and the feature-gated
+//! conformance suite remain library-side instruments. [`StemMap`] is
+//! production-linked: `shekyl-ffi` exposes it to C++ `net::dandelionpp::connection_map`,
+//! and the daemon's live stem routing executes this map. Epoch/fluff schedule
+//! and embargo cuts are RP-3/RP-4. Do not treat a `stem_map` change as
+//! measurement-only.
 //!
 //! # The findings
 //!
@@ -144,4 +149,4 @@ pub use schedule::{
     DelayFamily, EmbargoTimer, Epoch, EpochScheduler, FluffScheduler, Millis, NoiseCadence,
     PeerDirection, DEFAULT_EMBARGO_TICK_MILLIS,
 };
-pub use stem_map::{ConnectionId, StemMap};
+pub use stem_map::{ConnectionId, StemMap, StemSetChange};

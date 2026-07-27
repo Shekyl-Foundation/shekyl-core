@@ -34,22 +34,36 @@
 #include <utility>
 #include <vector>
 
-#include "span.h"
+#include "dandelionpp_ffi.h"
 
 namespace net
 {
 namespace dandelionpp
 {
     //! Assists with mapping source -> stem and tracking connections for stem.
+    //!
+    //! A moved-from map leaves a null handle; calling methods other than the
+    //! destructor / move-assign on it is undefined at the C++ layer (the FFI
+    //! null-hardens, but callers must not rely on that as a public contract).
     class connection_map
     {
-        // Make sure to update clone method if changing members
-        std::vector<boost::uuids::uuid> out_mapping_; //<! Current outgoing uuid connection at index.
-        std::vector<std::pair<boost::uuids::uuid, std::size_t>> in_mapping_; //<! uuid source to an `out_mapping_` index.
-        std::vector<std::size_t> usage_count_;
+        // RP-2a: the map logic now lives in shekyl-relay-privacy's `StemMap`;
+        // this class is the opaque-handle wrapper `levin_notify` holds until it
+        // ports (RP-3). `handle_` owns the Rust map (freed through the FFI);
+        // `out_mapping_` shadows its ordered stem slots (nils in position) so
+        // begin()/end()/size() keep their iterator ABI. `stem_width_` is the
+        // configured stem count — a hard upper bound on slot span — so shadow
+        // refresh is a single FFI snapshot. See
+        // docs/design/DAEMON_RELAY_PRIVACY.md §16.
+        std::unique_ptr<StemMapHandle, void (*)(StemMapHandle*)> handle_;
+        std::vector<boost::uuids::uuid> out_mapping_; //<! Shadow of the Rust map's ordered slots.
+        std::size_t stem_width_;                      //<! Configured stem count (cap for snapshot).
 
-        // Use clone method to prevent "hidden" copies.
-        connection_map(const connection_map&) = default;
+        //! Re-snapshot `out_mapping_` from the Rust map after a mutation.
+        void refresh_shadow();
+
+        // Use clone method to prevent "hidden" copies; deep-copies the handle.
+        connection_map(const connection_map&);
 
     public:
         using value_type = boost::uuids::uuid;

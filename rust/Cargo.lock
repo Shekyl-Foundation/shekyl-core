@@ -4153,6 +4153,7 @@ dependencies = [
  "shekyl-logging",
  "shekyl-pow-randomx",
  "shekyl-proofs",
+ "shekyl-relay-privacy",
  "shekyl-tx-builder",
  "shekyl-units",
  "tempfile",

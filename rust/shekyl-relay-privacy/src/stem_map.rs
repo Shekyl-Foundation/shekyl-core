@@ -48,6 +48,32 @@ impl ConnectionId {
     }
 }
 
+/// The outcome of [`StemMap::update`] — whether the live stem set changed.
+///
+/// This is a *specific* predicate: a stem slot was dropped/emptied, or the map
+/// grew to fill under-capacity. It is **not** "the connection set differed."
+/// `levin_notify` gates its channel **re-arm** on exactly this signal
+/// (DAEMON_RELAY_PRIVACY.md §16.1), so the distinction is load-bearing, and the
+/// `#[must_use]` makes a dropped re-arm signal a compile-time warning rather
+/// than a silent one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub enum StemSetChange {
+    /// No live stem changed; the caller need not re-point channels.
+    Unchanged,
+    /// The live stem set changed; the caller must re-point channels.
+    Changed,
+}
+
+impl StemSetChange {
+    /// Whether the caller must re-arm downstream channels — the C++
+    /// `connection_map::update` bool, carried faithfully to the FFI boundary.
+    #[must_use]
+    pub fn needs_rearm(self) -> bool {
+        matches!(self, Self::Changed)
+    }
+}
+
 /// Maps transaction sources to stem peers for one Dandelion++ epoch.
 ///
 /// The map is rebuilt from scratch at each epoch boundary (that is the point
@@ -116,14 +142,14 @@ impl StemMap {
     ///
     /// Slots whose peer has gone are emptied and backfilled from peers not
     /// already in use; empty stem slots are filled if candidates remain.
-    /// Returns `true` if the set of live stem peers changed, which is the
-    /// signal the caller uses to decide whether downstream channels need
-    /// re-pointing.
+    /// Returns [`StemSetChange::Changed`] if the set of live stem peers changed,
+    /// which is the signal the caller uses to decide whether downstream channels
+    /// need re-pointing.
     pub fn update<R: RelayRng + ?Sized>(
         &mut self,
         current: Vec<ConnectionId>,
         rng: &mut R,
-    ) -> bool {
+    ) -> StemSetChange {
         // Candidates not already serving as a stem.
         let mut candidates: Vec<ConnectionId> = current;
         candidates.sort_unstable();
@@ -153,7 +179,7 @@ impl StemMap {
 
         if !replaced && self.out.len() == self.usage.len() {
             // Every slot is live and the map is at full width: nothing to do.
-            return false;
+            return StemSetChange::Unchanged;
         }
 
         let existing_outs = self.out.len();
@@ -177,7 +203,25 @@ impl StemMap {
             }
         }
 
-        replaced || existing_outs < self.out.len()
+        if replaced || existing_outs < self.out.len() {
+            StemSetChange::Changed
+        } else {
+            StemSetChange::Unchanged
+        }
+    }
+
+    /// The stem slots in index order, `None` for an emptied slot.
+    ///
+    /// This is the ordering the daemon's noise-channel iteration indexes **by
+    /// position** (`levin_notify` computes `i = id - begin()` and posts to
+    /// `channels[i]`), so the FFI snapshot must preserve it, nils included —
+    /// see DAEMON_RELAY_PRIVACY.md §16.1. Length is the live-or-emptied slot
+    /// count, which can be below [`StemMap::width`] when the map is
+    /// under-filled; it mirrors the C++ `connection_map` iterator span, not
+    /// `size()`.
+    #[must_use]
+    pub fn slots(&self) -> &[Option<ConnectionId>] {
+        &self.out
     }
 
     /// Number of stem slots currently backed by a live peer.
@@ -382,7 +426,11 @@ mod tests {
             .filter(|p| !live.contains(p))
             .copied()
             .collect();
-        assert!(m.update(survivors, &mut rng), "update should report change");
+        assert_eq!(
+            m.update(survivors, &mut rng),
+            StemSetChange::Changed,
+            "update should report change"
+        );
         assert_eq!(m.live_stems(), 2, "slots backfilled from survivors");
         for slot in m.out.iter().flatten() {
             assert!(!live.contains(slot), "a dead peer was reused");
@@ -405,7 +453,7 @@ mod tests {
 
         // Call 1: drop one live stem, offering only the other — no candidate to
         // backfill, so a slot goes empty and stays empty.
-        m.update(vec![live[1]], &mut rng);
+        assert_eq!(m.update(vec![live[1]], &mut rng), StemSetChange::Changed);
         assert_eq!(
             m.live_stems(),
             1,
@@ -414,8 +462,9 @@ mod tests {
 
         // Call 2: the surviving stem stays and a fresh candidate appears. The
         // empty slot must be backfilled — and the change must be reported.
-        assert!(
+        assert_eq!(
             m.update(vec![live[1], spare], &mut rng),
+            StemSetChange::Changed,
             "backfilling a previously-emptied slot is a reportable change"
         );
         assert_eq!(
@@ -430,7 +479,7 @@ mod tests {
         let mut rng = SplitMix64::new(9);
         let peers = ids(5);
         let mut m = StemMap::new(peers.clone(), 2, &mut rng);
-        assert!(!m.update(peers, &mut rng));
+        assert_eq!(m.update(peers, &mut rng), StemSetChange::Unchanged);
     }
 
     #[test]
@@ -441,7 +490,7 @@ mod tests {
         let source = Some(peers[0]);
         assert!(m.stem_for(source, &mut rng).is_some());
 
-        assert!(m.update(Vec::new(), &mut rng));
+        assert_eq!(m.update(Vec::new(), &mut rng), StemSetChange::Changed);
         assert_eq!(m.live_stems(), 0);
         assert_eq!(
             m.stem_for(source, &mut rng),
@@ -468,7 +517,7 @@ mod tests {
         let victim = m.out[0].expect("slot 0 live");
         let survivors: Vec<ConnectionId> =
             peers.iter().filter(|p| **p != victim).copied().collect();
-        m.update(survivors, &mut rng);
+        assert_eq!(m.update(survivors, &mut rng), StemSetChange::Changed);
         for p in &peers {
             let _ = m.stem_for(Some(*p), &mut rng);
         }
@@ -484,11 +533,399 @@ mod tests {
         let mut rng = SplitMix64::new(12);
         let peers = ids(3);
         let mut m = StemMap::new(peers.clone(), 3, &mut rng);
-        m.update(peers, &mut rng);
+        assert_eq!(m.update(peers, &mut rng), StemSetChange::Unchanged);
         let live: Vec<ConnectionId> = m.out.iter().flatten().copied().collect();
         let mut sorted = live.clone();
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), live.len(), "duplicate peer across stem slots");
+    }
+
+    // --- Faithful translations of the C++ `dandelionpp_map` gtests (the
+    // survivor half of RP-2a's acceptance, DAEMON_RELAY_PRIVACY.md §16).
+    //
+    // The C++ suite (`tests/unit_tests/net.cpp`) stays as the migration oracle
+    // through the RP-2a cut and until an explicit retire (here or RP-3). These
+    // Rust cases are full outcome-invariant parity with that oracle so we can
+    // prove the port matches **before** cutting over. Assertions are
+    // RNG-agnostic (membership, counts, pin stability, even load, clone slot
+    // identity) — never exact peer draws.
+    //
+    // `traits` is a C++ STL/move-only ABI test with no Rust analogue
+    // (`StemMap` is `Clone` by design; the C++ wrapper deletes shallow copy).
+
+    fn source_ids(n: u8, tag: u8) -> Vec<ConnectionId> {
+        (0..n)
+            .map(|i| {
+                let mut b = [0u8; 16];
+                b[0] = tag;
+                b[1] = i;
+                ConnectionId::from_bytes(b)
+            })
+            .collect()
+    }
+
+    /// Live stem slots are unique and drawn from `peers`.
+    fn assert_live_slots_subset_of(m: &StemMap, peers: &[ConnectionId]) {
+        let mut seen = Vec::new();
+        for id in m.slots().iter().flatten() {
+            assert!(
+                peers.contains(id),
+                "stem slot {id:?} is not in the peer set"
+            );
+            assert!(
+                !seen.contains(id),
+                "duplicate peer {id:?} across stem slots"
+            );
+            seen.push(*id);
+        }
+        assert_eq!(seen.len(), m.live_stems());
+    }
+
+    fn assert_clone_slots_equal(m: &StemMap) {
+        let cloned = m.clone();
+        assert_eq!(cloned.live_stems(), m.live_stems());
+        assert_eq!(
+            cloned.slots(),
+            m.slots(),
+            "clone must deep-copy slot layout"
+        );
+    }
+
+    /// Per-stem source counts from a pin table (C++ `used[out]++` shape).
+    fn usage_by_stem(
+        mapping: &std::collections::BTreeMap<ConnectionId, ConnectionId>,
+    ) -> std::collections::BTreeMap<ConnectionId, usize> {
+        let mut used = std::collections::BTreeMap::new();
+        for out in mapping.values() {
+            *used.entry(*out).or_insert(0) += 1;
+        }
+        used
+    }
+
+    #[test]
+    fn gtest_empty() {
+        // C++ `dandelionpp_map.empty`: default map has empty span, size 0;
+        // clone matches.
+        let m = StemMap::empty();
+        assert_eq!(m.live_stems(), 0);
+        assert!(m.slots().is_empty());
+        assert_eq!(m.width(), 0);
+        assert_clone_slots_equal(&m);
+    }
+
+    #[test]
+    fn gtest_zero_stems() {
+        // C++ `dandelionpp_map.zero_stems`: stems=0 → empty span, get_stem is
+        // always None, update is a no-op, clone stays empty.
+        let mut rng = SplitMix64::new(0xD0);
+        let peers = ids(6);
+        let mut m = StemMap::new(peers.clone(), 0, &mut rng);
+        assert_eq!(m.live_stems(), 0);
+        assert!(m.slots().is_empty());
+        assert_eq!(m.width(), 0);
+
+        for p in &peers {
+            assert_eq!(m.stem_for(Some(*p), &mut rng), None);
+        }
+
+        assert_eq!(m.update(peers.clone(), &mut rng), StemSetChange::Unchanged);
+        assert_eq!(m.live_stems(), 0);
+        assert!(m.slots().is_empty());
+
+        for p in &peers {
+            assert_eq!(m.stem_for(Some(*p), &mut rng), None);
+        }
+        assert_clone_slots_equal(&m);
+    }
+
+    #[test]
+    fn gtest_dropped_connection() {
+        // C++ `dandelionpp_map.dropped_connection` (net.cpp ~1833–1956):
+        // 6 peers / 3 stems; nine inbound sources at 3-per-stem; drop one stem
+        // and backfill from a spare; pins on the lost stem re-point to the
+        // replacement in that slot; other pins stay; load stays even; clones
+        // match slot layout throughout.
+        let mut rng = SplitMix64::new(0xD1);
+        let mut peers = ids(6);
+        let mut m = StemMap::new(peers.clone(), 3, &mut rng);
+        assert_eq!(m.live_stems(), 3);
+        assert_eq!(m.slots().len(), 3);
+        assert_live_slots_subset_of(&m, &peers);
+        assert_clone_slots_equal(&m);
+
+        assert_eq!(
+            m.update(peers.clone(), &mut rng),
+            StemSetChange::Unchanged,
+            "re-presenting the full set must not re-arm"
+        );
+        assert_eq!(m.live_stems(), 3);
+        assert_live_slots_subset_of(&m, &peers);
+
+        let sources = source_ids(9, 100);
+        let mut mapping = std::collections::BTreeMap::new();
+        let mut inverse: std::collections::BTreeMap<ConnectionId, Vec<ConnectionId>> =
+            std::collections::BTreeMap::new();
+        for s in &sources {
+            let out = m.stem_for(Some(*s), &mut rng).expect("a stem is available");
+            assert!(mapping.insert(*s, out).is_none());
+            inverse.entry(out).or_default().push(*s);
+        }
+        let used = usage_by_stem(&mapping);
+        assert_eq!(used.len(), 3);
+        assert!(
+            used.values().all(|c| *c == 3),
+            "nine sources spread 3-per-stem: {used:?}"
+        );
+        for s in &sources {
+            assert_eq!(m.stem_for(Some(*s), &mut rng), Some(mapping[s]));
+        }
+
+        // Drop the middle stem slot's peer (C++: `*(++mapper.begin())`).
+        let lost = m.slots()[1].expect("slot 1 live");
+        peers.retain(|p| *p != lost);
+        assert_eq!(m.update(peers.clone(), &mut rng), StemSetChange::Changed);
+        assert_eq!(m.live_stems(), 3, "the dropped slot was backfilled");
+        assert_eq!(m.slots().len(), 3);
+        for slot in m.slots().iter().flatten() {
+            assert_ne!(*slot, lost, "the dropped peer was reused");
+        }
+        assert_live_slots_subset_of(&m, &peers);
+
+        // Replacement lands in the same slot index; sources pinned there now
+        // see the new peer without a re-select (C++ updates expected mapping).
+        let newly_mapped = m.slots()[1].expect("slot 1 backfilled");
+        assert_ne!(newly_mapped, lost);
+        if let Some(on_lost) = inverse.get(&lost) {
+            for s in on_lost {
+                mapping.insert(*s, newly_mapped);
+            }
+        }
+
+        assert_clone_slots_equal(&m);
+        assert_live_slots_subset_of(&m, &peers);
+
+        // Pin table and even load hold after the churn.
+        let mut used_after = std::collections::BTreeMap::new();
+        for s in &sources {
+            let out = m
+                .stem_for(Some(*s), &mut rng)
+                .expect("still routable after backfill");
+            assert_eq!(
+                out, mapping[s],
+                "pin must stay stable for unaffected sources and re-point \
+                 only for those on the lost stem"
+            );
+            *used_after.entry(out).or_insert(0) += 1;
+        }
+        assert_eq!(used_after.len(), 3);
+        assert!(
+            used_after.values().all(|c| *c == 3),
+            "post-churn load must stay even: {used_after:?}"
+        );
+        assert_clone_slots_equal(&m);
+    }
+
+    #[test]
+    fn gtest_dropped_connection_remapped() {
+        // C++ `dandelionpp_map.dropped_connection_remapped` (net.cpp ~1958–2095):
+        // 3 peers / 3 stems → drop one (nil hole, no spare) → re-pin 9+1
+        // sources across 2 stems at 5 each → refill hole without moving existing
+        // links → spread 8 more sources to 6-per-stem across 3 stems.
+        let mut rng = SplitMix64::new(0xD2);
+        let mut peers = ids(3);
+        let mut m = StemMap::new(peers.clone(), 3, &mut rng);
+        assert_eq!((m.live_stems(), m.slots().len()), (3, 3));
+        assert_live_slots_subset_of(&m, &peers);
+
+        assert_eq!(m.update(peers.clone(), &mut rng), StemSetChange::Unchanged);
+        assert_eq!(m.live_stems(), 3);
+        assert_live_slots_subset_of(&m, &peers);
+
+        let mut sources = source_ids(9, 110);
+        let mut mapping = std::collections::BTreeMap::new();
+        let mut inverse: std::collections::BTreeMap<ConnectionId, Vec<ConnectionId>> =
+            std::collections::BTreeMap::new();
+        for s in &sources {
+            let out = m.stem_for(Some(*s), &mut rng).expect("a stem is available");
+            assert!(mapping.insert(*s, out).is_none());
+            inverse.entry(out).or_default().push(*s);
+        }
+        let used = usage_by_stem(&mapping);
+        assert_eq!(used.len(), 3);
+        assert!(
+            used.values().all(|c| *c == 3),
+            "initial 3-per-stem: {used:?}"
+        );
+        for s in &sources {
+            assert_eq!(m.stem_for(Some(*s), &mut rng), Some(mapping[s]));
+        }
+
+        // Drop middle stem with no spare → nil hole in place.
+        let lost = m.slots()[1].expect("slot 1 live");
+        peers.retain(|p| *p != lost);
+        assert_eq!(m.update(peers.clone(), &mut rng), StemSetChange::Changed);
+        assert_eq!(m.live_stems(), 2, "one slot is nil, not compacted");
+        assert_eq!(m.slots().len(), 3, "span keeps the nil hole");
+        assert_eq!(m.slots().iter().filter(|s| s.is_none()).count(), 1);
+        if let Some(on_lost) = inverse.get(&lost) {
+            for s in on_lost {
+                // C++ marks these as nil expected until re-pin via get_stem.
+                mapping.remove(s);
+            }
+        }
+
+        // Remap the original 9 plus one new source across the two live stems.
+        let extra = ConnectionId::from_bytes({
+            let mut b = [0u8; 16];
+            b[0] = 110;
+            b[1] = 9;
+            b
+        });
+        sources.push(extra);
+        let mut used_two = std::collections::BTreeMap::new();
+        for s in &sources {
+            let out = m
+                .stem_for(Some(*s), &mut rng)
+                .expect("two live stems remain");
+            match mapping.get(s) {
+                Some(expected) => assert_eq!(
+                    out, *expected,
+                    "unaffected sources must keep their pin after the hole"
+                ),
+                None => {
+                    mapping.insert(*s, out);
+                }
+            }
+            *used_two.entry(out).or_insert(0) += 1;
+        }
+        assert_eq!(used_two.len(), 2);
+        assert!(
+            used_two.values().all(|c| *c == 5),
+            "10 sources across 2 stems at 5 each: {used_two:?}"
+        );
+
+        // Refill the hole with a third peer; existing links must not move.
+        let fresh = ConnectionId::from_bytes([210u8; 16]);
+        peers.push(fresh);
+        assert_eq!(m.update(peers.clone(), &mut rng), StemSetChange::Changed);
+        assert_eq!(m.live_stems(), 3);
+        assert_eq!(m.slots().len(), 3);
+        assert!(m.slots().iter().flatten().any(|s| *s == fresh));
+
+        let mut used_after_refill = std::collections::BTreeMap::new();
+        for s in &sources {
+            let out = m
+                .stem_for(Some(*s), &mut rng)
+                .expect("still routable after refill");
+            assert_eq!(
+                out, mapping[s],
+                "existing links stay put when a third peer fills the hole"
+            );
+            *used_after_refill.entry(out).or_insert(0) += 1;
+        }
+        assert_eq!(
+            used_after_refill.len(),
+            2,
+            "refill must not steal existing pins onto the new stem"
+        );
+        assert!(
+            used_after_refill.values().all(|c| *c == 5),
+            "still 5-per-live-stem until new sources arrive: {used_after_refill:?}"
+        );
+
+        // 8 more inbound sources → 18 total, even across 3 stems (6 each).
+        let more = source_ids(8, 120);
+        sources.extend(more);
+        let mut used_three = std::collections::BTreeMap::new();
+        for s in &sources {
+            let out = m.stem_for(Some(*s), &mut rng).expect("three live stems");
+            match mapping.get(s) {
+                Some(expected) => assert_eq!(out, *expected),
+                None => {
+                    mapping.insert(*s, out);
+                }
+            }
+            *used_three.entry(out).or_insert(0) += 1;
+        }
+        assert_eq!(sources.len(), 18);
+        assert_eq!(used_three.len(), 3);
+        assert!(
+            used_three.values().all(|c| *c == 6),
+            "18 sources across 3 stems at 6 each: {used_three:?}"
+        );
+    }
+
+    #[test]
+    fn gtest_dropped_all_connections() {
+        // C++ `dandelionpp_map.dropped_all_connections` (net.cpp ~2097–2180):
+        // 8 peers / 3 stems; 9 sources at 3-per-stem; drop everything (span
+        // stays, live=0); first 7 sources re-pin to None; refill from a fresh
+        // peer set; all 9 sources re-pin evenly (3-per-stem).
+        let mut rng = SplitMix64::new(0xD3);
+        let peers = ids(8);
+        let mut m = StemMap::new(peers.clone(), 3, &mut rng);
+        assert_eq!(m.live_stems(), 3);
+        assert_eq!(m.slots().len(), 3);
+        assert_live_slots_subset_of(&m, &peers);
+
+        assert_eq!(m.update(peers.clone(), &mut rng), StemSetChange::Unchanged);
+        assert_eq!(m.live_stems(), 3);
+        assert_live_slots_subset_of(&m, &peers);
+
+        let sources = source_ids(9, 130);
+        let mut mapping = std::collections::BTreeMap::new();
+        for s in &sources {
+            let out = m.stem_for(Some(*s), &mut rng).expect("a stem is available");
+            assert!(mapping.insert(*s, out).is_none());
+        }
+        let used = usage_by_stem(&mapping);
+        assert_eq!(used.len(), 3);
+        assert!(
+            used.values().all(|c| *c == 3),
+            "initial 3-per-stem: {used:?}"
+        );
+        for s in &sources {
+            assert_eq!(m.stem_for(Some(*s), &mut rng), Some(mapping[s]));
+        }
+
+        assert_eq!(m.update(Vec::new(), &mut rng), StemSetChange::Changed);
+        assert_eq!(m.live_stems(), 0, "no live stem remains");
+        assert_eq!(m.slots().len(), 3, "the slots are nil, not removed");
+
+        // C++ remaps only the first 7 while empty; the last two stay pinned to
+        // dead slot indices until the refill (then resolve to the new peers in
+        // those slots without a fresh select).
+        for s in sources.iter().take(7) {
+            assert_eq!(
+                m.stem_for(Some(*s), &mut rng),
+                None,
+                "no routable stem must surface as None, not a stale peer"
+            );
+        }
+
+        // Fresh peer set (C++: 30 new uuids); only stem-width matters for the
+        // even-load assertion after re-pin.
+        let refill = ids(30);
+        assert_eq!(m.update(refill.clone(), &mut rng), StemSetChange::Changed);
+        assert_eq!(m.live_stems(), 3);
+        assert_live_slots_subset_of(&m, &refill);
+
+        let mut used_after = std::collections::BTreeMap::new();
+        for s in &sources {
+            let out = m
+                .stem_for(Some(*s), &mut rng)
+                .expect("re-pin after full refill");
+            assert!(
+                refill.contains(&out),
+                "re-pin must land on a post-refill peer"
+            );
+            *used_after.entry(out).or_insert(0) += 1;
+        }
+        assert_eq!(used_after.len(), 3);
+        assert!(
+            used_after.values().all(|c| *c == 3),
+            "9 sources re-pin evenly across 3 new stems: {used_after:?}"
+        );
     }
 }
