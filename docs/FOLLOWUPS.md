@@ -143,6 +143,31 @@ sustainability is unaffected by the recalibration.
   *oscillation* — which would be real harm — is impossible, since
   `revert_archival_segment_freezes` is the only writer deleting segment rows and
   fires only on block pop. **Stage 3 now has NO outstanding hard inputs.**
+- **`prev_block` block templates deleted (RESERVED at the RPC) — reopen has a
+  named implementation** (added 2026-07-27, Stage 3a,
+  `feat/stage3-escalation-shape`). The `from_block` template path let a caller
+  build on a specified parent, which could be an **alt-chain** block — so
+  `m_db->height() != height` there, and **`get_curve_tree_leaf_count()` is
+  current-only** (only the curve *root* is height-indexed, via
+  `get_curve_tree_root_at_height`). That path therefore had **no way to read its
+  own parent's `frozen_segment_count`**, which is the D2 escalation's operand.
+  Inert while the escalation is genesis-neutral (`asymptote ==
+  staker_pool_share`), but the moment the ceremony raises the asymptote it
+  becomes a **mining-liveness bug**: a template priced against the wrong `n`
+  fails its own `validate_miner_transaction` check, so honest miners produce
+  invalid blocks. Deleted under rule 16 (user-absent inversion — pre-genesis, no
+  pool operator requires it; one asked did not know the field). **The RPC keeps
+  the `prev_block` field and refuses it loudly** rather than dropping it: epee
+  ignores unknown fields, so *removing* the field would make a Monero-lineage
+  pool stack that still sends it silently receive a tip-built template — a wrong
+  answer to a precise question, surfacing as an unexplained orphan rate.
+  **Reopen trigger:** a pool operator with a *stated requirement* for
+  `prev_block` templates. **Reopen implementation (decided, do not re-derive):**
+  store a **height-indexed curve leaf count** alongside the existing
+  root-at-height row, so an alt parent can read its own `n`; that carries a
+  **rule-42** obligation (persisted schema). With it, `m_db->height() ==
+  block_height` stops being the only way to prove parent-state and the path can
+  return. Target: post-genesis unless a consumer appears.
 - **~~KEM-ciphertext extra packing mismatch — vout ≥ 1 unscannable in
   production-built transactions~~** **CLOSED 2026-07-25**
   (`fix/kem-extra-packing`): landed exactly per the fix direction below

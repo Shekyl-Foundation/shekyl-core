@@ -1483,10 +1483,10 @@ namespace cryptonote
     return 0;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::get_block_template(const account_public_address &address, const crypto::hash *prev_block, const cryptonote::blobdata &extra_nonce, size_t &reserved_offset, cryptonote::difficulty_type  &difficulty, uint64_t &height, uint64_t &expected_reward, block &b, uint64_t &seed_height, crypto::hash &seed_hash, crypto::hash &next_seed_hash, epee::json_rpc::error &error_resp)
+  bool core_rpc_server::get_block_template(const account_public_address &address, const cryptonote::blobdata &extra_nonce, size_t &reserved_offset, cryptonote::difficulty_type  &difficulty, uint64_t &height, uint64_t &expected_reward, block &b, uint64_t &seed_height, crypto::hash &seed_hash, crypto::hash &next_seed_hash, epee::json_rpc::error &error_resp)
   {
     b = boost::value_initialized<cryptonote::block>();
-    if(!m_core.get_block_template(b, prev_block, address, difficulty, height, expected_reward, extra_nonce, seed_height, seed_hash))
+    if(!m_core.get_block_template(b, address, difficulty, height, expected_reward, extra_nonce, seed_height, seed_hash))
     {
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Internal error: failed to create block template";
@@ -1601,18 +1601,19 @@ namespace cryptonote
     else
       blob_reserve.resize(req.reserve_size, 0);
     cryptonote::difficulty_type wdiff;
-    crypto::hash prev_block;
+    // `prev_block` is RESERVED / NOT SUPPORTED. The field is kept in the request
+    // definition deliberately: epee ignores unknown fields, so REMOVING it would
+    // make a Monero-lineage pool stack that still sends it get a tip-built
+    // template silently -- a wrong answer to a precise question, surfacing later
+    // as an unexplained orphan rate. Refuse loudly instead.
     if (!req.prev_block.empty())
     {
-      if (!epee::string_tools::hex_to_pod(req.prev_block, prev_block))
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-        error_resp.message = "Invalid prev_block";
-        return false;
-      }
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "prev_block templates are not supported; build on the tip";
+      return false;
     }
     crypto::hash seed_hash, next_seed_hash;
-    if (!get_block_template(info.address, req.prev_block.empty() ? NULL : &prev_block, blob_reserve, reserved_offset, wdiff, res.height, res.expected_reward, b, res.seed_height, seed_hash, next_seed_hash, error_resp))
+    if (!get_block_template(info.address, blob_reserve, reserved_offset, wdiff, res.height, res.expected_reward, b, res.seed_height, seed_hash, next_seed_hash, error_resp))
       return false;
     res.seed_hash = string_tools::pod_to_hex(seed_hash);
     if (seed_hash != next_seed_hash)
@@ -1907,6 +1908,14 @@ namespace cryptonote
       return false;
     }
 
+    // RESERVED / NOT SUPPORTED -- refuse rather than silently generate on the
+    // tip, so a caller who asked for a specific parent is told, not guessed at.
+    if (!req.prev_block.empty())
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "prev_block templates are not supported; build on the tip";
+      return false;
+    }
     COMMAND_RPC_GETBLOCKTEMPLATE::request template_req;
     COMMAND_RPC_GETBLOCKTEMPLATE::response template_res;
     COMMAND_RPC_SUBMITBLOCK::request submit_req;
@@ -1914,7 +1923,6 @@ namespace cryptonote
 
     template_req.reserve_size = 1;
     template_req.wallet_address = req.wallet_address;
-    template_req.prev_block = req.prev_block;
     submit_req.push_back(std::string{});
     res.height = m_core.get_blockchain_storage().get_current_blockchain_height();
 
@@ -1922,7 +1930,6 @@ namespace cryptonote
     {
       bool r = on_getblocktemplate(template_req, template_res, error_resp, ctx);
       res.status = template_res.status;
-      template_req.prev_block.clear();
       
       if (!r) return false;
 
@@ -1959,7 +1966,9 @@ namespace cryptonote
       if (!r) return false;
 
       res.blocks.push_back(epee::string_tools::pod_to_hex(get_block_hash(b)));
-      template_req.prev_block = res.blocks.back();
+      // Previously re-pointed the next template at the block just mined. After a
+      // successful on_submitblock the tip IS that block, so tip-building is
+      // equivalent -- and prev_block templates are gone (DRS/Stage-3a).
       res.height = template_res.height;
     }
 

@@ -1777,7 +1777,7 @@ uint64_t Blockchain::get_current_cumulative_block_weight_median() const
 // in a lot of places.  That flag is not referenced in any of the code
 // nor any of the makefiles, howeve.  Need to look into whether or not it's
 // necessary at all.
-bool Blockchain::create_block_template(block& b, const crypto::hash *from_block, const account_public_address& miner_address, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash)
+bool Blockchain::create_block_template(block& b, const account_public_address& miner_address, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   size_t median_weight;
@@ -1789,7 +1789,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
   m_tx_pool.lock();
   const auto unlock_guard = epee::misc_utils::create_scope_leave_handler([&]() { m_tx_pool.unlock(); });
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
-  if (m_btc_valid && !from_block) {
+  if (m_btc_valid) {
     // The pool cookie is atomic. The lack of locking is OK, as if it changes
     // just as we compare it, we'll just use a slightly old template, but
     // this would be the case anyway if we'd lock, and the change happened
@@ -1808,87 +1808,18 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
       seed_hash = m_btc_seed_hash;
       return true;
     }
-    MDEBUG("Not using cached template: address " << (miner_address == m_btc_address) << ", nonce " << (m_btc_nonce == ex_nonce) << ", cookie " << (m_btc_pool_cookie == m_tx_pool.cookie()) << ", from_block " << (!!from_block));
+    MDEBUG("Not using cached template: address " << (miner_address == m_btc_address) << ", nonce " << (m_btc_nonce == ex_nonce) << ", cookie " << (m_btc_pool_cookie == m_tx_pool.cookie()));
     invalidate_block_template_cache();
   }
 
-  if (from_block)
-  {
-    //build alternative subchain, front -> mainchain, back -> alternative head
-    //block is not related with head of main chain
-    //first of all - look in alternative chains container
-    alt_block_data_t prev_data;
-    bool parent_in_alt = m_db->get_alt_block(*from_block, &prev_data, NULL);
-    bool parent_in_main = m_db->block_exists(*from_block);
-    if (!parent_in_alt && !parent_in_main)
-    {
-      MERROR("Unknown from block");
-      return false;
-    }
-
-    //we have new block in alternative chain
-    std::list<block_extended_info> alt_chain;
-    block_verification_context bvc = {};
-    std::vector<uint64_t> timestamps;
-    if (!build_alt_chain(*from_block, alt_chain, timestamps, bvc))
-      return false;
-
-    if (parent_in_main)
-    {
-      cryptonote::block prev_block;
-      CHECK_AND_ASSERT_MES(get_block_by_hash(*from_block, prev_block), false, "From block not found"); // TODO
-      uint64_t from_block_height = cryptonote::get_block_height(prev_block);
-      height = from_block_height + 1;
-      seed_height = shekyl_pow_randomx_v2_seedheight(height);
-      seed_hash = get_block_id_by_height(seed_height);
-    }
-    else
-    {
-      height = alt_chain.back().height + 1;
-      seed_height = shekyl_pow_randomx_v2_seedheight(height);
-
-      if (alt_chain.size() && alt_chain.front().height <= seed_height)
-      {
-        for (auto it=alt_chain.begin(); it != alt_chain.end(); it++)
-        {
-          if (it->height == seed_height+1)
-          {
-            seed_hash = it->bl.prev_id;
-            break;
-          }
-        }
-      }
-      else
-      {
-        seed_hash = get_block_id_by_height(seed_height);
-      }
-    }
-    b.major_version = m_hardfork->get_ideal_version(height);
-    b.minor_version = m_hardfork->get_ideal_version();
-    b.prev_id = *from_block;
-
-    // cheat and use the weight of the block we start from, virtually certain to be acceptable
-    // and use 1.9 times rather than 2 times so we're even more sure
-    if (parent_in_main)
-    {
-      median_weight = m_db->get_block_weight(height - 1);
-      already_generated_coins = m_db->get_block_already_generated_coins(height - 1);
-    }
-    else
-    {
-      median_weight = prev_data.cumulative_weight - prev_data.cumulative_weight / 20;
-      already_generated_coins = alt_chain.back().already_generated_coins;
-    }
-
-    // FIXME: consider moving away from block_extended_info at some point
-    block_extended_info bei = {};
-    bei.bl = b;
-    bei.height = alt_chain.size() ? prev_data.height + 1 : m_db->get_block_height(*from_block) + 1;
-
-    diffic = get_next_difficulty_for_alternative_chain(alt_chain, bei);
-  }
-  else
-  {
+  // DRS/Stage-3a: the from_block (prev_block) template path was DELETED.
+  // It built on a caller-specified parent, which could be an alt-chain block,
+  // so m_db->height() != height there -- and there is no height-indexed curve
+  // leaf count, so that path had no way to read its own parent's
+  // frozen_segment_count for the D2 escalation. Templates now always extend the
+  // tip, which makes m_db->height() == height an assertable precondition on
+  // every surviving path. The RPC refuses prev_block loudly rather than
+  // silently building on the tip. Reopen: see docs/FOLLOWUPS.md.
     height = m_db->height();
     b.major_version = m_hardfork->get_current_version();
     b.minor_version = m_hardfork->get_ideal_version();
@@ -1898,7 +1829,6 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
     already_generated_coins = m_db->get_block_already_generated_coins(height - 1);
     seed_height = shekyl_pow_randomx_v2_seedheight(height);
     seed_hash = get_block_id_by_height(seed_height);
-  }
   b.timestamp = time(NULL);
 
   uint64_t median_ts;
@@ -2028,17 +1958,12 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
       std::memcpy(&b.curve_tree_root, root_bytes.data(), root_bytes.size());
     }
 
-    if (!from_block)
-      cache_block_template(b, miner_address, ex_nonce, diffic, height, expected_reward, seed_height, seed_hash, pool_cookie);
+    // Always cacheable now: every template extends the tip (from_block deleted).
+    cache_block_template(b, miner_address, ex_nonce, diffic, height, expected_reward, seed_height, seed_hash, pool_cookie);
     return true;
   }
   LOG_ERROR("Failed to create_block_template with " << 10 << " tries");
   return false;
-}
-//------------------------------------------------------------------
-bool Blockchain::create_block_template(block& b, const account_public_address& miner_address, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash)
-{
-  return create_block_template(b, NULL, miner_address, diffic, height, expected_reward, ex_nonce, seed_height, seed_hash);
 }
 //------------------------------------------------------------------
 bool Blockchain::get_miner_data(uint8_t& major_version, uint64_t& height, crypto::hash& prev_id, crypto::hash& seed_hash, difficulty_type& difficulty, uint64_t& median_weight, uint64_t& already_generated_coins, std::vector<tx_block_template_backlog_entry>& tx_backlog)
