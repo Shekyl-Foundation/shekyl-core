@@ -29,6 +29,12 @@
   capture-point ceremony
   (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.12).
 
+- **Daemon chain-store design (`DRS-*`) — gap-close (docs only).** SoT
+  [`docs/design/DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)
+  (§0.1 Tier A/B, surface map, P0 envelope, findings A-1…A-6). Implementation
+  PRs (pure-virtual hooks, etc.) go on short-lived branches off `dev`, not
+  direct-to-`dev` design-session edits.
+
 - **Transaction proofs and reserve proofs across the wallet stack**
   (WI-RPC-3; Phase 2c, `feat/wallet-rpc-proofs`). The `shekyl-proofs`
   DLEQ primitives are projected through the Engine

@@ -47,6 +47,38 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Daemon chain store (`DRS-*`) — gap-close pass landed in design.** SoT:
+  [`docs/design/DAEMON_REDB_STORE.md`](./design/DAEMON_REDB_STORE.md).
+  **Tier A success criteria** (mission-ordered: journals, digest, warts,
+  durability, resource bounds, IBD floor, cross-store KAT, CI, surfaces,
+  reconstructible state) make Shekyl better **engine-agnostically**; Tier B
+  is pure-Rust/Path B. **D2-reopen = first-class Tier-A LMDB genesis**, not
+  a scar. DRS-0 blocked on **P0a–P0d** multi-PR envelope. **May start now:**
+  P0a–d, BENCH, C (bandwidth). **Target: V3.0**.
+
+- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI; **P0b**
+  atomicity+journals+RAW + **transcribe** height bases (hook vs block-index),
+  revert partial-order table, write-txn assertions (findings A-2/A-4/A-6);
+  **P0c** FIX-IN-CPP: drain **TreePosition** journal (A-3), dense-seq →
+  range scan (A-5), `hf_versions`; **A-1 pure-virtual hooks** (first P0c
+  PR, branch off `dev` — not applied on design-session `dev`); **P0d**
+  digest v0 — expand archival journals **before** S-ARCH port. S0 preempts
+  wallet priority. **Target: V3.0**.
+
+- **DRS-BENCH — resource/privacy/IBD/pop suite (not throughput).** File
+  growth over multi-year cadence, free-page reclamation under long-lived
+  readers, peak RSS under attacker-shaped input, pop depth wall time, IBD
+  to reference height. **Throughput vs LMDB not measured** (steady-state
+  network-bound). Artifacts in-tree with **durability config recorded**;
+  none exist on `dev` today. Gates DRS-D6. **Target: V3.0** (parallel with
+  wallet 2b).
+
+- **DRS-D3c — cross-store leaf/position KAT.** Daemon vs wallet LeafStore:
+  same fixture chain, output index *N* → identical tree position + 128-byte
+  leaf encoding. Encodings single-sourced (`shekyl-fcmp` / wire); stores
+  deliberately separate (opposed threat models). No shared redb-helpers
+  crate. **Target: V3.0** (with DRS-E3 / curve client).
+
 - **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with
   reopen (d).** The sliding-window m-of-n itself is **BUILT** (PR #368,
   `shekyl-archival-retention/src/failure_window.rs`; `FAILURE_WINDOW_M/N`
