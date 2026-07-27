@@ -40,8 +40,11 @@
 // serialised by the zone strand, so the handle needs no internal lock.
 //
 // A null handle is a safe no-op on every export (clone → null, update/get_stem
-// → false, snapshot/live_stems → 0, free → no-op). Moved-from C++ wrappers
-// still must not be used as a public contract — the hardening is defensive.
+// → false, snapshot/live_stems → 0, free → no-op). A null `source` or `out` on
+// get_stem likewise returns false — local origin is the nil *bytes*, never a
+// null pointer, so a null argument fails closed rather than being routed as a
+// local transaction. Moved-from C++ wrappers still must not be used as a public
+// contract — the hardening is defensive.
 //
 // Rust twins: rust/shekyl-ffi/src/dandelionpp_ffi.rs.
 

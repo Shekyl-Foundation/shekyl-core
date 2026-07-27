@@ -100,24 +100,17 @@ unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
         .collect()
 }
 
-/// Read one 16-byte id, mapping the nil sentinel to `None`.
+/// Interpret 16 source bytes: the nil sentinel means locally originated
+/// (`None`), any other value is a peer id.
 ///
-/// # Safety
-/// `p` must point to 16 readable bytes.
-unsafe fn read_source(p: *const u8) -> Option<ConnectionId> {
-    // A null pointer is a caller bug — the nil *bytes* (all zero) are the
-    // local-origin sentinel, not a null pointer. Catch it in debug; stay
-    // UB-free in release.
-    debug_assert!(!p.is_null(), "read_source: null source pointer");
-    if p.is_null() {
-        return None;
-    }
-    let mut b = [0u8; 16];
-    b.copy_from_slice(slice::from_raw_parts(p, 16));
-    if b == NIL {
+/// Safe by construction — only the nil *bytes* encode local origin, and a null
+/// pointer cannot reach here because the boundary rejects it
+/// (see [`shekyl_dandelionpp_map_get_stem`]).
+fn source_from_bytes(bytes: [u8; 16]) -> Option<ConnectionId> {
+    if bytes == NIL {
         None
     } else {
-        Some(ConnectionId::from_bytes(b))
+        Some(ConnectionId::from_bytes(bytes))
     }
 }
 
@@ -204,12 +197,14 @@ pub unsafe extern "C" fn shekyl_dandelionpp_map_update(
 /// Resolve the stem peer for `source` (16 bytes; nil = locally originated),
 /// writing it into `out` (16 bytes). Returns `true` if a stem was assigned;
 /// on `false` the caller must fluff and `out` is left nil. Mutates the map
-/// (source→slot pinning), as the C++ `get_stem` does. A null `handle` or
-/// null `out` returns `false` (and writes nil into `out` when `out` is non-null).
+/// (source→slot pinning), as the C++ `get_stem` does. A null `handle`, `source`
+/// or `out` returns `false` (writing nil into `out` when `out` is non-null):
+/// local origin is the nil *bytes*, never a null pointer, so a null `source`
+/// fails closed instead of being routed as a local transaction.
 ///
 /// # Safety
-/// `handle` must be null or live; when non-null, `source` and `out` must each
-/// point to 16 bytes (readable / writable respectively) if provided.
+/// `handle` must be null or live; `source` and `out` must each be null or point
+/// to 16 bytes (readable / writable respectively).
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_dandelionpp_map_get_stem(
     handle: *mut StemMapHandle,
@@ -223,9 +218,20 @@ pub unsafe extern "C" fn shekyl_dandelionpp_map_get_stem(
         write_id(out, &NIL);
         return false;
     }
+    // Past here `source` is actually interpreted. It is 16 readable bytes by
+    // contract; only the nil *bytes* encode local origin, never a null pointer.
+    // A null here is a caller bug — fail closed rather than routing it as a
+    // local-origin transaction, which would pin that entry and bump a usage
+    // count (mutating the map on a bug). Caught in debug, safe in release.
+    debug_assert!(!source.is_null(), "map_get_stem: null source pointer");
+    if source.is_null() {
+        write_id(out, &NIL);
+        return false;
+    }
     let h = &mut *handle;
-    let src = read_source(source);
-    match h.map.stem_for(src, &mut h.rng) {
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(slice::from_raw_parts(source, 16));
+    match h.map.stem_for(source_from_bytes(bytes), &mut h.rng) {
         Some(id) => {
             write_id(out, id.as_bytes());
             true
