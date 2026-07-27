@@ -1893,13 +1893,18 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 // §12.9). Its own error space — a separate consensus predicate called
 // alongside the vin verify, not part of it. The numeric codes below are
 // single-sourced from shekyl-archival-retention::admission::codes; the reason
-// STRINGS come separately from admission::admission_code_static_str, surfaced
-// here as shekyl_archival_admission_err_string (codes carries no strings).
+// STRINGS come from admission::admission_code_cstr -- the one table -- surfaced
+// here as shekyl_archival_admission_err_string. `codes` carries no strings, and
+// the FFI holds no second table of its own.
 #define SHEKYL_ARCHIVAL_ADMISSION_OK                            0
 #define SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR                  1
 #define SHEKYL_ARCHIVAL_ADMISSION_ERR_HOLDINGS_KIND             2
 #define SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH           3
 #define SHEKYL_ARCHIVAL_ADMISSION_ERR_BELOW_FLOOR               4
+// Gather columns ragged among THEMSELVES -- distinct from _GATHER_MISMATCH,
+// which compares the gather to the vin. Two different caller bugs, so two
+// codes: sharing one would force a reason string too vague to help either.
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_COLUMNS            5
 
 /// Settlement epoch whose archival_r_market rows are readable as of the parent
 /// block. C++ uses this as the LMDB key; do not re-derive E-1 in the daemon.

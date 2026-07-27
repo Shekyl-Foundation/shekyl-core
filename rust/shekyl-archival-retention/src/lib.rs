@@ -55,9 +55,9 @@ pub mod wire;
 
 pub use admission::codes as admission_codes;
 pub use admission::{
-    admission_code_static_str, check_admission, check_admission_of, credited_work_at_admission,
-    parent_state_shards_from_gather, AdmissionError, AdmissionShard, ParentStateHoldings,
-    ADMISSION_MIN_WORK_MILLI,
+    admission_code_cstr, admission_code_static_str, check_admission, check_admission_of,
+    credited_work_at_admission, parent_state_shards_from_gather, AdmissionError, AdmissionShard,
+    ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
 };
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,

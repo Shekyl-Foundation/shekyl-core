@@ -81,6 +81,8 @@
 //! in a larger position than the holder wants and force a full `Unbond` where
 //! they asked for a partial one. The gate protects reach; it must not tax it.
 
+use core::ffi::CStr;
+
 use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
 use crate::consensus_state::{shard_age_milli, shard_work_micro};
@@ -103,10 +105,17 @@ pub mod codes {
     pub const ERR_NULL_PTR: u8 = 1;
     /// `holdings_kind` is not a valid discriminant (marshal only).
     pub const ERR_HOLDINGS_KIND: u8 = 2;
-    /// Gather length disagrees with itself or with the vin shard count.
+    /// Gather length disagrees with the **vin's** shard count.
     pub const ERR_GATHER_MISMATCH: u8 = 3;
     /// Holding would score zero at every epoch close.
     pub const ERR_BELOW_FLOOR: u8 = 4;
+    /// The gather's own parallel **columns** disagree with each other.
+    ///
+    /// Distinct from [`ERR_GATHER_MISMATCH`] so the daemon log names the actual
+    /// breach: "your columns are ragged" and "your gather does not match the
+    /// vin" are different caller bugs to chase, and a shared code would force a
+    /// reason string vague enough to be useless for either.
+    pub const ERR_GATHER_COLUMNS: u8 = 5;
 }
 
 /// One held shard as seen at the admission read-point.
@@ -220,46 +229,63 @@ impl AdmissionError {
     pub const fn code(self) -> u8 {
         match self {
             Self::BelowViabilityFloor { .. } => codes::ERR_BELOW_FLOOR,
-            Self::GatherLengthMismatch { .. } | Self::GatherColumnLengthMismatch { .. } => {
-                codes::ERR_GATHER_MISMATCH
-            }
+            Self::GatherLengthMismatch { .. } => codes::ERR_GATHER_MISMATCH,
+            Self::GatherColumnLengthMismatch { .. } => codes::ERR_GATHER_COLUMNS,
         }
     }
 
     /// Short static reason for daemon logs (no allocation across the FFI).
+    ///
+    /// Routed through [`Self::code`] into the one string table, so a Rust-side
+    /// log and the C-ABI log for the same verdict are the *same bytes* by
+    /// construction — never two hand-kept wordings that agree until they don't.
     #[must_use]
-    pub const fn as_static_str(self) -> &'static str {
-        match self {
-            Self::BelowViabilityFloor { .. } => {
-                "holdings credit no work at the parent-block read-point \
-                 — this bond would score zero at every epoch close"
-            }
-            Self::GatherLengthMismatch { .. } => {
-                "admission gather length does not match the vin's shard list"
-            }
-            Self::GatherColumnLengthMismatch { .. } => {
-                "admission gather columns disagree with each other \
-                 (r_market / freeze_heights / has_segment)"
-            }
-        }
+    pub fn as_static_str(self) -> &'static str {
+        admission_code_static_str(self.code())
     }
 }
 
 /// Stable reason strings for the full C-ABI code space (including marshal-only
 /// codes that never become an [`AdmissionError`]).
+///
+/// **This is THE table.** It is NUL-terminated so the FFI can hand these
+/// straight to C++ without allocating, and [`admission_code_static_str`] derives
+/// its `&str` from it — so the header's "single-sourced" claim is structural
+/// rather than aspirational. A second hand-written table on the FFI side would
+/// be a mirror keyed on the same code space, free to drift silently the moment a
+/// code is added (which is exactly how `ERR_GATHER_COLUMNS` produced a lying
+/// string on its first outing).
+///
+/// Deliberately ASCII-only: these cross into `MERROR_VER` and end up on consoles
+/// whose encoding we do not control.
 #[must_use]
-pub const fn admission_code_static_str(code: u8) -> &'static str {
+pub const fn admission_code_cstr(code: u8) -> &'static CStr {
     match code {
-        codes::OK => "ok",
-        codes::ERR_NULL_PTR => "null gather pointer with non-zero length",
-        codes::ERR_HOLDINGS_KIND => "invalid holdings_kind",
-        codes::ERR_GATHER_MISMATCH => "admission gather length does not match the vin's shard list",
-        codes::ERR_BELOW_FLOOR => {
-            "holdings credit no work at the parent-block read-point \
-             — this bond would score zero at every epoch close"
+        codes::OK => c"ok",
+        codes::ERR_NULL_PTR => c"null gather pointer with non-zero length",
+        codes::ERR_HOLDINGS_KIND => c"invalid holdings_kind",
+        codes::ERR_GATHER_MISMATCH => {
+            c"admission gather length does not match the vin's shard list"
         }
-        _ => "unknown admission error",
+        codes::ERR_BELOW_FLOOR => {
+            c"holdings credit no work at the parent-block read-point - this bond would score zero at every epoch close"
+        }
+        codes::ERR_GATHER_COLUMNS => {
+            c"admission gather columns disagree with each other (r_market / freeze_heights / has_segment)"
+        }
+        _ => c"unknown admission error",
     }
+}
+
+/// [`admission_code_cstr`] as a Rust `&str`, for logs and tests on this side of
+/// the boundary. Derived, never a second table.
+#[must_use]
+pub fn admission_code_static_str(code: u8) -> &'static str {
+    // Every literal in `admission_code_cstr` is ASCII by construction, so the
+    // UTF-8 validation cannot fail; the fallback keeps this total anyway.
+    admission_code_cstr(code)
+        .to_str()
+        .unwrap_or("unknown admission error")
 }
 
 impl ParentStateHoldings<'_> {
@@ -629,7 +655,13 @@ mod tests {
                 has_segment: 1,
             }
         );
-        assert_eq!(err.code(), codes::ERR_GATHER_MISMATCH);
+        assert_eq!(
+            err.code(),
+            codes::ERR_GATHER_COLUMNS,
+            "ragged columns must not share the vin-mismatch code, or one of the \
+             two reason strings has to lie"
+        );
+        assert!(err.as_static_str().contains("columns"));
     }
 
     /// A whole-corpus holding is admitted without a gather — dominance, and the

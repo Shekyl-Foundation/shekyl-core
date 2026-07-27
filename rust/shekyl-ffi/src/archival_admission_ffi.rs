@@ -9,11 +9,10 @@
 //! viability predicate. Keeping this surface out of `archival_ffi.rs` stops
 //! that file from absorbing every archival concern.
 
-use std::ffi::CStr;
 use std::os::raw::c_char;
 
 use shekyl_archival_retention::{
-    admission_codes, check_admission_of, last_settled_epoch_as_of_parent,
+    admission_code_cstr, admission_codes, check_admission_of, last_settled_epoch_as_of_parent,
     parent_state_shards_from_gather, HoldingsKind, ParentStateHoldings,
 };
 
@@ -29,6 +28,11 @@ pub const SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH: u8 = admission_codes::E
 /// scale cannot pay.
 pub const SHEKYL_ARCHIVAL_ADMISSION_ERR_BELOW_FLOOR: u8 = admission_codes::ERR_BELOW_FLOOR;
 
+/// The gather's own parallel columns disagree with each other. Distinct from
+/// [`SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH`], which compares the gather
+/// to the vin.
+pub const SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_COLUMNS: u8 = admission_codes::ERR_GATHER_COLUMNS;
+
 /// Settlement epoch whose `archival_r_market` rows are readable as of the parent
 /// block. Single-sources the admission gather's LMDB epoch key so C++ never
 /// re-derives `settlement_epoch(parent) − 1`.
@@ -40,21 +44,14 @@ pub extern "C" fn shekyl_archival_last_settled_epoch_as_of_parent(parent_height:
 /// Static reason string for an admission C-ABI code (including marshal-only
 /// failures). Never null; unknown codes return a fixed sentinel. NUL-terminated
 /// for C++ `MERROR_VER` — do not free.
+///
+/// Delegates to `admission::admission_code_cstr`, which is **the** table. A
+/// second match arm here would be a mirror keyed on the same code space, free to
+/// drift the moment a code is added — which is how `ERR_GATHER_COLUMNS` first
+/// shipped describing itself as a vin-length mismatch.
 #[no_mangle]
 pub extern "C" fn shekyl_archival_admission_err_string(code: u8) -> *const c_char {
-    let s: &'static CStr = match code {
-        SHEKYL_ARCHIVAL_ADMISSION_OK => c"ok",
-        SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR => c"null gather pointer with non-zero length",
-        SHEKYL_ARCHIVAL_ADMISSION_ERR_HOLDINGS_KIND => c"invalid holdings_kind",
-        SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH => {
-            c"admission gather length does not match the vin's shard list"
-        }
-        SHEKYL_ARCHIVAL_ADMISSION_ERR_BELOW_FLOOR => {
-            c"holdings credit no work at the parent-block read-point - this bond would score zero at every epoch close"
-        }
-        _ => c"unknown admission error",
-    };
-    s.as_ptr()
+    admission_code_cstr(code).as_ptr()
 }
 
 /// D3/R3 admission gate: refuse a bond whose holdings credit no work.
@@ -228,7 +225,7 @@ mod tests {
                     0,
                 )
             },
-            SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH,
+            SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_COLUMNS,
             "parallel gather arrays of different lengths"
         );
         assert_eq!(
@@ -305,6 +302,34 @@ mod tests {
             !mismatch_s.contains("score zero"),
             "gather mismatch must not claim zero-work: {mismatch_s}"
         );
+
+        // Ragged columns and vin-mismatch are different caller bugs, so they
+        // must not share a reason string. This is the regression that made the
+        // shared-code arrangement untenable: one string had to lie.
+        let columns = unsafe {
+            CStr::from_ptr(shekyl_archival_admission_err_string(
+                SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_COLUMNS,
+            ))
+        };
+        let columns_s = columns.to_str().unwrap();
+        assert_ne!(columns_s, mismatch_s);
+        assert!(
+            columns_s.contains("columns"),
+            "column mismatch must say so: {columns_s}"
+        );
+        assert!(
+            mismatch_s.contains("vin"),
+            "vin mismatch must say so: {mismatch_s}"
+        );
+
+        // Every reason string is ASCII: these land in MERROR_VER on consoles
+        // whose encoding we do not control.
+        for code in 0u8..=6 {
+            let s = unsafe { CStr::from_ptr(shekyl_archival_admission_err_string(code)) }
+                .to_str()
+                .expect("reason strings are valid UTF-8");
+            assert!(s.is_ascii(), "code {code} reason is not ASCII: {s}");
+        }
         assert!(mismatch_s.contains("gather"), "{mismatch_s}");
     }
 }
