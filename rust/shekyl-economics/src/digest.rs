@@ -54,11 +54,12 @@
 //! staker/burn split, so a digest that omitted them would let two nodes agree on
 //! a stale calibration stamp while computing different splits.
 //!
-//! The preimage is exactly **81 bytes**, hashed with `Blake2b<U32>`:
+//! The preimage is exactly **97 bytes** (`1` version tag + `12 × 8` u64
+//! fields), hashed with `Blake2b<U32>`:
 //!
 //! | Offset | Width | Field                              | Notes               |
 //! |--------|-------|------------------------------------|---------------------|
-//! | 0      | 1     | format version tag                 | `0x01`              |
+//! | 0      | 1     | format version tag                 | `0x02`              |
 //! | 1      | 8     | `release_min`                      | u64 LE              |
 //! | 9      | 8     | `release_max`                      | u64 LE              |
 //! | 17     | 8     | `tx_volume_baseline`               | u64 LE              |
@@ -89,8 +90,16 @@ use crate::params::EconomicParams;
 pub const DIGEST_FORMAT_VERSION: u8 = 0x02;
 
 /// Length in bytes of the canonical digest preimage (`1` version tag +
-/// `10 × 8` u64 fields). Exposed for the round-trip test's
+/// `12 × 8` u64 fields = **97**). Exposed for the round-trip test's
 /// fixed-buffer assertion.
+///
+/// **Kept honest by `preimage_length_matches_the_documented_layout`**, which
+/// pins the literal so a field addition that changes this value fails a test
+/// telling the author to update the byte-layout table in the module docs. In a
+/// consensus digest spec, doc-vs-code drift is load-bearing: an implementer
+/// building a second node from a stale table computes a different digest than
+/// the running network, which is the exact failure the version tag exists to
+/// prevent.
 pub const DIGEST_PREIMAGE_LEN: usize = 1 + 12 * 8;
 
 /// Serialize `params` to the canonical fixed-width little-endian
@@ -189,5 +198,52 @@ mod tests {
         hasher.update(preimage);
         let expected: [u8; 32] = hasher.finalize().into();
         assert_eq!(params_digest(&p), expected);
+    }
+    /// **The byte-layout table in the module docs is part of the consensus
+    /// contract, so it gets a test.**
+    ///
+    /// F-DIGEST (PR #373 review): the `0x01` → `0x02` bump updated the version
+    /// constant and appended two table rows but left the header's byte count and
+    /// the table's version cell stale — three numbers disagreeing in the spec for
+    /// a consensus digest. The code was right and the fixture regen proved it,
+    /// but an implementer building a second node from the stale table would have
+    /// computed a different digest than the running network. That is precisely
+    /// the failure the version tag exists to prevent, arriving through the
+    /// documentation instead of the code.
+    ///
+    /// Pinning the literal converts that silent drift into a failing test whose
+    /// message names the obligation: change the layout, update the table.
+    #[test]
+    fn preimage_length_matches_the_documented_layout() {
+        const DOCUMENTED_FIELDS: usize = 12;
+        const DOCUMENTED_LEN: usize = 97;
+
+        assert_eq!(
+            DIGEST_PREIMAGE_LEN, DOCUMENTED_LEN,
+            "preimage length changed — update the byte-layout table in the module \
+             docs (header byte count, the version cell, and the offset rows), then \
+             this literal, and bump DIGEST_FORMAT_VERSION"
+        );
+        assert_eq!(
+            DIGEST_PREIMAGE_LEN,
+            1 + DOCUMENTED_FIELDS * 8,
+            "the documented field count no longer explains the preimage length"
+        );
+
+        // The last documented offset plus its width must land exactly on the end.
+        const LAST_FIELD_OFFSET: usize = 89; // escalation_asymptote_share
+        assert_eq!(
+            LAST_FIELD_OFFSET + 8,
+            DIGEST_PREIMAGE_LEN,
+            "the table's final row does not end at the preimage boundary"
+        );
+
+        // And the tag the table advertises is the one actually written.
+        let buf = canonical_preimage(&EconomicParams::default());
+        assert_eq!(buf.len(), DOCUMENTED_LEN);
+        assert_eq!(
+            buf[0], 0x02,
+            "the byte-layout table advertises 0x02; the encoder must write it"
+        );
     }
 }
