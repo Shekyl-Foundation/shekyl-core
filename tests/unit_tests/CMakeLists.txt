@@ -122,6 +122,7 @@ set(unit_tests_sources
   economics_b5_fee_coinbase.cpp
   tx_data_pruning_lmdb.cpp
   txpool_ref_age.cpp
+  txpool_relay_timers.cpp
   pending_tree_fuzz.cpp
   )
 

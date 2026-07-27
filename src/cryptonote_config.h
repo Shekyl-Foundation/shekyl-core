@@ -110,7 +110,16 @@
 #define CRYPTONOTE_DANDELIONPP_MIN_EPOCH         10 // minutes
 #define CRYPTONOTE_DANDELIONPP_EPOCH_RANGE       30 // seconds
 #define CRYPTONOTE_DANDELIONPP_FLUSH_AVERAGE      5 // seconds average for poisson distributed fluff flush
-#define CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE   39 // seconds (see tx_pool.cpp for more info)
+// The stem embargo is NOT a constant here any more, and must not become one
+// again. The inherited `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE = 39` did not
+// follow from the derivation printed beside it (the formula it cited gives
+// 16.61 s; 39 s reproduces only if you read log10 for ln), and it was drawn
+// from a Poisson under a derivation assuming exponential survival, so the
+// backstop it exists to provide never fired. Both the value (now 144 s) and the
+// distribution come from shekyl-relay-privacy's `EmbargoTimer` via
+// src/shekyl/shekyl_ffi.h, where the number and its
+// derivation live in the same place and are pinned by tests.
+// Derivation and guard: docs/design/DAEMON_RELAY_PRIVACY.md sec 17.
 
 // see src/cryptonote_protocol/levin_notify.cpp
 #define CRYPTONOTE_NOISE_MIN_EPOCH                      5      // minutes

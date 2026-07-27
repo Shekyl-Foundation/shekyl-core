@@ -29,6 +29,7 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include <algorithm>
+#include <chrono>
 #include <boost/filesystem.hpp>
 #include <unordered_set>
 #include <vector>
@@ -63,28 +64,17 @@ namespace cryptonote
 {
   namespace
   {
-    /*! The Dandelion++ has formula for calculating the average embargo timeout:
-                          (-k*(k-1)*hop)/(2*log(1-ep))
-        where k is the number of hops before this node and ep is the probability
-        that one of the k hops hits their embargo timer, and hop is the average
-        time taken between hops. So decreasing ep will make it more probable
-        that "this" node is the first to expire the embargo timer. Increasing k
-        will increase the number of nodes that will be "hidden" as a prior
-        recipient of the tx.
-
-        As example, k=5 and ep=0.1 means "this" embargo timer has a 90%
-        probability of being the first to expire amongst 5 nodes that saw the
-        tx before "this" one. These values are independent to the fluff
-        probability, but setting a low k with a low p (fluff probability) is
-        not ideal since a blackhole is more likely to reveal earlier nodes in
-        the chain.
-
-        This value was calculated with k=5, ep=0.10, and hop = 175 ms. A
-        testrun from a recent Intel laptop took ~80ms to
-        receive+parse+proces+send transaction. At least 50ms will be added to
-        the latency if crossing an ocean. So 175ms is the fudge factor for
-        a single hop with 39s being the embargo timer. */
-    constexpr const std::chrono::seconds dandelionpp_embargo_average{CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE};
+    /* The stem embargo — its value and its distribution — lives in
+       shekyl-relay-privacy's `EmbargoTimer`, reached through
+       `shekyl/shekyl_ffi.h`. The prose derivation that used to stand here
+       is gone with the constant it justified: it printed a formula
+       (-k*(k-1)*hop)/(2*log(1-ep)) that, over its own stated k=5, ep=0.10 and
+       hop=175ms, yields 16.61s rather than the 39s it claimed, and the draw
+       beside it was a Poisson under a derivation assuming exponential survival,
+       so the backstop never fired. The corrected mean is 144s, memoryless,
+       solved exactly against the survival target rather than through a closed
+       form that substituted E[K] into an expression in K(K-1).
+       See docs/design/DAEMON_RELAY_PRIVACY.md sec 17 (and sec 5 for the solve). */
 
     //TODO: constants such as these should at least be in the header,
     //      but probably somewhere more accessible to the rest of the
@@ -128,6 +118,20 @@ namespace cryptonote
       if (std::holds_alternative<txin_to_key>(in))
         return &std::get<txin_to_key>(in).k_image;
       return nullptr;
+    }
+  }
+
+  namespace detail
+  {
+    std::time_t embargo_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs)
+    {
+      // Cast: the FFI returns uint64_t; seconds::rep is signed, so list-init
+      // would be a narrowing conversion on some standard libraries.
+      const auto delay = std::chrono::seconds{static_cast<std::chrono::seconds::rep>(draw_secs)};
+      // ceil, not to_time_t's truncation — the header explains why the direction
+      // is a privacy decision rather than a formatting one.
+      return std::chrono::system_clock::to_time_t(
+        std::chrono::ceil<std::chrono::seconds>(now + delay));
     }
   }
   //---------------------------------------------------------------------------------
@@ -1028,7 +1032,6 @@ namespace cryptonote
   {
     just_broadcasted.clear();
 
-    crypto::random_poisson_seconds embargo_duration{dandelionpp_embargo_average};
     const auto now = std::chrono::system_clock::now();
     uint64_t next_relay = uint64_t{std::numeric_limits<time_t>::max()};
 
@@ -1050,7 +1053,8 @@ namespace cryptonote
 
           if (meta.dandelionpp_stem)
           {
-            meta.last_relayed_time = std::chrono::system_clock::to_time_t(now + embargo_duration());
+            meta.last_relayed_time =
+              detail::embargo_deadline(now, shekyl_dandelionpp_embargo_draw_seconds());
             next_relay = std::min(next_relay, meta.last_relayed_time);
           }
           else
