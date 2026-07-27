@@ -3465,7 +3465,21 @@ whether 3a lands cleanly with the snapshot seam intact.
 2. The corrected fluff delay is the crate's (`FluffScheduler`), and the C++
    `random_poisson_subseconds` draw is deleted — F-4/F-5 closed, with the
    derivation guarded at its sites per the STEMS=2 precedent.
-3. **The timing correction carries its own oracle.** The gtests are silent on
+3. **The timing correction carries its own oracle, and "wired" is not
+   "witnessed".** F-4/F-5 are not closed when the corrected draw is wired —
+   they are closed when a test witnesses that the *wired* draw is the corrected
+   distribution. The gap is not hypothetical: `FluffScheduler::inherited()`
+   constructs with `DelayFamily::Poisson` (the F-4 defect) and
+   `FluffScheduler::memoryless()` with `Geometric`, at the same means. A stale
+   wire is **one identifier**, and it compiles, fluffs, and passes all 33
+   routing gtests — which are blind to timing — plus any "does it fluff" test,
+   which is blind to distribution. So the fluff increment's acceptance is a
+   **distribution assertion**: the family the zone actually draws from is
+   `Geometric` and explicitly not `Poisson`, the inbound/outbound means match
+   the configured averages with the outbound halved, and a seeded deadline
+   sequence is pinned so *any* rewire of the draw fails the test. Armed trigger,
+   not documentation — this is the one gain the routing oracle cannot see, and
+   it is the gain the `lib.rs` seal was broken to obtain. The gtests are silent on
    delays by construction, so they cannot witness F-4/F-5 — deliberately, and
    that is what makes them a clean routing oracle across a mixed
    port-plus-correction: they cover exactly the axis that must not change and say
