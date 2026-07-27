@@ -52,6 +52,8 @@
 //! the force-step hooks stay honest and how this crate's own tests avoid
 //! wall-clock dependence.
 
+pub mod driver;
 pub mod zone;
 
-pub use zone::{PeerFluff, Zone};
+pub use driver::{Driver, Effect};
+pub use zone::{PeerFluff, RelayPlan, Zone};
