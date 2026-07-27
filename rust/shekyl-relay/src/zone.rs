@@ -50,6 +50,18 @@ impl PeerFluff {
     }
 }
 
+/// What the relay path should do with a batch of transactions.
+///
+/// The zone decides; the caller performs. Framing and the socket stay C++,
+/// so this returns a destination rather than sending to one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayPlan {
+    /// Forward to this stem successor.
+    Stem(ConnectionId),
+    /// Fluff: batch to every peer but the source.
+    Fluff,
+}
+
 /// One relay zone's owned state.
 ///
 /// Single-owner by construction: every field is private and reachable only
@@ -180,7 +192,41 @@ impl Zone {
         self.map.stem_for(source, rng)
     }
 
-    /// Accept transaction blobs for fluffing to every peer except `source`.
+    /// Decide whether a batch stems or fluffs, and to whom.
+    ///
+    /// Ports `dandelionpp_notify`. Two properties the inherited condition
+    /// `if (!zone_->fluffing || tx_relay == relay_method::local)` encodes, both
+    /// preserved deliberately:
+    ///
+    /// 1. During a **stem epoch** everything stems (subject to a routable slot).
+    /// 2. **The origin always stems** — a locally originated transaction stems
+    ///    *even during a fluff epoch*. This is RD-4, and it is the reason the
+    ///    adopted embargo is 144 s rather than the 31 s an origin-may-fluff
+    ///    model gives (§10.5). Reading `|| local` cold, it looks like a
+    ///    redundant clause on a fluff check; deleting it silently reverts a
+    ///    correction four rounds old, so
+    ///    `a_local_tx_stems_during_a_fluff_epoch_rd4` asserts the stem-vs-fluff
+    ///    axis the reversion would show on — not merely that the batch went
+    ///    somewhere.
+    ///
+    /// Falling back to [`RelayPlan::Fluff`] when no slot is routable mirrors the
+    /// inherited retry-then-fluff: the caller may re-offer connections and ask
+    /// again before accepting the fallback.
+    pub fn plan_relay<R: RelayRng + ?Sized>(
+        &mut self,
+        source: Option<ConnectionId>,
+        local_origin: bool,
+        rng: &mut R,
+    ) -> RelayPlan {
+        if !self.fluffing || local_origin {
+            if let Some(destination) = self.map.stem_for(source, rng) {
+                return RelayPlan::Stem(destination);
+            }
+        }
+        RelayPlan::Fluff
+    }
+
+    /// Accept transaction blobs for fluffing to every peer except `source`.    /// Accept transaction blobs for fluffing to every peer except `source`.
     ///
     /// Mirrors `fluff_notify`: each peer that has no batch in flight draws a
     /// fresh flush deadline; peers already batching keep theirs, so a burst
@@ -544,6 +590,89 @@ mod tests {
             released,
             vec![(id(1), vec![vec![9]])],
             "force releases regardless of deadline"
+        );
+    }
+
+    /// A zone whose epoch role is known, found by seed search rather than by a
+    /// test-only setter — the role must come from the same draw production
+    /// uses, or the fixture would not exercise the real path.
+    fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Zone {
+        for _ in 0..10_000 {
+            let z = Zone::new(DandelionParams::inherited(), 2, 0, rng);
+            if z.is_fluffing() == fluffing {
+                return z;
+            }
+        }
+        panic!("no epoch with fluffing={fluffing} in 10k draws");
+    }
+
+    #[test]
+    fn a_local_tx_stems_during_a_fluff_epoch_rd4() {
+        // RD-4, and the test is shaped against the REVERSION, not the feature.
+        // The inherited condition is `!fluffing || local`. Delete `|| local` —
+        // which reads like a redundant clause on a fluff check — and a local
+        // transaction fluffs instead of stemming, silently reverting the
+        // correction that makes the adopted embargo 144 s instead of 31 s.
+        //
+        // So this asserts the stem-vs-fluff axis the reversion shows on. A test
+        // that merely checked "the batch went somewhere" would pass on both
+        // wirings: it goes somewhere either way. That is the mean-check trap in
+        // the routing domain.
+        let mut rng = SplitMix64::new(30);
+        let mut z = zone_with_role(true, &mut rng);
+        assert!(z.is_fluffing(), "fixture must be in a fluff epoch");
+        let _ = z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+
+        assert!(
+            matches!(z.plan_relay(None, true, &mut rng), RelayPlan::Stem(_)),
+            "RD-4: the origin stems even during a fluff epoch — if this fails, \
+             check whether the `local_origin` arm was removed as redundant"
+        );
+    }
+
+    #[test]
+    fn a_relayed_tx_fluffs_during_a_fluff_epoch() {
+        // The other half of the discriminator. Without this, the RD-4 test
+        // above could pass on a zone that stems *everything* — which would also
+        // be wrong, and in the other direction.
+        let mut rng = SplitMix64::new(31);
+        let mut z = zone_with_role(true, &mut rng);
+        let _ = z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+
+        assert_eq!(
+            z.plan_relay(Some(id(7)), false, &mut rng),
+            RelayPlan::Fluff,
+            "a relayed tx must fluff during a fluff epoch"
+        );
+    }
+
+    #[test]
+    fn everything_stems_during_a_stem_epoch() {
+        let mut rng = SplitMix64::new(32);
+        let mut z = zone_with_role(false, &mut rng);
+        let _ = z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+
+        assert!(matches!(
+            z.plan_relay(Some(id(7)), false, &mut rng),
+            RelayPlan::Stem(_)
+        ));
+        assert!(matches!(
+            z.plan_relay(None, true, &mut rng),
+            RelayPlan::Stem(_)
+        ));
+    }
+
+    #[test]
+    fn no_routable_slot_falls_back_to_fluff() {
+        // Mirrors the inherited retry-then-fluff: with no stem successor there
+        // is nothing to forward to, and holding the transaction would be worse
+        // than fluffing it.
+        let mut rng = SplitMix64::new(33);
+        let mut z = zone_with_role(false, &mut rng);
+        assert_eq!(
+            z.plan_relay(None, true, &mut rng),
+            RelayPlan::Fluff,
+            "no stem slots exist yet, so even a stem epoch must fall back"
         );
     }
 
