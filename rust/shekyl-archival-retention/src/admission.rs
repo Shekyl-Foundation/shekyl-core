@@ -81,8 +81,10 @@
 //! in a larger position than the holder wants and force a full `Unbond` where
 //! they asked for a partial one. The gate protects reach; it must not tax it.
 
+use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
-use crate::consensus_state::shard_work_micro;
+use crate::consensus_state::{shard_age_milli, shard_work_micro};
+use crate::constants::effective_settlement_epoch_blocks;
 use crate::reward_arithmetic::work_milli_from_micro;
 
 /// Consensus admission threshold, **milli**. One milli is the smallest
@@ -90,6 +92,22 @@ use crate::reward_arithmetic::work_milli_from_micro;
 /// prize — at ≈ 0. Raising this in consensus is the one edit that grows the prize
 /// from nil to small; put headroom in the wallet instead (module docs).
 pub const ADMISSION_MIN_WORK_MILLI: u64 = 1;
+
+/// Wire / FFI codes for [`AdmissionError`] and marshal failures the C ABI maps
+/// separately. Kept in one place so the header, the Rust FFI, and the daemon
+/// log string cannot drift.
+pub mod codes {
+    /// Holding credits at least [`super::ADMISSION_MIN_WORK_MILLI`].
+    pub const OK: u8 = 0;
+    /// A gather array pointer was null with a non-zero length (marshal only).
+    pub const ERR_NULL_PTR: u8 = 1;
+    /// `holdings_kind` is not a valid discriminant (marshal only).
+    pub const ERR_HOLDINGS_KIND: u8 = 2;
+    /// Gather length disagrees with itself or with the vin shard count.
+    pub const ERR_GATHER_MISMATCH: u8 = 3;
+    /// Holding would score zero at every epoch close.
+    pub const ERR_BELOW_FLOOR: u8 = 4;
+}
 
 /// One held shard as seen at the admission read-point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +193,87 @@ pub enum AdmissionError {
         /// Entries supplied in the parent-state gather.
         gathered: usize,
     },
+}
+
+impl AdmissionError {
+    /// Stable C-ABI / log code for this verdict ([`codes`]).
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::BelowViabilityFloor { .. } => codes::ERR_BELOW_FLOOR,
+            Self::GatherLengthMismatch { .. } => codes::ERR_GATHER_MISMATCH,
+        }
+    }
+
+    /// Short static reason for daemon logs (no allocation across the FFI).
+    #[must_use]
+    pub const fn as_static_str(self) -> &'static str {
+        match self {
+            Self::BelowViabilityFloor { .. } => {
+                "holdings credit no work at the parent-block read-point \
+                 — this bond would score zero at every epoch close"
+            }
+            Self::GatherLengthMismatch { .. } => {
+                "admission gather length does not match the vin's shard list"
+            }
+        }
+    }
+}
+
+/// Stable reason strings for the full C-ABI code space (including marshal-only
+/// codes that never become an [`AdmissionError`]).
+#[must_use]
+pub const fn admission_code_static_str(code: u8) -> &'static str {
+    match code {
+        codes::OK => "ok",
+        codes::ERR_NULL_PTR => "null gather pointer with non-zero length",
+        codes::ERR_HOLDINGS_KIND => "invalid holdings_kind",
+        codes::ERR_GATHER_MISMATCH => "admission gather length does not match the vin's shard list",
+        codes::ERR_BELOW_FLOOR => {
+            "holdings credit no work at the parent-block read-point \
+             — this bond would score zero at every epoch close"
+        }
+        _ => "unknown admission error",
+    }
+}
+
+impl ParentStateHoldings<'_> {
+    /// Production constructor: age weight is the compiled consensus constant.
+    #[must_use]
+    pub fn with_consensus_age_weight(shards: &[AdmissionShard]) -> ParentStateHoldings<'_> {
+        ParentStateHoldings {
+            shards,
+            age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+        }
+    }
+}
+
+/// Build the per-shard parent-state gather from raw LMDB columns.
+///
+/// C++ owns the I/O; this owns the **age derivation** (parent height + freeze
+/// height + SEB schedule) so the daemon cannot re-implement `shard_age_milli`
+/// or pass a tip-dated age by accident at this layer. Parallel-array length
+/// disagreement is a gather mismatch.
+pub fn parent_state_shards_from_gather(
+    r_market: &[u64],
+    freeze_heights: &[u64],
+    parent_height: u64,
+) -> Result<Vec<AdmissionShard>, AdmissionError> {
+    if r_market.len() != freeze_heights.len() {
+        return Err(AdmissionError::GatherLengthMismatch {
+            vin_shards: r_market.len().max(freeze_heights.len()),
+            gathered: r_market.len().min(freeze_heights.len()),
+        });
+    }
+    let seb = effective_settlement_epoch_blocks();
+    Ok(r_market
+        .iter()
+        .zip(freeze_heights.iter())
+        .map(|(&r_market, &freeze_height)| AdmissionShard {
+            r_market,
+            age_milli: shard_age_milli(parent_height, freeze_height, seb),
+        })
+        .collect())
 }
 
 /// Credited work (milli) a holding would score at the read-point.
@@ -452,5 +551,24 @@ mod tests {
                 gathered: 2
             })
         ));
+    }
+
+    /// Age derivation lives in the gather builder so C++ cannot re-implement
+    /// `shard_age_milli` or tip-date the age at this layer.
+    #[test]
+    fn parent_state_shards_from_gather_derives_age_and_rejects_parallel_mismatch() {
+        let r = [0u64, 1];
+        let freeze = [0u64, 0];
+        let shards = parent_state_shards_from_gather(&r, &freeze, 0).expect("parallel");
+        assert_eq!(shards.len(), 2);
+        assert_eq!(shards[0].age_milli, 0);
+        assert!(matches!(
+            parent_state_shards_from_gather(&[1], &[0, 0], 0),
+            Err(AdmissionError::GatherLengthMismatch { .. })
+        ));
+        assert_eq!(
+            AdmissionError::BelowViabilityFloor { credited_milli: 0 }.code(),
+            codes::ERR_BELOW_FLOOR
+        );
     }
 }

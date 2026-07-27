@@ -105,10 +105,6 @@ fn build_gate4_document() -> Value {
             },
             "per_p_work_milli": [4000, 0, 12000],
             "market_mask": [true, false, false],
-            "curve": {
-                "plateau_work_milli": 16000,
-                "plateau_value_milli": 8000
-            },
             "serve_credit_rows": [
                 {
                     "p_id_hex": "01",

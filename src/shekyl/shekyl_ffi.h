@@ -1890,34 +1890,30 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
     uint8_t record_exists);
 
 // D3/R3 admission viability gate (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
-// §12.9). Its own error space — this is a separate consensus predicate called
-// alongside the vin verify, not part of it.
+// §12.9). Its own error space — a separate consensus predicate called
+// alongside the vin verify, not part of it. Codes and reason strings are
+// single-sourced from shekyl-archival-retention::admission::codes.
 #define SHEKYL_ARCHIVAL_ADMISSION_OK                            0
 #define SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR                  1
 #define SHEKYL_ARCHIVAL_ADMISSION_ERR_HOLDINGS_KIND             2
 #define SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH           3
 #define SHEKYL_ARCHIVAL_ADMISSION_ERR_BELOW_FLOOR               4
 
+/// Settlement epoch whose archival_r_market rows are readable as of the parent
+/// block. C++ uses this as the LMDB key; do not re-derive E-1 in the daemon.
+uint64_t shekyl_archival_last_settled_epoch_as_of_parent(uint64_t parent_height);
+
+/// NUL-terminated static reason for an admission code (do not free). Distinguishes
+/// marshal failures from the below-floor verdict.
+const char* shekyl_archival_admission_err_string(uint8_t code);
+
 /// Refuse a bond whose holdings credit no work: admission runs the SAME chain
-/// that pays (shard_work_micro -> work_milli_from_micro), so a bond can never be
-/// admitted into a position the frozen work scale cannot pay.
+/// that pays (shard_work_micro -> work_milli_from_micro).
 ///
-/// r_market_* is the per-shard archival_r_market row for the LAST SETTLED
-/// settlement epoch; freeze_height_* the per-shard segment freeze height. Both
-/// are parallel to the vin's shard list. A shard with no row marshals as 0 —
-/// correct and load-bearing: Rust scores the applicant as joining the market
-/// (r_market + 1), so a never-yet-served shard reads as maximal scarcity rather
-/// than as a zero. Without that term the first archiver on a rare shard would be
-/// refused, and no bond would be admissible at all before the first epoch close.
-///
-/// parent_height MUST be chain_height - 1. chain_height at the dispatch is
-/// m_db->height(), the height of the block BEING VALIDATED; passing it here
-/// would date the age term one block into the future and let the block under
-/// validation move its own verdict. This is the one place the parent-state
-/// read-point can be violated silently — no Rust test can catch it.
-///
-/// CompleteTree holdings are decided without a gather (dominance: they hold a
-/// superset of every compact holding). Pass vin_shard_count = 0 and NULL arrays.
+/// r_market_* / freeze_height_* are parallel to the vin's shard list; key
+/// r_market with shekyl_archival_last_settled_epoch_as_of_parent(parent_height).
+/// A missing row marshals as 0 (Rust scores r_market+1). parent_height MUST be
+/// chain_height - 1. CompleteTree: vin_shard_count = 0 and NULL arrays.
 uint8_t shekyl_archival_check_bond_admission(
     uint8_t holdings_kind,
     size_t vin_shard_count,
@@ -2615,15 +2611,17 @@ struct shekyl_archival_emission_epoch_snapshot
 };
 
 /// Claimant work over the as-of-E snapshot: writes P's `work_P(E)` milli to
-/// `out_work_milli` and its `Curve(work_P)` term to `out_capped_work_milli` —
-/// the emission verify numerator (REWARD_EMISSION_VIN_PLAN.md §8.0.2 step 4).
+/// `out_work_milli` and its membership-gated credited term to
+/// `out_credited_work_milli` — the emission verify numerator
+/// (REWARD_EMISSION_VIN_PLAN.md §8.0.2 step 4). D3/R2: credited work is linear
+/// in work (no plateau); non-members credit zero.
 ///
 /// Sources via the same single sourcing function whose output built the
 /// persisted Σwork(E) denominator at close, over the same frozen gather, so
-/// the capped output is P's exact per-P term of that denominator by
+/// the credited output is P's exact per-P term of that denominator by
 /// construction (WS-1 §5.5). Note this is the numerator only: it does NOT
 /// consult `snapshot->sigma_work_milli` — an empty epoch persists
-/// Σwork(E) == 0 while this may still return a positive capped term, so the
+/// Σwork(E) == 0 while this may still return a positive credited term, so the
 /// consumer MUST divide through the persisted denominator (reward is 0 when
 /// Σwork(E) == 0). Both outputs are
 /// zero when P has no credit row in E or is not a market member at E. Errors
@@ -2631,7 +2629,7 @@ struct shekyl_archival_emission_epoch_snapshot
 uint8_t shekyl_archival_emission_epoch_work(
     const struct shekyl_archival_emission_epoch_snapshot* snapshot,
     uint64_t* out_work_milli,
-    uint64_t* out_capped_work_milli);
+    uint64_t* out_credited_work_milli);
 
 /* ---------------------------------------------------------------------------
  * C-1 emission-vin verify FFI (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 items

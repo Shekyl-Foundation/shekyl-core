@@ -12,29 +12,28 @@
 use std::io::Cursor;
 
 use shekyl_archival_retention::{
-    as_of_e_served_work, bond_post_block_unique, capped_work_milli, challenge_fire_height,
+    as_of_e_served_work, bond_post_block_unique, challenge_fire_height,
     challenge_leaf_chunk_bounds, challenge_seal_height, challenge_seal_on_chain,
-    check_admission_of, claim_window_floor, claimed_epochs_check_and_set,
+    claim_window_floor, claimed_epochs_check_and_set, credited_work_milli,
     effective_settlement_epoch_blocks, emission_block_claims_unique, emission_vin_verify,
     emission_vin_verify_auth, emission_vin_verify_backing, emission_vin_verify_claims,
     epoch_close_compute, epoch_close_due_at_height, epoch_close_height, failure_window_slashable,
     frozen_segment_count, good_through, holdings_update_add_connect, holdings_update_drop_connect,
     holdings_update_pop, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
     rebond_connect, rebond_pop, serve_credit_epoch_ok, settlement_epoch_at_height,
-    settlement_epoch_blocks_overridden, shard_age_milli, slash_open_interval_to_append,
-    unbond_connect, unbond_pop, verify_bond_post_ct_balance, verify_holdings_update_add,
-    verify_holdings_update_drop, verify_join_market_bond_post, verify_leaf_index,
-    verify_rebond_bond_post, verify_segment_path, verify_unbond_bond_post,
-    whole_record_last_served, AdmissionError, AdmissionShard, ArchivalBondPostVin,
+    settlement_epoch_blocks_overridden, slash_open_interval_to_append, unbond_connect, unbond_pop,
+    verify_bond_post_ct_balance, verify_holdings_update_add, verify_holdings_update_drop,
+    verify_join_market_bond_post, verify_leaf_index, verify_rebond_bond_post, verify_segment_path,
+    verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin,
     ArchivalRewardEmissionVin, ArchivalServeCreditResponse, BadInterval, BaselineObservation,
     BondCtBalanceError, BondPostError, BondPostKind, BondTerm, ClaimantBondRecord,
     ClaimedEpochsError, CreditPair, EmissionEpochSource, EmissionVerifyContext,
     EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, HoldingsUpdateConnectError, HoldingsUpdatePopError, ParentStateHoldings,
-    RebondConnectError, RebondPopError, RewardCommit, ShardSet, ShardSetError, UnbondConnectError,
-    UnbondPopError, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, CHALLENGE_RESOLUTION_BLOCKS,
-    FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET, HYBRID_PUBKEY_CANONICAL_BYTES,
-    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
+    HoldingsKind, HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError,
+    RebondPopError, RewardCommit, ShardSet, ShardSetError, UnbondConnectError, UnbondPopError,
+    WireError, CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
+    FAILURE_WINDOW_SERVE_BUDGET, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -964,106 +963,6 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
     match verify_join_market_bond_post(&vin, record_exists != 0) {
         Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
         Err(e) => map_bond_post_error(e),
-    }
-}
-
-// ── D3/R3 admission viability (`shekyl-archival-retention::admission`) ───────
-/// The holding credits at least `ADMISSION_MIN_WORK_MILLI`.
-pub const SHEKYL_ARCHIVAL_ADMISSION_OK: u8 = 0;
-/// A gather array pointer was null with a non-zero length.
-pub const SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR: u8 = 1;
-/// `holdings_kind` is not a valid discriminant.
-pub const SHEKYL_ARCHIVAL_ADMISSION_ERR_HOLDINGS_KIND: u8 = 2;
-/// The marshaled gather does not line up with the vin's shard list.
-pub const SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH: u8 = 3;
-/// The holding would score zero at every epoch close — a bond the frozen work
-/// scale cannot pay.
-pub const SHEKYL_ARCHIVAL_ADMISSION_ERR_BELOW_FLOOR: u8 = 4;
-
-/// D3/R3 admission gate: refuse a bond whose holdings credit no work.
-///
-/// Marshaled facts (C++ owns the LMDB I/O, Rust decides — the same split as
-/// [`shekyl_archival_verify_join_market_bond_post`]): `r_market_*` is the
-/// per-shard `archival_r_market` row for the **last settled** settlement epoch,
-/// and `freeze_height_*` the per-shard segment freeze height, both **parallel to
-/// the vin's shard list**. A shard with no row marshals as `0`, which is correct
-/// and load-bearing — see the applicant-counts-itself note below.
-///
-/// **`parent_height` must be the parent block's height (`chain_height − 1`), not
-/// the tip.** `chain_height` at the dispatch is `m_db->height()`, i.e. the height
-/// of the block *being validated*; passing it here would date the age term one
-/// block into the future and let the block under validation move its own verdict.
-/// This is the one place the read-point ruling can be violated silently, and no
-/// Rust test can catch it.
-///
-/// The settlement-epoch schedule and the age weight are **not** parameters:
-/// Rust sources both ([`effective_settlement_epoch_blocks`],
-/// `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI`) so the gate cannot be handed a schedule
-/// that differs from the one the reward path pays on.
-///
-/// `CompleteTree` holdings are decided without a gather (dominance — see
-/// [`check_admission_of`]); pass `vin_shard_count = 0` and null arrays.
-///
-/// # Safety
-/// `r_market_ptr` must be valid for `r_market_len` `u64`s and `freeze_height_ptr`
-/// for `freeze_height_len` `u64`s, or null when the corresponding len is 0.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_archival_check_bond_admission(
-    holdings_kind: u8,
-    vin_shard_count: usize,
-    r_market_ptr: *const u64,
-    r_market_len: usize,
-    freeze_height_ptr: *const u64,
-    freeze_height_len: usize,
-    parent_height: u64,
-) -> u8 {
-    let kind = match HoldingsKind::from_u8(holdings_kind) {
-        Ok(k) => k,
-        Err(_) => return SHEKYL_ARCHIVAL_ADMISSION_ERR_HOLDINGS_KIND,
-    };
-
-    // The two gather arrays are parallel views of the same shard list; a length
-    // disagreement between them is a marshal breach, not a consensus verdict.
-    if r_market_len != freeze_height_len {
-        return SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH;
-    }
-    if (r_market_ptr.is_null() || freeze_height_ptr.is_null()) && r_market_len != 0 {
-        return SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR;
-    }
-
-    let r_market = if r_market_len == 0 {
-        &[][..]
-    } else {
-        std::slice::from_raw_parts(r_market_ptr, r_market_len)
-    };
-    let freeze_heights = if freeze_height_len == 0 {
-        &[][..]
-    } else {
-        std::slice::from_raw_parts(freeze_height_ptr, freeze_height_len)
-    };
-
-    let seb = effective_settlement_epoch_blocks();
-    let shards: Vec<AdmissionShard> = r_market
-        .iter()
-        .zip(freeze_heights.iter())
-        .map(|(&r_market, &freeze_height)| AdmissionShard {
-            r_market,
-            age_milli: shard_age_milli(parent_height, freeze_height, seb),
-        })
-        .collect();
-
-    let parent_state = ParentStateHoldings {
-        shards: &shards,
-        age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-    };
-    match check_admission_of(kind, vin_shard_count, &parent_state) {
-        Ok(()) => SHEKYL_ARCHIVAL_ADMISSION_OK,
-        Err(AdmissionError::GatherLengthMismatch { .. }) => {
-            SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH
-        }
-        Err(AdmissionError::BelowViabilityFloor { .. }) => {
-            SHEKYL_ARCHIVAL_ADMISSION_ERR_BELOW_FLOOR
-        }
     }
 }
 
@@ -2501,17 +2400,17 @@ pub struct ShekylArchivalEmissionEpochSnapshot {
 }
 
 /// Claimant work over the as-of-`E` snapshot: `work_P(E)` milli and its
-/// `Curve(work_P)` term — the emission verify numerator
+/// membership-gated credited term — the emission verify numerator
 /// (`REWARD_EMISSION_VIN_PLAN.md` §8.0.2 step 4).
 ///
 /// Sources via [`as_of_e_served_work`], the same single sourcing function
 /// whose output built the persisted `Σwork(E)` denominator at close, over the
-/// same frozen gather — so `out_capped_work_milli` is `P`'s exact per-P term
+/// same frozen gather — so `out_credited_work_milli` is `P`'s exact per-P term
 /// of that denominator by construction (WS-1 §5.5: sourcing divergence, the
 /// M-2 silent over/under-mint, is unrepresentable rather than tested-against).
 /// This is the numerator only — it does not read `snapshot.sigma_work_milli`,
 /// so an empty epoch persists
-/// `Σwork(E) == 0` while this may return a positive capped term; the consumer
+/// `Σwork(E) == 0` while this may return a positive credited term; the consumer
 /// divides through the persisted denominator (reward is 0 at `Σwork(E) == 0`,
 /// enforced by `reward_share_floor`).
 ///
@@ -2526,19 +2425,19 @@ pub struct ShekylArchivalEmissionEpochSnapshot {
 /// `snapshot` must point to a valid struct whose array pointers satisfy their
 /// stated lengths for the duration of the call, including each bond's
 /// interval buffer per its embedded lengths. `out_work_milli` and
-/// `out_capped_work_milli` must be writable.
+/// `out_credited_work_milli` must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_emission_epoch_work(
     snapshot: *const ShekylArchivalEmissionEpochSnapshot,
     out_work_milli: *mut u64,
-    out_capped_work_milli: *mut u64,
+    out_credited_work_milli: *mut u64,
 ) -> u8 {
-    if snapshot.is_null() || out_work_milli.is_null() || out_capped_work_milli.is_null() {
+    if snapshot.is_null() || out_work_milli.is_null() || out_credited_work_milli.is_null() {
         return SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR;
     }
     unsafe {
         *out_work_milli = 0;
-        *out_capped_work_milli = 0;
+        *out_credited_work_milli = 0;
     }
     let snap = unsafe { &*snapshot };
 
@@ -2579,13 +2478,12 @@ pub unsafe extern "C" fn shekyl_archival_emission_epoch_work(
     };
 
     let work = served.work_by_bond[snap.claimant_bond_idx];
-    // The single-sourced per-P capped term: non-members and zero-work members
-    // contribute nothing to the stored denominator, so their capped term is
-    // zero here too.
-    let capped = capped_work_milli(work, served.member[snap.claimant_bond_idx]);
+    // Single-sourced per-P credited term: non-members contribute nothing to
+    // the stored denominator, so their credited term is zero here too.
+    let credited = credited_work_milli(work, served.member[snap.claimant_bond_idx]);
     unsafe {
         *out_work_milli = work;
-        *out_capped_work_milli = capped;
+        *out_credited_work_milli = credited;
     }
     SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK
 }
@@ -3934,109 +3832,6 @@ mod tests {
         assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR);
     }
 
-    /// The D3/R3 gate across the C ABI: the `k = 1` boundary survives the
-    /// marshal, and the two shapes the dispatch relies on (`CompleteTree` with no
-    /// gather, a never-served shard reading `r_market = 0`) decide correctly.
-    ///
-    /// `parent_height = 0` with `freeze_height = 0` pins age to zero, so a shard
-    /// scores `floor(1e6 / (r_market + 1))` micro.
-    #[test]
-    fn check_bond_admission_ffi_pins_the_viability_boundary() {
-        let kind = HoldingsKind::ShardSetCompact as u8;
-        let call = |r: &[u64]| {
-            let freeze = vec![0u64; r.len()];
-            unsafe {
-                shekyl_archival_check_bond_admission(
-                    kind,
-                    r.len(),
-                    r.as_ptr(),
-                    r.len(),
-                    freeze.as_ptr(),
-                    freeze.len(),
-                    0,
-                )
-            }
-        };
-
-        // Exactly one milli admits; one notch under refuses.
-        assert_eq!(call(&[999]), SHEKYL_ARCHIVAL_ADMISSION_OK);
-        assert_eq!(call(&[1_000]), SHEKYL_ARCHIVAL_ADMISSION_ERR_BELOW_FLOOR);
-
-        // A never-served shard marshals as 0 and must read as maximal scarcity,
-        // not as a zero — the genesis/sole-holder shape the dispatch depends on.
-        assert_eq!(call(&[0]), SHEKYL_ARCHIVAL_ADMISSION_OK);
-
-        // CompleteTree is decided without a gather.
-        assert_eq!(
-            unsafe {
-                shekyl_archival_check_bond_admission(
-                    HoldingsKind::CompleteTree as u8,
-                    0,
-                    std::ptr::null(),
-                    0,
-                    std::ptr::null(),
-                    0,
-                    0,
-                )
-            },
-            SHEKYL_ARCHIVAL_ADMISSION_OK
-        );
-
-        // Marshal breaches fail closed rather than scoring whatever arrived.
-        let r = [999u64, 999];
-        let freeze = [0u64];
-        assert_eq!(
-            unsafe {
-                shekyl_archival_check_bond_admission(
-                    kind,
-                    2,
-                    r.as_ptr(),
-                    r.len(),
-                    freeze.as_ptr(),
-                    freeze.len(),
-                    0,
-                )
-            },
-            SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH,
-            "parallel gather arrays of different lengths"
-        );
-        assert_eq!(
-            unsafe {
-                shekyl_archival_check_bond_admission(kind, 1, r.as_ptr(), 2, freeze.as_ptr(), 2, 0)
-            },
-            SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH,
-            "gather that does not match the vin's shard count"
-        );
-        assert_eq!(
-            unsafe {
-                shekyl_archival_check_bond_admission(
-                    kind,
-                    1,
-                    std::ptr::null(),
-                    1,
-                    freeze.as_ptr(),
-                    1,
-                    0,
-                )
-            },
-            SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR
-        );
-        assert_eq!(
-            unsafe {
-                shekyl_archival_check_bond_admission(
-                    9,
-                    0,
-                    std::ptr::null(),
-                    0,
-                    std::ptr::null(),
-                    0,
-                    0,
-                )
-            },
-            SHEKYL_ARCHIVAL_ADMISSION_ERR_HOLDINGS_KIND
-        );
-    }
-
     #[test]
     fn bond_post_block_unique_ffi_rejects_same_p_pairs() {
         // Two distinct P ids pass; any same-P pair rejects (keyed on P alone,
@@ -4435,40 +4230,40 @@ mod tests {
             claimant_bond_idx,
         };
 
-        let mut capped_terms: Vec<u64> = Vec::with_capacity(bonds.len());
+        let mut credited_terms: Vec<u64> = Vec::with_capacity(bonds.len());
         for idx in 0..bonds.len() {
             let snap = snapshot_for(idx);
             let mut work = u64::MAX;
-            let mut capped = u64::MAX;
+            let mut credited = u64::MAX;
             let code = unsafe {
                 shekyl_archival_emission_epoch_work(
                     ptr::from_ref(&snap),
                     ptr::from_mut(&mut work),
-                    ptr::from_mut(&mut capped),
+                    ptr::from_mut(&mut credited),
                 )
             };
             assert_eq!(code, SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
             if idx >= 2 {
                 assert_eq!(work, 0, "non-member bond {idx} must have zero work");
                 assert_eq!(
-                    capped, 0,
-                    "non-member bond {idx} must have zero capped term"
+                    credited, 0,
+                    "non-member bond {idx} must have zero credited term"
                 );
             } else {
                 assert!(work > 0, "member bond {idx} must have nonzero work");
             }
-            capped_terms.push(capped);
+            credited_terms.push(credited);
         }
-        let capped_sum: u64 = capped_terms.iter().sum();
+        let credited_sum: u64 = credited_terms.iter().sum();
         assert_eq!(
-            capped_sum, sigma,
-            "sum of per-P capped terms must equal the persisted Σwork(E)"
+            credited_sum, sigma,
+            "sum of per-P credited terms must equal the persisted Σwork(E)"
         );
         // Reuse the per-bond terms already computed above rather than
         // re-invoking the FFI: the two members must differ for the identity to
         // be non-trivial.
         assert_ne!(
-            capped_terms[0], capped_terms[1],
+            credited_terms[0], credited_terms[1],
             "fixture must produce distinct per-P terms for the identity to be non-trivial"
         );
 
@@ -4476,33 +4271,33 @@ mod tests {
         // construction, OK status.
         let snap = snapshot_for(usize::MAX);
         let mut work = u64::MAX;
-        let mut capped = u64::MAX;
+        let mut credited = u64::MAX;
         let code = unsafe {
             shekyl_archival_emission_epoch_work(
                 ptr::from_ref(&snap),
                 ptr::from_mut(&mut work),
-                ptr::from_mut(&mut capped),
+                ptr::from_mut(&mut credited),
             )
         };
         assert_eq!(code, SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
         assert_eq!(work, 0);
-        assert_eq!(capped, 0);
+        assert_eq!(credited, 0);
 
         // Out-of-range claimant index (not the SIZE_MAX sentinel) rejects and
         // zeroes outputs.
         let snap = snapshot_for(bonds.len());
         let mut work = u64::MAX;
-        let mut capped = u64::MAX;
+        let mut credited = u64::MAX;
         let code = unsafe {
             shekyl_archival_emission_epoch_work(
                 ptr::from_ref(&snap),
                 ptr::from_mut(&mut work),
-                ptr::from_mut(&mut capped),
+                ptr::from_mut(&mut credited),
             )
         };
         assert_eq!(code, SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE);
         assert_eq!(work, 0, "failure path must not leave stale outputs");
-        assert_eq!(capped, 0);
+        assert_eq!(credited, 0);
     }
 
     /// The close-processing boundary wrapper single-sources

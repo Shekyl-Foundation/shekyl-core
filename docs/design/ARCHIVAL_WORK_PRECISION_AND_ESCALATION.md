@@ -1655,17 +1655,20 @@ boundary. R2 deleted the plateau's reward-path application at all **three**
 production sites (`consensus_state.rs`, `emission_verify.rs`, `archival_ffi.rs` —
 the census undercounted twice before grounding caught the third), retired
 `EpochCloseInputs.curve`, and deleted the generated constants and config keys.
-`capped_work_milli` **kept its name deliberately**: it is also the C-ABI
-out-parameter `out_capped_work_milli`, so the rename belongs with a change that
-already crosses the boundary, not smuggled into a rule-15 deletion. The rule-42
-digest claim was **retracted on verification** — the C++ generator requires 13
-keys, none of them plateau, so no bump was owed.
+Production now names the per-`P` term honestly as `credited_work_milli` (linear
+membership gate; C ABI `out_credited_work_milli`). The banded-PL
+`curve_milli` / `BandedCurveParams` remain **sim/counterfactual only**. The
+rule-42 digest claim was **retracted on verification** — the C++ generator
+requires 13 keys, none of them plateau, so no bump was owed.
 
-R3 shipped as `shekyl-archival-retention::admission`, attached **alongside** the
-JoinMarket vin verify (the `bond_post_block_unique` idiom) rather than threaded
-through it, so no existing signature moved. Both ratified pins hold: `k = 1`
-milli, parent-block read-point. Two things the build surfaced that this round did
-**not** anticipate, both now load-bearing:
+R3 shipped as `shekyl-archival-retention::admission` with a dedicated FFI module
+(`archival_admission_ffi.rs`), attached **alongside** the JoinMarket vin verify
+(the `bond_post_block_unique` idiom) rather than threaded through it, so no
+existing signature moved. The last-settled epoch key and age derivation live in
+Rust (`last_settled_epoch_as_of_parent`, `parent_state_shards_from_gather`); C++
+only marshals LMDB rows. Both ratified pins hold: `k = 1` milli, parent-block
+read-point. Two things the build surfaced that this round did **not** anticipate,
+both now load-bearing:
 
 1. **The applicant counts itself — `r_market + 1`.** `shard_work_micro` returns
    `0` for `r_market == 0` (correct on the paying path: a bond with no serve

@@ -119,9 +119,9 @@ impl Fixture {
         let work = served.work_by_bond[0];
         assert!(served.member[0] && work > 0, "fixture claimant must earn");
         // D3/R2: the plateau no longer gates the reward path — credited work is the
-        // work itself (membership is applied by `capped_work_milli`).
-        let capped = work;
-        let reward = reward_share_floor(BUDGET, capped, self.persisted_sigma());
+        // work itself (membership is applied by `credited_work_milli`).
+        let credited = work;
+        let reward = reward_share_floor(BUDGET, credited, self.persisted_sigma());
         assert!(reward > 0, "fixture reward must be wire-encodable (>0)");
         (work, reward)
     }

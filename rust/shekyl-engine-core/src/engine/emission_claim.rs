@@ -540,7 +540,7 @@ pub fn derive_claimable_epochs(
         // Step-2 row assembly from the admitting evaluation, in the same
         // scope (single-evaluator discipline).
         let Some(claimant) = view.claimant_bond_idx else {
-            // reward > 0 ⇒ positive capped work ⇒ a serve-credit row
+            // reward > 0 ⇒ positive credited work ⇒ a serve-credit row
             // exists, so a `None` claimant here is an internal
             // contradiction in the gather — refused typed, never panicked.
             return Err(EmissionClaimError::SourceInvalid { epoch });
@@ -701,7 +701,7 @@ fn work_epoch_claim(
     let epoch = view.inputs.settlement_epoch;
     debug_assert!(
         served.member[claimant],
-        "claimable ⇒ positive capped work ⇒ market member"
+        "claimable ⇒ positive credited work ⇒ market member"
     );
 
     let mut shard_ids: Vec<u64> = view
@@ -1158,10 +1158,10 @@ mod tests {
     use shekyl_types::ChainCount;
 
     use shekyl_archival_retention::{
-        as_of_e_served_work, bond_wire::MAX_HOLDINGS_SHARDS, capped_work_milli,
-        claimed_epochs_check_and_set, reward_share_floor, settlement_epoch_at_height,
-        ClaimedEpochsError, CreditPair, EpochCloseInputs, EpochCloseShard, EMISSION_KAT_SHAPE,
-        MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
+        as_of_e_served_work, bond_wire::MAX_HOLDINGS_SHARDS, claimed_epochs_check_and_set,
+        credited_work_milli, reward_share_floor, settlement_epoch_at_height, ClaimedEpochsError,
+        CreditPair, EpochCloseInputs, EpochCloseShard, EMISSION_KAT_SHAPE, MAX_CLAIM_AGE_W,
+        SETTLEMENT_EPOCH_BLOCKS,
     };
 
     /// The derivation's structural checks in one grid: boundary verdicts
@@ -1219,7 +1219,7 @@ mod tests {
         // Share positivity is the wire-positivity predicate: every
         // selected reward is strictly positive (encodable) and byte-exact
         // against verify's step-4/5 recompute — composed here from the
-        // literal chain (`as_of_e_served_work` → `capped_work_milli` →
+        // literal chain (`as_of_e_served_work` → `credited_work_milli` →
         // `reward_share_floor`) so the shared evaluation head the
         // derivation consumes is pinned against the chain, not against
         // itself. The carried row is the admitting evaluation's.
@@ -1234,10 +1234,10 @@ mod tests {
             let view = snap.source(&bonds);
             let served = as_of_e_served_work(&view.inputs).unwrap();
             let idx = view.claimant_bond_idx.unwrap();
-            let capped = capped_work_milli(served.work_by_bond[idx], served.member[idx]);
+            let credited = credited_work_milli(served.work_by_bond[idx], served.member[idx]);
             assert_eq!(
                 c.reward,
-                reward_share_floor(view.budget, capped, view.persisted_sigma_work_milli),
+                reward_share_floor(view.budget, credited, view.persisted_sigma_work_milli),
                 "derivation reward must equal verify's recompute"
             );
             let entry_sum: u64 = c

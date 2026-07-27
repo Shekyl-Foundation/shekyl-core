@@ -112,15 +112,19 @@ sustainability is unaffected by the recalibration.
   deleted the reward-path application at all **three** production sites (the
   census undercounted twice; grounding found the third in `archival_ffi.rs`) and
   the rule-42 digest claim was **retracted on verification** — the C++ generator
-  requires 13 keys, none of them plateau, so no bump was owed. R3 shipped as
-  `shekyl-archival-retention::admission`, attached *alongside* the JoinMarket vin
+  requires 13 keys, none of them plateau, so no bump was owed. Production now
+  names the per-`P` term `credited_work_milli` (linear membership gate; C ABI
+  `out_credited_work_milli`); `curve_milli` is sim/counterfactual only. R3
+  shipped as `shekyl-archival-retention::admission` with a dedicated
+  `archival_admission_ffi` surface, attached *alongside* the JoinMarket vin
   verify (the `bond_post_block_unique` idiom), so no existing signature moved.
-  Both pins held. Two corrections the build forced, neither anticipated by the
-  round: **the applicant counts itself (`r_market + 1`)** — without it the first
-  archiver on a rare shard is refused and genesis deadlocks, since `r_market`
-  reads `0` before any epoch closes and serve credit cannot be earned without
-  bonding; and **the gather's two fields have different read-points** — `r_market`
-  is settled-epoch and ordering-immune by construction, `age_milli` is
+  Last-settled epoch key and age derivation live in Rust; C++ only marshals
+  LMDB. Both pins held. Two corrections the build forced, neither anticipated by
+  the round: **the applicant counts itself (`r_market + 1`)** — without it the
+  first archiver on a rare shard is refused and genesis deadlocks, since
+  `r_market` reads `0` before any epoch closes and serve credit cannot be earned
+  without bonding; and **the gather's two fields have different read-points** —
+  `r_market` is settled-epoch and ordering-immune by construction, `age_milli` is
   height-derived, so the parent-height discipline is required *because of the age
   term*. **Only reopen (c) now gates Stage 3.**
 - **~~KEM-ciphertext extra packing mismatch — vout ≥ 1 unscannable in

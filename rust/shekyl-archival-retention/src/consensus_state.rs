@@ -28,6 +28,21 @@ pub fn settlement_epoch_at_height(block_height: u64) -> u64 {
     block_height / effective_settlement_epoch_blocks()
 }
 
+/// Settlement epoch whose `archival_r_market` rows are readable **as of the
+/// parent block** (`H − 1`).
+///
+/// Epoch `E` covers `[E·SEB, (E+1)·SEB)` and closes at `(E+1)·SEB`, so while the
+/// parent sits in epoch `P`, every epoch **strictly below** `P` has closed.
+/// Returns `0` before the first close (no rows exist yet; LMDB NOTFOUND must
+/// still marshal as `0` — see admission's applicant-counts-itself term).
+///
+/// Single source for the admission gather's epoch key — C++ must not re-derive
+/// `settlement_epoch_at_height(parent) − 1` by hand.
+#[must_use]
+pub fn last_settled_epoch_as_of_parent(parent_height: u64) -> u64 {
+    settlement_epoch_at_height(parent_height).saturating_sub(1)
+}
+
 /// Settlement epoch that closes at `block_height`, when one does.
 ///
 /// Epoch `E` covers heights `[E·SEB, (E+1)·SEB)`; its close is processed at
@@ -183,35 +198,30 @@ pub fn sigma_work_milli(per_p_work_milli: &[u64], market_mask: &[bool]) -> u64 {
         market_mask.len(),
         "per-P work and market mask must be parallel slices"
     );
-    let mut sum = 0u64;
-    for (&work, &in_market) in per_p_work_milli.iter().zip(market_mask.iter()) {
-        sum = sum.saturating_add(capped_work_milli(work, in_market));
-    }
-    sum
+    per_p_work_milli
+        .iter()
+        .zip(market_mask.iter())
+        .map(|(&work, &in_market)| credited_work_milli(work, in_market))
+        .fold(0u64, u64::saturating_add)
 }
 
 /// One `P`'s **credited** work term — the single definition of the per-`P`
 /// contribution to `Σwork(E)`.
 ///
-/// **D3/R2: this is a membership gate, not a cap.** It was `Curve(work_P)`; the
+/// **D3/R2: linear in work, gated only by market membership.** The banded-PL
 /// plateau was deleted from the reward path (dodgeable at no bond cost,
 /// unenforceable above the bond under the privacy architecture, and measurably
 /// harmful where it bound — A4 put the capped regime at ROI 1.19 vs 0.67
-/// uncapped). Credited work is now **linear in work**: members credit their work
-/// unchanged, non-members credit nothing. A zero-work member still contributes
-/// nothing — by arithmetic now, not by a guard.
+/// uncapped). Members credit their work unchanged; non-members credit nothing.
+/// A zero-work member contributes nothing by arithmetic.
 ///
-/// The **name is retained deliberately** rather than renamed in the deletion
-/// commit: it is also the C-ABI out-parameter (`out_capped_work_milli`,
-/// `shekyl_ffi.h`), so renaming crosses the language boundary and belongs with a
-/// change that already touches it — not smuggled into a rule-15 deletion.
-/// Sourced here so the persisted denominator
-/// ([`sigma_work_milli`]), the emission numerator FFI
-/// (`shekyl_archival_emission_epoch_work`), and the verify body
-/// (`emission_verify`) cannot drift on the guard — the M-2 sourcing-divergence
-/// the WS-1 design makes unrepresentable rather than tested-against.
+/// Sourced here so the persisted denominator ([`sigma_work_milli`]), the
+/// emission numerator FFI (`shekyl_archival_emission_epoch_work`), and the
+/// verify body (`emission_verify`) cannot drift on the membership gate — the
+/// M-2 sourcing-divergence the WS-1 design makes unrepresentable rather than
+/// tested-against.
 #[must_use]
-pub fn capped_work_milli(work_milli: u64, is_member: bool) -> u64 {
+pub fn credited_work_milli(work_milli: u64, is_member: bool) -> u64 {
     if is_member {
         work_milli
     } else {
@@ -735,7 +745,7 @@ mod tests {
     ///
     /// Mirror of [`bulk_holder_past_cliff_earns_proportional_not_zero`] (the
     /// Stage-1 gate): written to be **red against the capping code** and green
-    /// only once `curve_milli` no longer gates `capped_work_milli`, so "the
+    /// only once credited work is linear ([`credited_work_milli`]), so "the
     /// plateau is gone" is a checkmark rather than an absence a reader must
     /// verify by inspection.
     ///
@@ -1004,6 +1014,20 @@ mod tests {
         }];
         let err = epoch_close_compute(&close_inputs(&bonds, &shards, &pairs)).unwrap_err();
         assert_eq!(err.pair_index, 0);
+    }
+
+    #[test]
+    fn last_settled_epoch_is_parent_epoch_minus_one() {
+        let seb = SETTLEMENT_EPOCH_BLOCKS;
+        assert_eq!(last_settled_epoch_as_of_parent(0), 0);
+        assert_eq!(last_settled_epoch_as_of_parent(seb - 1), 0);
+        // First height of epoch 1: epoch 0 has closed at this height's parent? No —
+        // parent_height = SEB is already in epoch 1, so last settled is 0.
+        assert_eq!(last_settled_epoch_as_of_parent(seb), 0);
+        assert_eq!(last_settled_epoch_as_of_parent(seb + 1), 0);
+        assert_eq!(last_settled_epoch_as_of_parent(2 * seb), 1);
+        assert_eq!(last_settled_epoch_as_of_parent(2 * seb - 1), 0);
+        assert_eq!(last_settled_epoch_as_of_parent(7 * seb + 3), 6);
     }
 
     #[test]

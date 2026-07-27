@@ -20,7 +20,7 @@
 
 use serde_json::Value;
 use shekyl_archival_retention::{
-    BadInterval, BandedCurveParams, CreditPair, EpochCloseBond, EpochCloseResult, EpochCloseShard,
+    BadInterval, CreditPair, EpochCloseBond, EpochCloseResult, EpochCloseShard,
 };
 
 /// Owned bond storage. `EpochCloseBond` borrows its interval slice, so the
@@ -91,13 +91,6 @@ pub fn parse_pairs(v: &Value) -> Vec<CreditPair> {
             shard_idx: usize::try_from(p["shard"].as_u64().expect("shard idx")).unwrap(),
         })
         .collect()
-}
-
-pub fn parse_curve(v: &Value) -> BandedCurveParams {
-    BandedCurveParams {
-        plateau_work_milli: v["plateau_work_milli"].as_u64().expect("plateau_work"),
-        plateau_value_milli: v["plateau_value_milli"].as_u64().expect("plateau_value"),
-    }
 }
 
 pub fn expected_result(v: &Value) -> EpochCloseResult {

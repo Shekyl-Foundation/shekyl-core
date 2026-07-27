@@ -40,7 +40,7 @@
 
 use crate::claimed_epochs::{claim_window_floor, claimed_epochs_contains};
 use crate::consensus_state::{
-    as_of_e_served_work, capped_work_milli, epoch_close_height, settlement_epoch_at_height,
+    as_of_e_served_work, credited_work_milli, epoch_close_height, settlement_epoch_at_height,
     shard_contribution_micro, CreditIndexOutOfRange, EpochCloseInputs, ServedWork,
 };
 use crate::emission_wire::{ArchivalRewardEmissionVin, EmissionAuthRole, RewardCommit, WireError};
@@ -359,7 +359,7 @@ pub struct ClaimantShare {
     pub work_micro_p: u64,
     /// Market membership at `E` (the claimant's mask term).
     pub is_member: bool,
-    /// `reward_share_floor(budget, capped_work_milli(work_P, member),
+    /// `reward_share_floor(budget, credited_work_milli(work_P, member),
     /// persisted Σwork)` — verify's step-5 `RewardMismatch` operand and the
     /// builder's claimability/wire-positivity predicate.
     pub reward: u64,
@@ -406,10 +406,10 @@ pub fn claimant_reward_share(
         ),
         None => (0, 0, false),
     };
-    // The capped term is the same single-sourced per-P definition that built
+    // The credited term is the same single-sourced per-P definition that built
     // the persisted `Σwork(E)` denominator.
-    let capped = capped_work_milli(work_p, is_member);
-    let reward = reward_share_floor(source.budget, capped, source.persisted_sigma_work_milli);
+    let credited = credited_work_milli(work_p, is_member);
+    let reward = reward_share_floor(source.budget, credited, source.persisted_sigma_work_milli);
     Ok(ClaimantShare {
         served,
         work_p,

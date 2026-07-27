@@ -6,8 +6,8 @@
 //! Consensus-state KAT: `R_market`, `Σwork`, determinism (ARCHIVAL_CONSENSUS_STATE.md).
 
 use shekyl_archival_retention::{
-    curve_milli, epoch_close_compute, r_market_count, sigma_work_milli, BadInterval,
-    BandedCurveParams, EpochCloseInputs, ServeCreditRow, WORK_MILLI_SCALE,
+    epoch_close_compute, r_market_count, sigma_work_milli, BadInterval, EpochCloseInputs,
+    ServeCreditRow, WORK_MILLI_SCALE,
 };
 
 mod common;
@@ -17,7 +17,6 @@ const KAT: &str = include_str!("fixtures/consensus_state_kat_v1.json");
 #[test]
 fn consensus_state_kat_v1() {
     let doc: serde_json::Value = serde_json::from_str(KAT).expect("kat json");
-    let curve = common::parse_curve(&doc["curve"]);
     let e = doc["settlement_epoch"].as_u64().expect("epoch");
     let shard = doc["shard_id"].as_u64().expect("shard");
 
@@ -70,14 +69,6 @@ fn consensus_state_kat_v1() {
         assert_eq!(sigma_work_milli(&works, &mask), expected_sigma);
     }
 
-    if let Some(cases) = doc["curve_cases"].as_array() {
-        for case in cases {
-            let work = case["work_milli"].as_u64().unwrap();
-            let want = case["capped_milli"].as_u64().unwrap();
-            assert_eq!(curve_milli(work, &curve), want, "work_milli={work}");
-        }
-    }
-
     // Composed epoch-close replay — the exact computation the daemon delegates
     // through `shekyl_archival_epoch_close_compute`.
     let ec = &doc["epoch_close"];
@@ -116,13 +107,9 @@ fn consensus_state_kat_v1() {
 }
 
 #[test]
-fn curve_milli_plateau_and_scale_pin() {
-    // Plateau + scale golden pins. The comprehensive cross-implementation /
-    // cross-arch determinism vectors — including the Form-C division path
-    // (reward_share_floor / mul_div_floor, the u128-before-divide order) — live
-    // in tests/reward_arithmetic_determinism_kat.rs. (The previous body here was
-    // a same-arch in-process double-call that proved nothing about determinism.)
-    let curve = BandedCurveParams::default_provisional();
-    assert_eq!(curve_milli(16_000, &curve), 8_000);
+fn work_milli_scale_is_frozen() {
+    // Banded-PL curve golden pins live in reward_arithmetic_determinism_kat
+    // (sim/counterfactual only after D3/R2). The consensus fixed-point scale
+    // remains a consensus-state pin.
     assert_eq!(WORK_MILLI_SCALE, 1_000);
 }

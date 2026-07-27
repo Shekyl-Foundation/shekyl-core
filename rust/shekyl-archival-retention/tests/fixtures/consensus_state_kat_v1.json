@@ -1,12 +1,8 @@
 {
  "format_version": 1,
- "description": "ARCHIVAL_CONSENSUS_STATE §3.3 R_market + §4.5 Σwork fixture (pure replay).",
+ "description": "ARCHIVAL_CONSENSUS_STATE \u00a73.3 R_market + \u00a74.5 \u03a3work fixture (pure replay).",
  "settlement_epoch": 10,
  "shard_id": 42,
- "curve": {
-  "plateau_work_milli": 16000,
-  "plateau_value_milli": 8000
- },
  "serve_credit_rows": [
   {
    "p_id_hex": "01",
@@ -52,30 +48,8 @@
   false,
   false
  ],
- "curve_cases": [
-  {
-   "work_milli": 0,
-   "capped_milli": 0
-  },
-  {
-   "work_milli": 4000,
-   "capped_milli": 4000
-  },
-  {
-   "work_milli": 8000,
-   "capped_milli": 6000
-  },
-  {
-   "work_milli": 16000,
-   "capped_milli": 8000
-  },
-  {
-   "work_milli": 32000,
-   "capped_milli": 8000
-  }
- ],
  "epoch_close": {
-  "description": "Composed epoch_close_compute replay: membership, R_market counting, ledger-sourced work (WS-1: the credit pairs ARE the held-and-served set; no holdings descriptor participates), age weighting, Σwork. Values derived from §3.3/§3.5 by hand with relative-depth age (ARCHIVAL_REWARD_ARITHMETIC.md §Shard age): age_milli=floor(age_epochs·1000/chain_epochs); shard 42 → floor(4·1000/11)=363; g(age)=1000+floor(age_weight·age/1000)=1181; scarcity=floor(1000·g/(R·1000)) → 590; curve below first band is identity. work b0 = 590+500 = 1090, b2 = 500+590 = 1090 (b2's credit on shard 42 counts from the ledger alone — the retired tip-holdings filter dropped it, the M2-1 under-count), b4 = 1000. Σ = 1090 + 1090 + 1000 = 3180.",
+  "description": "Composed epoch_close_compute replay: membership, R_market counting, ledger-sourced work (WS-1: the credit pairs ARE the held-and-served set; no holdings descriptor participates), age weighting, \u03a3work. Values derived from \u00a73.3/\u00a73.5 by hand with relative-depth age (ARCHIVAL_REWARD_ARITHMETIC.md \u00a7Shard age): age_milli=floor(age_epochs\u00b71000/chain_epochs); shard 42 \u2192 floor(4\u00b71000/11)=363; g(age)=1000+floor(age_weight\u00b7age/1000)=1181; scarcity=floor(1000\u00b7g/(R\u00b71000)) \u2192 590; work b0 = 590+500 = 1090, b2 = 500+590 = 1090 (b2's credit on shard 42 counts from the ledger alone \u2014 the retired tip-holdings filter dropped it, the M2-1 under-count), b4 = 1000. \u03a3 = 1090 + 1090 + 1000 = 3180.",
   "settlement_epoch": 10,
   "close_block_height": 110000,
   "settlement_epoch_blocks": 10000,
