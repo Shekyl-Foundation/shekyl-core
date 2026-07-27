@@ -3408,6 +3408,27 @@ machines own *when* and never *how*, and remain pure steps that return deadlines
 That property is exactly what keeps the `run_*` hooks — and therefore the
 oracle — available. RP-3 rewrites the paragraph rather than deleting the idea.
 
+**The retraction surface is two files, not one.** `lib.rs:100–112` records a
+second position, written explicitly *"so the question does not get re-opened by
+accident"*: Cuprate's `dandelion-tower` was rejected partly because *"the shape
+is wrong for this seam … adopting it would mean running a second reactor inside
+the p2p path."* That reasoning argues against exactly what RP-3 now does, so
+reopening it deliberately means updating it with the reason, not stepping around
+it. And the honest form of the reframing is not "there is no second reactor" —
+there is. Asio keeps the sockets and the p2p path; a Rust driver takes the relay
+timing. What changed is the ledger: the original objection was *two loops for no
+gain*, and RP-3 buys something specific with the second one — the timing logic
+stops being duplicated across languages, and F-4/F-5 close. Two loops with a
+defined handoff, for a named gain.
+
+**Why the framing does not move with the loop.** The same `lib.rs` passage calls
+the workspace's lack of an epee/levin implementation *"the single largest
+obstacle to ever moving the full relay path into Rust."* RP-3 does not remove
+that obstacle and does not need to: the seam is Rust decides *when* and *to
+whom*, C++ frames and sends. Transaction bodies cross as opaque blobs — which is
+why §4's surface has `p2p.send(blob, uuid)` as a callback rather than a Rust
+socket. Moving the framing is a separate decision that RP-3 leaves untouched.
+
 **Where the rewrite lands: the implementation commit, not this one.** This
 section *describes* the retraction because a reader of §18 needs to know it is
 coming; `schedule.rs`'s module doc changes only when the code it documents
@@ -3456,5 +3477,15 @@ whether 3a lands cleanly with the snapshot seam intact.
    did for `random_poisson_seconds`; anything left is named with its round.
 5. The zone task is the only writer of zone state — asserted structurally (no
    C++ path mutates it) rather than by convention.
-6. `schedule.rs`'s "No async runtime" section reflects what shipped — enacted in
-   the commit that moves the loop, per the doc-tracks-code rule above.
+6. `schedule.rs`'s "No async runtime" section **and** `lib.rs`'s
+   second-reactor rationale reflect what shipped — both enacted in the commit
+   that moves the loop, per the doc-tracks-code rule above.
+7. **The live scheduler is a new crate, not an extension of
+   `shekyl-relay-privacy`.** That crate's stated scope is *"Timing only. Nothing
+   here serializes a message, chooses eligible peers, or touches a socket"*, and
+   a zone actor does the last two. Keeping the split preserves what makes the
+   round tractable: the primitives stay dependency-light, synchronous, and pure
+   `&mut self` steps — which is exactly the property the `run_*` force-step
+   hooks, and therefore the 33-test oracle, depend on. The new crate owns the
+   driver and the transport callbacks and depends on the primitives; rule 25's
+   "implement logic in a dedicated crate" points the same way.
