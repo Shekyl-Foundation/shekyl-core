@@ -29,6 +29,7 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include <algorithm>
+#include <chrono>
 #include <boost/filesystem.hpp>
 #include <unordered_set>
 #include <vector>
@@ -1040,9 +1041,18 @@ namespace cryptonote
           {
             // Cast: the FFI returns uint64_t; std::chrono::seconds::rep is
             // signed and list-init would be a narrowing conversion on some libcs.
+            //
+            // ceil, not to_time_t's truncation: `now` carries a sub-second
+            // remainder, and flooring the deadline would hand back up to ~999ms
+            // of the embargo — the same under-provisioning the FFI's div_ceil
+            // exists to avoid, applied in the opposite direction one layer down.
+            // Under-provisioning fluffs early, which is the privacy-losing
+            // direction (the D-5 asymmetry), so the whole-second deadline rounds
+            // away from now. See DAEMON_RELAY_PRIVACY.md sec 17.
             meta.last_relayed_time = std::chrono::system_clock::to_time_t(
-              now + std::chrono::seconds{static_cast<std::chrono::seconds::rep>(
-                shekyl_dandelionpp_embargo_draw_seconds())});
+              std::chrono::ceil<std::chrono::seconds>(
+                now + std::chrono::seconds{static_cast<std::chrono::seconds::rep>(
+                  shekyl_dandelionpp_embargo_draw_seconds())}));
             next_relay = std::min(next_relay, meta.last_relayed_time);
           }
           else
