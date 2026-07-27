@@ -495,23 +495,35 @@ flowchart TD
 
 ### 7.1 DRS-P0 — multi-PR envelope (honest “one audit pass”)
 
-**Intent:** one *intellectual* pass over `db_lmdb.{h,cpp}` + call graphs.
-**Delivery:** **not** one mega-PR. Envelope (parallelism only where noted):
+**Intent:** one *intellectual* pass over `db_lmdb.{h,cpp}` + call graphs +
+`blockchain_db.cpp` pop/connect hooks.
+**Delivery:** **not** one mega-PR. Envelope:
 
 | PR | ID | Deliverable | Blocks |
 | --- | --- | --- | --- |
-| **P0a** | Inventory + CI | Accurate `LMDB_SCHEMA.md` (46 tables, **seven** adds, drop phantoms); **DRS-CI** bidirectional gates (header↔schema; schema↔header) | Nothing; unblocks mental model |
-| **P0b** | Atomicity + journals + RAW | Rewrite `LMDB_WRITE_ATOMICITY_AUDIT.md`; all tables; five (+emission) **revert journals** pop-symmetry; **RAW edge set** (§6.6); CI: every `MDB_dbi` in audit | DRS-0 design of apply ordering |
-| **P0c** | Wart register | Call-graph-traced warts; **FIX-IN-CPP-FIRST** defaults; `hf_versions` fix or explicit REPLICATE **landed or ticketed with owner** | Clean digests / hardfork safety |
-| **P0d** | Digest v0 | Layout-independent logical state digest vs LMDB — **core chain + spent keys + curve root** minimum; expand journals in P0d.1 if needed | DRS-C oracle; DRS-0 “logical state” definition |
-| **P0e** | (optional split) | Digest coverage → full table inventory / exclusions named | E2 totality |
+| **P0a** | Inventory + CI | Accurate `LMDB_SCHEMA.md` (46 tables, **seven** adds, drop phantoms); **DRS-CI** bidirectional gates | Mental model |
+| **P0b** | Atomicity + journals + RAW + **transcriptions** | Rewrite audit for all tables + journals; **RAW edges**; CI every `MDB_dbi` in audit. **Transcribe (not invent):** (A-2) **height-base per journal** (hook height vs block-index *N*); (A-4) **revert partial-order table** (journal × fields × predecessors × reason) from `pop_block` comments; (A-6) note in-code `m_write_txn` assertions + error-type inconsistency | Apply/pop design; E2 pop_block |
+| **P0c** | Wart register + **cheap FIX-IN-CPP** | Call-graph warts. Concrete rows: (A-1) pure-virtual archival apply/revert hooks + explicit `BaseTestDB` stubs; (A-3) journal `TreePosition` in drain; (A-5) dense-seq → range scan; `hf_versions` FIX or REPLICATE. **Ship on a short-lived branch off `dev`, not on `dev` directly.** | Silent-failure classes removed pre-redb |
+| **P0d** | Digest v0 | Core chain + spent keys + curve root **minimum**; **must expand archival journals before S-ARCH / DRS-E archival port** (A-1 composes with blind min oracle — see §7.1.1) | C oracle; logical-state definition |
+| **P0e** | Digest totality | Full table inventory / named exclusions | E2 |
 
-**“DRS-0 blocked on P0”** means **P0a–P0d** landed (P0e may trail slightly if
-exclusions are named). Selling P0 as a single PR is a **lie** under rule 15 —
-do not.
+**“DRS-0 blocked on P0”** = **P0a–P0d** (P0e may trail with named exclusions).
 
-Pop-reversal atomicity is FCMP++ Phase-4 load-bearing. P0 is **not** doc
-hygiene.
+#### 7.1.1 Digest coverage gate (A-1 composition)
+
+P0d’s *minimum* deliberately excludes archival journals for speed of first
+oracle. That is **unsafe as a sole gate for archival surface extraction or
+store port**: a backend can omit all apply/revert hooks and still pass core
+digests.
+
+**Rule:** do **not** extract/port **S-ARCH** (or implement archival apply in
+`shekyl-chain-store`) until digest coverage includes the archival journal
+families (or an explicit, named exclusion with a **replacement KAT** that
+forces apply/revert to run). Pure-virtual hooks (A-1) force *someone* to
+implement or stub explicitly; digests must still *see* production LMDB
+behavior for those paths before claiming parity.
+
+Pop-reversal atomicity is FCMP++ Phase-4 load-bearing.
 
 ### 7.2 DRS-P0 bug-escalation ladder (E-2)
 
@@ -726,6 +738,37 @@ gate strike.
 | 2026-07-27 | **Round-2:** hf_versions FIX-IN-CPP; FIX default class; 46/46 + seven missing; D1 rule-40 only; early LMDB digest; linear accumulators; unpark C; D2 bridges; reopen checklist; BENCH; P0 escalation; CI bidirectional; reconstructible state; E4 cursor/delete; MAT matrix; supply-chain nuance |
 | 2026-07-27 | **DRS-D3 hardening:** opposed threat models (not overhead); three layers (encodings shared / store+API separate); D3c cross-store KAT; D3d no shared redb-helpers. **DRS-D9:** strict durability free at block cadence. **DRS-BENCH:** retire throughput column; resource/privacy/IBD/pop only; in-tree artifacts + durability label required |
 | 2026-07-27 | **Gap-close:** §0.1 Tier A/B success criteria (mission-ordered); §1.5 D2-reopen first-class good; D10 reconstructible **mandatory** for D2-closed; §1.3 IBD floor sketch (H=100k, ≤1.25× LMDB); §3.5 97-method surface map; §3.6 writer/reader concurrency; §7.1 P0 multi-PR envelope P0a–P0d |
+| 2026-07-27 | **Substrate findings A-1…A-6**: dispositions §17; P0b/P0c concrete rows; A-1/A-3/A-5 are **FIX-IN-CPP candidates for feature-branch PRs** (not applied on `dev` in the design session) |
+
+---
+
+## 17. Substrate findings A-1…A-6 (confirmed vs `dev`)
+
+Verified against `blockchain_db.cpp` / `db_lmdb.cpp` / headers. These are
+**accepted** unless noted; nuance called out where the finding over-claims.
+
+| ID | Claim | Verdict | Plan effect |
+| --- | --- | --- | --- |
+| **A-1** | Fourteen (plus segment-freeze process) archival apply/revert hooks are `{}` on `BlockchainDB`, not pure virtual; contrast deliberate fail-closed getter for `get_archival_last_slash_epoch` | **Accept.** Confirmed empties vs sentinel getter. Silent inheritance is a backend footgun. | **P0c PR (branch off `dev`):** `= 0` + `BaseTestDB` explicit stubs. Rust: no default methods on consensus hooks. |
+| **A-2** | Two height conventions in `pop_block` (hook height vs block index *N*); schema comments do not distinguish | **Accept.** In-code F-B5b rationale is correct; schema/`db_lmdb.h` journal key comments are **underspecified**, not wrong. | **P0b:** height base per journal in schema; Rust **distinct newtypes** so wrong key type won’t compile |
+| **A-3** | Curve pop reconstructs `TreePosition` by `leaf_count - drained_count + j` before “zero reconstruction” principle for pending keys | **Accept as hazard class.** Nuance: under *current* drain-to-tip + contiguous leaf invariant the arithmetic is *consistent*, not random. Still same **species** as slash pre-image reconstruction bugs (journal the truth). | **P0c FIX-IN-CPP:** put `TreePosition` in drain journal; pop uses journaled pos only |
+| **A-4** | Revert partial order is load-bearing prose in one function | **Accept.** Best spec we have for journal×fields×order. | **P0b:** lift to reviewable table (transcription) |
+| **A-5** | Dense `seq++` probe loops encode writer density invariant in the reader | **Accept.** Not a live bug today; porting fork (faithful vs range scan). | **P0c FIX-IN-CPP:** range scan under LMDB first (incl. epoch marker seq); avoid divergence-register tax |
+| **A-6** | `!m_write_txn` → `runtime_error` vs `DB_ERROR` elsewhere | **Accept as taxonomy note.** Both hit `pop_block` catch-all abort — behavior OK. | Document in P0b; Rust single error enum. **Checked clean:** journal rows are deleted on consume (no stale-row-on-re-pop) |
+
+### 17.1 Pushback / extensions (not commandments)
+
+| Topic | Position |
+| --- | --- |
+| Pure-virtual **getters** that return 0/false/empty | **Do not** blanket `= 0` without design. Fail-closed sentinels (`get_archival_last_slash_epoch` → max) are intentional verify marshaling. Empty **apply/revert** are the silent *mutation* hazard; getters are silent *read* defaults with different failure modes. Future: audit getters for “soft open” vs “fail closed” case-by-case. |
+| A-3 “must fix before redb” | Agree on priority; also valid to fix under LMDB solely for pop-correctness. Not blocked on DRS schedule. |
+| Count “fourteen” | User list + **`process_archival_segment_freezes_at_height`** empty → **15** mutation hooks pure-virtualized. |
+
+### 17.2 Net effect on P0 (sharper than original)
+
+- **P0b cheaper:** mostly **transcription** of height bases, partial order, txn assertions already in `pop_block` / LMDB.
+- **P0c three cheap FIX-IN-CPP rows:** pure-virtual (done), drain `TreePosition`, range-scan probes.
+- **A-1 first regardless of DRS:** first P0c PR when coding opens — branch off `dev`, PR, merge.
 
 ---
 

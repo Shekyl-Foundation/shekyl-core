@@ -56,11 +56,14 @@ sustainability is unaffected by the recalibration.
   a scar. DRS-0 blocked on **P0a–P0d** multi-PR envelope. **May start now:**
   P0a–d, BENCH, C (bandwidth). **Target: V3.0**.
 
-- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI (46 tables, seven
-  missing); **P0b** atomicity+journals+RAW; **P0c** wart register
-  (FIX-IN-CPP-FIRST; `hf_versions` load-bearing pop read-back); **P0d**
-  logical state digest v0 vs LMDB. S0 findings preempt wallet priority.
-  **Target: V3.0** (first DRS).
+- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI; **P0b**
+  atomicity+journals+RAW + **transcribe** height bases (hook vs block-index),
+  revert partial-order table, write-txn assertions (findings A-2/A-4/A-6);
+  **P0c** FIX-IN-CPP: drain **TreePosition** journal (A-3), dense-seq →
+  range scan (A-5), `hf_versions`; **A-1 pure-virtual hooks** (first P0c
+  PR, branch off `dev` — not applied on design-session `dev`); **P0d**
+  digest v0 — expand archival journals **before** S-ARCH port. S0 preempts
+  wallet priority. **Target: V3.0**.
 
 - **DRS-BENCH — resource/privacy/IBD/pop suite (not throughput).** File
   growth over multi-year cadence, free-page reclamation under long-lived
