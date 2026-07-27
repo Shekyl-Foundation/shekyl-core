@@ -183,15 +183,27 @@ txpool_tx_meta_t make_meta(uint64_t weight, time_t receive_time)
 }
 
 // A pool holding one tx with the given relay method and timers.
+//
+// Ownership: `db` is a raw pointer on purpose. `Blockchain::init` takes
+// ownership of the BlockchainDB (blockchain.cpp: `m_db = db`), and
+// `~Blockchain` calls `deinit()`, which does `delete m_db`. Holding it in a
+// unique_ptr here would double-free, so the raw pointer *is* the correct
+// expression of "owned elsewhere from `init()` onward" — it is not a leak.
+// Copying would alias that single ownership (and `BlockchainAndPool`'s members
+// hold references to each other), so copies are deleted rather than left to be
+// discovered.
 struct RelayTimerFixture
 {
   BlockchainAndPool bap;
-  RelayTimerTestDB* db;
+  RelayTimerTestDB* db; //!< owned by `bap.bc` from `init()` on; freed in ~Blockchain.
   crypto::hash txid;
   cryptonote::blobdata blob;
 
   RelayTimerFixture() : db(new RelayTimerTestDB(300)), txid(make_txid(0x77)),
                         blob(make_minimal_tx_blob()) {}
+
+  RelayTimerFixture(const RelayTimerFixture&) = delete;
+  RelayTimerFixture& operator=(const RelayTimerFixture&) = delete;
 
   bool init() { return init_blockchain(bap.bc, db); }
 
