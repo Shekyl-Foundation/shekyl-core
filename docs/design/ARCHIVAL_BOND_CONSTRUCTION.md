@@ -463,6 +463,73 @@ anything exercises it. Each carries its named verify-side gap:
 | Rebond | `P_pubkey` | absent | provisional |
 | Unbond | `bond_spend_pk` | absent | provisional |
 
+### 9.1 `CompleteTree` is a foundation-only constructor, structurally (naive-optimizer footgun)
+
+**Requirement for the builder author, to design in now rather than retrofit.**
+The standard wallet bond-post path must not be able to produce
+`HoldingsKind::CompleteTree`. This is a construction-side gate only — it does
+**not** touch consensus, which by deliberate design accepts either holdings
+kind from any poster (see below).
+
+**Why.** `CompleteTree` is the whole-corpus holdings kind reserved for
+Foundation serving nodes. It is **economically excluded by design** — a
+`CompleteTree` bond is removed from `R_market` and `Σwork`
+(`consensus_state.rs::market_member_at_epoch`, hard early-return on the
+holdings-kind byte) so that specially-privileged Foundation servers neither
+profit from nor skew the market. That exclusion is intentional and modelled,
+not incidental.
+
+The hazard is therefore **not** an attacker and **not** an informed volunteer
+who source-compiles a non-paying whole-tree server (that is a donated
+full-node-equivalent, strictly good for the network, and needs no gate). The
+hazard is a **naive optimizer**: an ordinary user who sees a "serve
+everything / select all" affordance and reasons "more shards served ⇒ more
+reward," selects it, bonds real capital, and lands in the one kind that pays
+**zero**. It is an inverted footgun — the user believes they are maximizing
+while silently zeroing themselves out, with capital locked.
+
+**The gate is single-point and subtractive.** The client is the *sole
+producer* of the holdings-kind byte; consensus only validates what it
+receives and never originates a kind. The choice is consumed at exactly one
+place — `bond_assembly::wire_holdings` (`bond_assembly.rs`), which maps a
+`HoldingsDescriptor` onto the wire `Holdings` enum. Because there is one
+choke point, the gate cannot be half-applied.
+
+**Required builder shape (make-bad-states-unrepresentable, applied to the
+API):**
+
+1. The **standard** market bond constructor takes **no holdings-kind
+   argument** and yields `ShardSetCompact` by construction. "The normal path
+   produces the safe kind" is enforced by the *type of the API*, not by
+   remembering to default an enum field correctly — a defaulted enum
+   parameter can be overridden by a confused caller or a wrapper script; a
+   type that cannot express the wrong value cannot.
+2. `CompleteTree` is reachable **only** through a **separately-named**
+   constructor (e.g. `build_foundation_complete_tree_bond`) that the GUI
+   never calls and the CLI exposes only behind an **explicit, non-default,
+   documented** foundation flag (e.g. `--complete-tree-foundation`, help text
+   marked foundation-only). Opt-in by intent, never reachable by accident.
+3. There is **no** "select all" / "serve everything" affordance in the
+   standard GUI or CLI staking flow. The fix is *absence*, not an
+   "are you sure?" dialog — the affordance that would produce the value must
+   not exist on the naive path.
+
+**Explicitly out of scope for this gate.** Consensus stays open to
+`CompleteTree` from any poster — it must accept the Foundation's, and it
+cannot distinguish posters by node build. That is safe precisely *because*
+of the economic exclusion above: there is no reward to be tricked out of, so
+an unguarded consensus layer is not a reward-theft surface. A consensus-level
+Foundation-identity gate on `CompleteTree` posting is a **separate** question
+(privilege control, not footgun control) and is **not** required by this
+note; if it is ever wanted, its natural shape is a genesis-pinned Foundation
+key set checked in `bond_post` verify — see
+`FOUNDATION_GENESIS_IDENTITY_SET.md`.
+
+**Status:** construction-side requirement, open — the builder is in flight,
+so this is designed-in, not retrofit. Reopen if a consensus-side
+Foundation-identity gate is later adopted (it would let the CLI foundation
+flag be checked rather than merely conventional).
+
 ## 10. PR 2 -- StakeEngine orchestration + standoff self-cert
 
 > **Status (PR 2c-2a landed inert, `feat/archival-stake-wiring`).** The
