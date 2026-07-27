@@ -120,6 +120,20 @@ namespace cryptonote
       return nullptr;
     }
   }
+
+  namespace detail
+  {
+    std::time_t embargo_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs)
+    {
+      // Cast: the FFI returns uint64_t; seconds::rep is signed, so list-init
+      // would be a narrowing conversion on some standard libraries.
+      const auto delay = std::chrono::seconds{static_cast<std::chrono::seconds::rep>(draw_secs)};
+      // ceil, not to_time_t's truncation — the header explains why the direction
+      // is a privacy decision rather than a formatting one.
+      return std::chrono::system_clock::to_time_t(
+        std::chrono::ceil<std::chrono::seconds>(now + delay));
+    }
+  }
   //---------------------------------------------------------------------------------
   //---------------------------------------------------------------------------------
   tx_memory_pool::tx_memory_pool(Blockchain& bchs): m_blockchain(bchs), m_cookie(0), m_txpool_max_weight(DEFAULT_TXPOOL_MAX_WEIGHT), m_txpool_weight(0), m_mine_stem_txes(false), m_next_check(std::time(nullptr))
@@ -1039,20 +1053,8 @@ namespace cryptonote
 
           if (meta.dandelionpp_stem)
           {
-            // Cast: the FFI returns uint64_t; std::chrono::seconds::rep is
-            // signed and list-init would be a narrowing conversion on some libcs.
-            //
-            // ceil, not to_time_t's truncation: `now` carries a sub-second
-            // remainder, and flooring the deadline would hand back up to ~999ms
-            // of the embargo — the same under-provisioning the FFI's div_ceil
-            // exists to avoid, applied in the opposite direction one layer down.
-            // Under-provisioning fluffs early, which is the privacy-losing
-            // direction (the D-5 asymmetry), so the whole-second deadline rounds
-            // away from now. See DAEMON_RELAY_PRIVACY.md sec 17.
-            meta.last_relayed_time = std::chrono::system_clock::to_time_t(
-              std::chrono::ceil<std::chrono::seconds>(
-                now + std::chrono::seconds{static_cast<std::chrono::seconds::rep>(
-                  shekyl_dandelionpp_embargo_draw_seconds())}));
+            meta.last_relayed_time =
+              detail::embargo_deadline(now, shekyl_dandelionpp_embargo_draw_seconds());
             next_relay = std::min(next_relay, meta.last_relayed_time);
           }
           else

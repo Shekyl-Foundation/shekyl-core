@@ -32,6 +32,8 @@
 #include "include_base_utils.h"
 
 #include <atomic>
+#include <chrono>
+#include <ctime>
 #include <set>
 #include <tuple>
 #include <unordered_map>
@@ -54,6 +56,24 @@
 namespace cryptonote
 {
   class Blockchain;
+
+  namespace detail
+  {
+    /*! The whole-second deadline at which a stem transaction's embargo expires.
+
+        `now` carries a sub-second remainder and `last_relayed_time` is a
+        whole-second `time_t`, so the conversion has to round — and the direction
+        is a privacy decision, not a formatting one. Under-provisioning the
+        embargo fluffs early (the D-5 asymmetry), so this rounds **away from
+        now**: the returned deadline is never earlier than `now + draw_secs`.
+        Truncating instead would hand back up to ~999ms of every embargo, undoing
+        one layer down what the Rust side's `div_ceil` does one layer up.
+
+        Extracted from `set_relayed` so the rounding is testable on a synthetic
+        `now` rather than only on whatever fraction the system clock happens to
+        hold. See docs/design/DAEMON_RELAY_PRIVACY.md sec 17. */
+    std::time_t embargo_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs);
+  }
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/

@@ -270,3 +270,70 @@ TEST(txpool_relay_timers, fluff_still_obeys_min_relay_time)
   EXPECT_FALSE(fx.relayable())
     << "a fluff tx relayed just now must wait out MIN_RELAY_TIME";
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The embargo deadline rounds AWAY from now (RP-4, sec 17).
+//
+// `now` carries a sub-second remainder and the stored deadline is a whole-second
+// time_t, so the conversion must round — and the direction is a privacy
+// decision. Truncating (what to_time_t does on its own) would shave up to ~999ms
+// off every embargo, undoing one layer down what the Rust side's div_ceil does
+// one layer up; under-provisioning fluffs early, the privacy-losing direction.
+//
+// Tested on a synthetic `now` rather than the system clock, so the fractional
+// case is exercised deterministically instead of whenever the clock happens to
+// land off a second boundary.
+// ─────────────────────────────────────────────────────────────────────────────
+namespace
+{
+  // A time_point at `whole` seconds past the epoch plus `frac` milliseconds.
+  std::chrono::system_clock::time_point at(std::time_t whole, int frac_ms)
+  {
+    return std::chrono::system_clock::from_time_t(whole) + std::chrono::milliseconds{frac_ms};
+  }
+}
+
+TEST(embargo_deadline, fractional_now_rounds_up_never_down)
+{
+  // The case the bug lived in: 1ms past the second, so truncation would return
+  // 1000 + 144 and silently shorten the embargo by 999ms.
+  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(1000, 1), 144), 1145)
+    << "a sub-second remainder must push the deadline to the next whole second";
+  // Worst case for truncation.
+  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(1000, 999), 144), 1145);
+  // Anywhere in the interior rounds to the same next second.
+  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(1000, 500), 144), 1145);
+}
+
+TEST(embargo_deadline, exact_second_is_not_padded)
+{
+  // On an exact boundary there is nothing to round: ceil must be the identity,
+  // not an unconditional +1. Rounding up here would lengthen every embargo by a
+  // second for no reason, which is a (smaller) drift in the other direction.
+  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(1000, 0), 144), 1144);
+  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(0, 0), 0), 0);
+}
+
+TEST(embargo_deadline, zero_draw_still_never_lands_in_the_past)
+{
+  // A 0s draw is legitimate (~0.17%: the memoryless geometric's support includes
+  // 0). It must still not resolve to an already-past deadline when `now` is
+  // mid-second, which is exactly what truncation would produce.
+  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(5000, 1), 0), 5001);
+  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(5000, 0), 0), 5000);
+}
+
+TEST(embargo_deadline, is_monotonic_in_the_draw)
+{
+  // A longer draw can never yield an earlier deadline, at any sub-second offset.
+  for (const int frac : {0, 1, 250, 999})
+  {
+    std::time_t previous = std::numeric_limits<std::time_t>::min();
+    for (std::uint64_t draw = 0; draw <= 300; ++draw)
+    {
+      const std::time_t d = cryptonote::detail::embargo_deadline(at(1000, frac), draw);
+      EXPECT_GE(d, previous) << "non-monotonic at frac=" << frac << " draw=" << draw;
+      previous = d;
+    }
+  }
+}
