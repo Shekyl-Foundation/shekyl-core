@@ -3452,6 +3452,30 @@ first carries findings:
 - **RP-3b** — the noise channels follow, and the snapshot seam is deleted with
   them.
 
+**Standing item for RP-3b: name the action, not the intent.** `run_stems()` does
+`for (noise_channel& c : zone_->channels) c.next_noise.cancel()` — it cancels
+covert-traffic timers and has nothing to do with stem routing. The name captured
+the *caller's intent* in the clearnet configuration, where stems run and noise
+does not, so "advance the stem machinery" and "cancel the noise timers"
+coincided. Once Tor exists — noise runs, stems do not — the name is **actively
+false**, and false on the transport that matters most. It nearly put covert
+traffic into the 3a stem branch under a name that made the misplacement
+invisible.
+
+The detector is the **three-way disagreement**: name says "run stems", the header
+comment says "next stem timeout", the body says "cancel noise timers". Only the
+body is executable, and the disagreement itself marks a name written for a world
+that no longer exists. These fossils cluster in the covert path — the fluff/stem
+vocabulary has been slippery throughout it — so 3b's grounding trusts bodies over
+identifiers harder than 3a's did.
+
+The port is a **free rename**: name each Rust function for its body's action, and
+where that differs from the C++ name, that difference is a dead assumption being
+deleted. The old identifier survives only at the ABI shim where the oracle needs
+it (the gtests call `run_stems`) — old names at the boundary, honest names where
+the logic lives, exactly as the map port kept the C++ ABI over honestly-typed
+Rust. Types stop the machine reasoning wrongly; names stop the human doing it.
+
 Noise is conditionally active (`if (zone->noise.empty()) return`) and carries its
 own strand-per-channel model, so it is genuinely a second subsystem rather than
 an arbitrary cut. The split is a proposal, not a decision: it stands or falls on
