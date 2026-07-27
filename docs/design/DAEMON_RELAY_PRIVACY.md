@@ -3480,7 +3480,13 @@ whether 3a lands cleanly with the snapshot seam intact.
 6. `schedule.rs`'s "No async runtime" section **and** `lib.rs`'s
    second-reactor rationale reflect what shipped — both enacted in the commit
    that moves the loop, per the doc-tracks-code rule above.
-7. **The live scheduler is a new crate, not an extension of
+7. **The §18.5 state inventory holds**: every piece of relay state has exactly
+   one owner, `connection_count` is Rust-owned single-writer, and the map
+   snapshot flows Rust → C++ as a push. Verified before RP-3a implementation
+   lands, and re-verified for any state the implementation adds — this is what
+   bounds the second reactor's cost, and therefore what earns the `lib.rs`
+   seal-break.
+8. **The live scheduler is a new crate, not an extension of
    `shekyl-relay-privacy`.** That crate's stated scope is *"Timing only. Nothing
    here serializes a message, chooses eligible peers, or touches a socket"*, and
    a zone actor does the last two. Keeping the split preserves what makes the
@@ -3489,3 +3495,65 @@ whether 3a lands cleanly with the snapshot seam intact.
    hooks, and therefore the 33-test oracle, depend on. The new crate owns the
    driver and the transport callbacks and depends on the primitives; rule 25's
    "implement logic in a dedicated crate" points the same way.
+
+### 18.5 State inventory — what earns the seal-break
+
+RP-3 reverses a decision `lib.rs:100–112` sealed *"so the question does not get
+re-opened by accident"*. The seal's objection was **a second reactor for no
+gain**, so the reversal is priced against that objection and not against a
+generic dislike of duplication:
+
+| Ledger | Entry |
+| --- | --- |
+| **Gain (load-bearing)** | **F-4/F-5 close.** A *defect* closure, which is a different category from the cleanliness the seal weighed — a cleanliness seal is legitimately broken by a defect and not by a preference. |
+| **Gain (discounted)** | Cross-language duplication of relay timing ends. Real, but partly self-inflicted: this arc created that duplication by migrating incrementally, so it is *finishing a migration we chose to start*. A half-migrated seam is worse than either endpoint, so it counts — but it does not carry the reversal. |
+| **Cost (acknowledged)** | There **is** a second reactor. Asio keeps sockets and the p2p path; a Rust driver takes relay timing. Saying otherwise would be dishonest. |
+| **Cost bound** | The cost is a *handoff* rather than a *race* **iff nothing straddles** — every piece of relay state has exactly one owner. That is inventoried below, not asserted. |
+
+**The inventory.** Zone state from `levin_notify.cpp`, with today's ownership
+taken from the code's own discipline comments:
+
+| State | Owner today | Owner after RP-3a |
+| --- | --- | --- |
+| `next_epoch`, `flush_txs` (`steady_timer`) | zone strand | **Rust** |
+| `contexts` (`uuid → {fluff_txs, flush_time, m_is_income}`) | zone strand | **Rust** |
+| `map` | zone strand | **Rust** (already Rust-backed, RP-2a) |
+| `flush_callbacks`, `fluffing` | zone strand | **Rust** |
+| `strand` | — | **deleted** — the task replaces it |
+| `channels` (`deque<noise_channel>`) | *"Never touch after init; only update elements on `noise_channel.strand`"* | **asio** (RP-3b) |
+| `noise_channel::{active, queue, next_noise, connection}` | per-channel strand | **asio** (RP-3b) |
+| `p2p`, `noise`, `nzone`, `pad_txs` | const after construction | config — no owner needed |
+| **`connection_count`** | *"Only update in strand, **can be read at any time**"* | **the one real straddle** — see below |
+
+Three findings, and the third is the one that would have bitten:
+
+1. **`connection_count` is the only genuine straddle.** The code says so itself:
+   written on the strand, read from anywhere — `get_status()`
+   ([`:755`](../../src/cryptonote_protocol/levin_notify.cpp#L755)) is public API
+   callable on any thread, and the tests call it. Resolution: it becomes a
+   Rust-owned atomic, written **only** by the zone task, read lock-free through
+   the FFI. That preserves the existing read-from-anywhere contract and is
+   single-writer by construction rather than by convention.
+2. **The 3a/3b split follows a serialization boundary that already exists.**
+   Noise channels are not on the zone strand today — each carries its own strand
+   and timer, and the comment forbids touching them after init except on that
+   strand. So deferring them to 3b splits along a boundary the inherited code
+   already draws, rather than inventing one.
+3. **The map snapshot must be a push (Rust → C++), not a pull.** During 3a the
+   C++ noise channels still need the ordered slot snapshot to bind
+   `channels[i]`. Today `update_channels::post`
+   ([`:514–524`](../../src/cryptonote_protocol/levin_notify.cpp#L514-L524)) reads
+   the map *on the zone strand*, which is what makes it safe. With the strand
+   gone and the map owned by the Rust task, a C++-initiated `map_snapshot` call
+   would race the task's own mutations — reintroducing exactly the
+   second-reactor-in-the-p2p-path hazard the seal warned about. So the task
+   **pushes** the snapshot outward when the map changes, and C++ never pulls it.
+
+Finding 3 is why this inventory is an acceptance item and not a paragraph: the
+3a/3b split looked safe until the ownership question was asked of it, and the
+answer changed the direction of a call.
+
+**Standing obligation.** Any new state added on either side of the boundary is
+inventoried before it is written, with a named single owner. "Nothing straddles"
+is the property that bounds the second reactor's cost, so it is maintained
+deliberately rather than assumed to persist.

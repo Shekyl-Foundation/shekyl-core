@@ -111,6 +111,45 @@
 //!    [`schedule`] is a plain `&mut self` state machine that returns a
 //!    deadline, precisely so the existing timer stays in charge.
 //!
+//! ## Reason 2's premise is reversed by RP-3 — deliberately, and on the record
+//!
+//! Reason 2 was sealed *"so the question does not get re-opened by accident"*.
+//! RP-3 reopens it on purpose (`DAEMON_RELAY_PRIVACY.md` §18), so the seal is
+//! broken here rather than stepped around, priced against what the seal
+//! actually objected to.
+//!
+//! The seal's objection was **a second reactor for no gain**, not two reactors
+//! being inelegant. So the reversal has to clear a bar the seal itself set:
+//!
+//! - **The gain is a different category from the one the seal weighed.** RP-3
+//!   closes **F-4 and F-5** — the fluff delay is still drawn in C++ from
+//!   `crypto::random_poisson_subseconds`, the same distribution defect as F-2,
+//!   on the timer every node applies to every transaction, and the ~7× slower
+//!   flood that follows. Those are defect closures, not tidiness. A cleanliness
+//!   seal is legitimately broken by a defect, and not by a preference.
+//! - **The secondary gain is honestly discounted.** Ending the cross-language
+//!   duplication of relay timing is real, but that duplication is partly
+//!   self-inflicted: this arc created it by migrating incrementally, so it is
+//!   *finishing a migration we chose to start*, not removing a pre-existing
+//!   wart. A half-migrated seam is worse than either endpoint, which is why it
+//!   still counts — but it does not carry the reversal.
+//! - **The cost is bounded by construction, and inventoried.** There *is* a
+//!   second reactor: asio keeps sockets and the p2p path, a Rust driver takes
+//!   relay timing. That is safe only if nothing straddles the boundary, so
+//!   §18.5 inventories every piece of relay state and assigns it one owner.
+//!   The inventory is the evidence, not the assertion — it found the one real
+//!   straddle (`connection_count`, *"only update in strand, can be read at any
+//!   time"*) and the one direction that must be a push rather than a pull (the
+//!   map snapshot, Rust → C++). Without that inventory this paragraph would be
+//!   asserting the cost is bounded; with it, the bound is checkable.
+//!
+//! What survives reason 2 unchanged, and matters more than what changed:
+//! everything in [`schedule`] stays a plain `&mut self` state machine that
+//! returns a deadline. That is what the daemon's `run_epoch` / `run_stems` /
+//! `run_fluff` force-step hooks forward into, and therefore what keeps the 33
+//! `levin_notify` cases usable as an oracle across the cut. The driver moves;
+//! the primitives do not become async.
+//!
 //! Cuprate's `net/levin` and `net/epee-encoding` are a genuinely different
 //! question — they would remove the single largest obstacle to ever moving the
 //! *full* relay path into Rust, which is that this workspace has no epee or
