@@ -3954,7 +3954,17 @@ void wallet2::process_unconfirmed_transfer(bool incremental, const crypto::hash 
     }
   };
 
-  constexpr const std::chrono::seconds tx_propagation_timeout{CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE * 3 / 2};
+  // A pending transaction is invisible to us until it fluffs, so this deadline
+  // is a quantile of the stem embargo, not a free-standing timeout. The Rust
+  // side derives it from the shipped distribution at a stated false-fail rate
+  // (at most 1 in 100 embargoes still running). The inherited `39s * 3/2` was
+  // wrong twice over: the mean was wrong, and a bare multiple of the mean is
+  // only the ~78th percentile of a memoryless distribution — so roughly a fifth
+  // of black-holed transactions were judged failed while their backstop was
+  // still running, which un-reserves their inputs (see below) and invites a
+  // re-spend. See docs/design/DAEMON_RELAY_PRIVACY.md sec 17.
+  const std::chrono::seconds tx_propagation_timeout{
+    static_cast<std::chrono::seconds::rep>(shekyl_dandelionpp_propagation_timeout_seconds())};
   if (seen_in_pool)
   {
     if (tx_details.m_state != wallet2::unconfirmed_transfer_details::pending_in_pool)
