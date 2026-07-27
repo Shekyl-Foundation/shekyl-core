@@ -10,43 +10,44 @@
 //! frozen §6.1 shape constraints and reports which members clear the burden
 //! (A1) without failing W9/W10. Stage 3 freezes the winner's number.
 //!
-//! Every candidate reuses the **consensus** [`curve_milli`] + [`mul_div_floor`]
-//! (the §6.1 "curve_milli precedent") so the recommended shape is
-//! bit-implementable, not a float sketch (DQ-2G). Given the floor `F` (today's
-//! 25%) and an asymptote `A`, over a saturation knee `K`:
+//! **This module owns *which candidates to sweep*, never *how a share is
+//! computed*.** Stage 3a promoted the escalation to consensus code
+//! ([`shekyl_economics::escalation::staker_pool_share_at`]), and
+//! [`EscalationCurve::share`] now delegates to it. The ramp arithmetic that used
+//! to live here — `curve_milli` in its continuous form, rescaled by
+//! `mul_div_floor` — moved with it, and is deliberately **not** restated: a
+//! local copy would be free to drift from the shape the chain actually freezes,
+//! which would silently turn every swept verdict into a statement about the sim
+//! rather than about consensus.
 //!
-//! ```text
-//! raw   = curve_milli(n, { plateau_work_milli: K, plateau_value_milli: K/2 })  // ∈ [0, K/2], = K/2 at n ≥ K
-//! lift  = mul_div_floor(A - F, raw, K/2)                                       // ∈ [0, A - F]
-//! share = F + lift                                                             // ∈ [F, A]
-//! ```
+//! The §6.1 frozen set is likewise asserted where it is implemented (each
+//! constraint carries an executable test in the consensus module), not
+//! re-argued here. The sweep's job is to say which `(asymptote, knee)` members
+//! clear the burden model; the *shape* they share is settled upstream.
 //!
-//! `curve_milli` is only **continuous** when `plateau_value = plateau_work / 2`
-//! (its reward-curve calibration) — using `pv = A − F` directly would put a
-//! **cliff at the knee** (the exact bounded-slope violation §6.1 forbids). So we
-//! run `curve_milli` in its continuous form (rising `0 → K/2` with the banded
-//! slopes `1, ½, ¼`) and rescale the output to `[0, A − F]` with the consensus
-//! `mul_div_floor`. This satisfies the §6.1 frozen set **by construction**:
-//! 1. **Monotone in `n`** — `curve_milli` is non-decreasing.
-//! 2. **Floor at 25%** — `curve_milli(0) = 0`, so `share(0) = F`.
-//! 3. **Asymptote `< 100%`** — it plateaus at `A` (chosen `< SCALE`), so the
-//!    deflation channel `1 − A` of burn survives forever.
-//! 4. **Banded piecewise-linear, integer fixed-point** — `curve_milli` +
-//!    `mul_div_floor`, no float.
-//! 5. **No time-derivative / smoothing** — `share` is a pure map of `n`; there
-//!    is no state, EMA, or rate-limiter. Smoothness is inherited from the
-//!    operand (monotone + slow, §6.0).
+//! Floor and scale are read from the shipped config too
+//! ([`floor_share`], [`SHARE_SCALE`]) rather than declared locally, for the same
+//! reason: a sim that redeclares the chain's constants can model a chain that
+//! does not exist.
 
-use shekyl_archival_retention::{curve_milli, mul_div_floor, BandedCurveParams};
+// Stage 3a: the escalation is CONSENSUS code now, so this module deps it rather
+// than restating it. Nothing here computes a ramp.
+use shekyl_economics::escalation::{staker_pool_share_at, EscalationParams};
+use shekyl_economics::params::{EconomicParams, SCALE};
 
-/// Fixed-point scale for shares (`SCALE = 1_000_000`; `250_000 = 25%`). Mirrors
-/// `shekyl_economics::params::SCALE` — the units `staker_pool_share` is carried
-/// in.
-pub const SHARE_SCALE: u64 = 1_000_000;
+/// Fixed-point scale for shares (`250_000 = 25 %`). **Sourced from**
+/// `shekyl_economics::params::SCALE` rather than restated — it is the unit
+/// `staker_pool_share` is carried in, and a sim that redeclared it could drift
+/// from the chain it is modelling.
+pub const SHARE_SCALE: u64 = SCALE;
 
-/// The §6.1 floor: today's `staker_pool_share` (`economics_params.json` =
-/// `250_000` = 25%). The escalation never dips below it.
-pub const FLOOR_SHARE: u64 = 250_000;
+/// The §6.1 floor: today's `staker_pool_share`. **Read from the shipped config**
+/// via [`EconomicParams::default`], not restated, so the sim's floor is the
+/// chain's floor by construction.
+#[must_use]
+pub fn floor_share() -> u64 {
+    EconomicParams::default().staker_pool_share
+}
 
 /// Asymptote candidates (all strictly `< SHARE_SCALE`, so `actually_destroyed`
 /// deflation survives): 50% / 75% / 90% of burn to the staker pool at
@@ -60,10 +61,10 @@ pub const ASYMPTOTE_BAND: [u64; 3] = [500_000, 750_000, 900_000];
 pub const KNEE_BAND: [u64; 3] = [25_000, 100_000, 250_000];
 
 /// One §6.1-conformant escalation candidate: a saturating banded-PL lift of the
-/// staker share from [`FLOOR_SHARE`] to `asymptote` as `n` rises to `knee`.
+/// staker share from [`floor_share`] to `asymptote` as `n` rises to `knee`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EscalationCurve {
-    /// Saturation share, fixed-point `SHARE_SCALE`. Must be `> FLOOR_SHARE` and
+    /// Saturation share, fixed-point `SHARE_SCALE`. Must be `> floor_share()` and
     /// `< SHARE_SCALE`.
     pub asymptote: u64,
     /// `frozen_segment_count` at which `share` reaches `asymptote`.
@@ -71,25 +72,26 @@ pub struct EscalationCurve {
 }
 
 impl EscalationCurve {
-    /// The staker-pool share at `n` frozen shards, fixed-point `SHARE_SCALE`,
-    /// in `[FLOOR_SHARE, asymptote]`. Reuses the consensus `curve_milli` (in its
-    /// continuous `pv = pw/2` form) rescaled by `mul_div_floor` — see the module
-    /// doc for why the naive `pv = A − F` form would cliff.
+    /// The staker-pool share at `n` frozen shards, fixed-point `SHARE_SCALE`.
+    ///
+    /// **Delegates to the consensus function** — this module owns *which
+    /// candidates to sweep*, never *how a share is computed*. A local ramp here
+    /// would be a mirror of `staker_pool_share_at`, free to drift from the
+    /// shape the chain actually freezes, which would make every swept verdict a
+    /// statement about the sim rather than about consensus.
     #[must_use]
     pub fn share(&self, n: u64) -> u64 {
-        let knee = self.knee_shards.max(1);
-        let cap = (knee / 2).max(1); // curve_milli's continuous plateau value
-        let raw = curve_milli(
-            n,
-            &BandedCurveParams {
-                plateau_work_milli: knee,
-                plateau_value_milli: cap,
-            },
-        );
-        let span = self.asymptote.saturating_sub(FLOOR_SHARE);
-        // lift = span · raw / cap ∈ [0, span]; floor keeps it integer-exact.
-        let lift = mul_div_floor(span, raw, cap).unwrap_or(span).min(span);
-        FLOOR_SHARE + lift
+        staker_pool_share_at(n, &self.params())
+    }
+
+    /// This candidate as consensus [`EscalationParams`].
+    #[must_use]
+    pub fn params(&self) -> EscalationParams {
+        EscalationParams {
+            floor_share: floor_share(),
+            knee_n: self.knee_shards,
+            asymptote_share: self.asymptote,
+        }
     }
 
     /// The share as a fraction (for reporting / the fiat conversion in A1).
@@ -122,7 +124,7 @@ pub fn family() -> Vec<EscalationCurve> {
 #[must_use]
 pub fn flat_25() -> EscalationCurve {
     EscalationCurve {
-        asymptote: FLOOR_SHARE,
+        asymptote: floor_share(),
         knee_shards: 1,
     }
 }
@@ -135,7 +137,7 @@ mod tests {
     fn floor_at_zero_plateau_at_knee() {
         for c in family() {
             // n = 0 ⇒ exactly the 25% floor.
-            assert_eq!(c.share(0), FLOOR_SHARE);
+            assert_eq!(c.share(0), floor_share());
             // n ≥ knee ⇒ exactly the asymptote (plateau), never above.
             assert_eq!(c.share(c.knee_shards), c.asymptote);
             assert_eq!(c.share(c.knee_shards * 10), c.asymptote);
@@ -149,7 +151,7 @@ mod tests {
             for n in (0..=c.knee_shards).step_by((c.knee_shards / 50).max(1) as usize) {
                 let s = c.share(n);
                 assert!(s >= prev, "share must be monotone in n");
-                assert!(s >= FLOOR_SHARE, "never below the 25% floor");
+                assert!(s >= floor_share(), "never below the 25% floor");
                 assert!(
                     s < SHARE_SCALE,
                     "asymptote < 100% — deflation must survive: {s}"
@@ -162,8 +164,8 @@ mod tests {
     #[test]
     fn flat_25_never_escalates() {
         let f = flat_25();
-        assert_eq!(f.share(0), FLOOR_SHARE);
-        assert_eq!(f.share(1_000_000), FLOOR_SHARE);
+        assert_eq!(f.share(0), floor_share());
+        assert_eq!(f.share(1_000_000), floor_share());
     }
 
     #[test]
@@ -173,7 +175,7 @@ mod tests {
         // exact property the `pv = A - F` form violated (a jump to the asymptote
         // at the knee).
         for c in family() {
-            let span = c.asymptote - FLOOR_SHARE;
+            let span = c.asymptote - floor_share();
             let step = (c.knee_shards / 200).max(1);
             let mut prev = c.share(0);
             let mut n = step;
