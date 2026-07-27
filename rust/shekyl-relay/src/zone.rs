@@ -15,7 +15,9 @@ use std::collections::BTreeMap;
 
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::RelayRng;
-use shekyl_relay_privacy::schedule::{EpochScheduler, Millis, PeerDirection};
+use shekyl_relay_privacy::schedule::{
+    DelayFamily, EpochScheduler, FluffScheduler, Millis, PeerDirection,
+};
 use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap, StemSetChange};
 
 /// What the zone knows about one connected peer's pending fluff batch.
@@ -27,9 +29,12 @@ use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap, StemSetChange};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerFluff {
     /// Blobs waiting for this peer's flush deadline.
+    ///
+    /// The deadline itself is **not** here. `FluffScheduler` owns pending
+    /// deadlines, and a copy in this struct would be a second owner of the
+    /// same fact — the duplicate-state pattern `connection_count` was designed
+    /// out of (§18.5). Ask the scheduler; do not mirror it.
     pub queued: Vec<Vec<u8>>,
-    /// When the batch flushes. `None` means no batch is in flight.
-    pub flush_at: Option<Millis>,
     /// Who dialed whom — the inherited code gives outbound peers half the
     /// inbound fluff delay, and [`shekyl_relay_privacy::schedule::FluffScheduler`]
     /// keeps that asymmetry.
@@ -40,7 +45,6 @@ impl PeerFluff {
     fn new(direction: PeerDirection) -> Self {
         Self {
             queued: Vec::new(),
-            flush_at: None,
             direction,
         }
     }
@@ -59,6 +63,14 @@ pub struct Zone {
     /// Stem routing for this epoch. Already Rust-backed since RP-2a; RP-3a
     /// takes ownership of it rather than reaching it through a C++ wrapper.
     map: StemMap,
+    /// Per-peer fluff batching deadlines.
+    ///
+    /// **The corrected draw (F-4/F-5).** Constructed `memoryless()`, never
+    /// `inherited()` — the latter is `DelayFamily::Poisson`, which *is* the F-4
+    /// defect, at identical means. The difference is one identifier and no
+    /// routing test can see it, so `fluff_draws_are_memoryless_not_the_inherited_poisson`
+    /// witnesses it rather than trusting this line (§18.4 item 3).
+    fluff: FluffScheduler,
     /// True when this zone spends the epoch fluffing everything it receives.
     fluffing: bool,
     /// When the current epoch ends and roles are re-drawn.
@@ -84,6 +96,7 @@ impl Zone {
         Self {
             contexts: BTreeMap::new(),
             map: StemMap::empty(),
+            fluff: FluffScheduler::memoryless(),
             fluffing: epoch.fluffing,
             epoch_ends_at: epoch.ends_at,
             params,
@@ -110,6 +123,9 @@ impl Zone {
     /// step is not entitled to make.
     pub fn on_connection_close(&mut self, id: &ConnectionId) {
         self.contexts.remove(id);
+        // The scheduler holds its own pending-deadline map; leaving the peer
+        // there would keep waking the driver for a connection that is gone.
+        self.fluff.forget(*id);
     }
 
     /// Re-point the stem map at the currently live outbound connections.
@@ -164,6 +180,74 @@ impl Zone {
         self.map.stem_for(source, rng)
     }
 
+    /// Accept transaction blobs for fluffing to every peer except `source`.
+    ///
+    /// Mirrors `fluff_notify`: each peer that has no batch in flight draws a
+    /// fresh flush deadline; peers already batching keep theirs, so a burst
+    /// does not repeatedly push a peer's flush into the future. Returns the
+    /// earliest pending deadline, which is what the driver arms its timer on.
+    ///
+    /// Blobs are opaque — this crate schedules, transport frames.
+    pub fn queue_fluff<R: RelayRng + ?Sized>(
+        &mut self,
+        txs: &[Vec<u8>],
+        source: Option<ConnectionId>,
+        now: Millis,
+        rng: &mut R,
+    ) -> Option<Millis> {
+        for (id, peer) in &mut self.contexts {
+            if Some(*id) == source {
+                continue;
+            }
+            // `queue` draws only when the peer has no pending deadline, so a
+            // burst cannot re-draw and defer an open batch. That idempotence
+            // lives in the scheduler; the zone does not second-guess it with a
+            // duplicate flag. Note the return is the scheduler's *earliest*
+            // deadline, not this peer's — storing it per peer would be wrong.
+            let _ = self.fluff.queue(now, *id, peer.direction, rng);
+            peer.queued.extend(txs.iter().cloned());
+        }
+        self.fluff.next_deadline()
+    }
+
+    /// Release every batch whose deadline has passed, and any batch at all when
+    /// `force` is set.
+    ///
+    /// `force` is what the daemon's `run_fluff()` test hook drives. It runs the
+    /// same release path as the deadline, which is why forcing a flush in a
+    /// test is not a special case — the only difference is which batches are
+    /// considered due.
+    pub fn flush_fluff(&mut self, now: Millis, force: bool) -> Vec<(ConnectionId, Vec<Vec<u8>>)> {
+        let due = if force {
+            self.fluff.drain()
+        } else {
+            self.fluff.due(now)
+        };
+        let mut released = Vec::with_capacity(due.len());
+        for id in due {
+            if let Some(peer) = self.contexts.get_mut(&id) {
+                let batch = std::mem::take(&mut peer.queued);
+                if !batch.is_empty() {
+                    released.push((id, batch));
+                }
+            }
+        }
+        released
+    }
+
+    /// The earliest pending fluff deadline, if any batch is in flight.
+    pub fn fluff_deadline(&self) -> Option<Millis> {
+        self.fluff.next_deadline()
+    }
+
+    /// The distribution family the fluff delay is drawn from.
+    ///
+    /// Exposed so the correction can be *witnessed* rather than assumed — see
+    /// the acceptance note on [`Zone::fluff`].
+    pub fn fluff_family(&self) -> DelayFamily {
+        self.fluff.family()
+    }
+
     /// Number of stem slots backed by a live peer.
     ///
     /// This is the value the inherited code cached in `connection_count`, the
@@ -199,6 +283,13 @@ impl Zone {
 mod tests {
     use super::*;
     use shekyl_relay_privacy::rng::SplitMix64;
+
+    /// Frozen draws from seed `0xF1FF` for the wired fluff path. Not chosen —
+    /// observed, then pinned. Note the shape is memoryless: a 250 ms draw sits
+    /// beside a 23.5 s one, which is the variance a Poisson at these means
+    /// cannot produce (`CV ~ 0.2` vs ~1). That is F-4 visible in four numbers.
+    const PINNED_INBOUND: [Millis; 4] = [23_500, 2_250, 9_000, 2_250];
+    const PINNED_OUTBOUND: [Millis; 4] = [1_750, 3_000, 250, 750];
 
     fn id(byte: u8) -> ConnectionId {
         let mut b = [0u8; 16];
@@ -288,6 +379,171 @@ mod tests {
         assert!(
             z.epoch_deadline() > first_deadline,
             "the new epoch ends after the old one"
+        );
+    }
+
+    // --- F-4/F-5: the correction must be WITNESSED, not merely wired ---------
+    //
+    // §18.4 item 3. `FluffScheduler::inherited()` is `DelayFamily::Poisson` —
+    // the F-4 defect — and `memoryless()` is `Geometric`, at identical means.
+    // A wire to the wrong one compiles, fluffs, and passes every routing test
+    // in `levin.cpp` (blind to timing) and any "does it fluff" test (blind to
+    // distribution). These three close that gap from different directions.
+
+    #[test]
+    fn fluff_draws_are_memoryless_not_the_inherited_poisson() {
+        // Structural: the family the zone actually draws from. Named against
+        // the defect so a rewire reads as a regression, not a preference.
+        let mut rng = SplitMix64::new(20);
+        let z = zone(&mut rng);
+        assert_eq!(
+            z.fluff_family(),
+            DelayFamily::Geometric,
+            "the fluff delay must be the corrected memoryless draw (F-4)"
+        );
+        assert_ne!(
+            z.fluff_family(),
+            DelayFamily::Poisson,
+            "FluffScheduler::inherited() is the F-4 defect and is one identifier away"
+        );
+    }
+
+    /// One peer of one direction, so the scheduler's earliest deadline *is*
+    /// that peer's draw. Measuring with two peers queued would sample
+    /// `min(inbound, outbound)` instead — the mistake this test caught.
+    fn mean_delay(direction: PeerDirection, seed: u64, n: u64) -> u64 {
+        let mut rng = SplitMix64::new(seed);
+        let mut total = 0_u64;
+        for _ in 0..n {
+            let mut z = zone(&mut rng);
+            z.on_handshake_complete(id(1), direction);
+            total += z
+                .queue_fluff(&[vec![1]], None, 0, &mut rng)
+                .expect("a batch is in flight");
+        }
+        total / n
+    }
+
+    #[test]
+    fn fluff_delay_means_match_the_configured_averages_with_outbound_halved() {
+        // Behavioural: a right family with a wrong mean passes the structural
+        // check above. The inherited asymmetry — outbound gets half the inbound
+        // delay, because a node chooses who it dials — is a privacy property,
+        // so it is pinned too.
+        const N: u64 = 4_000;
+        let inbound = mean_delay(PeerDirection::Inbound, 21, N);
+        let outbound = mean_delay(PeerDirection::Outbound, 22, N);
+
+        // Inherited means: 20 and 10 quarter-seconds = 5000ms and 2500ms.
+        assert!(
+            (4_600..=5_400).contains(&inbound),
+            "inbound fluff mean {inbound}ms is not the configured 5000ms"
+        );
+        assert!(
+            (2_300..=2_700).contains(&outbound),
+            "outbound fluff mean {outbound}ms is not the configured 2500ms"
+        );
+        assert!(
+            outbound < inbound,
+            "outbound must stay the shorter delay: {outbound} vs {inbound}"
+        );
+    }
+
+    #[test]
+    fn fluff_deadlines_are_pinned_for_a_fixed_seed() {
+        // Golden-vector shape on the *wired* path: any change to the draw the
+        // zone uses — family, mean, or table — moves this sequence. This is the
+        // assertion that fails if someone swaps in `inherited()`/Poisson, which
+        // nothing else in the tree would notice.
+        let mut rng = SplitMix64::new(0xF1FF);
+        let inbound: Vec<Millis> = (0..4)
+            .map(|_| {
+                let mut z = zone(&mut rng);
+                z.on_handshake_complete(id(1), PeerDirection::Inbound);
+                z.queue_fluff(&[vec![0xAB]], None, 0, &mut rng).unwrap()
+            })
+            .collect();
+        let outbound: Vec<Millis> = (0..4)
+            .map(|_| {
+                let mut z = zone(&mut rng);
+                z.on_handshake_complete(id(1), PeerDirection::Outbound);
+                z.queue_fluff(&[vec![0xAB]], None, 0, &mut rng).unwrap()
+            })
+            .collect();
+        assert_eq!(
+            (inbound.as_slice(), outbound.as_slice()),
+            (PINNED_INBOUND.as_slice(), PINNED_OUTBOUND.as_slice()),
+            "the wired fluff draw changed — if deliberate, re-derive it; if not, \
+             check whether the scheduler was rewired to inherited()/Poisson"
+        );
+    }
+
+    #[test]
+    fn a_burst_does_not_push_a_peers_flush_further_out() {
+        // The scheduler only draws when a peer has no pending deadline. If a
+        // later queue re-drew, an adversary could hold a batch open by
+        // trickling transactions and defer the fluff indefinitely.
+        let mut rng = SplitMix64::new(23);
+        let mut z = zone(&mut rng);
+        z.on_handshake_complete(id(1), PeerDirection::Inbound);
+
+        let first = z.queue_fluff(&[vec![1]], None, 0, &mut rng).unwrap();
+        for _ in 0..16 {
+            let _ = z.queue_fluff(&[vec![2]], None, 0, &mut rng);
+        }
+        assert_eq!(
+            z.fluff_deadline(),
+            Some(first),
+            "a burst must not re-draw and defer the flush"
+        );
+        assert_eq!(
+            z.peer(&id(1)).unwrap().queued.len(),
+            17,
+            "all blobs batched"
+        );
+    }
+
+    #[test]
+    fn fluff_skips_the_source_and_releases_on_deadline() {
+        let mut rng = SplitMix64::new(24);
+        let mut z = zone(&mut rng);
+        z.on_handshake_complete(id(1), PeerDirection::Inbound);
+        z.on_handshake_complete(id(2), PeerDirection::Outbound);
+
+        let next = z.queue_fluff(&[vec![7]], Some(id(1)), 0, &mut rng);
+        assert!(
+            z.peer(&id(1)).unwrap().queued.is_empty(),
+            "the source never gets its own transaction back"
+        );
+        assert_eq!(z.peer(&id(2)).unwrap().queued.len(), 1);
+
+        let deadline = next.expect("a batch is in flight");
+        if deadline > 0 {
+            assert!(z.flush_fluff(deadline - 1, false).is_empty(), "not due yet");
+        }
+        let released = z.flush_fluff(deadline, false);
+        assert_eq!(released, vec![(id(2), vec![vec![7]])]);
+        assert!(z.fluff_deadline().is_none(), "nothing left pending");
+    }
+
+    #[test]
+    fn forcing_a_flush_runs_the_same_release_path() {
+        // What `run_fluff()` drives. Same release code as the deadline path —
+        // only which batches count as due differs, which is what keeps the
+        // daemon's force-step hook honest rather than a special case.
+        let mut rng = SplitMix64::new(25);
+        let mut z = zone(&mut rng);
+        z.on_handshake_complete(id(1), PeerDirection::Inbound);
+        let deadline = z.queue_fluff(&[vec![9]], None, 0, &mut rng).unwrap();
+
+        if deadline > 0 {
+            assert!(z.flush_fluff(0, false).is_empty(), "not due at t=0");
+        }
+        let released = z.flush_fluff(0, true);
+        assert_eq!(
+            released,
+            vec![(id(1), vec![vec![9]])],
+            "force releases regardless of deadline"
         );
     }
 
