@@ -3564,6 +3564,39 @@ whether 3a lands cleanly with the snapshot seam intact.
    driver and the transport callbacks and depends on the primitives; rule 25's
    "implement logic in a dedicated crate" points the same way.
 
+### 18.4a The shim is the layer the oracle cannot see
+
+The 33 gtests become the oracle only after the FFI increment, and they reach the
+Rust through a C++ forwarding shim. That means they measure **shim ∘ Rust**, and
+the shim is the one layer they cannot isolate — new code with no oracle of its
+own, sitting inside the thing that is about to carry the whole round's weight.
+Two failure modes, neither visible in a green run: a shim error **cancels** a
+Rust error and the suite passes while both are wrong (until another call path
+hits the same shim bug uncancelled), or a shim error **manufactures** what looks
+like a port bug and sends debugging to the wrong layer.
+
+So "the gtests pass" means "the Rust is correct" only if the shim is transparent,
+which is a property to design for. Three requirements for that increment:
+
+1. **Pure forwarding, zero logic.** Every shim function is one line: translate
+   and call. No branching, no defaulting, no accumulation. A fat shim is where a
+   bug hides underneath a green oracle.
+2. **The fossil name is contained to that one line.** `notify::run_stems()`
+   keeps its C++ identifier so the gtests compile, and forwards to a
+   truthfully-named Rust function (it cancels noise timers). Pure forwarding
+   matters twice here: it stops the misleading name from ever acquiring
+   behaviour, so nobody adds logic *under* a name describing something else.
+3. **`connection_count` is the one deliberate cache, and needs its own test.**
+   The boundary publishes this derived fact as an atomic for off-task readers —
+   a copy, and an exception to derive-don't-cache. It is legitimate because the
+   alternative is worse: off-task readers deriving it live would have to reach
+   into the map, reintroducing the pull-races-mutation hazard finding 3 closed.
+   What keeps it honest is **single writer** — only the zone's owner writes it,
+   readers only read. That is the discipline the inherited *"only update in
+   strand"* comment asked for, now that the strand is gone and it must live in
+   ownership instead. The reused oracle does not cover it, so it carries a test
+   that nothing but the owning path writes it.
+
 ### 18.5 State inventory — what earns the seal-break
 
 RP-3 reverses a decision `lib.rs:100–112` sealed *"so the question does not get
