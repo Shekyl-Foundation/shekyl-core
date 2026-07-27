@@ -3408,6 +3408,14 @@ machines own *when* and never *how*, and remain pure steps that return deadlines
 That property is exactly what keeps the `run_*` hooks — and therefore the
 oracle — available. RP-3 rewrites the paragraph rather than deleting the idea.
 
+**Where the rewrite lands: the implementation commit, not this one.** This
+section *describes* the retraction because a reader of §18 needs to know it is
+coming; `schedule.rs`'s module doc changes only when the code it documents
+changes. Doc-tracks-code is the invariant — a design commit that pre-emptively
+rewrote that paragraph would leave the module claiming a state the tree has not
+reached, which is the stale-gate class this arc has spent its review budget
+catching.
+
 `tokio` is already in the daemon image (`shekyl-daemon-rpc`, `features = ["full"]`),
 so the runtime is not a new dependency under the single-image contract.
 
@@ -3436,8 +3444,17 @@ whether 3a lands cleanly with the snapshot seam intact.
 2. The corrected fluff delay is the crate's (`FluffScheduler`), and the C++
    `random_poisson_subseconds` draw is deleted — F-4/F-5 closed, with the
    derivation guarded at its sites per the STEMS=2 precedent.
-3. `crypto::random_poisson_subseconds`' remaining users are enumerated, as RP-4
+3. **The timing correction carries its own oracle.** The gtests are silent on
+   delays by construction, so they cannot witness F-4/F-5 — deliberately, and
+   that is what makes them a clean routing oracle across a mixed
+   port-plus-correction: they cover exactly the axis that must not change and say
+   nothing about the axis that must. The corrected distribution is witnessed the
+   way RP-4's embargo was, by the derivation and the crate's frozen tables —
+   the conformance grades, their negative controls, and the golden vector — not
+   by anything in `levin.cpp`.
+4. `crypto::random_poisson_subseconds`' remaining users are enumerated, as RP-4
    did for `random_poisson_seconds`; anything left is named with its round.
-4. The zone task is the only writer of zone state — asserted structurally (no
+5. The zone task is the only writer of zone state — asserted structurally (no
    C++ path mutates it) rather than by convention.
-5. `schedule.rs`'s "No async runtime" section reflects what shipped.
+6. `schedule.rs`'s "No async runtime" section reflects what shipped — enacted in
+   the commit that moves the loop, per the doc-tracks-code rule above.
