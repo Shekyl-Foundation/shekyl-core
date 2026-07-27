@@ -134,10 +134,15 @@ sustainability is unaffected by the recalibration.
   mechanism 2026-07-27** (§12.11): the W9 FAIL is retracted as a mismeasurement
   (profit ≠ theft; the stuffer funds `(1 − w_a)` of the lift for competitors who
   spent nothing, so the play is negative-sum and anti-scales). **Stage 3's lone
-  remaining input is §12.11.1** — the §6.0 anti-swing residual, which never
-  depended on stuffing being profitable and is expected to close structurally on
-  `frozen_segment_count` monotonicity (no oscillation to arbitrage; reversible
-  only to reorg depth).
+  remaining input was §12.11.1** — the §6.0 anti-swing residual, which never
+  depended on stuffing being profitable. **That closed too (2026-07-27,
+  §12.11.1), structurally and with no mechanism**, on two legs: the *level*
+  carries no harm to prevent (`frozen_segment_count` is integer division of leaf
+  count, so share cannot mis-track burden; the ceiling is the sanctioned
+  asymptote; and `staker_pool_share` never reaches `miner_fee_income`), and
+  *oscillation* — which would be real harm — is impossible, since
+  `revert_archival_segment_freezes` is the only writer deleting segment rows and
+  fires only on block pop. **Stage 3 now has NO outstanding hard inputs.**
 - **~~KEM-ciphertext extra packing mismatch — vout ≥ 1 unscannable in
   production-built transactions~~** **CLOSED 2026-07-25**
   (`fix/kem-extra-packing`): landed exactly per the fix direction below

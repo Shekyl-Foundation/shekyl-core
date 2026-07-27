@@ -773,10 +773,15 @@ survivors under the §11.4 ceremony and implements it in `compute_burn_split`.
 > **CLOSED with NO MECHANISM**; there is no fee floor to wait for and **no (c)
 > lane to run**. What survives is the *other* half of "load-bearing twice" —
 > §6.0's anti-swing property, which never depended on stuffing being profitable
-> and is now the lone residual, tracked at **§12.11.1 (OPEN)**. **D3 is
-> implemented** (§12.9.1, PR #371). Stage 3's remaining gate is §12.11.1's
-> disposition, expected to close structurally on `frozen_segment_count`
-> monotonicity.
+> and was the lone residual — **now also CLOSED with no mechanism (§12.11.1,
+> 2026-07-27)**, on two legs: the *level* carries no harm to prevent (`n` is
+> integer division of leaf count, so share can never mis-track burden; the
+> ceiling is the sanctioned asymptote; and `staker_pool_share` cannot reach
+> `miner_fee_income` at all), and *oscillation* — which would be real harm — is
+> structurally impossible, since `revert_archival_segment_freezes` is the only
+> writer that deletes segment rows and it fires only on block pop. **D3 is
+> implemented** (§12.9.1, PR #371). **Stage 3 has NO outstanding hard inputs and
+> opens now**; reopen (d) remains parallel to the *shape* freeze per §8.
 Stage 2 does **not** pin the asymptote number, and does **not** write consensus
 code — if it writes any Rust, it is `shekyl-economics-sim` only.
 
@@ -1052,7 +1057,7 @@ models (each cell links its section).
 | **A3** stranding | ✅ **reported** (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff — the §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside the quantization corner. |
 | **A4** stuffing (W9) | ~~🔴 FAILS~~ → ✅ **CLEARS (§12.11)** | **Verdict retracted 2026-07-27**: the arm measured *profit*, not *theft*; netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales**. Figures below are historical. Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6671**, `fee×→1` **0.7** (§12.9 OQ-4). |
 | **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching a ~3 KB opening beats holding 13.6 GB by **4–40×**; crossover `q* ≈ 0.098–0.278`. |
-| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts. Adversarial slew ceiling **1.41 pts/epoch penalty-free** (~~closed **economically** by reopen (c)~~ — **(c) is closed with no mechanism (§12.11); this tier is now the lone open residual, §12.11.1**, expected to close structurally on `frozen_segment_count` monotonicity) or **2.82 pts/epoch at the legal 2× limit** — the latter already priced out by the block-reward penalty (~10.24 M SKL/epoch, **114×** the fees). See the §6.0 amendment. |
+| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts. Adversarial slew ceiling **1.41 pts/epoch penalty-free** (~~closed **economically** by reopen (c)~~ — **(c) closed with no mechanism (§12.11); this tier CLOSED structurally at §12.11.1**) or **2.82 pts/epoch at the legal 2× limit** (~~already priced out by the block-reward penalty, ~10.24 M SKL/epoch, **114×** the fees~~ — **that is also a price argument and blind to a griefer; this tier closes on the same structural grounds, §12.11.1**). **Both tiers are now descriptive bounds on how fast the chain can be pushed toward a sanctioned state, not residual risk.** See the §6.0 amendment. |
 
 **The through-line: one theorem, three independent confirmations.** A4's
 `prem ≈ 1.0`, OQ-1's `|Δ| = 0` at the partition optimum, and A2's `0.02 %`
@@ -1082,8 +1087,9 @@ options**:
    the definition of a working archival incentive, not a vulnerability, and
    netted for the no-exclusivity subsidy the stuffer is **negative-sum**. "Load-
    bearing twice" is therefore **half-retired**: only §6.0's anti-swing property
-   survives, and it is now its own open item (**§12.11.1**), not a fee-floor
-   dependency. Stage 3 **loses this hard input**.
+   survives, and it became its own item (**§12.11.1**) rather than a fee-floor
+   dependency — **and that item is now CLOSED too**, structurally and with no
+   mechanism. Stage 3 **loses this hard input entirely**.
 2. **Reopen (d) — gate-4 grace tightening to `q ≥ q*`, or PoRep** (§12.6).
 3. **D3 — resolved** (§12.9): plateau deleted, admission predicate, cadence
    monitored. Its outcome is *already folded into* the numbers above.
@@ -1777,7 +1783,8 @@ unbounded path in the design.
 
 **R4** stays monitored, not designed for. ~~**Stage 3 remains gated on reopen
 (c).**~~ — **(c) CLOSED with no mechanism 2026-07-27 (§12.11).** Stage 3's lone
-remaining input is **§12.11.1** (the §6.0 anti-swing residual).
+remaining input was **§12.11.1** (the §6.0 anti-swing residual) — **also closed,
+2026-07-27. Stage 3 opens with no outstanding hard inputs.**
 
 ### 12.10 A2 (W6) and A6 (swing) results — the last two arms
 
@@ -1839,7 +1846,9 @@ tiers, closed by two different mechanisms** — which the first pass conflated:
   the expected closer is **structural** — `frozen_segment_count` is monotone
   non-decreasing and reversible only to reorg depth, so there is no oscillation
   to arbitrage, only one-directional drift the escalation is built to track.
-  **This is the lone open residual: §12.11.1.**
+  **CLOSED at §12.11.1 (2026-07-27)** — on both legs, and note the upper tier's
+  "priced out at 114×" closer above is *also* a price argument, equally blind to
+  a loss-indifferent griefer; both tiers close structurally instead.
 - **Legal `2×` limit**: **`2.82` pts/epoch**, ~`90 k` SKL/epoch in fees **plus
   ~`10.24 M` SKL/epoch of miner-reward penalty compensation** — at `B = 2M` the
   production formula pays the miner *exactly zero*, so the flooder funds the whole
@@ -1942,44 +1951,124 @@ the non-defect**.
 
 ---
 
-### 12.11.1 (OPEN) — the §6.0 anti-swing dependency does **not** close with (c)
+### 12.11.1 (RESOLVED) — the §6.0 anti-swing dependency closes: NO MECHANISM
 
-**This is the one thing that stood where (c) stood and does not fall with it.**
-§6.0's anti-swing property never depended on stuffing being *profitable* — it
-depends on the **rate** at which `n` can move, and an unprofitable stuffer (or
-Actor 2, the grudge-donor, who is indifferent to negative-sum) can still move `n`
-fast. (c)'s closure therefore leaves this live, and it now needs its own
-disposition rather than inheriting one.
+**Disposition: §6.0's anti-swing property is discharged structurally, with no
+slew-control mechanism.** This was the lone residual left standing when reopen
+(c) closed (§12.11) — it survived (c)'s price argument because §6.0 never
+depended on stuffing being *profitable*, and a negative-sum stuffer or a
+loss-indifferent grudge-donor moves `n` just as fast as a profiteer would.
 
-**Candidate resolution — to check, not assume: monotonicity already satisfies
-it.** The manipulation §6.0 exists to prevent is the *reversible* kind —
-pump-and-dump, whale churn — which needs a lever that swings **both ways**.
-`frozen_segment_count` is monotone non-decreasing
-(`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` **O-2, per-branch monotonicity**: "leaf
-count is non-decreasing on a single branch (connects only append; pops are branch
-switches), so `frozen_segment_count` is non-decreasing and rows are never
-deleted on one branch"), and the only decrease path is **O-3 pop-symmetry** — a
-branch switch, i.e. reorg. There is no oscillation to exploit: an attacker can
-push `n` up (funded, non-exclusive, negative-sum per §12.11) but **cannot pull it
-back** to run the other side of a swing. What remains is *one-directional drift*,
-which the escalation **should** follow because it tracks genuine burden growth —
-that is the mechanism working, not being manipulated.
+It closes on **two legs with two different arguments**, because the concern was
+two questions wearing one name. **Stage 3 now has no outstanding hard inputs.**
 
-**What must be written before this closes.** The argument above, verified against
-source end-to-end — specifically (i) that **no path exists to decrease `n` faster
-than reorg depth** (O-3 is the only deletion rule; confirm no other writer trims
-`frozen_segment_count`), and (ii) that the up-only slew — bounded by the A6
-measurement at **1.41 pts/epoch penalty-free** and **2.82 pts/epoch at the legal
-2× limit**, hardening with tree depth — is drift the escalation is *designed to
-track* rather than a swing to arbitrage. If both hold, §6.0 closes **structurally**
-(monotonicity + no-reversal) with **no** slew-control mechanism, mirroring (c)'s
-no-mechanism resolution. If an `n`-decrease path deeper than reorg exists, **that
-path — not a fee floor — is the thing to close.**
+#### Leg 1 — the *level*, and its rate of arrival: there is no harm to prevent
 
-**Status: OPEN**, single named residual, expected to close on the monotonicity
-argument. Blocks nothing in Stage 3's *shape* (the no-controller constraint is
-unaffected); it feeds Stage 3's **confidence** that the frozen shape needs no
-swing-damper. Note the §6.0 amendment's "**load-bearing twice**" framing is now
-**half-retired**: W9's profit gate is gone (§12.11), and this is the surviving
-half — so "one missing mechanism is two failures" no longer holds, and §6.0 must
-be discharged on its own terms.
+The question §6.0 was really asking is "can an adversary move the staker share?"
+The prior question — never asked — is **"what breaks if they do?"** Nothing does,
+and three source facts say so.
+
+**(i) The harm channel is exactly one, and it is not the security budget.**
+[`burn.rs::compute_burn_split`](../../rust/shekyl-economics/src/burn.rs) computes:
+
+```rust
+burned_amount      = total_fees * burn_pct
+staker_pool_amount = burned_amount * staker_pool_share
+actually_destroyed = burned_amount - staker_pool_amount
+miner_fee_income   = total_fees - burned_amount
+```
+
+`staker_pool_share` — the *only* quantity `n` moves — applies to `burned_amount`
+and **does not appear in `miner_fee_income`**. Miner income is a function of
+`total_fees` and `burn_pct` alone. So the obvious harm ("shrink the security
+budget, cheapen a 51 %") is **structurally unreachable**, not merely expensive.
+The single channel is `actually_destroyed`: coins that would have been burned are
+paid to archivers instead.
+
+**(ii) `n` cannot rise without burden rising — this is an arithmetic identity,
+not a design intention.**
+[`segment_freeze.rs:71`](../../rust/shekyl-archival-retention/src/segment_freeze.rs#L71):
+
+```rust
+pub const fn frozen_segment_count(leaf_count: u64) -> u64 {
+    leaf_count / SEGMENT_LEAF_COUNT
+}
+```
+
+`n` is integer division of the chain's leaf count. There is **no free variable**:
+every unit of `n` is `SEGMENT_LEAF_COUNT` real outputs, really stored, forever.
+§6.2's burden-coupling ("the operand *is* the funded quantity") is therefore not
+an approximation that could drift — the operand cannot lie about the quantity it
+measures. **Share tracking `n` is never mispricing.**
+
+**(iii) The ceiling is a state the design already sanctions.** The escalation is
+bounded by its asymptote (the object Stage 3 selects). Once share is at the
+asymptote, further stuffing moves nothing. Maximum achievable effect is therefore
+`(asymptote − current_share) × burned_amount` — *arriving early at the value we
+call correct for a mature, high-burden chain*.
+
+Put together, the "attack" reads: **pay to create real archival work, and cause
+the protocol to correctly compensate the people who do it** — while funding
+miners and the burn out of the same fees, and keeping only `w_a` of a lift paid
+for entirely. There is no victim in that sentence. Rate is irrelevant because the
+destination is sanctioned and the path cannot overshoot it; speed changes only
+*when* the chain arrives, never *where*.
+
+> **The same error twice, and worth naming as a pattern.** A4 measured `ROI > 1`
+> and recorded a working incentive as a vulnerability (§12.11). §6.0 asked whether
+> the share could rise quickly and treated the rise itself as harm. Both mistake
+> **the mechanism functioning for the mechanism failing**, and both survived
+> because the question was framed as *"can the adversary move this?"* rather than
+> *"what breaks if they do?"* **Adversary-can-move-it is not a finding. Name the
+> harm first, or there is nothing to price.**
+
+#### Leg 2 — *oscillation*: real harm, structurally impossible
+
+Unlike the level, oscillation would be **genuine** harm: a share that swings
+wrecks archiver planning (bond commitments are long-lived and priced against
+expected share) and opens real pump-and-dump arbitrage — which is precisely what
+§6.0/W8 were written to prevent. This leg is closed by structure, not by absence
+of harm.
+
+`frozen_segment_count` is monotone non-decreasing per branch
+(`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` **O-2**: "connects only append; pops are
+branch switches"), and the **single** decrease path is **O-3 pop-symmetry** —
+verified at source: `BlockchainLMDB::revert_archival_segment_freezes`
+([`db_lmdb.cpp:7525`](../../src/blockchain_db/lmdb/db_lmdb.cpp#L7525)) is the only
+writer that deletes segment rows, is explicitly the pop hook, derives its bound
+from the same Rust entry point as the connect hook, and requires an active write
+txn (`throw` otherwise), so it fires only on block pop. **No path exists to
+decrease `n` faster than reorg depth.** An attacker can push `n` up (funded,
+non-exclusive, negative-sum per §12.11) but **cannot pull it back**, so there is
+no second side of a swing to run. What remains is one-directional drift, which
+the escalation *should* follow because it tracks genuine burden growth.
+
+#### Consequences
+
+- **No slew-control mechanism ships.** Mirrors (c): the residual dissolved rather
+  than got built.
+- **The §6.0 amendment's "load-bearing twice" framing is fully retired.** W9's
+  profit gate went at §12.11; this was the surviving half, and it is now closed
+  on its own terms. Both slew tiers are covered: the penalty-free `1.41`
+  pts/epoch tier (which lost its (c) closer) and the legal-`2×` `2.82` tier —
+  whose "already priced out by the block-reward penalty (**114×**)" claim was
+  *also* a price argument and inherits the same blindness to a griefer. Neither
+  tier needs a price closer, because neither tier's arrival is harmful.
+- **A6's slew measurement stands as a measurement** (`1.41`/`2.82` pts/epoch,
+  hardening with tree depth) and is now a **descriptive bound on how fast the
+  chain can be pushed toward a sanctioned state**, not a residual risk.
+- **Stage 3 opens.** No outstanding hard inputs: (c) closed with no mechanism
+  (§12.11), D3 implemented (§12.9.1, PR #371), and this residual discharged.
+  Reopen (d) remains parallel to the *shape* freeze per §8, unchanged.
+
+#### The falsifier — state it, because everything rests on it
+
+Leg 1 stands entirely on **`n` ≡ burden**. If a path ever exists where
+`frozen_segment_count` rises without a corresponding permanent storage
+obligation — a change making it anything other than a pure function of realized
+leaf count — then share would rise without burden, the escalation *would* be
+mispricing, and this disposition reopens. That is a **one-line invariant to
+guard**, and it is guarded today by the definition itself: any edit to
+`segment_freeze.rs:71` that introduces a second variable is the trigger. Leg 2
+reopens if any writer other than `revert_archival_segment_freezes` learns to
+delete segment rows.
