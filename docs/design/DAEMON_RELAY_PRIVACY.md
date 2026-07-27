@@ -3480,12 +3480,22 @@ whether 3a lands cleanly with the snapshot seam intact.
 6. `schedule.rs`'s "No async runtime" section **and** `lib.rs`'s
    second-reactor rationale reflect what shipped — both enacted in the commit
    that moves the loop, per the doc-tracks-code rule above.
-7. **The §18.5 state inventory holds**: every piece of relay state has exactly
-   one owner, `connection_count` is Rust-owned single-writer, and the map
-   snapshot flows Rust → C++ as a push. Verified before RP-3a implementation
-   lands, and re-verified for any state the implementation adds — this is what
-   bounds the second reactor's cost, and therefore what earns the `lib.rs`
-   seal-break.
+7. **The §18.5 inventory is an invariant the implementation maintains, not a
+   one-time check.** Every piece of relay state has exactly one owner —
+   inventoried — or it does not land. `connection_count` is Rust-owned
+   single-writer; the map snapshot flows Rust → C++ as a push. Any new shared
+   state RP-3a introduces is a new inventory line that must resolve to
+   single-owner-or-atomic before merge, and the push-not-pull discipline is
+   re-applied to each.
+
+   The "nothing straddles" property is **not self-maintaining** — finding 3 is
+   the proof: a call that looked safe was unsafe until ownership was asked of
+   it. So the seal was not merely reopened, it was **replaced with a stronger,
+   checkable invariant**. `lib.rs` sealed against *a second reactor racing the
+   p2p path*; this item operationalises that as *every piece of state has
+   exactly one owner*, which permits the second reactor precisely because the
+   invariant guarantees it cannot race. Make-bad-states-unrepresentable applied
+   to the seal itself.
 8. **The live scheduler is a new crate, not an extension of
    `shekyl-relay-privacy`.** That crate's stated scope is *"Timing only. Nothing
    here serializes a message, chooses eligible peers, or touches a socket"*, and
