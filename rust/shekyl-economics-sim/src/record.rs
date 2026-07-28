@@ -37,12 +37,11 @@
 //! forgotten regen cannot silently pass.
 
 use serde::{Deserialize, Serialize};
-use shekyl_economics::burn::compute_burn_split;
 use shekyl_economics::params::{EconomicParams, SCALE};
 use shekyl_economics::{
     base_block_reward, base_emission_at, calc_burn_pct_from_activity,
-    calc_effective_emission_share, calc_release_multiplier, params_digest,
-    release::apply_release_multiplier, split_block_emission,
+    calc_effective_emission_share, calc_release_multiplier, compute_burn_split_at, params_digest,
+    release::apply_release_multiplier, split_block_emission, FrozenSegmentCount,
 };
 
 use crate::engine::SimParams;
@@ -229,7 +228,8 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             calc_burn_pct_from_activity(tx_volume, sim.tx_volume_baseline, circulating, &params);
         let total_fees = (u128::from(tx_volume) * u128::from(config.fee_per_tx))
             .min(u128::from(u64::MAX)) as u64;
-        let fee_split = compute_burn_split(total_fees, burn_pct, sim.staker_pool_share);
+        let fee_split =
+            compute_burn_split_at(total_fees, burn_pct, FrozenSegmentCount::ZERO, &params);
 
         if samples.contains(&block) {
             // Pool-weighted total: at V3.0 the sim has no separate

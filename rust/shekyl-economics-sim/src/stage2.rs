@@ -26,7 +26,7 @@ use shekyl_economics::{
     calc_effective_emission_share, calc_release_multiplier,
     params::{mul_scale, EconomicParams, SCALE},
     release::apply_release_multiplier,
-    split_block_emission,
+    split_block_emission, ScaledShare,
 };
 
 use crate::burden::{
@@ -243,9 +243,14 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         let total_fees = (u128::from(tx_volume) * u128::from(config.fee_per_tx))
             .min(u128::from(u64::MAX)) as u64;
         // share = SCALE → the whole burn (pre-split); the candidate re-splits it.
-        let whole_burn = compute_burn_split(total_fees, burn_pct, SCALE).staker_pool_amount;
+        let whole_burn =
+            compute_burn_split(total_fees, burn_pct, ScaledShare::from_raw(SCALE)).staker_pool_amount;
         // Flat-ledger advance: destroy at the shipped 25% split.
-        let flat = compute_burn_split(total_fees, burn_pct, params.staker_pool_share);
+        let flat = compute_burn_split(
+            total_fees,
+            burn_pct,
+            ScaledShare::from_raw(params.staker_pool_share),
+        );
 
         year_emission_atomic += u128::from(staker_emission);
         year_burn_atomic += u128::from(whole_burn);

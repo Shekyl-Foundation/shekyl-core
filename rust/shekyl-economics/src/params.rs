@@ -53,48 +53,20 @@ pub const CALIBRATION_GENERATION: u32 = 0;
 
 /// A malformed parameter set, refused at the door.
 ///
-/// N-1 (PR #373 review): the runtime fail-closed in
-/// [`crate::escalation::staker_pool_share_at`] is the *second* layer. This is the
-/// first — a bad asymptote must not be **storable**, not merely unapplied,
-/// because it is the field that would silently delete the burn channel if it
-/// were ever honoured.
+/// Escalation shape law lives in one place:
+/// [`crate::escalation::EscalationParams::try_new`]. This type is the serde /
+/// params-facing wrapper around [`crate::escalation::EscalationShapeError`].
+///
+/// **Door coverage:** deserialization (`#[serde(try_from)]`) always validates.
+/// Struct-literal construction of [`EconomicParams`] does **not** — public
+/// fields stay open for the digest preimage and build-generated defaults.
+/// Consensus paths obtain a well-formed shape via [`EconomicParams::escalation`]
+/// (or [`EconomicParams::try_escalation`]), which is the typed door for apply.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EconomicParamsError {
-    /// `escalation_asymptote_share >= SCALE` would redirect the entire burn and
-    /// delete the deflation channel (§6.1 constraint 3).
-    #[error(
-        "escalation asymptote {asymptote} must be < SCALE ({scale}): a full-scale \
-         share redirects the entire burn and deletes the deflation channel"
-    )]
-    AsymptoteAtOrAboveScale {
-        /// The offending asymptote.
-        asymptote: u64,
-        /// `SCALE`, for the message.
-        scale: u64,
-    },
-    /// `escalation_asymptote_share < staker_pool_share` would make the
-    /// "escalation" descend, breaking §6.1 constraints 1 and 2.
-    #[error(
-        "escalation asymptote {asymptote} is below the floor {floor}: the \
-         escalation would descend, and archivers would be worse off than under \
-         the flat share"
-    )]
-    AsymptoteBelowFloor {
-        /// The offending asymptote.
-        asymptote: u64,
-        /// The floor it fell below.
-        floor: u64,
-    },
-    /// `escalation_knee_n == 0` leaves the ramp no domain to rise across — far
-    /// more plausibly a zeroed config field than an intent, and honouring it as
-    /// "already saturated" would jump the share to the asymptote on a config
-    /// error. Refused here (loud, first layer); the apply-time layer
-    /// additionally fails closed to the floor.
-    #[error(
-        "escalation knee must be > 0: a zero knee gives the ramp no domain (a \
-         zeroed config field, not a parameterization)"
-    )]
-    KneeZero,
+    /// Escalation shape (§6.1) rejected by [`EscalationParams::try_new`].
+    #[error(transparent)]
+    Escalation(#[from] crate::escalation::EscalationShapeError),
 }
 
 /// Deserialization shim — every `EconomicParams` that arrives from serde is
@@ -167,7 +139,7 @@ pub struct EconomicParams {
 
 impl Default for EconomicParams {
     fn default() -> Self {
-        Self {
+        let p = Self {
             release_min: GENERATED_RELEASE_MIN,
             release_max: GENERATED_RELEASE_MAX,
             tx_volume_baseline: GENERATED_TX_VOLUME_BASELINE,
@@ -180,52 +152,55 @@ impl Default for EconomicParams {
             daa_target_seconds: GENERATED_DAA_TARGET_SECONDS,
             escalation_knee_n: GENERATED_ESCALATION_KNEE_N,
             escalation_asymptote_share: GENERATED_ESCALATION_ASYMPTOTE_SHARE,
-        }
+        };
+        // Build-generated constants must satisfy the frozen shape; the unit test
+        // `shipped_defaults_are_well_formed` is the loud gate, this is the
+        // debug-only belt so a bad OUT_DIR cannot silently enter consensus paths.
+        debug_assert!(
+            p.validate().is_ok(),
+            "config/economics_params.json escalation fields are malformed"
+        );
+        p
     }
 }
 
 impl EconomicParams {
     /// Reject a parameter set whose escalation numbers violate the **frozen
-    /// shape** (§6.1 constraints 1–3).
+    /// shape** (§6.1). Delegates entirely to
+    /// [`EscalationParams::try_new`](crate::escalation::EscalationParams::try_new)
+    /// — one predicate body, no restated rules.
     ///
-    /// Called from the serde `try_from` shim, so it gates every deserialization,
-    /// and available directly for construction paths.
-    ///
-    /// This validates the *shape's* invariants only — it deliberately does **not**
-    /// opine on which asymptote is correct. That number is ceremony-gated and
-    /// unpinned (§11.4); a validator that ranged it here would be pinning it by
-    /// the back door.
+    /// Does **not** opine on which asymptote is correct (§11.4 ceremony).
     pub fn validate(&self) -> Result<(), EconomicParamsError> {
-        if self.escalation_asymptote_share >= SCALE {
-            return Err(EconomicParamsError::AsymptoteAtOrAboveScale {
-                asymptote: self.escalation_asymptote_share,
-                scale: SCALE,
-            });
-        }
-        if self.escalation_asymptote_share < self.staker_pool_share {
-            return Err(EconomicParamsError::AsymptoteBelowFloor {
-                asymptote: self.escalation_asymptote_share,
-                floor: self.staker_pool_share,
-            });
-        }
-        if self.escalation_knee_n == 0 {
-            return Err(EconomicParamsError::KneeZero);
-        }
-        Ok(())
+        self.try_escalation().map(|_| ())
     }
 
-    /// The escalation shape parameters this set implies.
+    /// Validated escalation shape for this parameter set.
     ///
-    /// `staker_pool_share` **is** the floor — the escalation's constraint-2 base
-    /// is the very constant it replaces, which is what makes the change a strict
-    /// improvement rather than a redistribution.
+    /// `staker_pool_share` **is** the floor — constraint 2's base is the constant
+    /// the escalation replaces.
+    pub fn try_escalation(
+        &self,
+    ) -> Result<crate::escalation::EscalationParams, EconomicParamsError> {
+        use crate::escalation::{EscalationParams, ScaledShare};
+        Ok(EscalationParams::try_new(
+            ScaledShare::from_raw(self.staker_pool_share),
+            self.escalation_knee_n,
+            ScaledShare::from_raw(self.escalation_asymptote_share),
+        )?)
+    }
+
+    /// Escalation shape for consensus paths that already hold a well-formed set
+    /// (shipped defaults, serde-admitted values).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fields violate §6.1. Prefer [`Self::try_escalation`] at
+    /// untrusted boundaries; use this only where the set is known-good.
     #[must_use]
     pub fn escalation(&self) -> crate::escalation::EscalationParams {
-        crate::escalation::EscalationParams {
-            floor_share: self.staker_pool_share,
-            knee_n: self.escalation_knee_n,
-            asymptote_share: self.escalation_asymptote_share,
-        }
+        self.try_escalation()
+            .expect("EconomicParams escalation shape is malformed; call try_escalation / validate")
     }
 }
 
@@ -328,13 +303,8 @@ mod escalation_param_tests {
         )
     }
 
-    /// **N-1: the malformed asymptote is UNSTORABLE, not merely unapplied.**
-    ///
-    /// `staker_pool_share_at` fails closed at apply time, but that is the second
-    /// layer. This asserts the first: serde itself refuses, so a bad asymptote
-    /// cannot reach consensus state at all. It is the one field that would
-    /// silently delete the burn channel if honoured, so it gets a door and a
-    /// belt.
+    /// Serde door: a full-scale asymptote cannot deserialize (same predicate as
+    /// `EscalationParams::try_new`).
     #[test]
     fn deserialization_refuses_an_asymptote_that_would_delete_the_burn_channel() {
         let err = serde_json::from_str::<EconomicParams>(&valid_json(SCALE, 250_000))
@@ -343,13 +313,9 @@ mod escalation_param_tests {
             err.to_string().contains("deflation channel"),
             "error must name the harm: {err}"
         );
-
-        // Above scale is refused too, not just exactly at it.
         assert!(serde_json::from_str::<EconomicParams>(&valid_json(SCALE + 1, 250_000)).is_err());
     }
 
-    /// A descending "escalation" is refused at the door: it would break
-    /// constraints 1 and 2 and make archivers worse off than the flat share.
     #[test]
     fn deserialization_refuses_an_asymptote_below_the_floor() {
         let err = serde_json::from_str::<EconomicParams>(&valid_json(100_000, 250_000))
@@ -360,29 +326,46 @@ mod escalation_param_tests {
         );
     }
 
-    /// The neutral genesis parameterization deserializes and is exactly flat —
-    /// shipping the frozen shape must not ship an unpinned number.
     #[test]
     fn the_neutral_genesis_parameterization_is_accepted_and_flat() {
+        use crate::escalation::{staker_pool_share_at, FrozenSegmentCount};
+
         let p: EconomicParams =
             serde_json::from_str(&valid_json(250_000, 250_000)).expect("neutral params are valid");
         let esc = p.escalation();
-        assert!(esc.is_well_formed());
         for n in [0u64, 1, 50_000, 100_000, u64::MAX] {
             assert_eq!(
-                crate::escalation::staker_pool_share_at(n, &esc),
+                staker_pool_share_at(FrozenSegmentCount::new(n), &esc).to_raw(),
                 250_000,
                 "the pre-ceremony default must be bit-identical to the flat share"
             );
         }
     }
 
-    /// The shipped defaults are themselves well-formed — a config that cannot
-    /// pass its own validator would be caught here rather than at a node start.
     #[test]
     fn shipped_defaults_are_well_formed() {
         EconomicParams::default()
             .validate()
             .expect("config/economics_params.json must satisfy the frozen shape");
+        // escalation() is infallible for the shipped set.
+        let esc = EconomicParams::default().escalation();
+        assert_eq!(esc.floor_share().to_raw(), GENERATED_STAKER_POOL_SHARE);
+    }
+
+    #[test]
+    fn validate_and_try_escalation_share_one_predicate_body() {
+        let bad = EconomicParams {
+            escalation_asymptote_share: SCALE,
+            ..EconomicParams::default()
+        };
+        let v = bad.validate().expect_err("must refuse");
+        let e = bad.try_escalation().expect_err("must refuse");
+        assert_eq!(v, e);
+        assert!(matches!(
+            v,
+            EconomicParamsError::Escalation(
+                crate::escalation::EscalationShapeError::AsymptoteAtOrAboveScale { .. }
+            )
+        ));
     }
 }

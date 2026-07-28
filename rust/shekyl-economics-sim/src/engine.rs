@@ -1,11 +1,11 @@
 use serde::Serialize;
 use shekyl_economics::{
     base_block_reward,
-    burn::{calc_burn_pct_from_activity, compute_burn_split},
+    burn::{calc_burn_pct_from_activity, compute_burn_split_at},
     calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
     params::{calc_stake_ratio, EconomicParams, SCALE},
     release::apply_release_multiplier,
-    split_block_emission,
+    split_block_emission, FrozenSegmentCount,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -263,7 +263,16 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             ),
         };
 
-        let fee_split = compute_burn_split(total_fees, burn_pct, params.staker_pool_share);
+        // Canonical escalated split. This engine has no leaf/corpus trajectory, so
+        // n = 0; under the shipped genesis-neutral asymptote that is bit-identical
+        // to the flat floor at every n, and after the ceremony this is the honest
+        // "no burden yet" baseline (stage2 threads real n via burden::frozen_shards).
+        let fee_split = compute_burn_split_at(
+            total_fees,
+            burn_pct,
+            FrozenSegmentCount::ZERO,
+            &economic,
+        );
 
         already_generated += effective_reward as u128;
         if already_generated > money_supply {

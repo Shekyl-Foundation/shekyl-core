@@ -5,244 +5,295 @@
 
 //! **D2 staker-share escalation — the frozen shape.**
 //!
-//! `staker_pool_share` was a frozen `250_000` (25 %) constant. The archival
-//! burden it compensates grows without bound, so a fixed share under-pays
-//! archivers exactly as the chain gets heavier — the D2 defect
-//! (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`). This module replaces the
-//! constant with a **pure map of the burden operand**
-//! `n = frozen_segment_count`.
+//! Replaces the flat `staker_pool_share` constant with a pure map of the burden
+//! operand `n = frozen_segment_count` ([`FrozenSegmentCount`]). Shape is
+//! genesis-frozen (§6.1); the asymptote **numeric** is provisional-until-testnet
+//! (§11.4). See `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`.
 //!
-//! # What is frozen here, and what is not
+//! # Frozen constraints (§6.1)
 //!
-//! **Frozen (genesis, §6.1):** the *shape* — the five constraints below, each
-//! carrying an executable test in this module.
+//! 1. Monotone in `n`
+//! 2. Floor at today's share (strict improvement, never a redistribution)
+//! 3. Asymptote strictly below [`SCALE`](crate::params::SCALE) (deflation survives)
+//! 4. Banded piecewise-linear integer fixed-point ([`shekyl_units::banded_pl`])
+//! 5. Pure map of `n` — no EMA, rate-limiter, or per-block state
 //!
-//! **NOT frozen:** the **asymptote numeric**, which is provisional-until-testnet
-//! and is *the* capture point in this design (§11.4). It carries GF-7 freeze
-//! ceremony — the adversary-advantage argument is committed **before** the
-//! number — and one named contingency: **if the reopen-(d) joint round takes the
-//! PoRep branch, A1 re-runs with sealing costs before the number is pinned**,
-//! because per-replica sealing changes the burden model the pin reads. Nothing
-//! in this module pins that number; [`EscalationParams`] carries it as data so
-//! the shape can freeze without it (§8).
+//! # Construction
 //!
-//! # The five frozen constraints (§6.1)
-//!
-//! 1. **Monotone in `n`** — shards only accumulate, so the share may never fall.
-//! 2. **Floor at today's 25 %** — the escalation never dips below the value it
-//!    replaces, so this is a strict improvement on every input.
-//! 3. **Asymptote strictly below `SCALE`** — the deflation channel
-//!    (`actually_destroyed`) must survive forever; a share of `SCALE` would
-//!    redirect the entire burn and delete it.
-//! 4. **Banded piecewise-linear, integer fixed-point** — via
-//!    [`shekyl_units::banded_pl`], the shape primitive shared with the archival
-//!    reward curve. No float on a consensus path.
-//! 5. **No time-derivative or smoothing term** — [`staker_pool_share_at`] is a
-//!    pure function of `n`. No EMA, no rate-limiter, no per-block state. This is
-//!    a constraint, not an omission: smoothness is *inherited from the operand*
-//!    (§6.0), and a controller would add exactly the stateful machinery that
-//!    section rejects.
-//!
-//! # The safety guarantee constraint 2 buys: **strictly no one is worse off**
-//!
-//! Constraint 2 is easy to read as a bound and easy to under-sell. It is the
-//! strongest safety claim available about this freeze, so state it as the
-//! guarantee it is:
-//!
-//! > **The escalation can only ever raise the staker share above today's value,
-//! > never lower it below. At every `n`, and for every parameterization this
-//! > module accepts, no archiver is worse off than under the flat 25 %.**
-//!
-//! That is *structural*, not per-case: the floor is the value being replaced, and
-//! [`staker_pool_share_at`] is monotone from it. So the entire class of question
-//! *"did the escalation take something from someone?"* is **foreclosed** rather
-//! than answered case by case — the same posture as the no-exclusivity accounting
-//! that closed reopen (c) (§12.11). A future reviewer or stakeholder asking who
-//! lost out under the escalation can be answered from the shape alone, without
-//! re-deriving a distribution.
-//!
-//! The corollary matters for the still-open numeric: this guarantee holds for
-//! **any** asymptote the ceremony eventually pins, because it depends only on the
-//! floor and monotonicity. Pinning the number cannot retract it.
-//!
-//! # Why no rate-limiter, restated on its final footing
-//!
-//! The justification shifted twice and landed harder than it started. It was
-//! "smoothness inherited from an operand that cannot move"; then "the operand
-//! moves only monotonically, at a bounded, depth-falling slew, at a price the
-//! fee floor makes unprofitable". Both reopens closed with **no mechanism**:
-//! stuffing is negative-sum without any floor (§12.11 — the stuffer funds
-//! `(1 − w_a)` of the lift for competitors who spent nothing), and the anti-swing
-//! property closes structurally (§12.11.1 — `n` is monotone, reversible only to
-//! reorg depth, so there is no oscillation to arbitrage). A rate-limiter would
-//! slow a **paid, one-way ratchet toward a sanctioned endpoint**, which is not a
-//! thing worth slowing.
+//! [`EscalationParams`] is **well-formed by construction** ([`EscalationParams::try_new`]).
+//! There is no apply-time fail-closed path: a malformed shape cannot be held in
+//! the type. [`EconomicParams::validate`](crate::params::EconomicParams::validate)
+//! and the serde door both route through the same constructor.
 
 use shekyl_units::banded_pl::{curve_milli, mul_div_floor, BandedCurveParams};
 
 use crate::params::SCALE;
 
-/// Shape parameters for the escalation.
+/// D2 burden operand: `n = frozen_segment_count` at **parent-block** state.
 ///
-/// The *shape* these feed is genesis-frozen; the **values** are
-/// provisional-until-testnet (§11.4 ceremony — see the module docs). They live
-/// as data, not constants, precisely so the shape can freeze while the numeric
-/// re-pin remains open.
+/// State-shaped (chain progression owns the value). Callers read it once per
+/// template/connect via the asserting C++ read-point and pass the typed count
+/// through the burn split — never a bare height, never tip-after-`add_block`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[repr(transparent)]
+pub struct FrozenSegmentCount(u64);
+
+impl FrozenSegmentCount {
+    /// Zero frozen segments (genesis / empty tree).
+    pub const ZERO: Self = Self(0);
+
+    /// Wrap a raw count.
+    #[must_use]
+    pub const fn new(n: u64) -> Self {
+        Self(n)
+    }
+
+    /// Raw `u64` count.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<u64> for FrozenSegmentCount {
+    fn from(n: u64) -> Self {
+        Self::new(n)
+    }
+}
+
+impl From<FrozenSegmentCount> for u64 {
+    fn from(n: FrozenSegmentCount) -> Self {
+        n.get()
+    }
+}
+
+/// Fixed-point share over [`SCALE`] (`1_000_000` = 100 %).
+///
+/// Distinguishes share numerics from fee amounts / segment counts at the type
+/// boundary. Does **not** enforce `< SCALE` by itself — that is an
+/// [`EscalationParams`] shape rule on the asymptote (and, via the floor ≤
+/// asymptote chain, on the floor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct ScaledShare(u64);
+
+impl ScaledShare {
+    /// Wrap a raw fixed-point value.
+    #[must_use]
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// Raw fixed-point value.
+    #[must_use]
+    pub const fn to_raw(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<u64> for ScaledShare {
+    fn from(raw: u64) -> Self {
+        Self::from_raw(raw)
+    }
+}
+
+impl From<ScaledShare> for u64 {
+    fn from(s: ScaledShare) -> Self {
+        s.to_raw()
+    }
+}
+
+/// Shape-rule violation for [`EscalationParams::try_new`].
+///
+/// Single source of truth for §6.1 structural checks; params-load and tests both
+/// go through this error rather than restating the predicates.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum EscalationShapeError {
+    /// `asymptote >= SCALE` would redirect the entire burn.
+    #[error(
+        "escalation asymptote {asymptote} must be < SCALE ({scale}): a full-scale \
+         share redirects the entire burn and deletes the deflation channel"
+    )]
+    AsymptoteAtOrAboveScale {
+        /// Offending asymptote (raw SCALE units).
+        asymptote: u64,
+        /// [`SCALE`].
+        scale: u64,
+    },
+    /// `asymptote < floor` would make the map descend.
+    #[error(
+        "escalation asymptote {asymptote} is below the floor {floor}: the \
+         escalation would descend, and archivers would be worse off than under \
+         the flat share"
+    )]
+    AsymptoteBelowFloor {
+        /// Offending asymptote.
+        asymptote: u64,
+        /// Floor it fell below.
+        floor: u64,
+    },
+    /// `knee_n == 0` is a zeroed config field, not a parameterization.
+    #[error(
+        "escalation knee must be > 0: a zero knee gives the ramp no domain (a \
+         zeroed config field, not a parameterization)"
+    )]
+    KneeZero,
+}
+
+/// Well-formed escalation shape parameters.
+///
+/// Fields are private: the only constructor is [`Self::try_new`], so every value
+/// of this type satisfies the §6.1 structural rules. Numerics stay data (not
+/// code constants) so the shape can freeze while the asymptote re-pin stays open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EscalationParams {
-    /// Share at `n = 0` — the §6.1 floor. Genesis value is today's
-    /// `staker_pool_share` (`250_000` = 25 %), so the escalation is a strict
-    /// improvement on the constant it replaces.
-    pub floor_share: u64,
-    /// `frozen_segment_count` at which the share saturates to
-    /// [`Self::asymptote_share`]. A **larger knee is a slower ratchet** (§6.0
-    /// wide-but-slow).
-    pub knee_n: u64,
-    /// Share at and beyond the knee. **Must be `< SCALE`** so the deflation
-    /// channel survives (constraint 3); [`EscalationParams::is_well_formed`]
-    /// checks it.
-    pub asymptote_share: u64,
+    floor_share: ScaledShare,
+    knee_n: u64,
+    asymptote_share: ScaledShare,
 }
 
 impl EscalationParams {
-    /// Structural validity — the constraints that are about the *shape*, not the
-    /// (unpinned) numerics.
+    /// Build a well-formed shape, or refuse.
     ///
-    /// `asymptote < SCALE` is constraint 3 and is the one that would silently
-    /// delete the burn channel if violated. `floor <= asymptote` is what makes
-    /// the map monotone; inverted, the "escalation" would descend. `knee_n > 0`
-    /// is what makes the ramp a ramp: a zero knee leaves it no domain, and is
-    /// far more plausibly a zeroed config field than an intent — treating it as
-    /// "already saturated" would jump the share to the asymptote on a config
-    /// error, so it is malformed here and fails closed to the floor instead.
-    /// (`floor < SCALE` needs no clause of its own — implied by the first two.)
+    /// - `asymptote < SCALE` — constraint 3 (deflation channel)
+    /// - `floor <= asymptote` — constraints 1–2 (monotone, no one worse off)
+    /// - `knee_n > 0` — ramp has a domain (zero is a config error, not intent)
+    #[must_use = "check whether the shape was accepted"]
+    pub const fn try_new(
+        floor_share: ScaledShare,
+        knee_n: u64,
+        asymptote_share: ScaledShare,
+    ) -> Result<Self, EscalationShapeError> {
+        let floor = floor_share.to_raw();
+        let asymptote = asymptote_share.to_raw();
+        if asymptote >= SCALE {
+            return Err(EscalationShapeError::AsymptoteAtOrAboveScale {
+                asymptote,
+                scale: SCALE,
+            });
+        }
+        if asymptote < floor {
+            return Err(EscalationShapeError::AsymptoteBelowFloor { asymptote, floor });
+        }
+        if knee_n == 0 {
+            return Err(EscalationShapeError::KneeZero);
+        }
+        Ok(Self {
+            floor_share,
+            knee_n,
+            asymptote_share,
+        })
+    }
+
+    /// Share at `n = 0` (the §6.1 floor).
     #[must_use]
-    pub const fn is_well_formed(&self) -> bool {
-        self.asymptote_share < SCALE && self.floor_share <= self.asymptote_share && self.knee_n > 0
+    pub const fn floor_share(self) -> ScaledShare {
+        self.floor_share
+    }
+
+    /// `frozen_segment_count` at which the share saturates.
+    #[must_use]
+    pub const fn knee_n(self) -> u64 {
+        self.knee_n
+    }
+
+    /// Share at and beyond the knee (`< SCALE` by construction).
+    #[must_use]
+    pub const fn asymptote_share(self) -> ScaledShare {
+        self.asymptote_share
     }
 }
 
-/// The escalation: `staker_pool_share` as a pure map of the burden operand `n`.
+/// `staker_pool_share` as a pure map of the burden operand `n`.
 ///
-/// Rises from `floor_share` at `n = 0` along the banded piecewise-linear ramp,
-/// saturating at `asymptote_share` for `n >= knee_n`.
+/// Rises from `floor_share` at `n = 0` along the continuous banded-PL ramp,
+/// saturating at `asymptote_share` for `n >= knee_n`. Uses
+/// [`BandedCurveParams::continuous`] so there is no share cliff at the knee.
 ///
-/// **The ramp uses the *continuous* parameterization deliberately**
-/// ([`BandedCurveParams::continuous`]). A step at the join would be a share
-/// cliff, and a cliff is exactly the two-sided lever §6.0's anti-swing property
-/// exists to deny — an adversary who could straddle a discontinuity would gain
-/// the swing that monotonicity otherwise makes unavailable.
-///
-/// Malformed params fail **closed to the floor**: a bad asymptote yields today's
-/// constant rather than an arbitrary redirection of the burn. Returning the
-/// floor is the safe direction because it is the current shipping behaviour —
-/// and the fail-closed value is itself clamped below `SCALE`, so constraint 3
-/// holds even against a garbage floor.
+/// **`params` is well-formed by type** — no fail-closed branch.
 #[must_use]
-pub fn staker_pool_share_at(n: u64, params: &EscalationParams) -> u64 {
-    if !params.is_well_formed() {
-        // Constraint 3 binds even on the failure path: a garbage floor
-        // (>= SCALE) must not let the fail-closed value itself delete the
-        // deflation channel, so the clamp is SCALE - 1 — the largest share
-        // that still leaves the burn channel alive. The load-time door is the
-        // real defense; this is the layer that holds when it was bypassed.
-        return params.floor_share.min(SCALE - 1);
-    }
-    let span = params.asymptote_share - params.floor_share;
+pub fn staker_pool_share_at(n: FrozenSegmentCount, params: &EscalationParams) -> ScaledShare {
+    let floor = params.floor_share.to_raw();
+    let asymptote = params.asymptote_share.to_raw();
+    let span = asymptote - floor;
     if span == 0 {
-        // Degenerate-but-valid: a flat escalation is just the floor.
         return params.floor_share;
     }
 
-    // The ramp, normalized: `curve_milli` over the continuous parameterization
-    // rises 0 -> knee/2 across [0, knee], so `knee/2` is the full-scale value.
     let shape = BandedCurveParams::continuous(params.knee_n);
     let full = shape.plateau_value_milli;
     if full == 0 {
-        // knee_n == 1 floors to a zero plateau: the ramp has no interior, but
-        // the endpoints still exist — floor strictly below the knee, asymptote
-        // at and beyond it. ("Rises from floor_share at n = 0" holds for every
-        // well-formed parameterization, not just the ones with an interior.)
-        return if n >= params.knee_n {
+        // knee_n == 1 → continuous plateau floors to 0: no ramp interior, but
+        // the endpoints still exist (floor strictly below the knee, asymptote
+        // at and beyond it).
+        return if n.get() >= params.knee_n {
             params.asymptote_share
         } else {
             params.floor_share
         };
     }
-    let raw = curve_milli(n, &shape);
-
-    // share = floor + span * raw / full. Floors, so the share is never rounded
+    let raw = curve_milli(n.get(), &shape);
+    // share = floor + span * raw / full. Floors so the share is never rounded
     // UP into a larger redirection of the burn than the ramp earns.
     let lift = mul_div_floor(span, raw, full).unwrap_or(0);
-    params.floor_share.saturating_add(lift)
+    ScaledShare::from_raw(floor.saturating_add(lift))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Genesis-shaped params: today's floor, a mid-band knee, a mid-band
-    /// asymptote. **These are test fixtures, not the pin** — the numeric is
-    /// deliberately unpinned (§11.4).
+    /// Genesis-shaped params: today's floor, mid-band knee, mid-band asymptote.
+    /// **Test fixture, not the pin** — the numeric is deliberately unpinned.
     fn params() -> EscalationParams {
-        EscalationParams {
-            floor_share: 250_000,
-            knee_n: 100_000,
-            asymptote_share: 750_000,
-        }
+        EscalationParams::try_new(
+            ScaledShare::from_raw(250_000),
+            100_000,
+            ScaledShare::from_raw(750_000),
+        )
+        .expect("fixture is well-formed")
     }
 
-    /// **Constraint 1 — monotone in `n`.** The share may never fall as burden
-    /// accumulates, across the whole domain including past the knee.
+    fn share_at(n: u64, p: &EscalationParams) -> u64 {
+        staker_pool_share_at(FrozenSegmentCount::new(n), p).to_raw()
+    }
+
     #[test]
     fn constraint_1_monotone_in_n() {
         let p = params();
         let mut prev = 0;
         for n in (0..=250_000u64).step_by(311) {
-            let s = staker_pool_share_at(n, &p);
+            let s = share_at(n, &p);
             assert!(s >= prev, "share fell at n={n}: {s} < {prev}");
             prev = s;
         }
     }
 
-    /// **Constraint 2 — floor at today's 25 %.** At `n = 0` the escalation
-    /// returns exactly the constant it replaces, so it is a strict improvement
-    /// on every input rather than a redistribution.
     #[test]
     fn constraint_2_floor_is_todays_share() {
         let p = params();
-        assert_eq!(staker_pool_share_at(0, &p), 250_000);
-        // And never below it, anywhere.
+        assert_eq!(share_at(0, &p), 250_000);
         for n in [0u64, 1, 7, 1_000, 99_999, 100_000, 10_000_000] {
-            assert!(staker_pool_share_at(n, &p) >= p.floor_share);
+            assert!(share_at(n, &p) >= p.floor_share().to_raw());
         }
     }
 
-    /// **The strict-improvement guarantee, made executable.** No archiver is
-    /// worse off than under the flat 25 % — at any `n`, under *any* parameters
-    /// this module accepts, including ones the ceremony has not pinned yet.
-    ///
-    /// Swept over a grid of floors/knees/asymptotes rather than the fixture,
-    /// because the claim is about the shape's whole accepted domain: if it held
-    /// only for one parameterization it would be a coincidence, not a guarantee,
-    /// and the numeric is still open.
     #[test]
     fn no_one_is_ever_worse_off_than_the_flat_share() {
         const TODAY: u64 = 250_000;
         for knee in [1u64, 2, 1_000, 25_000, 100_000, 250_000] {
             for asymptote in [TODAY, 400_000, 750_000, 900_000, SCALE - 1] {
-                let p = EscalationParams {
-                    floor_share: TODAY,
-                    knee_n: knee,
-                    asymptote_share: asymptote,
-                };
-                assert!(p.is_well_formed(), "fixture must be accepted: {p:?}");
-                for n in [0u64, 1, knee / 2, knee - 1, knee, knee + 1, u64::MAX] {
-                    let s = staker_pool_share_at(n, &p);
+                let p = EscalationParams::try_new(
+                    ScaledShare::from_raw(TODAY),
+                    knee,
+                    ScaledShare::from_raw(asymptote),
+                )
+                .expect("fixture must be accepted");
+                for n in [0u64, 1, knee / 2, knee.saturating_sub(1), knee, knee + 1, u64::MAX] {
+                    let s = share_at(n, &p);
                     assert!(
                         s >= TODAY,
-                        "escalation went BELOW today's flat share: n={n} \
-                         params={p:?} share={s}"
+                        "escalation went BELOW today's flat share: n={n} share={s}"
                     );
                     assert!(s < SCALE, "deflation channel deleted: n={n} share={s}");
                 }
@@ -250,80 +301,76 @@ mod tests {
         }
     }
 
-    /// **Constraint 3 — asymptote strictly below `SCALE`, so deflation
-    /// survives.** The share saturates at the asymptote and never reaches full
-    /// scale, which is what keeps `actually_destroyed` a live channel forever.
     #[test]
     fn constraint_3_deflation_channel_survives() {
         let p = params();
-        assert_eq!(staker_pool_share_at(p.knee_n, &p), p.asymptote_share);
-        assert_eq!(staker_pool_share_at(u64::MAX, &p), p.asymptote_share);
+        assert_eq!(share_at(p.knee_n(), &p), p.asymptote_share().to_raw());
+        assert_eq!(share_at(u64::MAX, &p), p.asymptote_share().to_raw());
         for n in [0u64, 50_000, 100_000, u64::MAX] {
             assert!(
-                staker_pool_share_at(n, &p) < SCALE,
+                share_at(n, &p) < SCALE,
                 "share reached full scale at n={n} — the burn channel is deleted"
             );
         }
-        // A malformed asymptote must not be honoured.
-        let bad = EscalationParams {
-            asymptote_share: SCALE,
-            ..p
-        };
-        assert!(!bad.is_well_formed());
-        assert_eq!(staker_pool_share_at(u64::MAX, &bad), bad.floor_share);
     }
 
-    /// **Constraint 4 — banded PL, integer, no float.** Asserted structurally by
-    /// deferring to `shekyl_units::banded_pl` (the shape primitive's own tests
-    /// pin the bands); here we pin that the ramp is *strictly between* the
-    /// endpoints in the interior, i.e. it genuinely ramps rather than stepping.
+    #[test]
+    fn try_new_refuses_shape_violations() {
+        assert!(matches!(
+            EscalationParams::try_new(
+                ScaledShare::from_raw(250_000),
+                100_000,
+                ScaledShare::from_raw(SCALE),
+            ),
+            Err(EscalationShapeError::AsymptoteAtOrAboveScale { .. })
+        ));
+        assert!(matches!(
+            EscalationParams::try_new(
+                ScaledShare::from_raw(750_000),
+                100_000,
+                ScaledShare::from_raw(250_000),
+            ),
+            Err(EscalationShapeError::AsymptoteBelowFloor { .. })
+        ));
+        assert!(matches!(
+            EscalationParams::try_new(
+                ScaledShare::from_raw(250_000),
+                0,
+                ScaledShare::from_raw(750_000),
+            ),
+            Err(EscalationShapeError::KneeZero)
+        ));
+        // Malformed shapes are unrepresentable — there is no fail-closed apply path.
+    }
+
     #[test]
     fn constraint_4_ramps_rather_than_steps() {
         let p = params();
-        let mid = staker_pool_share_at(p.knee_n / 2, &p);
+        let mid = share_at(p.knee_n() / 2, &p);
         assert!(
-            mid > p.floor_share && mid < p.asymptote_share,
+            mid > p.floor_share().to_raw() && mid < p.asymptote_share().to_raw(),
             "interior value {mid} is not strictly between the endpoints"
         );
     }
 
-    /// **Constraint 5 — pure map of `n`, no state.** The same `n` decides
-    /// identically regardless of call order or history, which is what makes a
-    /// rate-limiter unnecessary *and* unrepresentable here.
     #[test]
     fn constraint_5_is_a_pure_map_with_no_history() {
         let p = params();
-        let ascending: Vec<u64> = (0..40)
-            .map(|i| staker_pool_share_at(i * 3_000, &p))
-            .collect();
-        let descending: Vec<u64> = (0..40)
-            .rev()
-            .map(|i| staker_pool_share_at(i * 3_000, &p))
-            .collect();
-        let mut d = descending;
-        d.reverse();
-        assert_eq!(ascending, d, "evaluation order changed the result");
+        let ascending: Vec<u64> = (0..40).map(|i| share_at(i * 3_000, &p)).collect();
+        let mut descending: Vec<u64> = (0..40).rev().map(|i| share_at(i * 3_000, &p)).collect();
+        descending.reverse();
+        assert_eq!(ascending, descending, "evaluation order changed the result");
     }
 
-    /// **No cliff at the knee** — stated as "the join is not a special place",
-    /// which is the property that actually matters and the only one that is
-    /// scale-independent.
-    ///
-    /// The naive form of this test ("the step at the knee is ≤ 1") asserts the
-    /// wrong quantity: the *curve* steps by at most 1 there, but the share
-    /// amplifies the curve by `span / full`, so a correct implementation shows a
-    /// step of exactly that ratio. What an adversary could straddle is a step
-    /// **larger than its neighbourhood**, so that is what is pinned — the knee's
-    /// step must not exceed the largest step found anywhere else on the ramp.
     #[test]
     fn no_share_cliff_at_the_knee() {
         let p = params();
-        let knee_step = staker_pool_share_at(p.knee_n, &p) - staker_pool_share_at(p.knee_n - 1, &p);
+        let knee_step = share_at(p.knee_n(), &p) - share_at(p.knee_n() - 1, &p);
 
         let mut max_interior_step = 0;
-        let mut prev = staker_pool_share_at(0, &p);
-        for n in 1..p.knee_n {
-            let cur = staker_pool_share_at(n, &p);
+        let mut prev = share_at(0, &p);
+        for n in 1..p.knee_n() {
+            let cur = share_at(n, &p);
             max_interior_step = max_interior_step.max(cur - prev);
             prev = cur;
         }
@@ -339,75 +386,47 @@ mod tests {
         );
     }
 
-    /// Rounding favours the protocol: the lift floors, so the share is never
-    /// rounded *up* into redirecting more burn than the ramp earns — the same
-    /// direction as every other rounding on this path (§11.5).
     #[test]
     fn rounding_never_favours_the_pool() {
-        let p = EscalationParams {
-            floor_share: 250_000,
-            knee_n: 7,
-            asymptote_share: 750_001,
-        };
+        let p = EscalationParams::try_new(
+            ScaledShare::from_raw(250_000),
+            7,
+            ScaledShare::from_raw(750_001),
+        )
+        .unwrap();
         for n in 0..=7u64 {
-            let s = staker_pool_share_at(n, &p);
-            assert!(s >= p.floor_share && s <= p.asymptote_share);
+            let s = share_at(n, &p);
+            assert!(s >= p.floor_share().to_raw() && s <= p.asymptote_share().to_raw());
         }
     }
 
-    /// Degenerate params must not panic or divide by zero — a consensus function
-    /// takes whatever the params file contains.
     #[test]
-    fn degenerate_params_fail_closed_not_loud() {
-        let flat = EscalationParams {
-            floor_share: 250_000,
-            knee_n: 100_000,
-            asymptote_share: 250_000,
-        };
-        assert_eq!(staker_pool_share_at(u64::MAX, &flat), 250_000);
+    fn flat_and_one_knee_endpoints() {
+        let flat = EscalationParams::try_new(
+            ScaledShare::from_raw(250_000),
+            100_000,
+            ScaledShare::from_raw(250_000),
+        )
+        .unwrap();
+        assert_eq!(share_at(u64::MAX, &flat), 250_000);
 
-        // A zero knee is malformed (a zeroed config field, not an intent):
-        // it fails closed to the FLOOR, never jumps to the asymptote — the
-        // pre-tightening behaviour returned 750_000 here, a burn redirection
-        // on a config error.
-        let zero_knee = EscalationParams {
-            floor_share: 250_000,
-            knee_n: 0,
-            asymptote_share: 750_000,
-        };
-        assert!(!zero_knee.is_well_formed());
-        assert_eq!(staker_pool_share_at(0, &zero_knee), 250_000);
-        assert_eq!(staker_pool_share_at(u64::MAX, &zero_knee), 250_000);
+        let one_knee = EscalationParams::try_new(
+            ScaledShare::from_raw(250_000),
+            1,
+            ScaledShare::from_raw(750_000),
+        )
+        .unwrap();
+        assert_eq!(share_at(0, &one_knee), 250_000);
+        assert_eq!(share_at(1, &one_knee), 750_000);
+        assert_eq!(share_at(5, &one_knee), 750_000);
+    }
 
-        // knee_n == 1 has no interior, but the endpoints hold: floor strictly
-        // below the knee, asymptote at and beyond it.
-        let one_knee = EscalationParams {
-            floor_share: 250_000,
-            knee_n: 1,
-            asymptote_share: 750_000,
-        };
-        assert_eq!(staker_pool_share_at(0, &one_knee), 250_000);
-        assert_eq!(staker_pool_share_at(1, &one_knee), 750_000);
-        assert_eq!(staker_pool_share_at(5, &one_knee), 750_000);
-
-        let inverted = EscalationParams {
-            floor_share: 750_000,
-            knee_n: 100_000,
-            asymptote_share: 250_000,
-        };
-        assert!(!inverted.is_well_formed());
-        assert_eq!(staker_pool_share_at(50_000, &inverted), 750_000);
-
-        // Constraint 3 binds on the failure path itself: a garbage floor at or
-        // above SCALE must not let the fail-closed value delete the deflation
-        // channel.
-        let garbage_floor = EscalationParams {
-            floor_share: SCALE + 7,
-            knee_n: 100_000,
-            asymptote_share: SCALE + 9,
-        };
-        assert!(!garbage_floor.is_well_formed());
-        assert!(staker_pool_share_at(0, &garbage_floor) < SCALE);
-        assert_eq!(staker_pool_share_at(u64::MAX, &garbage_floor), SCALE - 1);
+    #[test]
+    fn frozen_segment_count_newtype_round_trip() {
+        let n = FrozenSegmentCount::new(42);
+        assert_eq!(n.get(), 42);
+        assert_eq!(u64::from(n), 42);
+        assert_eq!(FrozenSegmentCount::from(7u64).get(), 7);
+        assert_eq!(FrozenSegmentCount::ZERO.get(), 0);
     }
 }

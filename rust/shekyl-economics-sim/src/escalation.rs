@@ -32,7 +32,9 @@
 
 // Stage 3a: the escalation is CONSENSUS code now, so this module deps it rather
 // than restating it. Nothing here computes a ramp.
-use shekyl_economics::escalation::{staker_pool_share_at, EscalationParams};
+use shekyl_economics::escalation::{
+    staker_pool_share_at, EscalationParams, FrozenSegmentCount, ScaledShare,
+};
 use shekyl_economics::params::{EconomicParams, SCALE};
 
 /// Fixed-point scale for shares (`250_000 = 25 %`). **Sourced from**
@@ -81,17 +83,19 @@ impl EscalationCurve {
     /// statement about the sim rather than about consensus.
     #[must_use]
     pub fn share(&self, n: u64) -> u64 {
-        staker_pool_share_at(n, &self.params())
+        staker_pool_share_at(FrozenSegmentCount::new(n), &self.params()).to_raw()
     }
 
-    /// This candidate as consensus [`EscalationParams`].
+    /// This candidate as consensus [`EscalationParams`] (well-formed by
+    /// [`EscalationParams::try_new`] — band members are shape-legal by construction).
     #[must_use]
     pub fn params(&self) -> EscalationParams {
-        EscalationParams {
-            floor_share: floor_share(),
-            knee_n: self.knee_shards,
-            asymptote_share: self.asymptote,
-        }
+        EscalationParams::try_new(
+            ScaledShare::from_raw(floor_share()),
+            self.knee_shards,
+            ScaledShare::from_raw(self.asymptote),
+        )
+        .expect("escalation family members are §6.1-conformant by construction")
     }
 
     /// The share as a fraction (for reporting / the fiat conversion in A1).
