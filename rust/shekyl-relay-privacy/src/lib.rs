@@ -111,44 +111,36 @@
 //!    [`schedule`] is a plain `&mut self` state machine that returns a
 //!    deadline, precisely so the existing timer stays in charge.
 //!
-//! ## Reason 2's premise is reversed by RP-3 — deliberately, and on the record
+//! ## Reason 2 stands — an earlier reversal of it is **withdrawn**
 //!
-//! Reason 2 was sealed *"so the question does not get re-opened by accident"*.
-//! RP-3 reopens it on purpose (`DAEMON_RELAY_PRIVACY.md` §18), so the seal is
-//! broken here rather than stepped around, priced against what the seal
-//! actually objected to.
+//! RP-3 briefly recorded reason 2 as reversed, on the grounds that moving the
+//! relay loop to Rust meant accepting a second reactor and that closing F-4/F-5
+//! paid for it. **That ledger was wrong, and following the error back showed the
+//! reversal was unnecessary.**
 //!
-//! The seal's objection was **a second reactor for no gain**, not two reactors
-//! being inelegant. So the reversal has to clear a bar the seal itself set:
+//! - **F-4/F-5 close without any reactor change.** The corrected fluff draw is
+//!   this crate's regardless of who owns the sleep, so the gain never required
+//!   the cost it was charged against.
+//! - **RP-3a adds no reactor.** Rust owns the zone state and every timing
+//!   *decision*; the existing `boost::asio` timer is armed from the returned
+//!   deadline and owns the *sleep*. Rust is a library the p2p path calls, not a
+//!   loop beside it — so the p2p path still has exactly one reactor.
+//! - That is not merely compatible with reason 2, it is **what reason 2
+//!   prescribes**: *"a plain `&mut self` state machine that returns a deadline,
+//!   precisely so the existing timer stays in charge."* RP-3a is that sentence,
+//!   implemented.
 //!
-//! - **The gain is a different category from the one the seal weighed.** RP-3
-//!   closes **F-4 and F-5** — the fluff delay is still drawn in C++ from
-//!   `crypto::random_poisson_subseconds`, the same distribution defect as F-2,
-//!   on the timer every node applies to every transaction, and the ~7× slower
-//!   flood that follows. Those are defect closures, not tidiness. A cleanliness
-//!   seal is legitimately broken by a defect, and not by a preference.
-//! - **The secondary gain is honestly discounted.** Ending the cross-language
-//!   duplication of relay timing is real, but that duplication is partly
-//!   self-inflicted: this arc created it by migrating incrementally, so it is
-//!   *finishing a migration we chose to start*, not removing a pre-existing
-//!   wart. A half-migrated seam is worse than either endpoint, which is why it
-//!   still counts — but it does not carry the reversal.
-//! - **The cost is bounded by construction, and inventoried.** There *is* a
-//!   second reactor: asio keeps sockets and the p2p path, a Rust driver takes
-//!   relay timing. That is safe only if nothing straddles the boundary, so
-//!   §18.5 inventories every piece of relay state and assigns it one owner.
-//!   The inventory is the evidence, not the assertion — it found the one real
-//!   straddle (`connection_count`, *"only update in strand, can be read at any
-//!   time"*) and the one direction that must be a push rather than a pull (the
-//!   map snapshot, Rust → C++). Without that inventory this paragraph would be
-//!   asserting the cost is bounded; with it, the bound is checkable.
+//! For precision: two reactors already coexist in the daemon process — the
+//! Axum/tokio server in `shekyl-daemon-rpc` — and always have. Reason 2 was
+//! never about the process; it is about the **p2p path**, which is why
+//! asio-arms leaves it intact.
 //!
-//! What survives reason 2 unchanged, and matters more than what changed:
-//! everything in [`schedule`] stays a plain `&mut self` state machine that
-//! returns a deadline. That is what the daemon's `run_epoch` / `run_stems` /
-//! `run_fluff` force-step hooks forward into, and therefore what keeps the 33
-//! `levin_notify` cases usable as an oracle across the cut. The driver moves;
-//! the primitives do not become async.
+//! The reactor does eventually move, when the C++ relay path is removed. That is
+//! the point at which the move costs nothing: with asio gone, tokio is the sole
+//! runtime, so there is no second reactor to create and no transitional
+//! asio/tokio seam to maintain. Reason 2 is broken *then*, by the removal, not
+//! now — and doing it before the removal would buy the seam and pay for it until
+//! the C++ leaves.
 //!
 //! Cuprate's `net/levin` and `net/epee-encoding` are a genuinely different
 //! question — they would remove the single largest obstacle to ever moving the

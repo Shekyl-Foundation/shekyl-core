@@ -6,10 +6,11 @@
 //! Driving the zone: what runs when a deadline elapses, and what the caller
 //! must do about it.
 //!
-//! This is the piece that *is* the second reactor (§18.5). Asio keeps sockets
-//! and the p2p path; this drives relay timing. The seal `lib.rs` broke was
-//! against a second reactor **racing** the p2p path, and the reason it does not
-//! race is that ownership is single: the driver owns the zone, and the only
+//! This decides *when*; it does not sleep. The caller arms its existing timer
+//! against [`Driver::next_wake`] and calls [`Driver::poll`] when that elapses —
+//! so RP-3a adds no reactor to the p2p path, and `shekyl-relay-privacy`'s
+//! reason-2 seal (*"the existing timer stays in charge"*) holds rather than
+//! breaks. Ownership is still single: the driver owns the zone, and the only
 //! things crossing the boundary are commands inward and [`Effect`]s outward.
 //!
 //! # Two disciplines this module exists to hold

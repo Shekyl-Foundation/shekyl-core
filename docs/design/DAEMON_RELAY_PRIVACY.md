@@ -3408,34 +3408,38 @@ machines own *when* and never *how*, and remain pure steps that return deadlines
 That property is exactly what keeps the `run_*` hooks — and therefore the
 oracle — available. RP-3 rewrites the paragraph rather than deleting the idea.
 
-**The retraction surface is two files, not one.** `lib.rs:100–112` records a
-second position, written explicitly *"so the question does not get re-opened by
-accident"*: Cuprate's `dandelion-tower` was rejected partly because *"the shape
-is wrong for this seam … adopting it would mean running a second reactor inside
-the p2p path."* That reasoning argues against exactly what RP-3 now does, so
-reopening it deliberately means updating it with the reason, not stepping around
-it. And the honest form of the reframing is not "there is no second reactor" —
-there is. Asio keeps the sockets and the p2p path; a Rust driver takes the relay
-timing. What changed is the ledger: the original objection was *two loops for no
-gain*, and RP-3 buys something specific with the second one — the timing logic
-stops being duplicated across languages, and F-4/F-5 close. Two loops with a
-defined handoff, for a named gain.
+**Correction: the retraction is withdrawn — RP-3a is seal-consistent.** An
+earlier pass here recorded `lib.rs:100–112`'s reason 2 as reversed, priced as
+*"F-4/F-5 buys the second reactor."* **That ledger was wrong**, and following the
+error back showed the reversal itself was unnecessary:
 
-**Why the framing does not move with the loop.** The same `lib.rs` passage calls
-the workspace's lack of an epee/levin implementation *"the single largest
-obstacle to ever moving the full relay path into Rust."* RP-3 does not remove
-that obstacle and does not need to: the seam is Rust decides *when* and *to
-whom*, C++ frames and sends. Transaction bodies cross as opaque blobs — which is
-why §4's surface has `p2p.send(blob, uuid)` as a callback rather than a Rust
-socket. Moving the framing is a separate decision that RP-3 leaves untouched.
+- **F-4/F-5 close without any reactor change** — the corrected draw is the
+  crate's whether asio or tokio owns the sleep. The gain never required the cost
+  it was charged against.
+- **RP-3a adds no reactor.** Rust owns the zone state and every timing
+  *decision*; the existing asio timer is armed from the returned deadline and
+  owns the *sleep*. Rust is a library the p2p path calls, not a loop beside it,
+  so the p2p path still has exactly one reactor.
+- That is **what reason 2 prescribes**, not a departure from it: *"a plain
+  `&mut self` state machine that returns a deadline, precisely so the existing
+  timer stays in charge."* RP-3a is that sentence implemented.
 
-**Where the rewrite lands: the implementation commit, not this one.** This
-section *describes* the retraction because a reader of §18 needs to know it is
-coming; `schedule.rs`'s module doc changes only when the code it documents
-changes. Doc-tracks-code is the invariant — a design commit that pre-emptively
-rewrote that paragraph would leave the module claiming a state the tree has not
-reached, which is the stale-gate class this arc has spent its review budget
-catching.
+For precision, two reactors already coexist in the daemon process — the
+Axum/tokio server in `shekyl-daemon-rpc` (`Builder::new_multi_thread()`) — and
+always have. Reason 2 was never about the process; it is about the **p2p path**,
+which asio-arms leaves intact.
+
+**When the reactor does move: at C++ removal, where it is free.** With asio gone,
+tokio is the sole runtime — no second reactor to create, and no transitional
+asio/tokio seam to maintain. Moving it earlier would buy that seam and pay for it
+until the C++ leaves. So reason 2 is broken by the *removal*, not by RP-3a, and
+`schedule.rs`'s "No async runtime" section **also stands unchanged** — its claim
+was always that the types never spawn, sleep or await, which remains true.
+
+**No rewrite lands at all now**, which is the doc-tracks-code rule reaching its
+cleanest outcome: the module docs never changed, because the code never departed
+from what they describe. The retraction that was scheduled for the
+implementation commit is simply withdrawn.
 
 `tokio` is already in the daemon image (`shekyl-daemon-rpc`, `features = ["full"]`),
 so the runtime is not a new dependency under the single-image contract.
@@ -3535,9 +3539,10 @@ whether 3a lands cleanly with the snapshot seam intact.
    did for `random_poisson_seconds`; anything left is named with its round.
 5. The zone task is the only writer of zone state — asserted structurally (no
    C++ path mutates it) rather than by convention.
-6. `schedule.rs`'s "No async runtime" section **and** `lib.rs`'s
-   second-reactor rationale reflect what shipped — both enacted in the commit
-   that moves the loop, per the doc-tracks-code rule above.
+6. `schedule.rs`'s "No async runtime" section and `lib.rs`'s reason 2 are
+   **unchanged**, because RP-3a does not depart from either: the types still
+   never spawn, sleep or await, and the existing timer stays in charge. The
+   earlier retraction is withdrawn.
 7. **The §18.5 inventory is an invariant the implementation maintains, not a
    one-time check.** Every piece of relay state has exactly one owner —
    inventoried — or it does not land. `connection_count` is Rust-owned
@@ -3548,12 +3553,12 @@ whether 3a lands cleanly with the snapshot seam intact.
 
    The "nothing straddles" property is **not self-maintaining** — finding 3 is
    the proof: a call that looked safe was unsafe until ownership was asked of
-   it. So the seal was not merely reopened, it was **replaced with a stronger,
-   checkable invariant**. `lib.rs` sealed against *a second reactor racing the
-   p2p path*; this item operationalises that as *every piece of state has
-   exactly one owner*, which permits the second reactor precisely because the
-   invariant guarantees it cannot race. Make-bad-states-unrepresentable applied
-   to the seal itself.
+   it. The invariant survives the withdrawal of the seal-break unchanged, and
+   for reasons that never depended on it: `get_status()` is callable from any
+   thread, so *something* crosses threads and must be published rather than
+   shared; and when the reactor eventually moves at C++ removal, an inventory
+   already at single-owner is what makes that move a non-event rather than a
+   new concurrency design.
 8. **The live scheduler is a new crate, not an extension of
    `shekyl-relay-privacy`.** That crate's stated scope is *"Timing only. Nothing
    here serializes a message, chooses eligible peers, or touches a socket"*, and
@@ -3655,19 +3660,21 @@ rebuilding. The three groups with no twin (`forward`/`block`/`none` dispatch,
 noise, framing) are C++-side behaviour the port does not move — a failure there
 attributes to the shim or to the C++ that was already there, not to the Rust.
 
-### 18.5 State inventory — what earns the seal-break
+### 18.5 State inventory — single ownership, and why it outlives the seal question
 
-RP-3 reverses a decision `lib.rs:100–112` sealed *"so the question does not get
-re-opened by accident"*. The seal's objection was **a second reactor for no
-gain**, so the reversal is priced against that objection and not against a
-generic dislike of duplication:
+This section was written to price a seal-break that has since been **withdrawn**
+(§18.2): RP-3a adds no reactor, so `lib.rs` reason 2 holds. The ledger it
+contained was wrong — F-4/F-5 close without any reactor change — and is deleted
+rather than patched.
 
-| Ledger | Entry |
-| --- | --- |
-| **Gain (load-bearing)** | **F-4/F-5 close.** A *defect* closure, which is a different category from the cleanliness the seal weighed — a cleanliness seal is legitimately broken by a defect and not by a preference. |
-| **Gain (discounted)** | Cross-language duplication of relay timing ends. Real, but partly self-inflicted: this arc created that duplication by migrating incrementally, so it is *finishing a migration we chose to start*. A half-migrated seam is worse than either endpoint, so it counts — but it does not carry the reversal. |
-| **Cost (acknowledged)** | There **is** a second reactor. Asio keeps sockets and the p2p path; a Rust driver takes relay timing. Saying otherwise would be dishonest. |
-| **Cost bound** | The cost is a *handoff* rather than a *race* **iff nothing straddles** — every piece of relay state has exactly one owner. That is inventoried below, not asserted. |
+**The inventory survives the correction, on grounds that never depended on it.**
+Single ownership is required because `get_status()` is callable from any thread,
+so one fact genuinely crosses threads and must be *published* rather than shared;
+and because when the reactor does move at C++ removal, an inventory already at
+single-owner makes that a non-event instead of a fresh concurrency design. It
+also earned its keep independently: it caught a duplicate-fact bug
+(`PeerFluff::flush_at`) in a single-threaded path, because it asks *"who owns
+this fact?"* rather than *"can this race?"*.
 
 **The inventory.** Zone state from `levin_notify.cpp`, with today's ownership
 taken from the code's own discipline comments:
@@ -3714,5 +3721,6 @@ answer changed the direction of a call.
 
 **Standing obligation.** Any new state added on either side of the boundary is
 inventoried before it is written, with a named single owner. "Nothing straddles"
-is the property that bounds the second reactor's cost, so it is maintained
+is what keeps the one genuinely cross-thread fact publishable rather than shared,
+and what will make the eventual reactor move a non-event — so it is maintained
 deliberately rather than assumed to persist.
