@@ -93,8 +93,12 @@ sustainability is unaffected by the recalibration.
   `(grace, m, n)` satisfies both, that infeasibility promotes the **PoRep** branch
   of (d). Input: `shekyl-economics-sim::proxy` (which now **deps**
   `FAILURE_WINDOW_M/N` rather than mirroring them). Target: **V3.0**.
-- **D3 — archival-reward per-bond `curve_milli` cap is dodgeable at no bond
-  cost** (added 2026-07-25; surfaced by A4/W9,
+- **~~D3 — archival-reward per-bond `curve_milli` cap is dodgeable at no bond
+  cost~~** **✅ RESOLVED (§12.9, round closed 2026-07-26) + IMPLEMENTED
+  (§12.9.1, PR #371, `feat/archival-d3-reward-path`) — status annotations sit at
+  the bottom of this entry; hoisted here because the entry head is what a
+  reader scans, and an unprefixed head reads as pending (the file's own
+  closed-entry idiom).** (added 2026-07-25; surfaced by A4/W9,
   `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.5 / reopen (e), sim commits
   `d4026efe3`+cp4c). `sigma_work_milli` applies the `curve_milli` plateau **per
   bond entry** (`per_p_work_milli`), while `bond_floor_of` scales the bond
