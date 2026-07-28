@@ -64,4 +64,4 @@ pub mod driver;
 pub mod zone;
 
 pub use driver::{Driver, Effect};
-pub use zone::{FluffReach, PeerFluff, RelayPlan, Zone};
+pub use zone::{FluffReach, PeerFluff, RelayPlan, TxBlob, Zone};

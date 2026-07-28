@@ -35,7 +35,7 @@ use shekyl_relay_privacy::stem_map::{ConnectionId, StemSetChange};
 
 #[cfg(test)]
 use crate::zone::FluffReach;
-use crate::zone::Zone;
+use crate::zone::{RelayPlan, TxBlob, Zone};
 
 /// Work the driver produced that the caller must perform.
 ///
@@ -48,8 +48,8 @@ pub enum Effect {
     Fluff {
         /// Where the batch goes.
         peer: ConnectionId,
-        /// The batched transaction blobs, in acceptance order.
-        blobs: Vec<Vec<u8>>,
+        /// The batched transaction blobs (shared handles; content-sorted).
+        blobs: Vec<TxBlob>,
     },
     /// The stem slots changed; re-point anything bound to them positionally.
     ///
@@ -106,10 +106,10 @@ impl Driver {
     ///
     /// This is the inherited `update_channels::run` — a *mid-epoch* refresh,
     /// distinct from the rollover below. The daemon needs it on three paths: a
-    /// new outbound connection, a covert send that failed, and the retry inside
-    /// `dandelionpp_notify` — which is the only thing that ever populates the
-    /// map on a public zone, because the zone is constructed before any peer
-    /// has connected.
+    /// new outbound connection, a covert send that failed, and the forced
+    /// refresh after a stem send failure in `dandelionpp_notify`. First-time
+    /// population of an empty public-zone map is handled by
+    /// [`Driver::plan_relay_with_refresh`] instead.
     pub fn update_stems<R: RelayRng + ?Sized>(
         &mut self,
         outbound: &[ConnectionId],
@@ -117,6 +117,24 @@ impl Driver {
     ) -> Vec<Effect> {
         let change = self.zone.update_stems(outbound.to_vec(), rng);
         self.slots_if_changed(change)
+    }
+
+    /// Plan a relay; on [`RelayPlan::NoRoute`], refresh from `outbound` once
+    /// and re-plan, pushing slots if the refresh changed them.
+    ///
+    /// See [`Zone::plan_relay_with_refresh`]. Returns the plan plus any
+    /// [`Effect::StemSlots`] the mid-call refresh produced.
+    pub fn plan_relay_with_refresh<R: RelayRng + ?Sized>(
+        &mut self,
+        source: Option<ConnectionId>,
+        local_origin: bool,
+        outbound: &[ConnectionId],
+        rng: &mut R,
+    ) -> (RelayPlan, Vec<Effect>) {
+        let (plan, change) =
+            self.zone
+                .plan_relay_with_refresh(source, local_origin, outbound.to_vec(), rng);
+        (plan, self.slots_if_changed(change))
     }
 
     /// Re-draw the whole stem set — what an epoch rollover does.
@@ -262,7 +280,7 @@ mod tests {
             d.poll(due, &[], &mut rng),
             vec![Effect::Fluff {
                 peer: id(1),
-                blobs: vec![vec![7]]
+                blobs: vec![TxBlob::from([7u8].as_slice())]
             }]
         );
     }
@@ -343,7 +361,7 @@ mod tests {
             d.force_fluff(0),
             vec![Effect::Fluff {
                 peer: id(1),
-                blobs: vec![vec![9]]
+                blobs: vec![TxBlob::from([9u8].as_slice())]
             }],
             "force releases the same batch the deadline would have"
         );

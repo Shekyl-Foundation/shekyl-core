@@ -30,21 +30,10 @@
 //! it: `stem_slots_cross_in_index_order_with_nils_in_position`.
 
 use shekyl_relay_privacy::params::DandelionParams;
-use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::{EmbargoTimer, PROPAGATION_FALSE_FAIL_ONE_IN};
 use std::sync::OnceLock;
 
-/// Production RNG for the embargo draw: a CSPRNG reading OS entropy each draw,
-/// matching the C++ `crypto::random_device` the inherited timer used — never the
-/// deterministic `SplitMix64` the measurement suite draws from.
-struct SecureRelayRng;
-
-impl RelayRng for SecureRelayRng {
-    fn next_u64(&mut self) -> u64 {
-        use rand::RngCore;
-        rand::rngs::OsRng.next_u64()
-    }
-}
+use crate::secure_relay_rng::SecureRelayRng;
 
 // --- the embargo timer (RP-4, §17) --------------------------------------------
 

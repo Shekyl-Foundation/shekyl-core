@@ -3079,16 +3079,28 @@ std::uint64_t shekyl_relay_zone_next_wake(const RelayZoneHandle* handle);
 //! routing failure (retry after a refresh) and a settled fluff epoch (do not)
 //! also report different relay_method events. Deciding between them in C++
 //! would mean a second copy of the RD-4 predicate `!fluffing || local_origin`.
-//! A null handle reports NO_ROUTE.
+//! A null handle reports NO_ROUTE. Pure plan — production notify prefers
+//! shekyl_relay_zone_plan_relay_with_refresh, which owns the one NoRoute
+//! refresh; keep this for a forced refresh already performed (send-failure
+//! retry) and for tests.
 std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::uint8_t* source,
                                           bool local_origin, std::uint8_t* out_dest);
+//! Plan a relay; on NO_ROUTE merge `outbound` once and re-plan, pushing slots
+//! if the set changed. Settled fluff epochs do not refresh. This is the
+//! production notify path: the refresh policy lives in Rust with the zone.
+std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
+    RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
+    const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest, void* ctx,
+    ShekylRelaySlotsCb on_slots);
 //! Merge the current outbound set into the stem map mid-epoch, pushing the new
-//! slots if it changed. On a public zone this is the only thing that ever fills
-//! the map: the zone is constructed before any peer has connected.
+//! slots if it changed. Used for connection churn, covert-send recovery, and
+//! the forced refresh after a stem send failure.
 void shekyl_relay_zone_update_stems(RelayZoneHandle* handle, const std::uint8_t* outbound,
                                     std::size_t n, void* ctx, ShekylRelaySlotsCb on_slots);
 //! Accept a batch for fluffing to every peer but `source`. Returns how many
-//! peers took it — zero means nothing is connected to fluff to.
+//! peers took it — zero means nothing is connected to fluff to, or a blob span
+//! was invalid (null ptr with non-zero len). Empty blobs (`len == 0`) are valid
+//! and may pass a null ptr; non-empty spans require a live readable ptr.
 std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
                                           const ShekylRelayBlob* blobs, std::size_t n,
                                           const std::uint8_t* source);

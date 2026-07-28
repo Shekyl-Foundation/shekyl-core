@@ -644,40 +644,50 @@ namespace levin
         assert(zone_->strand.running_in_this_thread());
 
         /* Stem-or-fluff is the zone's call, including "the origin always stems"
-           (RD-4). This asks and obeys; re-deriving `!fluffing || local` here
-           would put a second copy of that predicate in the tree, and the copy
-           is the one that would rot. */
+           (RD-4) and the one NoRoute refresh. This offers the outbound snapshot
+           and performs transport; re-deriving `!fluffing || local` or owning
+           the refresh loop here would put zone scheduling in the one layer the
+           gtest oracle cannot see through. */
         boost::uuids::uuid destination{};
         const bool local_origin = (tx_relay == relay_method::local);
-        const auto plan_relay = [this, &destination, local_origin] {
-          return shekyl_relay_zone_plan_relay(
-            zone_->relay.get(), uuid_bytes(source_), local_origin,
-            reinterpret_cast<std::uint8_t*>(std::addressof(destination))
-          );
-        };
+        relay_effects sink{zone_};
+        std::vector<boost::uuids::uuid> outs = get_out_connections(*zone_->p2p, core_);
 
-        std::int32_t plan = plan_relay();
+        std::int32_t plan = shekyl_relay_zone_plan_relay_with_refresh(
+          zone_->relay.get(), uuid_bytes(source_), local_origin,
+          uuid_bytes(outs), outs.size(),
+          reinterpret_cast<std::uint8_t*>(std::addressof(destination)),
+          std::addressof(sink), relay_effects::on_slots
+        );
+
         if (plan != SHEKYL_RELAY_PLAN_FLUFF_EPOCH)
         {
           core_->on_transactions_relayed(epee::to_span(txs_), relay_method::stem);
 
-          for (unsigned attempt = 0; attempt < 2; ++attempt)
+          if (plan == SHEKYL_RELAY_PLAN_STEM &&
+              make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
           {
-            if (attempt != 0)
-            {
-              // connection list may be outdated, try again
-              relay_update_stems(zone_, get_out_connections(*zone_->p2p, core_));
-              plan = plan_relay();
-            }
+            /* Source is intentionally omitted in debug log for privacy - a
+               nil uuid indicates source is that node. */
+            MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
+            return;
+          }
 
-            if (plan == SHEKYL_RELAY_PLAN_STEM &&
-                make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
-            {
-              /* Source is intentionally omitted in debug log for privacy - a
-                 nil uuid indicates source is that node. */
-              MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
-              return;
-            }
+          // Stem send failed, or still unroutable after the one NoRoute refresh:
+          // force a mid-epoch map refresh (connection list may be stale) and
+          // re-plan once. Transport retry only — refresh policy already lived
+          // in the first call for the empty-map case.
+          outs = get_out_connections(*zone_->p2p, core_);
+          relay_update_stems(zone_, outs);
+          plan = shekyl_relay_zone_plan_relay(
+            zone_->relay.get(), uuid_bytes(source_), local_origin,
+            reinterpret_cast<std::uint8_t*>(std::addressof(destination))
+          );
+          if (plan == SHEKYL_RELAY_PLAN_STEM &&
+              make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
+          {
+            MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
+            return;
           }
 
           MERROR("Unable to send transaction(s) via Dandelion++ stem");
