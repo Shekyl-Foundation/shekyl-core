@@ -1486,7 +1486,11 @@ namespace cryptonote
      * that fail validate_miner_transaction's exact-equality money check — a
      * chain halt, not a warning.
      *
-     * @param block_height height of the block being built or validated
+     * @param block_height height of the block being built or validated. At a
+     *   load-bearing (connect) site this MUST be a height captured before
+     *   m_db->add_block — never a fresh m_db->height() read, which turns the
+     *   check into a permanent tautology while looking correct and passing
+     *   every test.
      *
      * @return frozen_segment_count at the parent of block_height
      */

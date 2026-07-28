@@ -1643,7 +1643,13 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 // The check is load-bearing at CONNECT: handle_block_to_main_chain computes n
 // before validate_miner_transaction and m_db->add_block, and a refactor that
 // moves the read past add_block (the M3-1 cached-counter drift class) must
-// stop the node here, not skew the split. At TEMPLATE build it is a tripwire
+// stop the node here, not skew the split. The teeth depend on the OPERAND,
+// not just the call site: block_height must be a height captured BEFORE
+// add_block (connect passes its blockchain_height snapshot). "Simplifying"
+// the call to parent_frozen_segment_count(m_db->height()) makes the check a
+// permanent tautology — it still looks correct and still passes every test,
+// while the reordering it exists to catch becomes undetectable. Do not pass a
+// fresh m_db->height() at a load-bearing site. At TEMPLATE build it is a tripwire
 // only — create_block_template sets height = m_db->height() itself, so the
 // guarantee there comes from using the same expression, not from this check;
 // its value is refusing any future reintroduction of a non-tip parent, which
