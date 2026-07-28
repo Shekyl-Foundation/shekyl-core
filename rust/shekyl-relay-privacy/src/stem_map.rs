@@ -79,12 +79,43 @@ impl StemSetChange {
 /// The map is rebuilt from scratch at each epoch boundary (that is the point
 /// of an epoch); [`StemMap::update`] handles churn *within* an epoch as peers
 /// come and go.
+/// One source's routing decision for this epoch, frozen at its first pin.
+///
+/// **W3c (`DAEMON_RELAY_PRIVACY.md` §19.2).** The set of peers a source may be
+/// routed to is fixed when it first pins and **never grows**. That is the whole
+/// of the churn-stability property, and it is enforced by this field being
+/// append-never rather than by any caller's discipline — callers multiply, and
+/// §19.1's C-1 found the clearnet re-roll surface is already two triggers deep.
+///
+/// The property it replaces was pinning by *slot index*, which re-rolled a
+/// source silently: `update()` refilled the churned slot and the next `stem_for`
+/// took the `is_some()` fast path and returned whoever now occupied it, with no
+/// selection code running at all. Measured at §19.3 — 16 induced re-rolls reached
+/// the origin's stem path 91.7 % of the time against 16.7 % here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Pin {
+    /// Peers this source may be routed to, in walk order. Frozen at first pin.
+    candidates: Vec<ConnectionId>,
+    /// How far into `candidates` this source has walked. Only ever advances:
+    /// a peer that leaves the map does not come back to serve this source, even
+    /// if it reconnects, because that would be a post-pin arrival by another name.
+    cursor: usize,
+    /// The slot this source is currently counted against in `StemMap::usage`.
+    ///
+    /// Stored rather than re-derived from the current candidate, because the
+    /// candidate may have *left the map* — which is exactly when the count needs
+    /// releasing. Deriving it there silently skips the decrement and leaves a
+    /// phantom usage count, which is what `losing_all_peers_falls_back_to_no_stem`
+    /// caught on the first draft of this type.
+    counted: Option<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StemMap {
     /// Stem slots. `None` is a slot whose peer disconnected.
     out: Vec<Option<ConnectionId>>,
-    /// Source -> stem slot index. `None` key = locally originated.
-    inbound: BTreeMap<Option<ConnectionId>, usize>,
+    /// Source -> its frozen routing decision. `None` key = locally originated.
+    inbound: BTreeMap<Option<ConnectionId>, Pin>,
     /// Per-slot count of sources currently routed through it. Length is the
     /// configured stem count, which is `>= out.len()` at all times.
     usage: Vec<usize>,
@@ -244,46 +275,83 @@ impl StemMap {
         &self.usage
     }
 
+    /// The slot currently holding `peer`, if any.
+    fn slot_of(&self, peer: ConnectionId) -> Option<usize> {
+        self.out.iter().position(|s| *s == Some(peer))
+    }
+
     /// The stem peer for `source`, assigning one if this source has not been
     /// seen this epoch.
     ///
     /// `source` is `None` for locally originated transactions. Returns `None`
     /// when no stem slot is routable, in which case the caller must fluff.
+    ///
+    /// **Churn-stable (§19.2).** A source that has already pinned walks its own
+    /// frozen [`Pin::candidates`] and nothing else, so no peer that entered the
+    /// map after it pinned can ever serve it. A source whose successor churns
+    /// therefore falls back to its *alternate* — a peer that was in its set
+    /// before the churn — rather than to a fresh draw, which is what stopped an
+    /// adversary from converting induced churn into repeated rolls (§19.3).
+    ///
+    /// Exhausting the frozen set yields `None` (fluff) rather than a fresh pin.
+    /// That is the deliberate half of the trade: re-pinning here would hand back
+    /// exactly the post-churn draw the freeze exists to deny, and reaching it
+    /// requires churning *every* peer the source started with — the W3
+    /// both-slots case, already bounded — not a single induced drop. It is also
+    /// bounded in time: `rebuild_stems` re-draws every pin at the epoch
+    /// boundary, so a source is unroutable for at most the rest of the epoch.
     pub fn stem_for<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,
         rng: &mut R,
     ) -> Option<ConnectionId> {
-        match self.inbound.get(&source).copied() {
-            None => {
-                let index = self.select_slot(rng)?;
-                self.inbound.insert(source, index);
-                self.usage[index] += 1;
-                self.out[index]
+        if let Some(pin) = self.inbound.get(&source) {
+            let previous = pin.candidates.get(pin.cursor).copied();
+            // Walk forward over candidates that have left the map. The set never
+            // grows, so this can only narrow the source's options.
+            let mut cursor = pin.cursor;
+            while cursor < pin.candidates.len() && self.slot_of(pin.candidates[cursor]).is_none() {
+                cursor += 1;
             }
-            Some(index) => {
-                if self.out[index].is_some() {
-                    return self.out[index];
+            let chosen = pin.candidates.get(cursor).copied();
+
+            if chosen != previous {
+                // Move this source's usage from the old slot to the new one, so
+                // `select_slot` keeps balancing *live* load for later sources.
+                let counted = self.inbound.get(&source).and_then(|p| p.counted);
+                if let Some(old) = counted {
+                    self.usage[old] -= 1;
                 }
-                // The peer this source was pinned to disconnected. Release the
-                // old slot and re-pin. Re-pinning is not free — it moves this
-                // source's stem traffic to a different peer mid-epoch — but
-                // the alternative is dropping to fluff, which is strictly more
-                // revealing.
-                self.usage[index] -= 1;
-                match self.select_slot(rng) {
-                    Some(next) => {
-                        self.inbound.insert(source, next);
-                        self.usage[next] += 1;
-                        self.out[next]
-                    }
-                    None => {
-                        self.inbound.remove(&source);
-                        None
-                    }
+                let next_counted = chosen.and_then(|p| self.slot_of(p));
+                if let Some(new) = next_counted {
+                    self.usage[new] += 1;
+                }
+                if let Some(pin) = self.inbound.get_mut(&source) {
+                    pin.cursor = cursor;
+                    pin.counted = next_counted;
                 }
             }
+            return chosen;
         }
+
+        // First pin this epoch. The primary is load-balanced across slots; the
+        // rest of the live set follows it, in slot order, as this source's
+        // alternates.
+        let index = self.select_slot(rng)?;
+        let primary = self.out[index]?;
+        let mut candidates = Vec::with_capacity(self.out.len());
+        candidates.push(primary);
+        candidates.extend(self.out.iter().flatten().copied().filter(|p| *p != primary));
+        self.inbound.insert(
+            source,
+            Pin {
+                candidates,
+                cursor: 0,
+                counted: Some(index),
+            },
+        );
+        self.usage[index] += 1;
+        Some(primary)
     }
 
     /// Pick the live slot with the fewest sources routed through it, breaking
@@ -480,6 +548,118 @@ mod tests {
         let peers = ids(5);
         let mut m = StemMap::new(peers.clone(), 2, &mut rng);
         assert_eq!(m.update(peers, &mut rng), StemSetChange::Unchanged);
+    }
+
+    /// **W3c acceptance (§19.2 item 2).** A pinned source must never be routed
+    /// to a peer that entered the map *after* it pinned.
+    ///
+    /// The transition this asserts across is the one where **nothing executes**:
+    /// `update()` empties the pinned slot and backfills it, and the old
+    /// `stem_for` then took the `self.out[index].is_some()` fast path and
+    /// returned the new occupant. There was no selection call to hang a property
+    /// on — the re-roll *was the absence of an operation* — which is why the
+    /// assertion has to be about the peer that comes back, across the sequence,
+    /// rather than about anything the map does.
+    ///
+    /// Both §19.1 C-1 triggers are represented: two `update` calls in sequence,
+    /// as `plan_relay_with_refresh` (on `NoRoute`) and `dandelionpp_notify` (on
+    /// send failure) would produce. A per-call property is escaped by exactly
+    /// this composition.
+    #[test]
+    fn a_pinned_source_is_never_routed_to_a_post_pin_arrival() {
+        let mut rng = SplitMix64::new(0x9C1);
+        // Three peers, two stems: one spare, so a churned slot CAN be backfilled.
+        // The inherited `gtest_dropped_connection_remapped` fixture has no spare
+        // and therefore never constructs this state at all.
+        let peers = ids(3);
+        let mut m = StemMap::new(peers.clone(), 2, &mut rng);
+
+        let source = Some(ids(1)[0]);
+        let first = m.stem_for(source, &mut rng).expect("a stem is available");
+        let frozen: Vec<ConnectionId> = m.slots().iter().flatten().copied().collect();
+        assert_eq!(frozen.len(), 2, "fixture: two live stems at pin time");
+
+        // Trigger 1 — the pinned peer churns; the spare backfills its slot.
+        let survivors: Vec<ConnectionId> = peers.iter().copied().filter(|p| *p != first).collect();
+        assert_eq!(
+            m.update(survivors.clone(), &mut rng),
+            StemSetChange::Changed
+        );
+        let arrival = m
+            .slots()
+            .iter()
+            .flatten()
+            .copied()
+            .find(|p| !frozen.contains(p))
+            .expect("fixture: the backfill brought in a peer that was not frozen");
+
+        let after = m.stem_for(source, &mut rng).expect("the alternate is live");
+        assert_ne!(
+            after, arrival,
+            "the source followed the backfill into its own slot — this is the \
+             silent re-roll, and it is the whole of W3c"
+        );
+        assert!(
+            frozen.contains(&after),
+            "a pinned source may only be served by peers frozen at its pin"
+        );
+
+        // Trigger 2 — a second refresh in the same epoch. The composition is
+        // where a per-call property leaks, so the assertion is repeated after it.
+        assert_eq!(m.update(survivors, &mut rng), StemSetChange::Unchanged);
+        let after_two = m.stem_for(source, &mut rng).expect("still routable");
+        assert_eq!(
+            after_two, after,
+            "a no-op refresh must not move a pinned source"
+        );
+        assert!(
+            frozen.contains(&after_two),
+            "the frozen set must survive a SEQUENCE of updates, not just one"
+        );
+    }
+
+    /// **W3c acceptance (§19.2 item 3) — the negative control, run in-process.**
+    ///
+    /// Replays the same sequence against the *pre-fix* mechanism (pin by slot
+    /// index; follow whoever occupies it) and asserts it lands on the post-pin
+    /// arrival. If this ever stops reproducing the defect, the control has gone
+    /// blind and the test above is no longer discriminating anything.
+    ///
+    /// Modelled rather than reached through the real type, because the defect is
+    /// the *absence* of the walk — there is no flag to turn off. The model is
+    /// three lines and its fidelity is checked by the assertion it makes: the
+    /// slot-follower lands on the arrival, which is precisely what
+    /// `probe_silent_reroll` observed on the real map before the fix.
+    #[test]
+    fn negative_control_slot_pinning_follows_the_backfill() {
+        let mut rng = SplitMix64::new(0x9C1);
+        let peers = ids(3);
+        let mut m = StemMap::new(peers.clone(), 2, &mut rng);
+
+        let source = Some(ids(1)[0]);
+        let first = m.stem_for(source, &mut rng).expect("a stem is available");
+        let pinned_slot = m
+            .slots()
+            .iter()
+            .position(|s| *s == Some(first))
+            .expect("the pinned peer occupies a slot");
+        let frozen: Vec<ConnectionId> = m.slots().iter().flatten().copied().collect();
+
+        let survivors: Vec<ConnectionId> = peers.iter().copied().filter(|p| *p != first).collect();
+        assert_eq!(m.update(survivors, &mut rng), StemSetChange::Changed);
+
+        // The pre-fix read: whatever now occupies the pinned SLOT.
+        let slot_follower = m.slots()[pinned_slot].expect("the slot was backfilled");
+        assert!(
+            !frozen.contains(&slot_follower),
+            "control: the backfill must be a post-pin arrival, or this proves nothing"
+        );
+        assert_ne!(
+            slot_follower,
+            m.stem_for(source, &mut rng).expect("the alternate is live"),
+            "control: slot-pinning and the frozen set MUST disagree here — if they \
+             agree, the fixture stopped exercising the defect"
+        );
     }
 
     #[test]
@@ -681,6 +861,11 @@ mod tests {
             assert_eq!(m.stem_for(Some(*s), &mut rng), Some(mapping[s]));
         }
 
+        // The peers live at pin time — every source's frozen set (§19.2). A
+        // displaced source may be re-served only from here, never from a peer
+        // that arrives afterwards.
+        let frozen_at_pin: Vec<ConnectionId> = m.slots().iter().flatten().copied().collect();
+
         // Drop the middle stem slot's peer (C++: `*(++mapper.begin())`).
         let lost = m.slots()[1].expect("slot 1 live");
         peers.retain(|p| *p != lost);
@@ -692,15 +877,24 @@ mod tests {
         }
         assert_live_slots_subset_of(&m, &peers);
 
-        // Replacement lands in the same slot index; sources pinned there now
-        // see the new peer without a re-select (C++ updates expected mapping).
+        // **DELIBERATE DIVERGENCE FROM THE PORT (RP-2b, W3c).** The C++ this
+        // twin was ported from re-pointed the sources on the lost stem at
+        // whatever backfilled its slot, and the twin encoded that by rewriting
+        // its own expectation: `mapping.insert(*s, newly_mapped)`. That single
+        // line IS the induced-churn amplifier — a peer drawn *after* the churn
+        // becoming the source's successor with no selection running (§19.2).
+        // §19.3 measured it at 91.7 % exposure over 16 forced re-rolls.
+        //
+        // So the expectation is no longer rewritten. Displaced sources are
+        // tracked instead, and asserted below to land inside their frozen set.
         let newly_mapped = m.slots()[1].expect("slot 1 backfilled");
         assert_ne!(newly_mapped, lost);
-        if let Some(on_lost) = inverse.get(&lost) {
-            for s in on_lost {
-                mapping.insert(*s, newly_mapped);
-            }
-        }
+        let displaced: std::collections::BTreeSet<ConnectionId> =
+            inverse.get(&lost).into_iter().flatten().copied().collect();
+        assert!(
+            !displaced.is_empty(),
+            "fixture: the lost stem carried sources"
+        );
 
         assert_clone_slots_equal(&m);
         assert_live_slots_subset_of(&m, &peers);
@@ -711,17 +905,36 @@ mod tests {
             let out = m
                 .stem_for(Some(*s), &mut rng)
                 .expect("still routable after backfill");
-            assert_eq!(
-                out, mapping[s],
-                "pin must stay stable for unaffected sources and re-point \
-                 only for those on the lost stem"
-            );
+            if displaced.contains(s) {
+                assert!(
+                    frozen_at_pin.contains(&out) && out != lost,
+                    "a displaced source must re-point inside its frozen set"
+                );
+                assert_ne!(
+                    out, newly_mapped,
+                    "a displaced source must NOT follow the backfill — that is W3c"
+                );
+            } else {
+                assert_eq!(out, mapping[s], "an unaffected pin must not move");
+            }
             *used_after.entry(out).or_insert(0) += 1;
         }
-        assert_eq!(used_after.len(), 3);
+        // **DIVERGENCE, and the property's cost.** The port re-balanced displaced
+        // sources across all three stems, because it re-selected them by
+        // least-used slot. Walking a frozen set cannot re-balance: a displaced
+        // source goes to *its own* alternate, so the backfilled slot carries no
+        // traffic until a source pins there for the first time. Load evens out
+        // as new sources arrive and is re-drawn wholesale at the epoch boundary;
+        // what is bought for it is that a churn cannot hand a source to a peer
+        // chosen after the churn (§19.2).
+        assert_eq!(
+            used_after.values().sum::<usize>(),
+            sources.len(),
+            "every source is still routed exactly once"
+        );
         assert!(
-            used_after.values().all(|c| *c == 3),
-            "post-churn load must stay even: {used_after:?}"
+            used_after.keys().all(|p| frozen_at_pin.contains(p)),
+            "post-churn traffic goes only to peers frozen at pin time: {used_after:?}"
         );
         assert_clone_slots_equal(&m);
     }
@@ -799,10 +1012,22 @@ mod tests {
             }
             *used_two.entry(out).or_insert(0) += 1;
         }
-        assert_eq!(used_two.len(), 2);
+        // **DIVERGENCE (same cost as `gtest_dropped_connection`).** The port
+        // re-balanced the displaced sources to 5-per-stem by re-selecting on
+        // least-used; a frozen walk sends each to its own alternate instead, so
+        // the split follows where sources originally pinned rather than an even
+        // spread. The invariant that survives is that every source is routed
+        // exactly once, to a live stem.
+        assert_eq!(
+            used_two.values().sum::<usize>(),
+            sources.len(),
+            "all ten sources routed exactly once"
+        );
         assert!(
-            used_two.values().all(|c| *c == 5),
-            "10 sources across 2 stems at 5 each: {used_two:?}"
+            used_two
+                .keys()
+                .all(|p| m.slots().iter().flatten().any(|q| q == p)),
+            "every routed peer is a live stem: {used_two:?}"
         );
 
         // Refill the hole with a third peer; existing links must not move.
@@ -829,9 +1054,10 @@ mod tests {
             2,
             "refill must not steal existing pins onto the new stem"
         );
-        assert!(
-            used_after_refill.values().all(|c| *c == 5),
-            "still 5-per-live-stem until new sources arrive: {used_after_refill:?}"
+        assert_eq!(
+            used_after_refill.values().sum::<usize>(),
+            sources.len(),
+            "still every source routed exactly once until new sources arrive"
         );
 
         // 8 more inbound sources → 18 total, even across 3 stems (6 each).
@@ -911,21 +1137,43 @@ mod tests {
         assert_eq!(m.live_stems(), 3);
         assert_live_slots_subset_of(&m, &refill);
 
-        let mut used_after = std::collections::BTreeMap::new();
+        // **THE DIVERGENCE THAT COSTS SOMETHING, named plainly (RP-2b, W3c).**
+        // Every peer this map ever held is gone, so every already-pinned source
+        // has an exhausted frozen set and now **fluffs** where the port re-pinned
+        // it onto the fresh peers. That is the availability half of the trade,
+        // and it was chosen with a measurement rather than a preference: §19.3's
+        // third arm allowed a fresh pin on exhaustion and its exposure tracked
+        // the *unfixed* baseline (0.75 at k=8 against 0.17), because at
+        // `STEMS = 2` a full sweep costs an adversary two churns and hands back
+        // two fresh draws. An escape hatch here returns the whole amplifier, so
+        // there is no partial version of this property to take.
+        //
+        // The cost is bounded in time: `rebuild_stems` re-draws every pin at the
+        // epoch boundary, so an affected source fluffs for at most the remainder
+        // of the epoch. How often honest churn reaches total turnover is the
+        // ambient-rate measurement §12.11 still owes.
         for s in &sources {
-            let out = m
-                .stem_for(Some(*s), &mut rng)
-                .expect("re-pin after full refill");
-            assert!(
-                refill.contains(&out),
-                "re-pin must land on a post-refill peer"
+            assert_eq!(
+                m.stem_for(Some(*s), &mut rng),
+                None,
+                "a source whose entire frozen set churned out must fluff, not \
+                 re-pin onto peers that arrived after it pinned"
             );
-            *used_after.entry(out).or_insert(0) += 1;
         }
-        assert_eq!(used_after.len(), 3);
+        // A source that had never pinned still routes: the freeze is per-source,
+        // not a frozen map.
+        let newcomer = ConnectionId::from_bytes([250u8; 16]);
+        let out = m
+            .stem_for(Some(newcomer), &mut rng)
+            .expect("an unpinned source still routes through the refilled map");
         assert!(
-            used_after.values().all(|c| *c == 3),
-            "9 sources re-pin evenly across 3 new stems: {used_after:?}"
+            refill.contains(&out),
+            "and it routes to a live, post-refill peer"
         );
+        // The port's closing assertion here was "9 sources re-pin evenly across
+        // 3 new stems". There are no re-pins to spread now — see above — so what
+        // remains to check is that the refilled map is healthy for sources that
+        // pin into it, which the newcomer above establishes.
+        assert_eq!(m.live_stems(), 3, "the refilled map is fully live");
     }
 }

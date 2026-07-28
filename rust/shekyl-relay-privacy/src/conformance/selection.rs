@@ -360,8 +360,18 @@ pub struct InducedChurnExposure {
     /// `P(the origin is ever routed through an adversarial successor)` under the
     /// current slot-index pinning — one fresh draw per induced churn.
     pub fresh_draw_exposure: f64,
-    /// The same probability when the candidate set is frozen at first pin.
+    /// The same probability when the candidate set is frozen at first pin, and
+    /// an exhausted set means **no successor** (fluff until the epoch rolls).
     pub frozen_set_exposure: f64,
+    /// The same, but an exhausted set permits **one fresh pin** — a new frozen
+    /// set drawn from the live map. Availability is preserved; the adversary
+    /// must churn a source's *entire* set to buy a single new draw, rather than
+    /// one draw per churn.
+    pub frozen_repin_exposure: f64,
+    /// Share of trials in which the frozen set was exhausted at all — the
+    /// availability cost of the no-repin variant, since those sources fluff for
+    /// the remainder of the epoch.
+    pub exhausted_share: f64,
     /// `1 − (1 − a/D)^(k+1)` at the effective integer share — the compounding
     /// curve the fresh-draw arm is expected to track, stated so the measurement
     /// can *disagree* with the closed form rather than be read through it.
@@ -396,6 +406,8 @@ pub fn simulate_induced_churn_exposure<R: RelayRng + ?Sized>(
 
     let mut fresh_hits = 0_usize;
     let mut frozen_hits = 0_usize;
+    let mut repin_hits = 0_usize;
+    let mut exhausted_hits = 0_usize;
 
     for _ in 0..trials {
         // The epoch's stem set: `stems` distinct peers, partial Fisher-Yates as
@@ -408,7 +420,8 @@ pub fn simulate_induced_churn_exposure<R: RelayRng + ?Sized>(
         }
         let initial: Vec<usize> = pool[..stems].to_vec();
         // Peers not serving as a stem — `update()`'s candidate pool.
-        let mut spare: Vec<usize> = pool[stems..].to_vec();
+        let spare_seed: Vec<usize> = pool[stems..].to_vec();
+        let mut spare: Vec<usize> = spare_seed.clone();
 
         // The origin pins to one slot. Usage is all-zero at epoch start, so
         // `select_slot` breaks the tie uniformly.
@@ -432,11 +445,13 @@ pub fn simulate_induced_churn_exposure<R: RelayRng + ?Sized>(
         // Its own slot first, then the remaining initial peers — the alternate.
         let mut frozen_exposed = adversarial(initial[pinned_slot]);
         let mut walked = 1_usize;
+        let mut exhausted = false;
         for _ in 0..forced_rerolls {
             if walked >= initial.len() {
-                // Frozen set exhausted: no successor, so no exposure. Reaching
-                // here required churning every peer the source started with,
-                // which is the W3 both-slots case rather than a new one.
+                // Frozen set exhausted: no successor, so no exposure — but the
+                // source fluffs for the rest of the epoch, which is the cost
+                // `exhausted_share` reports.
+                exhausted = true;
                 break;
             }
             let next = initial[(pinned_slot + walked) % initial.len()];
@@ -444,8 +459,47 @@ pub fn simulate_induced_churn_exposure<R: RelayRng + ?Sized>(
             frozen_exposed |= adversarial(next);
         }
 
+        // --- arm 3: as arm 2, but exhaustion permits a fresh pin. Each new set
+        // costs the adversary a full sweep of the previous one.
+        let mut repin_spare = spare_seed.clone();
+        let mut set: Vec<usize> = {
+            let mut v = Vec::with_capacity(stems);
+            v.push(initial[pinned_slot]);
+            v.extend(
+                initial
+                    .iter()
+                    .copied()
+                    .filter(|p| *p != initial[pinned_slot]),
+            );
+            v
+        };
+        let mut idx = 0_usize;
+        let mut repin_exposed = adversarial(set[0]);
+        for _ in 0..forced_rerolls {
+            idx += 1;
+            if idx >= set.len() {
+                // Draw a fresh set from what is left — one draw per full sweep.
+                let mut fresh = Vec::with_capacity(stems);
+                for _ in 0..stems {
+                    if repin_spare.is_empty() {
+                        break;
+                    }
+                    let pick = usize_from(bounded_uniform(rng, (repin_spare.len() - 1) as u64));
+                    fresh.push(repin_spare.swap_remove(pick));
+                }
+                if fresh.is_empty() {
+                    break;
+                }
+                set = fresh;
+                idx = 0;
+            }
+            repin_exposed |= adversarial(set[idx]);
+        }
+
         fresh_hits += usize::from(fresh_exposed);
         frozen_hits += usize::from(frozen_exposed);
+        repin_hits += usize::from(repin_exposed);
+        exhausted_hits += usize::from(exhausted);
     }
 
     let effective_share = a as f64 / d as f64;
@@ -456,6 +510,8 @@ pub fn simulate_induced_churn_exposure<R: RelayRng + ?Sized>(
         forced_rerolls,
         fresh_draw_exposure: fresh_hits as f64 / trials as f64,
         frozen_set_exposure: frozen_hits as f64 / trials as f64,
+        frozen_repin_exposure: repin_hits as f64 / trials as f64,
+        exhausted_share: exhausted_hits as f64 / trials as f64,
         // `powf` rather than `powi`: the exponent comes from a `usize` and
         // casting it to `i32` can wrap. Precision is ample for a diagnostic
         // reference curve.
