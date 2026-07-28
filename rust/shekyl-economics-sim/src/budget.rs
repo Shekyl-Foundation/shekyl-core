@@ -51,11 +51,11 @@ use serde::Serialize;
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_economics::{
     base_block_reward,
-    burn::compute_burn_split,
+    burn::compute_burn_split_at,
     calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
     params::{EconomicParams, SCALE},
     release::apply_release_multiplier,
-    split_block_emission,
+    split_block_emission, FrozenSegmentCount,
 };
 
 use crate::engine::SimParams;
@@ -149,6 +149,9 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
         final_subsidy_per_minute: params.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
+        // Escalation numerics come from the shipped config: the sim must never
+        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
+        ..EconomicParams::default()
     };
 
     let money_supply = params.money_supply as u128;
@@ -249,7 +252,10 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         );
         let total_fees =
             (tx_volume as u128 * scenario.fee_per_tx as u128).min(u64::MAX as u128) as u64;
-        let fee_split = compute_burn_split(total_fees, burn_pct, params.staker_pool_share);
+        // Canonical escalated entry; n = 0 (no corpus trajectory in this arm —
+        // see engine.rs). Genesis-neutral asymptote ⇒ bit-identical to flat.
+        let fee_split =
+            compute_burn_split_at(total_fees, burn_pct, FrozenSegmentCount::ZERO, &economic);
 
         // Accumulate.
         emission_a_acc += staker_emission_a as u128;

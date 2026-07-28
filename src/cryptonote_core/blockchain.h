@@ -395,7 +395,6 @@ namespace cryptonote
      * @brief creates a new block to mine against
      *
      * @param b return-by-reference block to be filled in
-     * @param from_block optional block hash to start mining from (main chain tip if NULL)
      * @param miner_address address new coins for the block will go to
      * @param di return-by-reference tells the miner what the difficulty target is
      * @param height return-by-reference tells the miner what height it's mining against
@@ -405,7 +404,6 @@ namespace cryptonote
      * @return true if block template filled in successfully, else false
      */
     bool create_block_template(block& b, const account_public_address& miner_address, difficulty_type& di, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash);
-    bool create_block_template(block& b, const crypto::hash *from_block, const account_public_address& miner_address, difficulty_type& di, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash);
 
     /**
      * @brief gets data required to create a block template and start mining on it
@@ -1472,6 +1470,33 @@ namespace cryptonote
     bool prevalidate_miner_transaction(const block& b, uint64_t height, uint8_t hf_version);
 
     /**
+     * @brief reads the D2 escalation operand n = frozen_segment_count at parent-block state
+     *
+     * The staker-share escalation (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
+     * §6.2) is a pure map of the frozen-segment count derived from the curve
+     * tree's leaf count, and the count MUST be the parent block's: reading tip
+     * state after the tree has grown would let a block move its own split.
+     * add_block advances the chain height and grows the tree in one write txn,
+     * and pop_block trims both in one write txn, so
+     * m_db->height() == block_height is equivalent to "the tree has not yet
+     * grown for this block" — the check proves the read is parent-state.
+     *
+     * Throws (rather than logging) on violation: template and connect must
+     * price the coinbase against the same n, and a divergence produces blocks
+     * that fail validate_miner_transaction's exact-equality money check — a
+     * chain halt, not a warning.
+     *
+     * @param block_height height of the block being built or validated. At a
+     *   load-bearing (connect) site this MUST be a height captured before
+     *   m_db->add_block — never a fresh m_db->height() read, which turns the
+     *   check into a permanent tautology while looking correct and passing
+     *   every test.
+     *
+     * @return frozen_segment_count at the parent of block_height
+     */
+    uint64_t parent_frozen_segment_count(uint64_t block_height) const;
+
+    /**
      * @brief validates a miner (coinbase) transaction
      *
      * This function makes sure that the miner calculated his reward correctly
@@ -1483,10 +1508,11 @@ namespace cryptonote
      * @param base_reward return-by-reference the new block's generated coins
      * @param already_generated_coins the amount of currency generated prior to this block
      * @param version hard fork version for that transaction
+     * @param frozen_segment_count D2 escalation operand n, read at parent state via parent_frozen_segment_count
      *
      * @return false if anything is found wrong with the miner transaction, otherwise true
      */
-    bool validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version);
+    bool validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count);
 
     /**
      * @brief reverts the blockchain to its previous state following a failed switch

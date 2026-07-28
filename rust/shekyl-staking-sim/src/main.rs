@@ -2135,7 +2135,7 @@ mod tests {
         use crate::curve::curve_banded;
         use shekyl_archival_retention::{curve_milli, BandedCurveParams, WORK_MILLI_SCALE};
 
-        let banded = BandedCurveParams::from_sim_cap_milli(8_000);
+        let banded = BandedCurveParams::from_plateau_value(8_000);
         let int_cap = curve_milli(16_000, &banded);
         let flt_milli = (curve_banded(16.0, 8.0) * WORK_MILLI_SCALE as f64).round() as u64;
         assert_eq!(int_cap, flt_milli);

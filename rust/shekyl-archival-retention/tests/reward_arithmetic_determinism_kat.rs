@@ -29,7 +29,8 @@
 
 use shekyl_archival_retention::reward_arithmetic::{
     curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_micro,
-    work_milli_from_micro, BandedCurveParams, WORK_MICRO_SCALE, WORK_MILLI_SCALE,
+    work_milli_from_micro, BandedCurveParams, ARCHIVAL_PROVISIONAL_CURVE, WORK_MICRO_SCALE,
+    WORK_MILLI_SCALE,
 };
 
 #[test]
@@ -100,7 +101,7 @@ fn scarcity_micro_golden() {
 fn curve_milli_golden_banded_pl() {
     // Default provisional: plateau_value 8000, plateau_work 16000,
     // breakpoints b1=4000 (slope 1.0), b2=8000 (slope 0.5), b3=16000 (slope 0.25).
-    let p = BandedCurveParams::default_provisional();
+    let p = ARCHIVAL_PROVISIONAL_CURVE;
     assert_eq!(curve_milli(0, &p), 0); // zero work
     assert_eq!(curve_milli(2_000, &p), 2_000); // seg 1, slope 1.0
     assert_eq!(curve_milli(4_000, &p), 4_000); // b1 boundary
@@ -112,7 +113,7 @@ fn curve_milli_golden_banded_pl() {
     assert_eq!(curve_milli(32_000, &p), 8_000); // past plateau
 
     // Degenerate zero-plateau curve credits zero (not uncapped pass-through).
-    let p0 = BandedCurveParams::from_sim_cap_milli(0);
+    let p0 = BandedCurveParams::from_plateau_value(0);
     assert_eq!(curve_milli(5_000, &p0), 0);
 }
 

@@ -224,6 +224,37 @@ ShekylBurnSplit shekyl_compute_burn_split(
     uint64_t burn_pct,
     uint64_t staker_pool_share);
 
+// D2 escalation (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §6.1). The staker
+// share is no longer a constant: it is a pure map of the burden operand
+// n = frozen_segment_count. Rust derives it from the shipped EconomicParams, so
+// the escalation numerics never cross this boundary and C++ cannot be handed a
+// parameterization that differs from the one consensus pays on.
+//
+// frozen_segment_count MUST be read at PARENT-BLOCK state -- the same
+// read-point discipline as the archival admission gate (M3-1 cached-counter
+// drift class). Reading tip would let the block under validation move its own
+// split.
+//
+// The share cannot reach miner_fee_income: compute_burn_split applies it to
+// burned_amount, while miner_fee_income = total_fees - burned_amount depends
+// only on total_fees and burn_pct. Escalating moves value from
+// actually_destroyed to staker_pool_amount and nowhere else, so the
+// security-budget channel is structurally unreachable (§12.11.1 Leg 1).
+//
+// At the genesis-neutral parameterization (asymptote == staker_pool_share) this
+// is BIT-IDENTICAL to shekyl_compute_burn_split with the flat constant, at
+// every n. Shipping the frozen shape does not ship an unpinned number; the
+// asymptote is ceremony-gated (§11.4).
+ShekylBurnSplit shekyl_compute_burn_split_escalated(
+    uint64_t total_fees,
+    uint64_t burn_pct,
+    uint64_t frozen_segment_count);
+
+/// The D2-escalated staker share at frozen_segment_count, fixed-point SCALE.
+/// Observability / callers needing the share without a split. Same parent-state
+/// read-point obligation as shekyl_compute_burn_split_escalated.
+uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
+
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 

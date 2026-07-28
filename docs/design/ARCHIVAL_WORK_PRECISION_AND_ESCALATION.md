@@ -415,7 +415,13 @@ burden."
 The constraints §6.0 and the operand imply, to be pinned at Stage 3:
 
 1. **Monotone in `n`** (shards only increase).
-2. **Floor at the current 25%** (never below today's `staker_pool_share`).
+2. **Floor at the current 25%** (never below today's `staker_pool_share`) —
+   and the floor being *today's* value is itself a frozen guarantee, not an
+   accident of the current numbers (review N-2): at every `n` the escalated
+   share is ≥ what the flat constant paid, the miner leg is structurally
+   untouched (§12.11.1 Leg 1), and the delta comes only out of
+   `actually_destroyed` — so the escalation **strictly improves** the archival
+   input at every point rather than ever redistributing away from one.
 3. **Asymptote strictly below 100%** — the deflation channel
    (`actually_destroyed`) survives forever.
 4. **Banded piecewise-linear in integer fixed-point**, per the `curve_milli`
@@ -492,7 +498,9 @@ decision.
 - **Freeze posture** (`bond_duration` precedent — *"shape genesis-frozen;
   numerics provisional, re-pin at testnet"*): Stage-1 work-precision **function
   shape genesis-frozen**; Stage-3 escalation **shape frozen, numerics provisional**
-  per the sim.
+  per the sim. **Implemented:** the shape is not merely frozen on paper — it is
+  built (Stage 3a) and wired live on the consensus path (Stage 3b), shipped
+  genesis-neutral; §12.12 is the implementation record.
 - **The asymptote re-pin is a freeze-decision, not a tuning (§11.4).** The
   escalation asymptote's *shape* is frozen but its *number* is provisional-until-
   testnet, and it is the one capture point in this design — no post-genesis
@@ -2072,3 +2080,60 @@ guard**, and it is guarded today by the definition itself: any edit to
 `segment_freeze.rs:71` that introduces a second variable is the trigger. Leg 2
 reopens if any writer other than `revert_archival_segment_freezes` learns to
 delete segment rows.
+
+### 12.12 Stage 3 implementation record — 3a shape SHIPPED, 3b wiring LIVE (PR #373)
+
+Stage 3 shipped as **two deliberately separate artifacts**, so the freeze
+reviewer can see exactly what is frozen, what is live, and what is *not*
+shipped:
+
+**Stage 3a — the shape (frozen).** The §6.1 five-constraint set as executable
+code: the banded-PL body lives in `shekyl-units` (`banded_pl.rs` — single body,
+two consensus consumers, `shekyl-archival-retention` re-exports);
+`staker_pool_share_at(n)` in `shekyl-economics/escalation.rs` with the five
+constraints as tests; `EscalationParams` + load-time validation
+(`params.rs` — an `asymptote < floor` parameterization is refused at load, the
+first of the two fail-closed layers); persisted-params digest `0x01`→`0x02`
+(rule 42). The sim **deps** the consensus share rather than computing its own
+(dep-don't-mirror, both in the sweep and in `SimParams::default()`).
+
+**Stage 3b — the wiring (live consensus C++).** The escalated split is the
+*only* split on the consensus path: `economics.h::compute_fee_burn` routes
+`shekyl_compute_burn_split_escalated(total_fees, burn_pct, n)`, so **no share
+constant crosses the FFI boundary** — Rust derives the share from `n` and the
+shipped `EconomicParams`, and `SHEKYL_STAKER_POOL_SHARE` is deleted from the
+generated C++ header (the JSON key remains, as the Rust floor's source). The
+flat `shekyl_compute_burn_split` export is retained solely as the
+genesis-neutrality pin's differential oracle (it holds no constant; the share
+is an argument). The operand read-point:
+
+- `Blockchain::parent_frozen_segment_count(block_height)` is the single
+  asserting reader — `m_db->height() == block_height` proves parent-state
+  (add_block grows the tree and advances the height in one write txn;
+  pop_block trims both in one write txn), and it **throws** on violation
+  rather than logging, because a template/connect divergence prices a coinbase
+  that connect's exact-equality money check refuses — a chain halt. The check
+  is load-bearing at connect and a tripwire at template build (the template
+  caller sets `height = m_db->height()` itself; its guarantee is the shared
+  expression, and the tripwire refuses any future non-tip parent).
+- **Template:** `create_block_template` computes `n` once and passes it to
+  *both* `construct_miner_tx` passes (the retry after the coinbase weight
+  change must price the same split). `construct_miner_tx` takes `n` as a
+  **required** parameter — a default is a silently-wrong split the moment the
+  asymptote is non-neutral.
+- **Connect:** `handle_block_to_main_chain` computes `n` once, before
+  `validate_miner_transaction` and `m_db->add_block`, and the same value feeds
+  the money check and the staker-inflow accrual — verify's operand IS the
+  accrual's operand (the F-B1c discipline).
+- **The `prev_block` template path was deleted** (the one path that could not
+  read its own parent's `n` — no height-indexed leaf count exists), with the
+  RPC field RESERVED and loudly refused; reopen named in `FOLLOWUPS.md`.
+
+**NOT shipped — the asymptote numeric.** `asymptote_share == floor_share` in
+the shipped config, so the escalation is **genesis-neutral by construction**:
+bit-identical to the flat constant at every `n`, pinned by
+`escalated_split_is_bit_identical_to_flat_at_the_genesis_parameterization` and
+`escalating_the_share_never_touches_miner_income` (Leg 1). The number remains
+provisional-until-testnet under the §11.4 ceremony (adversary-advantage
+argument committed *before* the number; PoRep branch ⇒ A1 re-runs with sealing
+costs first). Nothing in 3a/3b weakens or advances that gate.

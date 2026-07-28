@@ -110,10 +110,15 @@ of the FFI:
   the write site passes the macros to the FFI **as arguments**
   (`compute_emission_split`, `economics.h:79–85` →
   `shekyl_calc_emission_share(…, initial_share, annual_decay,
-  blocks_per_year)`, `shekyl-ffi/src/lib.rs:727–733`; same shape for
-  `SHEKYL_STAKER_POOL_SHARE` at `economics.h:57`). The Rust FFI computes
+  blocks_per_year)`, `shekyl-ffi/src/lib.rs:727–733`). The Rust FFI computes
   from what it is handed — it holds no second copy of the values on the
-  consensus path.
+  consensus path. **One deliberate inversion (Stage 3b, D2 escalation):** the
+  staker share no longer crosses the boundary at all — C++ passes the operand
+  `n = frozen_segment_count` and Rust derives the share from the shipped
+  `EconomicParams` (`shekyl_compute_burn_split_escalated`), so
+  `SHEKYL_STAKER_POOL_SHARE` was deleted from the generated header; the JSON
+  key remains as the Rust-side floor's source
+  (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.12).
 - **Rust-side consumers (sim / local economics):**
   `shekyl-economics/build.rs` reads the **same JSON** at build time and
   writes `GENERATED_STAKER_EMISSION_{SHARE,DECAY}` into

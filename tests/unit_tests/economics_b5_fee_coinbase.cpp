@@ -131,8 +131,10 @@ B5Operands expected_operands(const Blockchain& bc)
     kHfVersion, tx_volume_avg));
   ops.split = shekyl::compute_emission_split(ops.base_reward, kBlockHeight,
     /*genesis_ng_height=*/0, kHfVersion);
+  // n = 0 is the same parent-state operand the production check reads:
+  // B5TestDB's curve tree is empty, so parent_frozen_segment_count yields 0.
   ops.burn = shekyl::compute_fee_burn(kFee, tx_volume_avg,
-    kAlreadyGenerated, kHfVersion);
+    kAlreadyGenerated, /*frozen_segment_count=*/0, kHfVersion);
   return ops;
 }
 
@@ -158,7 +160,7 @@ TEST(economics_b5_fee_coinbase, fee_bearing_exact_coinbase_accepts)
     ops.split.miner_emission + ops.burn.miner_fee_income);
   uint64_t base_reward_out = 0;
   EXPECT_TRUE(bap.bc.validate_miner_transaction(b, /*cumulative_block_weight=*/0,
-    kFee, base_reward_out, kAlreadyGenerated, kHfVersion));
+    kFee, base_reward_out, kAlreadyGenerated, kHfVersion, /*frozen_segment_count=*/0));
   // Fix α regression guard: the out-param stays the FULL subsidy (miner +
   // staker emission) so the connect path accumulates the full amount into
   // already_generated_coins.
@@ -178,7 +180,7 @@ TEST(economics_b5_fee_coinbase, coinbase_claiming_staker_pool_rejects)
     ops.split.miner_emission + ops.burn.miner_fee_income + ops.burn.staker_pool_amount);
   uint64_t base_reward_out = 0;
   EXPECT_FALSE(bap.bc.validate_miner_transaction(b, 0, kFee, base_reward_out,
-    kAlreadyGenerated, kHfVersion));
+    kAlreadyGenerated, kHfVersion, /*frozen_segment_count=*/0));
 }
 
 TEST(economics_b5_fee_coinbase, coinbase_claiming_staker_emission_rejects)
@@ -194,7 +196,7 @@ TEST(economics_b5_fee_coinbase, coinbase_claiming_staker_emission_rejects)
     ops.split.miner_emission + ops.split.staker_emission + ops.burn.miner_fee_income);
   uint64_t base_reward_out = 0;
   EXPECT_FALSE(bap.bc.validate_miner_transaction(b, 0, kFee, base_reward_out,
-    kAlreadyGenerated, kHfVersion));
+    kAlreadyGenerated, kHfVersion, /*frozen_segment_count=*/0));
 }
 
 TEST(economics_b5_fee_coinbase, fee_underclaim_rejects_exactness)
@@ -210,5 +212,5 @@ TEST(economics_b5_fee_coinbase, fee_underclaim_rejects_exactness)
   const block b = make_block_with_coinbase(kBlockHeight, ops.split.miner_emission);
   uint64_t base_reward_out = 0;
   EXPECT_FALSE(bap.bc.validate_miner_transaction(b, 0, kFee, base_reward_out,
-    kAlreadyGenerated, kHfVersion));
+    kAlreadyGenerated, kHfVersion, /*frozen_segment_count=*/0));
 }

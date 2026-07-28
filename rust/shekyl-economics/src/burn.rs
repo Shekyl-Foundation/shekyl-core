@@ -21,12 +21,17 @@
 //! Fee distribution per block:
 //! ```text
 //! burned_amount     = total_fees * burn_pct
-//! staker_pool       = burned_amount * STAKER_POOL_SHARE
+//! staker_pool       = burned_amount * staker_pool_share(n)
 //! actually_destroyed = burned_amount - staker_pool
 //! miner_fee_income  = total_fees - burned_amount
 //! ```
+//!
+//! **Consensus entry:** [`compute_burn_split_at`] — maps parent-state
+//! [`FrozenSegmentCount`] through the D2 escalation and splits. Prefer it over
+//! composing [`compute_burn_split`] with a hand-picked share.
 
-use crate::params::{clamp, isqrt, mul_scale, SCALE};
+use crate::escalation::{staker_pool_share_at, FrozenSegmentCount, ScaledShare};
+use crate::params::{clamp, isqrt, mul_scale, EconomicParams, SCALE};
 
 /// Result of the fee burn split calculation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,15 +101,18 @@ pub fn calc_burn_pct_from_activity(
     )
 }
 
-/// Compute the three-way fee split for a block.
+/// Compute the three-way fee split for a block with an explicit staker share.
 ///
-/// # Arguments
-/// * `total_fees` - Sum of all tx fees in the block (atomic units)
-/// * `burn_pct` - Burn percentage (fixed-point SCALE)
-/// * `staker_pool_share` - Fraction of burn redirected to stakers (fixed-point SCALE)
-pub fn compute_burn_split(total_fees: u64, burn_pct: u64, staker_pool_share: u64) -> BurnSplit {
+/// Prefer [`compute_burn_split_at`] on consensus paths: it is the escalated
+/// composition. This entry remains for the flat-share differential oracle and
+/// for tests that pin a specific share.
+pub fn compute_burn_split(
+    total_fees: u64,
+    burn_pct: u64,
+    staker_pool_share: ScaledShare,
+) -> BurnSplit {
     let burned_amount = mul_scale(total_fees, burn_pct);
-    let staker_pool_amount = mul_scale(burned_amount, staker_pool_share);
+    let staker_pool_amount = mul_scale(burned_amount, staker_pool_share.to_raw());
     let actually_destroyed = burned_amount.saturating_sub(staker_pool_amount);
     let miner_fee_income = total_fees.saturating_sub(burned_amount);
 
@@ -113,6 +121,23 @@ pub fn compute_burn_split(total_fees: u64, burn_pct: u64, staker_pool_share: u64
         staker_pool_amount,
         actually_destroyed,
     }
+}
+
+/// **Canonical consensus burn split:** fees × burn% × D2-escalated share at `n`.
+///
+/// `n` is parent-block [`FrozenSegmentCount`]. The share is derived from
+/// `params` via [`staker_pool_share_at`] — numerics never need to cross FFI as
+/// a free parameter. This is the single Rust function C++, the sim ledger, and
+/// future daemon paths should call.
+#[must_use]
+pub fn compute_burn_split_at(
+    total_fees: u64,
+    burn_pct: u64,
+    n: FrozenSegmentCount,
+    params: &EconomicParams,
+) -> BurnSplit {
+    let share = staker_pool_share_at(n, &params.escalation());
+    compute_burn_split(total_fees, burn_pct, share)
 }
 
 #[cfg(test)]
@@ -162,7 +187,7 @@ mod tests {
     fn test_compute_burn_split_basic() {
         let total_fees = 1_000_000_000u64; // 1 SHEKYL in fees
         let burn_pct = 400_000; // 40%
-        let staker_share = 200_000; // 20%
+        let staker_share = ScaledShare::from_raw(200_000); // 20%
         let split = compute_burn_split(total_fees, burn_pct, staker_share);
 
         assert_eq!(split.miner_fee_income, 600_000_000); // 60% of fees
@@ -176,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_burn_split_zero_fees() {
-        let split = compute_burn_split(0, 400_000, 200_000);
+        let split = compute_burn_split(0, 400_000, ScaledShare::from_raw(200_000));
         assert_eq!(split.miner_fee_income, 0);
         assert_eq!(split.staker_pool_amount, 0);
         assert_eq!(split.actually_destroyed, 0);
@@ -184,10 +209,31 @@ mod tests {
 
     #[test]
     fn test_burn_split_zero_burn() {
-        let split = compute_burn_split(1_000_000, 0, 200_000);
+        let split = compute_burn_split(1_000_000, 0, ScaledShare::from_raw(200_000));
         assert_eq!(split.miner_fee_income, 1_000_000);
         assert_eq!(split.staker_pool_amount, 0);
         assert_eq!(split.actually_destroyed, 0);
+    }
+
+    /// Canonical entry agrees with explicit share at the genesis-neutral set.
+    #[test]
+    fn compute_burn_split_at_matches_flat_at_genesis_neutral() {
+        let params = EconomicParams::default();
+        assert_eq!(
+            params.escalation_asymptote_share, params.staker_pool_share,
+            "fixture assumes neutral asymptote"
+        );
+        let fees = 1_000_000_000u64;
+        let burn_pct = 500_000;
+        let flat = compute_burn_split(
+            fees,
+            burn_pct,
+            ScaledShare::from_raw(params.staker_pool_share),
+        );
+        for n in [0u64, 1, 100_000, u64::MAX] {
+            let esc = compute_burn_split_at(fees, burn_pct, FrozenSegmentCount::new(n), &params);
+            assert_eq!(esc, flat, "n={n}");
+        }
     }
 
     #[test]

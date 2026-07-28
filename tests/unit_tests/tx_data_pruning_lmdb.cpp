@@ -114,6 +114,7 @@ bool construct_miner_only_block(
             already_generated_coins,
             target_block_weight,
             total_fee,
+            /*frozen_segment_count=*/0,
             miner_acc.get_keys().m_account_address,
             blk.miner_tx,
             blobdata(),

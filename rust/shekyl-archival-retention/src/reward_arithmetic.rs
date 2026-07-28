@@ -45,36 +45,6 @@ const _: () = assert!(
     "WORK_MICRO_SCALE = WORK_MILLI_SCALE · WORK_MICRO_PER_MILLI; the micro path is 10⁻³ of milli"
 );
 
-/// Banded piecewise-linear curve shape — **sim / counterfactual only (D3/R2)**.
-///
-/// The production reward path is **linear in work**
-/// ([`crate::consensus_state::credited_work_milli`]). This type remains so
-/// `shekyl-economics-sim` and `shekyl-staking-sim` can compare plateau-present
-/// vs plateau-deleted regimes; it is **not** consumed by epoch-close, emission
-/// verify, or admission. Work breakpoints are fractions of `plateau_work_milli`;
-/// plateau credited work is `plateau_value_milli`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BandedCurveParams {
-    pub plateau_work_milli: u64,
-    pub plateau_value_milli: u64,
-}
-
-impl BandedCurveParams {
-    /// Build from sim-style `cap` (plateau credited value); work to plateau is `2·cap`.
-    #[must_use]
-    pub const fn from_sim_cap_milli(plateau_value_milli: u64) -> Self {
-        Self {
-            plateau_work_milli: plateau_value_milli.saturating_mul(2),
-            plateau_value_milli,
-        }
-    }
-
-    #[must_use]
-    pub const fn default_provisional() -> Self {
-        Self::from_sim_cap_milli(8_000)
-    }
-}
-
 /// `g(age) = 1 + age_weight_milli · age_milli / WORK_MILLI_SCALE` in milli-units.
 #[must_use]
 pub fn g_age_milli(age_milli: u64, age_weight_milli: u64) -> u64 {
@@ -125,59 +95,30 @@ pub fn work_milli_from_micro(work_micro: u64) -> u64 {
     work_micro / WORK_MICRO_PER_MILLI
 }
 
-/// Evaluate banded piecewise-linear `Curve(work_milli)` → credited work milli.
+// D3/R2 + Stage 3: the banded piecewise-linear shape moved to `shekyl-units`.
+//
+// It was defined here because the archival reward curve was its only consumer.
+// §6.1 pins the D2 staker-share escalation as banded-PL "per the `curve_milli`
+// precedent", giving it a second consensus consumer in `shekyl-economics` —
+// which is deliberately free of crate dependencies and must not inherit this
+// crate's FCMP/PQC stack. Keeping the definition here would have forced either a
+// mirror or a layering inversion, so it lives in the foundational crate and is
+// re-exported here: every existing caller path is unchanged, and there is
+// exactly one body.
+//
+// The archival use is sim/counterfactual only — the production reward path is
+// linear in work (`consensus_state::credited_work_milli`).
+pub use shekyl_units::banded_pl::{curve_milli, mul_div_floor, BandedCurveParams};
+
+/// The archival provisional curve — the retired reward plateau's shape, kept for
+/// sim/counterfactual comparison (D3/R2 deleted its *application*, not the
+/// function).
 ///
-/// **Sim / counterfactual only** — see [`BandedCurveParams`]. Production uses
-/// linear [`crate::consensus_state::credited_work_milli`].
-#[must_use]
-pub fn curve_milli(work_milli: u64, params: &BandedCurveParams) -> u64 {
-    if work_milli == 0 || params.plateau_value_milli == 0 {
-        return 0;
-    }
-    let pw = params.plateau_work_milli.max(1);
-    let pv = params.plateau_value_milli;
-    let b1 = pw / 4;
-    let b2 = pw / 2;
-    let b3 = pw;
-
-    if work_milli >= b3 {
-        return pv;
-    }
-
-    let mut y = 0u64;
-
-    // segment 1: slope 1.0
-    let mut x = if work_milli > b1 {
-        y = y.saturating_add(b1);
-        b1
-    } else {
-        return work_milli;
-    };
-
-    // segment 2: slope 0.5
-    if work_milli > b2 {
-        let seg = b2 - x;
-        y = y.saturating_add(seg / 2);
-        x = b2;
-    } else {
-        let seg = work_milli - x;
-        return y.saturating_add(seg / 2);
-    }
-
-    // segment 3: slope 0.25
-    let seg = work_milli - x;
-    y.saturating_add(mul_div_floor(seg, 1, 4).unwrap_or(0))
-}
-
-/// `floor(a * b / d)` with `u128` intermediate; `None` on overflow of quotient to u64.
-#[must_use]
-pub fn mul_div_floor(a: u64, b: u64, d: u64) -> Option<u64> {
-    if d == 0 {
-        return None;
-    }
-    let q = u128::from(a).saturating_mul(u128::from(b)) / u128::from(d);
-    u64::try_from(q).ok()
-}
+/// The `8_000` is **archival vocabulary**, which is why it stays here rather
+/// than travelling to `shekyl-units` with the shape: a foundational crate should
+/// not know one consumer's provisional number.
+pub const ARCHIVAL_PROVISIONAL_CURVE: BandedCurveParams =
+    BandedCurveParams::from_plateau_value(8_000);
 
 /// Per-P reward: `floor(budget * credited / sigma_work)`; dust stays unminted.
 ///
@@ -197,14 +138,14 @@ mod tests {
 
     #[test]
     fn curve_reaches_plateau_at_plateau_work() {
-        let p = BandedCurveParams::from_sim_cap_milli(8_000);
+        let p = BandedCurveParams::from_plateau_value(8_000);
         assert_eq!(curve_milli(16_000, &p), 8_000);
         assert_eq!(curve_milli(32_000, &p), 8_000);
     }
 
     #[test]
     fn curve_monotone_below_plateau() {
-        let p = BandedCurveParams::default_provisional();
+        let p = ARCHIVAL_PROVISIONAL_CURVE;
         let mut prev = 0;
         for w in (1..=16_000).step_by(500) {
             let c = curve_milli(w, &p);
