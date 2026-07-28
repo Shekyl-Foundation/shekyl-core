@@ -3619,7 +3619,7 @@ The 33 cases are a matrix — `{fluff, stem, local, forward, block, none}` ×
 | --- | --- | --- | --- |
 | `fluff_*` (×4) | fluffs to every peer but the source | `fluff_skips_the_source_and_releases_on_deadline` | tight |
 | `stem_*` (×4) | routes to exactly one outbound successor | `everything_stems_during_a_stem_epoch`, `a_source_pins_to_one_stem_for_the_epoch` | tight |
-| `stem_no_outs_*` (×2) | no routable slot ⇒ fluff fallback | `no_routable_slot_falls_back_to_fluff` | tight |
+| `stem_no_outs_*` (×2) | no routable slot ⇒ fluff fallback | `no_routable_slot_reports_no_route_not_a_fluff_epoch` | tight |
 | `local_*` (×4) | **local origin always stems, incl. during a fluff epoch (RD-4)** | `a_local_tx_stems_during_a_fluff_epoch_rd4` | tight, both sides |
 | `stem_mappings` | a source stays pinned to one stem for the epoch | `a_source_pins_to_one_stem_for_the_epoch` | tight |
 | `fluff_multiple`, `fluff_with_duplicate` | batching accumulates without re-drawing | `a_burst_does_not_push_a_peers_flush_further_out` | tight |
@@ -3659,6 +3659,44 @@ tight twin, so a red gtest with a green twin attributes to the shim without
 rebuilding. The three groups with no twin (`forward`/`block`/`none` dispatch,
 noise, framing) are C++-side behaviour the port does not move — a failure there
 attributes to the shim or to the C++ that was already there, not to the Rust.
+
+### 18.4c Outcome — what the oracle caught, and what the map could not
+
+RP-3a is built and green: 33/33 `levin_notify`, and 1017 passed / 0 failed in the
+full unit suite. Two results are worth keeping.
+
+**The oracle caught a real privacy regression.** The first pass of the shim lost
+one line of `fluff_notify` — *"When i2p/tor, only fluff to outbound
+connections"* — and eight `private_*` cases failed together, each reporting nine
+peers notified where five belonged. It reads like a delivery detail and is a
+privacy rule: on a hidden service an inbound peer is a stranger who dialled us,
+so relaying to it hands a transaction to a peer this node never chose — the exact
+sybil exposure i2p/tor is standing in for now that Dandelion++ stemming is off.
+It is now `FluffReach::OutboundOnly`, a zone-lifetime policy in Rust, with a test
+asserting *who* received the batch plus a public-zone negative control.
+
+**But §18.4b's map could not have predicted it, and that is the lesson.** The map
+is organised by the behaviours the port *knew it was moving*; the outbound-only
+rule appears in none of its rows, because a rule nobody noticed cannot be listed
+as one to preserve. The `private_*` cases sat in the matrix as a `{public,
+private}` axis over the same eight behaviours — the map treated "private" as a
+*configuration* of known behaviours rather than as a column with a behaviour of
+its own.
+
+So the map does what it claimed and no more: it **attributes** failures, it does
+not **enumerate obligations**. It was still worth writing — the eight failures
+were isolated to a single dropped rule in one reading, without a bisect — but a
+port's real obligation list is the source it is porting *from*, read line by line,
+not a table of what the porter thought was there. The rule that bites is
+structurally the one absent from the table, because the table is built from what
+was noticed.
+
+**A note on where it was found.** This is also the case for building the oracle
+before believing the port. Nothing in the Rust tests, the FFI seam tests, fmt or
+clippy could have caught it: every one of them was green while the daemon fluffed
+transactions to peers it had no business reaching. Only running the inherited
+suite against the new implementation found it, which is what "the C++ is the
+oracle until the corpus *is* the spec" means in practice.
 
 ### 18.5 State inventory — single ownership, and why it outlives the seal question
 
