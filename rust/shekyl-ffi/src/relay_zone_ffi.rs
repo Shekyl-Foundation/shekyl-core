@@ -439,11 +439,31 @@ mod tests {
         });
     }
 
+    /// **Sole witness — do not delete as redundant. Read this before touching it.**
+    ///
+    /// This is the only test in the tree asserting that the stem-slot snapshot
+    /// crosses the boundary in **index order with nils in position**. Nothing
+    /// else covers it, and in particular the 33 `levin_notify` gtests do not:
+    /// they assert **counts** (`EXPECT_EQ(2u, sent)`, `connections_filled`) and
+    /// that a stem lands on an *outbound* peer — never that noise channel `i` is
+    /// bound to stem slot `i` (`DAEMON_RELAY_PRIVACY.md` §18.4b, finding 2).
+    /// Count assertions look like coverage and are not.
+    ///
+    /// The property is contract 3 (§16.1): `update_channels::post` computes
+    /// `i = id - begin()` and posts to `channels[i]`, so a snapshot that
+    /// compacted a nil away or reordered slots would silently bind covert
+    /// channels to the wrong connections — no crash, no failing count, wrong
+    /// peers.
+    ///
+    /// **RP-3b is the round that consumes this positionally**, and it is also
+    /// the round where the inherited names are least trustworthy (`run_stems`
+    /// cancels noise timers). So the reader most likely to consider this test
+    /// redundant is the one porting the covert path, looking at count-asserting
+    /// gtests, three commits deep. If the property ever becomes genuinely
+    /// covered elsewhere, delete this test *in the commit that adds that
+    /// coverage* and say so — not before.
     #[test]
     fn stem_slots_cross_in_index_order_with_nils_in_position() {
-        // Contract 3, at the new boundary: the consumer binds channels[i] to
-        // slot i, so order and nil-position are load-bearing. A snapshot that
-        // compacted or reordered would pass any "did we get slots?" check.
         reset();
         unsafe {
             let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
