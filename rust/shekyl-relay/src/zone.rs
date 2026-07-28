@@ -54,6 +54,7 @@ impl PeerFluff {
 ///
 /// The zone decides; the caller performs. Framing and the socket stay C++,
 /// so this returns a destination rather than sending to one.
+///
 /// # Why the two non-stem outcomes are distinct
 ///
 /// They differ in what the caller must do next, so collapsing them to one
@@ -254,8 +255,13 @@ impl Zone {
     ///
     /// Mirrors `fluff_notify`: each peer that has no batch in flight draws a
     /// fresh flush deadline; peers already batching keep theirs, so a burst
-    /// does not repeatedly push a peer's flush into the future. Returns the
-    /// earliest pending deadline, which is what the driver arms its timer on.
+    /// does not repeatedly push a peer's flush into the future.
+    ///
+    /// Returns **how many peers accepted the batch**, so a caller can report
+    /// the inherited "no available connections" warning. Deliberately not the
+    /// resulting deadline: the scheduler owns that, and returning it invites a
+    /// caller to store what it should be asking [`Zone::fluff_deadline`] for —
+    /// the mistake `PeerFluff::flush_at` already made once.
     ///
     /// Blobs are opaque — this crate schedules, transport frames.
     pub fn queue_fluff<R: RelayRng + ?Sized>(
@@ -264,7 +270,8 @@ impl Zone {
         source: Option<ConnectionId>,
         now: Millis,
         rng: &mut R,
-    ) -> Option<Millis> {
+    ) -> usize {
+        let mut accepted = 0;
         for (id, peer) in &mut self.contexts {
             if Some(*id) == source {
                 continue;
@@ -276,8 +283,9 @@ impl Zone {
             // deadline, not this peer's — storing it per peer would be wrong.
             let _ = self.fluff.queue(now, *id, peer.direction, rng);
             peer.queued.extend(txs.iter().cloned());
+            accepted += 1;
         }
-        self.fluff.next_deadline()
+        accepted
     }
 
     /// Release every batch whose deadline has passed, and any batch at all when
@@ -496,9 +504,8 @@ mod tests {
         for _ in 0..n {
             let mut z = zone(&mut rng);
             z.on_handshake_complete(id(1), direction);
-            total += z
-                .queue_fluff(&[vec![1]], None, 0, &mut rng)
-                .expect("a batch is in flight");
+            assert_eq!(z.queue_fluff(&[vec![1]], None, 0, &mut rng), 1);
+            total += z.fluff_deadline().expect("a batch is in flight");
         }
         total / n
     }
@@ -539,14 +546,16 @@ mod tests {
             .map(|_| {
                 let mut z = zone(&mut rng);
                 z.on_handshake_complete(id(1), PeerDirection::Inbound);
-                z.queue_fluff(&[vec![0xAB]], None, 0, &mut rng).unwrap()
+                z.queue_fluff(&[vec![0xAB]], None, 0, &mut rng);
+                z.fluff_deadline().unwrap()
             })
             .collect();
         let outbound: Vec<Millis> = (0..4)
             .map(|_| {
                 let mut z = zone(&mut rng);
                 z.on_handshake_complete(id(1), PeerDirection::Outbound);
-                z.queue_fluff(&[vec![0xAB]], None, 0, &mut rng).unwrap()
+                z.queue_fluff(&[vec![0xAB]], None, 0, &mut rng);
+                z.fluff_deadline().unwrap()
             })
             .collect();
         assert_eq!(
@@ -566,7 +575,8 @@ mod tests {
         let mut z = zone(&mut rng);
         z.on_handshake_complete(id(1), PeerDirection::Inbound);
 
-        let first = z.queue_fluff(&[vec![1]], None, 0, &mut rng).unwrap();
+        z.queue_fluff(&[vec![1]], None, 0, &mut rng);
+        let first = z.fluff_deadline().unwrap();
         for _ in 0..16 {
             let _ = z.queue_fluff(&[vec![2]], None, 0, &mut rng);
         }
@@ -589,14 +599,15 @@ mod tests {
         z.on_handshake_complete(id(1), PeerDirection::Inbound);
         z.on_handshake_complete(id(2), PeerDirection::Outbound);
 
-        let next = z.queue_fluff(&[vec![7]], Some(id(1)), 0, &mut rng);
+        let accepted = z.queue_fluff(&[vec![7]], Some(id(1)), 0, &mut rng);
+        assert_eq!(accepted, 1, "one peer took it; the source is skipped");
         assert!(
             z.peer(&id(1)).unwrap().queued.is_empty(),
             "the source never gets its own transaction back"
         );
         assert_eq!(z.peer(&id(2)).unwrap().queued.len(), 1);
 
-        let deadline = next.expect("a batch is in flight");
+        let deadline = z.fluff_deadline().expect("a batch is in flight");
         if deadline > 0 {
             assert!(z.flush_fluff(deadline - 1, false).is_empty(), "not due yet");
         }
@@ -613,7 +624,8 @@ mod tests {
         let mut rng = SplitMix64::new(25);
         let mut z = zone(&mut rng);
         z.on_handshake_complete(id(1), PeerDirection::Inbound);
-        let deadline = z.queue_fluff(&[vec![9]], None, 0, &mut rng).unwrap();
+        z.queue_fluff(&[vec![9]], None, 0, &mut rng);
+        let deadline = z.fluff_deadline().unwrap();
 
         if deadline > 0 {
             assert!(z.flush_fluff(0, false).is_empty(), "not due at t=0");

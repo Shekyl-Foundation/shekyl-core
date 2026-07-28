@@ -3051,10 +3051,11 @@ std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::ui
 //! the map: the zone is constructed before any peer has connected.
 void shekyl_relay_zone_update_stems(RelayZoneHandle* handle, const std::uint8_t* outbound,
                                     std::size_t n, void* ctx, ShekylRelaySlotsCb on_slots);
-//! Accept one blob for fluffing to every peer but `source`.
-void shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
-                                   const std::uint8_t* blob, std::size_t blob_len,
-                                   const std::uint8_t* source);
+//! Accept a batch for fluffing to every peer but `source`. Returns how many
+//! peers took it — zero means nothing is connected to fluff to.
+std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
+                                          const ShekylRelayBlob* blobs, std::size_t n,
+                                          const std::uint8_t* source);
 //! Run every step due at now_ms, delivering results through the callbacks.
 void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms,
                             const std::uint8_t* outbound, std::size_t n, void* ctx,

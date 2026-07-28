@@ -211,10 +211,8 @@ mod tests {
 
         d.zone_mut()
             .on_handshake_complete(id(1), PeerDirection::Outbound);
-        let fluff = d
-            .zone_mut()
-            .queue_fluff(&[vec![1]], None, 0, &mut rng)
-            .expect("a batch is in flight");
+        d.zone_mut().queue_fluff(&[vec![1]], None, 0, &mut rng);
+        let fluff = d.zone().fluff_deadline().expect("a batch is in flight");
         assert!(fluff < epoch_wake, "fixture: the fluff must be the sooner");
 
         assert_eq!(
@@ -231,10 +229,8 @@ mod tests {
         let mut d = driver(&mut rng);
         d.zone_mut()
             .on_handshake_complete(id(1), PeerDirection::Inbound);
-        let due = d
-            .zone_mut()
-            .queue_fluff(&[vec![7]], None, 0, &mut rng)
-            .unwrap();
+        d.zone_mut().queue_fluff(&[vec![7]], None, 0, &mut rng);
+        let due = d.zone().fluff_deadline().unwrap();
 
         if due > 0 {
             assert!(d.poll(due - 1, &[], &mut rng).is_empty(), "not due yet");
@@ -315,10 +311,8 @@ mod tests {
         let mut d = driver(&mut rng);
         d.zone_mut()
             .on_handshake_complete(id(1), PeerDirection::Inbound);
-        let due = d
-            .zone_mut()
-            .queue_fluff(&[vec![9]], None, 0, &mut rng)
-            .unwrap();
+        d.zone_mut().queue_fluff(&[vec![9]], None, 0, &mut rng);
+        let due = d.zone().fluff_deadline().unwrap();
         if due > 0 {
             assert!(d.poll(0, &[], &mut rng).is_empty(), "not due at t=0");
         }

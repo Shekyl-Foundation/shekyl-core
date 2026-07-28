@@ -368,33 +368,40 @@ pub unsafe extern "C" fn shekyl_relay_zone_update_stems(
     dispatch(effects, ctx, noop_fluff, on_slots);
 }
 
-/// Accept one transaction blob for fluffing to every peer but `source`.
+/// Accept a batch of transaction blobs for fluffing to every peer but `source`.
 ///
-/// One blob per call: the alternative is an array-of-spans ABI, and a three-line
-/// loop on the C++ side is more obviously transparent than a struct layout.
+/// Returns **how many peers took the batch**, so the caller can report the
+/// inherited "no available connections" warning. That answer is a property of
+/// the batch, not of any one blob, which is the other reason this takes the
+/// whole batch: offered blob-by-blob the caller would get N identical answers
+/// and have to decide what to do with them.
 ///
 /// # Safety
-/// `handle` must be live; `blob` must point to `blob_len` readable bytes;
-/// `source` must point to 16 bytes or be null.
+/// `handle` must be live; `blobs` must point to `n` spans, each readable for
+/// its own length; `source` must point to 16 bytes or be null.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_queue_fluff(
     handle: *mut RelayZoneHandle,
     now_ms: u64,
-    blob: *const u8,
-    blob_len: usize,
+    blobs: *const ShekylRelayBlob,
+    n: usize,
     source: *const u8,
-) {
-    if handle.is_null() || blob.is_null() {
-        return;
+) -> usize {
+    if handle.is_null() || blobs.is_null() || n == 0 {
+        return 0;
     }
-    let bytes = slice::from_raw_parts(blob, blob_len).to_vec();
+    let txs: Vec<Vec<u8>> = slice::from_raw_parts(blobs, n)
+        .iter()
+        .map(|b| slice::from_raw_parts(b.ptr, b.len).to_vec())
+        .collect();
     let source = read_id(source);
     let h = &mut *handle;
-    let _ = h
+    let accepted = h
         .driver
         .zone_mut()
-        .queue_fluff(&[bytes], source, now_ms, &mut h.rng);
+        .queue_fluff(&txs, source, now_ms, &mut h.rng);
     h.publish();
+    accepted
 }
 
 /// Run every step due at `now_ms`, delivering results through the callbacks.
@@ -538,7 +545,15 @@ mod tests {
             let h = shekyl_relay_zone_new(0, 2, 600, 30);
             shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
             let blob = [0xAB, 0xCD, 0xEF];
-            shekyl_relay_zone_queue_fluff(h, 0, blob.as_ptr(), blob.len(), std::ptr::null());
+            let batch = [ShekylRelayBlob {
+                ptr: blob.as_ptr(),
+                len: blob.len(),
+            }];
+            assert_eq!(
+                shekyl_relay_zone_queue_fluff(h, 0, batch.as_ptr(), 1, std::ptr::null()),
+                1,
+                "the one connected peer took the batch"
+            );
             shekyl_relay_zone_force_fluff(h, 0, std::ptr::null_mut(), rec_fluff);
             shekyl_relay_zone_free(h);
         }
@@ -575,9 +590,15 @@ mod tests {
             shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
             // Offered high-to-low, with a repeat: order and duplication both
             // have to be removed for the assertion below to hold.
-            for blob in [[0x33u8], [0x11], [0x22], [0x11]] {
-                shekyl_relay_zone_queue_fluff(h, 0, blob.as_ptr(), 1, std::ptr::null());
-            }
+            let raw = [[0x33u8], [0x11], [0x22], [0x11]];
+            let batch: Vec<ShekylRelayBlob> = raw
+                .iter()
+                .map(|b| ShekylRelayBlob {
+                    ptr: b.as_ptr(),
+                    len: 1,
+                })
+                .collect();
+            shekyl_relay_zone_queue_fluff(h, 0, batch.as_ptr(), batch.len(), std::ptr::null());
             shekyl_relay_zone_force_fluff(h, 0, std::ptr::null_mut(), rec_fluff);
             shekyl_relay_zone_free(h);
         }
