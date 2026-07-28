@@ -3944,3 +3944,76 @@ unchanged against it before they were retired), so those numbers stand. The
 remaining §12.11 owes — the genuine background-failure rate, and the
 cooldown/threshold sweep as a **reopen-checkpoint rather than a confirm-only
 sweep** — are untouched by RP-3a and carry forward as written.
+
+### 19.2 The churn-stable successor — specified over the *sequence*, not the call
+
+**The mechanism, re-read at source (not from §12.5's description).** `StemMap`
+pins a source to a **slot index**, not to a peer: `inbound: source → usize`, and
+`stem_for` returns `out[index]`. `update()` empties a slot whose peer is gone
+(`*slot = None`) and the backfill loop refills it with a uniform draw from the
+current outbound pool. The next `stem_for` for that source then takes the
+`self.out[index].is_some()` fast path and returns **the new occupant** — no
+re-pin branch executes, nothing is logged, and the source's stem traffic moves to
+a freshly drawn peer.
+
+That is sharper than W3c as written. The design describes churn re-rolling *the
+alternate*; what the code does is re-roll **the source's primary successor**, and
+it does so on the one path where no selection code runs. There is a second,
+visible path — if `update()` cannot backfill, the slot stays `None`, `stem_for`
+takes the re-pin branch and `select_slot`s afresh — but the invisible one is the
+common case, because backfill succeeds whenever any candidate is spare.
+
+**Why the property is stated over sequences.** §19.1's C-1 found the clearnet
+re-roll surface is two triggers deep: `plan_relay_with_refresh` merges on any
+`NoRoute`, and `dandelionpp_notify` refreshes again on send failure. Both flow
+through `StemMap::update`. A property that says *"one `update` does not re-roll a
+pinned source"* is escaped by their composition — two calls in sequence, each
+individually stable, can still hand the source a different peer than it started
+with. And W3c's exposure is **cumulative**: an adversary who can induce `k`
+re-rolls gets `1 − (1 − g)^k`, not `g`. The per-call framing prices one roll and
+the threat model is about the sequence.
+
+**The property.**
+
+> Within an epoch, a source's successor is drawn from the set of peers live in
+> the stem map **at that source's first pin**, and that set never grows. Any
+> number of `StemMap::update` calls may refill slots for the benefit of
+> *unpinned* sources; no already-pinned source may ever be routed to a peer that
+> entered the map after it pinned.
+
+Stated this way it is closed under composition by construction — the successor
+candidate set is frozen per source at pin time, so no sequence of updates can
+introduce a new candidate. It also names the fallback: when a pinned source's
+successor churns out, it moves to the next still-live peer **from its own frozen
+set** — the *alternate*, in §12.5's sense — and only when that set is exhausted
+does it have no successor.
+
+**What this buys, in the threat's terms.** W3c's adversary is the dropping
+successor, or induces churn on it; the drop is what triggers the refill. Today
+that hands them a fresh draw at ≈ `g`, repeatable. Under the property, dropping
+hands the source to a peer that was **already in its set before the adversary
+acted** — the adversary gains no new roll, so induced churn stops being an
+exposure amplifier and repeated churn buys nothing beyond the first. Exhausting
+the frozen set requires churning *every* peer in it, which is the both-successors
+case W3 already bounds (`≈ 0` at baseline `g = f`) rather than a new gap.
+
+**What it deliberately does not do.** It does not freeze the *map* — new peers
+still backfill empty slots and still serve sources that pin after them, so the
+map keeps healing and a node that starts with one outbound peer is not stuck with
+it. It does not touch cross-epoch rotation: the frozen set is per-epoch, and
+`rebuild_stems` re-draws everything at the boundary (§19.1 G-2a), which is the
+rotation §6.8's intersection defence rests on.
+
+**Acceptance.**
+
+1. A measurement, in-crate, of induced-churn exposure against `k` forced
+   re-rolls: today it must reproduce `1 − (1 − g)^k`; under the property it must
+   flatten to the single-draw `g`. The gap is *shown* before it is closed —
+   the number is the finding, not the fix.
+2. A structural test that a pinned source never routes to a peer that entered the
+   map after it pinned, asserted across a **sequence** of `update` calls, with
+   both C-1 triggers represented. Per-call stability is not the property and a
+   per-call test would pass on the defect.
+3. A negative control on (2): with the frozen set removed, the test must fail.
+   The composition is exactly where a stability property looks correct and is
+   not, so the control has to exercise the sequence, not one call.
