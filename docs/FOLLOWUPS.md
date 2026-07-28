@@ -5535,10 +5535,15 @@ sustainability is unaffected by the recalibration.
   Stage-2 A4 grounding, 2026-07-24)~~** **✅ IMPLEMENTED (2026-07-28,
   `feat/fh-coinbase-out-cap`)** — exactly-one enforced in
   `prevalidate_miner_transaction` for mined blocks; **genesis (height 0) is
-  exempt by design, not accommodation**: the final genesis carries a
-  multi-output coinbase on every nettype (testnet already 5; the current
-  mainnet/stagenet 1-output blobs are pre-genesis placeholders), so the rule-21
-  reopen trigger below reads "multi-output coinbase **in mined blocks**".
+  exempt — and the exemption is load-bearing TODAY, not defensive**: testnet's
+  shipped `GENESIS_TX` already carries 5 outputs (verified at the blob, vout
+  count `0x05`), so without the carve-out testnet fails to validate its own
+  genesis and does not start. The final genesis is multi-output on every
+  nettype (the current mainnet/stagenet 1-output blobs are pre-genesis
+  placeholders), so the rule-21 reopen trigger below reads "multi-output
+  coinbase **in mined blocks**". Spoof-resistant: the height operand is
+  caller-derived from chain position, never the block's own claimed txin_gen
+  height.
   Harness conformed per the stated principle (`chaingen` default `max_outs`
   9999→1, `construct_block` 10→1, `block_reward` helper 999→1;
   `bf_max_outs` still lets a test state a deliberate violation), and the
