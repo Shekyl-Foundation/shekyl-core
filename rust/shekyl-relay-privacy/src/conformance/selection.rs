@@ -320,3 +320,145 @@ pub fn simulate_epsilon_greedy_selection<R: RelayRng + ?Sized>(
         top2_traffic_share: top2_sends as f64 / all_sends as f64,
     }
 }
+
+/// **W3c (§19.2):** exposure to an adversary who *induces churn* on the origin's
+/// stem successor, measured against the number of re-rolls induced.
+///
+/// This is the churn model [`simulate_two_slot_occupancy`] explicitly does not
+/// carry, and it is where the single-draw number stops being a bound. Two arms,
+/// both driven by the same trial so they see identical draws:
+///
+/// - **`fresh_draw_exposure` — today.** `StemMap` pins a source to a *slot
+///   index*. When `update()` finds the pinned slot's peer gone it empties the
+///   slot and the backfill refills it with a uniform draw from the remaining
+///   pool; the next `stem_for` takes the `is_some()` fast path and silently
+///   returns the new occupant. Each induced churn is therefore an independent
+///   roll at the enriched share.
+/// - **`frozen_set_exposure` — under §19.2.** The source's candidate set is
+///   frozen at its first pin, so churn walks it to the next still-live peer of
+///   that set and no peer drawn afterwards can ever serve it.
+///
+/// The point of the measurement is the **shape in `forced_rerolls`**, not either
+/// endpoint: the fresh-draw arm compounds toward 1 while the frozen arm
+/// saturates once the source has walked its (at most `stems`) frozen peers. An
+/// adversary's return on inducing more churn is the difference.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero, `stems < 1`, `outbound_degree <= stems`, or
+/// `outbound_share` is outside `[0, 1]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InducedChurnExposure {
+    /// `g` — the adversary's share of the origin's outbound pool.
+    pub outbound_share: f64,
+    /// `D_out` — the origin's outbound degree (daemon default 12).
+    pub outbound_degree: usize,
+    /// Stem width (`CRYPTONOTE_DANDELIONPP_STEMS = 2`).
+    pub stems: usize,
+    /// How many times the adversary forces the origin's successor to be re-rolled.
+    pub forced_rerolls: usize,
+    /// `P(the origin is ever routed through an adversarial successor)` under the
+    /// current slot-index pinning — one fresh draw per induced churn.
+    pub fresh_draw_exposure: f64,
+    /// The same probability when the candidate set is frozen at first pin.
+    pub frozen_set_exposure: f64,
+    /// `1 − (1 − a/D)^(k+1)` at the effective integer share — the compounding
+    /// curve the fresh-draw arm is expected to track, stated so the measurement
+    /// can *disagree* with the closed form rather than be read through it.
+    pub independent_reference: f64,
+}
+
+/// Measure [`InducedChurnExposure`]; see the type for what the two arms model.
+#[must_use]
+pub fn simulate_induced_churn_exposure<R: RelayRng + ?Sized>(
+    outbound_share: f64,
+    outbound_degree: usize,
+    stems: usize,
+    forced_rerolls: usize,
+    trials: usize,
+    rng: &mut R,
+) -> InducedChurnExposure {
+    assert!(trials > 0, "need at least one trial");
+    assert!(stems >= 1, "need at least one stem slot");
+    assert!(
+        outbound_degree > stems,
+        "need at least one spare peer for churn to draw from"
+    );
+    assert!(
+        (0.0..=1.0).contains(&outbound_share),
+        "outbound share must be in [0, 1]"
+    );
+
+    let d = outbound_degree;
+    // The adversary holds the first `a` of the `d` outbound peers.
+    let a = (outbound_share * d as f64).round() as usize;
+    let adversarial = |peer: usize| peer < a;
+
+    let mut fresh_hits = 0_usize;
+    let mut frozen_hits = 0_usize;
+
+    for _ in 0..trials {
+        // The epoch's stem set: `stems` distinct peers, partial Fisher-Yates as
+        // `StemMap::new` draws them.
+        let mut pool: Vec<usize> = (0..d).collect();
+        for i in 0..stems {
+            let remaining = d - i;
+            let pick = i + usize_from(bounded_uniform(rng, (remaining - 1) as u64));
+            pool.swap(i, pick);
+        }
+        let initial: Vec<usize> = pool[..stems].to_vec();
+        // Peers not serving as a stem — `update()`'s candidate pool.
+        let mut spare: Vec<usize> = pool[stems..].to_vec();
+
+        // The origin pins to one slot. Usage is all-zero at epoch start, so
+        // `select_slot` breaks the tie uniformly.
+        let pinned_slot = usize_from(bounded_uniform(rng, (stems - 1) as u64));
+
+        // --- arm 1: today. The pinned SLOT is followed wherever it is refilled.
+        let mut occupant = initial[pinned_slot];
+        let mut fresh_exposed = adversarial(occupant);
+        for _ in 0..forced_rerolls {
+            if spare.is_empty() {
+                break;
+            }
+            // The occupant churns out and does not return; the backfill draws
+            // uniformly from peers not already serving a slot.
+            let pick = usize_from(bounded_uniform(rng, (spare.len() - 1) as u64));
+            occupant = spare.swap_remove(pick);
+            fresh_exposed |= adversarial(occupant);
+        }
+
+        // --- arm 2: §19.2. The source walks its frozen set and stops.
+        // Its own slot first, then the remaining initial peers — the alternate.
+        let mut frozen_exposed = adversarial(initial[pinned_slot]);
+        let mut walked = 1_usize;
+        for _ in 0..forced_rerolls {
+            if walked >= initial.len() {
+                // Frozen set exhausted: no successor, so no exposure. Reaching
+                // here required churning every peer the source started with,
+                // which is the W3 both-slots case rather than a new one.
+                break;
+            }
+            let next = initial[(pinned_slot + walked) % initial.len()];
+            walked += 1;
+            frozen_exposed |= adversarial(next);
+        }
+
+        fresh_hits += usize::from(fresh_exposed);
+        frozen_hits += usize::from(frozen_exposed);
+    }
+
+    let effective_share = a as f64 / d as f64;
+    InducedChurnExposure {
+        outbound_share,
+        outbound_degree: d,
+        stems,
+        forced_rerolls,
+        fresh_draw_exposure: fresh_hits as f64 / trials as f64,
+        frozen_set_exposure: frozen_hits as f64 / trials as f64,
+        // `powf` rather than `powi`: the exponent comes from a `usize` and
+        // casting it to `i32` can wrap. Precision is ample for a diagnostic
+        // reference curve.
+        independent_reference: 1.0 - (1.0 - effective_share).powf((forced_rerolls + 1) as f64),
+    }
+}

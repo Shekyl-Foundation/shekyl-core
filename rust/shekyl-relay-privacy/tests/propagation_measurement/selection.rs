@@ -244,3 +244,74 @@ fn epsilon_greedy_pure_preference_ossifies_to_two_peers() {
          eps~0.05 = the RL/ARPANET value, reproduced in-crate (§13.5 discipline)."
     );
 }
+
+/// **§19.3 W3c — induced-churn exposure, the number the churn-stable successor
+/// is specified against.** `simulate_two_slot_occupancy` measures one stable
+/// epoch map and says so ("this instrument does not model churn"); this is that
+/// model. Both arms run on the same trial, so the difference is the mechanism
+/// and not the draws.
+///
+/// Pinned because the *shape in `k`* is the finding: today's exposure compounds
+/// with every induced re-roll, the frozen-set arm saturates at the source's own
+/// initial peers. If the fresh arm ever stops rising, or the frozen arm ever
+/// starts, the mechanism changed underneath §19.2.
+#[test]
+fn induced_churn_compounds_today_and_saturates_under_a_frozen_set() {
+    use shekyl_relay_privacy::conformance::simulate_induced_churn_exposure;
+
+    const D_OUT: usize = 12; // P2P_DEFAULT_CONNECTIONS_COUNT
+    const STEMS: usize = 2; // CRYPTONOTE_DANDELIONPP_STEMS
+    const G: f64 = 0.10; // baseline outbound share
+    let trials = 200_000;
+
+    println!("  k   today   frozen   1-(1-g)^(k+1)");
+    let mut fresh_curve = Vec::new();
+    let mut frozen_curve = Vec::new();
+    for k in [0_usize, 1, 2, 4, 8, 16] {
+        let mut rng = SplitMix64::new(0xC0FFEE + k as u64);
+        let r = simulate_induced_churn_exposure(G, D_OUT, STEMS, k, trials, &mut rng);
+        println!(
+            "  {:>2}  {:.4}  {:.4}   {:.4}",
+            k, r.fresh_draw_exposure, r.frozen_set_exposure, r.independent_reference
+        );
+        fresh_curve.push(r.fresh_draw_exposure);
+        frozen_curve.push(r.frozen_set_exposure);
+
+        // The two arms must agree with no churn: same map, same pin, same draw.
+        if k == 0 {
+            assert!(
+                (r.fresh_draw_exposure - r.frozen_set_exposure).abs() < 1e-9,
+                "with k = 0 the mechanisms are indistinguishable by construction"
+            );
+        }
+    }
+
+    // Today: strictly compounding in k.
+    for w in fresh_curve.windows(2) {
+        assert!(
+            w[1] > w[0] + 0.01,
+            "today's exposure must rise with every induced re-roll: {w:?}"
+        );
+    }
+    assert!(
+        fresh_curve.last().copied().unwrap() > 0.90,
+        "~16 induced re-rolls must reach the origin's stem path >90% of the time"
+    );
+
+    // Frozen: flat from k = 2, once the source has walked its STEMS peers.
+    let saturated = &frozen_curve[2..];
+    for e in saturated {
+        assert!(
+            (e - saturated[0]).abs() < 0.01,
+            "the frozen set must saturate — more churn buys the adversary nothing: {frozen_curve:?}"
+        );
+    }
+    // And it saturates at P(>=1 of the source's OWN initial stems is adversarial),
+    // ~2g for small g — NOT at the single-draw g. §19.2's first draft said g; the
+    // measurement corrected it, and this assertion is what keeps that correction.
+    assert!(
+        (saturated[0] - 0.167).abs() < 0.01,
+        "frozen saturation is the two-slot at-least-one bound (~2g), not g: {}",
+        saturated[0]
+    );
+}

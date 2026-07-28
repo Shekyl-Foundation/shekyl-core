@@ -4007,9 +4007,9 @@ rotation §6.8's intersection defence rests on.
 **Acceptance.**
 
 1. A measurement, in-crate, of induced-churn exposure against `k` forced
-   re-rolls: today it must reproduce `1 − (1 − g)^k`; under the property it must
-   flatten to the single-draw `g`. The gap is *shown* before it is closed —
-   the number is the finding, not the fix.
+   re-rolls, with both arms driven by the same trial. The gap is *shown* before
+   it is closed — the number is the finding, not the fix. **Measured below; it
+   corrected this section's first draft, which had asserted the shape.**
 2. A structural test that a pinned source never routes to a peer that entered the
    map after it pinned, asserted across a **sequence** of `update` calls, with
    both C-1 triggers represented. Per-call stability is not the property and a
@@ -4017,3 +4017,47 @@ rotation §6.8's intersection defence rests on.
 3. A negative control on (2): with the frozen set removed, the test must fail.
    The composition is exactly where a stability property looks correct and is
    not, so the control has to exercise the sequence, not one call.
+
+### 19.3 Measured — induced-churn exposure, and two corrections it forced
+
+`simulate_induced_churn_exposure` (`conformance/selection.rs`) runs both arms on
+the same trial. At `D_out = 12`, `STEMS = 2`, 200k trials:
+
+| `g` | `k` | today (slot-pinned) | §19.2 (frozen set) | `1 − (1−g)^(k+1)` |
+| --- | --- | --- | --- | --- |
+| 0.10 | 0 | 0.0829 | 0.0829 | 0.0833 |
+| 0.10 | 1 | 0.1655 | 0.1674 | 0.1597 |
+| 0.10 | 2 | 0.2516 | **0.1665** | 0.2297 |
+| 0.10 | 4 | 0.4172 | **0.1665** | 0.3528 |
+| 0.10 | 8 | 0.7508 | **0.1663** | 0.5430 |
+| 0.10 | 16 | 0.9168 | **0.1675** | 0.7722 |
+| 0.25 | 16 | 1.0000 | 0.4546 | 0.9925 |
+| 0.30 | 16 | 1.0000 | 0.5759 | 0.9990 |
+
+**The gap is real and it is not marginal.** At the baseline `g = 0.10` an
+adversary who can induce ~16 re-rolls reaches the origin's stem path **91.7 %** of
+the time, against **16.7 %** if the candidate set is frozen. The frozen arm is
+flat in `k` from `k = 2` onward — it saturates once the source has walked its two
+initial peers, which is the whole point: **more induced churn buys nothing.**
+
+**Correction 1 — the frozen arm does not flatten to `g`, and §19.2's first draft
+said it would.** It flattens to `P(≥ 1 of the source's *initial* stems is
+adversarial)` — ≈ `2g` for small `g` (0.167 at `g = 0.10`), not `g` (0.083). The
+source can still be handed to an adversarial *alternate*; what it can no longer
+be handed is a peer drawn *after* the adversary acted. That is the property, and
+it is weaker than the sentence originally written here. The acceptance criterion
+that said "show the gap before closing it" is what caught it — the shape was
+asserted, then measured, and the measurement disagreed.
+
+**Correction 2 — the closed form *understates* today's compounding.** The
+fresh-draw arm sits **above** `1 − (1−g)^(k+1)` at every `k > 0` (0.917 vs 0.772
+at `g = 0.10, k = 16`), because churned peers do not return: the spare pool
+shrinks and its adversarial fraction rises with each induced churn. The
+independent-draw reference is therefore a *lower* bound on the real exposure, not
+an estimate of it — so "≈ `g` per re-stem", compounded naively, is optimistic
+about the mechanism it prices.
+
+The fresh arm's ceiling is `(D−1)/D = 0.917`, not 1: the one peer it can never be
+routed to is the *other* stem slot, which is never churned in this model. That
+the measurement lands on `11/12` exactly is the check that the model is the
+mechanism and not a caricature of it.
