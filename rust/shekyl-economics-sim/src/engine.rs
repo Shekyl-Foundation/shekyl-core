@@ -267,12 +267,8 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         // n = 0; under the shipped genesis-neutral asymptote that is bit-identical
         // to the flat floor at every n, and after the ceremony this is the honest
         // "no burden yet" baseline (stage2 threads real n via burden::frozen_shards).
-        let fee_split = compute_burn_split_at(
-            total_fees,
-            burn_pct,
-            FrozenSegmentCount::ZERO,
-            &economic,
-        );
+        let fee_split =
+            compute_burn_split_at(total_fees, burn_pct, FrozenSegmentCount::ZERO, &economic);
 
         already_generated += effective_reward as u128;
         if already_generated > money_supply {

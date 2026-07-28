@@ -5276,12 +5276,8 @@ mod tests {
         use shekyl_economics::{compute_burn_split_at, EconomicParams, FrozenSegmentCount};
         let params = EconomicParams::default();
         for n in [0u64, 1, 100_000, u64::MAX] {
-            let rust = compute_burn_split_at(
-                1_000_000_000,
-                500_000,
-                FrozenSegmentCount::new(n),
-                &params,
-            );
+            let rust =
+                compute_burn_split_at(1_000_000_000, 500_000, FrozenSegmentCount::new(n), &params);
             let c = shekyl_compute_burn_split_escalated(1_000_000_000, 500_000, n);
             assert_eq!(c.miner_fee_income, rust.miner_fee_income);
             assert_eq!(c.staker_pool_amount, rust.staker_pool_amount);

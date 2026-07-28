@@ -25,7 +25,8 @@ pub mod release;
 
 pub use activity::{ActivityInvariantViolation, ActivityMetric};
 pub use burn::{
-    calc_burn_pct, calc_burn_pct_from_activity, compute_burn_split, compute_burn_split_at, BurnSplit,
+    calc_burn_pct, calc_burn_pct_from_activity, compute_burn_split, compute_burn_split_at,
+    BurnSplit,
 };
 pub use digest::{params_digest, DIGEST_FORMAT_VERSION};
 pub use emission::{

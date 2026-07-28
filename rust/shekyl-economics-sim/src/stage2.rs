@@ -243,8 +243,8 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         let total_fees = (u128::from(tx_volume) * u128::from(config.fee_per_tx))
             .min(u128::from(u64::MAX)) as u64;
         // share = SCALE → the whole burn (pre-split); the candidate re-splits it.
-        let whole_burn =
-            compute_burn_split(total_fees, burn_pct, ScaledShare::from_raw(SCALE)).staker_pool_amount;
+        let whole_burn = compute_burn_split(total_fees, burn_pct, ScaledShare::from_raw(SCALE))
+            .staker_pool_amount;
         // Flat-ledger advance: destroy at the shipped 25% split.
         let flat = compute_burn_split(
             total_fees,
