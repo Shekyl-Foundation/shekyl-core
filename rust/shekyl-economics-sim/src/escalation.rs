@@ -129,7 +129,12 @@ pub fn family() -> Vec<EscalationCurve> {
 pub fn flat_25() -> EscalationCurve {
     EscalationCurve {
         asymptote: floor_share(),
-        knee_shards: 1,
+        // Any representable knee: the value is inert here because
+        // `asymptote == floor` makes the ramp flat (span 0), so
+        // `staker_pool_share_at` returns the floor for every `n` regardless of
+        // the knee. MIN_KNEE_N keeps it shape-legal now that `try_new` rejects
+        // sub-ramp knees.
+        knee_shards: EscalationParams::MIN_KNEE_N,
     }
 }
 

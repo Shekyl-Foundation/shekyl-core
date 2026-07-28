@@ -138,6 +138,19 @@ pub enum EscalationShapeError {
          zeroed config field, not a parameterization)"
     )]
     KneeZero,
+    /// `0 < knee_n < MIN_KNEE_N` — the ramp degenerates into a step (a cliff).
+    #[error(
+        "escalation knee {knee_n} is below the ramp minimum {min}: the banded-PL \
+         bands collapse under integer flooring (b1 = knee_n / 4 floors to 0), so \
+         the share holds at the floor and then jumps the whole span at the knee — \
+         a discontinuity §6.1 (monotone + bounded-slope) forbids"
+    )]
+    KneeBelowRampMinimum {
+        /// Offending knee.
+        knee_n: u64,
+        /// [`EscalationParams::MIN_KNEE_N`].
+        min: u64,
+    },
 }
 
 /// Well-formed escalation shape parameters.
@@ -153,11 +166,34 @@ pub struct EscalationParams {
 }
 
 impl EscalationParams {
+    /// Smallest knee the continuous banded-PL curve can ramp without degenerating
+    /// into a step.
+    ///
+    /// The curve's breakpoints are `b1 = knee_n / 4`, `b2 = knee_n / 2`,
+    /// `b3 = knee_n` (integer floor). Below `4`, `b1` floors to `0`, so segment 1
+    /// has an empty domain and the "continuous" parameterization
+    /// ([`BandedCurveParams::continuous`]) can no longer represent a rise: every
+    /// `n < knee_n` floors to the floor share and the map jumps the whole span to
+    /// the asymptote in one step at the knee. That is a discontinuity, which §6.1
+    /// (monotone + bounded-slope) forbids. `4` is the smallest `knee_n` with
+    /// `b1 >= 1`, so all three bands carry a nonzero domain and the ramp has an
+    /// interior; `no_share_cliff_at_the_knee` pins that this is exactly the
+    /// boundary.
+    ///
+    /// This gates the **shape**, not the **numeric**: it rejects only degenerate
+    /// knees and — like the asymptote (§11.4) — leaves *which* knee is correct to
+    /// the re-pin ceremony. No frozen §6.1 constraint states a knee domain, so
+    /// this enforces the constraint set's no-discontinuity requirement rather than
+    /// adding a parameter to it.
+    pub const MIN_KNEE_N: u64 = 4;
+
     /// Build a well-formed shape, or refuse.
     ///
     /// - `asymptote < SCALE` — constraint 3 (deflation channel)
     /// - `floor <= asymptote` — constraints 1–2 (monotone, no one worse off)
     /// - `knee_n > 0` — ramp has a domain (zero is a config error, not intent)
+    /// - `knee_n >= MIN_KNEE_N` — ramp does not collapse into a step (no
+    ///   discontinuity at the knee)
     #[must_use = "check whether the shape was accepted"]
     pub const fn try_new(
         floor_share: ScaledShare,
@@ -177,6 +213,12 @@ impl EscalationParams {
         }
         if knee_n == 0 {
             return Err(EscalationShapeError::KneeZero);
+        }
+        if knee_n < Self::MIN_KNEE_N {
+            return Err(EscalationShapeError::KneeBelowRampMinimum {
+                knee_n,
+                min: Self::MIN_KNEE_N,
+            });
         }
         Ok(Self {
             floor_share,
@@ -208,7 +250,10 @@ impl EscalationParams {
 ///
 /// Rises from `floor_share` at `n = 0` along the continuous banded-PL ramp,
 /// saturating at `asymptote_share` for `n >= knee_n`. Uses
-/// [`BandedCurveParams::continuous`] so there is no share cliff at the knee.
+/// [`BandedCurveParams::continuous`], and [`EscalationParams::try_new`] rejects
+/// knees below [`EscalationParams::MIN_KNEE_N`]. So for **every representable
+/// parameterization** the knee is not a discontinuity: the step at the knee never
+/// exceeds the ramp's largest interior step (pinned by `no_share_cliff_at_the_knee`).
 ///
 /// **`params` is well-formed by type** — no fail-closed branch.
 #[must_use]
@@ -220,18 +265,13 @@ pub fn staker_pool_share_at(n: FrozenSegmentCount, params: &EscalationParams) ->
         return params.floor_share;
     }
 
+    // `knee_n >= MIN_KNEE_N` (try_new) ⇒ `plateau_value_milli = knee_n / 2 >= 2`,
+    // so `full` is never zero and the ramp always has an interior — the degenerate
+    // step-at-the-knee case is unrepresentable, not handled here. (`mul_div_floor`
+    // still guards div-by-zero so the FFI export cannot panic even if that
+    // invariant were ever violated.)
     let shape = BandedCurveParams::continuous(params.knee_n);
     let full = shape.plateau_value_milli;
-    if full == 0 {
-        // knee_n == 1 → continuous plateau floors to 0: no ramp interior, but
-        // the endpoints still exist (floor strictly below the knee, asymptote
-        // at and beyond it).
-        return if n.get() >= params.knee_n {
-            params.asymptote_share
-        } else {
-            params.floor_share
-        };
-    }
     let raw = curve_milli(n.get(), &shape);
     // share = floor + span * raw / full. Floors so the share is never rounded
     // UP into a larger redirection of the burn than the ramp earns.
@@ -281,7 +321,14 @@ mod tests {
     #[test]
     fn no_one_is_ever_worse_off_than_the_flat_share() {
         const TODAY: u64 = 250_000;
-        for knee in [1u64, 2, 1_000, 25_000, 100_000, 250_000] {
+        for knee in [
+            EscalationParams::MIN_KNEE_N,
+            EscalationParams::MIN_KNEE_N + 1,
+            1_000,
+            25_000,
+            100_000,
+            250_000,
+        ] {
             for asymptote in [TODAY, 400_000, 750_000, 900_000, SCALE - 1] {
                 let p = EscalationParams::try_new(
                     ScaledShare::from_raw(TODAY),
@@ -289,7 +336,15 @@ mod tests {
                     ScaledShare::from_raw(asymptote),
                 )
                 .expect("fixture must be accepted");
-                for n in [0u64, 1, knee / 2, knee.saturating_sub(1), knee, knee + 1, u64::MAX] {
+                for n in [
+                    0u64,
+                    1,
+                    knee / 2,
+                    knee.saturating_sub(1),
+                    knee,
+                    knee + 1,
+                    u64::MAX,
+                ] {
                     let s = share_at(n, &p);
                     assert!(
                         s >= TODAY,
@@ -340,6 +395,17 @@ mod tests {
             ),
             Err(EscalationShapeError::KneeZero)
         ));
+        // A non-zero knee below the ramp minimum is a step (cliff) — refused.
+        for knee in 1..EscalationParams::MIN_KNEE_N {
+            assert!(matches!(
+                EscalationParams::try_new(
+                    ScaledShare::from_raw(250_000),
+                    knee,
+                    ScaledShare::from_raw(750_000),
+                ),
+                Err(EscalationShapeError::KneeBelowRampMinimum { .. })
+            ));
+        }
         // Malformed shapes are unrepresentable — there is no fail-closed apply path.
     }
 
@@ -364,26 +430,58 @@ mod tests {
 
     #[test]
     fn no_share_cliff_at_the_knee() {
-        let p = params();
-        let knee_step = share_at(p.knee_n(), &p) - share_at(p.knee_n() - 1, &p);
+        // §6.1 "no discontinuity", proven across the representable knee domain
+        // rather than at a single fixture: for every knee `try_new` admits, the
+        // step AT the knee never exceeds the ramp's largest interior step, and
+        // the interior genuinely ramps (max step > 0). MIN_KNEE_N is exactly the
+        // boundary — one below it the curve is a full-span step, so `try_new`
+        // refuses it. This asserts only what the type guarantees (no *knee*
+        // discontinuity); the finer "no step exceeds span/10" bound is a
+        // family-selection metric for the §11.4 sweep, not a frozen shape rule.
+        for knee in [
+            EscalationParams::MIN_KNEE_N,
+            EscalationParams::MIN_KNEE_N + 1,
+            7,
+            64,
+            1_000,
+            100_000,
+        ] {
+            let p = EscalationParams::try_new(
+                ScaledShare::from_raw(250_000),
+                knee,
+                ScaledShare::from_raw(750_000),
+            )
+            .expect("knee >= MIN_KNEE_N is representable");
+            let knee_step = share_at(knee, &p) - share_at(knee - 1, &p);
 
-        let mut max_interior_step = 0;
-        let mut prev = share_at(0, &p);
-        for n in 1..p.knee_n() {
-            let cur = share_at(n, &p);
-            max_interior_step = max_interior_step.max(cur - prev);
-            prev = cur;
+            let mut max_interior_step = 0;
+            let mut prev = share_at(0, &p);
+            for n in 1..knee {
+                let cur = share_at(n, &p);
+                max_interior_step = max_interior_step.max(cur - prev);
+                prev = cur;
+            }
+
+            assert!(
+                knee_step <= max_interior_step,
+                "cliff at knee={knee}: knee step {knee_step} exceeds the ramp's \
+                 largest interior step {max_interior_step}"
+            );
+            assert!(
+                max_interior_step > 0,
+                "knee={knee} does not ramp (interior is flat), so this proves nothing"
+            );
         }
 
-        assert!(
-            knee_step <= max_interior_step,
-            "the knee is a cliff: step {knee_step} exceeds the ramp's largest \
-             interior step {max_interior_step}"
-        );
-        assert!(
-            max_interior_step > 0,
-            "fixture must actually ramp, or this proves nothing"
-        );
+        // One below the minimum IS a full-span step — and unrepresentable.
+        assert!(matches!(
+            EscalationParams::try_new(
+                ScaledShare::from_raw(250_000),
+                EscalationParams::MIN_KNEE_N - 1,
+                ScaledShare::from_raw(750_000),
+            ),
+            Err(EscalationShapeError::KneeBelowRampMinimum { .. })
+        ));
     }
 
     #[test]
@@ -401,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn flat_and_one_knee_endpoints() {
+    fn flat_and_min_knee_endpoints() {
         let flat = EscalationParams::try_new(
             ScaledShare::from_raw(250_000),
             100_000,
@@ -410,15 +508,26 @@ mod tests {
         .unwrap();
         assert_eq!(share_at(u64::MAX, &flat), 250_000);
 
-        let one_knee = EscalationParams::try_new(
+        // The smallest representable knee still has both endpoints AND a genuine
+        // interior (no step): floor at 0, asymptote at/beyond the knee, and a
+        // value strictly between the two on the ramp.
+        let min_knee = EscalationParams::try_new(
             ScaledShare::from_raw(250_000),
-            1,
+            EscalationParams::MIN_KNEE_N,
             ScaledShare::from_raw(750_000),
         )
         .unwrap();
-        assert_eq!(share_at(0, &one_knee), 250_000);
-        assert_eq!(share_at(1, &one_knee), 750_000);
-        assert_eq!(share_at(5, &one_knee), 750_000);
+        assert_eq!(share_at(0, &min_knee), 250_000);
+        assert_eq!(share_at(EscalationParams::MIN_KNEE_N, &min_knee), 750_000);
+        assert_eq!(
+            share_at(EscalationParams::MIN_KNEE_N + 5, &min_knee),
+            750_000
+        );
+        let interior = share_at(1, &min_knee);
+        assert!(
+            interior > 250_000 && interior < 750_000,
+            "min knee must ramp through an interior value, got {interior}"
+        );
     }
 
     #[test]
