@@ -3597,6 +3597,64 @@ which is a property to design for. Three requirements for that increment:
    ownership instead. The reused oracle does not cover it, so it carries a test
    that nothing but the owning path writes it.
 
+### 18.4b gtest → Rust-test map, and the honest scope of the oracle
+
+Written **before** the daemon build, because it is cheap now and expensive to
+reconstruct under a failing build. Its purpose is failure *attribution*, not
+coverage: for a red gtest, the question is whether a Rust test **would fail if
+the Rust were wrong in the way that gtest checks**. If such a twin exists and is
+green, the failure is isolated to the shim by elimination — no rebuild, no
+bisect. A twin that merely covers the same *area* does not support that
+inference, so entries are only useful when tightly paired.
+
+The 33 cases are a matrix — `{fluff, stem, local, forward, block, none}` ×
+`{padding, no padding}` × `{public, private}` — over about eight behaviours:
+
+| gtest group | Behaviour checked | Tight Rust twin | Pairing |
+| --- | --- | --- | --- |
+| `fluff_*` (×4) | fluffs to every peer but the source | `fluff_skips_the_source_and_releases_on_deadline` | tight |
+| `stem_*` (×4) | routes to exactly one outbound successor | `everything_stems_during_a_stem_epoch`, `a_source_pins_to_one_stem_for_the_epoch` | tight |
+| `stem_no_outs_*` (×2) | no routable slot ⇒ fluff fallback | `no_routable_slot_falls_back_to_fluff` | tight |
+| `local_*` (×4) | **local origin always stems, incl. during a fluff epoch (RD-4)** | `a_local_tx_stems_during_a_fluff_epoch_rd4` | tight, both sides |
+| `stem_mappings` | a source stays pinned to one stem for the epoch | `a_source_pins_to_one_stem_for_the_epoch` | tight |
+| `fluff_multiple`, `fluff_with_duplicate` | batching accumulates without re-drawing | `a_burst_does_not_push_a_peers_flush_further_out` | tight |
+| `forward_*`, `block_*`, `none_*` (×12) | relay-**method** dispatch | — | not zone logic; stays C++ |
+| `noise`, `noise_stem` | covert channels | — | RP-3b; in 3a they consume the pushed snapshot |
+| `command_max_bytes` | framing/size limit | — | transport; stays C++ permanently |
+
+**Finding 1 — RD-4 is oracle-witnessed, and tightly.** The prediction was that
+the 33 might not reach it, leaving the Rust test as sole guard. They do reach it:
+`local_without_padding` loops epochs (`has_stemmed |= is_stem; has_fluffed |=
+!is_stem; notifier.run_epoch()`) until it has seen **both** roles, and in each it
+asserts under the comment *"run \"my\" txes which must always be stem"* that a
+local transaction produces exactly **one** send rather than nine, with
+`dandelionpp_fluff` false. That is the stem-vs-fluff axis — the axis a reversion
+of `|| local` shows on — asserted from the C++ side, pairing tightly with the
+Rust twin, which asserts the same axis. Notably the gtest arrives at a
+guaranteed fluff epoch by *cycling roles*, the same discipline the Rust twin
+reaches by seed search: neither injects the role.
+
+**Finding 2 — StemSlots index-order is *not* oracle-witnessed.** The noise
+cases assert **counts** (`EXPECT_EQ(2u, sent)`, `connections_filled`), and
+`local_*` asserts only that a stem lands on an *outbound* peer
+(`(context - begin()) % 2 == 1`). Nothing in the 33 asserts that noise channel
+*i* is bound to stem slot *i*. So contract 3 at the new boundary — order
+preserved, nils in position — is witnessed **only** by
+`stem_slots_cross_in_index_order_with_nils_in_position` in the FFI seam tests.
+
+That is not a gap to close; it is the oracle's honest scope, and it must be
+stated so nobody later reads "33 gtests green" as "everything verified". Green-33
+means *the behaviours the gtests reach are correct*. Index-order is correct
+because a seam test says so, and the seam test is therefore load-bearing rather
+than belt-and-braces — it is the sole witness of the property the RP-3b noise
+channels will depend on positionally.
+
+**Consequence for the build.** Every gtest whose behaviour is zone logic has a
+tight twin, so a red gtest with a green twin attributes to the shim without
+rebuilding. The three groups with no twin (`forward`/`block`/`none` dispatch,
+noise, framing) are C++-side behaviour the port does not move — a failure there
+attributes to the shim or to the C++ that was already there, not to the Rust.
+
 ### 18.5 State inventory — what earns the seal-break
 
 RP-3 reverses a decision `lib.rs:100–112` sealed *"so the question does not get
