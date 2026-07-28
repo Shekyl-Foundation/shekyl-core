@@ -754,6 +754,65 @@ mod tests {
     }
 
     #[test]
+    fn polling_at_the_reported_wake_time_releases_the_batch() {
+        // The production path, and the only test of it anywhere: the daemon
+        // arms its timer on `next_wake()` and calls `poll()` when it fires. The
+        // 33 gtests never reach this — their `io_service_.poll()` runs only
+        // *ready* handlers, and the wake deadline is seconds to minutes out, so
+        // every gtest drives the zone through `force_fluff`/`force_epoch`
+        // instead. Without this, `next_wake` could report a time `poll` did not
+        // agree was due and nothing in the tree would notice.
+        reset();
+        unsafe {
+            let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+            shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
+
+            let blob = [0x5Au8];
+            let batch = [ShekylRelayBlob {
+                ptr: blob.as_ptr(),
+                len: 1,
+            }];
+            shekyl_relay_zone_queue_fluff(h, 0, batch.as_ptr(), 1, std::ptr::null());
+
+            let due = shekyl_relay_zone_next_wake(h);
+            assert!(due > 0, "a queued batch must report a future wake");
+
+            if due > 1 {
+                shekyl_relay_zone_poll(
+                    h,
+                    due - 1,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    rec_fluff,
+                    rec_slots,
+                );
+                REC.with(|r| assert!(r.borrow().fluffed.is_empty(), "not due yet"));
+            }
+
+            shekyl_relay_zone_poll(
+                h,
+                due,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                rec_fluff,
+                rec_slots,
+            );
+            shekyl_relay_zone_free(h);
+        }
+        REC.with(|r| {
+            let rec = r.borrow();
+            assert_eq!(
+                rec.fluffed.len(),
+                1,
+                "the batch releases at the wake it reported"
+            );
+            assert_eq!(rec.fluffed[0].1, vec![vec![0x5Au8]]);
+        });
+    }
+
+    #[test]
     fn a_zone_that_would_spin_is_refused_rather_than_built() {
         // A zero epoch expires at every wake, so the daemon's relay timer would
         // re-arm in the past forever. Refusing construction turns a silent

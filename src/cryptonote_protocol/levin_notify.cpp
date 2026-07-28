@@ -512,7 +512,12 @@ namespace levin
            empty slot arrives as a nil in position rather than being compacted
            away. Indexing anything but positionally here would bind covert
            channels to the wrong connections, silently (§16.1 contract 3). */
-        assert(count == z->channels.size());
+        /* The snapshot may be NARROWER than the channel set: a stem map drawn
+           over fewer peers than the configured width has that many slots, which
+           is the normal state of a node with one outbound connection. The
+           inherited `post` handled it by iterating the map's span, not the
+           channels'. Only the reverse would be a bug. */
+        assert(count <= z->channels.size());
         for (std::size_t i = 0; i < count && i < z->channels.size(); ++i)
         {
           boost::uuids::uuid connection{};

@@ -31,7 +31,7 @@
 
 use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::Millis;
-use shekyl_relay_privacy::stem_map::ConnectionId;
+use shekyl_relay_privacy::stem_map::{ConnectionId, StemSetChange};
 
 #[cfg(test)]
 use crate::zone::FluffReach;
@@ -105,22 +105,37 @@ impl Driver {
     /// new slots outward if the set changed.
     ///
     /// This is the inherited `update_channels::run` — a *mid-epoch* refresh,
-    /// distinct from the epoch rollover that re-draws the role. The daemon
-    /// needs it on three paths: a new outbound connection, a covert send that
-    /// failed, and the retry inside `dandelionpp_notify` — which is the only
-    /// thing that ever populates the map on a public zone, because the zone is
-    /// constructed before any peer has connected.
-    ///
-    /// The rollover paths call this too, so "changed ⇒ push" has exactly one
-    /// implementation. A second copy of that rule is a second place for the
-    /// push to be forgotten, and a forgotten push is silent: the slots simply
-    /// stay stale.
+    /// distinct from the rollover below. The daemon needs it on three paths: a
+    /// new outbound connection, a covert send that failed, and the retry inside
+    /// `dandelionpp_notify` — which is the only thing that ever populates the
+    /// map on a public zone, because the zone is constructed before any peer
+    /// has connected.
     pub fn update_stems<R: RelayRng + ?Sized>(
         &mut self,
         outbound: &[ConnectionId],
         rng: &mut R,
     ) -> Vec<Effect> {
-        if self.zone.update_stems(outbound.to_vec(), rng).needs_rearm() {
+        let change = self.zone.update_stems(outbound.to_vec(), rng);
+        self.slots_if_changed(change)
+    }
+
+    /// Re-draw the whole stem set — what an epoch rollover does.
+    ///
+    /// See [`crate::Zone::rebuild_stems`] for why this is not the merge above.
+    fn rebuild_stems<R: RelayRng + ?Sized>(
+        &mut self,
+        outbound: &[ConnectionId],
+        rng: &mut R,
+    ) -> Vec<Effect> {
+        let change = self.zone.rebuild_stems(outbound.to_vec(), rng);
+        self.slots_if_changed(change)
+    }
+
+    /// The one place "changed ⇒ push the slots" is implemented. A second copy
+    /// of that rule is a second place for the push to be forgotten, and a
+    /// forgotten push is silent: the slots simply stay stale.
+    fn slots_if_changed(&self, change: StemSetChange) -> Vec<Effect> {
+        if change.needs_rearm() {
             vec![Effect::StemSlots(self.zone.stem_slots().to_vec())]
         } else {
             Vec::new()
@@ -144,7 +159,7 @@ impl Driver {
         // fluff release below should observe the new epoch, not the old one.
         if now >= self.zone.epoch_deadline() {
             self.zone.start_epoch(now, rng);
-            effects.extend(self.update_stems(outbound, rng));
+            effects.extend(self.rebuild_stems(outbound, rng));
         }
 
         for (peer, blobs) in self.zone.flush_fluff(now, false) {
@@ -174,7 +189,7 @@ impl Driver {
         rng: &mut R,
     ) -> Vec<Effect> {
         self.zone.start_epoch(now, rng);
-        self.update_stems(outbound, rng)
+        self.rebuild_stems(outbound, rng)
     }
 }
 

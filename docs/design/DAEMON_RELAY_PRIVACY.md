@@ -3698,6 +3698,42 @@ transactions to peers it had no business reaching. Only running the inherited
 suite against the new implementation found it, which is what "the C++ is the
 oracle until the corpus *is* the spec" means in practice.
 
+**A second dropped rule the oracle did *not* catch — the epoch rebuild.** The
+inherited epoch **replaced** the stem map outright (`start_epoch` built a fresh
+`connection_map{connections, count}`; `change_channels` assigned it over the old
+one), while the mid-epoch refresh **merged** into it
+(`connection_map::update`). Two operations. The port put both onto the merge, so
+after the first population the stem graph never rotated: successors persisted and
+every source stayed pinned to the slot it first drew, for the life of the
+process. That is the property epochs exist for, and the embargo derivation
+assumes it.
+
+All 33 gtests passed with the graph frozen, and passed again after the fix. They
+could not see it: `local_*` cycles roles until it observes both, and
+`start_epoch` *does* still re-draw `fluffing`, so role rotation looked healthy;
+`stem_mappings` asserts pinning holds *within* an epoch, which a frozen map
+satisfies more strongly than a correct one. The oracle asserted the axis the bug
+preserved and never the axis it broke — the same shape as the `private_*` rule,
+one layer deeper.
+
+It is now two methods, `Zone::update_stems` (merge) and `Zone::rebuild_stems`
+(rollover), because a single method whose behaviour depended on a width check is
+what let one silently stand in for the other. The witness is a rollover with an
+**unchanged** peer set — the one case the two disagree on — asserting that source
+pinning resets, since with two slots a re-draw may legitimately choose the same
+pair.
+
+**Honest scope, second entry: the production timer path is not exercised by the
+33.** Their `io_service_.poll()` runs only *ready* handlers, and the wake deadline
+is seconds to minutes out, so no gtest ever fires the wake — every one of them
+drives the zone through `run_fluff`/`run_epoch`, which force a step directly. So
+`next_wake() -> from_ms() -> fire -> poll() -> re-arm`, and the whole
+`pending_wakes` balance that stops a re-armed timer from re-arming itself
+forever, have **no C++-side coverage**. The suite not hanging is weak evidence
+that the millisecond round-trip is sane, and that is all it is. The FFI half is
+covered by `polling_at_the_reported_wake_time_releases_the_batch`; the asio half
+is not, and belongs to whatever round next touches that timer.
+
 ### 18.5 State inventory — single ownership, and why it outlives the seal question
 
 This section was written to price a seal-break that has since been **withdrawn**

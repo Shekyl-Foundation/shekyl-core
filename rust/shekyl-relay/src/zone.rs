@@ -151,7 +151,11 @@ impl Zone {
         let epoch = EpochScheduler::new(params).start(now, rng);
         Self {
             contexts: BTreeMap::new(),
-            map: StemMap::empty(),
+            // Built at full width with no peers rather than `StemMap::empty()`,
+            // so `update_stems` can grow into it. An empty map has no slots to
+            // fill, which is what forced the first-population special case that
+            // then swallowed the epoch rebuild.
+            map: StemMap::new(Vec::new(), stems, rng),
             fluff: FluffScheduler::memoryless(),
             fluffing: epoch.fluffing,
             epoch_ends_at: epoch.ends_at,
@@ -185,23 +189,45 @@ impl Zone {
         self.fluff.forget(*id);
     }
 
-    /// Re-point the stem map at the currently live outbound connections.
+    /// Merge the currently live outbound connections into the stem map,
+    /// **keeping** slots whose peer is still connected.
     ///
-    /// Returns whether downstream channels must be re-armed — the exact
-    /// predicate the inherited `connection_map::update` returned, carried
-    /// through as a type rather than a bare `bool`.
+    /// The mid-epoch refresh: the inherited `connection_map::update`, reached
+    /// through `update_channels::run`. Returns whether downstream channels must
+    /// be re-armed — the exact predicate that call returned, carried through as
+    /// a type rather than a bare `bool`.
+    ///
+    /// **Not what an epoch boundary does.** See [`Zone::rebuild_stems`]; the two
+    /// are separate methods because collapsing them freezes the stem graph, and
+    /// nothing about the merged result looks wrong when it happens.
     pub fn update_stems<R: RelayRng + ?Sized>(
         &mut self,
         outbound: Vec<ConnectionId>,
         rng: &mut R,
     ) -> StemSetChange {
-        if self.map.width() == 0 {
-            // First population: the map is built rather than merged, mirroring
-            // the inherited construction at epoch start.
-            self.map = StemMap::new(outbound, self.stems, rng);
-            return StemSetChange::Changed;
-        }
         self.map.update(outbound, rng)
+    }
+
+    /// Draw a wholly new stem set over `outbound` — what an epoch rollover does.
+    ///
+    /// The inherited `start_epoch` constructed a fresh
+    /// `connection_map{connections, count}` and `change_channels` assigned it
+    /// over the old one, so **both** the successors and every source's pinning
+    /// were re-drawn. That rotation is the reason epochs exist: it is what stops
+    /// a long-lived observer from correlating on a stable source -> successor
+    /// mapping, and the embargo derivation assumes it happens.
+    ///
+    /// Always [`StemSetChange::Changed`], matching `change_channels`
+    /// unconditionally calling `update_channels::post`: the slots are new even
+    /// when they name the same peers, and anything bound to them positionally
+    /// must be re-pointed.
+    pub fn rebuild_stems<R: RelayRng + ?Sized>(
+        &mut self,
+        outbound: Vec<ConnectionId>,
+        rng: &mut R,
+    ) -> StemSetChange {
+        self.map = StemMap::new(outbound, self.stems, rng);
+        StemSetChange::Changed
     }
 
     /// Begin a new epoch at `now`: re-draw the fluff/stem role and the end time.
@@ -383,6 +409,16 @@ impl Zone {
     /// §18.5 finding 3, the call whose direction the inventory reversed.
     pub fn stem_slots(&self) -> &[Option<ConnectionId>] {
         self.map.slots()
+    }
+
+    /// How many sources are currently pinned to a stem slot.
+    ///
+    /// Derived from the map's per-slot usage counts, so it is a read rather than
+    /// a second copy. Exists to witness that an epoch rollover *resets* pinning:
+    /// nothing else distinguishes a rebuilt map from a merged one when the peer
+    /// set has not changed, and that difference is the whole point of an epoch.
+    pub fn pinned_sources(&self) -> usize {
+        self.map.usage().iter().sum()
     }
 
     /// Peers currently known to the zone.
@@ -747,6 +783,58 @@ mod tests {
             z.plan_relay(None, true, &mut rng),
             RelayPlan::Stem(_)
         ));
+    }
+
+    #[test]
+    fn an_epoch_rollover_rebuilds_the_stem_map_rather_than_merging_into_it() {
+        // The inherited epoch REPLACED the map outright — `start_epoch` built a
+        // fresh `connection_map{connections, count}` and `change_channels` did
+        // `zone_->map = std::move(map_)`. Mid-epoch refresh was a different
+        // operation: `connection_map::update`, a merge that keeps live slots in
+        // place. Porting both onto the merge silently freezes the stem graph:
+        // successors never rotate and every source stays pinned to the slot it
+        // first drew, for the life of the process.
+        //
+        // That is the property epochs exist for, and it is load-bearing for the
+        // embargo derivation, which assumes a source's stem successor changes
+        // between epochs. A frozen graph gives a long-lived observer a stable
+        // source->successor mapping to correlate on.
+        //
+        // The discriminator is a rollover with an UNCHANGED peer set, because
+        // that is the case the two operations disagree on: a merge finds every
+        // slot still live and does nothing, a rebuild re-draws. Asserting that
+        // the chosen peers differ would not work — with two slots a re-draw can
+        // legitimately land on the same pair — so this asserts on pinning, which
+        // a rebuild always clears and a merge always keeps.
+        let mut rng = SplitMix64::new(88);
+        let mut z = zone(&mut rng);
+        let peers = vec![id(1), id(2), id(3), id(4)];
+        assert_eq!(
+            z.update_stems(peers.clone(), &mut rng),
+            StemSetChange::Changed
+        );
+
+        let _ = z.stem_for(Some(id(9)), &mut rng);
+        let _ = z.stem_for(None, &mut rng);
+        assert_eq!(
+            z.pinned_sources(),
+            2,
+            "fixture: two sources pinned this epoch"
+        );
+
+        z.start_epoch(0, &mut rng);
+        assert_eq!(
+            z.rebuild_stems(peers, &mut rng),
+            StemSetChange::Changed,
+            "a rollover re-draws the stem set even when every peer is still \
+             connected — if this reports Unchanged, the epoch merged instead of \
+             rebuilding and the stem graph is frozen"
+        );
+        assert_eq!(
+            z.pinned_sources(),
+            0,
+            "a new epoch starts with no source pinned to any slot"
+        );
     }
 
     #[test]
