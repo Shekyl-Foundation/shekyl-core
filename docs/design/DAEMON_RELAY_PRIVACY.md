@@ -1800,7 +1800,7 @@ reasons — *and a refuted one I record so it is not re-argued*:
 > [`stem_map.rs`](../../rust/shekyl-relay-privacy/src/stem_map.rs), the cached
 > `in_mapping_[source]` is its `inbound` map, and the caller that would choose
 > the alternate is `Zone::plan_relay` in
-> [`zone.rs`](../../rust/shekyl-relay/src/zone.rs). **The line numbers below are
+> [`zone.rs`](../../rust/shekyl-relay/src/zone/mod.rs). **The line numbers below are
 > kept as written** — they record what was verified at the time, and rewriting
 > them would silently re-attribute that verification to code nobody checked.
 > RP-2b re-grounds against the Rust source.
@@ -3869,3 +3869,78 @@ inventoried before it is written, with a named single owner. "Nothing straddles"
 is what keeps the one genuinely cross-thread fact publishable rather than shared,
 and what will make the eventual reactor move a non-event — so it is maintained
 deliberately rather than assumed to persist.
+
+---
+
+## 19. RP-2b design round — the churn-stable alternate (W3c) and Q-10 selection
+
+Short design leading the RP-2b implementation commits on
+`feat/rp2b-churn-stable-alternate`.
+
+RP-2b is the round §12.5 named a **spec gap** for, and it is the last named gap in
+this arc: F-1…F-5 all closed (RP-1 measurement, RP-4 embargo, RP-3a scheduler).
+Nothing here is genesis-blocking — relay timing is node-local policy, not
+consensus — but W3c is a defect in the design's own terms rather than a
+consolidation, which is why it precedes RP-3b's covert-channel port.
+
+### 19.1 Re-census — the anchors §§12.8–12.11 rest on, re-verified at source
+
+§12.11's handoff makes this the round's **first move**, in its own words: *"§§12.8
+–12.11 are grounded against `get_stem` / `out_mapping_` / the embargo-disarm
+behaviour of a dev tree that will have moved by the time RP-2 begins… Re-verify
+them at source before building on them."*
+
+That instruction has since become an understatement. RP-3a **rewrote
+`levin_notify.cpp` end to end and deleted `src/net/dandelionpp.{h,cpp}`**, so
+every one of the eleven `levin_notify.cpp` line anchors and the two
+`dandelionpp.cpp` anchors below points at something that has moved or no longer
+exists. The line numbers are stale by construction. The question this census
+answers is not "do the lines still resolve" but **"is the claim still true, and
+where does the fact live now."**
+
+| # | §12.x claim | Anchor as written | Status | Where the fact lives now |
+| --- | --- | --- | --- | --- |
+| G-1 | Stem *selection* is public/clearnet-zone only; Tor has no occupancy mechanism | `send_txs` `levin_notify.cpp:829-851, 866-872` | **holds** | `send_txs` `:963-1017` — the noise branch still short-circuits before the Dandelion++ branch, so a noise zone never reaches `dandelionpp_notify` |
+| G-1 | *"good protection against ISP adversaries, but not sybil adversaries"* | `:829` | **holds, verbatim** | `:974-976` |
+| G-1 | `MWARNING("Dandelion++ stem not supported over noise networks")` is the fork point | `:849` | **holds, verbatim** | `:994` |
+| G-1 | The reference's stated obstacle is fork-reconciliation bookkeeping | `:836-838` | **holds, verbatim** | `:981-983` |
+| G-2a | Epoch boundary **replaces** the whole map with a fresh rebuild | `change_channels` `:587-617` | **holds — and was briefly violated** | `Zone::rebuild_stems` (`zone/mod.rs`). RP-3a first ported this onto the *merge* path, freezing the stem graph; caught and fixed in `d7096527a`, witness `an_epoch_rollover_rebuilds_the_stem_map_rather_than_merging_into_it` |
+| G-2b | Mid-epoch churn fresh-draws the churned slot | `update_channels::run` → `map.update()` `:528-536`, `dandelionpp.cpp:160` | **holds — mechanism unchanged** | `Zone::update_stems` → `StemMap::update` (`stem_map.rs`). **This is the W3c gap's site.** |
+| G-2b | Trigger: stem-send-failure retry | `dandelionpp_notify:575` | **holds, restructured** | `dandelionpp_notify` `:745-751` — plus a *new* earlier trigger, below |
+| G-2b | Trigger: `new_out_connection` | `net_node.inl:1349` | **holds, but noise-only** | `notify::new_out_connection` early-returns on `noise.empty()`, so on the **clearnet path where stem selection actually happens (G-1) this trigger never fires**. It was already noise-only pre-RP-3a; the design's trigger list reads as though both fire on the path W3c is about. |
+| G-3 | Stem pool is all synced outbound, anchors included | `get_out_connections:142-159` | **holds** | `:186-192` |
+| G-4 | Anchor admission is any successful outbound handshake, no behavioural criterion | `net_node.inl:1347` | **holds, line exact** | unchanged — RP-3a did not touch `net_node.inl` |
+| G-4 | On reconnect the 2 anchor slots fill first | `net_node.inl:1820` | **holds, line exact** | unchanged |
+| §12.6 | Fluff is transport-gated: on Tor it fluffs outbound-only | `fluff_notify` `:448` | **holds — moved languages** | `FluffReach::OutboundOnly` (`zone/mod.rs`). RP-3a dropped this rule and the eight `private_*` gtests caught it; restored with `a_private_zone_fluffs_only_to_outbound_peers` |
+| — | `send_noise` pads every channel to a constant rate on its own timer | `:663` | **holds** | `:780`, `:811` |
+
+**Two findings from the census, neither of which is a line-number update.**
+
+**C-1 — a new mid-epoch re-roll trigger exists that the design does not model.**
+RP-3a's review round added `Zone::plan_relay_with_refresh`, which merges the
+current outbound set into the map on **any** `NoRoute` and re-plans, before the
+transport retry. That was the right move for its own reasons — it keeps
+"empty/stale map ⇒ refresh" as zone logic rather than shim logic — but it means
+the clearnet re-roll surface is now *two* triggers deep (`NoRoute` refresh, then
+send-failure refresh) where §12.6 models one. W3c's requirement is that the
+alternate be **stable across churn refill**; a second refresh path is a second
+place for the alternate to be re-rolled, so the churn-stability property must be
+specified against `StemMap::update` itself rather than against any one caller.
+That is the safer place for it regardless — callers multiply, the mechanism does
+not.
+
+**C-2 — `new_out_connection` does not fire on the path W3c is about.** The design
+lists it beside the send-failure retry as though both drive clearnet churn refill.
+It is guarded by `noise.empty()` and so is a no-op on public zones. This does not
+weaken W3c — the send-failure retry *is* the black-hole-correlated trigger, and it
+fires — but it removes one of the two triggers from the clearnet picture, which
+matters when sizing how often an adversary can induce a re-roll. **The
+inducement budget is smaller than the design's trigger list implies.**
+
+**What this census does not re-open.** The `ε → distinct-peers` and top-2-share
+numbers are in-crate measurements over `StemMap`, not over the C++ that moved;
+RP-3a ported that logic faithfully (the six `dandelionpp_map` gtests passed
+unchanged against it before they were retired), so those numbers stand. The
+remaining §12.11 owes — the genuine background-failure rate, and the
+cooldown/threshold sweep as a **reopen-checkpoint rather than a confirm-only
+sweep** — are untouched by RP-3a and carry forward as written.
