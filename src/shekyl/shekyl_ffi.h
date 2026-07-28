@@ -2976,6 +2976,65 @@ uint64_t shekyl_dandelionpp_embargo_draw_seconds(void);
 /// sender then releases the inputs it had reserved.
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 
+
+// ── Live relay zone (RP-3a, DAEMON_RELAY_PRIVACY.md sec 18) ────────────────
+//
+// The Dandelion++ scheduler: epoch role, stem routing, and per-peer fluff
+// batching. `levin_notify` forwards here and keeps transport — epee framing,
+// padding, the socket — so transaction bodies cross only as opaque blobs.
+//
+// RP-3a adds NO reactor. Rust owns the state and every timing DECISION; the
+// existing boost::asio timer is armed from shekyl_relay_zone_next_wake() and
+// owns the SLEEP. That is what the crate's reason-2 seal prescribes, so this
+// boundary is seal-consistent rather than seal-breaking.
+//
+// Effects are delivered through per-variant CALLBACKS rather than a marshalled
+// enum: dispatch happens in Rust where the compiler checks the match, so the
+// C++ side has no tag, no offsets and no decoding to get wrong (sec 18.4a).
+//
+// Rust twins: rust/shekyl-ffi/src/relay_zone_ffi.rs.
+
+struct RelayZoneHandle;
+
+//! One blob of a released fluff batch. Called once per blob.
+typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
+                                   const std::uint8_t* blob, std::size_t blob_len);
+//! The stem slots changed: `count` x 16 bytes, slot order, nil for an empty
+//! slot. Order and nil-position are load-bearing — the consumer indexes by slot.
+typedef void (*ShekylRelaySlotsCb)(void* ctx, const std::uint8_t* slots, std::size_t count);
+
+//! Open a zone. Release with shekyl_relay_zone_free. Null if stems == SIZE_MAX.
+RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems);
+//! Free a zone. Null is a no-op; free exactly once.
+void shekyl_relay_zone_free(RelayZoneHandle* handle);
+//! A peer completed its handshake.
+void shekyl_relay_zone_on_handshake(RelayZoneHandle* handle, const std::uint8_t* id, bool is_income);
+//! A peer disconnected.
+void shekyl_relay_zone_on_close(RelayZoneHandle* handle, const std::uint8_t* id);
+//! Stem slots backed by a live peer — the inherited `connection_count`. Reads a
+//! single-writer atomic, so it is safe from any thread.
+std::size_t shekyl_relay_zone_live_stems(const RelayZoneHandle* handle);
+//! Earliest time the zone has work; what the asio timer is armed against.
+std::uint64_t shekyl_relay_zone_next_wake(const RelayZoneHandle* handle);
+//! Stem (writing the successor to out_dest, returns true) or fluff (false).
+bool shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::uint8_t* source,
+                                  bool local_origin, std::uint8_t* out_dest);
+//! Accept one blob for fluffing to every peer but `source`.
+void shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
+                                   const std::uint8_t* blob, std::size_t blob_len,
+                                   const std::uint8_t* source);
+//! Run every step due at now_ms, delivering results through the callbacks.
+void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms,
+                            const std::uint8_t* outbound, std::size_t n, void* ctx,
+                            ShekylRelayFluffCb on_fluff, ShekylRelaySlotsCb on_slots);
+//! Release every pending fluff batch — what notify::run_fluff() drives.
+void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
+                                   void* ctx, ShekylRelayFluffCb on_fluff);
+//! Start a new epoch immediately — what notify::run_epoch() drives.
+void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms,
+                                   const std::uint8_t* outbound, std::size_t n,
+                                   void* ctx, ShekylRelaySlotsCb on_slots);
+
 } // extern "C"
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and
