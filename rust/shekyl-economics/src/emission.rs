@@ -170,6 +170,7 @@ mod tests {
         // of the C++ connect path.
         use crate::burn::compute_burn_split;
         use crate::emission_share::{calc_effective_emission_share, split_block_emission};
+        use crate::escalation::ScaledShare;
         use crate::params::SCALE;
         use crate::release::{apply_release_multiplier, calc_release_multiplier};
 
@@ -235,13 +236,14 @@ mod tests {
                 // Q_miner_coinbase = Q_miner_base + miner fee income. Fee-free block
                 // (the Layer-3 scenario) collapses to Q_miner_base; a fee-bearing
                 // block adds the burn miner leg.
+                let floor_share = ScaledShare::from_raw(p.staker_pool_share);
                 assert_eq!(
                     q_miner_base,
-                    q_miner_base + compute_burn_split(0, 0, p.staker_pool_share).miner_fee_income,
+                    q_miner_base + compute_burn_split(0, 0, floor_share).miner_fee_income,
                     "fee-free Q_miner_coinbase must equal Q_miner_base at ag={ag} h={h}"
                 );
                 let fees = 1_000_000_000_u64;
-                let burn = compute_burn_split(fees, p.burn_cap, p.staker_pool_share);
+                let burn = compute_burn_split(fees, p.burn_cap, floor_share);
                 let q_miner_coinbase = q_miner_base + burn.miner_fee_income;
                 assert!(
                     q_miner_coinbase >= q_miner_base && burn.miner_fee_income <= fees,

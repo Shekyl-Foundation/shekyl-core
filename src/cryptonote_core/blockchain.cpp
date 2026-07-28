@@ -1630,8 +1630,45 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   return true;
 }
 //------------------------------------------------------------------
+// D2 escalation operand read-point (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
+// §6.2): n = frozen_segment_count at PARENT-block state, derived from the
+// curve-tree leaf count. add_block advances the chain height and grows the
+// tree in the same write txn, and pop_block trims both in the same write txn
+// (see the pop invariant comment in blockchain_db.cpp), so
+// m_db->height() == block_height is EQUIVALENT to "the tree has not yet grown
+// for this block" — the leaf count read below is the parent's, by
+// construction, on every surviving path (the prev_block template path that
+// could not satisfy this was deleted; see create_block_template).
+//
+// The check is load-bearing at CONNECT: handle_block_to_main_chain computes n
+// before validate_miner_transaction and m_db->add_block, and a refactor that
+// moves the read past add_block (the M3-1 cached-counter drift class) must
+// stop the node here, not skew the split. The teeth depend on the OPERAND,
+// not just the call site: block_height must be a height captured BEFORE
+// add_block (connect passes its blockchain_height snapshot). "Simplifying"
+// the call to parent_frozen_segment_count(m_db->height()) makes the check a
+// permanent tautology — it still looks correct and still passes every test,
+// while the reordering it exists to catch becomes undetectable. Do not pass a
+// fresh m_db->height() at a load-bearing site. At TEMPLATE build it is a tripwire
+// only — create_block_template sets height = m_db->height() itself, so the
+// guarantee there comes from using the same expression, not from this check;
+// its value is refusing any future reintroduction of a non-tip parent, which
+// is exactly how the deleted prev_block path would have violated it.
+uint64_t Blockchain::parent_frozen_segment_count(uint64_t block_height) const
+{
+  LOG_PRINT_L3("Blockchain::" << __func__);
+  CRITICAL_REGION_LOCAL(m_blockchain_lock);
+  const uint64_t db_height = m_db->height();
+  CHECK_AND_ASSERT_THROW_MES(db_height == block_height,
+    "escalation operand read-point violated: template and connect must read "
+    "n = frozen_segment_count at the same parent state, but m_db->height() ("
+    << db_height << ") != block_height (" << block_height
+    << ") — the curve tree has already grown past this block's parent");
+  return shekyl_archival_frozen_segment_count(m_db->get_curve_tree_leaf_count());
+}
+//------------------------------------------------------------------
 // This function validates the miner transaction reward
-bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version)
+bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   const uint64_t block_height = std::get<txin_gen>(b.miner_tx.vin[0]).height;
@@ -1672,8 +1709,11 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height, genesis_ng_height, version);
   uint64_t miner_base_reward = em_split.miner_emission;
 
-  // Component 2: fee burn split — miner only receives miner_fee_income
-  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, version);
+  // Component 2: fee burn split — miner only receives miner_fee_income.
+  // frozen_segment_count is the caller's parent-state read (the asserting
+  // read-point above); the escalated share cannot reach miner_fee_income
+  // (§12.11.1 Leg 1), so this stays the security-budget-preserving split.
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, frozen_segment_count, version);
   uint64_t effective_fee = burn.miner_fee_income;
 
   if(miner_base_reward + effective_fee < money_in_use)
@@ -1777,7 +1817,7 @@ uint64_t Blockchain::get_current_cumulative_block_weight_median() const
 // in a lot of places.  That flag is not referenced in any of the code
 // nor any of the makefiles, howeve.  Need to look into whether or not it's
 // necessary at all.
-bool Blockchain::create_block_template(block& b, const crypto::hash *from_block, const account_public_address& miner_address, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash)
+bool Blockchain::create_block_template(block& b, const account_public_address& miner_address, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   size_t median_weight;
@@ -1789,7 +1829,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
   m_tx_pool.lock();
   const auto unlock_guard = epee::misc_utils::create_scope_leave_handler([&]() { m_tx_pool.unlock(); });
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
-  if (m_btc_valid && !from_block) {
+  if (m_btc_valid) {
     // The pool cookie is atomic. The lack of locking is OK, as if it changes
     // just as we compare it, we'll just use a slightly old template, but
     // this would be the case anyway if we'd lock, and the change happened
@@ -1808,87 +1848,18 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
       seed_hash = m_btc_seed_hash;
       return true;
     }
-    MDEBUG("Not using cached template: address " << (miner_address == m_btc_address) << ", nonce " << (m_btc_nonce == ex_nonce) << ", cookie " << (m_btc_pool_cookie == m_tx_pool.cookie()) << ", from_block " << (!!from_block));
+    MDEBUG("Not using cached template: address " << (miner_address == m_btc_address) << ", nonce " << (m_btc_nonce == ex_nonce) << ", cookie " << (m_btc_pool_cookie == m_tx_pool.cookie()));
     invalidate_block_template_cache();
   }
 
-  if (from_block)
-  {
-    //build alternative subchain, front -> mainchain, back -> alternative head
-    //block is not related with head of main chain
-    //first of all - look in alternative chains container
-    alt_block_data_t prev_data;
-    bool parent_in_alt = m_db->get_alt_block(*from_block, &prev_data, NULL);
-    bool parent_in_main = m_db->block_exists(*from_block);
-    if (!parent_in_alt && !parent_in_main)
-    {
-      MERROR("Unknown from block");
-      return false;
-    }
-
-    //we have new block in alternative chain
-    std::list<block_extended_info> alt_chain;
-    block_verification_context bvc = {};
-    std::vector<uint64_t> timestamps;
-    if (!build_alt_chain(*from_block, alt_chain, timestamps, bvc))
-      return false;
-
-    if (parent_in_main)
-    {
-      cryptonote::block prev_block;
-      CHECK_AND_ASSERT_MES(get_block_by_hash(*from_block, prev_block), false, "From block not found"); // TODO
-      uint64_t from_block_height = cryptonote::get_block_height(prev_block);
-      height = from_block_height + 1;
-      seed_height = shekyl_pow_randomx_v2_seedheight(height);
-      seed_hash = get_block_id_by_height(seed_height);
-    }
-    else
-    {
-      height = alt_chain.back().height + 1;
-      seed_height = shekyl_pow_randomx_v2_seedheight(height);
-
-      if (alt_chain.size() && alt_chain.front().height <= seed_height)
-      {
-        for (auto it=alt_chain.begin(); it != alt_chain.end(); it++)
-        {
-          if (it->height == seed_height+1)
-          {
-            seed_hash = it->bl.prev_id;
-            break;
-          }
-        }
-      }
-      else
-      {
-        seed_hash = get_block_id_by_height(seed_height);
-      }
-    }
-    b.major_version = m_hardfork->get_ideal_version(height);
-    b.minor_version = m_hardfork->get_ideal_version();
-    b.prev_id = *from_block;
-
-    // cheat and use the weight of the block we start from, virtually certain to be acceptable
-    // and use 1.9 times rather than 2 times so we're even more sure
-    if (parent_in_main)
-    {
-      median_weight = m_db->get_block_weight(height - 1);
-      already_generated_coins = m_db->get_block_already_generated_coins(height - 1);
-    }
-    else
-    {
-      median_weight = prev_data.cumulative_weight - prev_data.cumulative_weight / 20;
-      already_generated_coins = alt_chain.back().already_generated_coins;
-    }
-
-    // FIXME: consider moving away from block_extended_info at some point
-    block_extended_info bei = {};
-    bei.bl = b;
-    bei.height = alt_chain.size() ? prev_data.height + 1 : m_db->get_block_height(*from_block) + 1;
-
-    diffic = get_next_difficulty_for_alternative_chain(alt_chain, bei);
-  }
-  else
-  {
+  // DRS/Stage-3a: the from_block (prev_block) template path was DELETED.
+  // It built on a caller-specified parent, which could be an alt-chain block,
+  // so m_db->height() != height there -- and there is no height-indexed curve
+  // leaf count, so that path had no way to read its own parent's
+  // frozen_segment_count for the D2 escalation. Templates now always extend the
+  // tip, which makes m_db->height() == height an assertable precondition on
+  // every surviving path. The RPC refuses prev_block loudly rather than
+  // silently building on the tip. Reopen: see docs/FOLLOWUPS.md.
     height = m_db->height();
     b.major_version = m_hardfork->get_current_version();
     b.minor_version = m_hardfork->get_ideal_version();
@@ -1898,7 +1869,6 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
     already_generated_coins = m_db->get_block_already_generated_coins(height - 1);
     seed_height = shekyl_pow_randomx_v2_seedheight(height);
     seed_hash = get_block_id_by_height(seed_height);
-  }
   b.timestamp = time(NULL);
 
   uint64_t median_ts;
@@ -1969,7 +1939,12 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
   const uint64_t tx_volume_avg = get_tx_volume_avg(height);
   const uint64_t circulating_supply = already_generated_coins;
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, genesis_ng_height);
+  // D2 escalation operand, computed ONCE and passed to BOTH construct_miner_tx
+  // calls: the retry below re-prices the coinbase after the weight changes, and
+  // a second read there could price against a different n than the first pass
+  // (criterion #1 — template and connect must agree by construction).
+  const uint64_t frozen_segment_count = parent_frozen_segment_count(height);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, genesis_ng_height);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1978,7 +1953,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, genesis_ng_height);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, genesis_ng_height);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     size_t coinbase_weight = get_transaction_weight(b.miner_tx);
@@ -2028,17 +2003,12 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
       std::memcpy(&b.curve_tree_root, root_bytes.data(), root_bytes.size());
     }
 
-    if (!from_block)
-      cache_block_template(b, miner_address, ex_nonce, diffic, height, expected_reward, seed_height, seed_hash, pool_cookie);
+    // Always cacheable now: every template extends the tip (from_block deleted).
+    cache_block_template(b, miner_address, ex_nonce, diffic, height, expected_reward, seed_height, seed_hash, pool_cookie);
     return true;
   }
   LOG_ERROR("Failed to create_block_template with " << 10 << " tries");
   return false;
-}
-//------------------------------------------------------------------
-bool Blockchain::create_block_template(block& b, const account_public_address& miner_address, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash)
-{
-  return create_block_template(b, NULL, miner_address, diffic, height, expected_reward, ex_nonce, seed_height, seed_hash);
 }
 //------------------------------------------------------------------
 bool Blockchain::get_miner_data(uint8_t& major_version, uint64_t& height, crypto::hash& prev_id, crypto::hash& seed_hash, difficulty_type& difficulty, uint64_t& median_weight, uint64_t& already_generated_coins, std::vector<tx_block_template_backlog_entry>& tx_backlog)
@@ -6058,7 +6028,12 @@ leave:
   TIME_MEASURE_START(vmt);
   uint64_t base_reward = 0;
   uint64_t already_generated_coins = blockchain_height ? m_db->get_block_already_generated_coins(blockchain_height - 1) : 0;
-  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version()))
+  // D2 escalation operand, read ONCE at parent state (the helper throws if the
+  // tree has already grown for this block) and shared by the money check below
+  // and the staker-inflow accrual — the same single-read discipline as
+  // base_reward (F-B1c): verify's operand IS the accrual's operand.
+  const uint64_t frozen_segment_count = parent_frozen_segment_count(blockchain_height);
+  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), frozen_segment_count))
   {
     MERROR_VER("Block with id: " << id << " has incorrect miner transaction");
     bvc.m_verifivation_failed = true;
@@ -6139,7 +6114,7 @@ leave:
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
         fee_summary, get_tx_volume_avg(blockchain_height), already_generated_coins,
-        connect_hf_version);
+        frozen_segment_count, connect_hf_version);
 
     archival_budget_accrual = em_split.staker_emission + burn.staker_pool_amount;
     block_burn_amount = burn.actually_destroyed;

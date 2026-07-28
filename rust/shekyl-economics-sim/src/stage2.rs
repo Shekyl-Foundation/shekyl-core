@@ -26,7 +26,7 @@ use shekyl_economics::{
     calc_effective_emission_share, calc_release_multiplier,
     params::{mul_scale, EconomicParams, SCALE},
     release::apply_release_multiplier,
-    split_block_emission,
+    split_block_emission, ScaledShare,
 };
 
 use crate::burden::{
@@ -187,6 +187,9 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
         final_subsidy_per_minute: params.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
+        // Escalation numerics come from the shipped config: the sim must never
+        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
+        ..EconomicParams::default()
     };
     let total_blocks = params.blocks_per_year * config.sim_years;
     let money_supply = u128::from(params.money_supply);
@@ -240,9 +243,14 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         let total_fees = (u128::from(tx_volume) * u128::from(config.fee_per_tx))
             .min(u128::from(u64::MAX)) as u64;
         // share = SCALE → the whole burn (pre-split); the candidate re-splits it.
-        let whole_burn = compute_burn_split(total_fees, burn_pct, SCALE).staker_pool_amount;
+        let whole_burn = compute_burn_split(total_fees, burn_pct, ScaledShare::from_raw(SCALE))
+            .staker_pool_amount;
         // Flat-ledger advance: destroy at the shipped 25% split.
-        let flat = compute_burn_split(total_fees, burn_pct, params.staker_pool_share);
+        let flat = compute_burn_split(
+            total_fees,
+            burn_pct,
+            ScaledShare::from_raw(params.staker_pool_share),
+        );
 
         year_emission_atomic += u128::from(staker_emission);
         year_burn_atomic += u128::from(whole_burn);
@@ -1291,6 +1299,9 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
             emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
             final_subsidy_per_minute: params.final_subsidy_per_minute,
             daa_target_seconds: EconomicParams::default().daa_target_seconds,
+            // Escalation numerics come from the shipped config: the sim must never
+            // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
+            ..EconomicParams::default()
         };
         let br = base_block_reward(params.money_supply / 2, &econ).unwrap_or(0);
         crate::swing::a6_report(out, &ESCALATION_PREVIEW_N, br)?;

@@ -47,6 +47,38 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Daemon chain store (`DRS-*`) — gap-close pass landed in design.** SoT:
+  [`docs/design/DAEMON_REDB_STORE.md`](./design/DAEMON_REDB_STORE.md).
+  **Tier A success criteria** (mission-ordered: journals, digest, warts,
+  durability, resource bounds, IBD floor, cross-store KAT, CI, surfaces,
+  reconstructible state) make Shekyl better **engine-agnostically**; Tier B
+  is pure-Rust/Path B. **D2-reopen = first-class Tier-A LMDB genesis**, not
+  a scar. DRS-0 blocked on **P0a–P0d** multi-PR envelope. **May start now:**
+  P0a–d, BENCH, C (bandwidth). **Target: V3.0**.
+
+- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI; **P0b**
+  atomicity+journals+RAW + **transcribe** height bases (hook vs block-index),
+  revert partial-order table, write-txn assertions (findings A-2/A-4/A-6);
+  **P0c** FIX-IN-CPP: drain **TreePosition** journal (A-3), dense-seq →
+  range scan (A-5), `hf_versions`; **A-1 pure-virtual hooks** (first P0c
+  PR, branch off `dev` — not applied on design-session `dev`); **P0d**
+  digest v0 — expand archival journals **before** S-ARCH port. S0 preempts
+  wallet priority. **Target: V3.0**.
+
+- **DRS-BENCH — resource/privacy/IBD/pop suite (not throughput).** File
+  growth over multi-year cadence, free-page reclamation under long-lived
+  readers, peak RSS under attacker-shaped input, pop depth wall time, IBD
+  to reference height. **Throughput vs LMDB not measured** (steady-state
+  network-bound). Artifacts in-tree with **durability config recorded**;
+  none exist on `dev` today. Gates DRS-D6. **Target: V3.0** (parallel with
+  wallet 2b).
+
+- **DRS-D3c — cross-store leaf/position KAT.** Daemon vs wallet LeafStore:
+  same fixture chain, output index *N* → identical tree position + 128-byte
+  leaf encoding. Encodings single-sourced (`shekyl-fcmp` / wire); stores
+  deliberately separate (opposed threat models). No shared redb-helpers
+  crate. **Target: V3.0** (with DRS-E3 / curve client).
+
 - **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with
   reopen (d).** The sliding-window m-of-n itself is **BUILT** (PR #368,
   `shekyl-archival-retention/src/failure_window.rs`; `FAILURE_WINDOW_M/N`
@@ -143,6 +175,31 @@ sustainability is unaffected by the recalibration.
   *oscillation* — which would be real harm — is impossible, since
   `revert_archival_segment_freezes` is the only writer deleting segment rows and
   fires only on block pop. **Stage 3 now has NO outstanding hard inputs.**
+- **`prev_block` block templates deleted (RESERVED at the RPC) — reopen has a
+  named implementation** (added 2026-07-27, Stage 3a,
+  `feat/stage3-escalation-shape`). The `from_block` template path let a caller
+  build on a specified parent, which could be an **alt-chain** block — so
+  `m_db->height() != height` there, and **`get_curve_tree_leaf_count()` is
+  current-only** (only the curve *root* is height-indexed, via
+  `get_curve_tree_root_at_height`). That path therefore had **no way to read its
+  own parent's `frozen_segment_count`**, which is the D2 escalation's operand.
+  Inert while the escalation is genesis-neutral (`asymptote ==
+  staker_pool_share`), but the moment the ceremony raises the asymptote it
+  becomes a **mining-liveness bug**: a template priced against the wrong `n`
+  fails its own `validate_miner_transaction` check, so honest miners produce
+  invalid blocks. Deleted under rule 16 (user-absent inversion — pre-genesis, no
+  pool operator requires it; one asked did not know the field). **The RPC keeps
+  the `prev_block` field and refuses it loudly** rather than dropping it: epee
+  ignores unknown fields, so *removing* the field would make a Monero-lineage
+  pool stack that still sends it silently receive a tip-built template — a wrong
+  answer to a precise question, surfacing as an unexplained orphan rate.
+  **Reopen trigger:** a pool operator with a *stated requirement* for
+  `prev_block` templates. **Reopen implementation (decided, do not re-derive):**
+  store a **height-indexed curve leaf count** alongside the existing
+  root-at-height row, so an alt parent can read its own `n`; that carries a
+  **rule-42** obligation (persisted schema). With it, `m_db->height() ==
+  block_height` stops being the only way to prove parent-state and the path can
+  return. Target: post-genesis unless a consumer appears.
 - **~~KEM-ciphertext extra packing mismatch — vout ≥ 1 unscannable in
   production-built transactions~~** **CLOSED 2026-07-25**
   (`fix/kem-extra-packing`): landed exactly per the fix direction below

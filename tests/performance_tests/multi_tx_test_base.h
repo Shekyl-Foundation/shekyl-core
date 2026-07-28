@@ -57,7 +57,7 @@ public:
     {
       m_miners[i].generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
 
-      if (!construct_miner_tx(0, 0, 0, 2, 0, m_miners[i].get_keys().m_account_address, m_miner_txs[i]))
+      if (!construct_miner_tx(0, 0, 0, 2, 0, /*frozen_segment_count=*/0, m_miners[i].get_keys().m_account_address, m_miner_txs[i]))
         return false;
 
       crypto::public_key tx_out_key;

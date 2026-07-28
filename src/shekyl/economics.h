@@ -32,10 +32,16 @@ struct BurnResult {
     uint64_t actually_destroyed;
 };
 
+// frozen_segment_count is the D2 escalation operand n, read at PARENT-block
+// state (Blockchain::parent_frozen_segment_count is the asserting read-point;
+// see the FFI contract on shekyl_compute_burn_split_escalated). The share it
+// selects is Rust-owned — derived in shekyl-economics from the shipped
+// EconomicParams — so no share constant crosses this boundary.
 inline BurnResult compute_fee_burn(
     uint64_t total_fees,
     uint64_t tx_volume,
     uint64_t circulating_supply,
+    uint64_t frozen_segment_count,
     uint8_t hf_version)
 {
     if (hf_version < HF_VERSION_SHEKYL_NG || total_fees == 0)
@@ -51,8 +57,8 @@ inline BurnResult compute_fee_burn(
         SHEKYL_BURN_BASE_RATE,
         SHEKYL_BURN_CAP);
 
-    ShekylBurnSplit split = shekyl_compute_burn_split(
-        total_fees, burn_pct, SHEKYL_STAKER_POOL_SHARE);
+    ShekylBurnSplit split = shekyl_compute_burn_split_escalated(
+        total_fees, burn_pct, frozen_segment_count);
 
     return {split.miner_fee_income, split.staker_pool_amount, split.actually_destroyed};
 }

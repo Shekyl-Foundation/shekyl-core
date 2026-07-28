@@ -636,19 +636,75 @@ pub struct ShekylBurnSplit {
     pub actually_destroyed: u64,
 }
 
-/// Compute the three-way fee split for a block.
+/// Pack a Rust [`BurnSplit`] for the C ABI — single packing site for both
+/// burn-split exports so field order cannot drift between them.
+fn burn_split_to_c(split: shekyl_economics::BurnSplit) -> ShekylBurnSplit {
+    ShekylBurnSplit {
+        miner_fee_income: split.miner_fee_income,
+        staker_pool_amount: split.staker_pool_amount,
+        actually_destroyed: split.actually_destroyed,
+    }
+}
+
+/// Compute the three-way fee split for a block, with a caller-supplied flat
+/// share.
+///
+/// Consensus C++ no longer calls this (Stage 3b routes every burn split
+/// through [`shekyl_compute_burn_split_escalated`]); it is retained as the
+/// differential oracle for the genesis-neutrality pin. It holds no share
+/// constant of its own (the share is an argument), so keeping it duplicates no
+/// fact.
 #[no_mangle]
 pub extern "C" fn shekyl_compute_burn_split(
     total_fees: u64,
     burn_pct: u64,
     staker_pool_share: u64,
 ) -> ShekylBurnSplit {
-    let split = shekyl_economics::burn::compute_burn_split(total_fees, burn_pct, staker_pool_share);
-    ShekylBurnSplit {
-        miner_fee_income: split.miner_fee_income,
-        staker_pool_amount: split.staker_pool_amount,
-        actually_destroyed: split.actually_destroyed,
-    }
+    use shekyl_economics::{compute_burn_split, ScaledShare};
+    burn_split_to_c(compute_burn_split(
+        total_fees,
+        burn_pct,
+        ScaledShare::from_raw(staker_pool_share),
+    ))
+}
+
+/// Compute the three-way fee split with the **D2-escalated** staker share.
+///
+/// Thin FFI over the canonical Rust entry
+/// [`shekyl_economics::compute_burn_split_at`]. `frozen_segment_count` is the
+/// burden operand `n`, read **at parent-block state** (M3-1 cached-counter
+/// drift class). Numerics stay in shipped `EconomicParams`.
+///
+/// **The share cannot reach `miner_fee_income`** (§12.11.1 Leg 1). At the
+/// genesis-neutral parameterization this is bit-identical to
+/// [`shekyl_compute_burn_split`] with the flat constant, for every `n`.
+#[no_mangle]
+pub extern "C" fn shekyl_compute_burn_split_escalated(
+    total_fees: u64,
+    burn_pct: u64,
+    frozen_segment_count: u64,
+) -> ShekylBurnSplit {
+    use shekyl_economics::{compute_burn_split_at, EconomicParams, FrozenSegmentCount};
+    burn_split_to_c(compute_burn_split_at(
+        total_fees,
+        burn_pct,
+        FrozenSegmentCount::new(frozen_segment_count),
+        &EconomicParams::default(),
+    ))
+}
+
+/// The D2-escalated staker share at `frozen_segment_count`, fixed-point `SCALE`.
+///
+/// Observability / callers that need the share without a split. Same
+/// parent-state read-point obligation as [`shekyl_compute_burn_split_escalated`].
+#[no_mangle]
+pub extern "C" fn shekyl_staker_pool_share_at(frozen_segment_count: u64) -> u64 {
+    use shekyl_economics::{staker_pool_share_at, EconomicParams, FrozenSegmentCount};
+    staker_pool_share_at(
+        FrozenSegmentCount::new(frozen_segment_count),
+        &EconomicParams::default().escalation(),
+    )
+    .to_raw()
 }
 
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
@@ -5149,6 +5205,90 @@ fn zeroizing_arr32_from_ptr(ptr: *const u8) -> Option<zeroize::Zeroizing<[u8; 32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Leg 1 preserved across the boundary: the escalated share cannot reach
+    /// miner income.** Sweeping `n` across the whole domain, `miner_fee_income`
+    /// is invariant while value moves between `staker_pool_amount` and
+    /// `actually_destroyed`. This is the structural unreachability
+    /// (§12.11.1 Leg 1) asserted at the surface C++ actually calls, not inferred
+    /// from the formula.
+    #[test]
+    fn escalating_the_share_never_touches_miner_income() {
+        const FEES: u64 = 1_000_000_000;
+        const BURN_PCT: u64 = 500_000;
+
+        let baseline = shekyl_compute_burn_split_escalated(FEES, BURN_PCT, 0);
+        for n in [0u64, 1, 1_000, 50_000, 100_000, 1_000_000, u64::MAX] {
+            let split = shekyl_compute_burn_split_escalated(FEES, BURN_PCT, n);
+            assert_eq!(
+                split.miner_fee_income, baseline.miner_fee_income,
+                "n={n} moved miner income — the security-budget channel must be \
+                 structurally unreachable from the staker share"
+            );
+            // Conservation: the three legs still partition the fees exactly.
+            assert_eq!(
+                split.miner_fee_income + split.staker_pool_amount + split.actually_destroyed,
+                FEES,
+                "n={n} broke the three-way partition"
+            );
+        }
+    }
+
+    /// **The genesis-neutral property, end to end.** At the shipped
+    /// parameterization (`asymptote == staker_pool_share`) the escalated entry
+    /// is bit-identical to the flat one at every `n`, so landing the frozen
+    /// shape changes no consensus output until the ceremony raises the
+    /// asymptote.
+    #[test]
+    fn escalated_split_is_bit_identical_to_flat_at_the_genesis_parameterization() {
+        let params = shekyl_economics::params::EconomicParams::default();
+        assert_eq!(
+            params.escalation_asymptote_share, params.staker_pool_share,
+            "this test asserts the NEUTRAL default; if the ceremony has pinned a \
+             real asymptote, this test must be replaced by one that pins the \
+             pinned value, not deleted"
+        );
+
+        for fees in [0u64, 1, 1_000_000_000, u64::MAX / 4] {
+            for burn_pct in [0u64, 250_000, 500_000, 900_000] {
+                let flat = shekyl_compute_burn_split(fees, burn_pct, params.staker_pool_share);
+                for n in [0u64, 1, 100_000, u64::MAX] {
+                    let esc = shekyl_compute_burn_split_escalated(fees, burn_pct, n);
+                    assert_eq!(esc.miner_fee_income, flat.miner_fee_income);
+                    assert_eq!(esc.staker_pool_amount, flat.staker_pool_amount);
+                    assert_eq!(esc.actually_destroyed, flat.actually_destroyed);
+                }
+            }
+        }
+    }
+
+    /// The observability entry agrees with what the split actually applied.
+    #[test]
+    fn exposed_share_matches_the_share_the_split_used() {
+        use shekyl_economics::{staker_pool_share_at, EconomicParams, FrozenSegmentCount};
+        let params = EconomicParams::default();
+        for n in [0u64, 1, 100_000, u64::MAX] {
+            assert_eq!(
+                shekyl_staker_pool_share_at(n),
+                staker_pool_share_at(FrozenSegmentCount::new(n), &params.escalation()).to_raw()
+            );
+        }
+    }
+
+    /// Escalated FFI is a pure packing of the canonical Rust entry — no second formula.
+    #[test]
+    fn escalated_ffi_matches_compute_burn_split_at() {
+        use shekyl_economics::{compute_burn_split_at, EconomicParams, FrozenSegmentCount};
+        let params = EconomicParams::default();
+        for n in [0u64, 1, 100_000, u64::MAX] {
+            let rust =
+                compute_burn_split_at(1_000_000_000, 500_000, FrozenSegmentCount::new(n), &params);
+            let c = shekyl_compute_burn_split_escalated(1_000_000_000, 500_000, n);
+            assert_eq!(c.miner_fee_income, rust.miner_fee_income);
+            assert_eq!(c.staker_pool_amount, rust.staker_pool_amount);
+            assert_eq!(c.actually_destroyed, rust.actually_destroyed);
+        }
+    }
 
     #[test]
     fn test_version() {

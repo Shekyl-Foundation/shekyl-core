@@ -4,6 +4,37 @@
 
 ### Added
 
+- **Shard-indexed staker-share escalation — shape frozen and wired live,
+  genesis-neutral (D2 Stage 3; `feat/stage3-escalation-shape`).** The
+  staker pool share is no longer a frozen constant: it is a pure map of
+  `n = frozen_segment_count` (the archival burden operand), with the
+  §6.1 shape — monotone, floored at today's 25%, asymptote < 100%,
+  banded-PL integer fixed-point, no controller — implemented in
+  `shekyl-units`/`shekyl-economics` with the five constraints as tests
+  and `EscalationParams` load-time validation (persisted-params digest
+  `0x01`→`0x02`). The wiring is live consensus C++: every burn split
+  routes `shekyl_compute_burn_split_escalated`, the operand is read at
+  parent-block state through the asserting
+  `Blockchain::parent_frozen_segment_count` (throws on a
+  template/connect divergence — that mispricing is a chain halt), `n` is
+  computed once per template build (both `construct_miner_tx` passes)
+  and once per connect (money check and staker-inflow accrual share it),
+  and the `prev_block`/`from_block` template path — the one path that
+  could not read its parent's `n` — is deleted with the RPC field
+  reserved and loudly refused. `SHEKYL_STAKER_POOL_SHARE` is deleted
+  from the generated C++ header: no share constant crosses the FFI.
+  Shipped **genesis-neutral by construction** (`asymptote_share ==
+  floor_share`, bit-identity to the flat constant pinned by test); the
+  asymptote numeric stays provisional-until-testnet under the §11.4
+  capture-point ceremony
+  (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.12).
+
+- **Daemon chain-store design (`DRS-*`) — gap-close (docs only).** SoT
+  [`docs/design/DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)
+  (§0.1 Tier A/B, surface map, P0 envelope, findings A-1…A-6). Implementation
+  PRs (pure-virtual hooks, etc.) go on short-lived branches off `dev`, not
+  direct-to-`dev` design-session edits.
+
 - **Transaction proofs and reserve proofs across the wallet stack**
   (WI-RPC-3; Phase 2c, `feat/wallet-rpc-proofs`). The `shekyl-proofs`
   DLEQ primitives are projected through the Engine

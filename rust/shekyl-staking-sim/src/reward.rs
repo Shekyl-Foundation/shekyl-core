@@ -124,7 +124,7 @@ pub fn curve(work: f64, p: &RewardParams) -> f64 {
         CurveImpl::Integer => {
             // cap_f64_to_milli maps non-finite/non-positive caps to 0, and
             // curve_milli credits 0 for a zero plateau — no special-casing.
-            let params = BandedCurveParams::from_sim_cap_milli(cap_f64_to_milli(p.cap));
+            let params = BandedCurveParams::from_plateau_value(cap_f64_to_milli(p.cap));
             let work_milli = work_f64_to_milli(work);
             curve_milli(work_milli, &params) as f64 / WORK_MILLI_SCALE as f64
         }

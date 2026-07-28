@@ -12,6 +12,9 @@
   "shekyl_burn_base_rate": 500000,
   "shekyl_burn_cap": 900000,
   "shekyl_staker_pool_share": 250000,
+  "_comment_escalation": "D2 escalation (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §6.1). SHAPE is genesis-frozen; these NUMBERS are provisional-until-testnet and carry GF-7 freeze ceremony (§11.4): the adversary-advantage argument is committed BEFORE the asymptote is pinned, and if the reopen-(d) joint round takes the PoRep branch, A1 re-runs with sealing costs first. asymptote == staker_pool_share is the DELIBERATE pre-ceremony NEUTRAL value: the escalation is flat, so behaviour is bit-identical to the flat 25% until the ceremony raises it. Shipping the shape must not ship an unpinned number.",
+  "shekyl_escalation_knee_n": 100000,
+  "shekyl_escalation_asymptote_share": 250000,
   "shekyl_staker_emission_share": 150000,
   "shekyl_staker_emission_decay": 900000,
   "shekyl_blocks_per_year": 262800
