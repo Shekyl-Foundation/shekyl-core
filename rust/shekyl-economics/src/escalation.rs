@@ -110,10 +110,15 @@ impl EscalationParams {
     ///
     /// `asymptote < SCALE` is constraint 3 and is the one that would silently
     /// delete the burn channel if violated. `floor <= asymptote` is what makes
-    /// the map monotone; inverted, the "escalation" would descend.
+    /// the map monotone; inverted, the "escalation" would descend. `knee_n > 0`
+    /// is what makes the ramp a ramp: a zero knee leaves it no domain, and is
+    /// far more plausibly a zeroed config field than an intent — treating it as
+    /// "already saturated" would jump the share to the asymptote on a config
+    /// error, so it is malformed here and fails closed to the floor instead.
+    /// (`floor < SCALE` needs no clause of its own — implied by the first two.)
     #[must_use]
     pub const fn is_well_formed(&self) -> bool {
-        self.asymptote_share < SCALE && self.floor_share <= self.asymptote_share
+        self.asymptote_share < SCALE && self.floor_share <= self.asymptote_share && self.knee_n > 0
     }
 }
 
@@ -130,21 +135,23 @@ impl EscalationParams {
 ///
 /// Malformed params fail **closed to the floor**: a bad asymptote yields today's
 /// constant rather than an arbitrary redirection of the burn. Returning the
-/// floor is the safe direction because it is the current shipping behaviour.
+/// floor is the safe direction because it is the current shipping behaviour —
+/// and the fail-closed value is itself clamped below `SCALE`, so constraint 3
+/// holds even against a garbage floor.
 #[must_use]
 pub fn staker_pool_share_at(n: u64, params: &EscalationParams) -> u64 {
     if !params.is_well_formed() {
-        return params.floor_share.min(SCALE);
+        // Constraint 3 binds even on the failure path: a garbage floor
+        // (>= SCALE) must not let the fail-closed value itself delete the
+        // deflation channel, so the clamp is SCALE - 1 — the largest share
+        // that still leaves the burn channel alive. The load-time door is the
+        // real defense; this is the layer that holds when it was bypassed.
+        return params.floor_share.min(SCALE - 1);
     }
     let span = params.asymptote_share - params.floor_share;
-    if span == 0 || params.knee_n == 0 {
-        // Degenerate-but-valid: a flat escalation is just the floor. `knee_n == 0`
-        // would otherwise divide by zero; treat it as "already saturated".
-        return if params.knee_n == 0 {
-            params.asymptote_share
-        } else {
-            params.floor_share
-        };
+    if span == 0 {
+        // Degenerate-but-valid: a flat escalation is just the floor.
+        return params.floor_share;
     }
 
     // The ramp, normalized: `curve_milli` over the continuous parameterization
@@ -152,8 +159,15 @@ pub fn staker_pool_share_at(n: u64, params: &EscalationParams) -> u64 {
     let shape = BandedCurveParams::continuous(params.knee_n);
     let full = shape.plateau_value_milli;
     if full == 0 {
-        // knee_n == 1 floors to a zero plateau; saturate immediately.
-        return params.asymptote_share;
+        // knee_n == 1 floors to a zero plateau: the ramp has no interior, but
+        // the endpoints still exist — floor strictly below the knee, asymptote
+        // at and beyond it. ("Rises from floor_share at n = 0" holds for every
+        // well-formed parameterization, not just the ones with an interior.)
+        return if n >= params.knee_n {
+            params.asymptote_share
+        } else {
+            params.floor_share
+        };
     }
     let raw = curve_milli(n, &shape);
 
@@ -352,18 +366,28 @@ mod tests {
         };
         assert_eq!(staker_pool_share_at(u64::MAX, &flat), 250_000);
 
+        // A zero knee is malformed (a zeroed config field, not an intent):
+        // it fails closed to the FLOOR, never jumps to the asymptote — the
+        // pre-tightening behaviour returned 750_000 here, a burn redirection
+        // on a config error.
         let zero_knee = EscalationParams {
             floor_share: 250_000,
             knee_n: 0,
             asymptote_share: 750_000,
         };
-        assert_eq!(staker_pool_share_at(0, &zero_knee), 750_000);
+        assert!(!zero_knee.is_well_formed());
+        assert_eq!(staker_pool_share_at(0, &zero_knee), 250_000);
+        assert_eq!(staker_pool_share_at(u64::MAX, &zero_knee), 250_000);
 
+        // knee_n == 1 has no interior, but the endpoints hold: floor strictly
+        // below the knee, asymptote at and beyond it.
         let one_knee = EscalationParams {
             floor_share: 250_000,
             knee_n: 1,
             asymptote_share: 750_000,
         };
+        assert_eq!(staker_pool_share_at(0, &one_knee), 250_000);
+        assert_eq!(staker_pool_share_at(1, &one_knee), 750_000);
         assert_eq!(staker_pool_share_at(5, &one_knee), 750_000);
 
         let inverted = EscalationParams {
@@ -373,5 +397,17 @@ mod tests {
         };
         assert!(!inverted.is_well_formed());
         assert_eq!(staker_pool_share_at(50_000, &inverted), 750_000);
+
+        // Constraint 3 binds on the failure path itself: a garbage floor at or
+        // above SCALE must not let the fail-closed value delete the deflation
+        // channel.
+        let garbage_floor = EscalationParams {
+            floor_share: SCALE + 7,
+            knee_n: 100_000,
+            asymptote_share: SCALE + 9,
+        };
+        assert!(!garbage_floor.is_well_formed());
+        assert!(staker_pool_share_at(0, &garbage_floor) < SCALE);
+        assert_eq!(staker_pool_share_at(u64::MAX, &garbage_floor), SCALE - 1);
     }
 }

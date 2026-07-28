@@ -85,6 +85,16 @@ pub enum EconomicParamsError {
         /// The floor it fell below.
         floor: u64,
     },
+    /// `escalation_knee_n == 0` leaves the ramp no domain to rise across — far
+    /// more plausibly a zeroed config field than an intent, and honouring it as
+    /// "already saturated" would jump the share to the asymptote on a config
+    /// error. Refused here (loud, first layer); the apply-time layer
+    /// additionally fails closed to the floor.
+    #[error(
+        "escalation knee must be > 0: a zero knee gives the ramp no domain (a \
+         zeroed config field, not a parameterization)"
+    )]
+    KneeZero,
 }
 
 /// Deserialization shim — every `EconomicParams` that arrives from serde is
@@ -197,6 +207,9 @@ impl EconomicParams {
                 asymptote: self.escalation_asymptote_share,
                 floor: self.staker_pool_share,
             });
+        }
+        if self.escalation_knee_n == 0 {
+            return Err(EconomicParamsError::KneeZero);
         }
         Ok(())
     }

@@ -121,6 +121,14 @@ pub fn curve_milli(work_milli: u64, params: &BandedCurveParams) -> u64 {
         return pv;
     }
 
+    // Every pre-plateau return clamps to `pv` so the documented contract --
+    // monotone non-decreasing, saturating at `plateau_value_milli` -- holds for
+    // every representable parameterization, not just the constructed ones. A
+    // sub-continuous cap (`pv < pw/2`) would otherwise rise above `pv` on the
+    // ramp and then DROP to `pv` at the plateau. For the two shapes live
+    // consumers use the clamp is provably inert: the segment maxima are `pw/4`,
+    // `3*pw/8`, and `<= pw/2`, all `<= pv` when `pv >= pw/2` (continuous and
+    // cap-shaped both satisfy that).
     let mut y = 0u64;
 
     // segment 1: slope 1.0
@@ -128,7 +136,7 @@ pub fn curve_milli(work_milli: u64, params: &BandedCurveParams) -> u64 {
         y = y.saturating_add(b1);
         b1
     } else {
-        return work_milli;
+        return work_milli.min(pv);
     };
 
     // segment 2: slope 0.5
@@ -138,12 +146,13 @@ pub fn curve_milli(work_milli: u64, params: &BandedCurveParams) -> u64 {
         x = b2;
     } else {
         let seg = work_milli - x;
-        return y.saturating_add(seg / 2);
+        return y.saturating_add(seg / 2).min(pv);
     }
 
     // segment 3: slope 0.25
     let seg = work_milli - x;
     y.saturating_add(mul_div_floor(seg, 1, 4).unwrap_or(0))
+        .min(pv)
 }
 
 #[cfg(test)]
@@ -167,6 +176,28 @@ mod tests {
         assert_eq!(curve_milli(12_000, &p), 7_000);
         assert_eq!(curve_milli(16_000, &p), 8_000); // plateau
         assert_eq!(curve_milli(32_000, &p), 8_000); // past plateau
+    }
+
+    /// A sub-continuous cap (`pv < pw/2`) is representable (the fields are
+    /// public), and the documented contract — monotone, saturating at
+    /// `plateau_value_milli` — must hold for it too: without the pre-plateau
+    /// clamp the ramp rose ABOVE `pv` and then dropped to it at the plateau.
+    /// The same sweep pins that the clamp is inert for the continuous shape
+    /// (bit-identical outputs), which is what the live consumers rely on.
+    #[test]
+    fn sub_continuous_cap_saturates_without_overshoot() {
+        let sub = BandedCurveParams {
+            plateau_work_milli: 16_000,
+            plateau_value_milli: 3_000, // < pw/2 = 8_000
+        };
+        let mut prev = 0;
+        for w in (0..=32_000).step_by(97) {
+            let v = curve_milli(w, &sub);
+            assert!(v <= sub.plateau_value_milli, "overshot pv at w={w}: {v}");
+            assert!(v >= prev, "curve fell at w={w}: {v} < {prev}");
+            prev = v;
+        }
+        assert_eq!(curve_milli(16_000, &sub), 3_000);
     }
 
     /// Monotonicity is what every consumer leans on — the escalation for §6.1

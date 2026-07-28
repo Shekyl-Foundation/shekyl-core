@@ -1608,7 +1608,7 @@ namespace cryptonote
     // as an unexplained orphan rate. Refuse loudly instead.
     if (!req.prev_block.empty())
     {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
       error_resp.message = "prev_block templates are not supported; build on the tip";
       return false;
     }
@@ -1912,7 +1912,7 @@ namespace cryptonote
     // tip, so a caller who asked for a specific parent is told, not guessed at.
     if (!req.prev_block.empty())
     {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
       error_resp.message = "prev_block templates are not supported; build on the tip";
       return false;
     }
