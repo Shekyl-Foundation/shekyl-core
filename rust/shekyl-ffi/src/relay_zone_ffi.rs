@@ -23,6 +23,12 @@
 //! byte spans. The hazard is removed rather than guarded — the same move as
 //! deriving `connection_count` instead of caching it, applied to marshalling.
 //!
+//! [`ShekylRelayBlob`] is the one struct that crosses, and it is not a
+//! counter-example: the hazard named above is reading a *tag* and interpreting
+//! a union by it. A fixed two-field span has no tag, and it buys an explicit
+//! batch boundary — see the type's own note for why inferring that boundary on
+//! the C++ side would be the worse trade.
+//!
 //! # The one deliberate cache
 //!
 //! `live_stems` is published as an [`AtomicUsize`] for off-task readers, because
@@ -65,9 +71,30 @@ impl RelayRng for SecureRelayRng {
     }
 }
 
-/// Called once per blob of a released fluff batch. The caller frames and sends.
+/// One transaction blob: pointer and length, borrowed for the call.
+///
+/// Two scalars, and the reason a struct is acceptable here where a marshalled
+/// `Effect` was not: the hazard §18.4a names is *variant decoding* — reading a
+/// tag and interpreting a union by it — and a fixed two-field span carries no
+/// tag to misread. It buys the property that matters more, below.
+#[repr(C)]
+pub struct ShekylRelayBlob {
+    /// Start of `len` readable bytes, valid only for the duration of the call.
+    pub ptr: *const u8,
+    /// Length in bytes.
+    pub len: usize,
+}
+
+/// Called once per released fluff batch, with the peer's **whole** batch.
+///
+/// Whole, not blob-by-blob: the daemon sends a peer's batch as a *single* levin
+/// notification carrying every transaction, so a per-blob callback would turn
+/// one message into N. The alternative — stream blobs and have C++ infer where
+/// each peer's run ends — puts inference in the one layer that must be pure
+/// forwarding, and would break silently if two batches for one peer were ever
+/// emitted non-contiguously. The batch boundary is explicit instead.
 pub type FluffCb =
-    extern "C" fn(ctx: *mut c_void, peer: *const u8, blob: *const u8, blob_len: usize);
+    extern "C" fn(ctx: *mut c_void, peer: *const u8, blobs: *const ShekylRelayBlob, n: usize);
 
 /// Called when the stem slots change: `slots` is `count` × 16 bytes, in slot
 /// order, nil for an empty slot. Order and nils are load-bearing — the consumer
@@ -98,9 +125,15 @@ fn dispatch(effects: Vec<Effect>, ctx: *mut c_void, fluff: FluffCb, slots: Slots
     for effect in effects {
         match effect {
             Effect::Fluff { peer, blobs } => {
-                for blob in blobs {
-                    fluff(ctx, peer.as_bytes().as_ptr(), blob.as_ptr(), blob.len());
-                }
+                // `blobs` outlives the call, so the spans stay valid for it.
+                let spans: Vec<ShekylRelayBlob> = blobs
+                    .iter()
+                    .map(|b| ShekylRelayBlob {
+                        ptr: b.as_ptr(),
+                        len: b.len(),
+                    })
+                    .collect();
+                fluff(ctx, peer.as_bytes().as_ptr(), spans.as_ptr(), spans.len());
             }
             Effect::StemSlots(list) => {
                 let mut flat = Vec::with_capacity(list.len() * 16);
@@ -435,7 +468,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(
 
 /// Placeholders for the exports that cannot produce the other variant. Reaching
 /// one is a dispatch bug, so they assert in debug rather than failing silently.
-extern "C" fn noop_fluff(_: *mut c_void, _: *const u8, _: *const u8, _: usize) {
+extern "C" fn noop_fluff(_: *mut c_void, _: *const u8, _: *const ShekylRelayBlob, _: usize) {
     debug_assert!(false, "force_epoch produced a Fluff effect");
 }
 extern "C" fn noop_slots(_: *mut c_void, _: *const u8, _: usize) {
@@ -453,7 +486,7 @@ mod tests {
     // gate the expensive oracle rather than trail it.
     #[derive(Default)]
     struct Recorder {
-        fluffed: Vec<([u8; 16], Vec<u8>)>,
+        fluffed: Vec<([u8; 16], Vec<Vec<u8>>)>,
         slots: Vec<Vec<[u8; 16]>>,
     }
 
@@ -461,11 +494,19 @@ mod tests {
         static REC: RefCell<Recorder> = RefCell::new(Recorder::default());
     }
 
-    extern "C" fn rec_fluff(_: *mut c_void, peer: *const u8, blob: *const u8, len: usize) {
+    extern "C" fn rec_fluff(
+        _: *mut c_void,
+        peer: *const u8,
+        blobs: *const ShekylRelayBlob,
+        n: usize,
+    ) {
         let mut p = [0u8; 16];
         unsafe { p.copy_from_slice(slice::from_raw_parts(peer, 16)) };
-        let b = unsafe { slice::from_raw_parts(blob, len) }.to_vec();
-        REC.with(|r| r.borrow_mut().fluffed.push((p, b)));
+        let batch = unsafe { slice::from_raw_parts(blobs, n) }
+            .iter()
+            .map(|b| unsafe { slice::from_raw_parts(b.ptr, b.len) }.to_vec())
+            .collect();
+        REC.with(|r| r.borrow_mut().fluffed.push((p, batch)));
     }
 
     extern "C" fn rec_slots(_: *mut c_void, slots: *const u8, count: usize) {
@@ -503,9 +544,51 @@ mod tests {
         }
         REC.with(|r| {
             let rec = r.borrow();
-            assert_eq!(rec.fluffed.len(), 1, "one blob to one peer");
+            assert_eq!(rec.fluffed.len(), 1, "one batch to one peer");
             assert_eq!(rec.fluffed[0].0, id(1), "peer id crossed intact");
-            assert_eq!(rec.fluffed[0].1, vec![0xAB, 0xCD, 0xEF], "payload intact");
+            assert_eq!(
+                rec.fluffed[0].1,
+                vec![vec![0xAB, 0xCD, 0xEF]],
+                "payload intact"
+            );
+        });
+    }
+
+    #[test]
+    fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
+        // Two properties the daemon depends on, neither visible to a test that
+        // only checks the transactions arrived:
+        //
+        // 1. **One call per peer.** The batch becomes a single levin
+        //    notification carrying every transaction. Delivered blob-by-blob it
+        //    would become N notifications — same bytes on the wire, N times the
+        //    messages, and a per-peer message count that leaks how many
+        //    transactions were batched together.
+        // 2. **Sorted and de-duplicated**, which the inherited code did at the
+        //    send site under the comment "don't leak receive order". Receive
+        //    order is an observable: it is the order a relaying node saw
+        //    transactions arrive, and forwarding it hands that ordering to
+        //    every peer downstream.
+        reset();
+        unsafe {
+            let h = shekyl_relay_zone_new(0, 2, 600, 30);
+            shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
+            // Offered high-to-low, with a repeat: order and duplication both
+            // have to be removed for the assertion below to hold.
+            for blob in [[0x33u8], [0x11], [0x22], [0x11]] {
+                shekyl_relay_zone_queue_fluff(h, 0, blob.as_ptr(), 1, std::ptr::null());
+            }
+            shekyl_relay_zone_force_fluff(h, 0, std::ptr::null_mut(), rec_fluff);
+            shekyl_relay_zone_free(h);
+        }
+        REC.with(|r| {
+            let rec = r.borrow();
+            assert_eq!(rec.fluffed.len(), 1, "one call carries the whole batch");
+            assert_eq!(
+                rec.fluffed[0].1,
+                vec![vec![0x11], vec![0x22], vec![0x33]],
+                "sorted ascending with the duplicate removed — not receive order"
+            );
         });
     }
 

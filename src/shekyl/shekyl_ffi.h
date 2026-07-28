@@ -2996,9 +2996,21 @@ uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 
 struct RelayZoneHandle;
 
-//! One blob of a released fluff batch. Called once per blob.
+//! One transaction blob, borrowed for the duration of the call.
+struct ShekylRelayBlob
+{
+  const std::uint8_t* ptr;
+  std::size_t len;
+};
+static_assert(sizeof(ShekylRelayBlob) == sizeof(const std::uint8_t*) + sizeof(std::size_t),
+              "ShekylRelayBlob must be two packed words to match Rust's #[repr(C)]");
+
+//! A released fluff batch: one call carrying a peer's WHOLE batch, already
+//! sorted and de-duplicated by the zone (receive order is an observable). It
+//! becomes a single levin notification — delivered blob-by-blob it would become
+//! N notifications, leaking the batch size as a per-peer message count.
 typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
-                                   const std::uint8_t* blob, std::size_t blob_len);
+                                   const ShekylRelayBlob* blobs, std::size_t n);
 //! The stem slots changed: `count` x 16 bytes, slot order, nil for an empty
 //! slot. Order and nil-position are load-bearing — the consumer indexes by slot.
 typedef void (*ShekylRelaySlotsCb)(void* ctx, const std::uint8_t* slots, std::size_t count);

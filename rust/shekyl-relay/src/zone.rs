@@ -296,8 +296,17 @@ impl Zone {
         let mut released = Vec::with_capacity(due.len());
         for id in due {
             if let Some(peer) = self.contexts.get_mut(&id) {
-                let batch = std::mem::take(&mut peer.queued);
+                let mut batch = std::mem::take(&mut peer.queued);
                 if !batch.is_empty() {
+                    // Sort and de-duplicate before release. The inherited code
+                    // does this at the send site with the comment "don't leak
+                    // receive order" — which makes it a privacy property of the
+                    // batch, not a transport detail, so it belongs on this side
+                    // of the boundary with the rest of the relay's observables.
+                    // Byte-lexicographic here and in `std::sort` over
+                    // `blobdata`, so the emitted order is unchanged.
+                    batch.sort_unstable();
+                    batch.dedup();
                     released.push((id, batch));
                 }
             }
