@@ -311,7 +311,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
     // pinned in shekyl-ffi). A test that configures a non-neutral asymptote
     // must thread the real parent leaf-derived n here or its coinbase will be
     // refused at connect — which is the loud failure we want.
-    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), 10, hf_ver ? *hf_ver : 1,
+    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), /*max_outs=*/1, hf_ver ? *hf_ver : 1,
         /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
       return false;
 
@@ -417,7 +417,11 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   blk.prev_id       = actual_params & bf_prev_id   ? prev_id   : get_block_hash(prev_block);
   shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&blk.curve_tree_root));
   blk.tx_hashes     = actual_params & bf_tx_hashes ? tx_hashes : std::vector<crypto::hash>();
-  max_outs          = actual_params & bf_max_outs ? max_outs : 9999;
+  // F-H harness conformance: the consensus coinbase output-count cap is 1, and
+  // the harness conforms to consensus rather than the cap inflating for the
+  // harness (FOLLOWUPS F-H principle). bf_max_outs still lets a test state a
+  // deliberate violation.
+  max_outs          = actual_params & bf_max_outs ? max_outs : 1;
   hf_version        = actual_params & bf_hf_version ? hf_version : 1;
   fees              = actual_params & bf_tx_fees ? fees : 0;
 

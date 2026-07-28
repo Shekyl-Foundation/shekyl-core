@@ -1599,6 +1599,26 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   CHECK_AND_ASSERT_MES(b.miner_tx.version >= 3, false, "Invalid coinbase transaction version: " << b.miner_tx.version << " (minimum: 3)");
   CHECK_AND_ASSERT_MES(b.miner_tx.rct_signatures.type == rct::CTTypeNull, false, "FCMP++ signatures not allowed in coinbase transactions");
 
+  // F-H: consensus coinbase output-count cap (FOLLOWUPS "GENESIS-FREEZE: cap
+  // the coinbase output count"; ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
+  // §12.3). Coinbase outputs are curve-tree leaves that count toward
+  // frozen_segment_count yet pay no fee, so an uncapped foreign coinbase is an
+  // unpriced burden channel -- the W9 fee-path burden-coupling defense has a
+  // second face without this. The cap is EXACTLY 1: the honest template has
+  // only ever built one output (create_block_template max_outs = 1), the
+  // staker pool accrues off-coinbase, and a uniform coinbase is
+  // privacy-consistent. Genesis is exempt -- its hardcoded coinbase is
+  // accepted as configured, the same carve-out as
+  // validate_miner_transaction's height-0 return. That exemption is design,
+  // not accommodation: the final genesis carries a multi-output coinbase on
+  // every nettype (testnet's already has 5; the current mainnet/stagenet
+  // 1-output blobs are pre-genesis placeholders). Rule-21 reopen (sole
+  // trigger): a consensus consumer that structurally requires a multi-output
+  // coinbase in MINED blocks, as its own design round.
+  CHECK_AND_ASSERT_MES(height == 0 || b.miner_tx.vout.size() == 1, false,
+    "coinbase transaction has " << b.miner_tx.vout.size()
+    << " outputs; consensus requires exactly 1 (F-H output-count cap)");
+
   if(std::get<txin_gen>(b.miner_tx.vin[0]).height != height)
   {
     MWARNING("The miner transaction in block has invalid height: " << std::get<txin_gen>(b.miner_tx.vin[0]).height << ", expected: " << height);

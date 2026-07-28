@@ -395,7 +395,9 @@ bool gen_block_miner_tx_has_out_to_alice::generate(std::vector<test_event_entry>
   generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
   events.push_back(blk_1);
 
-  DO_CALLBACK(events, "check_block_accepted");
+  // F-H: a two-output coinbase must be refused (output-count cap = 1); this
+  // test asserted acceptance until the cap landed -- see the header comment.
+  DO_CALLBACK(events, "check_block_purged");
 
   return true;
 }

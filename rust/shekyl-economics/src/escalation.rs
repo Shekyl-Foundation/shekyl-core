@@ -34,6 +34,15 @@ use crate::params::SCALE;
 /// State-shaped (chain progression owns the value). Callers read it once per
 /// template/connect via the asserting C++ read-point and pass the typed count
 /// through the burn split — never a bare height, never tip-after-`add_block`.
+///
+/// **Scope of the guarantee: type-confusion, not provenance.** This type stops
+/// a block height or leaf count being passed where `n` is expected — real
+/// value, since the FFI marshals a raw `u64` and the wrapping site is the
+/// single audit point. It does **not** certify that a value was read at parent
+/// state: [`Self::new`] is a public const wrapper, so anything can be wrapped.
+/// The read-point discipline lives entirely in the C++
+/// `Blockchain::parent_frozen_segment_count` and its throwing assert — do not
+/// read this type as satisfying it by construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct FrozenSegmentCount(u64);

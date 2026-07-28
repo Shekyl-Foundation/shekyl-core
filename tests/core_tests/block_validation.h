@@ -175,7 +175,12 @@ struct gen_block_miner_tx_has_no_out : public gen_block_verification_base<1>
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
-struct gen_block_miner_tx_has_out_to_alice : public gen_block_accepted_base<2>
+// Inverted by F-H (consensus coinbase output-count cap = 1): inherited Monero
+// behavior let a miner pay an arbitrary extra address in the coinbase, and this
+// test asserted that ACCEPTANCE. The second output is now exactly the
+// unpriced-burden state the cap makes unrepresentable, so the same
+// construction pins the REJECTION.
+struct gen_block_miner_tx_has_out_to_alice : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
 };

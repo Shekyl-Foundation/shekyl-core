@@ -5531,8 +5531,20 @@ sustainability is unaffected by the recalibration.
   burn rate is now `activity × supply` (F-D,
   [`design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](./design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)).
 
-- **GENESIS-FREEZE: cap the coinbase output count in consensus (F-H, spawned
-  Stage-2 A4 grounding, 2026-07-24).** Coinbase outputs are curve-tree leaves
+- **~~GENESIS-FREEZE: cap the coinbase output count in consensus (F-H, spawned
+  Stage-2 A4 grounding, 2026-07-24)~~** **✅ IMPLEMENTED (2026-07-28,
+  `feat/fh-coinbase-out-cap`)** — exactly-one enforced in
+  `prevalidate_miner_transaction` for mined blocks; **genesis (height 0) is
+  exempt by design, not accommodation**: the final genesis carries a
+  multi-output coinbase on every nettype (testnet already 5; the current
+  mainnet/stagenet 1-output blobs are pre-genesis placeholders), so the rule-21
+  reopen trigger below reads "multi-output coinbase **in mined blocks**".
+  Harness conformed per the stated principle (`chaingen` default `max_outs`
+  9999→1, `construct_block` 10→1, `block_reward` helper 999→1;
+  `bf_max_outs` still lets a test state a deliberate violation), and the
+  inherited `gen_block_miner_tx_has_out_to_alice` acceptance test inverted into
+  the cap's rejection pin — the same two-output construction, now purged.
+  Original entry follows. Coinbase outputs are curve-tree leaves
   that count toward `frozen_segment_count` yet **pay no fee**, so the W9 fee-path
   burden-coupling defense has a second, unpriced face. **Verified at source:**
   `prevalidate_miner_transaction` / `validate_miner_transaction`
