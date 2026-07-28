@@ -5541,9 +5541,11 @@ sustainability is unaffected by the recalibration.
   genesis and does not start. The final genesis is multi-output on every
   nettype (the current mainnet/stagenet 1-output blobs are pre-genesis
   placeholders), so the rule-21 reopen trigger below reads "multi-output
-  coinbase **in mined blocks**". Spoof-resistant: the height operand is
-  caller-derived from chain position, never the block's own claimed txin_gen
-  height.
+  coinbase **in mined blocks**". Spoof-resistant twice over: the exemption's
+  height operand is caller-derived from chain position (not derived from the
+  block's claimed `txin_gen` height), and the claimed height is separately
+  read only to *enforce equality* with the caller's — so a block claiming to
+  be genesis at height N both faces the cap and fails the height match.
   Harness conformed per the stated principle (`chaingen` default `max_outs`
   9999→1, `construct_block` 10→1, `block_reward` helper 999→1;
   `bf_max_outs` still lets a test state a deliberate violation), and the

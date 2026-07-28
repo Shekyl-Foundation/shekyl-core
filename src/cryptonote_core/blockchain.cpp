@@ -1615,12 +1615,16 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   // height == 0 testnet fails to validate its own genesis and the chain does
   // not start. The final genesis is multi-output on every nettype; the
   // current mainnet/stagenet 1-output blobs are pre-genesis placeholders.
-  // The exemption cannot be spoofed: height here is CALLER-derived from chain
-  // position (main path passes blockchain_height, alt path passes
-  // bei.height), never read from the block's own claimed txin_gen height, so
-  // a mined block asserting it is genesis still faces the cap. Rule-21 reopen
-  // (sole trigger): a consensus consumer that structurally requires a
-  // multi-output coinbase in MINED blocks, as its own design round.
+  // The exemption cannot be spoofed: the height operand deciding
+  // genesis-or-not is CALLER-derived from chain position (main path passes
+  // blockchain_height, alt path passes bei.height) -- it is not derived from
+  // the block's claimed txin_gen height. That claimed height IS read just
+  // below, but as a second guard rather than an input: it must EQUAL the
+  // caller's height or the block is rejected there, so a mined block claiming
+  // to be genesis both faces the cap here (caller height != 0) and fails the
+  // height match below. Rule-21 reopen (sole trigger): a consensus consumer
+  // that structurally requires a multi-output coinbase in MINED blocks, as
+  // its own design round.
   CHECK_AND_ASSERT_MES(height == 0 || b.miner_tx.vout.size() == 1, false,
     "coinbase transaction has " << b.miner_tx.vout.size()
     << " outputs; consensus requires exactly 1 (F-H output-count cap)");
