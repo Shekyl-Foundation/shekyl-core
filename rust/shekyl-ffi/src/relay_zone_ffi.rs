@@ -648,24 +648,88 @@ mod tests {
     /// gtests, three commits deep. If the property ever becomes genuinely
     /// covered elsewhere, delete this test *in the commit that adds that
     /// coverage* and say so — not before.
+    ///
+    /// **Negative-controlled.** Two bugs were injected into `dispatch` and both
+    /// fail this test: compacting the nil away, and reversing slot order. That
+    /// check is the reason the body looks the way it does — an earlier version
+    /// carried this same docstring while never producing a nil at all, and
+    /// caught neither bug. A seal that says "sole witness" over a body that does
+    /// not test the property is worse than no test, because it tells the next
+    /// reader the coverage already exists.
     #[test]
     fn stem_slots_cross_in_index_order_with_nils_in_position() {
+        // Ground truth is read from the zone directly, NOT from the pushed
+        // snapshot, and that is load-bearing. An earlier version of this test
+        // derived which peer to keep from the pushed array — which made a
+        // *reversal* self-consistent and undetectable, because the expectation
+        // travelled through the very transform under test. A marshalling test
+        // whose expected value is computed from the marshalled output can only
+        // ever check that the output equals itself.
+        fn truth(h: *const RelayZoneHandle) -> Vec<[u8; 16]> {
+            unsafe { &*h }
+                .driver
+                .zone()
+                .stem_slots()
+                .iter()
+                .map(|s| s.map_or(NIL, |id| *id.as_bytes()))
+                .collect()
+        }
+
         reset();
-        unsafe {
+        let (filled, after) = unsafe {
             let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
             let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
             shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3, std::ptr::null_mut(), rec_slots);
-            shekyl_relay_zone_free(h);
-        }
-        REC.with(|r| {
-            let rec = r.borrow();
-            assert_eq!(rec.slots.len(), 1, "one slots push");
-            let slots = &rec.slots[0];
-            assert_eq!(slots.len(), 2, "width preserved across the boundary");
-            for s in slots {
-                assert_ne!(*s, NIL, "both slots filled from three candidates");
+            let filled = REC.with(|r| r.borrow().slots[0].clone());
+            assert_eq!(
+                filled,
+                truth(h),
+                "the pushed snapshot must be the zone's slots, in the zone's order"
+            );
+
+            // Now empty a slot and offer no replacement: re-offer ONLY the peer
+            // in slot 1. Slot 0's peer is gone with nothing to backfill it, so
+            // the map holds a hole — which is the state this test exists for,
+            // and which a snapshot of three-candidates-into-two-slots never
+            // reaches. `dispatch` maps `None` to nil via `map_or`; swap that for
+            // anything that skips instead and the hole compacts, silently
+            // shifting slot 1's peer onto covert channel 0.
+            let keep = filled[1];
+            shekyl_relay_zone_update_stems(h, keep.as_ptr(), 1, std::ptr::null_mut(), rec_slots);
+            let after = REC.with(|r| r.borrow().slots.last().cloned());
+            if let Some(after) = &after {
+                assert_eq!(
+                    *after,
+                    truth(h),
+                    "with a hole in it, the pushed snapshot must still be the \
+                     zone's slots in the zone's order"
+                );
             }
-        });
+            shekyl_relay_zone_free(h);
+            (filled, after)
+        };
+
+        assert_eq!(filled.len(), 2, "width preserved across the boundary");
+        for s in &filled {
+            assert_ne!(*s, NIL, "both slots filled from three candidates");
+        }
+
+        let after = after.expect("emptying a slot changes the set, so it pushes");
+        assert_eq!(
+            after.len(),
+            2,
+            "the span keeps its width when a slot empties"
+        );
+        assert_eq!(
+            after[0], NIL,
+            "the emptied slot stays nil IN POSITION — if this is the surviving \
+             peer, the hole was compacted away and every covert channel after it \
+             is now bound to the wrong connection"
+        );
+        assert_eq!(
+            after[1], filled[1],
+            "the surviving stem keeps slot 1 rather than sliding to slot 0"
+        );
     }
 
     #[test]
