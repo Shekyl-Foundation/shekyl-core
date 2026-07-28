@@ -54,12 +54,33 @@ impl PeerFluff {
 ///
 /// The zone decides; the caller performs. Framing and the socket stay C++,
 /// so this returns a destination rather than sending to one.
+/// # Why the two non-stem outcomes are distinct
+///
+/// They differ in what the caller must do next, so collapsing them to one
+/// "fluff" answer would lose the distinction the relay path is built on:
+///
+/// - [`RelayPlan::NoRoute`] is *transient*. The zone would stem, but no slot is
+///   currently backed by a live peer — the caller may refresh its connection
+///   set and re-plan before accepting the fallback.
+/// - [`RelayPlan::FluffEpoch`] is *settled for the epoch*. Refreshing changes
+///   nothing, so a retry would be wasted work.
+///
+/// The daemon also reports them differently: the inherited `dandelionpp_notify`
+/// emits `relay_method::stem` on *entering* the stem-eligible branch, before any
+/// routing is attempted, and `relay_method::fluff` only on falling through. A
+/// caller holding one bool cannot reconstruct which event to emit, and would
+/// have to re-evaluate `!fluffing || local_origin` itself — a second copy of the
+/// RD-4 predicate this type exists to keep single-owned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayPlan {
     /// Forward to this stem successor.
     Stem(ConnectionId),
-    /// Fluff: batch to every peer but the source.
-    Fluff,
+    /// Stem-eligible, but no stem slot is routable right now. Refresh the
+    /// connection set and re-plan, then fluff if it is still unroutable.
+    NoRoute,
+    /// This zone is fluffing this epoch and the transaction is not locally
+    /// originated. Fluff: batch to every peer but the source.
+    FluffEpoch,
 }
 
 /// One relay zone's owned state.
@@ -209,21 +230,24 @@ impl Zone {
     ///    axis the reversion would show on — not merely that the batch went
     ///    somewhere.
     ///
-    /// Falling back to [`RelayPlan::Fluff`] when no slot is routable mirrors the
-    /// inherited retry-then-fluff: the caller may re-offer connections and ask
-    /// again before accepting the fallback.
+    /// Reporting [`RelayPlan::NoRoute`] rather than a bare fluff when no slot is
+    /// routable is what lets the caller mirror the inherited retry-then-fluff:
+    /// re-offer connections, ask again, and only then accept the fallback.
     pub fn plan_relay<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,
         local_origin: bool,
         rng: &mut R,
     ) -> RelayPlan {
+        // The inherited predicate, transcribed rather than restated:
+        // `if (!zone_->fluffing || tx_relay == relay_method::local)`.
         if !self.fluffing || local_origin {
-            if let Some(destination) = self.map.stem_for(source, rng) {
-                return RelayPlan::Stem(destination);
-            }
+            return match self.map.stem_for(source, rng) {
+                Some(destination) => RelayPlan::Stem(destination),
+                None => RelayPlan::NoRoute,
+            };
         }
-        RelayPlan::Fluff
+        RelayPlan::FluffEpoch
     }
 
     /// Accept transaction blobs for fluffing to every peer except `source`.    /// Accept transaction blobs for fluffing to every peer except `source`.
@@ -641,7 +665,7 @@ mod tests {
 
         assert_eq!(
             z.plan_relay(Some(id(7)), false, &mut rng),
-            RelayPlan::Fluff,
+            RelayPlan::FluffEpoch,
             "a relayed tx must fluff during a fluff epoch"
         );
     }
@@ -663,16 +687,31 @@ mod tests {
     }
 
     #[test]
-    fn no_routable_slot_falls_back_to_fluff() {
-        // Mirrors the inherited retry-then-fluff: with no stem successor there
-        // is nothing to forward to, and holding the transaction would be worse
-        // than fluffing it.
+    fn no_routable_slot_reports_no_route_not_a_fluff_epoch() {
+        // The discriminator between the two non-stem outcomes, and the reason
+        // `RelayPlan` is three-way rather than a bool. Both mean "did not
+        // stem", and a caller that cannot tell them apart gets two things
+        // wrong: it retries an epoch decision that refreshing cannot change,
+        // and it emits the wrong `relay_method` event — the inherited code
+        // reports `stem` for an unroutable stem-epoch transaction, because it
+        // entered the stem branch before discovering there was nowhere to send.
         let mut rng = SplitMix64::new(33);
         let mut z = zone_with_role(false, &mut rng);
         assert_eq!(
             z.plan_relay(None, true, &mut rng),
-            RelayPlan::Fluff,
-            "no stem slots exist yet, so even a stem epoch must fall back"
+            RelayPlan::NoRoute,
+            "a stem epoch with no slots is unroutable, not a fluff epoch"
+        );
+
+        // And the converse, so the two are pinned apart from both sides: a
+        // fluff epoch reports `FluffEpoch` even with slots available, which is
+        // the case where a retry would be wasted work.
+        let mut z = zone_with_role(true, &mut rng);
+        let _ = z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+        assert_eq!(
+            z.plan_relay(Some(id(7)), false, &mut rng),
+            RelayPlan::FluffEpoch,
+            "a routable fluff epoch is settled, not merely unroutable"
         );
     }
 

@@ -47,6 +47,13 @@ use shekyl_relay_privacy::stem_map::ConnectionId;
 /// The nil UUID: an absent stem slot, or a locally originated transaction.
 const NIL: [u8; 16] = [0u8; 16];
 
+/// Forward to the successor written into `out_dest`.
+pub const SHEKYL_RELAY_PLAN_STEM: i32 = 0;
+/// Stem-eligible, but nothing is routable yet — refresh connections and re-plan.
+pub const SHEKYL_RELAY_PLAN_NO_ROUTE: i32 = 1;
+/// Settled for this epoch: fluff. Retrying cannot change the answer.
+pub const SHEKYL_RELAY_PLAN_FLUFF_EPOCH: i32 = 2;
+
 /// Production RNG — OS entropy, matching the C++ `crypto::random_device` the
 /// ported scheduling used. Never the deterministic `SplitMix64`.
 struct SecureRelayRng;
@@ -138,13 +145,34 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 }
 
 /// Open a zone. Release with [`shekyl_relay_zone_free`].
+///
+/// The epoch length is a parameter because the daemon runs two zone flavours
+/// with different ones — `CRYPTONOTE_DANDELIONPP_MIN_EPOCH` (600 s) on public
+/// zones, `CRYPTONOTE_NOISE_MIN_EPOCH` (300 s) on i2p/tor. C++ already selects
+/// between them at construction; passing the choice through keeps one owner of
+/// it rather than a second copy of the rule here.
+///
+/// Returns null on input a zone cannot be built from: a `stems` that would
+/// overflow the slot arithmetic, or a zero epoch — which is not merely useless
+/// but harmful, since every wake would find the epoch expired and the daemon's
+/// relay timer would spin. The caller treats null as a startup logic error.
 #[no_mangle]
-pub extern "C" fn shekyl_relay_zone_new(now_ms: u64, stems: usize) -> *mut RelayZoneHandle {
-    if stems == usize::MAX {
+pub extern "C" fn shekyl_relay_zone_new(
+    now_ms: u64,
+    stems: usize,
+    min_epoch_secs: u32,
+    epoch_jitter_secs: u32,
+) -> *mut RelayZoneHandle {
+    if stems == usize::MAX || min_epoch_secs == 0 {
         return std::ptr::null_mut();
     }
+    let params = DandelionParams {
+        min_epoch_secs,
+        epoch_jitter_secs,
+        ..DandelionParams::inherited()
+    };
     let mut rng = SecureRelayRng;
-    let zone = Zone::new(DandelionParams::inherited(), stems, now_ms, &mut rng);
+    let zone = Zone::new(params, stems, now_ms, &mut rng);
     let handle = RelayZoneHandle {
         driver: Driver::new(zone),
         rng,
@@ -231,8 +259,18 @@ pub unsafe extern "C" fn shekyl_relay_zone_next_wake(handle: *const RelayZoneHan
     (*handle).driver.next_wake()
 }
 
-/// Decide whether a batch stems (writing the successor into `out_dest`) or
-/// fluffs. Returns true for stem.
+/// Decide what to do with a batch: `SHEKYL_RELAY_PLAN_STEM` (writing the
+/// successor into `out_dest`), `..._NO_ROUTE`, or `..._FLUFF_EPOCH`.
+///
+/// Three-way rather than a bool because the caller must distinguish a
+/// *transient* failure to route — refresh connections and re-plan — from an
+/// epoch decision no refresh can change, and because the two produce different
+/// `relay_method` events. The alternative is C++ re-evaluating
+/// `!fluffing || local_origin` for itself, which duplicates the RD-4 predicate
+/// (§16.1); see [`RelayPlan`] for the full reasoning.
+///
+/// A null handle reports `NO_ROUTE`: nothing is routable through a zone that
+/// does not exist, and the caller's fallback is then the safe one.
 ///
 /// # Safety
 /// `handle` must be live; `source` and `out_dest` must each point to 16 bytes.
@@ -242,9 +280,9 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay(
     source: *const u8,
     local_origin: bool,
     out_dest: *mut u8,
-) -> bool {
+) -> i32 {
     if handle.is_null() || out_dest.is_null() {
-        return false;
+        return SHEKYL_RELAY_PLAN_NO_ROUTE;
     }
     let h = &mut *handle;
     let source = read_id(source);
@@ -256,13 +294,45 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay(
     match plan {
         RelayPlan::Stem(destination) => {
             std::ptr::copy_nonoverlapping(destination.as_bytes().as_ptr(), out_dest, 16);
-            true
+            SHEKYL_RELAY_PLAN_STEM
         }
-        RelayPlan::Fluff => {
+        RelayPlan::NoRoute => {
             std::ptr::copy_nonoverlapping(NIL.as_ptr(), out_dest, 16);
-            false
+            SHEKYL_RELAY_PLAN_NO_ROUTE
+        }
+        RelayPlan::FluffEpoch => {
+            std::ptr::copy_nonoverlapping(NIL.as_ptr(), out_dest, 16);
+            SHEKYL_RELAY_PLAN_FLUFF_EPOCH
         }
     }
+}
+
+/// Merge the caller's current outbound set into the stem map mid-epoch,
+/// delivering the new slots through `on_slots` if the set changed.
+///
+/// Ports `update_channels::run`. On a public zone this is the only thing that
+/// ever populates the map: `notify` is constructed before any peer connects, so
+/// without it every transaction would fluff.
+///
+/// # Safety
+/// `handle` must be live; `outbound` must point to `n * 16` readable bytes or be
+/// null with `n == 0`; the callback must be valid for the call.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_update_stems(
+    handle: *mut RelayZoneHandle,
+    outbound: *const u8,
+    n: usize,
+    ctx: *mut c_void,
+    on_slots: SlotsCb,
+) {
+    if handle.is_null() {
+        return;
+    }
+    let peers = read_ids(outbound, n);
+    let h = &mut *handle;
+    let effects = h.driver.update_stems(&peers, &mut h.rng);
+    h.publish();
+    dispatch(effects, ctx, noop_fluff, on_slots);
 }
 
 /// Accept one transaction blob for fluffing to every peer but `source`.
@@ -424,7 +494,7 @@ mod tests {
     fn fluff_effects_cross_with_peer_and_payload_intact() {
         reset();
         unsafe {
-            let h = shekyl_relay_zone_new(0, 2);
+            let h = shekyl_relay_zone_new(0, 2, 600, 30);
             shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
             let blob = [0xAB, 0xCD, 0xEF];
             shekyl_relay_zone_queue_fluff(h, 0, blob.as_ptr(), blob.len(), std::ptr::null());
@@ -467,7 +537,7 @@ mod tests {
         reset();
         unsafe {
             let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-            let h = shekyl_relay_zone_new(0, 2);
+            let h = shekyl_relay_zone_new(0, 2, 600, 30);
             shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3, std::ptr::null_mut(), rec_slots);
             shekyl_relay_zone_free(h);
         }
@@ -489,7 +559,7 @@ mod tests {
         // kind of mutation — a second writer, or a missed publish, shows here.
         unsafe {
             let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-            let h = shekyl_relay_zone_new(0, 2);
+            let h = shekyl_relay_zone_new(0, 2, 600, 30);
             assert_eq!(shekyl_relay_zone_live_stems(h), 0, "fresh zone");
 
             shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
@@ -514,6 +584,72 @@ mod tests {
     }
 
     #[test]
+    fn the_three_plan_outcomes_stay_distinct_across_the_boundary() {
+        // The C++ caller branches three ways on this code: send, refresh-and-
+        // retry, or fluff. Collapsing any two of them here is invisible to the
+        // 33 gtests as a *routing* failure — the transaction still goes
+        // somewhere — but it changes which `relay_method` event is emitted and
+        // whether a recoverable stem is abandoned.
+        unsafe {
+            let h = shekyl_relay_zone_new(0, 2, 600, 30);
+            let mut out = [0u8; 16];
+
+            assert_eq!(
+                shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, out.as_mut_ptr()),
+                SHEKYL_RELAY_PLAN_NO_ROUTE,
+                "no slots populated yet: transient, and a refresh may fix it"
+            );
+            assert_eq!(out, NIL, "no successor to report");
+
+            // Refresh, exactly as `dandelionpp_notify`'s retry does.
+            let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
+            shekyl_relay_zone_update_stems(h, peers.as_ptr(), 3, std::ptr::null_mut(), rec_slots);
+
+            // Drive to a fluff epoch. The role is drawn from OS entropy, so it
+            // is reached by re-drawing rather than by construction; at q = 20%
+            // the loop bound is astronomically slack.
+            let mut rolls = 0;
+            while !(*h).driver.zone().is_fluffing() {
+                shekyl_relay_zone_force_epoch(
+                    h,
+                    0,
+                    peers.as_ptr(),
+                    3,
+                    std::ptr::null_mut(),
+                    rec_slots,
+                );
+                rolls += 1;
+                assert!(rolls < 10_000, "no fluff epoch in 10k draws");
+            }
+
+            assert_eq!(
+                shekyl_relay_zone_plan_relay(h, id(7).as_ptr(), false, out.as_mut_ptr()),
+                SHEKYL_RELAY_PLAN_FLUFF_EPOCH,
+                "a relayed tx in a fluff epoch is settled — retrying is wasted work"
+            );
+            assert_eq!(
+                shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, out.as_mut_ptr()),
+                SHEKYL_RELAY_PLAN_STEM,
+                "RD-4 across the boundary: the origin stems even in a fluff epoch"
+            );
+            assert_ne!(out, NIL, "a stem plan must carry its successor");
+            shekyl_relay_zone_free(h);
+        }
+    }
+
+    #[test]
+    fn a_zone_that_would_spin_is_refused_rather_than_built() {
+        // A zero epoch expires at every wake, so the daemon's relay timer would
+        // re-arm in the past forever. Refusing construction turns a silent
+        // busy-loop in the p2p reactor into a loud startup failure.
+        assert!(shekyl_relay_zone_new(0, 2, 0, 30).is_null(), "zero epoch");
+        assert!(
+            shekyl_relay_zone_new(0, usize::MAX, 600, 30).is_null(),
+            "unrepresentable stem width"
+        );
+    }
+
+    #[test]
     fn a_null_handle_is_a_safe_no_op_on_every_export() {
         reset();
         unsafe {
@@ -523,12 +659,18 @@ mod tests {
             assert_eq!(shekyl_relay_zone_live_stems(null), 0);
             assert_eq!(shekyl_relay_zone_next_wake(null), 0);
             let mut out = [0u8; 16];
-            assert!(!shekyl_relay_zone_plan_relay(
+            assert_eq!(
+                shekyl_relay_zone_plan_relay(null, id(1).as_ptr(), true, out.as_mut_ptr()),
+                SHEKYL_RELAY_PLAN_NO_ROUTE,
+                "nothing routes through a zone that does not exist"
+            );
+            shekyl_relay_zone_update_stems(
                 null,
-                id(1).as_ptr(),
-                true,
-                out.as_mut_ptr()
-            ));
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                rec_slots,
+            );
             shekyl_relay_zone_poll(
                 null,
                 0,

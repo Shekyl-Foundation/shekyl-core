@@ -99,6 +99,32 @@ impl Driver {
         }
     }
 
+    /// Merge the caller's current outbound set into the stem map, pushing the
+    /// new slots outward if the set changed.
+    ///
+    /// This is the inherited `update_channels::run` — a *mid-epoch* refresh,
+    /// distinct from the epoch rollover that re-draws the role. The daemon
+    /// needs it on three paths: a new outbound connection, a covert send that
+    /// failed, and the retry inside `dandelionpp_notify` — which is the only
+    /// thing that ever populates the map on a public zone, because the zone is
+    /// constructed before any peer has connected.
+    ///
+    /// The rollover paths call this too, so "changed ⇒ push" has exactly one
+    /// implementation. A second copy of that rule is a second place for the
+    /// push to be forgotten, and a forgotten push is silent: the slots simply
+    /// stay stale.
+    pub fn update_stems<R: RelayRng + ?Sized>(
+        &mut self,
+        outbound: &[ConnectionId],
+        rng: &mut R,
+    ) -> Vec<Effect> {
+        if self.zone.update_stems(outbound.to_vec(), rng).needs_rearm() {
+            vec![Effect::StemSlots(self.zone.stem_slots().to_vec())]
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Run every step due at `now` and return the resulting work.
     ///
     /// `outbound` is the caller's current outbound connection set — the driver
@@ -116,9 +142,7 @@ impl Driver {
         // fluff release below should observe the new epoch, not the old one.
         if now >= self.zone.epoch_deadline() {
             self.zone.start_epoch(now, rng);
-            if self.zone.update_stems(outbound.to_vec(), rng).needs_rearm() {
-                effects.push(Effect::StemSlots(self.zone.stem_slots().to_vec()));
-            }
+            effects.extend(self.update_stems(outbound, rng));
         }
 
         for (peer, blobs) in self.zone.flush_fluff(now, false) {
@@ -148,11 +172,7 @@ impl Driver {
         rng: &mut R,
     ) -> Vec<Effect> {
         self.zone.start_epoch(now, rng);
-        if self.zone.update_stems(outbound.to_vec(), rng).needs_rearm() {
-            vec![Effect::StemSlots(self.zone.stem_slots().to_vec())]
-        } else {
-            Vec::new()
-        }
+        self.update_stems(outbound, rng)
     }
 }
 
@@ -246,6 +266,36 @@ mod tests {
             .expect("a rollover re-draws the stem set");
         assert_eq!(slots.len(), 2, "two slots at the configured width");
         assert!(slots.iter().flatten().all(|p| outbound.contains(p)));
+    }
+
+    #[test]
+    fn a_mid_epoch_refresh_pushes_slots_without_rolling_the_epoch() {
+        // The path the public zone actually depends on. `notify` is constructed
+        // before any peer connects, so the map is empty until the first relay
+        // attempt refreshes it — without this, every transaction would fluff on
+        // a node that is perfectly able to stem.
+        let mut rng = SplitMix64::new(45);
+        let mut d = driver(&mut rng);
+        let deadline = d.zone().epoch_deadline();
+        assert_eq!(d.zone().live_stems(), 0, "fixture: no peers yet");
+
+        let effects = d.update_stems(&[id(1), id(2), id(3)], &mut rng);
+        assert!(
+            matches!(effects.as_slice(), [Effect::StemSlots(s)] if s.len() == 2),
+            "a first population is a change, so the slots must be pushed"
+        );
+        assert_eq!(d.zone().live_stems(), 2);
+        assert_eq!(
+            d.zone().epoch_deadline(),
+            deadline,
+            "a refresh is not a rollover — the role and its deadline stand"
+        );
+
+        assert!(
+            d.update_stems(&[id(1), id(2), id(3)], &mut rng).is_empty(),
+            "an unchanged set must push nothing, or every relay attempt would \
+             re-point the covert channels bound to these slots"
+        );
     }
 
     #[test]

@@ -3003,8 +3003,19 @@ typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
 //! slot. Order and nil-position are load-bearing — the consumer indexes by slot.
 typedef void (*ShekylRelaySlotsCb)(void* ctx, const std::uint8_t* slots, std::size_t count);
 
-//! Open a zone. Release with shekyl_relay_zone_free. Null if stems == SIZE_MAX.
-RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems);
+//! Forward to the successor written into `out_dest`.
+#define SHEKYL_RELAY_PLAN_STEM        0
+//! Stem-eligible, but nothing routes yet — refresh connections and re-plan.
+#define SHEKYL_RELAY_PLAN_NO_ROUTE    1
+//! Settled for this epoch: fluff. Retrying cannot change the answer.
+#define SHEKYL_RELAY_PLAN_FLUFF_EPOCH 2
+
+//! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
+//! Null when a zone cannot be built: SIZE_MAX stems, or a zero epoch — which
+//! would expire at every wake and spin the relay timer. Treat null as fatal.
+RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems,
+                                       std::uint32_t min_epoch_secs,
+                                       std::uint32_t epoch_jitter_secs);
 //! Free a zone. Null is a no-op; free exactly once.
 void shekyl_relay_zone_free(RelayZoneHandle* handle);
 //! A peer completed its handshake.
@@ -3016,9 +3027,18 @@ void shekyl_relay_zone_on_close(RelayZoneHandle* handle, const std::uint8_t* id)
 std::size_t shekyl_relay_zone_live_stems(const RelayZoneHandle* handle);
 //! Earliest time the zone has work; what the asio timer is armed against.
 std::uint64_t shekyl_relay_zone_next_wake(const RelayZoneHandle* handle);
-//! Stem (writing the successor to out_dest, returns true) or fluff (false).
-bool shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::uint8_t* source,
-                                  bool local_origin, std::uint8_t* out_dest);
+//! One of the SHEKYL_RELAY_PLAN_* codes. Three-way, not a bool: a transient
+//! routing failure (retry after a refresh) and a settled fluff epoch (do not)
+//! also report different relay_method events. Deciding between them in C++
+//! would mean a second copy of the RD-4 predicate `!fluffing || local_origin`.
+//! A null handle reports NO_ROUTE.
+std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::uint8_t* source,
+                                          bool local_origin, std::uint8_t* out_dest);
+//! Merge the current outbound set into the stem map mid-epoch, pushing the new
+//! slots if it changed. On a public zone this is the only thing that ever fills
+//! the map: the zone is constructed before any peer has connected.
+void shekyl_relay_zone_update_stems(RelayZoneHandle* handle, const std::uint8_t* outbound,
+                                    std::size_t n, void* ctx, ShekylRelaySlotsCb on_slots);
 //! Accept one blob for fluffing to every peer but `source`.
 void shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
                                    const std::uint8_t* blob, std::size_t blob_len,

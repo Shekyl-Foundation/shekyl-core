@@ -3681,15 +3681,35 @@ taken from the code's own discipline comments:
 
 | State | Owner today | Owner after RP-3a |
 | --- | --- | --- |
-| `next_epoch`, `flush_txs` (`steady_timer`) | zone strand | **Rust** |
+| `next_epoch`, `flush_txs` (`steady_timer`) | zone strand | **asio** — collapsed to one timer, armed from `next_wake()` |
 | `contexts` (`uuid → {fluff_txs, flush_time, m_is_income}`) | zone strand | **Rust** |
-| `map` | zone strand | **Rust** (already Rust-backed, RP-2a) |
-| `flush_callbacks`, `fluffing` | zone strand | **Rust** |
-| `strand` | — | **deleted** — the task replaces it |
+| `map`, `fluffing` | zone strand | **Rust** (`map` already Rust-backed, RP-2a) |
+| `flush_callbacks` | zone strand | **C++**, as `pending_wakes` — reactor state, not schedule state |
+| `strand` | — | **stays** — nothing replaces it |
 | `channels` (`deque<noise_channel>`) | *"Never touch after init; only update elements on `noise_channel.strand`"* | **asio** (RP-3b) |
 | `noise_channel::{active, queue, next_noise, connection}` | per-channel strand | **asio** (RP-3b) |
 | `p2p`, `noise`, `nzone`, `pad_txs` | const after construction | config — no owner needed |
 | **`connection_count`** | *"Only update in strand, **can be read at any time**"* | **the one real straddle** — see below |
+
+**Three rows changed when the seal-break was withdrawn**, and they are called out
+because the first draft of this table assigned them under the reactor premise —
+a Rust task owning the sleep, replacing the strand. With no task:
+
+- **The timers stay asio's.** Rust owns the deadline *value*; asio owns the
+  *sleep*. The two timers collapse into one, armed from `next_wake()`, because
+  that call returns the earliest deadline and there is nothing left for a second
+  timer to hold.
+- **The strand stays.** Nothing replaces it, so `deleted` was only ever true of
+  the design that is no longer being built.
+- **`flush_callbacks` stays C++.** It is not schedule state — it is the guard
+  that stops a re-armed timer from re-arming itself forever, so it belongs with
+  the timer it guards. It moves in name only, to `pending_wakes`, because one
+  timer now covers both kinds of wake and "flush" would misname it.
+
+Assigning these to Rust was not a *safety* error — it was an ownership claim on
+state whose owner turned out not to move. Leaving it standing would have left the
+implementation and the inventory disagreeing, which is how an invariant quietly
+becomes a description.
 
 Three findings, and the third is the one that would have bitten:
 
