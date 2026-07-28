@@ -300,7 +300,7 @@ impl Zone {
         RelayPlan::FluffEpoch
     }
 
-    /// Accept transaction blobs for fluffing to every peer except `source`.    /// Accept transaction blobs for fluffing to every peer except `source`.
+    /// Accept transaction blobs for fluffing to every peer except `source`.
     ///
     /// Mirrors `fluff_notify`: each peer that has no batch in flight draws a
     /// fresh flush deadline; peers already batching keep theirs, so a burst

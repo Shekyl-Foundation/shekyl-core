@@ -166,8 +166,17 @@ unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
         .collect()
 }
 
+/// Read one connection id, mapping "no id" to `None`.
+///
+/// **Two encodings arrive here and both mean "no id".** The nil UUID is the
+/// one production uses: `levin_notify` always passes a real `boost::uuids::uuid`
+/// and sets it nil for a locally originated transaction, so nil-means-local is a
+/// live contract, not a convenience. A null pointer is accepted as well, purely
+/// so a caller cannot turn a missing argument into a dereference at an FFI
+/// boundary — no C++ call site passes one.
+///
 /// # Safety
-/// `p` must point to 16 readable bytes.
+/// `p` must point to 16 readable bytes, or be null.
 unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
     if p.is_null() {
         return None;
@@ -240,8 +249,10 @@ pub unsafe extern "C" fn shekyl_relay_zone_free(handle: *mut RelayZoneHandle) {
 
 /// A peer completed its handshake.
 ///
+/// A nil or null `id` is ignored: neither names a connection to track.
+///
 /// # Safety
-/// `handle` must be live; `id` must point to 16 readable bytes.
+/// `handle` must be live; `id` must point to 16 readable bytes, or be null.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_on_handshake(
     handle: *mut RelayZoneHandle,
@@ -264,8 +275,10 @@ pub unsafe extern "C" fn shekyl_relay_zone_on_handshake(
 
 /// A peer disconnected.
 ///
+/// A nil or null `id` is ignored: neither names a connection to forget.
+///
 /// # Safety
-/// `handle` must be live; `id` must point to 16 readable bytes.
+/// `handle` must be live; `id` must point to 16 readable bytes, or be null.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_on_close(handle: *mut RelayZoneHandle, id: *const u8) {
     if handle.is_null() {
@@ -317,8 +330,13 @@ pub unsafe extern "C" fn shekyl_relay_zone_next_wake(handle: *const RelayZoneHan
 /// A null handle reports `NO_ROUTE`: nothing is routable through a zone that
 /// does not exist, and the caller's fallback is then the safe one.
 ///
+/// `source` is the relaying peer, or the **nil UUID** for a transaction this
+/// node originated — the distinction RD-4 turns on, so it is a contract rather
+/// than a convention. Null is accepted and means the same thing.
+///
 /// # Safety
-/// `handle` must be live; `source` and `out_dest` must each point to 16 bytes.
+/// `handle` must be live; `source` must point to 16 readable bytes or be null;
+/// `out_dest` must point to 16 writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_plan_relay(
     handle: *mut RelayZoneHandle,
@@ -390,7 +408,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_update_stems(
 ///
 /// # Safety
 /// `handle` must be live; `blobs` must point to `n` spans, each readable for
-/// its own length; `source` must point to 16 bytes or be null.
+/// its own length; `source` must point to 16 readable bytes, or be null.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_queue_fluff(
     handle: *mut RelayZoneHandle,
@@ -813,6 +831,64 @@ mod tests {
                 "RD-4 across the boundary: the origin stems even in a fluff epoch"
             );
             assert_ne!(out, NIL, "a stem plan must carry its successor");
+            shekyl_relay_zone_free(h);
+        }
+    }
+
+    #[test]
+    fn the_nil_uuid_means_locally_originated_which_is_what_cpp_actually_sends() {
+        // The encoding production depends on, and — until this test — the one
+        // encoding nothing exercised. `levin_notify` never passes a null
+        // `source`: it passes `uuid_bytes(source_)`, a real 16-byte uuid that is
+        // *nil-valued* when the node originated the transaction. Every other
+        // seam test here reaches "local origin" through the null pointer
+        // instead, so `read_id`'s `(b != NIL)` check — the line that turns those
+        // bytes into `None` — had no coverage at all.
+        //
+        // Delete that check and nothing failed: a local transaction would become
+        // "sourced from connection nil", get pinned in the stem map under a peer
+        // id that does not exist, and share one slot with every other local
+        // transaction for the epoch. Routing changes, no test notices.
+        //
+        // So this asserts the two encodings agree, on the axis RD-4 turns on:
+        // nil-source + local_origin must stem during a fluff epoch exactly as
+        // the null-source path does.
+        unsafe {
+            let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
+            let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+            shekyl_relay_zone_update_stems(h, peers.as_ptr(), 3, std::ptr::null_mut(), rec_slots);
+
+            let mut rolls = 0;
+            while !(*h).driver.zone().is_fluffing() {
+                shekyl_relay_zone_force_epoch(
+                    h,
+                    0,
+                    peers.as_ptr(),
+                    3,
+                    std::ptr::null_mut(),
+                    rec_slots,
+                );
+                rolls += 1;
+                assert!(rolls < 10_000, "no fluff epoch in 10k draws");
+            }
+
+            let mut from_nil = [0u8; 16];
+            let mut from_null = [0u8; 16];
+            let nil_plan =
+                shekyl_relay_zone_plan_relay(h, NIL.as_ptr(), true, from_nil.as_mut_ptr());
+            let null_plan =
+                shekyl_relay_zone_plan_relay(h, std::ptr::null(), true, from_null.as_mut_ptr());
+
+            assert_eq!(
+                nil_plan, SHEKYL_RELAY_PLAN_STEM,
+                "a nil source IS local origin — RD-4 stems it even in a fluff epoch"
+            );
+            assert_eq!(
+                nil_plan, null_plan,
+                "the two spellings of \"no source\" must not route differently"
+            );
+            // Same source, so the epoch's pinning must send both to one slot.
+            assert_eq!(from_nil, from_null, "both pin to the same stem successor");
             shekyl_relay_zone_free(h);
         }
     }
