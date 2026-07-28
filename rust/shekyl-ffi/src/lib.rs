@@ -115,6 +115,11 @@ pub mod ct_balance_ffi;
 // moves to `shekyl-relay-privacy`'s `StemMap`.
 pub mod dandelionpp_ffi;
 
+// Live relay zone FFI — RP-3a (`DAEMON_RELAY_PRIVACY.md` §18). The C++
+// `levin::notify` forwards here; `Effect` is dispatched in Rust via per-variant
+// callbacks so no enum tag crosses the boundary (§18.4a).
+pub mod relay_zone_ffi;
+
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
 // `shekyl_log_install_tracing_forwarder`, …) are compiled into

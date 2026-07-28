@@ -59,6 +59,8 @@ shekyl-logging = { path = "../shekyl-logging" }
 # Dandelion++ stem map (`dandelionpp_ffi.rs`, RP-2a of DAEMON_RELAY_PRIVACY.md).
 # The FFI owns the CSPRNG (`OsRng`); the measurement crate stays deterministic.
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
+# Live relay zone (RP-3a). The scheduling logic; this crate only marshals.
+shekyl-relay = { path = "../shekyl-relay" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
 # OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is
