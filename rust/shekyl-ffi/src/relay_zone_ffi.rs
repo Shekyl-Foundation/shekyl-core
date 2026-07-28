@@ -44,7 +44,7 @@ use std::os::raw::c_void;
 use std::slice;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use shekyl_relay::{Driver, Effect, RelayPlan, Zone};
+use shekyl_relay::{Driver, Effect, FluffReach, RelayPlan, Zone};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -185,6 +185,12 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// between them at construction; passing the choice through keeps one owner of
 /// it rather than a second copy of the rule here.
 ///
+/// `outbound_fluff_only` is the i2p/tor rule: fluff to outbound connections
+/// only, never to an inbound peer. It is a property of the *network* rather than
+/// of noise mode — a hidden-service zone with noise disabled still needs it — so
+/// it is passed rather than derived from the epoch parameters. See
+/// [`FluffReach::OutboundOnly`].
+///
 /// Returns null on input a zone cannot be built from: a `stems` that would
 /// overflow the slot arithmetic, or a zero epoch — which is not merely useless
 /// but harmful, since every wake would find the epoch expired and the daemon's
@@ -195,6 +201,7 @@ pub extern "C" fn shekyl_relay_zone_new(
     stems: usize,
     min_epoch_secs: u32,
     epoch_jitter_secs: u32,
+    outbound_fluff_only: bool,
 ) -> *mut RelayZoneHandle {
     if stems == usize::MAX || min_epoch_secs == 0 {
         return std::ptr::null_mut();
@@ -204,8 +211,13 @@ pub extern "C" fn shekyl_relay_zone_new(
         epoch_jitter_secs,
         ..DandelionParams::inherited()
     };
+    let reach = if outbound_fluff_only {
+        FluffReach::OutboundOnly
+    } else {
+        FluffReach::EveryPeer
+    };
     let mut rng = SecureRelayRng;
-    let zone = Zone::new(params, stems, now_ms, &mut rng);
+    let zone = Zone::new(params, stems, reach, now_ms, &mut rng);
     let handle = RelayZoneHandle {
         driver: Driver::new(zone),
         rng,
@@ -542,7 +554,7 @@ mod tests {
     fn fluff_effects_cross_with_peer_and_payload_intact() {
         reset();
         unsafe {
-            let h = shekyl_relay_zone_new(0, 2, 600, 30);
+            let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
             shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
             let blob = [0xAB, 0xCD, 0xEF];
             let batch = [ShekylRelayBlob {
@@ -586,7 +598,7 @@ mod tests {
         //    every peer downstream.
         reset();
         unsafe {
-            let h = shekyl_relay_zone_new(0, 2, 600, 30);
+            let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
             shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
             // Offered high-to-low, with a repeat: order and duplication both
             // have to be removed for the assertion below to hold.
@@ -641,7 +653,7 @@ mod tests {
         reset();
         unsafe {
             let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-            let h = shekyl_relay_zone_new(0, 2, 600, 30);
+            let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
             shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3, std::ptr::null_mut(), rec_slots);
             shekyl_relay_zone_free(h);
         }
@@ -663,7 +675,7 @@ mod tests {
         // kind of mutation — a second writer, or a missed publish, shows here.
         unsafe {
             let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-            let h = shekyl_relay_zone_new(0, 2, 600, 30);
+            let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
             assert_eq!(shekyl_relay_zone_live_stems(h), 0, "fresh zone");
 
             shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
@@ -695,7 +707,7 @@ mod tests {
         // somewhere — but it changes which `relay_method` event is emitted and
         // whether a recoverable stem is abandoned.
         unsafe {
-            let h = shekyl_relay_zone_new(0, 2, 600, 30);
+            let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
             let mut out = [0u8; 16];
 
             assert_eq!(
@@ -746,9 +758,12 @@ mod tests {
         // A zero epoch expires at every wake, so the daemon's relay timer would
         // re-arm in the past forever. Refusing construction turns a silent
         // busy-loop in the p2p reactor into a loud startup failure.
-        assert!(shekyl_relay_zone_new(0, 2, 0, 30).is_null(), "zero epoch");
         assert!(
-            shekyl_relay_zone_new(0, usize::MAX, 600, 30).is_null(),
+            shekyl_relay_zone_new(0, 2, 0, 30, false).is_null(),
+            "zero epoch"
+        );
+        assert!(
+            shekyl_relay_zone_new(0, usize::MAX, 600, 30, false).is_null(),
             "unrepresentable stem width"
         );
     }

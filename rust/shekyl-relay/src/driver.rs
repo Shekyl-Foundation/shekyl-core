@@ -33,6 +33,8 @@ use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::Millis;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
+#[cfg(test)]
+use crate::zone::FluffReach;
 use crate::zone::Zone;
 
 /// Work the driver produced that the caller must perform.
@@ -190,7 +192,13 @@ mod tests {
     }
 
     fn driver(rng: &mut SplitMix64) -> Driver {
-        Driver::new(Zone::new(DandelionParams::inherited(), 2, 0, rng))
+        Driver::new(Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::EveryPeer,
+            0,
+            rng,
+        ))
     }
 
     #[test]

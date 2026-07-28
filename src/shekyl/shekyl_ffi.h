@@ -3023,11 +3023,16 @@ typedef void (*ShekylRelaySlotsCb)(void* ctx, const std::uint8_t* slots, std::si
 #define SHEKYL_RELAY_PLAN_FLUFF_EPOCH 2
 
 //! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
+//! `outbound_fluff_only` is the i2p/tor rule — fluff to outbound connections
+//! only, never to an inbound peer, who on a hidden service is a stranger that
+//! dialled us. It follows the NETWORK, not noise mode: a hidden-service zone
+//! with noise disabled still needs it.
 //! Null when a zone cannot be built: SIZE_MAX stems, or a zero epoch — which
 //! would expire at every wake and spin the relay timer. Treat null as fatal.
 RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems,
                                        std::uint32_t min_epoch_secs,
-                                       std::uint32_t epoch_jitter_secs);
+                                       std::uint32_t epoch_jitter_secs,
+                                       bool outbound_fluff_only);
 //! Free a zone. Null is a no-op; free exactly once.
 void shekyl_relay_zone_free(RelayZoneHandle* handle);
 //! A peer completed its handshake.

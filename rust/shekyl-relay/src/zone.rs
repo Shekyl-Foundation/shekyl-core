@@ -84,6 +84,25 @@ pub enum RelayPlan {
     FluffEpoch,
 }
 
+/// Which peers a fluff batch may reach in this zone.
+///
+/// A zone-lifetime policy, not a per-batch choice, which is why it is set at
+/// construction and never passed to [`Zone::queue_fluff`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FluffReach {
+    /// Every connected peer except the source. Public ipv4/ipv6 zones.
+    EveryPeer,
+    /// Outbound connections only — **i2p/tor**.
+    ///
+    /// The inherited rule, one line in `fluff_notify` under the comment *"When
+    /// i2p/tor, only fluff to outbound connections"*. It is why noise-mode
+    /// networks can substitute for Dandelion++'s sybil resistance at all: an
+    /// inbound connection on a hidden service is an unauthenticated stranger who
+    /// dialled *us*, so relaying to it hands a transaction to a peer we did not
+    /// choose. Only outbound connections are ones this node selected.
+    OutboundOnly,
+}
+
 /// One relay zone's owned state.
 ///
 /// Single-owner by construction: every field is private and reachable only
@@ -113,6 +132,8 @@ pub struct Zone {
     params: DandelionParams,
     /// Configured stem width — how many slots the map keeps.
     stems: usize,
+    /// Which peers a fluff batch may reach. See [`FluffReach`].
+    reach: FluffReach,
 }
 
 impl Zone {
@@ -123,6 +144,7 @@ impl Zone {
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,
+        reach: FluffReach,
         now: Millis,
         rng: &mut R,
     ) -> Self {
@@ -135,6 +157,7 @@ impl Zone {
             epoch_ends_at: epoch.ends_at,
             params,
             stems,
+            reach,
         }
     }
 
@@ -272,8 +295,15 @@ impl Zone {
         rng: &mut R,
     ) -> usize {
         let mut accepted = 0;
+        let outbound_only = self.reach == FluffReach::OutboundOnly;
         for (id, peer) in &mut self.contexts {
             if Some(*id) == source {
+                continue;
+            }
+            // See `FluffReach::OutboundOnly`: on i2p/tor an inbound peer is a
+            // stranger who dialled us, and relaying to it defeats the sybil
+            // resistance the hidden-service network is standing in for.
+            if outbound_only && peer.direction == PeerDirection::Inbound {
                 continue;
             }
             // `queue` draws only when the peer has no pending deadline, so a
@@ -385,7 +415,13 @@ mod tests {
     }
 
     fn zone(rng: &mut SplitMix64) -> Zone {
-        Zone::new(DandelionParams::inherited(), 2, 0, rng)
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::EveryPeer,
+            0,
+            rng,
+        )
     }
 
     #[test]
@@ -643,7 +679,13 @@ mod tests {
     /// uses, or the fixture would not exercise the real path.
     fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Zone {
         for _ in 0..10_000 {
-            let z = Zone::new(DandelionParams::inherited(), 2, 0, rng);
+            let z = Zone::new(
+                DandelionParams::inherited(),
+                2,
+                FluffReach::EveryPeer,
+                0,
+                rng,
+            );
             if z.is_fluffing() == fluffing {
                 return z;
             }
@@ -705,6 +747,62 @@ mod tests {
             z.plan_relay(None, true, &mut rng),
             RelayPlan::Stem(_)
         ));
+    }
+
+    #[test]
+    fn a_private_zone_fluffs_only_to_outbound_peers() {
+        // The rule the first port dropped, and the `levin_notify.private_*`
+        // gtests caught: eight failures, all on i2p/tor zones, all "9 peers
+        // notified where 5 were expected".
+        //
+        // It is a *privacy* rule wearing the clothes of a delivery detail. On a
+        // hidden service an inbound peer is a stranger who dialled us; fluffing
+        // to it hands a transaction to a peer this node never chose, which is
+        // exactly the sybil exposure i2p/tor is meant to stand in for now that
+        // Dandelion++ stemming is off. Nothing about *delivery* looks wrong when
+        // it breaks — the transaction still propagates — so the assertion has to
+        // be on who received it, not on whether it went anywhere.
+        let mut rng = SplitMix64::new(77);
+        let mut z = Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            0,
+            &mut rng,
+        );
+        z.on_handshake_complete(id(1), PeerDirection::Inbound);
+        z.on_handshake_complete(id(2), PeerDirection::Outbound);
+        z.on_handshake_complete(id(3), PeerDirection::Inbound);
+
+        assert_eq!(
+            z.queue_fluff(&[vec![7]], None, 0, &mut rng),
+            1,
+            "only the one outbound peer may take the batch"
+        );
+        assert!(
+            z.peer(&id(1)).unwrap().queued.is_empty() && z.peer(&id(3)).unwrap().queued.is_empty(),
+            "an inbound peer on i2p/tor must receive nothing"
+        );
+        assert_eq!(z.peer(&id(2)).unwrap().queued.len(), 1);
+
+        // The negative control: the same three peers on a public zone, where
+        // the rule does not apply. Without this, a zone that fluffed to nobody
+        // would also pass the assertions above.
+        let mut z = Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::EveryPeer,
+            0,
+            &mut rng,
+        );
+        z.on_handshake_complete(id(1), PeerDirection::Inbound);
+        z.on_handshake_complete(id(2), PeerDirection::Outbound);
+        z.on_handshake_complete(id(3), PeerDirection::Inbound);
+        assert_eq!(
+            z.queue_fluff(&[vec![7]], None, 0, &mut rng),
+            3,
+            "a public zone reaches every peer but the source"
+        );
     }
 
     #[test]
