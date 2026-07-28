@@ -92,6 +92,28 @@ pub type FluffCb =
 /// indexes by position (§16.1 contract 3).
 pub type SlotsCb = extern "C" fn(ctx: *mut c_void, slots: *const u8, count: usize);
 
+/// Supplies the outbound connection set on demand.
+///
+/// [`shekyl_relay_zone_poll`] invokes this **at most once per call, and only
+/// when a wake crosses an epoch boundary** and the stem map must be rebuilt — a
+/// plain fluff-release wake never calls it, so the caller never pays for the
+/// connection scan the inherited fluff path also skipped. It writes the id count
+/// through `out_n` and returns a pointer to `*out_n * 16` readable bytes that
+/// stays valid until the poll returns, or null with `*out_n == 0` for an empty
+/// set.
+///
+/// This is a *pull*, the one this module otherwise forbids (§18.5 finding 3) —
+/// but the hazard there was C++ reaching into the Rust-owned stem map off-strand
+/// while the driver mutates it. This reads the reverse direction: it pulls the
+/// **C++/asio-owned** connection table, synchronously, on the same strand the
+/// wake fired on, and hands the bytes straight back. No Rust zone state is read,
+/// so the race the seal names cannot arise.
+///
+/// Being a C++ callback reached from Rust, it must not unwind: a throw across
+/// this boundary is undefined behaviour, so the C++ side catches internally and
+/// reports an empty set.
+pub type OutboundCb = extern "C" fn(ctx: *mut c_void, out_n: *mut usize) -> *const u8;
+
 /// Opaque zone handle. C++ holds `*mut RelayZoneHandle` and nothing else.
 pub struct RelayZoneHandle {
     driver: Driver,
@@ -512,25 +534,40 @@ unsafe fn read_blobs(blobs: *const ShekylRelayBlob, n: usize) -> Option<Vec<TxBl
 
 /// Run every step due at `now_ms`, delivering results through the callbacks.
 ///
+/// The outbound set is not passed in: `gather_outbound` is called back **only**
+/// when a wake crosses an epoch boundary and the stem map is rebuilt, so a
+/// fluff-release wake — the common case — never triggers the connection scan.
+/// See [`OutboundCb`] for why this pull is the sanctioned exception to §18.5.
+///
 /// # Safety
-/// `handle` must be live; `outbound` must point to `n * 16` readable bytes or be
-/// null with `n == 0`; the callbacks must be valid for the duration of the call.
+/// `handle` must be live; the callbacks must be valid for the duration of the
+/// call. `gather_outbound` must honour the [`OutboundCb`] contract: on return,
+/// its pointer covers `*out_n * 16` readable bytes (or is null with `*out_n`
+/// zero), valid until this call returns, and it must not unwind.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_poll(
     handle: *mut RelayZoneHandle,
     now_ms: u64,
-    outbound: *const u8,
-    n: usize,
     ctx: *mut c_void,
+    gather_outbound: OutboundCb,
     on_fluff: FluffCb,
     on_slots: SlotsCb,
 ) {
     if handle.is_null() {
         return;
     }
-    let peers = read_ids(outbound, n);
     let h = &mut *handle;
-    let effects = h.driver.poll(now_ms, &peers, &mut h.rng);
+    let effects = h.driver.poll(
+        now_ms,
+        || {
+            let mut n: usize = 0;
+            let ptr = gather_outbound(ctx, &raw mut n);
+            // SAFETY: the `OutboundCb` contract makes `ptr` cover `n * 16`
+            // readable bytes (or null with `n == 0`), valid for this call.
+            unsafe { read_ids(ptr, n) }
+        },
+        &mut h.rng,
+    );
     h.publish();
     dispatch(effects, ctx, on_fluff, on_slots);
 }

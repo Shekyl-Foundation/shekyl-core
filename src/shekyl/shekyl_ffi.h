@@ -3023,7 +3023,7 @@ uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 // enum: dispatch happens in Rust where the compiler checks the match, so the
 // C++ side has no tag, no offsets and no decoding to get wrong (sec 18.4a).
 //
-// Rust twins: rust/shekyl-ffi/src/relay_zone_ffi.rs.
+// Rust twins: rust/shekyl-ffi/src/relay_zone_ffi/mod.rs.
 
 struct RelayZoneHandle;
 
@@ -3045,6 +3045,12 @@ typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
 //! The stem slots changed: `count` x 16 bytes, slot order, nil for an empty
 //! slot. Order and nil-position are load-bearing — the consumer indexes by slot.
 typedef void (*ShekylRelaySlotsCb)(void* ctx, const std::uint8_t* slots, std::size_t count);
+//! Supply the outbound connection set on demand: write the id count through
+//! `out_n` and return a pointer to `*out_n` x 16 bytes valid until the poll
+//! returns (nullptr with `*out_n == 0` for none). shekyl_relay_zone_poll calls
+//! this ONLY at an epoch boundary, so a fluff-release wake never pays for the
+//! connection scan. Must not throw across the FFI boundary.
+typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out_n);
 
 //! Forward to the successor written into `out_dest`.
 #define SHEKYL_RELAY_PLAN_STEM        0
@@ -3104,9 +3110,12 @@ void shekyl_relay_zone_update_stems(RelayZoneHandle* handle, const std::uint8_t*
 std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
                                           const ShekylRelayBlob* blobs, std::size_t n,
                                           const std::uint8_t* source);
-//! Run every step due at now_ms, delivering results through the callbacks.
-void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms,
-                            const std::uint8_t* outbound, std::size_t n, void* ctx,
+//! Run every step due at now_ms, delivering results through the callbacks. The
+//! outbound set is not passed in: `gather_outbound` is called back only when a
+//! wake crosses an epoch boundary and the stem map is rebuilt, so a fluff
+//! release never triggers the connection scan.
+void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
+                            ShekylRelayOutboundCb gather_outbound,
                             ShekylRelayFluffCb on_fluff, ShekylRelaySlotsCb on_slots);
 //! Release every pending fluff batch — what notify::run_fluff() drives.
 void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,

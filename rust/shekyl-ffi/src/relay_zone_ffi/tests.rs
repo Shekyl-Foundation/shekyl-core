@@ -42,8 +42,41 @@ extern "C" fn rec_slots(_: *mut c_void, slots: *const u8, count: usize) {
     REC.with(|r| r.borrow_mut().slots.push(list));
 }
 
+// The outbound-gather side of `poll`, simulated. `poll` pulls the connection
+// set through this callback only when a wake crosses an epoch boundary, so
+// `calls` is the witness for the lazy contract: it must stay 0 on a
+// fluff-release wake and tick to 1 on a rollover.
+#[derive(Default)]
+struct GatherState {
+    calls: usize,
+    /// The ids the next call hands back.
+    supply: Vec<[u8; 16]>,
+    /// Backing store the returned pointer borrows; a field so it outlives the
+    /// `poll` call, as the `OutboundCb` "valid until poll returns" contract asks.
+    pool: Vec<u8>,
+}
+
+thread_local! {
+    static GATHER: RefCell<GatherState> = RefCell::new(GatherState::default());
+}
+
+extern "C" fn rec_gather(_: *mut c_void, out_n: *mut usize) -> *const u8 {
+    GATHER.with(|g| {
+        let mut g = g.borrow_mut();
+        g.calls += 1;
+        g.pool = g.supply.concat();
+        unsafe { *out_n = g.supply.len() };
+        if g.pool.is_empty() {
+            std::ptr::null()
+        } else {
+            g.pool.as_ptr()
+        }
+    })
+}
+
 fn reset() {
     REC.with(|r| *r.borrow_mut() = Recorder::default());
+    GATHER.with(|g| *g.borrow_mut() = GatherState::default());
 }
 
 fn id(byte: u8) -> [u8; 16] {
@@ -168,7 +201,11 @@ fn stem_slots_cross_in_index_order_with_nils_in_position() {
     // whose expected value is computed from the marshalled output can only
     // ever check that the output equals itself.
     fn truth(h: *const RelayZoneHandle) -> Vec<[u8; 16]> {
-        unsafe { &*h }
+        // `as_ref` is the checked deref: `None` for null, so a construction
+        // regression surfaces as a panic here rather than a read of an invalid
+        // pointer (which is also what keeps CodeQL's invalid-pointer query quiet).
+        unsafe { h.as_ref() }
+            .expect("live zone handle")
             .driver
             .zone()
             .stem_slots()
@@ -250,7 +287,7 @@ fn live_stems_atomic_tracks_the_derived_value_after_every_mutation() {
         shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3, std::ptr::null_mut(), rec_slots);
         assert_eq!(
             shekyl_relay_zone_live_stems(h),
-            (*h).driver.zone().live_stems(),
+            h.as_ref().expect("live zone").driver.zone().live_stems(),
             "published value must equal the derived one after an epoch"
         );
         assert_eq!(shekyl_relay_zone_live_stems(h), 2);
@@ -258,7 +295,7 @@ fn live_stems_atomic_tracks_the_derived_value_after_every_mutation() {
         shekyl_relay_zone_on_close(h, id(1).as_ptr());
         assert_eq!(
             shekyl_relay_zone_live_stems(h),
-            (*h).driver.zone().live_stems(),
+            h.as_ref().expect("live zone").driver.zone().live_stems(),
             "published value must track a close"
         );
         shekyl_relay_zone_free(h);
@@ -291,7 +328,7 @@ fn the_three_plan_outcomes_stay_distinct_across_the_boundary() {
         // is reached by re-drawing rather than by construction; at q = 20%
         // the loop bound is astronomically slack.
         let mut rolls = 0;
-        while !(*h).driver.zone().is_fluffing() {
+        while !h.as_ref().expect("live zone").driver.zone().is_fluffing() {
             shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3, std::ptr::null_mut(), rec_slots);
             rolls += 1;
             assert!(rolls < 10_000, "no fluff epoch in 10k draws");
@@ -336,7 +373,7 @@ fn the_nil_uuid_means_locally_originated_which_is_what_cpp_actually_sends() {
         shekyl_relay_zone_update_stems(h, peers.as_ptr(), 3, std::ptr::null_mut(), rec_slots);
 
         let mut rolls = 0;
-        while !(*h).driver.zone().is_fluffing() {
+        while !h.as_ref().expect("live zone").driver.zone().is_fluffing() {
             shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3, std::ptr::null_mut(), rec_slots);
             rolls += 1;
             assert!(rolls < 10_000, "no fluff epoch in 10k draws");
@@ -390,9 +427,8 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
             shekyl_relay_zone_poll(
                 h,
                 due - 1,
-                std::ptr::null(),
-                0,
                 std::ptr::null_mut(),
+                rec_gather,
                 rec_fluff,
                 rec_slots,
             );
@@ -402,9 +438,8 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
         shekyl_relay_zone_poll(
             h,
             due,
-            std::ptr::null(),
-            0,
             std::ptr::null_mut(),
+            rec_gather,
             rec_fluff,
             rec_slots,
         );
@@ -418,6 +453,63 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
             "the batch releases at the wake it reported"
         );
         assert_eq!(rec.fluffed[0].1, vec![vec![0x5Au8]]);
+    });
+    // The wake was a fluff release, not an epoch boundary, so poll must not have
+    // reached for the outbound set — the lazy-gather contract, across the FFI.
+    GATHER.with(|g| {
+        assert_eq!(
+            g.borrow().calls,
+            0,
+            "a fluff-release wake must not gather the outbound set"
+        )
+    });
+}
+
+#[test]
+fn polling_across_the_epoch_boundary_gathers_and_rebuilds() {
+    // The other half of the lazy-gather contract, and the reason it is safe to
+    // skip the scan on a fluff wake: a wake that *does* cross the epoch deadline
+    // must still pull the outbound set — through the callback, exactly once —
+    // and rebuild the stem map from it. With no batch queued, `next_wake` is the
+    // epoch deadline, so polling there is a rollover.
+    reset();
+    unsafe {
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+        assert!(!h.is_null(), "these params build a zone");
+
+        // The set the rollover will draw its two slots from.
+        GATHER.with(|g| g.borrow_mut().supply = vec![id(1), id(2), id(3)]);
+
+        let due = shekyl_relay_zone_next_wake(h);
+        shekyl_relay_zone_poll(
+            h,
+            due,
+            std::ptr::null_mut(),
+            rec_gather,
+            rec_fluff,
+            rec_slots,
+        );
+
+        GATHER.with(|g| {
+            assert_eq!(
+                g.borrow().calls,
+                1,
+                "a wake that crosses the epoch boundary gathers the set exactly once"
+            )
+        });
+        assert_eq!(
+            shekyl_relay_zone_live_stems(h),
+            2,
+            "the rollover rebuilt the map from the gathered peers"
+        );
+        shekyl_relay_zone_free(h);
+    }
+    REC.with(|r| {
+        assert_eq!(
+            r.borrow().slots.len(),
+            1,
+            "the rebuilt slots are pushed outward"
+        );
     });
 }
 
@@ -468,9 +560,8 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
         shekyl_relay_zone_poll(
             null,
             0,
-            std::ptr::null(),
-            0,
             std::ptr::null_mut(),
+            rec_gather,
             rec_fluff,
             rec_slots,
         );
@@ -532,7 +623,9 @@ fn queue_fluff_rejects_a_null_ptr_with_nonzero_len() {
             "invalid span rejects the batch"
         );
         assert!(
-            (*h).driver
+            h.as_ref()
+                .expect("live zone")
+                .driver
                 .zone()
                 .peer(&ConnectionId::from_bytes(id(1)))
                 .map(|p| p.queued.is_empty())

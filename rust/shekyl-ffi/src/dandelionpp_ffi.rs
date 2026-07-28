@@ -24,7 +24,7 @@
 //! returning the exact re-arm predicate is now `Zone::update_stems` returning
 //! `StemSetChange`, and `clone` being a deep copy died with the handle that
 //! could be shallow-copied. **Index order with nils in position survived**, as
-//! the `SlotsCb` contract in `relay_zone_ffi.rs` — a consumer still indexes the
+//! the `SlotsCb` contract in `relay_zone_ffi/mod.rs` — a consumer still indexes the
 //! parallel noise channel by position, so a compacted or reordered snapshot
 //! still binds covert channels to the wrong connections. Its witness moved with
 //! it: `stem_slots_cross_in_index_order_with_nils_in_position`.

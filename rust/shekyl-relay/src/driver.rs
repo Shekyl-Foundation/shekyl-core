@@ -162,22 +162,28 @@ impl Driver {
 
     /// Run every step due at `now` and return the resulting work.
     ///
-    /// `outbound` is the caller's current outbound connection set — the driver
-    /// does not reach for it, because the p2p connection table is asio's to own
-    /// (§18.5). It is needed at an epoch boundary, where the stem map is rebuilt.
+    /// `gather_outbound` yields the caller's current outbound connection set —
+    /// the driver does not reach for it, because the p2p connection table is
+    /// asio's to own (§18.5). It is a **thunk, not a slice**, because the set is
+    /// needed *only* at an epoch boundary, where the stem map is rebuilt; a plain
+    /// fluff-release wake — the common case — must not pay to gather it. So the
+    /// closure is called at most once, and only inside the epoch branch below.
+    /// The branch that decides this is the zone's own `epoch_deadline`, evaluated
+    /// exactly here: the caller never holds a copy of it to decide for itself.
     pub fn poll<R: RelayRng + ?Sized>(
         &mut self,
         now: Millis,
-        outbound: &[ConnectionId],
+        gather_outbound: impl FnOnce() -> Vec<ConnectionId>,
         rng: &mut R,
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
 
         // Epoch first: a rollover re-draws the role and the stem set, and the
         // fluff release below should observe the new epoch, not the old one.
+        // Only here is `gather_outbound` invoked — a fluff-only wake skips it.
         if now >= self.zone.epoch_deadline() {
             self.zone.start_epoch(now, rng);
-            effects.extend(self.rebuild_stems(outbound, rng));
+            effects.extend(self.rebuild_stems(&gather_outbound(), rng));
         }
 
         for (peer, blobs) in self.zone.flush_fluff(now, false) {
@@ -222,6 +228,14 @@ mod tests {
         let mut b = [0u8; 16];
         b[0] = byte;
         ConnectionId::from_bytes(b)
+    }
+
+    /// A `gather_outbound` thunk that must never run. Passed to [`Driver::poll`]
+    /// on wakes that do not cross an epoch boundary, so it doubles as the witness
+    /// that a fluff-only wake never pays for the outbound scan — poll invoking it
+    /// off an epoch boundary would fail here rather than pass quietly.
+    fn no_gather() -> Vec<ConnectionId> {
+        unreachable!("a fluff-only wake must not gather the outbound set")
     }
 
     fn driver(rng: &mut SplitMix64) -> Driver {
@@ -274,10 +288,13 @@ mod tests {
         let due = d.zone().fluff_deadline().unwrap();
 
         if due > 0 {
-            assert!(d.poll(due - 1, &[], &mut rng).is_empty(), "not due yet");
+            assert!(
+                d.poll(due - 1, no_gather, &mut rng).is_empty(),
+                "not due yet"
+            );
         }
         assert_eq!(
-            d.poll(due, &[], &mut rng),
+            d.poll(due, no_gather, &mut rng),
             vec![Effect::Fluff {
                 peer: id(1),
                 blobs: vec![TxBlob::from([7u8].as_slice())]
@@ -293,7 +310,7 @@ mod tests {
         let mut d = driver(&mut rng);
         let outbound = vec![id(1), id(2), id(3)];
 
-        let effects = d.poll(d.zone().epoch_deadline(), &outbound, &mut rng);
+        let effects = d.poll(d.zone().epoch_deadline(), || outbound.clone(), &mut rng);
         let slots = effects
             .iter()
             .find_map(|e| match e {
@@ -340,7 +357,7 @@ mod tests {
         let mut rng = SplitMix64::new(43);
         let mut d = driver(&mut rng);
         let deadline = d.zone().epoch_deadline();
-        assert!(d.poll(deadline - 1, &[id(1)], &mut rng).is_empty());
+        assert!(d.poll(deadline - 1, no_gather, &mut rng).is_empty());
         assert_eq!(d.zone().epoch_deadline(), deadline, "epoch untouched");
     }
 
@@ -355,7 +372,7 @@ mod tests {
         d.zone_mut().queue_fluff(&[vec![9]], None, 0, &mut rng);
         let due = d.zone().fluff_deadline().unwrap();
         if due > 0 {
-            assert!(d.poll(0, &[], &mut rng).is_empty(), "not due at t=0");
+            assert!(d.poll(0, no_gather, &mut rng).is_empty(), "not due at t=0");
         }
         assert_eq!(
             d.force_fluff(0),

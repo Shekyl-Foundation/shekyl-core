@@ -37,7 +37,13 @@ fn a_new_zone_owns_nothing_and_routes_nothing() {
     let mut z = zone(&mut rng);
     assert_eq!(z.peer_count(), 0);
     assert_eq!(z.live_stems(), 0);
-    assert_eq!(z.stem_for(None, &mut rng), None, "no stem before peers");
+    // Through the production path: a local-origin tx always attempts a stem
+    // (RD-4), and with no peers connected there is nothing to route to.
+    assert_eq!(
+        z.plan_relay(None, true, &mut rng),
+        RelayPlan::NoRoute,
+        "no route before peers"
+    );
 }
 
 #[test]

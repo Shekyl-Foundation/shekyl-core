@@ -466,64 +466,127 @@ namespace levin
         is either transport or a `post` to another strand; note that `post`
         always defers, where `dispatch` could run the posted work inline and
         re-enter that way. Re-arming happens *after* the FFI call returns. */
+    /* Every method here is a Rust callback: `shekyl_relay_zone_*` invokes them
+       across the FFI boundary, where an exception unwinding back into Rust is
+       undefined behaviour. So each is `noexcept` and catches internally — a
+       dropped relay or a skipped repoint is recoverable; a corrupted unwind is
+       not. `core` and `outs` exist for `on_outbound`, which the epoch branch of
+       `poll` calls back to gather the outbound set lazily. */
     struct relay_effects
     {
       std::shared_ptr<detail::zone> zone;
+      const i_core_events* core = nullptr;
+      std::vector<boost::uuids::uuid> outs;
 
       //! Send one peer's whole batch as a single notification.
-      static void on_fluff(void* ctx, const std::uint8_t* peer, const ShekylRelayBlob* blobs, std::size_t n)
+      static void on_fluff(void* ctx, const std::uint8_t* peer, const ShekylRelayBlob* blobs, std::size_t n) noexcept
       {
         assert(ctx != nullptr);
-        detail::zone& z = *static_cast<relay_effects*>(ctx)->zone;
-        if (!z.p2p)
-          return;
+        try
+        {
+          detail::zone& z = *static_cast<relay_effects*>(ctx)->zone;
+          if (!z.p2p)
+            return;
 
-        boost::uuids::uuid destination{};
-        std::memcpy(std::addressof(destination), peer, sizeof(destination));
+          boost::uuids::uuid destination{};
+          std::memcpy(std::addressof(destination), peer, sizeof(destination));
 
-        std::vector<blobdata> txs;
-        txs.reserve(n);
-        for (std::size_t i = 0; i < n; ++i)
-          txs.emplace_back(reinterpret_cast<const char*>(blobs[i].ptr), blobs[i].len);
+          std::vector<blobdata> txs;
+          txs.reserve(n);
+          for (std::size_t i = 0; i < n; ++i)
+            txs.emplace_back(reinterpret_cast<const char*>(blobs[i].ptr), blobs[i].len);
 
-        /* The zone released this batch already sorted and de-duplicated: the
-           order transactions were received in is an observable, and forwarding
-           it would hand it to every peer downstream. */
+          /* The zone released this batch already sorted and de-duplicated: the
+             order transactions were received in is an observable, and forwarding
+             it would hand it to every peer downstream. */
 
-        /* Always send with `fluff` flag, even over i2p/tor. The hidden service
-	   will disable the forwarding delay and immediately fluff. The i2p/tor
-	   network is therefore replacing the sybil protection of Dandelion++.
-	   Dandelion++ stem phase over i2p/tor is also worth investigating
-	   (with/without "noise"?). */
-        make_payload_send_txs(*z.p2p, std::move(txs), destination, z.pad_txs, true);
+          /* Always send with `fluff` flag, even over i2p/tor. The hidden service
+             will disable the forwarding delay and immediately fluff. The i2p/tor
+             network is therefore replacing the sybil protection of Dandelion++.
+             Dandelion++ stem phase over i2p/tor is also worth investigating
+             (with/without "noise"?). */
+          make_payload_send_txs(*z.p2p, std::move(txs), destination, z.pad_txs, true);
+        }
+        catch (const std::exception& e)
+        {
+          MERROR("relay fluff callback threw, dropping batch: " << e.what());
+        }
+        catch (...)
+        {
+          MERROR("relay fluff callback threw a non-standard exception, dropping batch");
+        }
       }
 
       //! Re-point the covert channels at the new stem slots.
-      static void on_slots(void* ctx, const std::uint8_t* slots, std::size_t count)
+      static void on_slots(void* ctx, const std::uint8_t* slots, std::size_t count) noexcept
       {
         assert(ctx != nullptr);
-        const std::shared_ptr<detail::zone>& z = static_cast<relay_effects*>(ctx)->zone;
-
-        // only noise uses the "noise channels", only update when enabled
-        if (z->noise.empty())
-          return;
-
-        /* Slot order is load-bearing: channel `i` carries stem slot `i`, and an
-           empty slot arrives as a nil in position rather than being compacted
-           away. Indexing anything but positionally here would bind covert
-           channels to the wrong connections, silently (§16.1 contract 3). */
-        /* The snapshot may be NARROWER than the channel set: a stem map drawn
-           over fewer peers than the configured width has that many slots, which
-           is the normal state of a node with one outbound connection. The
-           inherited `post` handled it by iterating the map's span, not the
-           channels'. Only the reverse would be a bug. */
-        assert(count <= z->channels.size());
-        for (std::size_t i = 0; i < count && i < z->channels.size(); ++i)
+        try
         {
-          boost::uuids::uuid connection{};
-          std::memcpy(std::addressof(connection), slots + (i * sizeof(connection)), sizeof(connection));
-          boost::asio::post(z->channels[i].strand, update_channel{z, i, connection});
+          const std::shared_ptr<detail::zone>& z = static_cast<relay_effects*>(ctx)->zone;
+
+          // only noise uses the "noise channels", only update when enabled
+          if (z->noise.empty())
+            return;
+
+          /* Slot order is load-bearing: channel `i` carries stem slot `i`, and an
+             empty slot arrives as a nil in position rather than being compacted
+             away. Indexing anything but positionally here would bind covert
+             channels to the wrong connections, silently (§16.1 contract 3). */
+          /* The snapshot may be NARROWER than the channel set: a stem map drawn
+             over fewer peers than the configured width has that many slots, which
+             is the normal state of a node with one outbound connection. The
+             inherited `post` handled it by iterating the map's span, not the
+             channels'. Only the reverse would be a bug. */
+          assert(count <= z->channels.size());
+          for (std::size_t i = 0; i < count && i < z->channels.size(); ++i)
+          {
+            boost::uuids::uuid connection{};
+            std::memcpy(std::addressof(connection), slots + (i * sizeof(connection)), sizeof(connection));
+            boost::asio::post(z->channels[i].strand, update_channel{z, i, connection});
+          }
         }
+        catch (const std::exception& e)
+        {
+          MERROR("relay slots callback threw, covert channels not repointed: " << e.what());
+        }
+        catch (...)
+        {
+          MERROR("relay slots callback threw a non-standard exception, covert channels not repointed");
+        }
+      }
+
+      //! Gather the outbound connection set on demand.
+      //!
+      //! `poll` calls this only when a wake crosses an epoch boundary, so the
+      //! locked connection scan and median-height sort are paid at a rollover
+      //! and never on a fluff release. The result is stored in `outs` so the
+      //! returned span outlives the FFI call; an empty set returns nullptr.
+      static const std::uint8_t* on_outbound(void* ctx, std::size_t* out_n) noexcept
+      {
+        assert(ctx != nullptr);
+        relay_effects& self = *static_cast<relay_effects*>(ctx);
+        try
+        {
+          if (self.zone && self.zone->p2p && self.core)
+            self.outs = get_out_connections(*self.zone->p2p, self.core);
+        }
+        catch (const std::exception& e)
+        {
+          // An empty set at a boundary rebuilds the map over no peers — the
+          // already-tolerated no-outbound state, self-healing on the next
+          // update_stems — but log it, since it is otherwise a silent one-epoch
+          // stem/noise dropout.
+          self.outs.clear();
+          MWARNING("relay outbound gather threw, rebuilding over no peers: " << e.what());
+        }
+        catch (...)
+        {
+          self.outs.clear();
+          MWARNING("relay outbound gather threw a non-standard exception, rebuilding over no peers");
+        }
+        *out_n = self.outs.size();
+        return uuid_bytes(self.outs);
       }
     };
 
@@ -569,16 +632,19 @@ namespace levin
         if (error && error != boost::system::errc::operation_canceled)
           throw boost::system::system_error{error, "relay wake timer failed"};
 
-        /* The connection set is offered on every wake, not only at an epoch
-           boundary. Whether *this* wake is an epoch boundary is a scheduling
-           question, and answering it here would mean holding a copy of the
-           epoch deadline on this side of the boundary. */
-        const std::vector<boost::uuids::uuid> outs = get_out_connections(*zone_->p2p, core_);
-
-        relay_effects sink{zone_};
+        /* The connection set is gathered lazily: `poll` calls `on_outbound`
+           back only when this wake crosses an epoch boundary and the stem map
+           must be rebuilt. A fluff-release wake — the common case — never pays
+           for the locked connection scan and median-height sort the inherited
+           fluff path also skipped. The epoch deadline stays the zone's; this
+           side answers "give me the set", never "is it time", so no copy of the
+           deadline lives here. `sink` carries `core_` because `on_outbound`
+           needs it to filter by blockchain height. */
+        relay_effects sink{zone_, core_};
         shekyl_relay_zone_poll(
-          zone_->relay.get(), now_ms(), uuid_bytes(outs), outs.size(),
-          std::addressof(sink), relay_effects::on_fluff, relay_effects::on_slots
+          zone_->relay.get(), now_ms(),
+          std::addressof(sink), relay_effects::on_outbound,
+          relay_effects::on_fluff, relay_effects::on_slots
         );
 
         arm(std::move(zone_), core_);

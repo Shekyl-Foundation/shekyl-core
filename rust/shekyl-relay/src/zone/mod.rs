@@ -260,11 +260,20 @@ impl Zone {
         self.fluffing
     }
 
-    /// The stem peer for `source`, or `None` when none is routable.
+    /// The raw stem decision for `source`, bypassing the epoch role — a
+    /// **test-only** window on the pinning mechanics that [`Zone::plan_relay`]
+    /// wraps.
     ///
-    /// `source` is `None` for locally originated transactions. Mutates the
-    /// map's source pinning, as the inherited `get_stem` does.
-    pub fn stem_for<R: RelayRng + ?Sized>(
+    /// Production never calls this: it routes through `plan_relay`, which applies
+    /// the RD-4 predicate (`!fluffing || local_origin`) before consulting the
+    /// map. This forwarder lets the pinning tests drive `stem_map::stem_for`
+    /// directly, without a redraw loop to force a stem epoch. It is `#[cfg(test)]`
+    /// — compiled out of production — so a maintainer reading the type cannot
+    /// mistake it for a second live routing entry point (unlike the deliberately
+    /// `pub` observation witnesses such as [`Zone::pinned_sources`], which only
+    /// read state and never decide a route).
+    #[cfg(test)]
+    fn stem_for<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,
         rng: &mut R,
