@@ -26,6 +26,20 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+/*! \file
+    \brief Transport for Dandelion++ relay; the scheduling lives in Rust.
+
+    RP-3a of `docs/design/DAEMON_RELAY_PRIVACY.md`. The stem map, the per-peer
+    fluff batching and the epoch role moved to `shekyl-relay`; what stays here is
+    epee framing, padding, the socket, and the boost::asio timer that sleeps.
+
+    So this file is deliberately the layer with no decisions in it. It asks the
+    zone what to do and does it. Any `if` here that re-derives something the zone
+    already decided is a second copy of that decision — and this is the layer the
+    `levin_notify` gtests structurally cannot see through, so a bug in it hides
+    underneath a green suite (§18.4a). Read it for what it forwards, not for what
+    it computes. */
+
 #include "levin_notify.h"
 
 #include <boost/asio/bind_executor.hpp>
@@ -35,7 +49,10 @@
 #include <boost/system/system_error.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <chrono>
+#include <cstdint>
+#include <cstring>
 #include <deque>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
@@ -45,12 +62,11 @@
 #include "common/varint.h"
 #include "cryptonote_config.h"
 #include "crypto/crypto.h"
-#include "crypto/duration.h"
 #include "cryptonote_basic/connection_context.h"
 #include "cryptonote_core/i_core_events.h"
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
-#include "net/dandelionpp.h"
 #include "p2p/net_node.h"
+#include "shekyl/shekyl_ffi.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "net.p2p.tx"
@@ -72,22 +88,11 @@ namespace levin
     constexpr const std::chrono::seconds noise_min_delay{CRYPTONOTE_NOISE_MIN_DELAY};
     constexpr const std::chrono::seconds noise_delay_range{CRYPTONOTE_NOISE_DELAY_RANGE};
 
-    /* A custom duration is used for the poisson distribution because of the
-       variance. If 5 seconds is given to `std::poisson_distribution`, 95% of
-       the values fall between 1-9s in 1s increments (not granular enough). If
-       5000 milliseconds is given, 95% of the values fall between 4859ms-5141ms
-       in 1ms increments (not enough time variance). Providing 20 quarter
-       seconds yields 95% of the values between 3s-7.25s in 1/4s increments. */
-    using fluff_stepsize = std::chrono::duration<std::chrono::milliseconds::rep, std::ratio<1, 4>>;
-    constexpr const std::chrono::seconds fluff_average_in{CRYPTONOTE_DANDELIONPP_FLUSH_AVERAGE};
-
-    /*! Bitcoin Core is using 1/2 average seconds for outgoing connections
-        compared to incoming. The thinking is that the user controls outgoing
-        connections (Dandelion++ makes similar assumptions in its stem
-        algorithm). The randomization yields 95% values between 1s-4s in
-	1/4s increments. */
-    using fluff_duration = crypto::random_poisson_subseconds::result_type;
-    constexpr const fluff_duration fluff_average_out{fluff_duration{fluff_average_in} / 2};
+    /* The Dandelion++ fluff delay used to be drawn here, from a Poisson
+       distribution over quarter-seconds. It is drawn in `shekyl-relay` now, from
+       the memoryless family the derivation actually calls for — the inherited
+       draw is F-4 of DAEMON_RELAY_PRIVACY.md, and it is gone rather than ported
+       so it cannot be reintroduced by symmetry with the noise delays below. */
 
     /*! Select a randomized duration from 0 to `range`. The precision will be to
         the systems `steady_clock`. As an example, supplying 3 seconds to this
@@ -100,6 +105,38 @@ namespace levin
     {
       using rep = std::chrono::steady_clock::rep;
       return std::chrono::steady_clock::duration{crypto::rand_range(rep(0), range.count())};
+    }
+
+    /* The relay FFI speaks whole milliseconds on the caller's own monotonic
+       clock. `steady_clock`'s epoch is arbitrary but fixed for the process, so
+       the two conversions below round-trip and the zone's deadlines land back on
+       the same timeline the timer waits on. */
+
+    //! \return Now, in the millisecond clock the relay zone is driven on.
+    std::uint64_t now_ms() noexcept
+    {
+      return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    //! \return `ms` from `now_ms()` as a point the `steady_timer` can wait on.
+    std::chrono::steady_clock::time_point from_ms(const std::uint64_t ms) noexcept
+    {
+      return std::chrono::steady_clock::time_point{std::chrono::milliseconds{ms}};
+    }
+
+    static_assert(sizeof(boost::uuids::uuid) == 16, "connection ids cross the relay FFI as 16 raw bytes");
+
+    //! \return `id` as the 16 raw bytes the relay FFI reads.
+    const std::uint8_t* uuid_bytes(const boost::uuids::uuid& id) noexcept
+    {
+      return reinterpret_cast<const std::uint8_t*>(std::addressof(id));
+    }
+
+    //! \return `ids` as a contiguous run of 16-byte ids, or nullptr when empty.
+    const std::uint8_t* uuid_bytes(const std::vector<boost::uuids::uuid>& ids) noexcept
+    {
+      return ids.empty() ? nullptr : reinterpret_cast<const std::uint8_t*>(ids.data());
     }
 
     uint64_t get_median_remote_height(connections& p2p)
@@ -161,6 +198,49 @@ namespace levin
     std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, const i_core_events* core)
     {
       return get_out_connections(p2p, get_blockchain_height(p2p, core));
+    }
+
+    //! How wide a zone's stem set is and how long its epoch runs.
+    struct relay_zone_params
+    {
+      std::size_t stems;
+      std::chrono::seconds min_epoch;
+      std::chrono::seconds epoch_range;
+    };
+
+    /* Two independent parameter sets, kept whole rather than selected field by
+       field. `CRYPTONOTE_NOISE_CHANNELS` and `CRYPTONOTE_DANDELIONPP_STEMS`
+       happen to be equal today and have no reason to stay that way, so choosing
+       between them per-field reads as an accident where choosing between the
+       sets reads as the decision it is. */
+
+    constexpr relay_zone_params noise_zone_params()
+    {
+      return {CRYPTONOTE_NOISE_CHANNELS, noise_min_epoch, noise_epoch_range};
+    }
+
+    constexpr relay_zone_params public_zone_params()
+    {
+      return {CRYPTONOTE_DANDELIONPP_STEMS, dandelionpp_min_epoch, dandelionpp_epoch_range};
+    }
+
+    /*! \return A relay zone for this daemon zone.
+
+        The relay parameters this side still chooses, because it is the only
+        side that knows how the zone is configured. Note the two questions are
+        independent: the epoch comes from whether *noise* is enabled, and the
+        fluff reach from which *network* this is. An i2p zone with noise
+        disabled still fluffs outbound-only. Everything the zone then *does*
+        with them belongs to `shekyl-relay`. */
+    RelayZoneHandle* make_relay_zone(const epee::net_utils::zone nzone, const bool noise_enabled)
+    {
+      const relay_zone_params params = noise_enabled ? noise_zone_params() : public_zone_params();
+      const bool outbound_fluff_only = (nzone != epee::net_utils::zone::public_);
+      return shekyl_relay_zone_new(
+        now_ms(), params.stems,
+        std::uint32_t(params.min_epoch.count()), std::uint32_t(params.epoch_range.count()),
+        outbound_fluff_only
+      );
     }
 
     epee::levin::message_writer make_tx_message(std::vector<blobdata>&& txs, const bool pad, const bool fluff)
@@ -229,11 +309,10 @@ namespace levin
        `post` is used where deferred execution to an `asio::io_context::run`
        thread is preferred.
 
-       The strand per "zone" is useful because the levin
-       `foreach_connection` is blocked with a mutex anyway. So this primarily
-       helps with reducing blocking of a thread attempting a "flood"
-       notification. Updating/merging the outgoing connections in the
-       Dandelion++ map is also somewhat expensive.
+       The strand per "zone" serializes access to the relay zone handle, which
+       is a `&mut self` state machine in Rust and must have exactly one caller
+       at a time. It also keeps `foreach_connection` — which takes a lock of its
+       own — off the notifying thread.
 
        The strand per "channel" may need a re-visit. The most "expensive" code
        is figuring out the noise/notification to send. If levin code is
@@ -272,16 +351,13 @@ namespace levin
       explicit zone(boost::asio::io_context& io_service, std::shared_ptr<connections> p2p, epee::byte_slice noise_in, epee::net_utils::zone zone, bool pad_txs)
         : p2p(std::move(p2p)),
           noise(std::move(noise_in)),
-          next_epoch(io_service),
-          flush_txs(io_service),
+          wake(io_service),
           strand(io_service),
-          map(),
           channels(),
-          connection_count(0),
-          flush_callbacks(0),
+          relay(make_relay_zone(zone, !noise.empty()), &shekyl_relay_zone_free),
+          pending_wakes(0),
           nzone(zone),
-          pad_txs(pad_txs),
-          fluffing(false)
+          pad_txs(pad_txs)
       {
         for (std::size_t count = 0; !noise.empty() && count < CRYPTONOTE_NOISE_CHANNELS; ++count)
           channels.emplace_back(io_service);
@@ -289,22 +365,22 @@ namespace levin
 
       const std::shared_ptr<connections> p2p;
       const epee::byte_slice noise; //!< `!empty()` means zone is using noise channels
-      boost::asio::steady_timer next_epoch;
-      boost::asio::steady_timer flush_txs;
+      /*! One timer for every scheduled relay step, armed from
+          `shekyl_relay_zone_next_wake()`. The zone owns the deadline *value*;
+          this owns the *sleep*. A second timer would need a second deadline,
+          and that would be a copy of a fact the zone already holds. */
+      boost::asio::steady_timer wake;
       boost::asio::io_context::strand strand;
-      struct context_t {
-        std::vector<cryptonote::blobdata> fluff_txs;
-        std::chrono::steady_clock::time_point flush_time;
-        bool m_is_income;
-      };
-      boost::unordered_map<boost::uuids::uuid, context_t> contexts;
-      net::dandelionpp::connection_map map;//!< Tracks outgoing uuid's for noise channels or Dandelion++ stems
       std::deque<noise_channel> channels;  //!< Never touch after init; only update elements on `noise_channel.strand`
-      std::atomic<std::size_t> connection_count; //!< Only update in strand, can be read at any time
-      std::uint32_t flush_callbacks;             //!< Number of active fluff flush callbacks queued
+      //! Stem map, per-peer fluff batches, epoch role. Only touch in `strand`.
+      const std::unique_ptr<RelayZoneHandle, void (*)(RelayZoneHandle*)> relay;
+      /*! Outstanding `wake` callbacks. Re-arming cancels the pending wait, and a
+          canceled callback that re-armed in turn would cancel the next one
+          forever — so only the last outstanding callback does work. The
+          inherited `flush_callbacks` guarded the same hazard on `flush_txs`. */
+      std::uint32_t pending_wakes;
       const epee::net_utils::zone nzone;         //!< Zone is public ipv4/ipv6 connections, or i2p or tor
       const bool pad_txs;                        //!< Pad txs to the next boundary for privacy
-      bool fluffing;                             //!< Zone is in Dandelion++ fluff epoch
     };
   } // detail
 
@@ -338,129 +414,9 @@ namespace levin
 
         if (!channel.connection.is_nil())
           channel.queue.push_back(std::move(message_));
-        else if (destination_ == 0 && zone_->connection_count == 0)
+        else if (destination_ == 0 && shekyl_relay_zone_live_stems(zone_->relay.get()) == 0)
           MWARNING("Unable to send transaction(s) to " << epee::net_utils::zone_to_string(zone_->nzone) <<
 			" - no available outbound connections");
-      }
-    };
-
-    //! Sends txs on connections with expired timers, and queues callback for next timer expiration (if any).
-    struct fluff_flush
-    {
-      std::shared_ptr<detail::zone> zone_;
-
-      static void queue(std::shared_ptr<detail::zone> zone, const std::chrono::steady_clock::time_point flush_time)
-      {
-        assert(zone != nullptr);
-        assert(zone->strand.running_in_this_thread());
-
-        detail::zone& this_zone = *zone;
-        ++this_zone.flush_callbacks;
-        this_zone.flush_txs.expires_at(flush_time);
-        this_zone.flush_txs.async_wait(boost::asio::bind_executor(this_zone.strand, fluff_flush{std::move(zone)}));
-      }
-
-      void operator()(const boost::system::error_code error)
-      {
-        if (!zone_ || !zone_->flush_callbacks || --zone_->flush_callbacks || !zone_->p2p)
-          return;
-
-        assert(zone_->strand.running_in_this_thread());
-
-        const bool timer_error = bool(error);
-        if (timer_error && error != boost::system::errc::operation_canceled)
-          throw boost::system::system_error{error, "fluff_flush timer failed"};
-
-        const auto now = std::chrono::steady_clock::now();
-        auto next_flush = std::chrono::steady_clock::time_point::max();
-        std::vector<std::pair<std::vector<blobdata>, boost::uuids::uuid>> connections{};
-        for (auto &e: zone_->contexts)
-        {
-          auto &id = e.first;
-          auto &context = e.second;
-          if (!context.fluff_txs.empty())
-          {
-            if (context.flush_time <= now || timer_error) // flush on canceled timer
-            {
-              context.flush_time = std::chrono::steady_clock::time_point::max();
-              connections.emplace_back(std::move(context.fluff_txs), id);
-              context.fluff_txs.clear();
-            }
-            else // not flushing yet
-              next_flush = std::min(next_flush, context.flush_time);
-          }
-          else // nothing to flush
-            context.flush_time = std::chrono::steady_clock::time_point::max();
-        }
-
-        /* Always send with `fluff` flag, even over i2p/tor. The hidden service
-	   will disable the forwarding delay and immediately fluff. The i2p/tor
-	   network is therefore replacing the sybil protection of Dandelion++.
-	   Dandelion++ stem phase over i2p/tor is also worth investigating
-	   (with/without "noise"?). */
-        for (auto& connection : connections)
-        {
-          std::sort(connection.first.begin(), connection.first.end()); // don't leak receive order
-          connection.first.erase(std::unique(connection.first.begin(), connection.first.end()),
-                                  connection.first.end());
-          make_payload_send_txs(*zone_->p2p, std::move(connection.first), connection.second, zone_->pad_txs, true);
-        }
-
-        if (next_flush != std::chrono::steady_clock::time_point::max())
-          fluff_flush::queue(std::move(zone_), next_flush);
-      }
-    };
-
-    /*! The "fluff" portion of the Dandelion++ algorithm. Every tx is queued
-        per-connection and flushed with a randomized poisson timer. This
-        implementation only has one system timer per-zone, and instead tracks
-        the lowest flush time. */
-    struct fluff_notify
-    {
-      std::shared_ptr<detail::zone> zone_;
-      std::vector<blobdata> txs_;
-      boost::uuids::uuid source_;
-
-      void operator()()
-      {
-        run(std::move(zone_), epee::to_span(txs_), source_);
-      }
-
-      static void run(std::shared_ptr<detail::zone> zone, epee::span<const blobdata> txs, const boost::uuids::uuid& source)
-      {
-        if (!zone || !zone->p2p || txs.empty())
-          return;
-
-        assert(zone->strand.running_in_this_thread());
-
-        const auto now = std::chrono::steady_clock::now();
-        auto next_flush = std::chrono::steady_clock::time_point::max();
-
-        crypto::random_poisson_subseconds in_duration(fluff_average_in);
-        crypto::random_poisson_subseconds out_duration(fluff_average_out);
-
-
-        MDEBUG("Queueing " << txs.size() << " transaction(s) for Dandelion++ fluffing");
-        for (auto &e: zone->contexts)
-        {
-          auto &id = e.first;
-          auto &context = e.second;
-          // When i2p/tor, only fluff to outbound connections
-          if (source != id && (zone->nzone == epee::net_utils::zone::public_ || !context.m_is_income))
-          {
-            if (context.fluff_txs.empty())
-              context.flush_time = now + (context.m_is_income ? in_duration() : out_duration());
-
-            next_flush = std::min(next_flush, context.flush_time);
-            context.fluff_txs.reserve(context.fluff_txs.size() + txs.size());
-            context.fluff_txs.insert(context.fluff_txs.end(), txs.begin(), txs.end());
-          }
-        }
-
-        if (next_flush == std::chrono::steady_clock::time_point::max())
-          MWARNING("Unable to send transaction(s), no available connections");
-        else if (!zone->flush_callbacks || next_flush < zone->flush_txs.expiry())
-          fluff_flush::queue(std::move(zone), next_flush);
       }
     };
 
@@ -497,48 +453,242 @@ namespace levin
       }
     };
 
-    //! Merges `out_connections_` into the existing `zone_->map`.
-    struct update_channels
+    /*! Performs the effects a relay-zone call produced.
+
+        Both handlers are transport: frame and send, or re-point a covert
+        channel at a new stem slot. Neither decides anything — the decisions were
+        taken in Rust before the callback fired, which is why no variant tag
+        crosses the boundary and there is nothing here to decode wrongly.
+
+        \pre A handler must NOT call back into the zone. It runs while Rust
+        holds `&mut` on the zone's state, so re-entering through any
+        `shekyl_relay_zone_*` call would alias that borrow. Everything these do
+        is either transport or a `post` to another strand; note that `post`
+        always defers, where `dispatch` could run the posted work inline and
+        re-enter that way. Re-arming happens *after* the FFI call returns. */
+    /* Every method here is a Rust callback: `shekyl_relay_zone_*` invokes them
+       across the FFI boundary, where an exception unwinding back into Rust is
+       undefined behaviour. So each is `noexcept` and catches internally — a
+       dropped relay or a skipped repoint is recoverable; a corrupted unwind is
+       not. `core` and `outs` exist for `on_outbound`, which the epoch branch of
+       `poll` calls back to gather the outbound set lazily. */
+    struct relay_effects
     {
-      std::shared_ptr<detail::zone> zone_;
-      std::vector<boost::uuids::uuid> out_connections_;
+      std::shared_ptr<detail::zone> zone;
+      const i_core_events* core = nullptr;
+      std::vector<boost::uuids::uuid> outs;
 
-      //! \pre Called within `zone->strand`.
-      static void post(std::shared_ptr<detail::zone> zone)
+      //! Send one peer's whole batch as a single notification.
+      static void on_fluff(void* ctx, const std::uint8_t* peer, const ShekylRelayBlob* blobs, std::size_t n) noexcept
       {
-        if (!zone)
-          return;
-
-        assert(zone->strand.running_in_this_thread());
-
-        zone->connection_count = zone->map.size();
-
-        // only noise uses the "noise channels", only update when enabled
-        if (zone->noise.empty())
-          return;
-
-        for (auto id = zone->map.begin(); id != zone->map.end(); ++id)
+        assert(ctx != nullptr);
+        try
         {
-          const std::size_t i = id - zone->map.begin();
-          boost::asio::post(zone->channels[i].strand, update_channel{zone, i, *id});
+          detail::zone& z = *static_cast<relay_effects*>(ctx)->zone;
+          if (!z.p2p)
+            return;
+
+          boost::uuids::uuid destination{};
+          std::memcpy(std::addressof(destination), peer, sizeof(destination));
+
+          std::vector<blobdata> txs;
+          txs.reserve(n);
+          for (std::size_t i = 0; i < n; ++i)
+            txs.emplace_back(reinterpret_cast<const char*>(blobs[i].ptr), blobs[i].len);
+
+          /* The zone released this batch already sorted and de-duplicated: the
+             order transactions were received in is an observable, and forwarding
+             it would hand it to every peer downstream. */
+
+          /* Always send with `fluff` flag, even over i2p/tor. The hidden service
+             will disable the forwarding delay and immediately fluff. The i2p/tor
+             network is therefore replacing the sybil protection of Dandelion++.
+             Dandelion++ stem phase over i2p/tor is also worth investigating
+             (with/without "noise"?). */
+          make_payload_send_txs(*z.p2p, std::move(txs), destination, z.pad_txs, true);
+        }
+        catch (const std::exception& e)
+        {
+          MERROR("relay fluff callback threw, dropping batch: " << e.what());
+        }
+        catch (...)
+        {
+          MERROR("relay fluff callback threw a non-standard exception, dropping batch");
         }
       }
 
-      //! \pre Called within `zone_->strand`.
-      static void run(std::shared_ptr<detail::zone> zone, std::vector<boost::uuids::uuid> out_connections)
+      //! Re-point the covert channels at the new stem slots.
+      static void on_slots(void* ctx, const std::uint8_t* slots, std::size_t count) noexcept
       {
-        if (!zone)
+        assert(ctx != nullptr);
+        try
+        {
+          const std::shared_ptr<detail::zone>& z = static_cast<relay_effects*>(ctx)->zone;
+
+          // only noise uses the "noise channels", only update when enabled
+          if (z->noise.empty())
+            return;
+
+          /* Slot order is load-bearing: channel `i` carries stem slot `i`, and an
+             empty slot arrives as a nil in position rather than being compacted
+             away. Indexing anything but positionally here would bind covert
+             channels to the wrong connections, silently (§16.1 contract 3). */
+          /* The snapshot may be NARROWER than the channel set: a stem map drawn
+             over fewer peers than the configured width has that many slots, which
+             is the normal state of a node with one outbound connection. The
+             inherited `post` handled it by iterating the map's span, not the
+             channels'. Only the reverse would be a bug. */
+          assert(count <= z->channels.size());
+          for (std::size_t i = 0; i < count && i < z->channels.size(); ++i)
+          {
+            boost::uuids::uuid connection{};
+            std::memcpy(std::addressof(connection), slots + (i * sizeof(connection)), sizeof(connection));
+            boost::asio::post(z->channels[i].strand, update_channel{z, i, connection});
+          }
+        }
+        catch (const std::exception& e)
+        {
+          MERROR("relay slots callback threw, covert channels not repointed: " << e.what());
+        }
+        catch (...)
+        {
+          MERROR("relay slots callback threw a non-standard exception, covert channels not repointed");
+        }
+      }
+
+      //! Gather the outbound connection set on demand.
+      //!
+      //! `poll` calls this only when a wake crosses an epoch boundary, so the
+      //! locked connection scan and median-height sort are paid at a rollover
+      //! and never on a fluff release. The result is stored in `outs` so the
+      //! returned span outlives the FFI call; an empty set returns nullptr.
+      static const std::uint8_t* on_outbound(void* ctx, std::size_t* out_n) noexcept
+      {
+        assert(ctx != nullptr);
+        relay_effects& self = *static_cast<relay_effects*>(ctx);
+        try
+        {
+          if (self.zone && self.zone->p2p && self.core)
+            self.outs = get_out_connections(*self.zone->p2p, self.core);
+        }
+        catch (const std::exception& e)
+        {
+          // An empty set at a boundary rebuilds the map over no peers — the
+          // already-tolerated no-outbound state, self-healing on the next
+          // update_stems — but log it, since it is otherwise a silent one-epoch
+          // stem/noise dropout.
+          self.outs.clear();
+          MWARNING("relay outbound gather threw, rebuilding over no peers: " << e.what());
+        }
+        catch (...)
+        {
+          self.outs.clear();
+          MWARNING("relay outbound gather threw a non-standard exception, rebuilding over no peers");
+        }
+        *out_n = self.outs.size();
+        return uuid_bytes(self.outs);
+      }
+    };
+
+    //! \pre Called within `zone->strand`.
+    void relay_update_stems(const std::shared_ptr<detail::zone>& zone, const std::vector<boost::uuids::uuid>& outs)
+    {
+      if (!zone)
+        return;
+
+      assert(zone->strand.running_in_this_thread());
+
+      relay_effects sink{zone};
+      shekyl_relay_zone_update_stems(
+        zone->relay.get(), uuid_bytes(outs), outs.size(), std::addressof(sink), relay_effects::on_slots
+      );
+    }
+
+    //! Runs every relay step that has come due, and re-arms the single timer.
+    struct relay_wake
+    {
+      std::shared_ptr<detail::zone> zone_;
+      const i_core_events* core_;
+
+      //! \pre Called within `zone->strand`.
+      static void arm(std::shared_ptr<detail::zone> zone, const i_core_events* core)
+      {
+        assert(zone != nullptr);
+        assert(zone->strand.running_in_this_thread());
+
+        detail::zone& this_zone = *zone;
+        ++this_zone.pending_wakes;
+        this_zone.wake.expires_at(from_ms(shekyl_relay_zone_next_wake(this_zone.relay.get())));
+        this_zone.wake.async_wait(boost::asio::bind_executor(this_zone.strand, relay_wake{std::move(zone), core}));
+      }
+
+      void operator()(const boost::system::error_code error)
+      {
+        if (!zone_ || !zone_->pending_wakes || --zone_->pending_wakes || !zone_->p2p)
+          return;
+
+        assert(zone_->strand.running_in_this_thread());
+
+        if (error && error != boost::system::errc::operation_canceled)
+          throw boost::system::system_error{error, "relay wake timer failed"};
+
+        /* The connection set is gathered lazily: `poll` calls `on_outbound`
+           back only when this wake crosses an epoch boundary and the stem map
+           must be rebuilt. A fluff-release wake — the common case — never pays
+           for the locked connection scan and median-height sort the inherited
+           fluff path also skipped. The epoch deadline stays the zone's; this
+           side answers "give me the set", never "is it time", so no copy of the
+           deadline lives here. `sink` carries `core_` because `on_outbound`
+           needs it to filter by blockchain height. */
+        relay_effects sink{zone_, core_};
+        shekyl_relay_zone_poll(
+          zone_->relay.get(), now_ms(),
+          std::addressof(sink), relay_effects::on_outbound,
+          relay_effects::on_fluff, relay_effects::on_slots
+        );
+
+        arm(std::move(zone_), core_);
+      }
+    };
+
+    /*! The "fluff" portion of the Dandelion++ algorithm. Every tx is queued
+        per-connection behind a randomized delay drawn by the zone, and released
+        when that deadline comes due. This side only hands over the batch and
+        re-arms the timer against whatever deadline the zone now holds. */
+    struct relay_fluff
+    {
+      std::shared_ptr<detail::zone> zone_;
+      std::vector<blobdata> txs_;
+      boost::uuids::uuid source_;
+      const i_core_events* core_;
+
+      void operator()()
+      {
+        run(std::move(zone_), epee::to_span(txs_), source_, core_);
+      }
+
+      //! \pre Called within `zone->strand`.
+      static void run(std::shared_ptr<detail::zone> zone, epee::span<const blobdata> txs, const boost::uuids::uuid& source, const i_core_events* core)
+      {
+        if (!zone || !zone->p2p || txs.empty())
           return;
 
         assert(zone->strand.running_in_this_thread());
-        if (zone->map.update(std::move(out_connections)))
-          post(std::move(zone));
-      }
 
-      //! \pre Called within `zone_->strand`.
-      void operator()()
-      {
-        run(std::move(zone_), std::move(out_connections_));
+        MDEBUG("Queueing " << txs.size() << " transaction(s) for Dandelion++ fluffing");
+
+        std::vector<ShekylRelayBlob> batch;
+        batch.reserve(txs.size());
+        for (const blobdata& tx : txs)
+          batch.push_back(ShekylRelayBlob{reinterpret_cast<const std::uint8_t*>(tx.data()), tx.size()});
+
+        const std::size_t accepted = shekyl_relay_zone_queue_fluff(
+          zone->relay.get(), now_ms(), batch.data(), batch.size(), uuid_bytes(source)
+        );
+        if (accepted == 0)
+          MWARNING("Unable to send transaction(s), no available connections");
+
+        relay_wake::arm(std::move(zone), core);
       }
     };
 
@@ -557,63 +707,60 @@ namespace levin
         if (!zone_ || !core_ || txs_.empty())
           return;
 
-        if (!zone_->fluffing || tx_relay == relay_method::local)
+        assert(zone_->strand.running_in_this_thread());
+
+        /* Stem-or-fluff is the zone's call, including "the origin always stems"
+           (RD-4) and the one NoRoute refresh. This offers the outbound snapshot
+           and performs transport; re-deriving `!fluffing || local` or owning
+           the refresh loop here would put zone scheduling in the one layer the
+           gtest oracle cannot see through. */
+        boost::uuids::uuid destination{};
+        const bool local_origin = (tx_relay == relay_method::local);
+        relay_effects sink{zone_};
+        std::vector<boost::uuids::uuid> outs = get_out_connections(*zone_->p2p, core_);
+
+        std::int32_t plan = shekyl_relay_zone_plan_relay_with_refresh(
+          zone_->relay.get(), uuid_bytes(source_), local_origin,
+          uuid_bytes(outs), outs.size(),
+          reinterpret_cast<std::uint8_t*>(std::addressof(destination)),
+          std::addressof(sink), relay_effects::on_slots
+        );
+
+        if (plan != SHEKYL_RELAY_PLAN_FLUFF_EPOCH)
         {
           core_->on_transactions_relayed(epee::to_span(txs_), relay_method::stem);
-          for (int tries = 2; 0 < tries; tries--)
-          {
-            const boost::uuids::uuid destination = zone_->map.get_stem(source_);
-            if (!destination.is_nil() && make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
-            {
-              /* Source is intentionally omitted in debug log for privacy - a
-                 nil uuid indicates source is that node. */
-              MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
-              return;
-            }
 
-            // connection list may be outdated, try again
-            update_channels::run(zone_, get_out_connections(*zone_->p2p, core_));
+          if (plan == SHEKYL_RELAY_PLAN_STEM &&
+              make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
+          {
+            /* Source is intentionally omitted in debug log for privacy - a
+               nil uuid indicates source is that node. */
+            MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
+            return;
+          }
+
+          // Stem send failed, or still unroutable after the one NoRoute refresh:
+          // force a mid-epoch map refresh (connection list may be stale) and
+          // re-plan once. Transport retry only — refresh policy already lived
+          // in the first call for the empty-map case.
+          outs = get_out_connections(*zone_->p2p, core_);
+          relay_update_stems(zone_, outs);
+          plan = shekyl_relay_zone_plan_relay(
+            zone_->relay.get(), uuid_bytes(source_), local_origin,
+            reinterpret_cast<std::uint8_t*>(std::addressof(destination))
+          );
+          if (plan == SHEKYL_RELAY_PLAN_STEM &&
+              make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
+          {
+            MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
+            return;
           }
 
           MERROR("Unable to send transaction(s) via Dandelion++ stem");
         }
 
         core_->on_transactions_relayed(epee::to_span(txs_), relay_method::fluff);
-        fluff_notify::run(std::move(zone_), epee::to_span(txs_), source_);
-      }
-    };
-
-    //! Swaps out noise/dandelionpp channels entirely; new epoch start.
-    class change_channels
-    {
-      std::shared_ptr<detail::zone> zone_;
-      net::dandelionpp::connection_map map_; // Requires manual copy constructor
-      bool fluffing_;
-
-    public:
-      explicit change_channels(std::shared_ptr<detail::zone> zone, net::dandelionpp::connection_map map, const bool fluffing)
-        : zone_(std::move(zone)), map_(std::move(map)), fluffing_(fluffing)
-      {}
-
-      change_channels(change_channels&&) = default;
-      change_channels(const change_channels& source)
-        : zone_(source.zone_), map_(source.map_.clone()), fluffing_(source.fluffing_)
-      {}
-
-      //! \pre Called within `zone_->strand`.
-      void operator()()
-      {
-        if (!zone_)
-          return;
-
-        assert(zone_->strand.running_in_this_thread());
-
-        if (zone_->nzone == epee::net_utils::zone::public_)
-          MDEBUG("Starting new Dandelion++ epoch: " << (fluffing_ ? "fluff" : "stem"));
-
-        zone_->map = std::move(map_);
-        zone_->fluffing = fluffing_;
-        update_channels::post(std::move(zone_));
+        relay_fluff::run(std::move(zone_), epee::to_span(txs_), source_, core_);
       }
     };
 
@@ -679,44 +826,13 @@ namespace levin
               MWARNING("Unable to send transaction(s) to " << epee::net_utils::zone_to_string(zone_->nzone) <<
 			" - no suitable outbound connections at height " << height);
 
-            boost::asio::post(zone_->strand, update_channels{zone_, std::move(connections)});
+            boost::asio::post(zone_->strand, [z = zone_, connections = std::move(connections)] {
+              relay_update_stems(z, connections);
+            });
           }
         }
 
         wait(start, std::move(zone_), channel_, core_);
-      }
-    };
-
-    //! Prepares connections for new channel/dandelionpp epoch and sets timer for next epoch
-    struct start_epoch
-    {
-      // Variables allow for Dandelion++ extension
-      std::shared_ptr<detail::zone> zone_;
-      std::chrono::seconds min_epoch_;
-      std::chrono::seconds epoch_range_;
-      std::size_t count_;
-      const i_core_events* core_;
-
-      //! \pre Should not be invoked within any strand to prevent blocking.
-      void operator()(const boost::system::error_code error = {})
-      {
-        if (!zone_ || !zone_->p2p)
-          return;
-
-        if (error && error != boost::system::errc::operation_canceled)
-          throw boost::system::system_error{error, "start_epoch timer failed"};
-
-        const bool fluffing = crypto::rand_idx(unsigned(100)) < CRYPTONOTE_DANDELIONPP_FLUFF_PROBABILITY;
-        const auto start = std::chrono::steady_clock::now();
-        auto connections = get_out_connections(*(zone_->p2p), core_);
-        boost::asio::dispatch(
-          zone_->strand,
-          change_channels{zone_, net::dandelionpp::connection_map{std::move(connections), count_}, fluffing}
-        );
-
-        detail::zone& alias = *zone_;
-        alias.next_epoch.expires_at(start + min_epoch_ + random_duration(epoch_range_));
-        alias.next_epoch.async_wait(start_epoch{std::move(*this)});
       }
     };
   } // anonymous
@@ -727,16 +843,22 @@ namespace levin
   {
     if (!zone_->p2p)
       throw std::logic_error{"cryptonote::levin::notify cannot have nullptr p2p argument"};
+    if (!zone_->relay)
+      throw std::logic_error{"cryptonote::levin::notify could not open its relay zone"};
 
     const bool noise_enabled = !zone_->noise.empty();
     if (noise_enabled || zone == epee::net_utils::zone::public_)
     {
       const auto now = std::chrono::steady_clock::now();
-      const auto min_epoch = noise_enabled ? noise_min_epoch : dandelionpp_min_epoch;
-      const auto epoch_range = noise_enabled ? noise_epoch_range : dandelionpp_epoch_range;
-      const std::size_t out_count = noise_enabled ? CRYPTONOTE_NOISE_CHANNELS : CRYPTONOTE_DANDELIONPP_STEMS;
 
-      start_epoch{zone_, min_epoch, epoch_range, out_count, core_}();
+      /* The zone drew its first epoch when it was constructed, matching the
+         inherited `start_epoch` running once here. All that is left is to offer
+         it the connections that already exist and arm the timer on the deadline
+         it chose. */
+      boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
+        relay_update_stems(z, get_out_connections(*z->p2p, core));
+        relay_wake::arm(z, core);
+      });
 
       for (std::size_t channel = 0; channel < zone_->channels.size(); ++channel)
         send_noise::wait(now, zone_, channel, core_);
@@ -751,8 +873,11 @@ namespace levin
     if (!zone_)
       return {false, false, false};
 
-    // `connection_count` is only set when `!noise.empty()`.
-    const std::size_t connection_count = zone_->connection_count;
+    /* Stem slots backed by a live peer — the inherited `connection_count`, and
+       only meaningful when `!noise.empty()`. Published by the zone as a
+       single-writer atomic precisely because this method is callable from any
+       thread (§18.5 finding 1). */
+    const std::size_t connection_count = shekyl_relay_zone_live_stems(zone_->relay.get());
     bool has_outgoing = connection_count;
     if (zone_->noise.empty())
       has_outgoing = zone_->p2p->get_out_connections_count();
@@ -761,13 +886,13 @@ namespace levin
 
   void notify::new_out_connection()
   {
-    if (!zone_ || zone_->noise.empty() || CRYPTONOTE_NOISE_CHANNELS <= zone_->connection_count)
+    if (!zone_ || zone_->noise.empty() ||
+        CRYPTONOTE_NOISE_CHANNELS <= shekyl_relay_zone_live_stems(zone_->relay.get()))
       return;
 
-    boost::asio::dispatch(
-      zone_->strand,
-      update_channels{zone_, get_out_connections(*(zone_->p2p), core_)}
-    );
+    boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
+      relay_update_stems(z, get_out_connections(*z->p2p, core));
+    });
   }
 
   void notify::on_handshake_complete(const boost::uuids::uuid &id, bool is_income)
@@ -775,12 +900,8 @@ namespace levin
     if (!zone_)
       return;
 
-    auto& zone = zone_;
-    boost::asio::dispatch(zone_->strand, [zone, id, is_income] {
-      auto& ctx = zone->contexts[id];
-      ctx.fluff_txs.clear();
-      ctx.flush_time = std::chrono::steady_clock::time_point::max();
-      ctx.m_is_income = is_income;
+    boost::asio::dispatch(zone_->strand, [z = zone_, id, is_income] {
+      shekyl_relay_zone_on_handshake(z->relay.get(), uuid_bytes(id), is_income);
     });
   }
 
@@ -789,17 +910,30 @@ namespace levin
     if (!zone_)
       return;
 
-    auto& zone = zone_;
-    boost::asio::dispatch(zone_->strand, [zone, id]{
-      zone->contexts.erase(id);
+    boost::asio::dispatch(zone_->strand, [z = zone_, id] {
+      shekyl_relay_zone_on_close(z->relay.get(), uuid_bytes(id));
     });
   }
+
+  /* `run_epoch` and `run_fluff` force a *step*, where the inherited code
+     cancelled a *timer*. With one timer covering both kinds of wake, cancelling
+     it would no longer say which step was wanted — and the forced step runs the
+     same zone code the deadline would have, so neither is a test-only path. */
 
   void notify::run_epoch()
   {
     if (!zone_)
       return;
-    zone_->next_epoch.cancel();
+
+    boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
+      const std::vector<boost::uuids::uuid> outs = get_out_connections(*z->p2p, core);
+      relay_effects sink{z};
+      shekyl_relay_zone_force_epoch(
+        z->relay.get(), now_ms(), uuid_bytes(outs), outs.size(),
+        std::addressof(sink), relay_effects::on_slots
+      );
+      relay_wake::arm(z, core);
+    });
   }
 
   void notify::run_stems()
@@ -807,6 +941,10 @@ namespace levin
     if (!zone_)
       return;
 
+    /* Despite the name, this cancels the *noise* timers — it has nothing to do
+       with Dandelion++ stems, and never did. The name is the public test hook's
+       and is left alone here; RP-3b owns the covert path and can rename it
+       along with the rest of that vocabulary. */
     for (noise_channel& channel : zone_->channels)
       channel.next_noise.cancel();
   }
@@ -815,7 +953,14 @@ namespace levin
   {
     if (!zone_)
       return;
-    zone_->flush_txs.cancel();
+
+    boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
+      relay_effects sink{z};
+      shekyl_relay_zone_force_fluff(
+        z->relay.get(), now_ms(), std::addressof(sink), relay_effects::on_fluff
+      );
+      relay_wake::arm(z, core);
+    });
   }
 
   bool notify::send_txs(std::vector<blobdata> txs, const boost::uuids::uuid& source, relay_method tx_relay)
@@ -899,7 +1044,7 @@ namespace levin
              ipv4/6. Marking it as "fluff" here will make the tx immediately
              visible externally from this node, which is not desired. */
           core_->on_transactions_relayed(epee::to_span(txs), tx_relay);
-          boost::asio::dispatch(zone_->strand, fluff_notify{zone_, std::move(txs), source});
+          boost::asio::dispatch(zone_->strand, relay_fluff{zone_, std::move(txs), source, core_});
           break;
       }
     }

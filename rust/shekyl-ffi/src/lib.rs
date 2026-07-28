@@ -110,10 +110,18 @@ pub mod archival_admission_ffi;
 // General CT cleartext-balance verification FFI (`GENESIS_TX_WIRE_FORMAT.md` §2.3).
 pub mod ct_balance_ffi;
 
-// Dandelion++ stem-map FFI — RP-2a (`DAEMON_RELAY_PRIVACY.md` §16). The opaque
-// handle the C++ `net::dandelionpp::connection_map` forwards to once its logic
-// moves to `shekyl-relay-privacy`'s `StemMap`.
+// Production OsRng → RelayRng adapter shared by the relay FFI seams.
+mod secure_relay_rng;
+
+// Dandelion++ embargo / propagation-timeout FFI — RP-4
+// (`DAEMON_RELAY_PRIVACY.md` §17). Stem-map exports retired at RP-3a; the zone
+// owns a `StemMap` directly (`relay_zone_ffi`).
 pub mod dandelionpp_ffi;
+
+// Live relay zone FFI — RP-3a (`DAEMON_RELAY_PRIVACY.md` §18). The C++
+// `levin::notify` forwards here; `Effect` is dispatched in Rust via per-variant
+// callbacks so no enum tag crosses the boundary (§18.4a).
+pub mod relay_zone_ffi;
 
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,

@@ -3007,6 +3007,124 @@ uint64_t shekyl_dandelionpp_embargo_draw_seconds(void);
 /// sender then releases the inputs it had reserved.
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 
+
+// ── Live relay zone (RP-3a, DAEMON_RELAY_PRIVACY.md sec 18) ────────────────
+//
+// The Dandelion++ scheduler: epoch role, stem routing, and per-peer fluff
+// batching. `levin_notify` forwards here and keeps transport — epee framing,
+// padding, the socket — so transaction bodies cross only as opaque blobs.
+//
+// RP-3a adds NO reactor. Rust owns the state and every timing DECISION; the
+// existing boost::asio timer is armed from shekyl_relay_zone_next_wake() and
+// owns the SLEEP. That is what the crate's reason-2 seal prescribes, so this
+// boundary is seal-consistent rather than seal-breaking.
+//
+// Effects are delivered through per-variant CALLBACKS rather than a marshalled
+// enum: dispatch happens in Rust where the compiler checks the match, so the
+// C++ side has no tag, no offsets and no decoding to get wrong (sec 18.4a).
+//
+// Rust twins: rust/shekyl-ffi/src/relay_zone_ffi/mod.rs.
+
+struct RelayZoneHandle;
+
+//! One transaction blob, borrowed for the duration of the call.
+struct ShekylRelayBlob
+{
+  const std::uint8_t* ptr;
+  std::size_t len;
+};
+static_assert(sizeof(ShekylRelayBlob) == sizeof(const std::uint8_t*) + sizeof(std::size_t),
+              "ShekylRelayBlob must be two packed words to match Rust's #[repr(C)]");
+
+//! A released fluff batch: one call carrying a peer's WHOLE batch, already
+//! sorted and de-duplicated by the zone (receive order is an observable). It
+//! becomes a single levin notification — delivered blob-by-blob it would become
+//! N notifications, leaking the batch size as a per-peer message count.
+typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
+                                   const ShekylRelayBlob* blobs, std::size_t n);
+//! The stem slots changed: `count` x 16 bytes, slot order, nil for an empty
+//! slot. Order and nil-position are load-bearing — the consumer indexes by slot.
+typedef void (*ShekylRelaySlotsCb)(void* ctx, const std::uint8_t* slots, std::size_t count);
+//! Supply the outbound connection set on demand: write the id count through
+//! `out_n` and return a pointer to `*out_n` x 16 bytes valid until the poll
+//! returns (nullptr with `*out_n == 0` for none). shekyl_relay_zone_poll calls
+//! this ONLY at an epoch boundary, so a fluff-release wake never pays for the
+//! connection scan. Must not throw across the FFI boundary.
+typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out_n);
+
+//! Forward to the successor written into `out_dest`.
+#define SHEKYL_RELAY_PLAN_STEM        0
+//! Stem-eligible, but nothing routes yet — refresh connections and re-plan.
+#define SHEKYL_RELAY_PLAN_NO_ROUTE    1
+//! Settled for this epoch: fluff. Retrying cannot change the answer.
+#define SHEKYL_RELAY_PLAN_FLUFF_EPOCH 2
+
+//! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
+//! `outbound_fluff_only` is the i2p/tor rule — fluff to outbound connections
+//! only, never to an inbound peer, who on a hidden service is a stranger that
+//! dialled us. It follows the NETWORK, not noise mode: a hidden-service zone
+//! with noise disabled still needs it.
+//! Null when a zone cannot be built: SIZE_MAX stems, or a zero epoch — which
+//! would expire at every wake and spin the relay timer. Treat null as fatal.
+RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems,
+                                       std::uint32_t min_epoch_secs,
+                                       std::uint32_t epoch_jitter_secs,
+                                       bool outbound_fluff_only);
+//! Free a zone. Null is a no-op; free exactly once.
+void shekyl_relay_zone_free(RelayZoneHandle* handle);
+//! A peer completed its handshake.
+void shekyl_relay_zone_on_handshake(RelayZoneHandle* handle, const std::uint8_t* id, bool is_income);
+//! A peer disconnected.
+void shekyl_relay_zone_on_close(RelayZoneHandle* handle, const std::uint8_t* id);
+//! Stem slots backed by a live peer — the inherited `connection_count`. Reads a
+//! single-writer atomic, so it is safe from any thread.
+std::size_t shekyl_relay_zone_live_stems(const RelayZoneHandle* handle);
+//! Earliest time the zone has work; what the asio timer is armed against.
+std::uint64_t shekyl_relay_zone_next_wake(const RelayZoneHandle* handle);
+//! One of the SHEKYL_RELAY_PLAN_* codes. Three-way, not a bool: a transient
+//! routing failure (retry after a refresh) and a settled fluff epoch (do not)
+//! also report different relay_method events. Deciding between them in C++
+//! would mean a second copy of the RD-4 predicate `!fluffing || local_origin`.
+//! A null handle reports NO_ROUTE. Pure plan — production notify prefers
+//! shekyl_relay_zone_plan_relay_with_refresh, which owns the one NoRoute
+//! refresh; keep this for a forced refresh already performed (send-failure
+//! retry) and for tests.
+std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::uint8_t* source,
+                                          bool local_origin, std::uint8_t* out_dest);
+//! Plan a relay; on NO_ROUTE merge `outbound` once and re-plan, pushing slots
+//! if the set changed. Settled fluff epochs do not refresh. This is the
+//! production notify path: the refresh policy lives in Rust with the zone.
+std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
+    RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
+    const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest, void* ctx,
+    ShekylRelaySlotsCb on_slots);
+//! Merge the current outbound set into the stem map mid-epoch, pushing the new
+//! slots if it changed. Used for connection churn, covert-send recovery, and
+//! the forced refresh after a stem send failure.
+void shekyl_relay_zone_update_stems(RelayZoneHandle* handle, const std::uint8_t* outbound,
+                                    std::size_t n, void* ctx, ShekylRelaySlotsCb on_slots);
+//! Accept a batch for fluffing to every peer but `source`. Returns how many
+//! peers took it — zero means nothing is connected to fluff to, or a blob span
+//! was invalid (null ptr with non-zero len). Empty blobs (`len == 0`) are valid
+//! and may pass a null ptr; non-empty spans require a live readable ptr.
+std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
+                                          const ShekylRelayBlob* blobs, std::size_t n,
+                                          const std::uint8_t* source);
+//! Run every step due at now_ms, delivering results through the callbacks. The
+//! outbound set is not passed in: `gather_outbound` is called back only when a
+//! wake crosses an epoch boundary and the stem map is rebuilt, so a fluff
+//! release never triggers the connection scan.
+void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
+                            ShekylRelayOutboundCb gather_outbound,
+                            ShekylRelayFluffCb on_fluff, ShekylRelaySlotsCb on_slots);
+//! Release every pending fluff batch — what notify::run_fluff() drives.
+void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
+                                   void* ctx, ShekylRelayFluffCb on_fluff);
+//! Start a new epoch immediately — what notify::run_epoch() drives.
+void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms,
+                                   const std::uint8_t* outbound, std::size_t n,
+                                   void* ctx, ShekylRelaySlotsCb on_slots);
+
 } // extern "C"
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and

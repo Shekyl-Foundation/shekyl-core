@@ -27,14 +27,15 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-set(net_sources dandelionpp.cpp error.cpp http.cpp i2p_address.cpp parse.cpp
+set(net_sources error.cpp http.cpp i2p_address.cpp parse.cpp
     socks.cpp socks_connect.cpp tor_address.cpp)
 monero_find_all_headers(net_headers "${CMAKE_CURRENT_SOURCE_DIR}")
 
 monero_add_library(net ${net_sources} ${net_headers})
-# dandelionpp.cpp forwards to the Rust stem-map FFI (RP-2a). SHEKYL_FFI_LINK_LIBS
-# propagates transitively and resolves per-binary to the right Rust image
-# (daemon -> shekyl_daemon_image, everything else -> shekyl_ffi), so the daemon
-# and unit_tests both get the shekyl_dandelionpp_map_* symbols at final link.
-target_link_libraries(net common epee ${Boost_ASIO_LIBRARY} ${SHEKYL_FFI_LINK_LIBS})
+# No Rust image here. `dandelionpp.cpp` was this library's only FFI consumer and
+# was retired with the RP-2a stem-map seam (RP-3a): `shekyl-relay::Zone` owns the
+# map directly in Rust, so nothing under net/ reaches across the boundary. If a
+# source here ever does again, add ${SHEKYL_FFI_LINK_LIBS} back — it resolves
+# per-binary to the right image (daemon -> shekyl_daemon_image, else shekyl_ffi).
+target_link_libraries(net common epee ${Boost_ASIO_LIBRARY})
 

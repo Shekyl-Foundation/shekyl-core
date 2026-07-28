@@ -57,7 +57,9 @@ none of this is genesis-blocking. It is being fixed before ship because it is
 ## 0. Problem statement (verified at source and by measurement)
 
 Shekyl inherits a complete Dandelion++ implementation from the Monero
-lineage: the stem map in [`src/net/dandelionpp.cpp`](../../src/net/dandelionpp.cpp),
+lineage: the stem map in `src/net/dandelionpp.cpp` (**deleted at RP-3a** — see
+§16; `dandelionpp.cpp:NNN` citations throughout this document are historical and
+resolve against git history, `git log --follow -- src/net/dandelionpp.cpp`),
 the epoch/stem/fluff orchestration in
 [`src/cryptonote_protocol/levin_notify.cpp`](../../src/cryptonote_protocol/levin_notify.cpp),
 and the stem embargo in
@@ -448,7 +450,7 @@ changes no daemon behaviour.
 **RP-2…RP-4 (not yet scoped — gated on this document converging).** Sketch
 only; the sequence is decided in review, not here:
 
-- **RP-2** — FFI + cut `connection_map` over; delete `src/net/dandelionpp.cpp`.
+- **RP-2** — FFI + cut `connection_map` over; delete `src/net/dandelionpp.cpp`. *(Done: ported at RP-2a, file deleted at RP-3a.)*
   The `dandelionpp_map` block in `tests/unit_tests/net.cpp` (≈1787–2140) is the
   acceptance gate.
 - **RP-3** — cut the epoch/fluff scheduler; `levin_notify.cpp` becomes a
@@ -815,7 +817,7 @@ leaks in **distinct epochs** — same-epoch leaks re-confirm the same fixed stem
 path, while two cross-epoch `5`-sets share only the origin, so they intersect to
 `~{origin}`. This distinct-epoch requirement is the load-bearing assumption of
 the whole section, and it is anchored at source:
-[`get_stem` caches `source → out-index` in `in_mapping_`](../../src/net/dandelionpp.cpp#L192)
+`get_stem` caches `source → out-index` in `in_mapping_`
 and returns it thereafter, so a source egresses on one fixed stem successor for
 the life of a `connection_map`; the per-epoch
 [`change_channels` rebuild](../../src/cryptonote_protocol/levin_notify.cpp#L711)
@@ -1210,7 +1212,7 @@ instruments for both are built or scoped. What remains is the *arguments*:
 
   **The churn path (§12.6, W3c) tightens what Q-10 must deliver.** `connection_map::update()`
   refills a churned stem slot with a *fresh* draw
-  ([dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160)) mid-epoch, and an
+  (dandelionpp.cpp:160) mid-epoch, and an
   adversary who induces churn re-rolls that draw repeatedly. So the bound Q-10 owes
   is not "`g` in a single initial draw" but **`g` under repeated adversary-induced
   refills** — each induced disconnect is another `~g` chance at the slot, strictly
@@ -1249,7 +1251,7 @@ instruments for both are built or scoped. What remains is the *arguments*:
 
   1. **The churn coupling is the non-obvious constraint.** `g_max` is not a static
      peerlist property. `update()`'s fresh `rand_idx` refill
-     ([dandelionpp.cpp:144,160](../../src/net/dandelionpp.cpp#L144)) re-rolls the
+     (dandelionpp.cpp:144,160) re-rolls the
      slot on every disconnect, and the reshape trigger correlates with exactly that
      disconnect. So the round cannot answer with "the white list is N %
      poisonable"; it must answer "an adversary who can force `k` disconnects gets
@@ -1789,18 +1791,32 @@ reasons — *and a refuted one I record so it is not re-argued*:
 
 ### 12.2 Mechanism spec, pinned to `get_stem` / `connection_map`
 
+> **Anchors retired — read this before following the links below (RP-3a).**
+> `src/net/dandelionpp.{h,cpp}` no longer exists: `connection_map` was an
+> opaque-handle wrapper over the Rust map, and RP-3a took the whole relay zone
+> into Rust, so `shekyl-relay::Zone` now owns a `StemMap` directly. The
+> mechanism this section specifies is unchanged; only its address moved.
+> `get_stem(source)` is `StemMap::stem_for` in
+> [`stem_map.rs`](../../rust/shekyl-relay-privacy/src/stem_map.rs), the cached
+> `in_mapping_[source]` is its `inbound` map, and the caller that would choose
+> the alternate is `Zone::plan_relay` in
+> [`zone.rs`](../../rust/shekyl-relay/src/zone.rs). **The line numbers below are
+> kept as written** — they record what was verified at the time, and rewriting
+> them would silently re-attribute that verification to code nobody checked.
+> RP-2b re-grounds against the Rust source.
+
 1. **Trigger.** A stem holder's embargo fires before disarm (the preemption
    event of the survival model).
 2. **Response.** Instead of `fluff_notify`, forward the transaction on the
    *alternate* stem successor.
 3. **Selecting the alternate — not via `get_stem` again.** `get_stem(source)`
    returns the cached `in_mapping_[source]` entry
-   ([dandelionpp.cpp:192,209](../../src/net/dandelionpp.cpp#L192)); calling it
+   (dandelionpp.cpp:192,209); calling it
    again re-selects the *same* successor and the re-stem is a no-op (question ii).
    The alternate must be taken explicitly as the *other* live `out_mapping_`
    index. `out_mapping_` holds exactly `CRYPTONOTE_DANDELIONPP_STEMS = 2` entries
    ([config](../../src/cryptonote_config.h#L101),
-   [ctor](../../src/net/dandelionpp.cpp#L113)), so "the other index" is
+   ctor), so "the other index" is
    well-defined: the primary is `out_mapping_[in_mapping_[source].second]`, the
    alternate is the remaining index.
 4. **Retry cap = `STEMS − 1 = 1`** (derived, §12.3). After the alternate is used,
@@ -1857,9 +1873,9 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 | --- | --- | --- | --- | --- | --- |
 | W1 | `get_stem(nil)` no-op (ii) | design bug | select the alternate `out_mapping_` index explicitly, never re-call `get_stem` | none | **closed by spec** |
 | W2 | Fan-out 1→2 (i) | passive inbound supernode (§6.8) | reuse the existing 2nd `out_mapping_` entry; net against leak benefit in the §6.8 metric | fan-out cost sub-dominant to the ~86× rate cut | **closed (netted)** |
-| W3 | Both-successors-black-hole | adversary occupies *both* of the origin's 2 stem successors | re-stem to the 2nd is also dropped → fluff after the cap; the fluff recovers liveness | origin exposed iff **both** stem slots are adversarial. The two slots are drawn **without replacement** from the origin's *outbound* pool of `D_out = 12` ([`out_mapping_`](../../src/net/dandelionpp.cpp#L103), [`!m_is_income`](../../src/cryptonote_protocol/levin_notify.cpp#L152)); an adversary enters that pool only by being *selected* as an outbound peer (the costly direction). Measured (§12.6): **≈ 0 at baseline `g = f`** (~1 of 12 peers cannot fill two slots), **bounded *above* by the independent draw `(a/D)²`** (no-replacement is anti-correlated, not "worse than independence"), rising only under genuine outbound enrichment `g ≫ f` — ≈ 0.09 even at `g = 0.30`, well under the inbound `π₀ = 0.45`. | **measured (build 1)** — small, gated on the costly outbound-selection capability |
+| W3 | Both-successors-black-hole | adversary occupies *both* of the origin's 2 stem successors | re-stem to the 2nd is also dropped → fluff after the cap; the fluff recovers liveness | origin exposed iff **both** stem slots are adversarial. The two slots are drawn **without replacement** from the origin's *outbound* pool of `D_out = 12` (`out_mapping_`, [`!m_is_income`](../../src/cryptonote_protocol/levin_notify.cpp#L152)); an adversary enters that pool only by being *selected* as an outbound peer (the costly direction). Measured (§12.6): **≈ 0 at baseline `g = f`** (~1 of 12 peers cannot fill two slots), **bounded *above* by the independent draw `(a/D)²`** (no-replacement is anti-correlated, not "worse than independence"), rising only under genuine outbound enrichment `g ≫ f` — ≈ 0.09 even at `g = 0.30`, well under the inbound `π₀ = 0.45`. | **measured (build 1)** — small, gated on the costly outbound-selection capability |
 | W3b | Single-live-stem fallback | adversary holds the origin at *one* live stem peer (induced churn / partial eclipse) | no alternate exists → fluff on embargo fire (the §12.2.7 fallback) | **every** embargo fire becomes an origin fluff for that origin — cheaper than W3 (one slot, not two), same lever (shaping the 2-slot stem set). Uncounted by §6.8. | **ceiling measured** — the single-slot occupancy the same instrument reports (§12.6) bounds it; the realized rate is gated on an induced-churn capability |
-| W3c | Churn-refilled alternate | adversary induces churn on the origin's stem peer (or *is* the dropping successor), forcing `update()` to refill the slot | `update()` fresh-draws the churned slot from the outbound pool ([dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160)) mid-epoch; reshape may then forward to a fresh draw | `≈ g` per re-stem, and **churn correlates with the reshape trigger** (a dark successor is why the embargo fires), so it is the operative case, not the edge case. Repeated induced churn re-rolls the draw. | **spec gap named** — RP-2 must make the alternate stable across churn refill (§12.5); the `g`-bound Q-10 owes must hold under *repeated* refills |
+| W3c | Churn-refilled alternate | adversary induces churn on the origin's stem peer (or *is* the dropping successor), forcing `update()` to refill the slot | `update()` fresh-draws the churned slot from the outbound pool (dandelionpp.cpp:160) mid-epoch; reshape may then forward to a fresh draw | `≈ g` per re-stem, and **churn correlates with the reshape trigger** (a dark successor is why the embargo fires), so it is the operative case, not the edge case. Repeated induced churn re-rolls the draw. | **spec gap named** — RP-2 must make the alternate stable across churn refill (§12.5); the `g`-bound Q-10 owes must hold under *repeated* refills |
 | W4 | Loop (revisited node) | topology | once-per-tx local cap bounds re-stemming; matches the paper's "fluff on loop" | bounded by the cap | **closed by cap + local state** |
 | W5 | Epoch-boundary straddle | timing | a re-stem after `change_channels` uses the fresh map; D++ already tolerates map turnover mid-flight ([levin_notify.cpp:711](../../src/cryptonote_protocol/levin_notify.cpp#L711)) | tx may re-stem into a rebuilt map | **low — within existing D++ tolerance** |
 | W6 | Wire position leak | on-path observer counting re-stems | retry state local, tx-hash-keyed, never serialized | none | **closed by spec (the wire rule)** |
@@ -1875,7 +1891,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
   reading the transport table's `π₀ = 0.45` (§6.5) as single-slot occupancy under
   the same enrichment. **It is not.** `π₀` is the *inbound* diffusion reach — cheap
   edges the spy dials — while `out_mapping_` is built from the origin's *outbound*
-  pool ([dandelionpp.cpp:103](../../src/net/dandelionpp.cpp#L103)), which an
+  pool (dandelionpp.cpp:103), which an
   adversary enters only by being *selected* as an outbound peer (address-manager /
   sybil bias, the costly direction the node resists). Importing the inbound reach
   would have measured a channel that capability cannot reach — the exact
@@ -1895,7 +1911,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
   ([levin_notify.cpp:448](../../src/cryptonote_protocol/levin_notify.cpp#L448)),
   which makes the inbound passive supernode structurally absent (§6.3, reshape's
   *friend*); and the stem pool is the outbound set
-  ([dandelionpp.cpp:103](../../src/net/dandelionpp.cpp#L103),
+  (dandelionpp.cpp:103,
   [`:152`](../../src/cryptonote_protocol/levin_notify.cpp#L152)), which is what W3
   occupies. They are related but **not the same fact**, and the earlier "W3's
   residual is *worse* than independence" reading was **backwards**: drawing two
@@ -1913,7 +1929,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
   regression the spec forbids (§12.2.6), not a tuning question. **This HALT must
   bind on the churn-refill path too (§12.6, W3c):** `connection_map::update()`
   already fresh-draws to refill a churned slot
-  ([dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160)) mid-epoch, so an
+  (dandelionpp.cpp:160) mid-epoch, so an
   alternate that was a stable peer at arming can silently become a fresh
   g-enriched draw before reshape forwards to it. Reusing "`out_mapping_[other]`"
   is not sufficient if the peer *in* that slot was re-rolled by churn.
@@ -2015,13 +2031,13 @@ slots §12.6 already counts, so reshape leaks iff **both** slots are adversarial
 with no third peer to add a separate `P(re-stem target adversarial) ≈ g`.
 
 **But "the fixed second slot" is fixed only while the map is stable, and the tree
-already fresh-draws on churn.** [`connection_map::update()`](../../src/net/dandelionpp.cpp#L134)
-nils a churned slot ([:144](../../src/net/dandelionpp.cpp#L144)) and refills it with
+already fresh-draws on churn.** `connection_map::update()`
+nils a churned slot (:144) and refills it with
 a fresh `crypto::rand_idx` draw from the current outbound pool
-([:160](../../src/net/dandelionpp.cpp#L160)); it runs **mid-epoch**, dispatched from
+(:160); it runs **mid-epoch**, dispatched from
 [`new_out_connection` → `update_channels`](../../src/cryptonote_protocol/levin_notify.cpp#L762)
 when a replacement outbound peer connects. (`get_stem`'s nil branch
-[:195](../../src/net/dandelionpp.cpp#L195) additionally re-maps a source onto the
+:195 additionally re-maps a source onto the
 *other* existing slot via `select_stem` — no fresh peer, but it too breaks slot
 stability.) So on churn the alternate can be a **fresh g-enriched draw** — exactly
 the fresh-draw case that resurrects `W3c ≈ g`.
@@ -2184,7 +2200,7 @@ trigger.** (a) *Epoch boundary:* `change_channels`
 the cross-epoch independence §6.8's intersection defence rests on. (b) *Mid-epoch
 churn:* `update_channels::run` → `map.update()`
 ([levin_notify.cpp:528-536](../../src/cryptonote_protocol/levin_notify.cpp#L528),
-the fresh-draw refill at [dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160))
+the fresh-draw refill at dandelionpp.cpp:160)
 fires on the **stem-send-*failure* retry**
 ([dandelionpp_notify:575](../../src/cryptonote_protocol/levin_notify.cpp#L575),
 "connection list may be outdated, try again") and on `new_out_connection`
@@ -3018,6 +3034,15 @@ reconciliation the paper always assumed some layer would.
 
 ## 16. RP-2a design round — `connection_map` → Rust (the faithful port)
 
+> **Seam retired in RP-3a. This section is lineage, not current structure.**
+> The wrapper was designed with `removal target RP-3` written into it, and RP-3a
+> reached it: `src/net/dandelionpp.{h,cpp}`, `dandelionpp_ffi.h`, the
+> `shekyl_dandelionpp_map_*` exports and the six `dandelionpp_map` gtests are all
+> gone, because `shekyl-relay::Zone` owns a `StemMap` directly and a second path
+> to the same map is a defect waiting for a reader. Kept in full because the
+> *reasoning* is still load-bearing — §16.1's three contracts are why the port
+> was faithful, and one of them outlived the seam (see below).
+
 Short design leading the RP-2a implementation commits on `feat/rp2a-connection-map-rust`.
 
 **Scope (the ratified split, §3).** RP-2a ports the `connection_map` *logic* to
@@ -3132,6 +3157,32 @@ cryptographically-secure `RelayRng`** matching the C++ `crypto::random_device` /
    whichever keeps the diff clean).
 3. The RP-1 `a_slot_emptied_by_an_earlier_update_is_backfilled_later` regression
    still holds.
+
+**Retirement executed at RP-3a, on the option acceptance item 2 reserved.** The
+six C++ gtests are gone, and the condition that authorised it was checked rather
+than remembered: `gtest_empty`, `gtest_zero_stems`, `gtest_dropped_connection`,
+`gtest_dropped_connection_remapped` and `gtest_dropped_all_connections` all live
+in `stem_map.rs` — five twins for the five behavioural cases, the sixth
+(`traits`) being wrapper move/copy semantics that died with the wrapper it
+constrained. Census by grep, not by memory: after the deletion no
+`connection_map`, `StemMapHandle`, `shekyl_dandelionpp_map_*` or `net/dandelionpp`
+reference remains anywhere in `src/`, `tests/`, `contrib/` or `cmake/`.
+
+**Which of the three contracts survived the seam, and where its witness went.**
+Two are moot: `map_update`'s exact re-arm predicate is now `Zone::update_stems`
+returning `StemSetChange` with no ABI in between, and `map_clone`'s deep-copy
+requirement died with the handle that could be shallow-copied. **Contract 3 did
+not die** — a consumer still indexes the parallel noise channel by position, so a
+compacted or reordered snapshot still binds covert channels to the wrong
+connections. It is now the `SlotsCb` contract at the RP-3a boundary, and its
+witness is `stem_slots_cross_in_index_order_with_nils_in_position`.
+
+That check is the reason this retirement took a pass of its own rather than a
+tail-end commit. The successor test *carried a "sole witness" seal over a body
+that never produced a nil* — three candidates into two slots, both filled. It
+would have inherited the seal and not the coverage, and the seal would have told
+the next reader the property was already covered. It now empties a slot with no
+backfill and is negative-controlled against both compaction and reordering.
 
 The six gtests are **necessary but not sufficient** — they are structurally blind
 to the three §16.1 consumption contracts. Three micro-tests arm them (an armed
@@ -3313,3 +3364,508 @@ sites, matching:
    assumed, during implementation; any that does is re-pinned to the derived value
    with the reason recorded.
 5. The daemon builds and the existing `tx_pool` / relay tests pass.
+
+---
+
+## 18. RP-3 design round — the scheduler cut (F-4/F-5 → Rust)
+
+Short design leading the RP-3 implementation commits on
+`feat/rp3-levin-scheduler-rust`. This is the arc's last port and its last two
+findings.
+
+**Scope and the two decisions already taken.** The relay *loop* moves to Rust
+(not "C++ keeps the loop and asks Rust for decisions"), and **Rust owns the zone
+state** — `contexts` and their fluff queues, the map, and every timer. C++ keeps
+what it is uniquely good at and what no Rust implementation exists for: epee
+binary serialization, levin framing, fragmentation, padding, and the socket.
+`levin_notify` becomes the transport shim §3 always said it would.
+
+### 18.1 Re-census (at source, on `dev` @ `41ee2c41f`)
+
+The surface is **unmoved** since RP-1: no commit has touched `levin_notify.{cpp,h}`
+or `tests/unit_tests/levin.cpp`. Two findings change the round's shape, and the
+first corrects a claim made earlier in this arc.
+
+**The 33-gtest oracle survives — the earlier reading was wrong.** It looked like
+the tests were asio-coupled beyond rescue: they construct
+`cryptonote::levin::notify{io_service_, …}` with their own `io_context` and pump
+it with `run_one()`, which a Rust-owned loop would not be on. But the pumping
+drains the **transport** queue, not the timers. The tests never wait on a timer
+at all: `levin_notify.h:108–115` declares `run_epoch()`, `run_stems()` and
+`run_fluff()`, each commented *"Only use in testing"*, the suite calls them **36
+times**, and it manipulates a `steady_timer` **zero** times. The oracle is
+timing-independent by construction — it forces each scheduled step and asserts on
+*routing and payload* (`fluff_without_padding`: nine of ten contexts get exactly
+one send, the source gets none, `dandelionpp_fluff` is set). So the 33 tests
+remain a free regression oracle across the cut, provided the Rust scheduler
+exposes equivalent force-step entry points for those three hooks to forward to.
+That is a **requirement on the Rust design**, and it is cheap: the crate's state
+machines are already pure `&mut self` steps that return deadlines.
+
+**RP-3 owns F-4 and F-5, so this is a correction and not only a port.** The fluff
+delay is still drawn in C++ from `crypto::random_poisson_subseconds`
+([`levin_notify.cpp:439–440`](../../src/cryptonote_protocol/levin_notify.cpp#L439-L440),
+means at [`:75–90`](../../src/cryptonote_protocol/levin_notify.cpp#L75-L90)) —
+F-4, "the same distribution defect as F-2, on the timer every node applies to
+every transaction", and with it F-5, the flood that is ~7× slower than it needs
+to be (13.75 s vs 2.25 s p90 first passage). Both are **High**. RP-4 closed
+F-1/F-2/F-3; this closes the pair that touches every transaction on every node,
+and `FluffScheduler` already holds the corrected draw. Because the gtests assert
+routing rather than delays, that deliberate behaviour change does not threaten
+them — the same reason RP-4's correction needed no unchanged-behaviour oracle.
+
+### 18.2 What moves, what stays, and the seam
+
+`notify`'s public API is the contract that must survive verbatim — callers and
+all 33 tests bind to it: `get_status`, `new_out_connection`,
+`on_handshake_complete`, `on_connection_close`, `send_txs`, and the three `run_*`
+hooks. Each becomes a forwarding call onto a Rust zone handle, exactly as
+`connection_map` became a forwarding wrapper in RP-2a.
+
+Rust calls back out through the surface §4 sketched, now verified at source:
+
+| Outward call | Site |
+| --- | --- |
+| `p2p.foreach_connection(cb)` — connection snapshot | [`:109`](../../src/cryptonote_protocol/levin_notify.cpp#L109), [`:151`](../../src/cryptonote_protocol/levin_notify.cpp#L151) |
+| `p2p.send(blob, id)` | [`:211`](../../src/cryptonote_protocol/levin_notify.cpp#L211), [`:666`](../../src/cryptonote_protocol/levin_notify.cpp#L666) |
+| `p2p.get_out_connections_count()` | [`:758`](../../src/cryptonote_protocol/levin_notify.cpp#L758) |
+| `core->get_current_blockchain_height()` / `is_synchronized()` | [`:133`](../../src/cryptonote_protocol/levin_notify.cpp#L133), [`:134`](../../src/cryptonote_protocol/levin_notify.cpp#L134) |
+| `core->on_transactions_relayed(txs, method)` | [`:562`](../../src/cryptonote_protocol/levin_notify.cpp#L562), [`:581`](../../src/cryptonote_protocol/levin_notify.cpp#L581), [`:853`](../../src/cryptonote_protocol/levin_notify.cpp#L853) |
+
+Message construction (`make_payload_send_txs`: epee serialization plus padding to
+the next boundary) stays C++ and is called *by* Rust with the peer set it chose.
+Batching **content** is transport; batching **time** is privacy — the split
+`schedule.rs` has asserted from the start.
+
+**Concurrency: the Rust task replaces the strand.** Today every mutation is
+serialized by `zone->strand`, and connection events arrive on asio threads. With
+Rust owning the state, the zone task becomes the sole serializer — a stronger
+guarantee than the strand, because it is enforced by ownership rather than by
+each handler remembering its `\pre`. The RP-2a map contract inverts cleanly with
+it: "no internal lock because the zone strand serializes" becomes "no internal
+lock because the Rust task owns it". The design obligation is the handoff — every
+C++-side event (`on_handshake_complete`, `on_connection_close`, `send_txs`) must
+enqueue to that task rather than mutate anything, and the FFI must make the
+mutating path the only path.
+
+**Retraction (rule: a dropped path is documented, and every artifact reflects
+it).** `schedule.rs`'s module doc and §3 both record the opposite position — *"a
+Rust core that demanded its own reactor would mean reconciling two event loops
+for no gain. The caller arms whatever timer it already has."* That was written
+when C++ was assumed to keep the loop; moving it *replaces* the loop rather than
+duplicating it, so the reasoning does not survive its premise. What **does**
+survive, and should be said louder, is the rest of that module's claim: the state
+machines own *when* and never *how*, and remain pure steps that return deadlines.
+That property is exactly what keeps the `run_*` hooks — and therefore the
+oracle — available. RP-3 rewrites the paragraph rather than deleting the idea.
+
+**Correction: the retraction is withdrawn — RP-3a is seal-consistent.** An
+earlier pass here recorded `lib.rs:100–112`'s reason 2 as reversed, priced as
+*"F-4/F-5 buys the second reactor."* **That ledger was wrong**, and following the
+error back showed the reversal itself was unnecessary:
+
+- **F-4/F-5 close without any reactor change** — the corrected draw is the
+  crate's whether asio or tokio owns the sleep. The gain never required the cost
+  it was charged against.
+- **RP-3a adds no reactor.** Rust owns the zone state and every timing
+  *decision*; the existing asio timer is armed from the returned deadline and
+  owns the *sleep*. Rust is a library the p2p path calls, not a loop beside it,
+  so the p2p path still has exactly one reactor.
+- That is **what reason 2 prescribes**, not a departure from it: *"a plain
+  `&mut self` state machine that returns a deadline, precisely so the existing
+  timer stays in charge."* RP-3a is that sentence implemented.
+
+For precision, two reactors already coexist in the daemon process — the
+Axum/tokio server in `shekyl-daemon-rpc` (`Builder::new_multi_thread()`) — and
+always have. Reason 2 was never about the process; it is about the **p2p path**,
+which asio-arms leaves intact.
+
+**When the reactor does move: at C++ removal, where it is free.** With asio gone,
+tokio is the sole runtime — no second reactor to create, and no transitional
+asio/tokio seam to maintain. Moving it earlier would buy that seam and pay for it
+until the C++ leaves. So reason 2 is broken by the *removal*, not by RP-3a, and
+`schedule.rs`'s "No async runtime" section **also stands unchanged** — its claim
+was always that the types never spawn, sleep or await, which remains true.
+
+**No rewrite lands at all now**, which is the doc-tracks-code rule reaching its
+cleanest outcome: the module docs never changed, because the code never departed
+from what they describe. The retraction that was scheduled for the
+implementation commit is simply withdrawn.
+
+`tokio` is already in the daemon image (`shekyl-daemon-rpc`, `features = ["full"]`),
+so the runtime is not a new dependency under the single-image contract.
+
+### 18.3 Proposed split
+
+The Dandelion++ path and the covert-traffic path are separable, and only the
+first carries findings:
+
+- **RP-3a** — the zone, epoch/fluff/stem scheduling, and the map's ownership move
+  to Rust; **F-4/F-5 close here**. The C++ noise channels keep working by reading
+  the ordered slot snapshot RP-2a already exposes (`levin_notify.cpp:520` binds
+  `channels[i]` to slot `i`; `map_snapshot` is that call).
+- **RP-3b** — the noise channels follow, and the snapshot seam is deleted with
+  them.
+
+**Standing item for RP-3b: name the action, not the intent.** `run_stems()` does
+`for (noise_channel& c : zone_->channels) c.next_noise.cancel()` — it cancels
+covert-traffic timers and has nothing to do with stem routing. The name captured
+the *caller's intent* in the clearnet configuration, where stems run and noise
+does not, so "advance the stem machinery" and "cancel the noise timers"
+coincided. Once Tor exists — noise runs, stems do not — the name is **actively
+false**, and false on the transport that matters most. It nearly put covert
+traffic into the 3a stem branch under a name that made the misplacement
+invisible.
+
+The detector is the **three-way disagreement**: name says "run stems", the header
+comment says "next stem timeout", the body says "cancel noise timers". Only the
+body is executable, and the disagreement itself marks a name written for a world
+that no longer exists. These fossils cluster in the covert path — the fluff/stem
+vocabulary has been slippery throughout it — so 3b's grounding trusts bodies over
+identifiers harder than 3a's did.
+
+The port is a **free rename**: name each Rust function for its body's action, and
+where that differs from the C++ name, that difference is a dead assumption being
+deleted. The old identifier survives only at the ABI shim where the oracle needs
+it (the gtests call `run_stems`) — old names at the boundary, honest names where
+the logic lives, exactly as the map port kept the C++ ABI over honestly-typed
+Rust. Types stop the machine reasoning wrongly; names stop the human doing it.
+
+Noise is conditionally active (`if (zone->noise.empty()) return`) and carries its
+own strand-per-channel model, so it is genuinely a second subsystem rather than
+an arbitrary cut. The split is a proposal, not a decision: it stands or falls on
+whether 3a lands cleanly with the snapshot seam intact.
+
+### 18.4 Acceptance
+
+1. **The 33 `levin_notify` gtests pass unchanged**, through `run_epoch` /
+   `run_stems` / `run_fluff` forwarding into the Rust scheduler. This is the
+   round's primary oracle and the reason the riskiest step is tractable.
+2. The corrected fluff delay is the crate's (`FluffScheduler`), and the C++
+   `random_poisson_subseconds` draw is deleted — F-4/F-5 closed, with the
+   derivation guarded at its sites per the STEMS=2 precedent.
+3. **The timing correction carries its own oracle, and "wired" is not
+   "witnessed".** F-4/F-5 are not closed when the corrected draw is wired —
+   they are closed when a test witnesses that the *wired* draw is the corrected
+   distribution. The gap is not hypothetical: `FluffScheduler::inherited()`
+   constructs with `DelayFamily::Poisson` (the F-4 defect) and
+   `FluffScheduler::memoryless()` with `Geometric`, at the same means. A stale
+   wire is **one identifier**, and it compiles, fluffs, and passes all 33
+   routing gtests — which are blind to timing — plus any "does it fluff" test,
+   which is blind to distribution. So the fluff increment's acceptance is a
+   **distribution assertion**: the family the zone actually draws from is
+   `Geometric` and explicitly not `Poisson`, the inbound/outbound means match
+   the configured averages with the outbound halved, and a seeded deadline
+   sequence is pinned so *any* rewire of the draw fails the test. Armed trigger,
+   not documentation — this is the one gain the routing oracle cannot see, and
+   it is the gain the `lib.rs` seal was broken to obtain.
+
+   **Generalised, after the negative control found a hole in this very oracle.**
+   Wiring back to `inherited()` failed the family check and the frozen sequence —
+   and *passed* the mean check, correctly, because F-4 is a **same-mean
+   distribution swap**. The mean assertion is a distribution assertion and looks
+   like the rigorous behavioural choice; it is blind, because the defect lives in
+   the variance (CV ≈ 1 vs ≈ 0.2) and a mean integrates variance away. Had only
+   that assertion been written, F-4 would have shipped through its own oracle.
+
+   That is not specific to distributions. A defect that survived in production
+   survived *because it produces plausible behaviour on the obvious metric* —
+   F-4 lasted years in the inherited tree by being mean-correct, so its
+   camouflage **is** the obvious metric. For **every remaining RP-3 correction**:
+   assert on the axis where the defect lives rather than where measurement is
+   easiest, and **run the negative control** — reintroduce the defect, confirm
+   the oracle fails, and confirm *which* assertions fail. An assertion that stays
+   green is blind, and identifying the blind one is worth more than adding a
+   fourth.
+
+   The gtests are silent on
+   delays by construction, so they cannot witness F-4/F-5 — deliberately, and
+   that is what makes them a clean routing oracle across a mixed
+   port-plus-correction: they cover exactly the axis that must not change and say
+   nothing about the axis that must. The corrected distribution is witnessed the
+   way RP-4's embargo was, by the derivation and the crate's frozen tables —
+   the conformance grades, their negative controls, and the golden vector — not
+   by anything in `levin.cpp`.
+4. `crypto::random_poisson_subseconds`' remaining users are enumerated, as RP-4
+   did for `random_poisson_seconds`; anything left is named with its round.
+5. The zone task is the only writer of zone state — asserted structurally (no
+   C++ path mutates it) rather than by convention.
+6. `schedule.rs`'s "No async runtime" section and `lib.rs`'s reason 2 are
+   **unchanged**, because RP-3a does not depart from either: the types still
+   never spawn, sleep or await, and the existing timer stays in charge. The
+   earlier retraction is withdrawn.
+7. **The §18.5 inventory is an invariant the implementation maintains, not a
+   one-time check.** Every piece of relay state has exactly one owner —
+   inventoried — or it does not land. `connection_count` is Rust-owned
+   single-writer; the map snapshot flows Rust → C++ as a push. Any new shared
+   state RP-3a introduces is a new inventory line that must resolve to
+   single-owner-or-atomic before merge, and the push-not-pull discipline is
+   re-applied to each.
+
+   The "nothing straddles" property is **not self-maintaining** — finding 3 is
+   the proof: a call that looked safe was unsafe until ownership was asked of
+   it. The invariant survives the withdrawal of the seal-break unchanged, and
+   for reasons that never depended on it: `get_status()` is callable from any
+   thread, so *something* crosses threads and must be published rather than
+   shared; and when the reactor eventually moves at C++ removal, an inventory
+   already at single-owner is what makes that move a non-event rather than a
+   new concurrency design.
+8. **The live scheduler is a new crate, not an extension of
+   `shekyl-relay-privacy`.** That crate's stated scope is *"Timing only. Nothing
+   here serializes a message, chooses eligible peers, or touches a socket"*, and
+   a zone actor does the last two. Keeping the split preserves what makes the
+   round tractable: the primitives stay dependency-light, synchronous, and pure
+   `&mut self` steps — which is exactly the property the `run_*` force-step
+   hooks, and therefore the 33-test oracle, depend on. The new crate owns the
+   driver and the transport callbacks and depends on the primitives; rule 25's
+   "implement logic in a dedicated crate" points the same way.
+
+### 18.4a The shim is the layer the oracle cannot see
+
+The 33 gtests become the oracle only after the FFI increment, and they reach the
+Rust through a C++ forwarding shim. That means they measure **shim ∘ Rust**, and
+the shim is the one layer they cannot isolate — new code with no oracle of its
+own, sitting inside the thing that is about to carry the whole round's weight.
+Two failure modes, neither visible in a green run: a shim error **cancels** a
+Rust error and the suite passes while both are wrong (until another call path
+hits the same shim bug uncancelled), or a shim error **manufactures** what looks
+like a port bug and sends debugging to the wrong layer.
+
+So "the gtests pass" means "the Rust is correct" only if the shim is transparent,
+which is a property to design for. Three requirements for that increment:
+
+1. **Pure forwarding, zero logic.** Every shim function is one line: translate
+   and call. No branching, no defaulting, no accumulation. A fat shim is where a
+   bug hides underneath a green oracle.
+2. **The fossil name is contained to that one line.** `notify::run_stems()`
+   keeps its C++ identifier so the gtests compile, and forwards to a
+   truthfully-named Rust function (it cancels noise timers). Pure forwarding
+   matters twice here: it stops the misleading name from ever acquiring
+   behaviour, so nobody adds logic *under* a name describing something else.
+3. **`connection_count` is the one deliberate cache, and needs its own test.**
+   The boundary publishes this derived fact as an atomic for off-task readers —
+   a copy, and an exception to derive-don't-cache. It is legitimate because the
+   alternative is worse: off-task readers deriving it live would have to reach
+   into the map, reintroducing the pull-races-mutation hazard finding 3 closed.
+   What keeps it honest is **single writer** — only the zone's owner writes it,
+   readers only read. That is the discipline the inherited *"only update in
+   strand"* comment asked for, now that the strand is gone and it must live in
+   ownership instead. The reused oracle does not cover it, so it carries a test
+   that nothing but the owning path writes it.
+
+### 18.4b gtest → Rust-test map, and the honest scope of the oracle
+
+Written **before** the daemon build, because it is cheap now and expensive to
+reconstruct under a failing build. Its purpose is failure *attribution*, not
+coverage: for a red gtest, the question is whether a Rust test **would fail if
+the Rust were wrong in the way that gtest checks**. If such a twin exists and is
+green, the failure is isolated to the shim by elimination — no rebuild, no
+bisect. A twin that merely covers the same *area* does not support that
+inference, so entries are only useful when tightly paired.
+
+The 33 cases are a matrix — `{fluff, stem, local, forward, block, none}` ×
+`{padding, no padding}` × `{public, private}` — over about eight behaviours:
+
+| gtest group | Behaviour checked | Tight Rust twin | Pairing |
+| --- | --- | --- | --- |
+| `fluff_*` (×4) | fluffs to every peer but the source | `fluff_skips_the_source_and_releases_on_deadline` | tight |
+| `stem_*` (×4) | routes to exactly one outbound successor | `everything_stems_during_a_stem_epoch`, `a_source_pins_to_one_stem_for_the_epoch` | tight |
+| `stem_no_outs_*` (×2) | no routable slot ⇒ fluff fallback | `no_routable_slot_reports_no_route_not_a_fluff_epoch` | tight |
+| `local_*` (×4) | **local origin always stems, incl. during a fluff epoch (RD-4)** | `a_local_tx_stems_during_a_fluff_epoch_rd4` | tight, both sides |
+| `stem_mappings` | a source stays pinned to one stem for the epoch | `a_source_pins_to_one_stem_for_the_epoch` | tight |
+| `fluff_multiple`, `fluff_with_duplicate` | batching accumulates without re-drawing | `a_burst_does_not_push_a_peers_flush_further_out` | tight |
+| `forward_*`, `block_*`, `none_*` (×12) | relay-**method** dispatch | — | not zone logic; stays C++ |
+| `noise`, `noise_stem` | covert channels | — | RP-3b; in 3a they consume the pushed snapshot |
+| `command_max_bytes` | framing/size limit | — | transport; stays C++ permanently |
+
+**Finding 1 — RD-4 is oracle-witnessed, and tightly.** The prediction was that
+the 33 might not reach it, leaving the Rust test as sole guard. They do reach it:
+`local_without_padding` loops epochs (`has_stemmed |= is_stem; has_fluffed |=
+!is_stem; notifier.run_epoch()`) until it has seen **both** roles, and in each it
+asserts under the comment *"run \"my\" txes which must always be stem"* that a
+local transaction produces exactly **one** send rather than nine, with
+`dandelionpp_fluff` false. That is the stem-vs-fluff axis — the axis a reversion
+of `|| local` shows on — asserted from the C++ side, pairing tightly with the
+Rust twin, which asserts the same axis. Notably the gtest arrives at a
+guaranteed fluff epoch by *cycling roles*, the same discipline the Rust twin
+reaches by seed search: neither injects the role.
+
+**Finding 2 — StemSlots index-order is *not* oracle-witnessed.** The noise
+cases assert **counts** (`EXPECT_EQ(2u, sent)`, `connections_filled`), and
+`local_*` asserts only that a stem lands on an *outbound* peer
+(`(context - begin()) % 2 == 1`). Nothing in the 33 asserts that noise channel
+*i* is bound to stem slot *i*. So contract 3 at the new boundary — order
+preserved, nils in position — is witnessed **only** by
+`stem_slots_cross_in_index_order_with_nils_in_position` in the FFI seam tests.
+
+That is not a gap to close; it is the oracle's honest scope, and it must be
+stated so nobody later reads "33 gtests green" as "everything verified". Green-33
+means *the behaviours the gtests reach are correct*. Index-order is correct
+because a seam test says so, and the seam test is therefore load-bearing rather
+than belt-and-braces — it is the sole witness of the property the RP-3b noise
+channels will depend on positionally.
+
+**Consequence for the build.** Every gtest whose behaviour is zone logic has a
+tight twin, so a red gtest with a green twin attributes to the shim without
+rebuilding. The three groups with no twin (`forward`/`block`/`none` dispatch,
+noise, framing) are C++-side behaviour the port does not move — a failure there
+attributes to the shim or to the C++ that was already there, not to the Rust.
+
+### 18.4c Outcome — what the oracle caught, and what the map could not
+
+RP-3a is built and green: 33/33 `levin_notify`, and 1017 passed / 0 failed in the
+full unit suite. Two results are worth keeping.
+
+**The oracle caught a real privacy regression.** The first pass of the shim lost
+one line of `fluff_notify` — *"When i2p/tor, only fluff to outbound
+connections"* — and eight `private_*` cases failed together, each reporting nine
+peers notified where five belonged. It reads like a delivery detail and is a
+privacy rule: on a hidden service an inbound peer is a stranger who dialled us,
+so relaying to it hands a transaction to a peer this node never chose — the exact
+sybil exposure i2p/tor is standing in for now that Dandelion++ stemming is off.
+It is now `FluffReach::OutboundOnly`, a zone-lifetime policy in Rust, with a test
+asserting *who* received the batch plus a public-zone negative control.
+
+**But §18.4b's map could not have predicted it, and that is the lesson.** The map
+is organised by the behaviours the port *knew it was moving*; the outbound-only
+rule appears in none of its rows, because a rule nobody noticed cannot be listed
+as one to preserve. The `private_*` cases sat in the matrix as a `{public,
+private}` axis over the same eight behaviours — the map treated "private" as a
+*configuration* of known behaviours rather than as a column with a behaviour of
+its own.
+
+So the map does what it claimed and no more: it **attributes** failures, it does
+not **enumerate obligations**. It was still worth writing — the eight failures
+were isolated to a single dropped rule in one reading, without a bisect — but a
+port's real obligation list is the source it is porting *from*, read line by line,
+not a table of what the porter thought was there. The rule that bites is
+structurally the one absent from the table, because the table is built from what
+was noticed.
+
+**A note on where it was found.** This is also the case for building the oracle
+before believing the port. Nothing in the Rust tests, the FFI seam tests, fmt or
+clippy could have caught it: every one of them was green while the daemon fluffed
+transactions to peers it had no business reaching. Only running the inherited
+suite against the new implementation found it, which is what "the C++ is the
+oracle until the corpus *is* the spec" means in practice.
+
+**A second dropped rule the oracle did *not* catch — the epoch rebuild.** The
+inherited epoch **replaced** the stem map outright (`start_epoch` built a fresh
+`connection_map{connections, count}`; `change_channels` assigned it over the old
+one), while the mid-epoch refresh **merged** into it
+(`connection_map::update`). Two operations. The port put both onto the merge, so
+after the first population the stem graph never rotated: successors persisted and
+every source stayed pinned to the slot it first drew, for the life of the
+process. That is the property epochs exist for, and the embargo derivation
+assumes it.
+
+All 33 gtests passed with the graph frozen, and passed again after the fix. They
+could not see it: `local_*` cycles roles until it observes both, and
+`start_epoch` *does* still re-draw `fluffing`, so role rotation looked healthy;
+`stem_mappings` asserts pinning holds *within* an epoch, which a frozen map
+satisfies more strongly than a correct one. The oracle asserted the axis the bug
+preserved and never the axis it broke — the same shape as the `private_*` rule,
+one layer deeper.
+
+It is now two methods, `Zone::update_stems` (merge) and `Zone::rebuild_stems`
+(rollover), because a single method whose behaviour depended on a width check is
+what let one silently stand in for the other. The witness is a rollover with an
+**unchanged** peer set — the one case the two disagree on — asserting that source
+pinning resets, since with two slots a re-draw may legitimately choose the same
+pair.
+
+**Honest scope, second entry: the production timer path is not exercised by the
+33.** Their `io_service_.poll()` runs only *ready* handlers, and the wake deadline
+is seconds to minutes out, so no gtest ever fires the wake — every one of them
+drives the zone through `run_fluff`/`run_epoch`, which force a step directly. So
+`next_wake() -> from_ms() -> fire -> poll() -> re-arm`, and the whole
+`pending_wakes` balance that stops a re-armed timer from re-arming itself
+forever, have **no C++-side coverage**. The suite not hanging is weak evidence
+that the millisecond round-trip is sane, and that is all it is. The FFI half is
+covered by `polling_at_the_reported_wake_time_releases_the_batch`; the asio half
+is not, and belongs to whatever round next touches that timer.
+
+### 18.5 State inventory — single ownership, and why it outlives the seal question
+
+This section was written to price a seal-break that has since been **withdrawn**
+(§18.2): RP-3a adds no reactor, so `lib.rs` reason 2 holds. The ledger it
+contained was wrong — F-4/F-5 close without any reactor change — and is deleted
+rather than patched.
+
+**The inventory survives the correction, on grounds that never depended on it.**
+Single ownership is required because `get_status()` is callable from any thread,
+so one fact genuinely crosses threads and must be *published* rather than shared;
+and because when the reactor does move at C++ removal, an inventory already at
+single-owner makes that a non-event instead of a fresh concurrency design. It
+also earned its keep independently: it caught a duplicate-fact bug
+(`PeerFluff::flush_at`) in a single-threaded path, because it asks *"who owns
+this fact?"* rather than *"can this race?"*.
+
+**The inventory.** Zone state from `levin_notify.cpp`, with today's ownership
+taken from the code's own discipline comments:
+
+| State | Owner today | Owner after RP-3a |
+| --- | --- | --- |
+| `next_epoch`, `flush_txs` (`steady_timer`) | zone strand | **asio** — collapsed to one timer, armed from `next_wake()` |
+| `contexts` (`uuid → {fluff_txs, flush_time, m_is_income}`) | zone strand | **Rust** |
+| `map`, `fluffing` | zone strand | **Rust** (`map` already Rust-backed, RP-2a) |
+| `flush_callbacks` | zone strand | **C++**, as `pending_wakes` — reactor state, not schedule state |
+| `strand` | — | **stays** — nothing replaces it |
+| `channels` (`deque<noise_channel>`) | *"Never touch after init; only update elements on `noise_channel.strand`"* | **asio** (RP-3b) |
+| `noise_channel::{active, queue, next_noise, connection}` | per-channel strand | **asio** (RP-3b) |
+| `p2p`, `noise`, `nzone`, `pad_txs` | const after construction | config — no owner needed |
+| **`connection_count`** | *"Only update in strand, **can be read at any time**"* | **the one real straddle** — see below |
+
+**Three rows changed when the seal-break was withdrawn**, and they are called out
+because the first draft of this table assigned them under the reactor premise —
+a Rust task owning the sleep, replacing the strand. With no task:
+
+- **The timers stay asio's.** Rust owns the deadline *value*; asio owns the
+  *sleep*. The two timers collapse into one, armed from `next_wake()`, because
+  that call returns the earliest deadline and there is nothing left for a second
+  timer to hold.
+- **The strand stays.** Nothing replaces it, so `deleted` was only ever true of
+  the design that is no longer being built.
+- **`flush_callbacks` stays C++.** It is not schedule state — it is the guard
+  that stops a re-armed timer from re-arming itself forever, so it belongs with
+  the timer it guards. It moves in name only, to `pending_wakes`, because one
+  timer now covers both kinds of wake and "flush" would misname it.
+
+Assigning these to Rust was not a *safety* error — it was an ownership claim on
+state whose owner turned out not to move. Leaving it standing would have left the
+implementation and the inventory disagreeing, which is how an invariant quietly
+becomes a description.
+
+Three findings, and the third is the one that would have bitten:
+
+1. **`connection_count` is the only genuine straddle.** The code says so itself:
+   written on the strand, read from anywhere — `get_status()`
+   ([`:755`](../../src/cryptonote_protocol/levin_notify.cpp#L755)) is public API
+   callable on any thread, and the tests call it. Resolution: it becomes a
+   Rust-owned atomic, written **only** by the zone task, read lock-free through
+   the FFI. That preserves the existing read-from-anywhere contract and is
+   single-writer by construction rather than by convention.
+2. **The 3a/3b split follows a serialization boundary that already exists.**
+   Noise channels are not on the zone strand today — each carries its own strand
+   and timer, and the comment forbids touching them after init except on that
+   strand. So deferring them to 3b splits along a boundary the inherited code
+   already draws, rather than inventing one.
+3. **The map snapshot must be a push (Rust → C++), not a pull.** During 3a the
+   C++ noise channels still need the ordered slot snapshot to bind
+   `channels[i]`. Today `update_channels::post`
+   ([`:514–524`](../../src/cryptonote_protocol/levin_notify.cpp#L514-L524)) reads
+   the map *on the zone strand*, which is what makes it safe. With the strand
+   gone and the map owned by the Rust task, a C++-initiated `map_snapshot` call
+   would race the task's own mutations — reintroducing exactly the
+   second-reactor-in-the-p2p-path hazard the seal warned about. So the task
+   **pushes** the snapshot outward when the map changes, and C++ never pulls it.
+
+Finding 3 is why this inventory is an acceptance item and not a paragraph: the
+3a/3b split looked safe until the ownership question was asked of it, and the
+answer changed the direction of a call.
+
+**Standing obligation.** Any new state added on either side of the boundary is
+inventoried before it is written, with a named single owner. "Nothing straddles"
+is what keeps the one genuinely cross-thread fact publishable rather than shared,
+and what will make the eventual reactor move a non-event — so it is maintained
+deliberately rather than assumed to persist.

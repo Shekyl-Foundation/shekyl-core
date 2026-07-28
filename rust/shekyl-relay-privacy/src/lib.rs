@@ -111,6 +111,37 @@
 //!    [`schedule`] is a plain `&mut self` state machine that returns a
 //!    deadline, precisely so the existing timer stays in charge.
 //!
+//! ## Reason 2 stands — an earlier reversal of it is **withdrawn**
+//!
+//! RP-3 briefly recorded reason 2 as reversed, on the grounds that moving the
+//! relay loop to Rust meant accepting a second reactor and that closing F-4/F-5
+//! paid for it. **That ledger was wrong, and following the error back showed the
+//! reversal was unnecessary.**
+//!
+//! - **F-4/F-5 close without any reactor change.** The corrected fluff draw is
+//!   this crate's regardless of who owns the sleep, so the gain never required
+//!   the cost it was charged against.
+//! - **RP-3a adds no reactor.** Rust owns the zone state and every timing
+//!   *decision*; the existing `boost::asio` timer is armed from the returned
+//!   deadline and owns the *sleep*. Rust is a library the p2p path calls, not a
+//!   loop beside it — so the p2p path still has exactly one reactor.
+//! - That is not merely compatible with reason 2, it is **what reason 2
+//!   prescribes**: *"a plain `&mut self` state machine that returns a deadline,
+//!   precisely so the existing timer stays in charge."* RP-3a is that sentence,
+//!   implemented.
+//!
+//! For precision: two reactors already coexist in the daemon process — the
+//! Axum/tokio server in `shekyl-daemon-rpc` — and always have. Reason 2 was
+//! never about the process; it is about the **p2p path**, which is why
+//! asio-arms leaves it intact.
+//!
+//! The reactor does eventually move, when the C++ relay path is removed. That is
+//! the point at which the move costs nothing: with asio gone, tokio is the sole
+//! runtime, so there is no second reactor to create and no transitional
+//! asio/tokio seam to maintain. Reason 2 is broken *then*, by the removal, not
+//! now — and doing it before the removal would buy the seam and pay for it until
+//! the C++ leaves.
+//!
 //! Cuprate's `net/levin` and `net/epee-encoding` are a genuinely different
 //! question — they would remove the single largest obstacle to ever moving the
 //! *full* relay path into Rust, which is that this workspace has no epee or

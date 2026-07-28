@@ -4154,6 +4154,7 @@ dependencies = [
  "shekyl-logging",
  "shekyl-pow-randomx",
  "shekyl-proofs",
+ "shekyl-relay",
  "shekyl-relay-privacy",
  "shekyl-tx-builder",
  "shekyl-units",
@@ -4240,6 +4241,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "shekyl-pow-randomx",
+]
+
+[[package]]
+name = "shekyl-relay"
+version = "3.1.0"
+dependencies = [
+ "shekyl-relay-privacy",
 ]
 
 [[package]]

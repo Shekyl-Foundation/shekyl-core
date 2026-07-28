@@ -46,7 +46,6 @@
 #include "cryptonote_protocol/levin_notify.h"
 #include "int-util.h"
 #include "p2p/net_node.h"
-#include "net/dandelionpp.h"
 #include "net/levin_base.h"
 #include "span.h"
 

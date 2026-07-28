@@ -1,0 +1,21 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-relay"
+description = "Live daemon relay scheduler: owns the Dandelion++ zone state and drives the timing primitives from shekyl-relay-privacy. Separate from that crate because a zone actor chooses peers and reaches transport, which its scope boundary forbids."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The timing primitives and the stem map. This crate drives them; it does not
+# reimplement them. Note the dependency direction: primitives stay
+# dependency-light and synchronous, which is what keeps the force-step entry
+# points — and therefore the 33-test oracle — available (DAEMON_RELAY_PRIVACY.md
+# §18.1).
+shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
