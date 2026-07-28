@@ -4061,3 +4061,28 @@ The fresh arm's ceiling is `(D−1)/D = 0.917`, not 1: the one peer it can never
 routed to is the *other* stem slot, which is never churned in this model. That
 the measurement lands on `11/12` exactly is the check that the model is the
 mechanism and not a caricature of it.
+
+**Correction 3 — there is no partial version of this property, and a third arm
+proved it.** §19.2 makes an exhausted frozen set terminal: the source fluffs
+until the epoch rolls. That is an availability cost, and the obvious softening is
+to allow one fresh pin on exhaustion — the adversary would then have to churn a
+source's *entire* set to buy a single new draw. Measured as a third arm
+(`frozen_repin_exposure`), it is worth nothing:
+
+| `k` | today | frozen | frozen + re-pin |
+| --- | --- | --- | --- |
+| 2 | 0.2521 | 0.1666 | 0.2502 |
+| 8 | 0.7488 | 0.1666 | 0.7505 |
+| 16 | 0.9167 | 0.1657 | 1.0000 |
+
+The re-pin arm tracks the **unfixed** baseline. At `STEMS = 2` a "full sweep" is
+two churns and the fresh pin hands back *two* new peers, so the escape hatch
+returns the whole amplifier — and at `k = 16` it is worse than doing nothing,
+because re-pinning keeps drawing from a pool whose adversarial fraction rises as
+honest peers are consumed. The property is all-or-nothing at this stem width.
+
+So the availability cost is not a knob to soften but a price to either pay or
+reject. It is paid here, bounded by the epoch (`rebuild_stems` re-draws every pin
+at the boundary), and how often honest churn actually reaches a source's whole
+set is the ambient-rate measurement §12.11 still owes — the same measurement the
+cooldown/threshold work is blocked on.
