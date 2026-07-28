@@ -57,7 +57,9 @@ none of this is genesis-blocking. It is being fixed before ship because it is
 ## 0. Problem statement (verified at source and by measurement)
 
 Shekyl inherits a complete Dandelion++ implementation from the Monero
-lineage: the stem map in [`src/net/dandelionpp.cpp`](../../src/net/dandelionpp.cpp),
+lineage: the stem map in `src/net/dandelionpp.cpp` (**deleted at RP-3a** — see
+§16; `dandelionpp.cpp:NNN` citations throughout this document are historical and
+resolve against git history, `git log --follow -- src/net/dandelionpp.cpp`),
 the epoch/stem/fluff orchestration in
 [`src/cryptonote_protocol/levin_notify.cpp`](../../src/cryptonote_protocol/levin_notify.cpp),
 and the stem embargo in
@@ -448,7 +450,7 @@ changes no daemon behaviour.
 **RP-2…RP-4 (not yet scoped — gated on this document converging).** Sketch
 only; the sequence is decided in review, not here:
 
-- **RP-2** — FFI + cut `connection_map` over; delete `src/net/dandelionpp.cpp`.
+- **RP-2** — FFI + cut `connection_map` over; delete `src/net/dandelionpp.cpp`. *(Done: ported at RP-2a, file deleted at RP-3a.)*
   The `dandelionpp_map` block in `tests/unit_tests/net.cpp` (≈1787–2140) is the
   acceptance gate.
 - **RP-3** — cut the epoch/fluff scheduler; `levin_notify.cpp` becomes a
@@ -815,7 +817,7 @@ leaks in **distinct epochs** — same-epoch leaks re-confirm the same fixed stem
 path, while two cross-epoch `5`-sets share only the origin, so they intersect to
 `~{origin}`. This distinct-epoch requirement is the load-bearing assumption of
 the whole section, and it is anchored at source:
-[`get_stem` caches `source → out-index` in `in_mapping_`](../../src/net/dandelionpp.cpp#L192)
+`get_stem` caches `source → out-index` in `in_mapping_`
 and returns it thereafter, so a source egresses on one fixed stem successor for
 the life of a `connection_map`; the per-epoch
 [`change_channels` rebuild](../../src/cryptonote_protocol/levin_notify.cpp#L711)
@@ -1210,7 +1212,7 @@ instruments for both are built or scoped. What remains is the *arguments*:
 
   **The churn path (§12.6, W3c) tightens what Q-10 must deliver.** `connection_map::update()`
   refills a churned stem slot with a *fresh* draw
-  ([dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160)) mid-epoch, and an
+  (dandelionpp.cpp:160) mid-epoch, and an
   adversary who induces churn re-rolls that draw repeatedly. So the bound Q-10 owes
   is not "`g` in a single initial draw" but **`g` under repeated adversary-induced
   refills** — each induced disconnect is another `~g` chance at the slot, strictly
@@ -1249,7 +1251,7 @@ instruments for both are built or scoped. What remains is the *arguments*:
 
   1. **The churn coupling is the non-obvious constraint.** `g_max` is not a static
      peerlist property. `update()`'s fresh `rand_idx` refill
-     ([dandelionpp.cpp:144,160](../../src/net/dandelionpp.cpp#L144)) re-rolls the
+     (dandelionpp.cpp:144,160) re-rolls the
      slot on every disconnect, and the reshape trigger correlates with exactly that
      disconnect. So the round cannot answer with "the white list is N %
      poisonable"; it must answer "an adversary who can force `k` disconnects gets
@@ -1789,18 +1791,32 @@ reasons — *and a refuted one I record so it is not re-argued*:
 
 ### 12.2 Mechanism spec, pinned to `get_stem` / `connection_map`
 
+> **Anchors retired — read this before following the links below (RP-3a).**
+> `src/net/dandelionpp.{h,cpp}` no longer exists: `connection_map` was an
+> opaque-handle wrapper over the Rust map, and RP-3a took the whole relay zone
+> into Rust, so `shekyl-relay::Zone` now owns a `StemMap` directly. The
+> mechanism this section specifies is unchanged; only its address moved.
+> `get_stem(source)` is `StemMap::stem_for` in
+> [`stem_map.rs`](../../rust/shekyl-relay-privacy/src/stem_map.rs), the cached
+> `in_mapping_[source]` is its `inbound` map, and the caller that would choose
+> the alternate is `Zone::plan_relay` in
+> [`zone.rs`](../../rust/shekyl-relay/src/zone.rs). **The line numbers below are
+> kept as written** — they record what was verified at the time, and rewriting
+> them would silently re-attribute that verification to code nobody checked.
+> RP-2b re-grounds against the Rust source.
+
 1. **Trigger.** A stem holder's embargo fires before disarm (the preemption
    event of the survival model).
 2. **Response.** Instead of `fluff_notify`, forward the transaction on the
    *alternate* stem successor.
 3. **Selecting the alternate — not via `get_stem` again.** `get_stem(source)`
    returns the cached `in_mapping_[source]` entry
-   ([dandelionpp.cpp:192,209](../../src/net/dandelionpp.cpp#L192)); calling it
+   (dandelionpp.cpp:192,209); calling it
    again re-selects the *same* successor and the re-stem is a no-op (question ii).
    The alternate must be taken explicitly as the *other* live `out_mapping_`
    index. `out_mapping_` holds exactly `CRYPTONOTE_DANDELIONPP_STEMS = 2` entries
    ([config](../../src/cryptonote_config.h#L101),
-   [ctor](../../src/net/dandelionpp.cpp#L113)), so "the other index" is
+   ctor), so "the other index" is
    well-defined: the primary is `out_mapping_[in_mapping_[source].second]`, the
    alternate is the remaining index.
 4. **Retry cap = `STEMS − 1 = 1`** (derived, §12.3). After the alternate is used,
@@ -1857,9 +1873,9 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 | --- | --- | --- | --- | --- | --- |
 | W1 | `get_stem(nil)` no-op (ii) | design bug | select the alternate `out_mapping_` index explicitly, never re-call `get_stem` | none | **closed by spec** |
 | W2 | Fan-out 1→2 (i) | passive inbound supernode (§6.8) | reuse the existing 2nd `out_mapping_` entry; net against leak benefit in the §6.8 metric | fan-out cost sub-dominant to the ~86× rate cut | **closed (netted)** |
-| W3 | Both-successors-black-hole | adversary occupies *both* of the origin's 2 stem successors | re-stem to the 2nd is also dropped → fluff after the cap; the fluff recovers liveness | origin exposed iff **both** stem slots are adversarial. The two slots are drawn **without replacement** from the origin's *outbound* pool of `D_out = 12` ([`out_mapping_`](../../src/net/dandelionpp.cpp#L103), [`!m_is_income`](../../src/cryptonote_protocol/levin_notify.cpp#L152)); an adversary enters that pool only by being *selected* as an outbound peer (the costly direction). Measured (§12.6): **≈ 0 at baseline `g = f`** (~1 of 12 peers cannot fill two slots), **bounded *above* by the independent draw `(a/D)²`** (no-replacement is anti-correlated, not "worse than independence"), rising only under genuine outbound enrichment `g ≫ f` — ≈ 0.09 even at `g = 0.30`, well under the inbound `π₀ = 0.45`. | **measured (build 1)** — small, gated on the costly outbound-selection capability |
+| W3 | Both-successors-black-hole | adversary occupies *both* of the origin's 2 stem successors | re-stem to the 2nd is also dropped → fluff after the cap; the fluff recovers liveness | origin exposed iff **both** stem slots are adversarial. The two slots are drawn **without replacement** from the origin's *outbound* pool of `D_out = 12` (`out_mapping_`, [`!m_is_income`](../../src/cryptonote_protocol/levin_notify.cpp#L152)); an adversary enters that pool only by being *selected* as an outbound peer (the costly direction). Measured (§12.6): **≈ 0 at baseline `g = f`** (~1 of 12 peers cannot fill two slots), **bounded *above* by the independent draw `(a/D)²`** (no-replacement is anti-correlated, not "worse than independence"), rising only under genuine outbound enrichment `g ≫ f` — ≈ 0.09 even at `g = 0.30`, well under the inbound `π₀ = 0.45`. | **measured (build 1)** — small, gated on the costly outbound-selection capability |
 | W3b | Single-live-stem fallback | adversary holds the origin at *one* live stem peer (induced churn / partial eclipse) | no alternate exists → fluff on embargo fire (the §12.2.7 fallback) | **every** embargo fire becomes an origin fluff for that origin — cheaper than W3 (one slot, not two), same lever (shaping the 2-slot stem set). Uncounted by §6.8. | **ceiling measured** — the single-slot occupancy the same instrument reports (§12.6) bounds it; the realized rate is gated on an induced-churn capability |
-| W3c | Churn-refilled alternate | adversary induces churn on the origin's stem peer (or *is* the dropping successor), forcing `update()` to refill the slot | `update()` fresh-draws the churned slot from the outbound pool ([dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160)) mid-epoch; reshape may then forward to a fresh draw | `≈ g` per re-stem, and **churn correlates with the reshape trigger** (a dark successor is why the embargo fires), so it is the operative case, not the edge case. Repeated induced churn re-rolls the draw. | **spec gap named** — RP-2 must make the alternate stable across churn refill (§12.5); the `g`-bound Q-10 owes must hold under *repeated* refills |
+| W3c | Churn-refilled alternate | adversary induces churn on the origin's stem peer (or *is* the dropping successor), forcing `update()` to refill the slot | `update()` fresh-draws the churned slot from the outbound pool (dandelionpp.cpp:160) mid-epoch; reshape may then forward to a fresh draw | `≈ g` per re-stem, and **churn correlates with the reshape trigger** (a dark successor is why the embargo fires), so it is the operative case, not the edge case. Repeated induced churn re-rolls the draw. | **spec gap named** — RP-2 must make the alternate stable across churn refill (§12.5); the `g`-bound Q-10 owes must hold under *repeated* refills |
 | W4 | Loop (revisited node) | topology | once-per-tx local cap bounds re-stemming; matches the paper's "fluff on loop" | bounded by the cap | **closed by cap + local state** |
 | W5 | Epoch-boundary straddle | timing | a re-stem after `change_channels` uses the fresh map; D++ already tolerates map turnover mid-flight ([levin_notify.cpp:711](../../src/cryptonote_protocol/levin_notify.cpp#L711)) | tx may re-stem into a rebuilt map | **low — within existing D++ tolerance** |
 | W6 | Wire position leak | on-path observer counting re-stems | retry state local, tx-hash-keyed, never serialized | none | **closed by spec (the wire rule)** |
@@ -1875,7 +1891,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
   reading the transport table's `π₀ = 0.45` (§6.5) as single-slot occupancy under
   the same enrichment. **It is not.** `π₀` is the *inbound* diffusion reach — cheap
   edges the spy dials — while `out_mapping_` is built from the origin's *outbound*
-  pool ([dandelionpp.cpp:103](../../src/net/dandelionpp.cpp#L103)), which an
+  pool (dandelionpp.cpp:103), which an
   adversary enters only by being *selected* as an outbound peer (address-manager /
   sybil bias, the costly direction the node resists). Importing the inbound reach
   would have measured a channel that capability cannot reach — the exact
@@ -1895,7 +1911,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
   ([levin_notify.cpp:448](../../src/cryptonote_protocol/levin_notify.cpp#L448)),
   which makes the inbound passive supernode structurally absent (§6.3, reshape's
   *friend*); and the stem pool is the outbound set
-  ([dandelionpp.cpp:103](../../src/net/dandelionpp.cpp#L103),
+  (dandelionpp.cpp:103,
   [`:152`](../../src/cryptonote_protocol/levin_notify.cpp#L152)), which is what W3
   occupies. They are related but **not the same fact**, and the earlier "W3's
   residual is *worse* than independence" reading was **backwards**: drawing two
@@ -1913,7 +1929,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
   regression the spec forbids (§12.2.6), not a tuning question. **This HALT must
   bind on the churn-refill path too (§12.6, W3c):** `connection_map::update()`
   already fresh-draws to refill a churned slot
-  ([dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160)) mid-epoch, so an
+  (dandelionpp.cpp:160) mid-epoch, so an
   alternate that was a stable peer at arming can silently become a fresh
   g-enriched draw before reshape forwards to it. Reusing "`out_mapping_[other]`"
   is not sufficient if the peer *in* that slot was re-rolled by churn.
@@ -2015,13 +2031,13 @@ slots §12.6 already counts, so reshape leaks iff **both** slots are adversarial
 with no third peer to add a separate `P(re-stem target adversarial) ≈ g`.
 
 **But "the fixed second slot" is fixed only while the map is stable, and the tree
-already fresh-draws on churn.** [`connection_map::update()`](../../src/net/dandelionpp.cpp#L134)
-nils a churned slot ([:144](../../src/net/dandelionpp.cpp#L144)) and refills it with
+already fresh-draws on churn.** `connection_map::update()`
+nils a churned slot (:144) and refills it with
 a fresh `crypto::rand_idx` draw from the current outbound pool
-([:160](../../src/net/dandelionpp.cpp#L160)); it runs **mid-epoch**, dispatched from
+(:160); it runs **mid-epoch**, dispatched from
 [`new_out_connection` → `update_channels`](../../src/cryptonote_protocol/levin_notify.cpp#L762)
 when a replacement outbound peer connects. (`get_stem`'s nil branch
-[:195](../../src/net/dandelionpp.cpp#L195) additionally re-maps a source onto the
+:195 additionally re-maps a source onto the
 *other* existing slot via `select_stem` — no fresh peer, but it too breaks slot
 stability.) So on churn the alternate can be a **fresh g-enriched draw** — exactly
 the fresh-draw case that resurrects `W3c ≈ g`.
@@ -2184,7 +2200,7 @@ trigger.** (a) *Epoch boundary:* `change_channels`
 the cross-epoch independence §6.8's intersection defence rests on. (b) *Mid-epoch
 churn:* `update_channels::run` → `map.update()`
 ([levin_notify.cpp:528-536](../../src/cryptonote_protocol/levin_notify.cpp#L528),
-the fresh-draw refill at [dandelionpp.cpp:160](../../src/net/dandelionpp.cpp#L160))
+the fresh-draw refill at dandelionpp.cpp:160)
 fires on the **stem-send-*failure* retry**
 ([dandelionpp_notify:575](../../src/cryptonote_protocol/levin_notify.cpp#L575),
 "connection list may be outdated, try again") and on `new_out_connection`
@@ -3018,6 +3034,15 @@ reconciliation the paper always assumed some layer would.
 
 ## 16. RP-2a design round — `connection_map` → Rust (the faithful port)
 
+> **Seam retired in RP-3a. This section is lineage, not current structure.**
+> The wrapper was designed with `removal target RP-3` written into it, and RP-3a
+> reached it: `src/net/dandelionpp.{h,cpp}`, `dandelionpp_ffi.h`, the
+> `shekyl_dandelionpp_map_*` exports and the six `dandelionpp_map` gtests are all
+> gone, because `shekyl-relay::Zone` owns a `StemMap` directly and a second path
+> to the same map is a defect waiting for a reader. Kept in full because the
+> *reasoning* is still load-bearing — §16.1's three contracts are why the port
+> was faithful, and one of them outlived the seam (see below).
+
 Short design leading the RP-2a implementation commits on `feat/rp2a-connection-map-rust`.
 
 **Scope (the ratified split, §3).** RP-2a ports the `connection_map` *logic* to
@@ -3132,6 +3157,32 @@ cryptographically-secure `RelayRng`** matching the C++ `crypto::random_device` /
    whichever keeps the diff clean).
 3. The RP-1 `a_slot_emptied_by_an_earlier_update_is_backfilled_later` regression
    still holds.
+
+**Retirement executed at RP-3a, on the option acceptance item 2 reserved.** The
+six C++ gtests are gone, and the condition that authorised it was checked rather
+than remembered: `gtest_empty`, `gtest_zero_stems`, `gtest_dropped_connection`,
+`gtest_dropped_connection_remapped` and `gtest_dropped_all_connections` all live
+in `stem_map.rs` — five twins for the five behavioural cases, the sixth
+(`traits`) being wrapper move/copy semantics that died with the wrapper it
+constrained. Census by grep, not by memory: after the deletion no
+`connection_map`, `StemMapHandle`, `shekyl_dandelionpp_map_*` or `net/dandelionpp`
+reference remains anywhere in `src/`, `tests/`, `contrib/` or `cmake/`.
+
+**Which of the three contracts survived the seam, and where its witness went.**
+Two are moot: `map_update`'s exact re-arm predicate is now `Zone::update_stems`
+returning `StemSetChange` with no ABI in between, and `map_clone`'s deep-copy
+requirement died with the handle that could be shallow-copied. **Contract 3 did
+not die** — a consumer still indexes the parallel noise channel by position, so a
+compacted or reordered snapshot still binds covert channels to the wrong
+connections. It is now the `SlotsCb` contract at the RP-3a boundary, and its
+witness is `stem_slots_cross_in_index_order_with_nils_in_position`.
+
+That check is the reason this retirement took a pass of its own rather than a
+tail-end commit. The successor test *carried a "sole witness" seal over a body
+that never produced a nil* — three candidates into two slots, both filled. It
+would have inherited the seal and not the coverage, and the seal would have told
+the next reader the property was already covered. It now empties a slot with no
+backfill and is negative-controlled against both compaction and reordering.
 
 The six gtests are **necessary but not sufficient** — they are structurally blind
 to the three §16.1 consumption contracts. Three micro-tests arm them (an armed
