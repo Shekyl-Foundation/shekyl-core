@@ -47,6 +47,22 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **TJ price premise — NOT codeable, tracked here with its falsifiers as
+  reopen triggers (added 2026-07-29,
+  `design/ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §5.3).** The test≡job
+  ruling's bandwidth leg rests on a premise no test can assert:
+  transfer-cost-per-byte versus storage-cost-per-byte-epoch, over Tor — and
+  §5.3 records that the ratio spans **~0 to ~100 by infrastructure
+  assumption** (cloud+egress ≈ 1.1; amortized consumer disk ≈ 100; flat-rate
+  residential inverts). The ruling's structural leg is `T_risk` (deliverable
+  2 quantifies it); the price leg is context. **Reopen triggers, either
+  sufficient:** (1) either term moving **~3 orders of magnitude** (storage or
+  transfer economics shifting the §5.3 span's ends); (2) **serving moving off
+  Tor** (the latency/dispersion model and the risk term both re-derive).
+  Knowing which parts of an argument cannot be frozen in code, and tracking
+  those as premises, is the honest completion of freeze-the-behavior — not a
+  gap in it.
+
 - **Superseded-section cross-reference sweep (docs hygiene, split out by the
   batching rule — added 2026-07-28).** The RP-2b ledger's #2 item (add a
   cross-reference from a superseded section to its superseder) class-checked

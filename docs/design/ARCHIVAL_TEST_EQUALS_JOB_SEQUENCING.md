@@ -213,6 +213,31 @@ change post-genesis.
   TJ-F therefore **freezes behaviour rather than concept** — the opposite posture
   from TJ-A/TJ-B, where the concept is unresolved and behaviour is not yet
   freezable. It is the genesis-critical work that is blocked on nothing.
+  **The property has two faces, and the tests cover both** (2026-07-29):
+  the **soundness face** as stated above (responder-supplied material must not
+  verify against non-committed leaves — holds at the pure-function level today,
+  `recompute_subroot != R_k` rejects; the test freezes it), and the **liveness
+  face** (verification must *succeed* from `R_k` plus responder-supplied
+  material **with no leaf-store read** — RED today, and `path.rs`'s own doc
+  states why: *"Consensus derives [the leaf-layer scalars] from segment leaf
+  store… the vin carries only the challenged `leaf_bytes`"*. The wire lacks
+  the material a pruned validator would need). The liveness face is what
+  dissolves fact §2.5's consensus-required retention; the soundness face is
+  what makes dissolving it safe.
+- **TJ-G — the challenge's scope is the whole segment.** *(Alias **RED-1**;
+  registered here per rule 94, same motion as TJ-F.)* Phrased at the
+  **challenge-construction** level, not the response level: a challenge for
+  `(P, s, E)` names **all `SEGMENT_LEAF_COUNT` = 25,992 leaves**, not a
+  subset. That phrasing survives both TJ-A branches — under receipt-attested
+  transfer the on-chain artifact is compact by design, so "response payload ≥
+  segment bytes" would be the wrong assertion and would break the moment the
+  right answer landed; **scope-of-challenge is the invariant, witnessing is
+  what TJ-A decides**. The test mechanically rejects sub-shard sampling: any
+  `k < 25,992` leaves it red, which converts §5.6's finding (sampling fails
+  on its own cost ledger) from a paragraph someone must re-derive into a CI
+  gate. RED today: `challenge_leaf_index` derives exactly one index per
+  `(P, s, E)`. `#[ignore]`d with TJ-A's landing as the un-ignore trigger —
+  the D1 red-test pattern.
 
 ## 5. The ROI ledger — why R1 closes it, and what the closure rests on
 
@@ -451,6 +476,25 @@ structural achievement of test≡job.
    TJ-A: genesis-frozen, testable against current code today, and independent of
    which TJ-A branch is taken. It freezes behaviour rather than concept and is
    blocked on nothing.
+4. **TJ-G (RED-1) + the per-`(P,s,E)` summand weld** — the challenge-scope red
+   test (`#[ignore]`d, TJ-A un-ignore trigger) and a green test pinning that a
+   bond claiming `n` shards with serve-credit on `j` earns work on **exactly
+   `j`** — the granularity §5.5 rests on, currently asserted by adjacent tests
+   (`bonded_without_serve_credit_not_in_r_market`,
+   `drop_after_serve_credit_counts_toward_work`) but not as the summand
+   property directly.
+
+## 7. Implementation blast radius — so TJ-A scopes as what it is
+
+The challenge change is a **four-surface change, not a Rust-local one**, and
+the TJ-A design pass must specify it as such: **Rust**
+(`shekyl-archival-retention`: `wire.rs` response format, `path.rs` opening
+verification, `serve_credit_decisions.rs` decision logic), the **FFI**
+surface those cross, and **C++** (`blockchain.cpp` `txin_archival_serve_credit_response`
+verification, ~:3190) — plus KAT regeneration and whatever rule-42
+version-constant surface the wire change touches. dev's code currently does
+the thing dev's docs call the defect, and nothing fails; TJ-F/TJ-G's red
+tests are what close that gap until the implementation round lands.
 4. The TJ-A/TJ-B challenge-spec design pass — the rest of the genesis-frozen
    half, now scoped by §5.6 to *witnessing* a full transfer rather than choosing
    between a compact test and a full one.
