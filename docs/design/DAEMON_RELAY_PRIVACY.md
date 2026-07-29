@@ -4119,6 +4119,7 @@ these are numbered in discovery order, which is not document order):
 | **CV-1** | repointing a channel discards the in-flight remainder | §20.5 | item 2 |
 | **CV-2** | an empty slot emits no covert send at that index and shifts no other | §20.3 | item 3 |
 | **CV-3** | an armed covert deadline survives wakes it did not cause | §20.2a | item 9 |
+| **CV-4** | the covert schedule is payload-blind — *when* never depends on *what* | §20.2 | item 10 |
 | **Q-11** | the covert timing constants owe a derivation | §20.9 | *ranked next, out of round* |
 
 `CV-*` is a **covert-path invariant** — a privacy property of the noise channels
@@ -4163,13 +4164,51 @@ resolution turned on. Applying that resolution here splits the row cleanly:
 | the *sleep* for that deadline | **asio**, on the **existing single `wake` timer** | see §20.2a — the per-channel `next_noise` timers are removed, not kept |
 | the per-channel `strand` | **asio** | still serializes the byte state; see §20.2a |
 | *which peer* channel `i` points at | **Rust** | it is stem slot `i` — Rust already owns the map |
-| *whether* this send is dummy or real | **Rust** | a schedule decision, not a byte operation |
+| *whether* this send is dummy or real | **C++** | **corrected — see CV-4.** It is a *queue* question, not a schedule one, and Rust must not be able to answer it |
 | `active` / `queue` **bytes** | **C++** | levin fragments; rule 36 — Rust holds no wire payloads it does not need |
 | the dummy payload and its size | **config** | see §20.4 — currently three facts in one field |
 
 So RP-3b moves **decisions**, not buffers. §18.5's row is amended to this table
 rather than left to be re-read charitably; an inventory that needs charitable
 reading has already stopped being an invariant (§18.5's own standing obligation).
+
+**Correction to the dummy-vs-real row, and the invariant behind it.** An earlier
+draft assigned that decision to Rust as *"a schedule decision, not a byte
+operation."* It is neither — it is a **queue** question (*is a real fragment
+pending?*), and the queue is C++ by the row two lines below. Assigning it to Rust
+would have required queue state to cross the boundary, contradicting this table's
+own principle in the same table.
+
+The deeper reason is the invariant it would have put at risk:
+
+> **CV-4.** The covert schedule is **payload-blind**. When the next send happens
+> must not depend on *what* is being sent.
+
+This is the property constant-rate cover traffic *is*: a real send is
+indistinguishable from a dummy because the cadence cannot react to having
+something real to say. Today it holds **structurally**, three ways over, verified
+at source:
+
+| Mechanism | Site | Effect |
+| --- | --- | --- |
+| `start` captured before the branch | [`:797`](../../src/cryptonote_protocol/levin_notify.cpp#L797) | the deadline base predates the payload choice |
+| `wait()` called unconditionally | [`:835`](../../src/cryptonote_protocol/levin_notify.cpp#L835) | outside the `is_nil()` block — one re-arm path for dummy, real, no-peer and send-failure alike |
+| both branches emit `noise.size()` | [`:804`, `:808`, `:811`](../../src/cryptonote_protocol/levin_notify.cpp#L804-L811) | the fragment unit is the same either way |
+
+C++ *cannot* let the payload influence the schedule, because the timer is armed
+before the payload is chosen. **The port could quietly convert that structural
+property into a convention.** `on_covert_send(channel_i, peer, DUMMY|REAL)` hands
+the scheduler precisely the input needed to break it, and the breaking change
+would look like an optimisation — *"a real fragment is pending, drain it
+sooner."* That is a covert-channel leak wearing the costume of a latency
+improvement, and no test in the tree would object.
+
+**So the callback carries no payload discriminant.** Rust decides *when* and
+*who*; C++ decides *what*, from a queue Rust cannot see. Payload-blindness then
+remains enforced by the **ownership split** rather than by discipline — Rust is
+not trusted to ignore the queue, it is structurally unable to consult it. That is
+the same move as §18.5's *"single-writer by construction rather than by
+convention"*, applied to a privacy property instead of a concurrency one.
 
 ### 20.2a Which strand calls the FFI — the question that decides the shape
 
@@ -4274,9 +4313,20 @@ one.
 
 Hence CV-3's witness is an assertion about **mechanism**, not about
 distribution: *this channel fires at the deadline it was armed with*, checked by
-identity across foreign wakes. That is also why CV-3 survives Q-11 — even once
-those constants carry a derivation and a conformance grade, the grade will be
-over draws and this defect will still be invisible to it.
+identity across foreign wakes.
+
+**CV-3's witness therefore gets the sole-witness seal when it is written**, and
+for a sharper reason than usual. The ordinary reason to seal a test is that
+nothing else covers the property today. Here **nothing else *can*** — including
+the measurement that will look like it does. When Q-11 lands, the covert cadence
+will have a derivation and a conformance grade aimed at exactly this subsystem,
+and a future reader will reasonably think *"the cadence is measured now, CV-3 is
+redundant."* That inference is wrong, and it is **more plausible than the usual
+version of this error**, because the apparently-superseding instrument genuinely
+exists and genuinely targets the same mechanism — it simply observes draws where
+CV-3 observes selection among them. The seal must say that, not merely "do not
+delete": it must name Q-11 as the thing that will look like it supersedes this
+and explain why it cannot.
 
 That last property is what makes it worse than option (a)'s races: a race
 eventually manifests as a crash or a corrupted send, whereas a biased-short
@@ -4305,7 +4355,7 @@ Rust-owned fact, so the array crossing the boundary is C++ being handed the
 itself:
 
 ```text
-Rust covert step ──on_covert_send(channel_i, peer, DUMMY|REAL)──▶ C++ sends bytes
+Rust covert step ──on_covert_send(channel_i, peer)──▶ C++ picks payload, sends bytes
 ```
 
 The slot array stops crossing. **`SlotsCb` is deleted** — genuinely, not renamed
@@ -4515,15 +4565,37 @@ which §20.2a's fold routes covert deadlines through. RP-3a already moved the
 fluff and epoch schedules onto that contract; the covert path is the last
 ns-granularity timer in the relay layer, and folding it makes the layer uniform.
 
-Assessed as immaterial, with the reasoning stated so it can be challenged rather
-than inherited: the jitter is quantized to ~10⁻⁴ of a 10–15 s interval, which is
-well below the transport's own timing noise. Contrast the arc's one live
-granularity finding — whole-**second** timer granularity manufacturing ~20 % of
+Assessed as immaterial, and the **primary argument is structural rather than
+empirical**, because that is the one that survives if the empirical premise is
+ever challenged:
+
+**The invariant a covert channel needs is not resolution — it is symmetry.**
+Constant-rate cover works because a real send is indistinguishable from a dummy
+(CV-4). Both paths draw the same deadline through the same code and emit the same
+fragment size, so both quantize *identically* through the same FFI contract. The
+observable available to an adversary is the **comparison** between dummy and real
+emissions, not the resolution of either. Coarsening a quantum that applies
+equally to both changes nothing that comparison can exploit — so long as CV-4
+holds, and CV-4 is an acceptance item precisely so this argument keeps its
+premise.
+
+**The secondary argument is empirical, and its premise is named as a condition
+rather than buried as a caveat.** The jitter quantizes to ~10⁻⁴ of a 10–15 s
+interval, below the transport's own timing noise. Contrast the arc's one live
+granularity finding — whole-**second** granularity manufacturing ~20 % of
 observed preemption — where the quantum was *coarser than the signal* (seconds
-against a ~700 ms stem). Here it is far finer. But this is an *assessment*, not a
-measurement, and the two count-asserting gtests cannot see it either way, so it
-is named here and handed to **Q-11** to confirm rather than assume when those
-constants get their derivation.
+against a ~700 ms stem). Here it is far finer, same mechanism, opposite side of
+the threshold.
+
+> **Premise.** "Below the transport's own timing noise" is a claim about the
+> **medium** (Tor and clearnet as they exist today), not about the mechanism. A
+> covert path over a transport with materially tighter timing would need this
+> rechecked. It is not a reason to hold the port; it is a reason for the
+> assessment to state which fact it rests on.
+
+Both are *assessments*, not measurements, and neither noise gtest can see this
+either way — so it is handed to **Q-11** to confirm rather than inherit. The
+structural argument is what makes the interim position sound in the meantime.
 
 ### 20.5 The oracle is thinner here than it was for 3a — say so before building
 
@@ -4643,6 +4715,12 @@ is a consequence of the port. Order: §20.4 split → §20.2 scheduling port →
    rather than worse, and unlike item 8 it has **no** load-dependent symptom —
    a resampling fold passes every existing test, always, and relays sooner than
    its own distribution claims.
+10. **CV-4 (payload-blindness) is enforced structurally, not by discipline.** The
+    covert-send callback carries **no dummy-vs-real discriminant**, so the
+    scheduler cannot consult the queue even in principle. Checkable by reading
+    one signature — if a payload kind, queue depth, or "has real pending" flag
+    appears in it, the property has become a convention and the acceptance fails
+    regardless of what the implementation currently does with it.
 
 ### 20.8 What this round does not do
 
