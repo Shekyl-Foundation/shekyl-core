@@ -121,6 +121,16 @@ sustainability is unaffected by the recalibration.
   lookup; an empty region promotes PoRep **before** testnet build-out. The
   probe pins nothing; this entry's joint round retains sole pin authority,
   behind the amended §12.6 handoff.
+  **⏸ SUPERSEDED IN PART 2026-07-29 (`design/ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`):**
+  the **deterrence objective** (`q*` reachability) is suspended with reopen
+  (d) — the A5 margin was a pre-pruning artifact under a mis-specified
+  payload (test ≡ job ruling R1; pruning-is-upstream ruling R2), and the
+  probe is paused. The **false-slash objective survives untouched**: honest
+  transient outages vs the m-of-n window (the confirmation pin's §3.2
+  Round-2 criteria) bind under any challenge design, and the Round-2
+  stressnet re-pin of `m`/`n` proceeds against that objective alone —
+  re-JOINTed with a deterrence term only if TJ's post-pruning re-measurement
+  resurrects one.
 - **~~D3 — archival-reward per-bond `curve_milli` cap is dodgeable at no bond
   cost~~** **✅ RESOLVED (§12.9, round closed 2026-07-26) + IMPLEMENTED
   (§12.9.1, PR #371, `feat/archival-d3-reward-path`) — status annotations sit at

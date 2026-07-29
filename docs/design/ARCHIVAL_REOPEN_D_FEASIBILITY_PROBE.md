@@ -1,6 +1,17 @@
 # Reopen-(d) feasibility probe — does any `(grace, m, n)` serve both masters?
 
-**Status:** Round 0 — three review passes, 2026-07-28. First pass: PD-1
+**Status: ⏸ PAUSED 2026-07-29 — superseded in premise by the test≡job
+sequencing ruling (`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`).** The charter
+presumed the ~3 KB-payload `q*` band; R1 (test ≡ job) corrects the payload and
+R2 (pruning is upstream) shows the A5 margin compared costs that do not exist
+pre-pruning. Everything ratified here survives for reuse — PD-D's
+parameterized predicate for any future `(m, n)` re-pin, the conditional-map
+form, PD-F-2's total-latency/dispersion framing (which transfers directly to
+TJ-C's deadline design). Resumption condition: TJ challenge spec ratified +
+pruned-daemon mode designed + A5 re-measured under both. The pre-pause record
+follows unchanged.
+
+**Status (pre-pause):** Round 0 — three review passes, 2026-07-28. First pass: PD-1
 (i.i.d. direction) and PD-2 (marginal-map rule) folded, PD-3 ruled (predicate
 parameterization inverted to production-side). Second pass: PD-F-1 folded
 (band grounding = named measurable anchors), PD-3-1 folded (the delegate is
