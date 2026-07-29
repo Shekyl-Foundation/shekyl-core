@@ -4145,8 +4145,8 @@ resolution turned on. Applying that resolution here splits the row cleanly:
 | Fact | Owner after RP-3b | Why |
 | --- | --- | --- |
 | *when* channel `i` next sends | **Rust** (deadline value) | same as `next_wake()`: a schedule fact |
-| the `next_noise` timer (the sleep) | **asio** | no reactor added; 3a's reason-2 seal holds |
-| the per-channel `strand` | **asio** | serialization primitive, nothing replaces it |
+| the *sleep* for that deadline | **asio**, on the **existing single `wake` timer** | see §20.2a — the per-channel `next_noise` timers are removed, not kept |
+| the per-channel `strand` | **asio** | still serializes the byte state; see §20.2a |
 | *which peer* channel `i` points at | **Rust** | it is stem slot `i` — Rust already owns the map |
 | *whether* this send is dummy or real | **Rust** | a schedule decision, not a byte operation |
 | `active` / `queue` **bytes** | **C++** | levin fragments; rule 36 — Rust holds no wire payloads it does not need |
@@ -4156,11 +4156,66 @@ So RP-3b moves **decisions**, not buffers. §18.5's row is amended to this table
 rather than left to be re-read charitably; an inventory that needs charitable
 reading has already stopped being an invariant (§18.5's own standing obligation).
 
+### 20.2a Which strand calls the FFI — the question that decides the shape
+
+The table above is not self-executing, and left at that it admits two readings
+that differ in safety. The covert timers are **per channel**, each on its own
+strand. Moving their deadline *values* to Rust while keeping N timers gives:
+
+- **(a) Rust publishes N deadlines, C++ arms N timers.** Then the zone handle is
+  consulted from `CRYPTONOTE_NOISE_CHANNELS` strands instead of one. That is
+  §18.5's `connection_count` straddle multiplied by the channel count, and it is
+  finding 3 exactly — a C++-initiated read racing the Rust owner's mutations.
+  **Rejected.**
+- **(b) Covert deadlines fold into `next_wake()`, per-channel timers deleted.**
+  One sleep, one caller. But taken naively this also drags `send_noise`'s byte
+  work (`active.take_slice`, `queue.pop_front`) onto the zone strand, leaving the
+  per-channel strands serializing nothing — and the inherited discipline comment
+  ([`:374`](../../src/cryptonote_protocol/levin_notify.cpp#L374)) with no
+  referent.
+
+**Adopted: (b), with the dispatch split.** `next_wake()` already returns the
+earliest deadline across every scheduled step; covert sends become another kind
+of step, so Rust tracks per-channel deadlines internally and folds them into the
+same answer. The single `wake` timer fires on the zone strand, which is the
+**sole caller into the zone handle** — unchanged from 3a. Rust then emits, per
+channel that has come due:
+
+```text
+on_covert_send(channel_i, peer, DUMMY | REAL)
+```
+
+and the C++ callback **posts that instruction to `channels[i].strand`**, where
+the byte work happens exactly as it does today. Nothing reads the zone handle off
+a channel strand.
+
+This keeps all three invariants that were in tension:
+
+1. **One FFI caller.** The zone strand, as in 3a. No straddle, no new reactor,
+   reason-2 seal untouched.
+2. **The per-channel strands keep their job.** They still serialize `active`,
+   `queue` and `connection` against the two writers that exist — the dispatch
+   post above, and `queue_covert_notify` posted from `send_txs`. The `:374`
+   comment stays true and keeps a referent.
+3. **Per-channel timing stays independent.** Folding the *sleep* is not folding
+   the *schedule*: Rust holds a separate deadline per channel and the wake merely
+   asks "what is earliest". This is precisely what 3a did when two zone timers
+   became one, and the same argument applies — a second timer would need a second
+   deadline, which would be a copy of a fact the zone already holds.
+
+The delta from today is therefore `CRYPTONOTE_NOISE_CHANNELS` timers becoming
+zero, not becoming one: the covert path gains no timer of its own and rides the
+one that already exists.
+
+**This is an acceptance item, not a note** (§20.7 item 8), because it is the one
+place the round could quietly re-break 3a's seal, and it would do so invisibly —
+option (a) compiles, passes both noise gtests, and races only under load.
+
 ### 20.3 The seam inverts — and the seal migrates rather than dying
 
 Today Rust pushes an **ordered slot array** and C++ decides what to do with it:
 
-```
+```text
 Rust update_stems ──on_slots(slots[], count)──▶ C++ posts update_channel{i, slots[i]}
 ```
 
@@ -4169,7 +4224,7 @@ Rust-owned fact, so the array crossing the boundary is C++ being handed the
 *inputs to a decision Rust already made*. The port replaces it with the decision
 itself:
 
-```
+```text
 Rust covert step ──on_covert_send(channel_i, peer, DUMMY|REAL)──▶ C++ sends bytes
 ```
 
@@ -4309,12 +4364,23 @@ is a consequence of the port. Order: §20.4 split → §20.2 scheduling port →
    port must not disturb the Dandelion++ path. Necessary, and per §20.5 nowhere
    near sufficient.
 2. **CV-1 has a witness**, negative-controlled: a channel repointed mid-message
-   must fail the test if the remainder is resumed.
+   must fail the test if the remainder is resumed. **It is a gtest, not a Rust
+   twin.** After the port the invariant is enforced by whoever clears `active`,
+   and `active` stays C++ (§20.2) while only the repoint *decision* is Rust's —
+   so a Rust test would be asserting about a buffer it cannot see, measuring the
+   shim rather than the property.
 3. **The index-order property has a live witness on the Rust side**, negative-
    controlled against compaction, reordering, *and* channel-index off-by-one,
    landed **before** the RP-3a seal test is removed, in a commit naming the
    successor.
 4. **`SlotsCb` and the slot array are gone from the FFI** — deleted, not renamed.
+   Checked by command, not by prose, because this is exactly the claim that
+   survives while a renamed equivalent ships:
+
+   ```console
+   $ rg -n 'SlotsCb|on_slots' rust/ src/     # must return nothing
+   ```
+
    If the round ends with an ordered array still crossing the boundary, the
    consolidation did not happen and the round should say so rather than claim it.
 5. **`zone::noise`'s enable predicate has one owner.** No `.empty()` test
@@ -4325,6 +4391,12 @@ is a consequence of the port. Order: §20.4 split → §20.2 scheduling port →
 7. Covert-path Rust twins exist for the behaviours §20.5 lists as unreached, or
    the gap is stated in the round's outcome section with the same explicitness
    §18.4b used.
+8. **The zone handle is called from exactly one strand** (§20.2a). The
+   per-channel `next_noise` timers are gone — `CRYPTONOTE_NOISE_CHANNELS` timers
+   become **zero**, not one — and no `shekyl_relay_zone_*` call appears on a
+   channel strand. This one is load-bearing because the rejected alternative
+   compiles, passes both noise gtests, and races only under load; a green suite
+   is not evidence here.
 
 ### 20.8 What this round does not do
 
