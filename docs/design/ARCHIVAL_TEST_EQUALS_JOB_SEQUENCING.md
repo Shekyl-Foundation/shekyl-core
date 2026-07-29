@@ -144,7 +144,13 @@ change post-genesis.
   therefore not "which of two options" but "is the witness problem solvable
   at consensus grade" — with sampling-plus-deadline as the named fallback
   whose soundness dependency (deadline pressure + reacquisition-source
-  behavior) must be priced explicitly if taken.
+  behavior) must be priced explicitly if taken. **§5.6 settles the same
+  asymmetry independently and quantitatively**, which removes this branch's
+  dependence on §4's assertion: sampling reaches parity with the full
+  transfer only at `k ≈ 26k` — the segment's entire leaf count — so no
+  interior `k` buys test≡job. The question is therefore how to **witness a
+  full transfer compactly**, not whether a compact test can substitute for
+  one.
 - **TJ-B — the serve/verify split.** The full-shard serve is off-chain (to
   the challenger at the rendezvous, R1); the consensus artifact proves it
   happened. What binds the off-chain serve to the on-chain proof — the
@@ -156,12 +162,15 @@ change post-genesis.
   directly — the proxy's extra leg is now a full-shard transfer, so the mean
   displacement grows ~1000× and dispersion stops swamping it. **The
   bandwidth arithmetic that makes R1 obviously affordable, stated rather
-  than left implicit:** at one challenge per `(P, s, E)`, a maximal bond
+  than left implicit:** at one challenge per `(P, s, E)` — which §5.5 verifies
+  is structural, not a coverage policy — a maximal bond
   (`MAX_HOLDINGS_SHARDS` = 4,096 × ~3.3 MB ≈ 13.5 GB) serves over one
   settlement epoch (`SEB` = 10,000 blocks × ~120 s ≈ 13.9 days) —
   **≈ 11 KB/s sustained worst case**, trivial against any serving-capable
   link. The full-shard test costs the honest archiver effectively nothing in
-  bandwidth; what it costs the zero-storage responder is the point.
+  bandwidth; what it costs the zero-storage responder is the point. The
+  profitability threshold this feeds is **marginal, not total** — see §5.1,
+  which corrects a 2× form of it.
 - **TJ-D — pruned-daemon mode's design home and its two reconciliations.**
   DRS coupling (storage side), segment-freeze reversion clause (frozen-leaf
   exclusion or materialized chunk store), and the serve-credit verify rewire
@@ -179,10 +188,162 @@ change post-genesis.
   question** outside consensus. TJ-E is resolved after TJ-A, in TJ-A's
   terms.
 
-## 5. First deliverables
+## 5. The ROI ledger — why R1 closes it, and what the closure rests on
+
+R1 is justified by an ROI argument, and this is where that argument lives. Other
+records **cite** this section rather than restating it (8C's Round-2 reversal
+already does).
+
+The bar is deliberately soft: **free-riding does not have to be impossible, only
+unprofitable.** Impossible would be better; it is a higher bar than the market
+needs and a much higher one than any mechanism here reaches.
+
+### 5.1 The threshold is marginal, not total
+
+The honest holder pays a local read (free) plus the upload. The free-rider pays a
+download **plus the same upload**. The uploads cancel. So the free-rider's total
+is ~2× the test's bandwidth, but its *marginal* cost over the honest party is the
+**download alone**:
+
+> **Free-riding wins iff `cost(1 shard transferred) < cost(1 shard stored for one
+> epoch)`.**
+
+Stated once, precisely, because an earlier formulation of this ruling used the
+free-rider's **total** (2×) in a comparison that is inherently marginal. Anyone
+deriving a break-even from that version would inherit a **2× safety margin that
+does not exist**. The verdict is unchanged; the margin is half what the 2× form
+implies.
+
+### 5.2 Why R1 wins is not why the opening lost
+
+Worth separating, because they are different mechanisms and only one of them
+carries a premise:
+
+| | Opening (3 KB) | R1 (full shard) |
+| --- | --- | --- |
+| bytes moved vs bytes avoided | ~1 : 1000 | **1 : 1** |
+| decided by | **quantity** | **price per byte** |
+
+The opening failed on a quantity ratio — three orders of magnitude in the
+cheater's favour. **R1 does not win on quantity**: transferring 3.3 MB to avoid
+storing 3.3 MB is one-to-one in bytes. It wins because, at equal quantities, the
+*price* asymmetry decides — and a transfer costs far more per byte than fourteen
+days of disk for the same volume.
+
+### 5.3 Leg 1 — the price argument, and its two falsifiers
+
+The relevant premise is **not** generic bandwidth-vs-storage. It is
+**Tor-borne transfer vs storage**, which is a stronger premise than cloud-egress
+pricing: Tor capacity is scarce and donated, so its effective cost per byte sits
+far above clearnet. That strength is also its narrowness — the premise is
+**transport-dependent**, not merely price-dependent.
+
+> **Falsifiers, both of which reopen this leg:**
+> 1. Either term moves by ~3 orders of magnitude (storage becomes costly, or
+>    anonymous bulk transfer becomes ~free).
+> 2. **Serving moves off Tor.** The margin is computed against Tor's cost per
+>    byte; a clearnet or subsidised-transport serve path is a different ledger.
+
+### 5.4 Leg 2 — caching makes the free-rider category *unstable*
+
+The stronger leg, and it does not depend on §5.3's premise at all — only on
+storage being cheap, which is the same condition that motivated free-riding.
+
+1. Storage is cheap ⇒ once a shard is fetched to answer a challenge, **discarding
+   it is irrational** — retention costs ~nothing and eliminates every future
+   fetch for that shard.
+2. `held(P,E)` changes only by bond/unbond, so a bond faces **the same shards
+   every epoch**. The fetches recur; the cache pays off immediately and forever.
+3. Therefore the optimal free-rider strategy **converges on holding**.
+
+So the attack is not blocked — **its own optimum is the honest behaviour.** The
+"cheat helper" that downloads and writes to a storage device *is an archiver*,
+with extra steps and worse latency.
+
+This is the same closure shape the program has used elsewhere, and the pattern is
+worth naming: reopen (c) closed because stuffing is negative-sum *for the
+stuffer*; §12.11.1 closed because the mechanism is monotone, leaving no
+oscillation to arbitrage. A threat whose rational play is the honest play does
+not need a deterrent.
+
+### 5.5 Coverage is per-`(P,s,E)` **structurally** — it cannot be coarsened to per-`P`
+
+The whole ledger assumes every claimed shard is tested every epoch. If a bond
+claiming 4,096 shards faced one challenge per epoch, the arithmetic inverts and
+coverage — not payload — would be the fix. **Verified, and it is not a policy
+knob:**
+
+```text
+work_P(E) = Σ_{s ∈ held(P,E)} scarcity(s,E) · serve_credit_bit(P,s,E)
+```
+
+Per-shard is the **summand index of the emission formula**. Each held shard
+contributes only if its own `serve_credit_bit(P,s,E)` is set, so a bond claiming
+4,096 shards that produces one passing proof **earns on one shard** — the other
+4,095 terms are multiplied by zero. Answering fewer shards is not a weaker test
+evaded; it is reward forfeited.
+
+Independently welded in two places:
+
+- *"Per-`(P,s,E)` granularity | Emission `work_P(E)` | **Cannot coarsen without
+  breaking `R_market` / Σwork**"* — `ARCHIVAL_CORPUS_FOSSIL_SWEEP.md` §granularity table.
+- *"a fixed **shard** axis (per-`(P,s,E)`) — **not coarsenable without breaking
+  Σwork / `R_market`**"* — `ARCHIVAL_TIMING_CONSTANTS.md`.
+
+This is the same property the escalation's operand has: **the thing that would
+have to break for the argument to fail is load-bearing elsewhere**, so it cannot
+drift silently. Coarsening coverage is not a weaker deterrent — it is a broken
+emission formula.
+
+At full coverage the honest cost is the bandwidth arithmetic already in TJ-C
+(≈ 11 KB/s sustained worst case); the free-rider pays that **again as download,
+every epoch, forever**, to avoid a standing 13.6 GB.
+
+### 5.6 Consequence — TJ-A's sampling candidate fails on its own cost ledger
+
+8C §4 rejects sampling by assertion (*"`m` is the wrong lever until §7.5
+closes"*). The ROI ledger settles it **independently and quantitatively**, which
+matters because it removes the dependence on that assertion.
+
+Grounded units: the leaf is **128 bytes** (8C §6.2 PQC note) and a level-2
+segment is **≈ 26k leaves** (§7.2.2) — consistent with the ~3.3 MB shard, since
+26,000 × 128 B ≈ 3.33 MB.
+
+A free-rider answering `k` sampled positions fetches `k` leaves per shard per
+epoch:
+
+| `k` | fetched per epoch (4,096 shards) | vs 13.6 GB storage avoided | verdict |
+| --- | --- | --- | --- |
+| 100 | ~52 MB | ~1 : 260 | free-riding **wins** |
+| 1,000 | ~520 MB | ~1 : 26 | free-riding **wins** |
+| **≈ 26,000** | **~13.6 GB** | **1 : 1** | parity — **and this is every leaf** |
+
+Sampling reaches parity only when `k` approaches the segment's entire leaf count,
+at which point **it is the full transfer**. There is no interior `k` that buys
+test≡job.
+
+**So TJ-A's question is narrower than "two comparable options."** The compact
+on-chain artifact is not a rival branch that trades soundness for succinctness —
+it fails its own cost ledger at every `k` short of the whole shard. The real
+question is:
+
+> **How is a full transfer witnessed compactly?** — not whether a compact *test*
+> can substitute for one.
+
+Sampling survives only in the form §4 already named: sampling **plus a deadline**
+that makes single-sample reacquisition expensive — i.e. grace-tightening, the
+mechanism reopen (d) was dissolved for depending on. If that is taken, it is
+taken as a latency argument with its soundness dependency priced, not as a
+structural achievement of test≡job.
+
+## 6. First deliverables
 
 1. This record, registered (index row, FOLLOWUPS annotations, probe pause).
 2. **A5 re-measurement at shard-size payload** (sim-side, own branch) — the
    corrected margin *in the pruned world*, as TJ's economic baseline; the
-   pre-pruning artifact number retained alongside for the record.
-3. The TJ-A/TJ-B challenge-spec design pass — the genesis-frozen half.
+   pre-pruning artifact number retained alongside for the record. §5 is the
+   analytic prediction it re-measures against, threshold in §5.1's marginal
+   form.
+3. The TJ-A/TJ-B challenge-spec design pass — the genesis-frozen half, now
+   scoped by §5.6 to *witnessing* a full transfer rather than choosing
+   between a compact test and a full one.
