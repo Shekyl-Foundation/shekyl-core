@@ -298,9 +298,16 @@ pub fn margin_per_epoch(
 
 /// The crossover re-fetch-failure rate `q*` at which the margin first turns
 /// non-negative — i.e. how *unreliable* re-fetch must be (how *tight* the gate-4
-/// grace window must be forced) for honest holding to win. `None` if the margin is
-/// already ≥ 0 at `q = 0` (never happens while re-fetch is cheaper than storage),
-/// or if even `q = 1` (re-fetch impossible — the PoRep limit) cannot close it.
+/// grace window must be forced) for honest holding to win.
+///
+/// Returns **`Some(0.0)`** when the margin is already ≥ 0 at `q = 0` — the
+/// margin is closed with no deadline pressure at all. At the opening payload
+/// this never happens (re-fetch is cheaper than storage); at the test≡job
+/// shard payload it is the routine result across the modeled fetch band, and
+/// the report reads `Some(0.0)` as exactly that fact. Returns **`None`** only
+/// when even `q = 1` (re-fetch impossible — the PoRep limit) cannot close it.
+/// The two ends are opposite facts and must not be conflated: `Some(0.0)` =
+/// already closed, `None` = unclosable.
 #[must_use]
 pub fn crossover_q(
     payload_bytes: f64,
