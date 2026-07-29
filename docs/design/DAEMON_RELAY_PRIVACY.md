@@ -4849,3 +4849,45 @@ prerequisite by sequencing hygiene; **it is the instrument.**
 are different states and a future reader treats them differently — the same
 reason ρ's status line was corrected from "blocked" to "blocked, with the
 obligation now single-draw-per-epoch" in §19.
+
+**Re-scoped 2026-07-29 — Q-11 is a *mechanism* question with constants
+attached, not a constants question.** The port surfaced this twice in one day:
+the inherited noise gtests asserted *synchronized* channel emission (a hook
+artifact — see the §20.2a outcome), and nothing anywhere states whether
+synchronization would even be wrong. It is wrong — simultaneous emission makes
+the aggregate bursty and periodic, the exact shape constant-rate cover exists to
+deny — but that argument had to be *reconstructed*, because the shape was never
+specified. The constants are the least of what is underived: whether channels
+emit independently, whether the cadence is uniform or memoryless, and what the
+aggregate rate is meant to look like all have no stated source. Answering "are
+10 s + U[0, 5 s] the right numbers" without first stating the shape would close
+the entry while leaving the mechanism exactly as unspecified as the day it was
+inherited.
+
+**Name the adversary, because Q-11's is different from every other item in this
+document.** Everything else here — stem routing, occupancy, the embargo, W3,
+CV-1…CV-4 — concerns the **peer/sybil adversary**. Cover traffic defends the
+**wire observer** and is transparent to the peer decoder; the inherited code
+says so itself, verbatim, at the G-1 fork point: *"good protection against ISP
+adversaries, but not sybil adversaries"* (re-census: the noise branch
+short-circuits before `dandelionpp_notify`, so a noise zone never reaches
+Dandelion++ at all). An entry that does not say this invites someone to grade
+cadence uniformity against a sybil, find it does not help, and record a defect
+that is not one.
+
+**What the derivation owes, in dependency order** — and the first two cannot be
+measured into existence:
+
+1. **The adversary and its capability.** Passive timing observation only, or
+   active probing? The relevant literature is the traffic-analysis
+   cover-traffic lineage (**Loopix** and descendants), *not* Dandelion++ —
+   a different body of work with a different threat model.
+2. **The emission shape that defeats it.** Independence across channels,
+   cadence family (uniform vs memoryless — F-2's exact question, one subsystem
+   over), aggregate-rate target. What the shape argument already gives:
+   per-channel independence is *required*, not incidental — the mechanism
+   witness (`covert_channels_emit_one_per_advance_not_synchronized`) pins it as
+   soundness, and it survives whatever family the derivation picks.
+3. **The constants that instantiate the shape.** Only now do
+   `NOISE_MIN_DELAY`/`_DELAY_RANGE`/`_MIN_EPOCH` become gradeable, and only now
+   does the conformance instrument know what distribution to grade against.

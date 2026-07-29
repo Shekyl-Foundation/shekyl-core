@@ -456,6 +456,16 @@ mod tests {
     /// The gtests keep what §20.5 says that oracle is for — counts, status,
     /// payload identity — and assert them collision-robustly. Cadence is
     /// asserted here, exactly, where it can be.
+    ///
+    /// **Negative-controlled per leg, because synchronization has two entry
+    /// points and one injection cannot reach both.** A construction-time
+    /// injection (all channels share one initial deadline) trips the *fixture*
+    /// assertion — proving the precondition is sound, not that the count
+    /// assertion bites. An emission-time injection (the due predicate broken so
+    /// every channel fires on every wake, deadlines left distinct) trips the
+    /// *count* assertion with `[0, 1]`. Both were run and observed to fail. A
+    /// control that only reaches the precondition would be the
+    /// asserted-a-constant-against-itself shape at one remove.
     #[test]
     fn covert_channels_emit_one_per_advance_not_synchronized() {
         let mut rng = SplitMix64::new(11);
