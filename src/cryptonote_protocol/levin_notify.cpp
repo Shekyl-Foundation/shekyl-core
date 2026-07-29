@@ -348,23 +348,23 @@ namespace levin
   {
     struct zone
     {
-      explicit zone(boost::asio::io_context& io_service, std::shared_ptr<connections> p2p, epee::byte_slice noise_in, epee::net_utils::zone zone, bool pad_txs)
+      explicit zone(boost::asio::io_context& io_service, std::shared_ptr<connections> p2p, epee::byte_slice covert_payload_in, epee::net_utils::zone zone, bool pad_txs)
         : p2p(std::move(p2p)),
-          noise(std::move(noise_in)),
+          covert_payload(std::move(covert_payload_in)),
           wake(io_service),
           strand(io_service),
           channels(),
-          relay(make_relay_zone(zone, !noise.empty()), &shekyl_relay_zone_free),
+          relay(make_relay_zone(zone, !covert_payload.empty()), &shekyl_relay_zone_free),
           pending_wakes(0),
           nzone(zone),
           pad_txs(pad_txs)
       {
-        for (std::size_t count = 0; !noise.empty() && count < CRYPTONOTE_NOISE_CHANNELS; ++count)
+        for (std::size_t count = 0; !covert_payload.empty() && count < CRYPTONOTE_NOISE_CHANNELS; ++count)
           channels.emplace_back(io_service);
       }
 
       const std::shared_ptr<connections> p2p;
-      const epee::byte_slice noise; //!< `!empty()` means zone is using noise channels
+      const epee::byte_slice covert_payload; //!< `!empty()` means zone is using noise channels
       /*! One timer for every scheduled relay step, armed from
           `shekyl_relay_zone_next_wake()`. The zone owns the deadline *value*;
           this owns the *sleep*. A second timer would need a second deadline,
@@ -526,7 +526,7 @@ namespace levin
           const std::shared_ptr<detail::zone>& z = static_cast<relay_effects*>(ctx)->zone;
 
           // only noise uses the "noise channels", only update when enabled
-          if (z->noise.empty())
+          if (z->covert_payload.empty())
             return;
 
           /* Slot order is load-bearing: channel `i` carries stem slot `i`, and an
@@ -786,7 +786,7 @@ namespace levin
       //! \pre Called within `zone_->channels[channel_].strand`.
       void operator()(boost::system::error_code error)
       {
-        if (!zone_ || !zone_->p2p || zone_->noise.empty())
+        if (!zone_ || !zone_->p2p || zone_->covert_payload.empty())
           return;
 
         if (error && error != boost::system::errc::operation_canceled)
@@ -801,14 +801,14 @@ namespace levin
         {
           epee::byte_slice message = nullptr;
           if (!channel.active.empty())
-            message = channel.active.take_slice(zone_->noise.size());
+            message = channel.active.take_slice(zone_->covert_payload.size());
           else if (!channel.queue.empty())
           {
             channel.active = channel.queue.front().clone();
-            message = channel.active.take_slice(zone_->noise.size());
+            message = channel.active.take_slice(zone_->covert_payload.size());
           }
           else
-            message = zone_->noise.clone();
+            message = zone_->covert_payload.clone();
 
           if (zone_->p2p->send(std::move(message), channel.connection))
           {
@@ -846,7 +846,7 @@ namespace levin
     if (!zone_->relay)
       throw std::logic_error{"cryptonote::levin::notify could not open its relay zone"};
 
-    const bool noise_enabled = !zone_->noise.empty();
+    const bool noise_enabled = !zone_->covert_payload.empty();
     if (noise_enabled || zone == epee::net_utils::zone::public_)
     {
       const auto now = std::chrono::steady_clock::now();
@@ -874,19 +874,19 @@ namespace levin
       return {false, false, false};
 
     /* Stem slots backed by a live peer — the inherited `connection_count`, and
-       only meaningful when `!noise.empty()`. Published by the zone as a
+       only meaningful when `!covert_payload.empty()`. Published by the zone as a
        single-writer atomic precisely because this method is callable from any
        thread (§18.5 finding 1). */
     const std::size_t connection_count = shekyl_relay_zone_live_stems(zone_->relay.get());
     bool has_outgoing = connection_count;
-    if (zone_->noise.empty())
+    if (zone_->covert_payload.empty())
       has_outgoing = zone_->p2p->get_out_connections_count();
-    return {!zone_->noise.empty(), CRYPTONOTE_NOISE_CHANNELS <= connection_count, has_outgoing};
+    return {!zone_->covert_payload.empty(), CRYPTONOTE_NOISE_CHANNELS <= connection_count, has_outgoing};
   }
 
   void notify::new_out_connection()
   {
-    if (!zone_ || zone_->noise.empty() ||
+    if (!zone_ || zone_->covert_payload.empty() ||
         CRYPTONOTE_NOISE_CHANNELS <= shekyl_relay_zone_live_stems(zone_->relay.get()))
       return;
 
@@ -982,7 +982,7 @@ namespace levin
        but the mempool/stempool needs to know the zone a tx originated from to
        work properly. */
 
-    if (!zone_->noise.empty() && !zone_->channels.empty())
+    if (!zone_->covert_payload.empty() && !zone_->channels.empty())
     {
       // covert send in "noise" channel
       static_assert(
@@ -1000,9 +1000,9 @@ namespace levin
       // Padding is not useful when using noise mode. Send as stem so receiver
       // forwards in Dandelion++ mode.
       epee::byte_slice message = epee::levin::make_fragmented_notify(
-        zone_->noise.size(), NOTIFY_NEW_TRANSACTIONS::ID, make_tx_message(std::move(txs), false, false)
+        zone_->covert_payload.size(), NOTIFY_NEW_TRANSACTIONS::ID, make_tx_message(std::move(txs), false, false)
       );
-      if (CRYPTONOTE_MAX_FRAGMENTS * zone_->noise.size() < message.size())
+      if (CRYPTONOTE_MAX_FRAGMENTS * zone_->covert_payload.size() < message.size())
       {
         MERROR("notify::send_txs provided message exceeding covert fragment size");
         return false;
