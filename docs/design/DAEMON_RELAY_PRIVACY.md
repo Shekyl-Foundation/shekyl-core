@@ -4740,12 +4740,41 @@ is a consequence of the port. Order: §20.4 split → §20.2 scheduling port →
 7. Covert-path Rust twins exist for the behaviours §20.5 lists as unreached, or
    the gap is stated in the round's outcome section with the same explicitness
    §18.4b used.
-8. **The zone handle is called from exactly one strand** (§20.2a). The
-   per-channel `next_noise` timers are gone — `CRYPTONOTE_NOISE_CHANNELS` timers
-   become **zero**, not one — and no `shekyl_relay_zone_*` call appears on a
-   channel strand. This one is load-bearing because the rejected alternative
-   compiles, passes both noise gtests, and races only under load; a green suite
-   is not evidence here.
+8. **No `shekyl_relay_zone_*` call that reads or mutates zone state *owned by
+   the zone strand* appears off the zone strand.** The per-channel `next_noise`
+   timers are gone — `CRYPTONOTE_NOISE_CHANNELS` timers become **zero**, not
+   one. Two exceptions, both **by construction rather than by discipline**:
+
+   - **`live_stems`** — published single-writer atomic, built for off-task
+     readers (§18.5 finding 1). Safe because the write side is single and the
+     read side is lock-free.
+   - **`covert_enabled`** — frozen at construction, no writer after `new`. Safe
+     because it is immutable for the object's lifetime.
+
+   **Any third exception is a finding, not a cleanup.**
+
+   Load-bearing because the rejected alternative compiles, passes both noise
+   gtests, and races only under load; a green suite is not evidence here.
+
+   **Two deliberate choices in this wording.** *"Owned by the zone strand"*
+   rather than *"mutable"*, because the property being protected is
+   **ownership**, not mutability — §18.5's whole framing is *who decides a
+   value*, not whether a field happens to be `const`. A future field could be
+   technically mutable, zone-strand-owned, and in scope; another could be
+   immutable and irrelevant. The acceptance item draws the line the inventory
+   draws. And *"any third exception is a finding"* because the failure mode for
+   an item with named exceptions is that **the list grows silently** — each
+   addition looks locally justified and the property erodes by accretion.
+   Declaring the list closed forces the next person who needs a third to argue
+   for it against the inventory, which is where that argument belongs.
+
+   **Amended 2026-07-29.** The original wording — *"no `shekyl_relay_zone_*`
+   call appears on a channel strand"* — was written before `covert_enabled`
+   existed as Rust state, against a model in which every zone-handle call
+   touched the map. The design has since acquired a published atomic and a
+   frozen fact, and the criterion did not move with them. Ordinary drift between
+   a criterion and what it measures; caught **at the check**, rather than by
+   passing against a loose reading of it.
 9. **CV-3 (deadline stability) has a witness** — a channel's armed deadline
    survives wakes it did not cause. Driven through `poll(now_ms)`: arm a channel,
    advance time through several unrelated wakes (fluff release, epoch rollover,
