@@ -926,6 +926,95 @@ mod tests {
         assert_eq!(out.sigma_work_milli, 1_000);
     }
 
+    /// The per-`(P, s, E)` summand weld (TJ §5.5 / deliverable 4,
+    /// `ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`): **a bond with serve-credit
+    /// on exactly `j` shards earns work on exactly those `j`** — no
+    /// contribution from shards it did not answer, and adding one more
+    /// credit adds exactly that shard's per-pair contribution. The adjacent
+    /// tests (`bonded_without_serve_credit_not_in_r_market`,
+    /// `drop_after_serve_credit_counts_toward_work`) assert membership and
+    /// single-credit counting; neither asserts the summand property directly,
+    /// and the free-rider ledger's granularity argument stands on it (coverage
+    /// is per-pair structurally — it cannot be coarsened to per-`P`).
+    #[test]
+    fn work_sums_over_exactly_the_answered_pairs() {
+        // Five fresh shards; A answers {0, 1}, B answers {2, 3, 4}. Disjoint,
+        // uncrowded: every credited shard has r_market = 1 → scarcity 1000
+        // milli each, curve below the first band → identity.
+        let bonds = [
+            EpochCloseBond {
+                join_settlement_epoch: 0,
+                is_foundation_complete_tree: false,
+                bad_intervals: &[],
+            },
+            EpochCloseBond {
+                join_settlement_epoch: 0,
+                is_foundation_complete_tree: false,
+                bad_intervals: &[],
+            },
+        ];
+        let shards: Vec<EpochCloseShard> = (0..5).map(|i| shard(i, 0)).collect();
+        let disjoint = [
+            CreditPair {
+                bond_idx: 0,
+                shard_idx: 0,
+            },
+            CreditPair {
+                bond_idx: 0,
+                shard_idx: 1,
+            },
+            CreditPair {
+                bond_idx: 1,
+                shard_idx: 2,
+            },
+            CreditPair {
+                bond_idx: 1,
+                shard_idx: 3,
+            },
+            CreditPair {
+                bond_idx: 1,
+                shard_idx: 4,
+            },
+        ];
+        let out = as_of_e_served_work(&close_inputs(&bonds, &shards, &disjoint)).unwrap();
+        // j = 2 and j = 3 at 1000 milli per answered pair — and nothing from
+        // the shards each bond did NOT answer.
+        assert_eq!(out.work_by_bond, vec![2_000, 3_000]);
+
+        // One more answered pair for A (shard 2, now shared with B): A gains
+        // exactly shard 2's per-pair contribution at the SPLIT scarcity
+        // (r_market = 2 → 500 milli), and B's shard-2 term drops to the same
+        // split — every earning moves per-pair, nothing moves per-P.
+        let overlapping = [
+            CreditPair {
+                bond_idx: 0,
+                shard_idx: 0,
+            },
+            CreditPair {
+                bond_idx: 0,
+                shard_idx: 1,
+            },
+            CreditPair {
+                bond_idx: 0,
+                shard_idx: 2,
+            },
+            CreditPair {
+                bond_idx: 1,
+                shard_idx: 2,
+            },
+            CreditPair {
+                bond_idx: 1,
+                shard_idx: 3,
+            },
+            CreditPair {
+                bond_idx: 1,
+                shard_idx: 4,
+            },
+        ];
+        let out2 = as_of_e_served_work(&close_inputs(&bonds, &shards, &overlapping)).unwrap();
+        assert_eq!(out2.work_by_bond, vec![2_500, 2_500]);
+    }
+
     // The close/verify shared-sourcing identity — that summing the emission
     // numerator's per-P `Curve(work_P)` terms reproduces the persisted Σwork(E)
     // denominator exactly — is pinned end-to-end through the real FFI numerator
