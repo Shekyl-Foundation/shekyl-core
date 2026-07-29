@@ -4244,8 +4244,15 @@ distribution says is a privacy defect, and it is one that:
 
 - no gtest in the tree would catch (§20.5 — the two noise cases assert counts,
   and a biased-short interval still produces the expected count per poll);
-- no conformance test today covers (the crate's goodness-of-fit instruments are
-  pointed at the embargo and fluff delay, not the covert schedule);
+- **no conformance test would catch even though one is already aimed here** —
+  `grade_uniform`
+  ([`grade.rs:96`](../../rust/shekyl-relay-privacy/src/conformance/grade.rs#L96))
+  says in its own doc that it applies to *"the epoch jitter and the noise
+  cadence"*. An earlier draft of this section claimed the instruments were
+  pointed elsewhere; they are not, and the correction strengthens the point
+  rather than weakening it: the machinery is already aimed at this draw and
+  **still** cannot see the defect, because it grades the draw and the defect is
+  in the selection among draws;
 - looks like correct behaviour under casual inspection, because each individual
   draw *is* from the right distribution.
 
@@ -4407,26 +4414,47 @@ channels"*. Censused, it carries three distinct facts:
 | **fragment size** (`.size()`) | `:804`, `:808`, `:1003`, `:1005` | 4 |
 | **the dummy payload** (`.clone()`) | `:811` | 1 |
 
-The predicate is nine of fourteen uses, and it is *already duplicated across the
-boundary*: [`:357`](../../src/cryptonote_protocol/levin_notify.cpp#L357) passes
-`!noise.empty()` into `make_relay_zone` at construction, so Rust has held the
-enable bit since RP-3a. Every later C++ `.empty()` test re-derives a fact Rust
-owns — two copies of one fact, which is one defect class (they disagree, or the
-copy goes stale) and is fixed by deletion plus a single owner, not by keeping
-them in step. It is the same class as the `PeerFluff::flush_at` bug §18.5 caught
-by asking *"who owns this fact?"*.
+The predicate is nine of fourteen uses.
 
-It is benign today only because `noise` is `const` after construction. It stops
-being benign the moment covert scheduling is Rust-side and a caller asks C++
-whether noise is on — the answer would be a second copy of a Rust fact,
-synchronized by nothing but the constructor.
+**Correction, made while grounding the port.** An earlier draft of this section
+claimed the bit was *already duplicated across the FFI*, reasoning that
+[`:357`](../../src/cryptonote_protocol/levin_notify.cpp#L357) passes
+`!noise.empty()` into `make_relay_zone`, so Rust had held it since RP-3a. **That
+is false, and checking it changed the fix.** `make_relay_zone`
+([`:235–244`](../../src/cryptonote_protocol/levin_notify.cpp#L235-L244)) consumes
+the bool *C++-side* to choose between `noise_zone_params()` and
+`public_zone_params()`; what crosses into `shekyl_relay_zone_new` is the
+**resulting parameters**, never the bit. `Zone` has no noise or covert field at
+all — verified by grep across `shekyl-relay`, `shekyl-relay-privacy` and
+`relay_zone_ffi`.
+
+So the defect is **overloading, not cross-boundary duplication**: one C++ fact,
+re-derived at nine sites from a field whose type says "payload". Smaller than the
+draft claimed, and a different operation to fix.
 
 **Decision:** split at the port. The payload and its size stay C++ config
-(`covert_payload`, and its `.size()` remains the fragment unit). The enable bit
-is **read from the zone handle**, not re-derived from the payload. This is a
-mechanical change with no behavioural delta, and it is done *before* the
-scheduling port rather than after, so the port is not written against an
-ambiguous predicate.
+(`covert_payload`; its `.size()` remains the fragment unit). The enable bit
+**becomes Rust state**, because after the port Rust needs it on its own account —
+a covert send cannot be scheduled without knowing whether covert sends exist. It
+is therefore *new state acquired by the port*, inventoried with a named owner per
+§18.5's standing obligation, and **not** the deletion of an existing duplicate.
+
+Keeping those straight matters: "delete the duplicate" and "move a fact to the
+side that needs it" carry different risks. The second *creates* a second copy at
+the moment of the move, since construction still passes the payload in. So the
+acceptance test is that **no C++ `.empty()` survives as a predicate** — one
+owner, rather than two kept in step by the constructor.
+
+**Already built and unwired: `NoiseCadence`.**
+[`schedule.rs:690`](../../rust/shekyl-relay-privacy/src/schedule.rs#L690) already
+carries the covert cadence — `min_delay_secs`, `jitter_secs`, a `next_send()`
+drawing from the same `bounded_uniform` primitive as the epoch jitter, and the
+test `noise_cadence_spans_its_band`. It was built during RP-1's measurement pass
+and wired to nothing. Its own doc comment says why it sits there: *"it draws from
+the same uniform primitive and raises the same conformance question, not because
+it is part of Dandelion++."* RP-3b's scheduling port therefore **wires an existing
+primitive** rather than writing one, which lowers the port's cost and is the
+reason §20.9 can call RP-3b the instrument for Q-11.
 
 ### 20.5 The oracle is thinner here than it was for 3a — say so before building
 
