@@ -164,7 +164,14 @@ change post-genesis.
   deterrent is carried structurally and the witness mechanism can be chosen
   on other grounds; a **small** one means the receipt branch is doing more
   work than it looks. Running it first turns TJ-A from a two-way argument
-  into a decision with a number under it. **§5.6 settles the same
+  into a decision with a number under it. **The number is under it (§6.2,
+  measured 2026-07-29):** bandwidth alone closes the margin across the
+  modeled band (`q* = 0`; break-even at `$0.0004/GB`, 26× below bulk
+  transit); below break-even the deterrent needs `q_risk* ≈ 0.10` (+reward)
+  on the whole-shard fetch — so the witness choice is free at modeled
+  prices, and in the flat-rate world it hinges on whether TJ-C's deadline
+  forces `q ≥ 0.10` on 3.33 MB over Tor: exactly PD-F-2's dispersion
+  question, now with the threshold it must answer against. **§5.6 settles the same
   asymmetry independently and quantitatively**, which removes this branch's
   dependence on §4's assertion: sampling reaches parity with the full
   transfer only at `k ≈ 26k` — the segment's entire leaf count — so no
@@ -502,17 +509,32 @@ structural achievement of test≡job.
    `⏸ PAUSED`; `FOLLOWUPS.md` grace + `m`/`n` entry annotated
    `⏸ SUPERSEDED IN PART`; `ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md` status
    `⚠️ REVERSED IN PART`, citing this record rather than restating it.
-2. **A5 re-measurement at shard-size payload** (sim-side, own branch) —
-   **DECISIVE, not confirmatory — and NEXT: sequenced BEFORE the TJ-A/TJ-B
-   design pass** (ruled 2026-07-29; rationale at TJ-A). §5.4 withdrew the
-   caching leg and §5.3 admitted the bandwidth leg is price-ambiguous, so
-   the ruling now rests on `T_risk`: the free-rider's expected cost from
-   deadline misses against the m-of-n window and the slashable bond. This
-   deliverable **quantifies that term**, independent of the witness question.
-   Threshold in §5.1's marginal form; the retained absorbing-Markov
-   machinery is the instrument; PD-F-2's dispersion framing supplies the tail
-   model for a 3.33 MB Tor-borne fetch. The pre-pruning artifact number is
-   retained alongside for the record.
+2. ~~**A5 re-measurement at shard-size payload**~~ **✅ MEASURED (2026-07-29,
+   `feat/a5-shard-payload`, `tj_shard_payload_report` — payload threaded as
+   the explicit operand; the opening-payload report retained as the labeled
+   pre-pruning artifact; existing test pins are the inertness check).** The
+   numbers, at the modeled bands (per-shard slash scope, `m=11/n=13`,
+   `SKL_FIAT_PRICE_BAND[1]`):
+   - **Bandwidth alone flips the margin at both band ends**: re-fetch
+     $0.136–$1.364/epoch vs `S = $0.0052` — proxying is **26–263× dearer**
+     than holding; `q* = 0`. At cloud/transit prices no deadline pressure is
+     needed.
+   - **Break-even fetch price `$0.0004/GB`** (26× below bulk transit) — the
+     §5.3 price-contingency as one number: only a flat-rate/residential
+     fetcher below it escapes the bandwidth closure.
+   - **`T_risk(q)` (the price-independent leg, sub-break-even world):** ~0
+     through `q = 0.05` (the m-of-n window absorbs isolated misses), then
+     steep — `$0.0046`/epoch at `q = 0.10` (+reward), `$175`/epoch at
+     `q = 0.278`. **`q_risk* = 0.1011` (+reward) / `0.2792` (bond-only)** —
+     numerically the old `q*` band, as it must be: in the zero-bandwidth
+     world the payload changes nothing about slash arithmetic.
+   - **TJ-A steering readout:** the deterrent is band-wide structural at
+     modeled prices; in the sub-break-even world it needs `q ≥ 0.10` on a
+     3.33 MB Tor-borne fetch inside the TJ-C deadline — far more forceable
+     than the same `q` on 3 KB (PD-F-2 dispersion), but *whether* the
+     deadline forces it is PD-F-2's measurement; the sim sweeps `q` and
+     asserts no Tor-tail parameter. The R2 caveat applies to every number
+     here: neither cost exists until pruned-daemon mode ships.
 3. **TJ-F (RED-2) — poisoned-leaf-store verification**, sequenced **ahead of**
    TJ-A: genesis-frozen, testable against current code today, and independent of
    which TJ-A branch is taken. It freezes behaviour rather than concept and is
