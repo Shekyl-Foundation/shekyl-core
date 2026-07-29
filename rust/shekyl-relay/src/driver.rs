@@ -56,6 +56,25 @@ pub enum Effect {
     /// **Pushed, never pulled.** Slot order is meaningful and nils are kept in
     /// position, because the consumer indexes by slot (§16.1 contract 3).
     StemSlots(Vec<Option<ConnectionId>>),
+    /// Covert channel `channel` is due: send on it now.
+    ///
+    /// **Carries no payload discriminant, and that is CV-4** (§20.2). Whether
+    /// this send is a dummy or drains a queued real fragment is a *queue*
+    /// question, and the queue is C++. Rust decides **when** and **who**; C++
+    /// decides **what**.
+    ///
+    /// The omission is structural, not stylistic. Handing the scheduler a
+    /// `DUMMY | REAL` tag would let the cadence react to having something real
+    /// to say — and the breaking change would look like an optimisation
+    /// (*"a real fragment is pending, drain it sooner"*), which is a
+    /// covert-channel leak wearing a latency improvement's costume. Constant-rate
+    /// cover works precisely because the schedule cannot know. With no
+    /// discriminant here, Rust is not *trusted* to ignore the queue — it is
+    /// structurally unable to consult it.
+    CovertSend {
+        /// Channel index. Positional: channel `i` is bound to stem slot `i`.
+        channel: usize,
+    },
 }
 
 /// Owns a zone and runs its scheduled steps.
@@ -204,6 +223,18 @@ impl Driver {
             effects.push(Effect::Fluff { peer, blobs });
         }
 
+        // Covert sends last, and after the epoch block on purpose: a rollover
+        // rebuilds the stem slots, and channel `i` is bound to slot `i`, so
+        // emitting before the rebuild would name a channel against the slots it
+        // is about to stop being bound to.
+        //
+        // `due_covert_channels` re-arms only what fired (CV-3). Nothing here
+        // consults a queue or a payload — the effect carries an index and
+        // nothing else, which is CV-4 by construction.
+        for channel in self.zone.due_covert_channels(now, rng) {
+            effects.push(Effect::CovertSend { channel });
+        }
+
         effects
     }
 
@@ -330,7 +361,7 @@ mod tests {
             .iter()
             .find_map(|e| match e {
                 Effect::StemSlots(s) => Some(s.clone()),
-                Effect::Fluff { .. } => None,
+                Effect::Fluff { .. } | Effect::CovertSend { .. } => None,
             })
             .expect("a rollover re-draws the stem set");
         assert_eq!(slots.len(), 2, "two slots at the configured width");

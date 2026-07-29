@@ -14,6 +14,7 @@ use std::cell::RefCell;
 struct Recorder {
     fluffed: Vec<([u8; 16], Vec<Vec<u8>>)>,
     slots: Vec<Vec<[u8; 16]>>,
+    covert: Vec<usize>,
 }
 
 thread_local! {
@@ -72,6 +73,10 @@ extern "C" fn rec_gather(_: *mut c_void, out_n: *mut usize) -> *const u8 {
             g.pool.as_ptr()
         }
     })
+}
+
+extern "C" fn rec_covert(_: *mut c_void, channel: usize) {
+    REC.with(|r| r.borrow_mut().covert.push(channel));
 }
 
 fn reset() {
@@ -431,6 +436,7 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
                 rec_gather,
                 rec_fluff,
                 rec_slots,
+                rec_covert,
             );
             REC.with(|r| assert!(r.borrow().fluffed.is_empty(), "not due yet"));
         }
@@ -442,6 +448,7 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
             rec_gather,
             rec_fluff,
             rec_slots,
+            rec_covert,
         );
         shekyl_relay_zone_free(h);
     }
@@ -488,6 +495,7 @@ fn polling_across_the_epoch_boundary_gathers_and_rebuilds() {
             rec_gather,
             rec_fluff,
             rec_slots,
+            rec_covert,
         );
 
         GATHER.with(|g| {
@@ -564,6 +572,7 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
             rec_gather,
             rec_fluff,
             rec_slots,
+            rec_covert,
         );
         shekyl_relay_zone_free(null);
     }

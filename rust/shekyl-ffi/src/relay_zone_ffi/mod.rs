@@ -92,6 +92,16 @@ pub type FluffCb =
 /// indexes by position (§16.1 contract 3).
 pub type SlotsCb = extern "C" fn(ctx: *mut c_void, slots: *const u8, count: usize);
 
+/// Called when covert channel `channel` is due to send.
+///
+/// **No payload discriminant, and that is CV-4** (§20.2). Rust decides *when*
+/// and *which channel*; C++ decides *what* — dummy, or the next queued real
+/// fragment — from a queue Rust cannot see. Adding a kind, a queue depth, or a
+/// "has real pending" flag here would hand the scheduler exactly the input
+/// needed to let the cadence react to traffic, and the resulting change would
+/// look like a latency optimisation rather than the covert-channel leak it is.
+pub type CovertSendCb = extern "C" fn(ctx: *mut c_void, channel: usize);
+
 /// Zone-shape flags for [`shekyl_relay_zone_new`].
 ///
 /// **Named bits, deliberately, instead of a second `bool` parameter.** RP-3b
@@ -159,7 +169,13 @@ impl RelayZoneHandle {
 /// Hand each effect to the matching callback. Dispatch happens here, in Rust,
 /// so no variant tag ever crosses the boundary — the reason the C++ side has no
 /// decoding to get wrong (§18.4a).
-fn dispatch(effects: Vec<Effect>, ctx: *mut c_void, fluff: FluffCb, slots: SlotsCb) {
+fn dispatch(
+    effects: Vec<Effect>,
+    ctx: *mut c_void,
+    fluff: FluffCb,
+    slots: SlotsCb,
+    covert: CovertSendCb,
+) {
     for effect in effects {
         match effect {
             Effect::Fluff { peer, blobs } => {
@@ -180,9 +196,13 @@ fn dispatch(effects: Vec<Effect>, ctx: *mut c_void, fluff: FluffCb, slots: Slots
                 }
                 slots(ctx, flat.as_ptr(), list.len());
             }
+            Effect::CovertSend { channel } => covert(ctx, channel),
         }
     }
 }
+
+/// Ignore covert sends — for the forced hooks, which drive one specific step.
+extern "C" fn noop_covert(_: *mut c_void, _: usize) {}
 
 /// # Safety
 /// `ids` must point to `n * 16` readable bytes, or be null with `n == 0`.
@@ -457,7 +477,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay_with_refresh(
         h.driver
             .plan_relay_with_refresh(source, local_origin, &peers, &mut h.rng);
     h.publish();
-    dispatch(effects, ctx, noop_fluff, on_slots);
+    dispatch(effects, ctx, noop_fluff, on_slots, noop_covert);
     write_plan(plan, out_dest)
 }
 
@@ -507,7 +527,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_update_stems(
     let h = &mut *handle;
     let effects = h.driver.update_stems(&peers, &mut h.rng);
     h.publish();
-    dispatch(effects, ctx, noop_fluff, on_slots);
+    dispatch(effects, ctx, noop_fluff, on_slots, noop_covert);
 }
 
 /// Accept a batch of transaction blobs for fluffing to every peer but `source`.
@@ -601,6 +621,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
     gather_outbound: OutboundCb,
     on_fluff: FluffCb,
     on_slots: SlotsCb,
+    on_covert: CovertSendCb,
 ) {
     if handle.is_null() {
         return;
@@ -618,7 +639,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
         &mut h.rng,
     );
     h.publish();
-    dispatch(effects, ctx, on_fluff, on_slots);
+    dispatch(effects, ctx, on_fluff, on_slots, on_covert);
 }
 
 /// Release every pending fluff batch — what `notify::run_fluff()` drives.
@@ -638,7 +659,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_fluff(
     let h = &mut *handle;
     let effects = h.driver.force_fluff(now_ms);
     h.publish();
-    dispatch(effects, ctx, on_fluff, noop_slots);
+    dispatch(effects, ctx, on_fluff, noop_slots, noop_covert);
 }
 
 /// Start a new epoch immediately — what `notify::run_epoch()` drives.
@@ -662,7 +683,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(
     let h = &mut *handle;
     let effects = h.driver.force_epoch(now_ms, &peers, &mut h.rng);
     h.publish();
-    dispatch(effects, ctx, noop_fluff, on_slots);
+    dispatch(effects, ctx, noop_fluff, on_slots, noop_covert);
 }
 
 /// Placeholders for the exports that cannot produce the other variant. Reaching

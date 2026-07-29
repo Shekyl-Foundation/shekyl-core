@@ -3052,6 +3052,16 @@ typedef void (*ShekylRelaySlotsCb)(void* ctx, const std::uint8_t* slots, std::si
 //! connection scan. Must not throw across the FFI boundary.
 typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out_n);
 
+//! Covert channel `channel` is due to send.
+//!
+//! Carries NO payload discriminant, and that is deliberate (CV-4): whether the
+//! send is a dummy or drains a queued real fragment is a queue question, and the
+//! queue is C++. Rust decides WHEN and WHICH CHANNEL; C++ decides WHAT. Adding a
+//! kind or a "has real pending" flag here would let the cadence react to traffic,
+//! and that change would look like a latency optimisation rather than the
+//! covert-channel leak it is. Must not throw across the FFI boundary.
+typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel);
+
 //! Forward to the successor written into `out_dest`.
 #define SHEKYL_RELAY_PLAN_STEM        0
 //! Stem-eligible, but nothing routes yet — refresh connections and re-plan.
@@ -3135,7 +3145,8 @@ std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t
 //! release never triggers the connection scan.
 void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
                             ShekylRelayOutboundCb gather_outbound,
-                            ShekylRelayFluffCb on_fluff, ShekylRelaySlotsCb on_slots);
+                            ShekylRelayFluffCb on_fluff, ShekylRelaySlotsCb on_slots,
+                            ShekylRelayCovertSendCb on_covert);
 //! Release every pending fluff batch — what notify::run_fluff() drives.
 void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
                                    void* ctx, ShekylRelayFluffCb on_fluff);

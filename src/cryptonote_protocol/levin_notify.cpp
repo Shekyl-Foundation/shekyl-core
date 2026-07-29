@@ -572,6 +572,22 @@ namespace levin
         }
       }
 
+      //! A covert channel is due to send.
+      //!
+      //! **Not yet wired to the channels.** The Rust zone now schedules covert
+      //! sends and emits this, but the per-channel `next_noise` timers still
+      //! drive the actual sends, so this deliberately does nothing for now.
+      //! Deleting those timers and routing sends through here is the next
+      //! commit; landing the seam first keeps that change a rewire rather than
+      //! a rewire plus a new boundary.
+      //!
+      //! Note what it does NOT take: any hint of what is being sent (CV-4).
+      static void on_covert(void* ctx, std::size_t channel) noexcept
+      {
+        (void)ctx;
+        (void)channel;
+      }
+
       //! Gather the outbound connection set on demand.
       //!
       //! `poll` calls this only when a wake crosses an epoch boundary, so the
@@ -660,7 +676,8 @@ namespace levin
         shekyl_relay_zone_poll(
           zone_->relay.get(), now_ms(),
           std::addressof(sink), relay_effects::on_outbound,
-          relay_effects::on_fluff, relay_effects::on_slots
+          relay_effects::on_fluff, relay_effects::on_slots,
+          relay_effects::on_covert
         );
 
         arm(std::move(zone_), core_);
