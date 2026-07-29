@@ -243,6 +243,7 @@ mod tests {
             DandelionParams::inherited(),
             2,
             FluffReach::EveryPeer,
+            false,
             0,
             rng,
         ))

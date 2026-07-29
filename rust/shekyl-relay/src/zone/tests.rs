@@ -26,6 +26,7 @@ fn zone(rng: &mut SplitMix64) -> Zone {
         DandelionParams::inherited(),
         2,
         FluffReach::EveryPeer,
+        false,
         0,
         rng,
     )
@@ -299,6 +300,7 @@ fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Zone {
             DandelionParams::inherited(),
             2,
             FluffReach::EveryPeer,
+            false,
             0,
             rng,
         );
@@ -435,6 +437,7 @@ fn a_private_zone_fluffs_only_to_outbound_peers() {
         DandelionParams::inherited(),
         2,
         FluffReach::OutboundOnly,
+        false,
         0,
         &mut rng,
     );
@@ -460,6 +463,7 @@ fn a_private_zone_fluffs_only_to_outbound_peers() {
         DandelionParams::inherited(),
         2,
         FluffReach::EveryPeer,
+        false,
         0,
         &mut rng,
     );

@@ -89,7 +89,7 @@ fn id(byte: u8) -> [u8; 16] {
 fn fluff_effects_cross_with_peer_and_payload_intact() {
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
         let blob = [0xAB, 0xCD, 0xEF];
         let batch = [ShekylRelayBlob {
@@ -133,7 +133,7 @@ fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
     //    every peer downstream.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
         // Offered high-to-low, with a repeat: order and duplication both
         // have to be removed for the assertion below to hold.
@@ -217,7 +217,7 @@ fn stem_slots_cross_in_index_order_with_nils_in_position() {
     reset();
     let (filled, after) = unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
         shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3, std::ptr::null_mut(), rec_slots);
         let filled = REC.with(|r| r.borrow().slots[0].clone());
         assert_eq!(
@@ -278,7 +278,7 @@ fn live_stems_atomic_tracks_the_derived_value_after_every_mutation() {
     // kind of mutation — a second writer, or a missed publish, shows here.
     unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
         assert_eq!(shekyl_relay_zone_live_stems(h), 0, "fresh zone");
 
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
@@ -310,7 +310,7 @@ fn the_three_plan_outcomes_stay_distinct_across_the_boundary() {
     // somewhere — but it changes which `relay_method` event is emitted and
     // whether a recoverable stem is abandoned.
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
         let mut out = [0u8; 16];
 
         assert_eq!(
@@ -369,7 +369,7 @@ fn the_nil_uuid_means_locally_originated_which_is_what_cpp_actually_sends() {
     // the null-source path does.
     unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
         shekyl_relay_zone_update_stems(h, peers.as_ptr(), 3, std::ptr::null_mut(), rec_slots);
 
         let mut rolls = 0;
@@ -410,7 +410,7 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
     // agree was due and nothing in the tree would notice.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
 
         let blob = [0x5Au8];
@@ -474,7 +474,7 @@ fn polling_across_the_epoch_boundary_gathers_and_rebuilds() {
     // epoch deadline, so polling there is a rollover.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
         assert!(!h.is_null(), "these params build a zone");
 
         // The set the rollover will draw its two slots from.
@@ -519,11 +519,11 @@ fn a_zone_that_would_spin_is_refused_rather_than_built() {
     // re-arm in the past forever. Refusing construction turns a silent
     // busy-loop in the p2p reactor into a loud startup failure.
     assert!(
-        shekyl_relay_zone_new(0, 2, 0, 30, false).is_null(),
+        shekyl_relay_zone_new(0, 2, 0, 30, 0).is_null(),
         "zero epoch"
     );
     assert!(
-        shekyl_relay_zone_new(0, usize::MAX, 600, 30, false).is_null(),
+        shekyl_relay_zone_new(0, usize::MAX, 600, 30, 0).is_null(),
         "unrepresentable stem width"
     );
 }
@@ -577,7 +577,7 @@ fn plan_relay_with_refresh_fills_an_empty_map_and_pushes_slots() {
     reset();
     unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
         let mut out = [0u8; 16];
         let plan = shekyl_relay_zone_plan_relay_with_refresh(
             h,
@@ -611,7 +611,7 @@ fn queue_fluff_rejects_a_null_ptr_with_nonzero_len() {
     // Contract: empty blobs may pass a null ptr; non-empty must not. Fail
     // closed on the whole batch so a bad span cannot drop a sibling silently.
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, false);
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
         let bad = [ShekylRelayBlob {
             ptr: std::ptr::null(),
@@ -643,5 +643,81 @@ fn queue_fluff_rejects_a_null_ptr_with_nonzero_len() {
             "empty blob with null ptr is valid"
         );
         shekyl_relay_zone_free(h);
+    }
+}
+
+/// The zone-flag bits do not transpose, and the covert bit round-trips.
+///
+/// This test is the *reason* [`SHEKYL_RELAY_ZONE_COVERT_ENABLED`] is a named bit
+/// rather than a second `bool` parameter, so it must be able to fail if the two
+/// bits were ever swapped. It is written as a **negative control on
+/// transposition**: each bit is set *alone*, so a swap flips both assertions
+/// rather than cancelling out — which a both-bits-set case would not catch.
+///
+/// Why the stakes justify a dedicated test: transposing these two swaps the
+/// i2p/tor outbound-only fluff rule with the covert enable, which is exactly the
+/// regression RP-3a's first pass shipped. That one survived only because eight
+/// `private_*` gtests happened to cover the fluff side; nothing covered this
+/// side, and the C++ header is hand-written, so no codegen would catch a
+/// mismatched declaration either.
+#[test]
+fn zone_flag_bits_do_not_transpose() {
+    // **The ABI pin, and the reason it comes first.** A first version of this
+    // test set a flag and read it back through the *same constant*, which made
+    // swapping both definitions a consistent relabelling — it passed under the
+    // very transposition it claimed to catch, because the expectation travelled
+    // through the transform under test. Verified by doing the swap: it stayed
+    // green.
+    //
+    // The real hazard was never a Rust-internal swap. It is these values
+    // drifting from the `#define`s in the hand-written `shekyl_ffi.h`, which no
+    // codegen checks. So the load-bearing assertion is on the **numbers**, which
+    // are the actual ABI contract; the round-trip cases below are then
+    // meaningful because these are pinned.
+    assert_eq!(
+        SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY, 1,
+        "ABI value; `shekyl_ffi.h` hardcodes 1u"
+    );
+    assert_eq!(
+        SHEKYL_RELAY_ZONE_COVERT_ENABLED, 2,
+        "ABI value; `shekyl_ffi.h` hardcodes 2u"
+    );
+
+    unsafe {
+        // Covert bit ALONE. A swap makes this read the fluff bit → false.
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
+        assert!(
+            shekyl_relay_zone_covert_enabled(h),
+            "covert bit set alone must read back as covert-enabled; \
+             reading false here means the bits are transposed"
+        );
+        shekyl_relay_zone_free(h);
+
+        // Fluff bit ALONE. A swap makes this read the covert bit → true.
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY);
+        assert!(
+            !shekyl_relay_zone_covert_enabled(h),
+            "outbound-fluff bit set alone must NOT enable covert; \
+             reading true here means the bits are transposed"
+        );
+        shekyl_relay_zone_free(h);
+
+        // Neither, and both — the two ends, so an always-true or always-false
+        // decode cannot pass the set above by accident.
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        assert!(!shekyl_relay_zone_covert_enabled(h), "no flags ⇒ no covert");
+        shekyl_relay_zone_free(h);
+
+        let both = SHEKYL_RELAY_ZONE_COVERT_ENABLED | SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, both);
+        assert!(
+            shekyl_relay_zone_covert_enabled(h),
+            "both flags ⇒ covert on"
+        );
+        shekyl_relay_zone_free(h);
+
+        // A null handle answers false rather than aborting: a caller that lost
+        // its zone has no covert channels by construction.
+        assert!(!shekyl_relay_zone_covert_enabled(std::ptr::null()));
     }
 }

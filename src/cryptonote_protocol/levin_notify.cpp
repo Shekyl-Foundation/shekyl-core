@@ -232,14 +232,25 @@ namespace levin
         fluff reach from which *network* this is. An i2p zone with noise
         disabled still fluffs outbound-only. Everything the zone then *does*
         with them belongs to `shekyl-relay`. */
-    RelayZoneHandle* make_relay_zone(const epee::net_utils::zone nzone, const bool noise_enabled)
+    RelayZoneHandle* make_relay_zone(const epee::net_utils::zone nzone, const bool covert_enabled)
     {
-      const relay_zone_params params = noise_enabled ? noise_zone_params() : public_zone_params();
-      const bool outbound_fluff_only = (nzone != epee::net_utils::zone::public_);
+      const relay_zone_params params = covert_enabled ? noise_zone_params() : public_zone_params();
+
+      /* Named bits, not two bools: adjacent `bool` arguments transpose silently
+         across a C ABI, and transposing these two swaps the i2p/tor
+         outbound-only fluff rule with the covert enable — the regression RP-3a
+         shipped once. This is also the ONLY place the covert-enabled fact is
+         derived from the payload; every other site asks the zone. */
+      std::uint32_t flags = 0;
+      if (nzone != epee::net_utils::zone::public_)
+        flags |= SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
+      if (covert_enabled)
+        flags |= SHEKYL_RELAY_ZONE_COVERT_ENABLED;
+
       return shekyl_relay_zone_new(
         now_ms(), params.stems,
         std::uint32_t(params.min_epoch.count()), std::uint32_t(params.epoch_range.count()),
-        outbound_fluff_only
+        flags
       );
     }
 
@@ -364,7 +375,12 @@ namespace levin
       }
 
       const std::shared_ptr<connections> p2p;
-      const epee::byte_slice covert_payload; //!< `!empty()` means zone is using noise channels
+      /*! The dummy covert packet, and the fragment unit every covert send is
+          cut to. Payload ONLY: whether the zone runs covert channels is the
+          zone's fact now (`shekyl_relay_zone_covert_enabled`), not this
+          field's emptiness. It used to be both, which is why nine sites
+          re-derived an enable flag from a byte buffer (§20.4). */
+      const epee::byte_slice covert_payload;
       /*! One timer for every scheduled relay step, armed from
           `shekyl_relay_zone_next_wake()`. The zone owns the deadline *value*;
           this owns the *sleep*. A second timer would need a second deadline,
@@ -526,7 +542,7 @@ namespace levin
           const std::shared_ptr<detail::zone>& z = static_cast<relay_effects*>(ctx)->zone;
 
           // only noise uses the "noise channels", only update when enabled
-          if (z->covert_payload.empty())
+          if (!shekyl_relay_zone_covert_enabled(z->relay.get()))
             return;
 
           /* Slot order is load-bearing: channel `i` carries stem slot `i`, and an
@@ -786,7 +802,7 @@ namespace levin
       //! \pre Called within `zone_->channels[channel_].strand`.
       void operator()(boost::system::error_code error)
       {
-        if (!zone_ || !zone_->p2p || zone_->covert_payload.empty())
+        if (!zone_ || !zone_->p2p || !shekyl_relay_zone_covert_enabled(zone_->relay.get()))
           return;
 
         if (error && error != boost::system::errc::operation_canceled)
@@ -846,8 +862,8 @@ namespace levin
     if (!zone_->relay)
       throw std::logic_error{"cryptonote::levin::notify could not open its relay zone"};
 
-    const bool noise_enabled = !zone_->covert_payload.empty();
-    if (noise_enabled || zone == epee::net_utils::zone::public_)
+    const bool covert_enabled = shekyl_relay_zone_covert_enabled(zone_->relay.get());
+    if (covert_enabled || zone == epee::net_utils::zone::public_)
     {
       const auto now = std::chrono::steady_clock::now();
 
@@ -874,19 +890,19 @@ namespace levin
       return {false, false, false};
 
     /* Stem slots backed by a live peer — the inherited `connection_count`, and
-       only meaningful when `!covert_payload.empty()`. Published by the zone as a
+       only meaningful when the zone runs covert channels. Published by it as a
        single-writer atomic precisely because this method is callable from any
        thread (§18.5 finding 1). */
     const std::size_t connection_count = shekyl_relay_zone_live_stems(zone_->relay.get());
     bool has_outgoing = connection_count;
-    if (zone_->covert_payload.empty())
+    if (!shekyl_relay_zone_covert_enabled(zone_->relay.get()))
       has_outgoing = zone_->p2p->get_out_connections_count();
-    return {!zone_->covert_payload.empty(), CRYPTONOTE_NOISE_CHANNELS <= connection_count, has_outgoing};
+    return {shekyl_relay_zone_covert_enabled(zone_->relay.get()), CRYPTONOTE_NOISE_CHANNELS <= connection_count, has_outgoing};
   }
 
   void notify::new_out_connection()
   {
-    if (!zone_ || zone_->covert_payload.empty() ||
+    if (!zone_ || !shekyl_relay_zone_covert_enabled(zone_->relay.get()) ||
         CRYPTONOTE_NOISE_CHANNELS <= shekyl_relay_zone_live_stems(zone_->relay.get()))
       return;
 
@@ -982,7 +998,7 @@ namespace levin
        but the mempool/stempool needs to know the zone a tx originated from to
        work properly. */
 
-    if (!zone_->covert_payload.empty() && !zone_->channels.empty())
+    if (shekyl_relay_zone_covert_enabled(zone_->relay.get()) && !zone_->channels.empty())
     {
       // covert send in "noise" channel
       static_assert(

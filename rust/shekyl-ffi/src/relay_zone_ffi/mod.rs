@@ -92,6 +92,31 @@ pub type FluffCb =
 /// indexes by position (§16.1 contract 3).
 pub type SlotsCb = extern "C" fn(ctx: *mut c_void, slots: *const u8, count: usize);
 
+/// Zone-shape flags for [`shekyl_relay_zone_new`].
+///
+/// **Named bits, deliberately, instead of a second `bool` parameter.** RP-3b
+/// needs the zone to carry a covert-enabled fact alongside the existing
+/// outbound-fluff rule; appending `covert_enabled: bool` would have put two
+/// adjacent `bool`s at the end of a C signature, where a transposition
+/// compiles cleanly on both sides and is silent at runtime.
+///
+/// Transposing *these two* is not a generic footgun — it swaps the i2p/tor
+/// outbound-only fluff rule with the covert enable, which is exactly the
+/// regression RP-3a's first pass shipped and the eight `private_*` gtests
+/// caught (§18.4c). The header is hand-written rather than cbindgen-generated,
+/// so nothing mechanically checks the C++ declaration against this definition;
+/// a bitmask removes the ordering question rather than relying on that check.
+///
+/// The i2p/tor rule: fluff to outbound connections only, never to an inbound
+/// peer, who on a hidden service is a stranger that dialled us. It follows the
+/// **network**, not covert mode — a hidden-service zone with covert disabled
+/// still needs it, which is why the two bits are independent.
+pub const SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY: u32 = 1 << 0;
+
+/// This zone runs covert (noise) channels. See
+/// [`SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY`] for why these are bits.
+pub const SHEKYL_RELAY_ZONE_COVERT_ENABLED: u32 = 1 << 1;
+
 /// Supplies the outbound connection set on demand.
 ///
 /// [`shekyl_relay_zone_poll`] invokes this **at most once per call, and only
@@ -223,11 +248,13 @@ pub extern "C" fn shekyl_relay_zone_new(
     stems: usize,
     min_epoch_secs: u32,
     epoch_jitter_secs: u32,
-    outbound_fluff_only: bool,
+    flags: u32,
 ) -> *mut RelayZoneHandle {
     if stems == usize::MAX || min_epoch_secs == 0 {
         return std::ptr::null_mut();
     }
+    let outbound_fluff_only = flags & SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY != 0;
+    let covert_enabled = flags & SHEKYL_RELAY_ZONE_COVERT_ENABLED != 0;
     let params = DandelionParams {
         min_epoch_secs,
         epoch_jitter_secs,
@@ -239,7 +266,7 @@ pub extern "C" fn shekyl_relay_zone_new(
         FluffReach::EveryPeer
     };
     let mut rng = SecureRelayRng;
-    let zone = Zone::new(params, stems, reach, now_ms, &mut rng);
+    let zone = Zone::new(params, stems, reach, covert_enabled, now_ms, &mut rng);
     let handle = RelayZoneHandle {
         driver: Driver::new(zone),
         rng,
@@ -322,6 +349,28 @@ pub unsafe extern "C" fn shekyl_relay_zone_live_stems(handle: *const RelayZoneHa
 ///
 /// # Safety
 /// `handle` must be live.
+/// Whether this zone runs covert (noise) channels.
+///
+/// The **single owner** of a fact C++ used to re-derive at nine sites from
+/// `!zone::noise.empty()` — a byte payload doing double duty as its own enable
+/// flag (§20.4). C++ now asks rather than re-derives.
+///
+/// Frozen at construction, so this is a plain read with no publish/atomic
+/// dance: unlike `live_stems` there is no writer after `new`, and nothing to
+/// race. Returns `false` for a null handle — a caller that lost its zone has no
+/// covert channels by construction, and the alternative (abort) would turn a
+/// C++ lifetime bug into a daemon crash at a read that cannot itself be wrong.
+///
+/// # Safety
+/// `handle` must be null or a live zone from [`shekyl_relay_zone_new`].
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_covert_enabled(handle: *const RelayZoneHandle) -> bool {
+    match handle.as_ref() {
+        Some(h) => h.driver.zone().covert_enabled(),
+        None => false,
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_next_wake(handle: *const RelayZoneHandle) -> u64 {
     if handle.is_null() {

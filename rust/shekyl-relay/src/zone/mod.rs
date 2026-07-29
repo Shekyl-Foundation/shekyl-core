@@ -143,6 +143,21 @@ pub struct Zone {
     stems: usize,
     /// Which peers a fluff batch may reach. See [`FluffReach`].
     reach: FluffReach,
+    /// Whether this zone runs covert (noise) channels at all.
+    ///
+    /// **New state acquired by RP-3b, not a duplicated one** (§20.4). Before
+    /// this round the fact lived only in C++, encoded as
+    /// `!zone::noise.empty()` — the byte payload doing double duty as its own
+    /// enable flag — and it never crossed the FFI: `make_relay_zone` consumed
+    /// it C++-side to pick a parameter set and passed only the result.
+    ///
+    /// It moves here because the covert scheduling port needs it on Rust's own
+    /// account: a covert send cannot be scheduled without knowing whether
+    /// covert sends exist. Until that port lands this field is stored and read
+    /// back rather than acted on, which is deliberate — the predicate split
+    /// goes first so the scheduler is not written against an ambiguous
+    /// predicate.
+    covert_enabled: bool,
 }
 
 impl Zone {
@@ -154,6 +169,7 @@ impl Zone {
         params: DandelionParams,
         stems: usize,
         reach: FluffReach,
+        covert_enabled: bool,
         now: Millis,
         rng: &mut R,
     ) -> Self {
@@ -171,7 +187,19 @@ impl Zone {
             params,
             stems,
             reach,
+            covert_enabled,
         }
+    }
+
+    /// Whether this zone runs covert (noise) channels.
+    ///
+    /// The single owner of the fact (§20.4). C++ reads it back through
+    /// `shekyl_relay_zone_covert_enabled` rather than re-deriving it from the
+    /// payload it happens to hold, so there is exactly one place the answer
+    /// comes from.
+    #[must_use]
+    pub fn covert_enabled(&self) -> bool {
+        self.covert_enabled
     }
 
     /// A peer finished its handshake and may now carry relay traffic.

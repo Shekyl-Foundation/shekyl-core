@@ -3059,17 +3059,36 @@ typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out
 //! Settled for this epoch: fluff. Retrying cannot change the answer.
 #define SHEKYL_RELAY_PLAN_FLUFF_EPOCH 2
 
+//! Zone-shape flags for `shekyl_relay_zone_new`.
+//!
+//! Named bits rather than two `bool` parameters, deliberately. Adjacent bools
+//! in a C signature transpose silently — and transposing THESE two swaps the
+//! i2p/tor outbound-only fluff rule with the covert enable, which is the exact
+//! regression RP-3a's first pass shipped (caught only because eight `private_*`
+//! gtests happened to cover it). This header is hand-written, not generated, so
+//! nothing mechanically checks it against the Rust definition in
+//! `relay_zone_ffi/mod.rs`; a bitmask removes the ordering question instead of
+//! relying on a check that does not exist.
+//!
+//! The i2p/tor rule follows the NETWORK, not covert mode: a hidden-service zone
+//! with covert disabled still needs it. That is why the bits are independent.
+//! Keep these values in sync with `SHEKYL_RELAY_ZONE_*` in `relay_zone_ffi`.
+#define SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY 1u
+#define SHEKYL_RELAY_ZONE_COVERT_ENABLED 2u
+
 //! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
-//! `outbound_fluff_only` is the i2p/tor rule — fluff to outbound connections
-//! only, never to an inbound peer, who on a hidden service is a stranger that
-//! dialled us. It follows the NETWORK, not noise mode: a hidden-service zone
-//! with noise disabled still needs it.
+//! `flags` is a mask of the `SHEKYL_RELAY_ZONE_*` bits above.
 //! Null when a zone cannot be built: SIZE_MAX stems, or a zero epoch — which
 //! would expire at every wake and spin the relay timer. Treat null as fatal.
 RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems,
                                        std::uint32_t min_epoch_secs,
                                        std::uint32_t epoch_jitter_secs,
-                                       bool outbound_fluff_only);
+                                       std::uint32_t flags);
+//! Whether this zone runs covert (noise) channels.
+//! The single owner of a fact this side used to re-derive at nine sites from
+//! `!zone::noise.empty()` — a byte payload doubling as its own enable flag.
+//! Frozen at construction, so this is a plain read. False for a null handle.
+bool shekyl_relay_zone_covert_enabled(const RelayZoneHandle* handle);
 //! Free a zone. Null is a no-op; free exactly once.
 void shekyl_relay_zone_free(RelayZoneHandle* handle);
 //! A peer completed its handshake.
