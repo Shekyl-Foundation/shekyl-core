@@ -325,23 +325,29 @@ pub fn simulate_epsilon_greedy_selection<R: RelayRng + ?Sized>(
 /// stem successor, measured against the number of re-rolls induced.
 ///
 /// This is the churn model [`simulate_two_slot_occupancy`] explicitly does not
-/// carry, and it is where the single-draw number stops being a bound. Two arms,
-/// both driven by the same trial so they see identical draws:
+/// carry, and it is where the single-draw number stops being a bound. **Three
+/// arms**, all driven by the same trial so they see identical initial draws:
 ///
-/// - **`fresh_draw_exposure` — today.** `StemMap` pins a source to a *slot
-///   index*. When `update()` finds the pinned slot's peer gone it empties the
-///   slot and the backfill refills it with a uniform draw from the remaining
-///   pool; the next `stem_for` takes the `is_some()` fast path and silently
-///   returns the new occupant. Each induced churn is therefore an independent
-///   roll at the enriched share.
-/// - **`frozen_set_exposure` — under §19.2.** The source's candidate set is
-///   frozen at its first pin, so churn walks it to the next still-live peer of
-///   that set and no peer drawn afterwards can ever serve it.
+/// - **`fresh_draw_exposure` — pre-fix / slot-index pinning.** `StemMap` pinned
+///   a source to a *slot index*. When `update()` found the pinned slot's peer
+///   gone it emptied the slot and the backfill refilled it with a uniform draw
+///   from the remaining pool; the next `stem_for` took the `is_some()` fast path
+///   and silently returned the new occupant. Each induced churn is therefore a
+///   fresh roll at the enriched share.
+/// - **`frozen_set_exposure` — under §19.2 (shipped).** The source's candidate
+///   set is frozen at its first pin; churn walks it to the next still-live peer
+///   of that set and no peer drawn afterwards can ever serve it. Exhaustion
+///   fluffs for the rest of the epoch.
+/// - **`frozen_repin_exposure` — rejected softening.** As arm 2, but exhaustion
+///   permits one fresh pin (a new frozen set from the live pool). Measured to
+///   decide terminal exhaustion: at `STEMS = 2` this arm tracks the unfixed
+///   baseline, so the escape hatch returns the whole amplifier (§19.3).
 ///
-/// The point of the measurement is the **shape in `forced_rerolls`**, not either
-/// endpoint: the fresh-draw arm compounds toward 1 while the frozen arm
-/// saturates once the source has walked its (at most `stems`) frozen peers. An
-/// adversary's return on inducing more churn is the difference.
+/// The point of the measurement is the **shape in `forced_rerolls`**: the
+/// fresh-draw arm compounds toward 1, the frozen arm saturates once the source
+/// has walked its (at most `stems`) frozen peers, and the re-pin arm rises with
+/// the fresh arm once sweeps begin. An adversary's return on inducing more
+/// churn is the difference.
 ///
 /// # Panics
 ///
@@ -349,7 +355,7 @@ pub fn simulate_epsilon_greedy_selection<R: RelayRng + ?Sized>(
 /// `outbound_share` is outside `[0, 1]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InducedChurnExposure {
-    /// `g` — the adversary's share of the origin's outbound pool.
+    /// Nominal `g` — the adversary's requested share of the origin's outbound pool.
     pub outbound_share: f64,
     /// `D_out` — the origin's outbound degree (daemon default 12).
     pub outbound_degree: usize,
@@ -358,7 +364,7 @@ pub struct InducedChurnExposure {
     /// How many times the adversary forces the origin's successor to be re-rolled.
     pub forced_rerolls: usize,
     /// `P(the origin is ever routed through an adversarial successor)` under the
-    /// current slot-index pinning — one fresh draw per induced churn.
+    /// pre-fix slot-index pinning — one fresh draw per induced churn.
     pub fresh_draw_exposure: f64,
     /// The same probability when the candidate set is frozen at first pin, and
     /// an exhausted set means **no successor** (fluff until the epoch rolls).
@@ -366,19 +372,23 @@ pub struct InducedChurnExposure {
     /// The same, but an exhausted set permits **one fresh pin** — a new frozen
     /// set drawn from the live map. Availability is preserved; the adversary
     /// must churn a source's *entire* set to buy a single new draw, rather than
-    /// one draw per churn.
+    /// one draw per churn. **Rejected** for shipping: tracks the unfixed baseline.
     pub frozen_repin_exposure: f64,
     /// Share of trials in which the frozen set was exhausted at all — the
     /// availability cost of the no-repin variant, since those sources fluff for
     /// the remainder of the epoch.
     pub exhausted_share: f64,
-    /// `1 − (1 − a/D)^(k+1)` at the effective integer share — the compounding
-    /// curve the fresh-draw arm is expected to track, stated so the measurement
-    /// can *disagree* with the closed form rather than be read through it.
+    /// Effective integer share `g_eff = round(g · D_out) / D_out` used by the
+    /// trial (the adversary holds `round(g·D)` of `D` peers). Stated explicitly
+    /// so the reference curve is not misread as the closed form at nominal `g`.
+    pub effective_share: f64,
+    /// `1 − (1 − g_eff)^(k+1)` — the independent-draw compounding curve the
+    /// fresh-draw arm is *expected* to track, stated so the measurement can
+    /// *disagree* with the closed form rather than be read through it.
     pub independent_reference: f64,
 }
 
-/// Measure [`InducedChurnExposure`]; see the type for what the two arms model.
+/// Measure [`InducedChurnExposure`]; see the type for what the three arms model.
 #[must_use]
 pub fn simulate_induced_churn_exposure<R: RelayRng + ?Sized>(
     outbound_share: f64,
@@ -512,9 +522,10 @@ pub fn simulate_induced_churn_exposure<R: RelayRng + ?Sized>(
         frozen_set_exposure: frozen_hits as f64 / trials as f64,
         frozen_repin_exposure: repin_hits as f64 / trials as f64,
         exhausted_share: exhausted_hits as f64 / trials as f64,
+        effective_share,
         // `powf` rather than `powi`: the exponent comes from a `usize` and
         // casting it to `i32` can wrap. Precision is ample for a diagnostic
-        // reference curve.
+        // reference curve. Uses `g_eff`, not nominal `g`.
         independent_reference: 1.0 - (1.0 - effective_share).powf((forced_rerolls + 1) as f64),
     }
 }

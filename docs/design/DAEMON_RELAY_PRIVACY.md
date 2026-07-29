@@ -4020,10 +4020,13 @@ rotation §6.8's intersection defence rests on.
 
 ### 19.3 Measured — induced-churn exposure, and two corrections it forced
 
-`simulate_induced_churn_exposure` (`conformance/selection.rs`) runs both arms on
-the same trial. At `D_out = 12`, `STEMS = 2`, 200k trials:
+`simulate_induced_churn_exposure` (`conformance/selection.rs`) runs all three arms
+on the same trial. At `D_out = 12`, `STEMS = 2`, 200k trials. The reference column
+uses the **effective integer share** `g_eff = round(g · D_out) / D_out` (so
+nominal `g = 0.10` becomes `1/12 ≈ 0.0833`), matching how the trial places the
+adversary on a discrete outbound pool — not the closed form at nominal `g`.
 
-| `g` | `k` | today (slot-pinned) | §19.2 (frozen set) | `1 − (1−g)^(k+1)` |
+| `g` | `k` | today (slot-pinned) | §19.2 (frozen set) | `1 − (1−g_eff)^(k+1)` |
 | --- | --- | --- | --- | --- |
 | 0.10 | 0 | 0.0829 | 0.0829 | 0.0833 |
 | 0.10 | 1 | 0.1655 | 0.1674 | 0.1597 |
@@ -4050,8 +4053,8 @@ that said "show the gap before closing it" is what caught it — the shape was
 asserted, then measured, and the measurement disagreed.
 
 **Correction 2 — the closed form *understates* today's compounding.** The
-fresh-draw arm sits **above** `1 − (1−g)^(k+1)` at every `k > 0` (0.917 vs 0.772
-at `g = 0.10, k = 16`), because churned peers do not return: the spare pool
+fresh-draw arm sits **above** `1 − (1−g_eff)^(k+1)` at every `k > 0` (0.917 vs
+0.772 at `g = 0.10, k = 16`), because churned peers do not return: the spare pool
 shrinks and its adversarial fraction rises with each induced churn. The
 independent-draw reference is therefore a *lower* bound on the real exposure, not
 an estimate of it — so "≈ `g` per re-stem", compounded naively, is optimistic
