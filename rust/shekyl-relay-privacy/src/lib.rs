@@ -180,4 +180,4 @@ pub use schedule::{
     DelayFamily, EmbargoTimer, Epoch, EpochScheduler, FluffScheduler, Millis, NoiseCadence,
     PeerDirection, DEFAULT_EMBARGO_TICK_MILLIS,
 };
-pub use stem_map::{ConnectionId, StemMap, StemSetChange};
+pub use stem_map::{ConnectionId, SourceId, StemMap, StemSetChange};

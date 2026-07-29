@@ -1800,7 +1800,7 @@ reasons — *and a refuted one I record so it is not re-argued*:
 > [`stem_map.rs`](../../rust/shekyl-relay-privacy/src/stem_map.rs), the cached
 > `in_mapping_[source]` is its `inbound` map, and the caller that would choose
 > the alternate is `Zone::plan_relay` in
-> [`zone.rs`](../../rust/shekyl-relay/src/zone.rs). **The line numbers below are
+> [`zone.rs`](../../rust/shekyl-relay/src/zone/mod.rs). **The line numbers below are
 > kept as written** — they record what was verified at the time, and rewriting
 > them would silently re-attribute that verification to code nobody checked.
 > RP-2b re-grounds against the Rust source.
@@ -3869,3 +3869,223 @@ inventoried before it is written, with a named single owner. "Nothing straddles"
 is what keeps the one genuinely cross-thread fact publishable rather than shared,
 and what will make the eventual reactor move a non-event — so it is maintained
 deliberately rather than assumed to persist.
+
+---
+
+## 19. RP-2b design round — the churn-stable alternate (W3c) and Q-10 selection
+
+Short design leading the RP-2b implementation commits on
+`feat/rp2b-churn-stable-alternate`.
+
+RP-2b is the round §12.5 named a **spec gap** for, and it is the last named gap in
+this arc: F-1…F-5 all closed (RP-1 measurement, RP-4 embargo, RP-3a scheduler).
+Nothing here is genesis-blocking — relay timing is node-local policy, not
+consensus — but W3c is a defect in the design's own terms rather than a
+consolidation, which is why it precedes RP-3b's covert-channel port.
+
+### 19.1 Re-census — the anchors §§12.8–12.11 rest on, re-verified at source
+
+§12.11's handoff makes this the round's **first move**, in its own words: *"§§12.8
+–12.11 are grounded against `get_stem` / `out_mapping_` / the embargo-disarm
+behaviour of a dev tree that will have moved by the time RP-2 begins… Re-verify
+them at source before building on them."*
+
+That instruction has since become an understatement. RP-3a **rewrote
+`levin_notify.cpp` end to end and deleted `src/net/dandelionpp.{h,cpp}`**, so
+every one of the eleven `levin_notify.cpp` line anchors and the two
+`dandelionpp.cpp` anchors below points at something that has moved or no longer
+exists. The line numbers are stale by construction. The question this census
+answers is not "do the lines still resolve" but **"is the claim still true, and
+where does the fact live now."**
+
+| # | §12.x claim | Anchor as written | Status | Where the fact lives now |
+| --- | --- | --- | --- | --- |
+| G-1 | Stem *selection* is public/clearnet-zone only; Tor has no occupancy mechanism | `send_txs` `levin_notify.cpp:829-851, 866-872` | **holds** | `send_txs` `:963-1017` — the noise branch still short-circuits before the Dandelion++ branch, so a noise zone never reaches `dandelionpp_notify` |
+| G-1 | *"good protection against ISP adversaries, but not sybil adversaries"* | `:829` | **holds, verbatim** | `:974-976` |
+| G-1 | `MWARNING("Dandelion++ stem not supported over noise networks")` is the fork point | `:849` | **holds, verbatim** | `:994` |
+| G-1 | The reference's stated obstacle is fork-reconciliation bookkeeping | `:836-838` | **holds, verbatim** | `:981-983` |
+| G-2a | Epoch boundary **replaces** the whole map with a fresh rebuild | `change_channels` `:587-617` | **holds — and was briefly violated** | `Zone::rebuild_stems` (`zone/mod.rs`). RP-3a first ported this onto the *merge* path, freezing the stem graph; caught and fixed in `d7096527a`, witness `an_epoch_rollover_rebuilds_the_stem_map_rather_than_merging_into_it` |
+| G-2b | Mid-epoch churn fresh-draws the churned slot | `update_channels::run` → `map.update()` `:528-536`, `dandelionpp.cpp:160` | **holds — mechanism unchanged** | `Zone::update_stems` → `StemMap::update` (`stem_map.rs`). **This is the W3c gap's site.** |
+| G-2b | Trigger: stem-send-failure retry | `dandelionpp_notify:575` | **holds, restructured** | `dandelionpp_notify` `:745-751` — plus a *new* earlier trigger, below |
+| G-2b | Trigger: `new_out_connection` | `net_node.inl:1349` | **holds, but noise-only** | `notify::new_out_connection` early-returns on `noise.empty()`, so on the **clearnet path where stem selection actually happens (G-1) this trigger never fires**. It was already noise-only pre-RP-3a; the design's trigger list reads as though both fire on the path W3c is about. |
+| G-3 | Stem pool is all synced outbound, anchors included | `get_out_connections:142-159` | **holds** | `:186-192` |
+| G-4 | Anchor admission is any successful outbound handshake, no behavioural criterion | `net_node.inl:1347` | **holds, line exact** | unchanged — RP-3a did not touch `net_node.inl` |
+| G-4 | On reconnect the 2 anchor slots fill first | `net_node.inl:1820` | **holds, line exact** | unchanged |
+| §12.6 | Fluff is transport-gated: on Tor it fluffs outbound-only | `fluff_notify` `:448` | **holds — moved languages** | `FluffReach::OutboundOnly` (`zone/mod.rs`). RP-3a dropped this rule and the eight `private_*` gtests caught it; restored with `a_private_zone_fluffs_only_to_outbound_peers` |
+| — | `send_noise` pads every channel to a constant rate on its own timer | `:663` | **holds** | `:780`, `:811` |
+
+**Two findings from the census, neither of which is a line-number update.**
+
+**C-1 — a new mid-epoch re-roll trigger exists that the design does not model.**
+RP-3a's review round added `Zone::plan_relay_with_refresh`, which merges the
+current outbound set into the map on **any** `NoRoute` and re-plans, before the
+transport retry. That was the right move for its own reasons — it keeps
+"empty/stale map ⇒ refresh" as zone logic rather than shim logic — but it means
+the clearnet re-roll surface is now *two* triggers deep (`NoRoute` refresh, then
+send-failure refresh) where §12.6 models one. W3c's requirement is that the
+alternate be **stable across churn refill**; a second refresh path is a second
+place for the alternate to be re-rolled, so the churn-stability property must be
+specified against `StemMap::update` itself rather than against any one caller.
+That is the safer place for it regardless — callers multiply, the mechanism does
+not.
+
+**C-2 — `new_out_connection` does not fire on the path W3c is about.** The design
+lists it beside the send-failure retry as though both drive clearnet churn refill.
+It is guarded by `noise.empty()` and so is a no-op on public zones. This does not
+weaken W3c — the send-failure retry *is* the black-hole-correlated trigger, and it
+fires — but it removes one of the two triggers from the clearnet picture, which
+matters when sizing how often an adversary can induce a re-roll. **The
+inducement budget is smaller than the design's trigger list implies.**
+
+**What this census does not re-open.** The `ε → distinct-peers` and top-2-share
+numbers are in-crate measurements over `StemMap`, not over the C++ that moved;
+RP-3a ported that logic faithfully (the six `dandelionpp_map` gtests passed
+unchanged against it before they were retired), so those numbers stand. The
+remaining §12.11 owes — the genuine background-failure rate, and the
+cooldown/threshold sweep as a **reopen-checkpoint rather than a confirm-only
+sweep** — are untouched by RP-3a and carry forward as written.
+
+### 19.2 The churn-stable successor — specified over the *sequence*, not the call
+
+**The mechanism, re-read at source (not from §12.5's description).** `StemMap`
+pins a source to a **slot index**, not to a peer: `inbound: source → usize`, and
+`stem_for` returns `out[index]`. `update()` empties a slot whose peer is gone
+(`*slot = None`) and the backfill loop refills it with a uniform draw from the
+current outbound pool. The next `stem_for` for that source then takes the
+`self.out[index].is_some()` fast path and returns **the new occupant** — no
+re-pin branch executes, nothing is logged, and the source's stem traffic moves to
+a freshly drawn peer.
+
+That is sharper than W3c as written. The design describes churn re-rolling *the
+alternate*; what the code does is re-roll **the source's primary successor**, and
+it does so on the one path where no selection code runs. There is a second,
+visible path — if `update()` cannot backfill, the slot stays `None`, `stem_for`
+takes the re-pin branch and `select_slot`s afresh — but the invisible one is the
+common case, because backfill succeeds whenever any candidate is spare.
+
+**Why the property is stated over sequences.** §19.1's C-1 found the clearnet
+re-roll surface is two triggers deep: `plan_relay_with_refresh` merges on any
+`NoRoute`, and `dandelionpp_notify` refreshes again on send failure. Both flow
+through `StemMap::update`. A property that says *"one `update` does not re-roll a
+pinned source"* is escaped by their composition — two calls in sequence, each
+individually stable, can still hand the source a different peer than it started
+with. And W3c's exposure is **cumulative**: an adversary who can induce `k`
+re-rolls gets `1 − (1 − g)^k`, not `g`. The per-call framing prices one roll and
+the threat model is about the sequence.
+
+**The property.**
+
+> Within an epoch, a source's successor is drawn from the set of peers live in
+> the stem map **at that source's first pin**, and that set never grows. Any
+> number of `StemMap::update` calls may refill slots for the benefit of
+> *unpinned* sources; no already-pinned source may ever be routed to a peer that
+> entered the map after it pinned.
+
+Stated this way it is closed under composition by construction — the successor
+candidate set is frozen per source at pin time, so no sequence of updates can
+introduce a new candidate. It also names the fallback: when a pinned source's
+successor churns out, it moves to the next still-live peer **from its own frozen
+set** — the *alternate*, in §12.5's sense — and only when that set is exhausted
+does it have no successor.
+
+**What this buys, in the threat's terms.** W3c's adversary is the dropping
+successor, or induces churn on it; the drop is what triggers the refill. Today
+that hands them a fresh draw at ≈ `g`, repeatable. Under the property, dropping
+hands the source to a peer that was **already in its set before the adversary
+acted** — the adversary gains no new roll, so induced churn stops being an
+exposure amplifier and repeated churn buys nothing beyond the first. Exhausting
+the frozen set requires churning *every* peer in it, which is the both-successors
+case W3 already bounds (`≈ 0` at baseline `g = f`) rather than a new gap.
+
+**What it deliberately does not do.** It does not freeze the *map* — new peers
+still backfill empty slots and still serve sources that pin after them, so the
+map keeps healing and a node that starts with one outbound peer is not stuck with
+it. It does not touch cross-epoch rotation: the frozen set is per-epoch, and
+`rebuild_stems` re-draws everything at the boundary (§19.1 G-2a), which is the
+rotation §6.8's intersection defence rests on.
+
+**Acceptance.**
+
+1. A measurement, in-crate, of induced-churn exposure against `k` forced
+   re-rolls, with both arms driven by the same trial. The gap is *shown* before
+   it is closed — the number is the finding, not the fix. **Measured below; it
+   corrected this section's first draft, which had asserted the shape.**
+2. A structural test that a pinned source never routes to a peer that entered the
+   map after it pinned, asserted across a **sequence** of `update` calls, with
+   both C-1 triggers represented. Per-call stability is not the property and a
+   per-call test would pass on the defect.
+3. A negative control on (2): with the frozen set removed, the test must fail.
+   The composition is exactly where a stability property looks correct and is
+   not, so the control has to exercise the sequence, not one call.
+
+### 19.3 Measured — induced-churn exposure, and two corrections it forced
+
+`simulate_induced_churn_exposure` (`conformance/selection.rs`) runs all three arms
+on the same trial. At `D_out = 12`, `STEMS = 2`, 200k trials. The reference column
+uses the **effective integer share** `g_eff = round(g · D_out) / D_out` (so
+nominal `g = 0.10` becomes `1/12 ≈ 0.0833`), matching how the trial places the
+adversary on a discrete outbound pool — not the closed form at nominal `g`.
+
+| `g` | `k` | today (slot-pinned) | §19.2 (frozen set) | `1 − (1−g_eff)^(k+1)` |
+| --- | --- | --- | --- | --- |
+| 0.10 | 0 | 0.0829 | 0.0829 | 0.0833 |
+| 0.10 | 1 | 0.1655 | 0.1674 | 0.1597 |
+| 0.10 | 2 | 0.2516 | **0.1665** | 0.2297 |
+| 0.10 | 4 | 0.4172 | **0.1665** | 0.3528 |
+| 0.10 | 8 | 0.7508 | **0.1663** | 0.5430 |
+| 0.10 | 16 | 0.9168 | **0.1675** | 0.7722 |
+| 0.25 | 16 | 1.0000 | 0.4546 | 0.9925 |
+| 0.30 | 16 | 1.0000 | 0.5759 | 0.9990 |
+
+**The gap is real and it is not marginal.** At the baseline `g = 0.10` an
+adversary who can induce ~16 re-rolls reaches the origin's stem path **91.7 %** of
+the time, against **16.7 %** if the candidate set is frozen. The frozen arm is
+flat in `k` from `k = 2` onward — it saturates once the source has walked its two
+initial peers, which is the whole point: **more induced churn buys nothing.**
+
+**Correction 1 — the frozen arm does not flatten to `g`, and §19.2's first draft
+said it would.** It flattens to `P(≥ 1 of the source's *initial* stems is
+adversarial)` — ≈ `2g` for small `g` (0.167 at `g = 0.10`), not `g` (0.083). The
+source can still be handed to an adversarial *alternate*; what it can no longer
+be handed is a peer drawn *after* the adversary acted. That is the property, and
+it is weaker than the sentence originally written here. The acceptance criterion
+that said "show the gap before closing it" is what caught it — the shape was
+asserted, then measured, and the measurement disagreed.
+
+**Correction 2 — the closed form *understates* today's compounding.** The
+fresh-draw arm sits **above** `1 − (1−g_eff)^(k+1)` at every `k > 0` (0.917 vs
+0.772 at `g = 0.10, k = 16`), because churned peers do not return: the spare pool
+shrinks and its adversarial fraction rises with each induced churn. The
+independent-draw reference is therefore a *lower* bound on the real exposure, not
+an estimate of it — so "≈ `g` per re-stem", compounded naively, is optimistic
+about the mechanism it prices.
+
+The fresh arm's ceiling is `(D−1)/D = 0.917`, not 1: the one peer it can never be
+routed to is the *other* stem slot, which is never churned in this model. That
+the measurement lands on `11/12` exactly is the check that the model is the
+mechanism and not a caricature of it.
+
+**Correction 3 — there is no partial version of this property, and a third arm
+proved it.** §19.2 makes an exhausted frozen set terminal: the source fluffs
+until the epoch rolls. That is an availability cost, and the obvious softening is
+to allow one fresh pin on exhaustion — the adversary would then have to churn a
+source's *entire* set to buy a single new draw. Measured as a third arm
+(`frozen_repin_exposure`), it is worth nothing:
+
+| `k` | today | frozen | frozen + re-pin |
+| --- | --- | --- | --- |
+| 2 | 0.2521 | 0.1666 | 0.2502 |
+| 8 | 0.7488 | 0.1666 | 0.7505 |
+| 16 | 0.9167 | 0.1657 | 1.0000 |
+
+The re-pin arm tracks the **unfixed** baseline. At `STEMS = 2` a "full sweep" is
+two churns and the fresh pin hands back *two* new peers, so the escape hatch
+returns the whole amplifier — and at `k = 16` it is worse than doing nothing,
+because re-pinning keeps drawing from a pool whose adversarial fraction rises as
+honest peers are consumed. The property is all-or-nothing at this stem width.
+
+So the availability cost is not a knob to soften but a price to either pay or
+reject. It is paid here, bounded by the epoch (`rebuild_stems` re-draws every pin
+at the boundary), and how often honest churn actually reaches a source's whole
+set is the ambient-rate measurement §12.11 still owes — the same measurement the
+cooldown/threshold work is blocked on.

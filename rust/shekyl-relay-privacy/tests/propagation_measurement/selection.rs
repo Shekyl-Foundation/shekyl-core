@@ -244,3 +244,119 @@ fn epsilon_greedy_pure_preference_ossifies_to_two_peers() {
          eps~0.05 = the RL/ARPANET value, reproduced in-crate (§13.5 discipline)."
     );
 }
+
+/// **§19.3 W3c — induced-churn exposure, the number the churn-stable successor
+/// is specified against.** `simulate_two_slot_occupancy` measures one stable
+/// epoch map and says so ("this instrument does not model churn"); this is that
+/// model. All three arms run on the same trial, so differences are the mechanism
+/// and not the draws.
+///
+/// Pinned because the *shape in `k`* is the finding: today's exposure compounds
+/// with every induced re-roll, the frozen-set arm saturates at the source's own
+/// initial peers, and the re-pin-on-exhaustion arm tracks the unfixed baseline
+/// (the reason terminal exhaustion shipped). If any of those shapes break, the
+/// mechanism under §19.2 changed.
+#[test]
+fn induced_churn_compounds_today_and_saturates_under_a_frozen_set() {
+    use shekyl_relay_privacy::conformance::simulate_induced_churn_exposure;
+
+    const D_OUT: usize = 12; // P2P_DEFAULT_CONNECTIONS_COUNT
+    const STEMS: usize = 2; // CRYPTONOTE_DANDELIONPP_STEMS
+    const G: f64 = 0.10; // baseline outbound share
+    let trials = 200_000;
+
+    // Reference column uses g_eff = round(g·D)/D, not nominal g (0.10 → 1/12).
+    println!("  k   today   frozen   re-pin   1-(1-g_eff)^(k+1)");
+    let mut fresh_curve = Vec::new();
+    let mut frozen_curve = Vec::new();
+    let mut repin_curve = Vec::new();
+    for k in [0_usize, 1, 2, 4, 8, 16] {
+        let mut rng = SplitMix64::new(0xC0FFEE + k as u64);
+        let r = simulate_induced_churn_exposure(G, D_OUT, STEMS, k, trials, &mut rng);
+        println!(
+            "  {:>2}  {:.4}  {:.4}  {:.4}   {:.4}",
+            k,
+            r.fresh_draw_exposure,
+            r.frozen_set_exposure,
+            r.frozen_repin_exposure,
+            r.independent_reference
+        );
+        fresh_curve.push(r.fresh_draw_exposure);
+        frozen_curve.push(r.frozen_set_exposure);
+        repin_curve.push(r.frozen_repin_exposure);
+
+        // Nominal g is 0.10; effective integer share is 1/12.
+        assert!(
+            (r.effective_share - (1.0 / 12.0)).abs() < 1e-12,
+            "g_eff must be round(g·D)/D = 1/12, got {}",
+            r.effective_share
+        );
+
+        // With no churn the three arms are the same initial pin.
+        if k == 0 {
+            assert!(
+                (r.fresh_draw_exposure - r.frozen_set_exposure).abs() < 1e-9
+                    && (r.frozen_set_exposure - r.frozen_repin_exposure).abs() < 1e-9,
+                "with k = 0 the mechanisms are indistinguishable by construction"
+            );
+        }
+    }
+
+    // Today: strictly compounding in k.
+    for w in fresh_curve.windows(2) {
+        assert!(
+            w[1] > w[0] + 0.01,
+            "today's exposure must rise with every induced re-roll: {w:?}"
+        );
+    }
+    assert!(
+        fresh_curve.last().copied().unwrap() > 0.90,
+        "~16 induced re-rolls must reach the origin's stem path >90% of the time"
+    );
+
+    // Frozen: flat from k = 2, once the source has walked its STEMS peers.
+    let saturated = &frozen_curve[2..];
+    for e in saturated {
+        assert!(
+            (e - saturated[0]).abs() < 0.01,
+            "the frozen set must saturate — more churn buys the adversary nothing: {frozen_curve:?}"
+        );
+    }
+    // And it saturates at P(>=1 of the source's OWN initial stems is adversarial),
+    // ~2g for small g — NOT at the single-draw g. §19.2's first draft said g; the
+    // measurement corrected it, and this assertion is what keeps that correction.
+    assert!(
+        (saturated[0] - 0.167).abs() < 0.01,
+        "frozen saturation is the two-slot at-least-one bound (~2g), not g: {}",
+        saturated[0]
+    );
+
+    // Re-pin-on-exhaustion (rejected arm): once sweeps begin it tracks the
+    // *unfixed* baseline, not the frozen arm — the measurement that made
+    // terminal exhaustion all-or-nothing at STEMS=2 (§19.3 correction 3).
+    assert!(
+        (repin_curve[0] - frozen_curve[0]).abs() < 1e-9,
+        "k=0: re-pin arm matches frozen"
+    );
+    // At k=8 a full sweep has happened repeatedly; re-pin must sit near today,
+    // far above the saturated frozen arm.
+    assert!(
+        (repin_curve[4] - fresh_curve[4]).abs() < 0.05,
+        "at k=8 re-pin tracks the unfixed baseline ({:.4}), not frozen ({:.4}): re-pin={:.4}",
+        fresh_curve[4],
+        frozen_curve[4],
+        repin_curve[4]
+    );
+    assert!(
+        repin_curve[4] > frozen_curve[4] + 0.4,
+        "re-pin must be far above frozen at k=8 or the terminal-exhaustion decision loses its evidence"
+    );
+    // At k=16 re-pin can exceed today (keeps drawing from a pool whose adversarial
+    // fraction rises) — the §19.3 table's 1.0000 vs 0.9167.
+    assert!(
+        repin_curve[5] >= fresh_curve[5] - 0.02,
+        "at k=16 re-pin must not fall below the unfixed baseline: re-pin={:.4} today={:.4}",
+        repin_curve[5],
+        fresh_curve[5]
+    );
+}

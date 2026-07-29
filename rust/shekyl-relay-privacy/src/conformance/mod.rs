@@ -50,8 +50,9 @@ pub use reshape::{
     OriginExposure, PrecisionIncrement, ReshapeRecovery,
 };
 pub use selection::{
-    simulate_epoch_layering, simulate_epsilon_greedy_selection, simulate_two_slot_occupancy,
-    EpochLayering, EpsilonGreedySelection, TwoSlotOccupancy,
+    simulate_epoch_layering, simulate_epsilon_greedy_selection, simulate_induced_churn_exposure,
+    simulate_two_slot_occupancy, EpochLayering, EpsilonGreedySelection, InducedChurnExposure,
+    TwoSlotOccupancy,
 };
 pub use stem::{
     simulate_blackhole_attack, simulate_preemption_profile, simulate_propagation,
