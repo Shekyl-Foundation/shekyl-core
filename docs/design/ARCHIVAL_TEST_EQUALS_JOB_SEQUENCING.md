@@ -149,7 +149,22 @@ change post-genesis.
   therefore not "which of two options" but "is the witness problem solvable
   at consensus grade" — with sampling-plus-deadline as the named fallback
   whose soundness dependency (deadline pressure + reacquisition-source
-  behavior) must be priced explicitly if taken. **§5.6 settles the same
+  behavior) must be priced explicitly if taken.
+  **Standing constraint on whatever witness shape wins (TJ-F liveness,
+  type-level):** the verify entry point takes **the response (leaf-layer
+  chunk included) and `R_k` and nothing else** — no store handle in scope at
+  the assembly site. This is a design obligation on TJ-A's output, not a
+  branch input: both witness shapes must satisfy it, and it is satisfied by
+  exactly the correct fix.
+  **Sequencing (ruled 2026-07-29): the A5 shard-payload re-measurement runs
+  BEFORE this design pass, not after.** `T_risk` is independent of the
+  witness question — it is a function of payload size against the deadline
+  and the m-of-n window, not of how the transfer is attested — but its result
+  feeds this pass directly: a **large** `T_risk` at 3.33 MB means the
+  deterrent is carried structurally and the witness mechanism can be chosen
+  on other grounds; a **small** one means the receipt branch is doing more
+  work than it looks. Running it first turns TJ-A from a two-way argument
+  into a decision with a number under it. **§5.6 settles the same
   asymmetry independently and quantitatively**, which removes this branch's
   dependence on §4's assertion: sampling reaches parity with the full
   transfer only at `k ≈ 26k` — the segment's entire leaf count — so no
@@ -488,11 +503,13 @@ structural achievement of test≡job.
    `⏸ SUPERSEDED IN PART`; `ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md` status
    `⚠️ REVERSED IN PART`, citing this record rather than restating it.
 2. **A5 re-measurement at shard-size payload** (sim-side, own branch) —
-   **DECISIVE, not confirmatory.** §5.4 withdrew the caching leg and §5.3
-   admitted the bandwidth leg is price-ambiguous, so the ruling now rests on
-   `T_risk`: the free-rider's expected cost from deadline misses against the
-   m-of-n window and the slashable bond. This deliverable **quantifies that
-   term**. Threshold in §5.1's marginal form; the retained absorbing-Markov
+   **DECISIVE, not confirmatory — and NEXT: sequenced BEFORE the TJ-A/TJ-B
+   design pass** (ruled 2026-07-29; rationale at TJ-A). §5.4 withdrew the
+   caching leg and §5.3 admitted the bandwidth leg is price-ambiguous, so
+   the ruling now rests on `T_risk`: the free-rider's expected cost from
+   deadline misses against the m-of-n window and the slashable bond. This
+   deliverable **quantifies that term**, independent of the witness question.
+   Threshold in §5.1's marginal form; the retained absorbing-Markov
    machinery is the instrument; PD-F-2's dispersion framing supplies the tail
    model for a 3.33 MB Tor-borne fetch. The pre-pruning artifact number is
    retained alongside for the record.
