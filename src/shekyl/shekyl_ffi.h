@@ -3060,7 +3060,10 @@ typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out
 //! kind or a "has real pending" flag here would let the cadence react to traffic,
 //! and that change would look like a latency optimisation rather than the
 //! covert-channel leak it is. Must not throw across the FFI boundary.
-typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel);
+//! `peer` is the 16-byte connection id the channel's stem slot is bound to --
+//! never nil, since an unbound slot emits nothing (CV-2). The binding travels
+//! with the send (§20.3's inversion) rather than as a pushed slot array.
+typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel, const std::uint8_t* peer);
 
 //! Forward to the successor written into `out_dest`.
 #define SHEKYL_RELAY_PLAN_STEM        0

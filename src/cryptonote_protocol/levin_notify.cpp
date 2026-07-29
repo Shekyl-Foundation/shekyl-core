@@ -479,7 +479,7 @@ namespace levin
        `poll` calls back to gather the outbound set lazily. */
     //! Post a covert send to `channel`'s strand. Defined after `send_noise`.
     void post_covert_send(const std::shared_ptr<detail::zone>& zone, std::size_t channel,
-                          const i_core_events* core);
+                          const boost::uuids::uuid& peer, const i_core_events* core);
 
     struct relay_effects
     {
@@ -575,7 +575,7 @@ namespace levin
       //!
       //! Note what it does NOT take: any hint of what is being sent (CV-4).
       //! C++ picks dummy-or-real from a queue Rust cannot see.
-      static void on_covert(void* ctx, std::size_t channel) noexcept
+      static void on_covert(void* ctx, std::size_t channel, const std::uint8_t* peer) noexcept
       {
         assert(ctx != nullptr);
         try
@@ -583,7 +583,11 @@ namespace levin
           relay_effects& self = *static_cast<relay_effects*>(ctx);
           if (!self.zone || channel >= self.zone->channels.size())
             return;
-          post_covert_send(self.zone, channel, self.core);
+          /* The binding travels with the send (§20.3's inversion): never nil,
+             because an unbound slot emits nothing at all (CV-2). */
+          boost::uuids::uuid destination{};
+          std::memcpy(std::addressof(destination), peer, sizeof(destination));
+          post_covert_send(self.zone, channel, destination, self.core);
         }
         catch (const std::exception& e)
         {
@@ -815,6 +819,7 @@ namespace levin
     {
       std::shared_ptr<detail::zone> zone_;
       const std::size_t channel_;
+      const boost::uuids::uuid peer_;
       const i_core_events* core_;
 
       //! \pre Called within `zone_->channels[channel_].strand`.
@@ -826,6 +831,17 @@ namespace levin
         assert(zone_->channels.at(channel_).strand.running_in_this_thread());
 
         noise_channel& channel = zone_->channels.at(channel_);
+        if (channel.connection != peer_)
+        {
+          /* Rebind at send time — §20.3's inversion moves the binding here
+             from the pushed-slot repoint. Clearing `active` restarts any
+             in-flight message rather than resuming it (CV-1): the remainder
+             of a real fragment run sent to the new peer would make this send
+             longer than a dummy, and length is the one thing the covert
+             channel holds constant. */
+          channel.connection = peer_;
+          channel.active = nullptr;
+        }
 
         if (!channel.connection.is_nil())
         {
@@ -866,9 +882,9 @@ namespace levin
     };
 
     void post_covert_send(const std::shared_ptr<detail::zone>& zone, const std::size_t channel,
-                          const i_core_events* core)
+                          const boost::uuids::uuid& peer, const i_core_events* core)
     {
-      boost::asio::post(zone->channels[channel].strand, send_noise{zone, channel, core});
+      boost::asio::post(zone->channels[channel].strand, send_noise{zone, channel, peer, core});
     }
   } // anonymous
 

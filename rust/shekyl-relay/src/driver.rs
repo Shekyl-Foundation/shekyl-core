@@ -74,6 +74,12 @@ pub enum Effect {
     CovertSend {
         /// Channel index. Positional: channel `i` is bound to stem slot `i`.
         channel: usize,
+        /// The peer stem slot `channel` is bound to — **the inversion** (§20.3).
+        /// Rust no longer pushes an ordered slot array for C++ to bind
+        /// positionally; it hands over the decision itself, already made
+        /// against the map it owns. An unbound slot emits nothing (CV-2), so
+        /// this is never nil.
+        peer: ConnectionId,
     },
 }
 
@@ -231,8 +237,16 @@ impl Driver {
         // `due_covert_channels` re-arms only what fired (CV-3). Nothing here
         // consults a queue or a payload — the effect carries an index and
         // nothing else, which is CV-4 by construction.
+        // The binding is resolved HERE, against the map the zone owns, and an
+        // unbound slot emits nothing — CV-2: an empty stem slot produces no
+        // covert send at that channel index, and shifts no other channel's
+        // index. The schedule is deliberately not consulted about binding and
+        // the map not consulted about time; `due_covert_channels` re-arms
+        // every due channel (bound or not) so cadence survives rebinds.
         for channel in self.zone.due_covert_channels(now, rng) {
-            effects.push(Effect::CovertSend { channel });
+            if let Some(peer) = self.zone.stem_slots().get(channel).copied().flatten() {
+                effects.push(Effect::CovertSend { channel, peer });
+            }
         }
 
         effects
@@ -477,6 +491,13 @@ mod tests {
             0,
             &mut rng,
         ));
+        // Bind both slots: since the inversion, an unbound slot emits nothing
+        // (CV-2), and this test is about cadence, not binding.
+        d.zone_mut()
+            .on_handshake_complete(id(1), PeerDirection::Outbound);
+        d.zone_mut()
+            .on_handshake_complete(id(2), PeerDirection::Outbound);
+        let _ = d.update_stems(&[id(1), id(2)], &mut rng);
 
         // Fixture requirement: distinct deadlines, or "one per advance" could
         // hold by coincidence rather than by independence.
@@ -492,7 +513,7 @@ mod tests {
             .poll(first, Vec::new, &mut rng)
             .into_iter()
             .filter_map(|e| match e {
-                Effect::CovertSend { channel } => Some(channel),
+                Effect::CovertSend { channel, .. } => Some(channel),
                 _ => None,
             })
             .collect();
@@ -510,7 +531,7 @@ mod tests {
             .poll(second, Vec::new, &mut rng)
             .into_iter()
             .filter_map(|e| match e {
-                Effect::CovertSend { channel } => Some(channel),
+                Effect::CovertSend { channel, .. } => Some(channel),
                 _ => None,
             })
             .collect();
@@ -519,5 +540,149 @@ mod tests {
             covert2[0], firstc,
             "the second advance fires the OTHER channel — liveness, so a              scheduler that only ever serves channel 0 cannot pass"
         );
+    }
+
+    /// CV-2, half 1: a covert send carries **its own slot's** peer, at **its
+    /// own** index.
+    ///
+    /// **Successor of `stem_slots_cross_in_index_order_with_nils_in_position`**
+    /// (the RP-3a seal), restated for the inversion per §20.3: there is no
+    /// array any more, so "nils in position" has nothing to be in — the
+    /// property becomes *per-emission* index/peer identity, checked against
+    /// the owning structure (`stem_slots()`), never against the emission
+    /// stream itself. That sourcing is what made the RP-3a reversal bug
+    /// detectable, and it is kept deliberately.
+    ///
+    /// Negative-controlled in the post-inversion forms (each injected into
+    /// `poll`'s emission mapping and observed to fail):
+    /// - **reorder**: emit the *other* slot's peer → peer-identity fails;
+    /// - **index off-by-one**: emit `channel + 1` → index-identity fails.
+    ///   This control only exists because the inversion introduced a channel
+    ///   index; the array had no index to be off by.
+    #[test]
+    fn covert_sends_carry_the_slots_own_peer_at_its_own_index() {
+        let mut rng = SplitMix64::new(23);
+        let mut d = Driver::new(Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::EveryPeer,
+            true,
+            0,
+            &mut rng,
+        ));
+        d.zone_mut()
+            .on_handshake_complete(id(1), PeerDirection::Outbound);
+        d.zone_mut()
+            .on_handshake_complete(id(2), PeerDirection::Outbound);
+        let _ = d.update_stems(&[id(1), id(2)], &mut rng);
+
+        // Ground truth from the owning structure, captured before driving.
+        let truth: Vec<Option<ConnectionId>> = d.zone().stem_slots().to_vec();
+        assert!(
+            truth.iter().all(Option::is_some),
+            "fixture: both slots bound"
+        );
+
+        // Drive until BOTH channels have emitted — the liveness requirement:
+        // without it, "every emission was correct" and "channel 1 never fired"
+        // are indistinguishable, which is the seal-is-not-coverage failure
+        // one level down.
+        let mut seen = [false; 2];
+        for _ in 0..16 {
+            if seen.iter().all(|s| *s) {
+                break;
+            }
+            let wake = d.next_wake();
+            for e in d.poll(wake, Vec::new, &mut rng) {
+                if let Effect::CovertSend { channel, peer } = e {
+                    assert_eq!(
+                        Some(peer),
+                        truth[channel],
+                        "channel {channel} must carry its own slot's peer — a \
+                         different slot's peer is the reorder defect"
+                    );
+                    seen[channel] = true;
+                }
+            }
+        }
+        assert_eq!(
+            seen,
+            [true, true],
+            "both bound channels must emit — liveness, so a scheduler that \
+             serves one channel cannot pass by emitting nothing wrong"
+        );
+    }
+
+    /// CV-2, half 2: an **unbound** slot emits nothing at its index, and
+    /// shifts no other channel's index.
+    ///
+    /// The hole is placed at index **0** with the surviving binding at index
+    /// **1**, deliberately: compaction shifts *down*, so a hole above the
+    /// binding would make the compaction injection invisible. With the hole
+    /// below, compacting emits channel 1's peer at index 0 — the exact
+    /// silent-misbinding the RP-3a seal existed to catch, in its
+    /// post-inversion form.
+    ///
+    /// Negative-controlled: injecting dense re-indexing (emit at
+    /// `emitted_count` instead of the slot index) fails the index assertion.
+    #[test]
+    fn an_unbound_channel_emits_nothing_and_shifts_no_other() {
+        let mut rng = SplitMix64::new(29);
+        let mut d = Driver::new(Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::EveryPeer,
+            true,
+            0,
+            &mut rng,
+        ));
+        d.zone_mut()
+            .on_handshake_complete(id(1), PeerDirection::Outbound);
+        d.zone_mut()
+            .on_handshake_complete(id(2), PeerDirection::Outbound);
+        let _ = d.update_stems(&[id(1), id(2)], &mut rng);
+
+        // Make a hole at index 0 the way the RP-3a seal did: close slot 0's
+        // peer AND re-offer only slot 1's, so there is nothing to backfill
+        // with. (Close alone is not enough — churn REFILLS a slot from the
+        // surviving outbound set; the hole exists only when the pool cannot
+        // cover the width. The fixture assertion below caught exactly that
+        // when this test was first written against a close-only recipe.)
+        let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
+        let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
+        d.zone_mut().on_connection_close(&slot0_peer);
+        let _ = d.update_stems(&[keep], &mut rng);
+        let truth: Vec<Option<ConnectionId>> = d.zone().stem_slots().to_vec();
+        assert_eq!(truth[0], None, "fixture: the hole is at index 0");
+        let bound = truth[1].expect("fixture: index 1 still bound");
+
+        let mut emissions = Vec::new();
+        for _ in 0..16 {
+            if emissions.len() >= 3 {
+                break;
+            }
+            let wake = d.next_wake();
+            for e in d.poll(wake, Vec::new, &mut rng) {
+                if let Effect::CovertSend { channel, peer } = e {
+                    emissions.push((channel, peer));
+                }
+            }
+        }
+
+        // Liveness: the bound channel really emitted, repeatedly — so "no
+        // wrong emission" cannot be satisfied by no emission at all.
+        assert!(
+            emissions.len() >= 3,
+            "the bound channel keeps emitting past the hole"
+        );
+        for (channel, peer) in emissions {
+            assert_eq!(
+                (channel, peer),
+                (1, bound),
+                "every emission names index 1 and its own peer — index 0 here \
+                 is the compaction defect (channel 1's send shifted into the \
+                 hole), exactly what the RP-3a seal caught in array form"
+            );
+        }
     }
 }

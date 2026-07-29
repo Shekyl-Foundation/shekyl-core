@@ -110,7 +110,12 @@ pub type SlotsCb = extern "C" fn(ctx: *mut c_void, slots: *const u8, count: usiz
 /// "has real pending" flag here would hand the scheduler exactly the input
 /// needed to let the cadence react to traffic, and the resulting change would
 /// look like a latency optimisation rather than the covert-channel leak it is.
-pub type CovertSendCb = extern "C" fn(ctx: *mut c_void, channel: usize);
+/// `peer` is the 16-byte connection id of the stem slot the channel is bound
+/// to — never nil, because an unbound slot emits nothing at all (CV-2). The
+/// **binding travels with the send** instead of as a pushed slot array: this is
+/// §20.3's inversion, and it is what lets the array (and its positional
+/// decoding on the C++ side) be deleted.
+pub type CovertSendCb = extern "C" fn(ctx: *mut c_void, channel: usize, peer: *const u8);
 
 /// Zone-shape flags for [`shekyl_relay_zone_new`].
 ///
@@ -206,13 +211,15 @@ fn dispatch(
                 }
                 slots(ctx, flat.as_ptr(), list.len());
             }
-            Effect::CovertSend { channel } => covert(ctx, channel),
+            Effect::CovertSend { channel, peer } => {
+                covert(ctx, channel, peer.as_bytes().as_ptr());
+            }
         }
     }
 }
 
 /// Ignore covert sends — for the forced hooks, which drive one specific step.
-extern "C" fn noop_covert(_: *mut c_void, _: usize) {}
+extern "C" fn noop_covert(_: *mut c_void, _: usize, _: *const u8) {}
 
 /// # Safety
 /// `ids` must point to `n * 16` readable bytes, or be null with `n == 0`.

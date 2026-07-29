@@ -75,7 +75,10 @@ extern "C" fn rec_gather(_: *mut c_void, out_n: *mut usize) -> *const u8 {
     })
 }
 
-extern "C" fn rec_covert(_: *mut c_void, channel: usize) {
+extern "C" fn rec_covert(_: *mut c_void, channel: usize, peer: *const u8) {
+    let mut p = [0u8; 16];
+    unsafe { p.copy_from_slice(slice::from_raw_parts(peer, 16)) };
+    let _ = p; // channel identity is what the poll seam tests consume today
     REC.with(|r| r.borrow_mut().covert.push(channel));
 }
 
