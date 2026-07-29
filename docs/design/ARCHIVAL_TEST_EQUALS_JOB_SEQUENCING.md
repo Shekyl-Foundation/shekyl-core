@@ -165,13 +165,15 @@ change post-genesis.
   on other grounds; a **small** one means the receipt branch is doing more
   work than it looks. Running it first turns TJ-A from a two-way argument
   into a decision with a number under it. **The number is under it (§6.2,
-  measured 2026-07-29):** bandwidth alone closes the margin across the
-  modeled band (`q* = 0`; break-even at `$0.0004/GB`, 26× below bulk
-  transit); below break-even the deterrent needs `q_risk* ≈ 0.10` (+reward)
-  on the whole-shard fetch — so the witness choice is free at modeled
-  prices, and in the flat-rate world it hinges on whether TJ-C's deadline
-  forces `q ≥ 0.10` on 3.33 MB over Tor: exactly PD-F-2's dispersion
-  question, now with the threshold it must answer against. **§5.6 settles the same
+  measured 2026-07-29, within-class per review F-1):** bandwidth closes the
+  margin decisively for metered-egress fetchers, **marginally (~1.1×) in the
+  within-cloud cheap-transit cell** (the §5.3 reopen's watch-cell), and not
+  at all for flat-rate actors — where the deterrent needs
+  `q_risk* ≈ 0.10` (+reward) on the whole-shard fetch. The receipt branch
+  does real work precisely in the flat-rate cell, and TJ-C's deadline
+  question determines whether that cell is reachable: whether `q ≥ 0.10` is
+  forceable on 3.33 MB over Tor is exactly PD-F-2's dispersion question,
+  now with the threshold it must answer against. **§5.6 settles the same
   asymmetry independently and quantitatively**, which removes this branch's
   dependence on §4's assertion: sampling reaches parity with the full
   transfer only at `k ≈ 26k` — the segment's entire leaf count — so no
@@ -515,10 +517,14 @@ structural achievement of test≡job.
    pre-pruning artifact; existing test pins are the inertness check).** The
    numbers, at the modeled bands (per-shard slash scope, `m=11/n=13`,
    `SKL_FIAT_PRICE_BAND[1]`):
-   - **Bandwidth alone flips the margin at both band ends**: re-fetch
-     $0.136–$1.364/epoch vs `S = $0.0052` — proxying is **26–263× dearer**
-     than holding; `q* = 0`. At cloud/transit prices no deadline pressure is
-     needed.
+   - **Bandwidth alone flips the margin at both band ends** (`q* = 0`) — but
+     the honest headline is **within-class** (review F-1: one actor has one
+     infrastructure class, and the cross-class 26–263× paired the cheapest
+     storage against the dearest bandwidth): **decisive for a metered-egress
+     fetcher** (retail ~11× within cloud-class), **marginal (~1.1×) for a
+     cheap-transit cloud actor** — the cell that quietly inverts if either
+     term moves, and the one the §5.3 price-contingency reopen watches — and
+     **not at all for a flat-rate one**, where `T_risk` decides.
    - **Break-even fetch price `$0.0004/GB`** (26× below bulk transit) — the
      §5.3 price-contingency as one number: only a flat-rate/residential
      fetcher below it escapes the bandwidth closure.
@@ -526,8 +532,11 @@ structural achievement of test≡job.
      through `q = 0.05` (the m-of-n window absorbs isolated misses), then
      steep — `$0.0046`/epoch at `q = 0.10` (+reward), `$175`/epoch at
      `q = 0.278`. **`q_risk* = 0.1011` (+reward) / `0.2792` (bond-only)** —
-     numerically the old `q*` band, as it must be: in the zero-bandwidth
-     world the payload changes nothing about slash arithmetic.
+     near the old `q*` band, with the residual **attributed** (review F-2):
+     A5's crossover solves `T_risk(q) = S − T_bw(opening)` and its band ends
+     were quoted at specific fetch prices; `q_risk*` solves `T_risk(q) = S`
+     exactly. The slash model is payload-independent *inputs aside*, and the
+     zero-payload crossover equals `q_risk*` identically — welded by test.
    - **TJ-A steering readout:** the deterrent is band-wide structural at
      modeled prices; in the sub-break-even world it needs `q ≥ 0.10` on a
      3.33 MB Tor-borne fetch inside the TJ-C deadline — far more forceable

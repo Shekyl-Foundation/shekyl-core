@@ -79,6 +79,14 @@ pub const STORAGE_FIAT_PER_BYTE_YEAR: f64 = 1.0e-11;
 /// pays this only on the re-fetched openings, not on 13.6 GB of standing storage.
 pub const FETCH_FIAT_PER_BYTE_BAND: [f64; 2] = [1.0e-11, 1.0e-10];
 
+/// Cloud-class storage basis (`~$0.02/GB-month` ≈ `2.4e-10 $/B/yr`) — the
+/// within-class comparison partner for the metered-egress fetch band above.
+/// One actor has ONE infrastructure class (review F-1): pairing consumer-disk
+/// storage against cloud egress overstates the hold-vs-fetch ratio by ~24×,
+/// and the cell a §5.3-style reopen must watch is the WITHIN-cloud cheap-transit
+/// one, where the ratio is ~1.1× and would quietly invert if either term moved.
+pub const CLOUD_STORAGE_FIAT_PER_BYTE_YEAR: f64 = 2.4e-10;
+
 /// Sliding-window failure-confirmation params — **called from consensus**, not
 /// mirrored (DQ-2G). Built by PR #368 (`failure_window.rs`) after this arm first
 /// modelled them as local constants; the numerics stay provisional (shape frozen,
@@ -595,13 +603,33 @@ pub fn tj_shard_payload_report(
     writeln!(
         out,
         "  -> q_risk* (T_risk alone covers S; storage cheap-side worst case): bond-only {QB},\n\
-         +reward {QF}. TJ-A steering: LARGE T_risk at plausible q means the deterrent is\n\
-         carried structurally and the witness mechanism is chosen on other grounds; SMALL\n\
-         means the receipt branch does more work than it looks (TJ-A, sequencing ruling).\n\
-         S here is the §5.1 marginal threshold at one epoch; the pre-pruning caveat (R2)\n\
-         applies to BOTH tables — neither cost exists until pruned-daemon mode ships.",
+         +reward {QF}. Residual vs the quoted A5 band (0.098-0.278), ATTRIBUTED (F-2): the\n\
+         A5 crossover solves T_risk(q) = S - T_bw(opening) and its band ends were quoted at\n\
+         specific fetch prices; q_risk* solves T_risk(q) = S exactly. The slash model is\n\
+         payload-independent -- inputs aside -- and the zero-payload crossover EQUALS\n\
+         q_risk* identically (welded by test).",
         QB = qr_bond.map_or("none (PoRep limit)".to_string(), |q| format!("{q:.4}")),
         QF = qr_full.map_or("none (PoRep limit)".to_string(), |q| format!("{q:.4}")),
+    )?;
+    let cloud_s = honest_storage_cost_per_epoch(CLOUD_STORAGE_FIAT_PER_BYTE_YEAR);
+    writeln!(
+        out,
+        "  -> WITHIN-CLASS restatement (F-1 -- one actor, one infrastructure class; the\n\
+         cross-class 26-263x pairs the cheapest storage against the dearest bandwidth):\n\
+         cloud-class: S = ${CS:.4}/epoch (@{CB:.1e} $/B/yr) vs T = ${TL:.3}-${TH:.3}\n\
+           -> ratio {RL:.1}x-{RH:.1}x -- MARGINAL at cheap transit ({RL:.1}x); this is the\n\
+           cell the SS 5.3 price-contingency reopen watches, not the 26x one.\n\
+         consumer/flat-rate: S = ${HS:.4}/epoch, T_marginal ~= 0 -> INVERTED; T_risk\n\
+           decides (q_risk* above). Headline, honestly: bandwidth closes it decisively\n\
+           for a metered-egress fetcher, marginally for a cheap-transit cloud actor,\n\
+           and not at all for a flat-rate one.",
+        CS = cloud_s,
+        CB = CLOUD_STORAGE_FIAT_PER_BYTE_YEAR,
+        TL = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[0]),
+        TH = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[1]),
+        RL = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[0]) / cloud_s,
+        RH = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[1]) / cloud_s,
+        HS = honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR),
     )?;
     Ok(())
 }
@@ -785,5 +813,48 @@ mod tests {
         assert!(qr.is_some(), "bond+reward T_risk must cover S at some q");
         let qr = qr.unwrap();
         assert!(qr > 0.0 && qr < 1.0, "q_risk* interior: {qr}");
+    }
+
+    #[test]
+    fn zero_payload_crossover_equals_q_risk_star() {
+        // The F-2 identity, stated properly and welded: with the bandwidth
+        // term zeroed the margin crossover IS q_risk* — the slash model is
+        // payload-independent, and the residual between q_risk* and the
+        // quoted A5 band is entirely the opening bandwidth offset plus which
+        // fetch-price cells the band quoted. Any payload coupling into the
+        // risk path breaks this equality.
+        let bond = bond_at_risk_skl() * 1.0;
+        let reward = 0.01;
+        for &fp in &FETCH_FIAT_PER_BYTE_BAND {
+            let via_crossover = crossover_q(0.0, fp, STORAGE_FIAT_PER_BYTE_YEAR, bond, reward, 131)
+                .expect("zero-payload crossover exists");
+            let via_q_risk =
+                q_risk_star(STORAGE_FIAT_PER_BYTE_YEAR, bond, reward, 131).expect("q_risk* exists");
+            assert!(
+                (via_crossover - via_q_risk).abs() < 1e-9,
+                "zero-payload crossover {via_crossover} must equal q_risk* {via_q_risk}"
+            );
+        }
+    }
+
+    #[test]
+    fn within_cloud_class_cheap_transit_cell_is_marginal() {
+        // The F-1 cell the §5.3 reopen watches: within the cloud class the
+        // cheap-transit ratio is ~1.1× — decisive it is NOT, and this pin
+        // holds the honest headline in place (a drift of either term by a
+        // few tens of percent flips this cell, unlike the cross-class 26×).
+        let cloud_s = honest_storage_cost_per_epoch(CLOUD_STORAGE_FIAT_PER_BYTE_YEAR);
+        let t_cheap = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[0]);
+        let ratio = t_cheap / cloud_s;
+        assert!(
+            ratio > 1.0 && ratio < 1.5,
+            "within-cloud cheap-transit ratio must be marginal (~1.1x), got {ratio}"
+        );
+        // And the retail end stays decisively closed within-class too.
+        let t_retail = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[1]);
+        assert!(
+            t_retail / cloud_s > 5.0,
+            "retail end must remain decisive within-class"
+        );
     }
 }
