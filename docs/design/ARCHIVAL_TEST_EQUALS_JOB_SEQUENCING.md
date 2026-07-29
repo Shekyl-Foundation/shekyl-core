@@ -121,33 +121,63 @@ change post-genesis.
 
 ## 4. TJ design questions (Round 0 — open)
 
-- **TJ-A — post-pruning verification mechanism.** Candidate: challenges name
-  positions across shard `s`; the response carries leaves + paths verifying
-  against `R_k` (held by all nodes); consensus verifies the response
-  self-contained. Question: sampling breadth `k` such that answering requires
-  the whole shard in hand (partial holder at fraction `f` answers with
-  probability `f^k`), versus receipt-attested full transfer. On-chain
-  artifact stays compact either way.
+- **TJ-A — post-pruning verification mechanism.** The verification substrate
+  is settled (responder-supplied leaves + paths verified against `R_k`, which
+  every node holds); the open question is what the response must prove — and
+  **the two candidates are not equally sound, and 8C §4 already settles the
+  asymmetry**: *"`m` independent indices per `(P,s,E)`… bounds partial
+  deletion… It does not bound the zero-storage + reacquire adversary, who
+  fetches exactly the `m` named leaves (+ siblings) on demand — cost Θ(`m`),
+  not Θ(`|segment|`). Raising `m` does not help that adversary until
+  reacquisition of one sample is expensive. `m` is the wrong lever until
+  §7.5 closes."* That is precisely the sampling candidate: `f^k` bounds a
+  responder who holds a fraction and cannot fetch — **partial deletion** — and
+  does nothing against `f = 0` with fetch, because `k` unpredictable
+  positions are still `k` cheap fetches. Sampling therefore achieves
+  test≡job **only if single-sample reacquisition is expensive — a deadline
+  argument, i.e. grace-tightening, i.e. the mechanism reopen (d) was
+  dissolved for depending on.** **Receipt-attested full transfer is the only
+  candidate that gets test≡job structurally** rather than by latency margin;
+  its cost is the **witness problem** — consensus stops observing the act
+  directly and must trust an attestation of it (challenger honesty,
+  collusion, receipt forgery are its threat surface). The round's question is
+  therefore not "which of two options" but "is the witness problem solvable
+  at consensus grade" — with sampling-plus-deadline as the named fallback
+  whose soundness dependency (deadline pressure + reacquisition-source
+  behavior) must be priced explicitly if taken.
 - **TJ-B — the serve/verify split.** The full-shard serve is off-chain (to
   the challenger at the rendezvous, R1); the consensus artifact proves it
   happened. What binds the off-chain serve to the on-chain proof — the
   sampling indices' unpredictability (drawn at challenge time, answerable
   only with the shard in hand), a challenger receipt, or both.
-- **TJ-C — deadline.** A ~3.3 MB serve over two Tor legs replaces a ~3 KB
-  one: `CHALLENGE_RESOLUTION_BLOCKS` and the honest-latency analysis re-run
-  at the corrected payload. PD-F-2's dispersion framing transfers directly —
-  the proxy's extra leg is now a full-shard transfer, so the mean
-  displacement grows ~1000× and dispersion stops swamping it.
+- **TJ-C — deadline and cadence.** A ~3.3 MB serve over two Tor legs replaces
+  a ~3 KB one: `CHALLENGE_RESOLUTION_BLOCKS` and the honest-latency analysis
+  re-run at the corrected payload. PD-F-2's dispersion framing transfers
+  directly — the proxy's extra leg is now a full-shard transfer, so the mean
+  displacement grows ~1000× and dispersion stops swamping it. **The
+  bandwidth arithmetic that makes R1 obviously affordable, stated rather
+  than left implicit:** at one challenge per `(P, s, E)`, a maximal bond
+  (`MAX_HOLDINGS_SHARDS` = 4,096 × ~3.3 MB ≈ 13.5 GB) serves over one
+  settlement epoch (`SEB` = 10,000 blocks × ~120 s ≈ 13.9 days) —
+  **≈ 11 KB/s sustained worst case**, trivial against any serving-capable
+  link. The full-shard test costs the honest archiver effectively nothing in
+  bandwidth; what it costs the zero-storage responder is the point.
 - **TJ-D — pruned-daemon mode's design home and its two reconciliations.**
   DRS coupling (storage side), segment-freeze reversion clause (frozen-leaf
   exclusion or materialized chunk store), and the serve-credit verify rewire
   (fact §2.5's consensus-required retention must be dissolved by TJ-A before
   any pruning is possible).
-- **TJ-E — foundation-source economics under R1.** Post-pruning, a proxy's
-  re-fetch source of last resort is the foundation's `CompleteTree` nodes.
-  Full-shard tests make that re-fetch cost full freight per challenge; the
-  question is whether foundation serving policy (rate, priority) needs to be
-  an explicit input to the margin or stays out of consensus entirely.
+- **TJ-E — foundation-source classification (downstream of TJ-A, not
+  independent).** Post-pruning, a re-fetcher's source of last resort is the
+  foundation's `CompleteTree` nodes — and **what kind of input foundation
+  serving policy is depends on which TJ-A branch is taken**. Under
+  **sampling**, the foundation is the reacquisition source that makes `k`
+  fetches cheap: its serving policy (rate, priority) becomes a **soundness
+  input** — the branch's security depends on it. Under **receipt-attested
+  transfer**, re-fetching full freight through the foundation is just an
+  expensive way to do the job, and serving policy stays an **economics
+  question** outside consensus. TJ-E is resolved after TJ-A, in TJ-A's
+  terms.
 
 ## 5. First deliverables
 
