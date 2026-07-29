@@ -239,10 +239,13 @@ far above clearnet. That strength is also its narrowness — the premise is
 **transport-dependent**, not merely price-dependent.
 
 > **Falsifiers, both of which reopen this leg:**
+>
 > 1. Either term moves by ~3 orders of magnitude (storage becomes costly, or
 >    anonymous bulk transfer becomes ~free).
 > 2. **Serving moves off Tor.** The margin is computed against Tor's cost per
 >    byte; a clearnet or subsidised-transport serve path is a different ledger.
+>    Note this one can fire with **no economic input changing at all** — purely
+>    from a transport decision taken elsewhere in the program.
 
 ### 5.4 Leg 2 — caching makes the free-rider category *unstable*
 
@@ -338,7 +341,12 @@ structural achievement of test≡job.
 
 ## 6. First deliverables
 
-1. This record, registered (index row, FOLLOWUPS annotations, probe pause).
+1. ~~This record, registered (index row, FOLLOWUPS annotations, probe pause).~~
+   **DONE 2026-07-29** — `IMPLEMENTATION_INDEX.md` `TJ-A…TJ-E` row (registered
+   at birth, rule 94); `ARCHIVAL_REOPEN_D_FEASIBILITY_PROBE.md` status
+   `⏸ PAUSED`; `FOLLOWUPS.md` grace + `m`/`n` entry annotated
+   `⏸ SUPERSEDED IN PART`; `ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md` status
+   `⚠️ REVERSED IN PART`, citing this record rather than restating it.
 2. **A5 re-measurement at shard-size payload** (sim-side, own branch) — the
    corrected margin *in the pruned world*, as TJ's economic baseline; the
    pre-pruning artifact number retained alongside for the record. §5 is the
