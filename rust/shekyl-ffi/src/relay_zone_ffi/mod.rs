@@ -23,6 +23,16 @@
 //! byte spans. The hazard is removed rather than guarded — the same move as
 //! deriving `connection_count` instead of caching it, applied to marshalling.
 //!
+//! **A second dividend, unclaimed when this was decided and collected in RP-3b.**
+//! The original argument was only that dispatching here removes the *decoding*
+//! failure mode. It also makes **adding a variant a compile error at every
+//! consumer**: `Effect::CovertSend` broke [`dispatch`] and two further matches
+//! the moment it was introduced, and each had to be answered explicitly. Had the
+//! variant crossed as an integer tag, the new case would have been a silent
+//! default on the C++ side — which does not surface as a test failure but as a
+//! covert channel that quietly never fires. Exhaustiveness is doing work here
+//! that the decoding argument never claimed.
+//!
 //! [`ShekylRelayBlob`] is the one struct that crosses, and it is not a
 //! counter-example: the hazard named above is reading a *tag* and interpreting
 //! a union by it. A fixed two-field span has no tag, and it buys an explicit
