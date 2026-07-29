@@ -4240,18 +4240,65 @@ one layer in. So `stem_slots_cross_in_index_order_with_nils_in_position`
 ([`relay_zone_ffi/tests.rs`](../../rust/shekyl-ffi/src/relay_zone_ffi/tests.rs)),
 sealed in RP-3a as the sole witness, is **migrated, not deleted**.
 
+**Can Rust actually observe it? Yes — verified at source before relying on it**,
+because if it could not, acceptance item 3 would be unsatisfiable and the round
+would need a different shape. Three ingredients, all present today:
+
+| Ingredient | Site | Survives the inversion |
+| --- | --- | --- |
+| ground truth from the owning structure | `Zone::stem_slots() -> &[Option<ConnectionId>]` ([`zone/mod.rs:464`](../../rust/shekyl-relay/src/zone/mod.rs#L464)) | yes — the inversion does not touch `map.slots()` |
+| emission capture in a test | `rec_slots` ([`tests.rs:33`](../../rust/shekyl-ffi/src/relay_zone_ffi/tests.rs#L33)), a supplied `extern "C"` collector | yes — a `rec_covert_send` is the same pattern |
+| deterministic time | `shekyl_relay_zone_poll(handle, now_ms, …)` | yes — "channel comes due" is driven, not awaited |
+
+The ingredient that matters most is the first: the expectation is still sourced
+from the owning structure rather than the transform under test, which is the
+discipline that made RP-3a's reversal bug detectable at all.
+
+**But the property does not survive verbatim, and translating the old test
+literally would produce one that cannot fail.** Today an array crosses and the
+test asserts elementwise equality, nils included — the nil is a *value in a
+position*. After the inversion there is no array: Rust emits per due channel, so
+an empty slot produces **no emission at all** and "in position" has nothing to be
+in. Restated for the shape that will exist:
+
+> **CV-2.** An empty stem slot produces **no covert send at that channel index**,
+> and shifts no other channel's index.
+
+The negative controls change with it, and this is the part to get right:
+
+| Failure mode | Shows today as | Shows after inversion as |
+| --- | --- | --- |
+| compaction | array shorter; peers shift left | channel `i+1`'s send emitted with index `i` |
+| reordering | array elements transposed | two live channels' peers swapped |
+| index off-by-one | — (not reachable) | every emission shifted by one |
+
+That is arguably a *sharper* observable than the array — the defect surfaces as a
+wrong index on a live send rather than as a wrong array element — but it is a
+different assertion, and a literal port of the old body would assert about an
+array that no longer exists.
+
+One trap, named now because it is the same seal-is-not-coverage shape one layer
+down: today the check is **synchronous** on `update_stems`, and after the
+inversion it is only observable when channels actually come due. So the successor
+must assert that it *saw* an emission for every channel it expects. Without that,
+"the binding is correct" and "no channel ever fired" are indistinguishable — a
+test that passes by observing nothing is exactly what the RP-3a seal turned out
+to be.
+
 The migration is the round's sharpest edge and gets the RP-3a retirement
 treatment, in this order and no other:
 
-1. Build the successor witness on the Rust side, asserting the binding where it
-   now lives.
+1. Build the successor witness on the Rust side, asserting **CV-2** where the
+   binding now lives — not a transliteration of the array assertion.
 2. **Negative-control it plural**: compaction *and* reordering *and* an
-   off-by-one in the channel index must each independently fail it. RP-3a's
-   first version of this same test passed while never producing a nil, and its
-   first *fix* passed under reversal because the expectation was sourced through
-   the transform under test. Both failure modes are on the record; neither is
-   hypothetical here.
-3. Only then remove the old test, in a commit that names the successor.
+   off-by-one in the channel index must each independently fail it, in the
+   post-inversion forms tabled above. RP-3a's first version of this same test
+   passed while never producing a nil, and its first *fix* passed under reversal
+   because the expectation was sourced through the transform under test. Both
+   failure modes are on the record; neither is hypothetical here.
+3. Confirm the test observes an emission per expected channel, so absence of a
+   defect is distinguishable from absence of coverage.
+4. Only then remove the old test, in a commit that names the successor.
 
 Deleting the seam and the seal in one commit is the specific thing this round
 must not do, because the seal's justification (*"RP-3b consumes it
@@ -4369,10 +4416,14 @@ is a consequence of the port. Order: §20.4 split → §20.2 scheduling port →
    and `active` stays C++ (§20.2) while only the repoint *decision* is Rust's —
    so a Rust test would be asserting about a buffer it cannot see, measuring the
    shim rather than the property.
-3. **The index-order property has a live witness on the Rust side**, negative-
-   controlled against compaction, reordering, *and* channel-index off-by-one,
-   landed **before** the RP-3a seal test is removed, in a commit naming the
-   successor.
+3. **CV-2 has a live witness on the Rust side** — the *restated* property
+   (§20.3), not a transliteration of the array assertion — negative-controlled
+   against compaction, reordering, *and* channel-index off-by-one in their
+   post-inversion forms, and asserting that an emission was observed for every
+   expected channel. Landed **before** the RP-3a seal test is removed, in a
+   commit naming the successor. Satisfiability was verified at source (§20.3):
+   `stem_slots()`, a supplied collector, and injectable `now_ms` all survive the
+   inversion.
 4. **`SlotsCb` and the slot array are gone from the FFI** — deleted, not renamed.
    Checked by command, not by prose, because this is exactly the claim that
    survives while a renamed equivalent ships:
