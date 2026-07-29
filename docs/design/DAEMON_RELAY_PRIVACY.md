@@ -4514,10 +4514,25 @@ to cover. The honest line is:
 
 | State | Owner | Note |
 | --- | --- | --- |
-| covert enabled? | **Rust** | *transitionally duplicated at construction; resolved when the last C++ `.empty()` predicate is gone* |
+| covert enabled? | **Rust** | ~~transitionally duplicated at construction~~ — **window closed 2026-07-29 (step 2, `76b71d155`)**. C++ derives it *once*, at construction, to hand it in; no runtime re-derivation survives. |
 
 An inventory is a claim about now. Where a move has a transitional window, the
 window is part of the entry, and the acceptance test is what closes it.
+
+**Closed, by comparison against a pre-stated set rather than a fresh
+derivation.** Step 2's commit message listed the two expected survivors before
+the check was run, so completion is a diff, not a judgement:
+
+```text
+levin_notify.cpp:368   relay(make_relay_zone(zone, !covert_payload.empty()), ...)
+levin_notify.cpp:373   for (count = 0; !covert_payload.empty() && count < CHANNELS; ++count)
+```
+
+`rg -n 'covert_payload\.empty\(\)' src/` returns exactly these. Both are
+**construction-time feeds** — they carry the fact *into* Rust; neither
+re-derives it at runtime, which is the property acceptance item 5 names. The
+distinction matters because these two never go away: something has to tell Rust,
+once, whether covert is on. "One owner" was never "zero C++ mentions".
 
 **Already built and unwired: `NoiseCadence`.**
 [`schedule.rs:690`](../../rust/shekyl-relay-privacy/src/schedule.rs#L690) already

@@ -47,6 +47,53 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **FFI *signature* drift has no remedy, unlike FFI *constant* drift
+  (added 2026-07-29, from RP-3b step 2; measurement attached).**
+  `src/shekyl/shekyl_ffi.h` is hand-written — **sanctioned**, not an oversight
+  (rule 25: *"Use `cbindgen` **or** hand-maintained headers"*). C linkage carries
+  no type information, so a declaration that drifts from its Rust definition
+  **compiles, links, and is UB at runtime**. That much is structural and needs no
+  measurement.
+
+  **What is already handled.** The 2026-05-05 constant-drift audit
+  ([`audit_trail/2026-05-ffi-constant-drift-audit.md`](./audit_trail/2026-05-ffi-constant-drift-audit.md))
+  found three real bugs, hand-checked all 47 cross-language constants, and landed
+  a structural fix for the consensus-affecting subset: `config/consensus_constants.json`
+  as single authority, build-time generation into both languages, `static_assert` /
+  `const _: () = assert!(...)` sentinels at every consumption site. Full cbindgen
+  was **considered and deliberately reduced** to that subset. Elsewhere the
+  convention is per-constant equality-assertion tests
+  (`ffi_classical_address_bytes_matches_rust_authority`,
+  `last_settled_epoch_ffi_matches_rust`, `serve_credit_epoch_ok_ffi_matches_rust`,
+  and now `zone_flag_bits_do_not_transpose`'s ABI pins).
+
+  **What is not.** All of that addresses **constants**. A *signature* — arity,
+  parameter types, return type — cannot be pinned by a value assertion, because
+  there is no value to assert. The relay surface is entirely post-audit (RP-1…RP-3b
+  did not exist in 2026-05), so nothing has ever checked it.
+
+  **Measured 2026-07-29 (RP-3b), targeted at the relay surface: CLEAN.** All 14
+  `shekyl_relay_zone_*` exports agree with the header on name, arity and return
+  type. So this is a **hazard, not a live defect** — registered at that strength
+  deliberately, per the Q-11 discipline: the hazard is demonstrated structurally,
+  the defect is not demonstrated at all, and promoting one to the other without
+  evidence is the error that discipline exists to prevent.
+
+  **Gate shape is NOT yet grounded — do not design it from here.** "Generate and
+  diff in CI" is the obvious answer and is probably wrong, because the project
+  already evaluated wholesale cbindgen and narrowed it. Open questions the round
+  must answer first: (a) what, if anything, cbindgen cannot express for this
+  header (the `RelayZoneHandle` opaque type, the callback typedefs, the
+  `ShekylRelayBlob` `#[repr(C)]` struct are the candidates); (b) whether a
+  signature check can be had more cheaply than full generation — e.g. a
+  link-time-only compile unit that takes the address of every export under the
+  header's declared type, which fails to compile on arity/type mismatch without
+  generating anything; (c) whether the remaining 33 non-consensus constants want
+  the same treatment or stay on per-constant pins.
+
+  Not blocking anything. `cbindgen` is not installed on the dev box, so the
+  full-surface diff (all crates, not just relay) is still unmeasured.
+
 - **Superseded-section cross-reference sweep (docs hygiene, split out by the
   batching rule — added 2026-07-28).** The RP-2b ledger's #2 item (add a
   cross-reference from a superseded section to its superseder) class-checked
