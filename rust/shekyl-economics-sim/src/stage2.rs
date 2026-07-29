@@ -1338,6 +1338,11 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     // The absorption DP prices the stream forgone FROM the slash epoch, so it
     // takes the per-epoch rate rather than a horizon lump.
     crate::proxy::a5_proxy_report(out, max_shard_reward_per_epoch_skl, SKL_FIAT_PRICE_BAND[1])?;
+    crate::proxy::tj_shard_payload_report(
+        out,
+        max_shard_reward_per_epoch_skl,
+        SKL_FIAT_PRICE_BAND[1],
+    )?;
 
     let report = Stage2Report {
         burden_trajectories: trajectories,
