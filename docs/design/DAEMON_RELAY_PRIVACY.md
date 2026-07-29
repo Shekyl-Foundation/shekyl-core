@@ -4111,6 +4111,21 @@ consolidation's whole value is that it removes a seam rather than adding a
 mechanism. If it ends with the seam still standing under a different name, it did
 not happen.
 
+**Identifiers this round registers** (rule 94 — a family registers at birth, and
+these are numbered in discovery order, which is not document order):
+
+| ID | Invariant | Defined | Acceptance |
+| --- | --- | --- | --- |
+| **CV-1** | repointing a channel discards the in-flight remainder | §20.5 | item 2 |
+| **CV-2** | an empty slot emits no covert send at that index and shifts no other | §20.3 | item 3 |
+| **CV-3** | an armed covert deadline survives wakes it did not cause | §20.2a | item 9 |
+| **Q-11** | the covert timing constants owe a derivation | §20.9 | *ranked next, out of round* |
+
+`CV-*` is a **covert-path invariant** — a privacy property of the noise channels
+that must survive the port. All three are either untested today (CV-1) or newly
+reachable *because* of the port (CV-2, CV-3), which is why they are named here
+rather than assumed.
+
 ### 20.1 Re-census — the covert path re-verified at source
 
 §18.3 proposed the 3a/3b split against a tree that has since moved twice (RP-3a's
@@ -4207,9 +4222,42 @@ The delta from today is therefore `CRYPTONOTE_NOISE_CHANNELS` timers becoming
 zero, not becoming one: the covert path gains no timer of its own and rides the
 one that already exists.
 
-**This is an acceptance item, not a note** (§20.7 item 8), because it is the one
-place the round could quietly re-break 3a's seal, and it would do so invisibly —
-option (a) compiles, passes both noise gtests, and races only under load.
+**The fold is correct only under deadline stability, and that is a precondition,
+not a nice-to-have.**
+
+> **CV-3.** A covert channel's armed deadline is drawn once and survives every
+> wake it did not cause. Wakes triggered by the fluff scheduler, an epoch
+> rollover, or another channel coming due must leave it untouched.
+
+State it here rather than in an implementation note, because the failure it
+excludes is invisible and the fold is what creates the opportunity for it. With N
+independent timers the property is free — nothing else can reach a channel's
+timer. Folding puts every deadline behind one wake that fires far more often, so
+a re-arm that redraws instead of preserving becomes *reachable* for the first
+time. And a redraw on every unrelated wake resamples `noise_min_delay +
+U(0, noise_delay_range)` repeatedly and keeps the minimum, which biases the
+effective covert interval **short** — a covert channel emitting faster than its
+distribution says is a privacy defect, and it is one that:
+
+- no gtest in the tree would catch (§20.5 — the two noise cases assert counts,
+  and a biased-short interval still produces the expected count per poll);
+- no conformance test today covers (the crate's goodness-of-fit instruments are
+  pointed at the embargo and fluff delay, not the covert schedule);
+- looks like correct behaviour under casual inspection, because each individual
+  draw *is* from the right distribution.
+
+That last property is what makes it worse than option (a)'s races: a race
+eventually manifests as a crash or a corrupted send, whereas a biased-short
+covert interval simply relays sooner and reports nothing. So CV-3 is the
+condition under which folding is *strictly better* than keeping N timers. Without
+it, folding is worse than the option this section rejects, and a future
+implementer who folds without preserving deadlines should find that written down
+rather than have to rediscover it.
+
+**This is an acceptance item, not a note** (§20.7 items 8 and 9), because it is
+the one place the round could quietly re-break 3a's seal, and it would do so
+invisibly — option (a) compiles, passes both noise gtests, and races only under
+load; a deadline-resampling fold passes everything, always.
 
 ### 20.3 The seam inverts — and the seal migrates rather than dying
 
@@ -4305,6 +4353,32 @@ must not do, because the seal's justification (*"RP-3b consumes it
 positionally"*) is retired by the same change that retires its subject, and a
 reader reconstructing that later cannot tell whether the property was
 re-witnessed or merely dropped.
+
+#### 20.3a The three ways a test is vacuous — stated because this round needs all three checks
+
+The same failure has now appeared three times in this arc wearing three
+different costumes, and the third one is above:
+
+| Costume | Instance | What the test lacked | What catches it |
+| --- | --- | --- | --- |
+| No input to fire on | the RP-3a seal that never produced a nil | a fixture reaching the state it claimed to witness | **fixture requirements** — assert the precondition was constructed |
+| No way to fail | its first fix, self-consistent under reversal | ground truth independent of the transform | **negative control**, plural |
+| No execution to observe | a time-driven successor that never advances the clock | the code under test actually running | **liveness assertion** — assert the emission happened |
+
+The general form: **a test can be vacuous by lacking input, by lacking
+independent ground truth, or by lacking execution.** They are independent
+failures with independent remedies, and a test can pass all of one check while
+failing another — the RP-3a seal had perfect ground truth and no input; its fix
+had input and no independent truth.
+
+This is worth stating once rather than re-deriving, because CV-2's successor
+needs **all three at once**: it must construct a genuine hole (input), source
+truth from `stem_slots()` rather than the emission stream (ground truth), and
+assert it observed an emission per expected channel (execution). Miss any one and
+the test is green for a reason unrelated to the property.
+
+The arc has now paid for each of the three separately. That is the argument for
+treating them as a checklist rather than as instincts.
 
 ### 20.4 `noise` is three facts in one field
 
@@ -4448,15 +4522,71 @@ is a consequence of the port. Order: §20.4 split → §20.2 scheduling port →
    channel strand. This one is load-bearing because the rejected alternative
    compiles, passes both noise gtests, and races only under load; a green suite
    is not evidence here.
+9. **CV-3 (deadline stability) has a witness** — a channel's armed deadline
+   survives wakes it did not cause. Driven through `poll(now_ms)`: arm a channel,
+   advance time through several unrelated wakes (fluff release, epoch rollover,
+   another channel firing), and assert the channel still fires at its **original**
+   deadline. Negative control: a re-arm that redraws must fail it. This is the
+   condition under which the §20.2a fold is better than the option it rejects
+   rather than worse, and unlike item 8 it has **no** load-dependent symptom —
+   a resampling fold passes every existing test, always, and relays sooner than
+   its own distribution claims.
 
 ### 20.8 What this round does not do
 
-- **No change to covert timing parameters.** `CRYPTONOTE_NOISE_MIN_DELAY` /
-  `_DELAY_RANGE` / `_MIN_EPOCH` are ported as-is. They have never been measured
-  the way the embargo and fluff delay were, and whether they carry an F-2-shaped
-  defect is an open question this round deliberately does not open — a port that
-  also re-derives its constants cannot attribute a behavioural change to either.
-  Registered as a successor question, not deferred work with a blocker.
+- **No change to covert timing parameters** — the constants are ported as-is.
+  This is a sequencing decision, not a priority one: see **Q-11** below, which
+  ranks the derivation *next* rather than parking it.
 - **No reactor.** 3a's reason-2 seal holds; asio keeps every sleep.
 - **No Q-10 selection work.** §12.11's three tiers remain unimplemented and
   blocked on the ambient background-failure-rate measurement (§19.3).
+
+### 20.9 Q-11 — the covert timing constants are the arc's last unexamined numbers
+
+`CRYPTONOTE_NOISE_MIN_DELAY`, `CRYPTONOTE_NOISE_DELAY_RANGE` and
+`CRYPTONOTE_NOISE_MIN_EPOCH` are ported unchanged by RP-3b, and the reason is
+attribution: a port that also re-derives its constants cannot attribute a
+behavioural change to either half. That is the same separation RP-3a kept between
+the faithful port and the F-4/F-5 correction, and it held.
+
+**But "not in this round" is not "low priority", and the record should not read
+as though it were.** Three facts stack, and none of them is speculative:
+
+1. **They are the residue.** F-1…F-5 are closed. The embargo mean, the embargo
+   distribution family, the closed-form solve, the fluff delay's family and the
+   flood-return term are all now derived, witnessed and negative-controlled.
+   These three constants are what is left of the relay path's timing that has
+   never been examined.
+2. **They share provenance with the ones that were wrong.** Same file, same
+   lineage, same era, same absence of any derivation in the tree. The base rate
+   on that population *in this arc specifically* is five defects out of five
+   examined constants — F-1 (a value that did not follow from its own stated
+   derivation), F-2 (the wrong distribution family under a correct-looking name),
+   F-3 (a closed form that under-provisioned at every parameter).
+3. **They govern the mechanism with the thinnest oracle and the most
+   privacy-load-bearing behaviour.** Two count-asserting gtests (§20.5) over a
+   channel whose entire function is holding a real emission indistinguishable
+   from dummy traffic. An F-2-shaped defect here — a plausible name over the
+   wrong distribution — is exactly what that oracle cannot see.
+
+**Epistemic status, stated precisely, because the distinction is the point.**
+This is registered as **Q-11**, an *owed derivation*, and deliberately **not** as
+F-6. F-1…F-5 were each demonstrated with a measurement; nothing here has been
+measured, and numbering it into the F-family would assert a defect that has not
+been shown. It is **F-shaped in provenance and priority, Q-shaped in evidence.**
+Anyone tempted to promote it to an F should do so by measuring, not by
+renumbering.
+
+**RP-3b is what makes it tractable, which is a stronger claim than deferral.**
+Once covert deadlines are Rust-owned and driven through `poll(now_ms)` (§20.2a),
+these constants become measurable exactly the way the embargo and fluff delay
+became measurable: deterministic time, in-crate, negative-controllable, with the
+conformance instruments already built. Today they are not cheaply measurable at
+all — they live behind N asio timers on N strands. So the port is not merely a
+prerequisite by sequencing hygiene; **it is the instrument.**
+
+**Rank: immediately after RP-3b**, ahead of the remaining §12.11 selection work
+(which is blocked on a measurement RP-3b does not produce). "Parked" and "next"
+are different states and a future reader treats them differently — the same
+reason ρ's status line was corrected from "blocked" to "blocked, with the
+obligation now single-draw-per-epoch" in §19.
