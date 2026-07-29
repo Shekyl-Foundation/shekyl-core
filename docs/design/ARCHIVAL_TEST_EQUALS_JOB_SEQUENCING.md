@@ -213,17 +213,41 @@ change post-genesis.
   TJ-F therefore **freezes behaviour rather than concept** — the opposite posture
   from TJ-A/TJ-B, where the concept is unresolved and behaviour is not yet
   freezable. It is the genesis-critical work that is blocked on nothing.
-  **The property has two faces, and the tests cover both** (2026-07-29):
-  the **soundness face** as stated above (responder-supplied material must not
-  verify against non-committed leaves — holds at the pure-function level today,
-  `recompute_subroot != R_k` rejects; the test freezes it), and the **liveness
-  face** (verification must *succeed* from `R_k` plus responder-supplied
-  material **with no leaf-store read** — RED today, and `path.rs`'s own doc
-  states why: *"Consensus derives [the leaf-layer scalars] from segment leaf
-  store… the vin carries only the challenged `leaf_bytes`"*. The wire lacks
-  the material a pruned validator would need). The liveness face is what
-  dissolves fact §2.5's consensus-required retention; the soundness face is
-  what makes dissolving it safe.
+  **The property has two faces, and their artifacts differ in kind**
+  (2026-07-29, corrected same day — the first cut hedged a question that was
+  never open):
+  - **Soundness face** (a test, GREEN, frozen): responder-supplied material
+    must not verify against non-committed leaves — holds at the pure-function
+    level today (`recompute_subroot != R_k` rejects, tampered leaf-layer
+    material rejects); `tj_f_forged_material_does_not_verify` pins it so the
+    rewire inherits it.
+  - **Liveness face** (a **type-level constraint, not a test**): the verify
+    entry point takes **the response (leaf-layer chunk included) and `R_k`
+    and nothing else** — no store handle in scope at the assembly site.
+    **The chunk's origin was never open**: if the validator could derive the
+    chunk from what it retains, there would be no archival market — the
+    market exists precisely because validators pruned the leaves down to
+    `R_k`. "Responder supplies the chunk" is the premise the system rests
+    on, not a TJ-A branch; TJ-A's actual open question is only **how a full
+    transfer is witnessed compactly** (receipt-attested vs
+    sampling-with-priced-deadline). With the origin fixed, local-leaf reads
+    become *unrepresentable* rather than tested-against — the same move as
+    numerics-as-data and the admission predicate — and the constraint is
+    satisfied by exactly the correct fix.
+  **Why the liveness face is not a red test (recorded so it is not
+  re-attempted):** an empty-material "store-free verification succeeds"
+  assertion is **un-greenable by the correct fix** — the corrected assembly
+  site definitively passes a *populated* chunk from the response, so success
+  against `Vec::new()` can only be achieved by a verifier that skips the
+  leaf-in-layer check, which the soundness test then catches. The pair is
+  jointly unsatisfiable; such a test was cut from the PR #378 branch. The
+  sharper fact the hedge obscured: **`verify_segment_path` is not the broken
+  component** — its signature (`leaf_bytes, leaf_layer_scalars, path, rk`)
+  already takes material as arguments with no store handle; it is already
+  pruned-validator-compatible, and the fix may not touch it at all. What is
+  broken is **upstream**: today the caller fills `leaf_layer_scalars` from
+  local leaf reads (fact §2.5 in code form); tomorrow it fills them from the
+  response bytes. Same function, different source — enforced by signature.
 - **TJ-G — the challenge's scope is the whole segment.** *(Alias **RED-1**;
   registered here per rule 94, same motion as TJ-F.)* Phrased at the
   **challenge-construction** level, not the response level: a challenge for
@@ -493,8 +517,10 @@ verification, `serve_credit_decisions.rs` decision logic), the **FFI**
 surface those cross, and **C++** (`blockchain.cpp` `txin_archival_serve_credit_response`
 verification, ~:3190) — plus KAT regeneration and whatever rule-42
 version-constant surface the wire change touches. dev's code currently does
-the thing dev's docs call the defect, and nothing fails; TJ-F/TJ-G's red
-tests are what close that gap until the implementation round lands.
+the thing dev's docs call the defect, and nothing fails; TJ-G's red test,
+TJ-F's soundness test, and TJ-F's entry-point signature obligation (the
+liveness face, enforced type-level at implementation) are what close that
+gap until the implementation round lands.
 4. The TJ-A/TJ-B challenge-spec design pass — the rest of the genesis-frozen
    half, now scoped by §5.6 to *witnessing* a full transfer rather than choosing
    between a compact test and a full one.
