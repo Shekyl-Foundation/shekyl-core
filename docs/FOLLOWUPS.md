@@ -93,6 +93,14 @@ sustainability is unaffected by the recalibration.
   `(grace, m, n)` satisfies both, that infeasibility promotes the **PoRep** branch
   of (d). Input: `shekyl-economics-sim::proxy` (which now **deps**
   `FAILURE_WINDOW_M/N` rather than mirroring them). Target: **V3.0**.
+  **Feasibility de-risked ahead of the stressnet:** the pre-stressnet
+  **reopen-(d) feasibility probe** (`PD-*`,
+  `design/ARCHIVAL_REOPEN_D_FEASIBILITY_PROBE.md`, Round 0 opened 2026-07-28)
+  parameterizes the missing honest-`q` coupling and delivers the admissible
+  `(m, n)` region as a conditional map — the stressnet lands into it as a
+  lookup; an empty region promotes PoRep **before** testnet build-out. The
+  probe pins nothing; this entry's joint round retains sole pin authority,
+  behind the amended §12.6 handoff.
 - **~~D3 — archival-reward per-bond `curve_milli` cap is dodgeable at no bond
   cost~~** **✅ RESOLVED (§12.9, round closed 2026-07-26) + IMPLEMENTED
   (§12.9.1, PR #371, `feat/archival-d3-reward-path`) — status annotations sit at
