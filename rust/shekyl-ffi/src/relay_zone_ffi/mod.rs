@@ -97,10 +97,16 @@ pub struct ShekylRelayBlob {
 pub type FluffCb =
     extern "C" fn(ctx: *mut c_void, peer: *const u8, blobs: *const ShekylRelayBlob, n: usize);
 
-/// Called when the stem slots change: `slots` is `count` × 16 bytes, in slot
-/// order, nil for an empty slot. Order and nils are load-bearing — the consumer
-/// indexes by position (§16.1 contract 3).
-pub type SlotsCb = extern "C" fn(ctx: *mut c_void, slots: *const u8, count: usize);
+/// Called when covert channel `channel` loses its stem slot: clear it — nil
+/// the binding, discard buffers — on the channel's strand.
+///
+/// **The other half of the deleted slot array** (§20.3). The binding itself
+/// travels with each [`CovertSendCb`] call; the *loss* of a binding cannot,
+/// because an unbound channel emits no sends (CV-2) — and without it the C++
+/// enqueue guard reads a stale binding forever, so a dormant channel
+/// accumulates queued messages without bound. One channel index crosses: no
+/// array, no slot order, no width for C++ to reconcile.
+pub type CovertUnbindCb = extern "C" fn(ctx: *mut c_void, channel: usize);
 
 /// Called when covert channel `channel` is due to send.
 ///
@@ -188,7 +194,7 @@ fn dispatch(
     effects: Vec<Effect>,
     ctx: *mut c_void,
     fluff: FluffCb,
-    slots: SlotsCb,
+    unbind: CovertUnbindCb,
     covert: CovertSendCb,
 ) {
     for effect in effects {
@@ -204,15 +210,11 @@ fn dispatch(
                     .collect();
                 fluff(ctx, peer.as_bytes().as_ptr(), spans.as_ptr(), spans.len());
             }
-            Effect::StemSlots(list) => {
-                let mut flat = Vec::with_capacity(list.len() * 16);
-                for slot in &list {
-                    flat.extend_from_slice(&slot.map_or(NIL, |id| *id.as_bytes()));
-                }
-                slots(ctx, flat.as_ptr(), list.len());
-            }
             Effect::CovertSend { channel, peer } => {
                 covert(ctx, channel, peer.as_bytes().as_ptr());
+            }
+            Effect::CovertUnbind { channel } => {
+                unbind(ctx, channel);
             }
         }
     }
@@ -461,7 +463,8 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay(
 }
 
 /// Plan a relay; on `NO_ROUTE`, merge `outbound` into the stem map once and
-/// re-plan, delivering new slots through `on_slots` if the set changed.
+/// re-plan, clearing any covert channel the merge left unbound through
+/// `on_unbind`.
 ///
 /// This is the production path for `dandelionpp_notify`: the refresh policy
 /// lives in Rust with the rest of zone scheduling, so the C++ shim only offers
@@ -471,8 +474,8 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay(
 /// # Safety
 /// `handle` must be live; `source` must point to 16 readable bytes or be null;
 /// `outbound` must point to `n * 16` readable bytes or be null with `n == 0`;
-/// `out_dest` must point to 16 writable bytes; the slots callback must be valid
-/// for the call.
+/// `out_dest` must point to 16 writable bytes; the callback must be valid for
+/// the call.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_plan_relay_with_refresh(
     handle: *mut RelayZoneHandle,
@@ -482,7 +485,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay_with_refresh(
     n: usize,
     out_dest: *mut u8,
     ctx: *mut c_void,
-    on_slots: SlotsCb,
+    on_unbind: CovertUnbindCb,
 ) -> i32 {
     if handle.is_null() || out_dest.is_null() {
         return SHEKYL_RELAY_PLAN_NO_ROUTE;
@@ -494,7 +497,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay_with_refresh(
         h.driver
             .plan_relay_with_refresh(source, local_origin, &peers, &mut h.rng);
     h.publish();
-    dispatch(effects, ctx, noop_fluff, on_slots, noop_covert);
+    dispatch(effects, ctx, noop_fluff, on_unbind, noop_covert);
     write_plan(plan, out_dest)
 }
 
@@ -520,7 +523,7 @@ unsafe fn write_plan(plan: RelayPlan, out_dest: *mut u8) -> i32 {
 }
 
 /// Merge the caller's current outbound set into the stem map mid-epoch,
-/// delivering the new slots through `on_slots` if the set changed.
+/// clearing any covert channel the merge left unbound through `on_unbind`.
 ///
 /// Ports `update_channels::run`. On a public zone this is the only thing that
 /// ever populates the map: `notify` is constructed before any peer connects, so
@@ -535,7 +538,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_update_stems(
     outbound: *const u8,
     n: usize,
     ctx: *mut c_void,
-    on_slots: SlotsCb,
+    on_unbind: CovertUnbindCb,
 ) {
     if handle.is_null() {
         return;
@@ -544,7 +547,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_update_stems(
     let h = &mut *handle;
     let effects = h.driver.update_stems(&peers, &mut h.rng);
     h.publish();
-    dispatch(effects, ctx, noop_fluff, on_slots, noop_covert);
+    dispatch(effects, ctx, noop_fluff, on_unbind, noop_covert);
 }
 
 /// Accept a batch of transaction blobs for fluffing to every peer but `source`.
@@ -637,7 +640,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
     ctx: *mut c_void,
     gather_outbound: OutboundCb,
     on_fluff: FluffCb,
-    on_slots: SlotsCb,
+    on_unbind: CovertUnbindCb,
     on_covert: CovertSendCb,
 ) {
     if handle.is_null() {
@@ -656,7 +659,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
         &mut h.rng,
     );
     h.publish();
-    dispatch(effects, ctx, on_fluff, on_slots, on_covert);
+    dispatch(effects, ctx, on_fluff, on_unbind, on_covert);
 }
 
 /// Release every pending fluff batch — what `notify::run_fluff()` drives.
@@ -676,7 +679,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_fluff(
     let h = &mut *handle;
     let effects = h.driver.force_fluff(now_ms);
     h.publish();
-    dispatch(effects, ctx, on_fluff, noop_slots, noop_covert);
+    dispatch(effects, ctx, on_fluff, noop_unbind, noop_covert);
 }
 
 /// Start a new epoch immediately — what `notify::run_epoch()` drives.
@@ -691,7 +694,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(
     outbound: *const u8,
     n: usize,
     ctx: *mut c_void,
-    on_slots: SlotsCb,
+    on_unbind: CovertUnbindCb,
 ) {
     if handle.is_null() {
         return;
@@ -700,7 +703,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(
     let h = &mut *handle;
     let effects = h.driver.force_epoch(now_ms, &peers, &mut h.rng);
     h.publish();
-    dispatch(effects, ctx, noop_fluff, on_slots, noop_covert);
+    dispatch(effects, ctx, noop_fluff, on_unbind, noop_covert);
 }
 
 /// Placeholders for the exports that cannot produce the other variant. Reaching
@@ -708,8 +711,8 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(
 extern "C" fn noop_fluff(_: *mut c_void, _: *const u8, _: *const ShekylRelayBlob, _: usize) {
     debug_assert!(false, "force_epoch produced a Fluff effect");
 }
-extern "C" fn noop_slots(_: *mut c_void, _: *const u8, _: usize) {
-    debug_assert!(false, "force_fluff produced a StemSlots effect");
+extern "C" fn noop_unbind(_: *mut c_void, _: usize) {
+    debug_assert!(false, "force_fluff produced a CovertUnbind effect");
 }
 
 #[cfg(test)]

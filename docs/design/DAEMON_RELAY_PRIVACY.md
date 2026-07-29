@@ -4363,6 +4363,49 @@ The slot array stops crossing. **`SlotsCb` is deleted** — genuinely, not renam
 longer publishes a width for C++ to reconcile against; it addresses a channel
 directly or does not.
 
+**Amended 2026-07-29, at the deletion itself.** The array carried **two** facts
+per slot, and the inversion as drafted moved only one. *Who a bound channel
+sends to* travels with each `CovertSend`. *That a channel's slot went nil*
+cannot travel with a send — an unbound channel emits none, which is CV-2's own
+statement — and the draft left it nowhere. The consumer that needed it is
+`queue_covert_notify`'s enqueue guard: `send_txs` clones every covert message to
+**every** channel, and the nil check on `channel.connection` is what stops a
+channel whose slot unbound from accumulating those clones. That check was
+truthful only because the old nil-repoint (`update_channel` with a nil
+connection) maintained it. Delete the repoint with nothing in its place and the
+guard reads a stale binding forever: the dormant channel's queue grows without
+bound, and *fewer peers than channels* is a **permanent** state for a node with
+one outbound i2p/tor connection, not a transient one.
+
+So the second fact becomes its own effect, shaped like the first:
+`CovertUnbind { channel }` — one index, no array, no slot order, no width to
+reconcile. C++ restores the inherited nil-repoint semantics on the channel's
+strand (`clear_channel`: nil the binding, discard `active` and the queue). It is
+**not** `SlotsCb` renamed: the array pushed the inputs to a binding decision for
+C++ to apply positionally; this pushes one already-made decision, the same shape
+as `CovertSend`. Two alternatives were rejected at the finding: a **pull**
+(*"let C++ ask whether slot `i` is bound at enqueue"*) because the enqueue runs
+on a channel strand — exactly the off-zone-strand read item 8 closed its
+exception list against; and a **`live_stems`-based guard** because it is the
+wrong granularity — zone-wide where the fact is per-channel, leaving the same
+leak open whenever the zone holds at least one peer. A bound→bound repoint
+still crosses as nothing, deliberately: the new binding travels with the next
+send, where `send_noise` discards the in-flight remainder (CV-1), and the
+inherited repoint preserved the queue across a live successor — clearing it on
+rebind would drop messages the old code delivered. CV-2's witnesses are
+untouched: an unbind is not a send, and the successors filter on `CovertSend`.
+
+One delta this leaves, stated rather than smoothed over: on a **nil→bound**
+transition the enqueue guard now opens at the channel's *first send* (where
+`send_noise` rebinds) rather than at the instant of the old repoint post — so
+for up to one covert interval after a slot binds, an enqueue still drops as if
+the channel were unbound. The loss is a redundant clone (`send_txs` offers every
+channel, and the transaction still relays through the zone's other channels and
+the node's other zones), and the window is intrinsic to the inversion's shape:
+closing it would need a bind push, and bind-push plus unbind-push is the slot
+array reassembled in pieces. Q-11's wire-observer assessment inherits the
+cadence bound either way.
+
 **What does not go away is the property.** "Covert channel `i` is bound to stem
 slot `i`, and an empty slot is a nil in position rather than a compaction" was
 true across the FFI and stays true *inside* Rust — it is the same requirement,
@@ -4723,11 +4766,25 @@ is a consequence of the port. Order: §20.4 split → §20.2 scheduling port →
    survives while a renamed equivalent ships:
 
    ```bash
-   rg -n 'SlotsCb|on_slots' rust/ src/     # must return nothing
+   rg -n 'SlotsCb|\bon_slots\b' rust/ src/     # must return nothing
    ```
 
    If the round ends with an ordered array still crossing the boundary, the
    consolidation did not happen and the round should say so rather than claim it.
+
+   **Amended 2026-07-29 — the command, not the criterion.** As originally
+   written (`'SlotsCb|on_slots'`, no boundary) the gate can never return
+   nothing: it substring-matches `emission_slots` in the P-scan engine
+   (`scan_step.rs`), an identifier unrelated to relay. That is item 5's own
+   finding one item early — a gate that flags legitimate uses gets deleted by
+   the first person who runs it — so the pattern gains the word boundary and
+   nothing else. Run against the deletion commit, the sharpened gate returns
+   nothing; `StemSlots` and `update_channel` were swept alongside it (one
+   lineage mention of `update_channel` survives, in `clear_channel`'s comment
+   naming the inherited code whose semantics it preserves). The successor
+   `CovertUnbind { channel }` does not trip the criterion's intent: no array,
+   no order, no width crosses — see the §20.3 amendment for why the unbind
+   *fact* must still cross at all.
 5. **`zone::noise`'s enable predicate has one owner.** The check is
    **receiver-targeted**, and that is narrower than it first looks — the
    property is *"no `.empty()` survives **as the enable predicate**"*, not *"no

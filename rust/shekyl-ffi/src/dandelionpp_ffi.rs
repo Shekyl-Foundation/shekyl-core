@@ -23,11 +23,15 @@
 //! The three §16.1 seam contracts went with them, but only two are moot: `update`
 //! returning the exact re-arm predicate is now `Zone::update_stems` returning
 //! `StemSetChange`, and `clone` being a deep copy died with the handle that
-//! could be shallow-copied. **Index order with nils in position survived**, as
-//! the `SlotsCb` contract in `relay_zone_ffi/mod.rs` — a consumer still indexes the
-//! parallel noise channel by position, so a compacted or reordered snapshot
-//! still binds covert channels to the wrong connections. Its witness moved with
-//! it: `stem_slots_cross_in_index_order_with_nils_in_position`.
+//! could be shallow-copied. **Index order with nils in position survived** — as
+//! a pushed-array contract through RP-3a, then RP-3b's §20.3 inversion retired
+//! the array itself: the binding now travels with each covert send, and a slot
+//! going unbound crosses as its own per-channel decision. The property's
+//! witnesses moved with it, into `shekyl-relay`'s
+//! `covert_sends_carry_the_slots_own_peer_at_its_own_index` /
+//! `an_unbound_channel_emits_nothing_and_shifts_no_other` (the decision) and
+//! `relay_zone_ffi`'s `an_unbinding_slot_crosses_as_covert_unbind_at_its_index`
+//! (the marshalling).
 
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::{EmbargoTimer, PROPAGATION_FALSE_FAIL_ONE_IN};

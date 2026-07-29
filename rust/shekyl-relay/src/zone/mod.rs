@@ -331,10 +331,12 @@ impl Zone {
     /// a long-lived observer from correlating on a stable source -> successor
     /// mapping, and the embargo derivation assumes it happens.
     ///
-    /// Always [`StemSetChange::Changed`], matching `change_channels`
-    /// unconditionally calling `update_channels::post`: the slots are new even
-    /// when they name the same peers, and anything bound to them positionally
-    /// must be re-pointed.
+    /// Always [`StemSetChange::Changed`], matching the inherited
+    /// `change_channels` unconditionally re-pointing the channels: the slots
+    /// are new even when they name the same peers. Post-inversion (§20.3) the
+    /// re-point itself happens at the next send, but the driver's unbind diff
+    /// still keys off this — a set redrawn narrower, or over fewer peers, must
+    /// clear the channels it no longer binds.
     pub fn rebuild_stems<R: RelayRng + ?Sized>(
         &mut self,
         outbound: Vec<ConnectionId>,

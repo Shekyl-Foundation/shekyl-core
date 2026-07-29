@@ -24,10 +24,13 @@
 //! hold an OS timer *handle* — that is the mechanism, "a timer is pending" — but
 //! never the deadline *value*, which is the fact the scheduler owns.
 //!
-//! **Push, never pull.** Stem-slot changes leave as [`Effect::StemSlots`]. C++
-//! is never given a way to read the map on its own schedule: with the zone
-//! strand gone, a caller-initiated read would race this driver's mutations,
-//! which is precisely the hazard the seal named (§18.5 finding 3).
+//! **The map never crosses, in either direction.** C++ is never given a way to
+//! read the stem map on its own schedule: with the zone strand gone, a
+//! caller-initiated read would race this driver's mutations, which is precisely
+//! the hazard the seal named (§18.5 finding 3). Nor is it pushed an array to
+//! decode: a covert binding travels with each [`Effect::CovertSend`], and a
+//! channel that loses its slot is told so by [`Effect::CovertUnbind`] —
+//! decisions leave, never the inputs to them (§20.3).
 
 use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::Millis;
@@ -51,11 +54,6 @@ pub enum Effect {
         /// The batched transaction blobs (shared handles; content-sorted).
         blobs: Vec<TxBlob>,
     },
-    /// The stem slots changed; re-point anything bound to them positionally.
-    ///
-    /// **Pushed, never pulled.** Slot order is meaningful and nils are kept in
-    /// position, because the consumer indexes by slot (§16.1 contract 3).
-    StemSlots(Vec<Option<ConnectionId>>),
     /// Covert channel `channel` is due: send on it now.
     ///
     /// **Carries no payload discriminant, and that is CV-4** (§20.2). Whether
@@ -80,6 +78,28 @@ pub enum Effect {
         /// against the map it owns. An unbound slot emits nothing (CV-2), so
         /// this is never nil.
         peer: ConnectionId,
+    },
+    /// Covert channel `channel` lost its stem slot: clear it.
+    ///
+    /// **The other half of the deleted slot array** (§20.3, amended at the
+    /// deletion). The array carried two facts per slot: *who* a bound channel
+    /// sends to — which now travels with each [`Effect::CovertSend`] — and
+    /// *that* an unbound channel stopped. The second fact cannot travel with a
+    /// send, because an unbound channel emits none (CV-2); without it, the C++
+    /// enqueue guard (`queue_covert_notify`'s nil check) reads a stale binding
+    /// forever, and a dormant channel accumulates queued messages without
+    /// bound — a node holding fewer peers than the channel width is a
+    /// *permanent* instance of that state, not a transient one.
+    ///
+    /// Still a decision, not an input: one channel index, no array, no width
+    /// for C++ to reconcile. The receiver restores the inherited nil-repoint
+    /// semantics — nil the binding, discard buffers — on the channel's strand.
+    /// Emitted only for a bound→unbound transition; a rebind produces nothing
+    /// here, because the new binding travels with the next send, where the
+    /// in-flight remainder is discarded (CV-1).
+    CovertUnbind {
+        /// Channel index. Positional: channel `i` was bound to stem slot `i`.
+        channel: usize,
     },
 }
 
@@ -140,8 +160,8 @@ impl Driver {
         wake
     }
 
-    /// Merge the caller's current outbound set into the stem map, pushing the
-    /// new slots outward if the set changed.
+    /// Merge the caller's current outbound set into the stem map, emitting a
+    /// [`Effect::CovertUnbind`] for every slot the merge left unbound.
     ///
     /// This is the inherited `update_channels::run` — a *mid-epoch* refresh,
     /// distinct from the rollover below. The daemon needs it on three paths: a
@@ -154,15 +174,16 @@ impl Driver {
         outbound: &[ConnectionId],
         rng: &mut R,
     ) -> Vec<Effect> {
+        let before = self.zone.stem_slots().to_vec();
         let change = self.zone.update_stems(outbound.to_vec(), rng);
-        self.slots_if_changed(change)
+        self.unbinds_if_changed(change, &before)
     }
 
     /// Plan a relay; on [`RelayPlan::NoRoute`], refresh from `outbound` once
-    /// and re-plan, pushing slots if the refresh changed them.
+    /// and re-plan.
     ///
     /// See [`Zone::plan_relay_with_refresh`]. Returns the plan plus any
-    /// [`Effect::StemSlots`] the mid-call refresh produced.
+    /// [`Effect::CovertUnbind`] the mid-call refresh produced.
     pub fn plan_relay_with_refresh<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,
@@ -170,10 +191,12 @@ impl Driver {
         outbound: &[ConnectionId],
         rng: &mut R,
     ) -> (RelayPlan, Vec<Effect>) {
+        let before = self.zone.stem_slots().to_vec();
         let (plan, change) =
             self.zone
                 .plan_relay_with_refresh(source, local_origin, outbound.to_vec(), rng);
-        (plan, self.slots_if_changed(change))
+        let effects = self.unbinds_if_changed(change, &before);
+        (plan, effects)
     }
 
     /// Re-draw the whole stem set — what an epoch rollover does.
@@ -184,19 +207,35 @@ impl Driver {
         outbound: &[ConnectionId],
         rng: &mut R,
     ) -> Vec<Effect> {
+        let before = self.zone.stem_slots().to_vec();
         let change = self.zone.rebuild_stems(outbound.to_vec(), rng);
-        self.slots_if_changed(change)
+        self.unbinds_if_changed(change, &before)
     }
 
-    /// The one place "changed ⇒ push the slots" is implemented. A second copy
-    /// of that rule is a second place for the push to be forgotten, and a
-    /// forgotten push is silent: the slots simply stay stale.
-    fn slots_if_changed(&self, change: StemSetChange) -> Vec<Effect> {
-        if change.needs_rearm() {
-            vec![Effect::StemSlots(self.zone.stem_slots().to_vec())]
-        } else {
-            Vec::new()
+    /// The one place a lost binding is detected. A second copy of this rule is
+    /// a second place for the unbind to be forgotten — and a forgotten unbind
+    /// is silent: the C++ enqueue guard reads a stale binding and a dormant
+    /// channel's queue grows until the slot rebinds, if it ever does.
+    ///
+    /// Only a bound→unbound transition emits. A rebind (bound→bound, new peer)
+    /// deliberately produces nothing here — the new binding travels with the
+    /// next send, where `send_noise` discards any in-flight remainder (CV-1) —
+    /// and a never-bound slot has nothing to clear. A map redrawn *narrower*
+    /// than before unbinds the channels beyond its new width, which is why the
+    /// walk is over `before` rather than the current slots.
+    fn unbinds_if_changed(
+        &self,
+        change: StemSetChange,
+        before: &[Option<ConnectionId>],
+    ) -> Vec<Effect> {
+        if !change.needs_rearm() || !self.zone.covert_enabled() {
+            return Vec::new();
         }
+        let after = self.zone.stem_slots();
+        (0..before.len())
+            .filter(|&i| before[i].is_some() && after.get(i).copied().flatten().is_none())
+            .map(|channel| Effect::CovertUnbind { channel })
+            .collect()
     }
 
     /// Run every step due at `now` and return the resulting work.
@@ -363,27 +402,27 @@ mod tests {
     }
 
     #[test]
-    fn an_epoch_rollover_pushes_the_new_slots_outward() {
-        // Push, not pull (§18.5 finding 3): the caller learns the slots changed
-        // because the driver hands them over, never because it reached in.
+    fn an_epoch_rollover_redraws_the_stem_set() {
+        // The slots no longer cross as an effect — the binding travels with
+        // each covert send instead (§20.3) — so the rollover's work is asserted
+        // where it lives: on the map the zone owns.
         let mut rng = SplitMix64::new(42);
         let mut d = driver(&mut rng);
         let outbound = vec![id(1), id(2), id(3)];
 
         let effects = d.poll(d.zone().epoch_deadline(), || outbound.clone(), &mut rng);
-        let slots = effects
-            .iter()
-            .find_map(|e| match e {
-                Effect::StemSlots(s) => Some(s.clone()),
-                Effect::Fluff { .. } | Effect::CovertSend { .. } => None,
-            })
-            .expect("a rollover re-draws the stem set");
+        assert!(
+            effects.is_empty(),
+            "no fluff pending, covert disabled, nothing previously bound: a \
+             rollover on this zone produces map changes, not effects"
+        );
+        let slots = d.zone().stem_slots();
         assert_eq!(slots.len(), 2, "two slots at the configured width");
         assert!(slots.iter().flatten().all(|p| outbound.contains(p)));
     }
 
     #[test]
-    fn a_mid_epoch_refresh_pushes_slots_without_rolling_the_epoch() {
+    fn a_mid_epoch_refresh_fills_the_map_without_rolling_the_epoch() {
         // The path the public zone actually depends on. `notify` is constructed
         // before any peer connects, so the map is empty until the first relay
         // attempt refreshes it — without this, every transaction would fluff on
@@ -395,8 +434,8 @@ mod tests {
 
         let effects = d.update_stems(&[id(1), id(2), id(3)], &mut rng);
         assert!(
-            matches!(effects.as_slice(), [Effect::StemSlots(s)] if s.len() == 2),
-            "a first population is a change, so the slots must be pushed"
+            effects.is_empty(),
+            "a first population unbinds nothing — no channel was bound"
         );
         assert_eq!(d.zone().live_stems(), 2);
         assert_eq!(
@@ -407,8 +446,132 @@ mod tests {
 
         assert!(
             d.update_stems(&[id(1), id(2), id(3)], &mut rng).is_empty(),
-            "an unchanged set must push nothing, or every relay attempt would \
-             re-point the covert channels bound to these slots"
+            "an unchanged set is not a change, so nothing crosses"
+        );
+    }
+
+    /// A slot's bound→unbound transition emits [`Effect::CovertUnbind`] at its
+    /// own index — the fact the deleted slot array carried that a send cannot:
+    /// an unbound channel emits no sends (CV-2), so *stopping* must cross on
+    /// its own, or the C++ enqueue guard reads a stale binding forever.
+    ///
+    /// Asserted by exact equality, which carries the liveness requirement (the
+    /// unbind really was emitted) and the no-shift requirement (nothing was
+    /// emitted for the surviving channel) in one comparison.
+    ///
+    /// Negative-controlled, each injected into `unbinds_if_changed` and
+    /// observed to fail:
+    /// - **fire-on-any-prior-binding** (drop the `after…is_none()` conjunct):
+    ///   the surviving channel 1 also emits → exact equality fails with
+    ///   `[{0}, {1}]`;
+    /// - **index off-by-one** (`channel: i + 1`): fails with `[{1}]`.
+    #[test]
+    fn a_slot_going_unbound_emits_covert_unbind_at_its_own_index() {
+        let mut rng = SplitMix64::new(31);
+        let mut d = Driver::new(Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::EveryPeer,
+            true,
+            0,
+            &mut rng,
+        ));
+        d.zone_mut()
+            .on_handshake_complete(id(1), PeerDirection::Outbound);
+        d.zone_mut()
+            .on_handshake_complete(id(2), PeerDirection::Outbound);
+        let _ = d.update_stems(&[id(1), id(2)], &mut rng);
+
+        // The hole recipe the CV-2 witness established: close the slot's peer
+        // AND re-offer only the survivor, so nothing backfills.
+        let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
+        let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
+        d.zone_mut().on_connection_close(&slot0_peer);
+        let effects = d.update_stems(&[keep], &mut rng);
+
+        assert_eq!(
+            d.zone().stem_slots()[0],
+            None,
+            "fixture: the hole is at index 0"
+        );
+        assert_eq!(
+            d.zone().stem_slots()[1],
+            Some(keep),
+            "fixture: slot 1 kept its own peer"
+        );
+        assert_eq!(
+            effects,
+            vec![Effect::CovertUnbind { channel: 0 }],
+            "exactly the unbound channel, at its own index — an entry for \
+             channel 1 is the fire-on-any-change defect, and an empty list \
+             leaves the C++ enqueue guard reading a stale binding"
+        );
+    }
+
+    /// The two transitions that must NOT emit an unbind: a rebind (the new
+    /// binding travels with the next send, where CV-1's discard lives), and any
+    /// slot change on a zone without covert channels (there is nothing to
+    /// clear). Standing negative pair for
+    /// [`a_slot_going_unbound_emits_covert_unbind_at_its_own_index`]: the
+    /// injections that fail it fail these first.
+    #[test]
+    fn a_rebind_and_a_covert_disabled_zone_emit_no_unbind() {
+        // Rebind: close slot 0's peer but offer a replacement, so the churned
+        // slot refills — bound→bound, never through unbound.
+        let mut rng = SplitMix64::new(37);
+        let mut d = Driver::new(Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::EveryPeer,
+            true,
+            0,
+            &mut rng,
+        ));
+        d.zone_mut()
+            .on_handshake_complete(id(1), PeerDirection::Outbound);
+        d.zone_mut()
+            .on_handshake_complete(id(2), PeerDirection::Outbound);
+        let _ = d.update_stems(&[id(1), id(2)], &mut rng);
+        let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
+        let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
+        d.zone_mut().on_connection_close(&slot0_peer);
+        d.zone_mut()
+            .on_handshake_complete(id(3), PeerDirection::Outbound);
+        let effects = d.update_stems(&[keep, id(3)], &mut rng);
+        assert_eq!(
+            d.zone().stem_slots()[0],
+            Some(id(3)),
+            "fixture: the churned slot refilled — this is a rebind, not a hole"
+        );
+        assert!(
+            effects.is_empty(),
+            "a rebind crosses with the next send (CV-1's site), never as an \
+             unbind — clearing the queue here would drop messages the \
+             inherited repoint delivered to the successor"
+        );
+
+        // Covert disabled: the same hole recipe that emits above must emit
+        // nothing, because there are no channels to clear.
+        let mut d = driver(&mut rng);
+        d.zone_mut()
+            .on_handshake_complete(id(1), PeerDirection::Outbound);
+        d.zone_mut()
+            .on_handshake_complete(id(2), PeerDirection::Outbound);
+        let _ = d.update_stems(&[id(1), id(2)], &mut rng);
+        let slot0_peer = d.zone().stem_slots()[0].expect("slot 0 bound");
+        let keep = d.zone().stem_slots()[1].expect("slot 1 bound");
+        d.zone_mut().on_connection_close(&slot0_peer);
+        let effects = d.update_stems(&[keep], &mut rng);
+        assert_eq!(
+            d.zone().stem_slots()[0],
+            None,
+            "fixture: the hole exists — emptiness below must come from the \
+             covert gate, not from the transition failing to happen"
+        );
+        assert!(
+            effects.is_empty(),
+            "slot changes cross only as covert decisions, and a zone without \
+             covert channels has none"
         );
     }
 

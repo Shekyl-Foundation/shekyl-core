@@ -3042,9 +3042,13 @@ static_assert(sizeof(ShekylRelayBlob) == sizeof(const std::uint8_t*) + sizeof(st
 //! N notifications, leaking the batch size as a per-peer message count.
 typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
                                    const ShekylRelayBlob* blobs, std::size_t n);
-//! The stem slots changed: `count` x 16 bytes, slot order, nil for an empty
-//! slot. Order and nil-position are load-bearing — the consumer indexes by slot.
-typedef void (*ShekylRelaySlotsCb)(void* ctx, const std::uint8_t* slots, std::size_t count);
+//! Covert channel `channel` lost its stem slot: clear it — nil the binding,
+//! discard buffers — on the channel's own strand. The other half of the deleted
+//! slot array: the binding itself travels with each covert send, and the LOSS
+//! of a binding travels here, because an unbound channel emits no sends. One
+//! index crosses -- no array, no slot order, no width to reconcile. Must not
+//! throw across the FFI boundary.
+typedef void (*ShekylRelayCovertUnbindCb)(void* ctx, std::size_t channel);
 //! Supply the outbound connection set on demand: write the id count through
 //! `out_n` and return a pointer to `*out_n` x 16 bytes valid until the poll
 //! returns (nullptr with `*out_n == 0` for none). shekyl_relay_zone_poll calls
@@ -3123,18 +3127,20 @@ std::uint64_t shekyl_relay_zone_next_wake(const RelayZoneHandle* handle);
 //! retry) and for tests.
 std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::uint8_t* source,
                                           bool local_origin, std::uint8_t* out_dest);
-//! Plan a relay; on NO_ROUTE merge `outbound` once and re-plan, pushing slots
-//! if the set changed. Settled fluff epochs do not refresh. This is the
-//! production notify path: the refresh policy lives in Rust with the zone.
+//! Plan a relay; on NO_ROUTE merge `outbound` once and re-plan, clearing any
+//! covert channel the merge left unbound. Settled fluff epochs do not refresh.
+//! This is the production notify path: the refresh policy lives in Rust with
+//! the zone.
 std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
     const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest, void* ctx,
-    ShekylRelaySlotsCb on_slots);
-//! Merge the current outbound set into the stem map mid-epoch, pushing the new
-//! slots if it changed. Used for connection churn, covert-send recovery, and
-//! the forced refresh after a stem send failure.
+    ShekylRelayCovertUnbindCb on_unbind);
+//! Merge the current outbound set into the stem map mid-epoch, clearing any
+//! covert channel the merge left unbound. Used for connection churn,
+//! covert-send recovery, and the forced refresh after a stem send failure.
 void shekyl_relay_zone_update_stems(RelayZoneHandle* handle, const std::uint8_t* outbound,
-                                    std::size_t n, void* ctx, ShekylRelaySlotsCb on_slots);
+                                    std::size_t n, void* ctx,
+                                    ShekylRelayCovertUnbindCb on_unbind);
 //! Accept a batch for fluffing to every peer but `source`. Returns how many
 //! peers took it — zero means nothing is connected to fluff to, or a blob span
 //! was invalid (null ptr with non-zero len). Empty blobs (`len == 0`) are valid
@@ -3148,7 +3154,7 @@ std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t
 //! release never triggers the connection scan.
 void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
                             ShekylRelayOutboundCb gather_outbound,
-                            ShekylRelayFluffCb on_fluff, ShekylRelaySlotsCb on_slots,
+                            ShekylRelayFluffCb on_fluff, ShekylRelayCovertUnbindCb on_unbind,
                             ShekylRelayCovertSendCb on_covert);
 //! Release every pending fluff batch — what notify::run_fluff() drives.
 void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
@@ -3156,7 +3162,7 @@ void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms
 //! Start a new epoch immediately — what notify::run_epoch() drives.
 void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms,
                                    const std::uint8_t* outbound, std::size_t n,
-                                   void* ctx, ShekylRelaySlotsCb on_slots);
+                                   void* ctx, ShekylRelayCovertUnbindCb on_unbind);
 
 } // extern "C"
 

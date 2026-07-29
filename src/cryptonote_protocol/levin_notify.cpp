@@ -417,6 +417,10 @@ namespace levin
         noise_channel& channel = zone_->channels.at(destination_);
         assert(channel.strand.running_in_this_thread());
 
+        /* Truthful by push: `clear_channel` nils this when the stem slot goes
+           unbound and `send_noise` nils it on a send failure, so nil here means
+           the channel will not fire and queuing would accumulate without
+           bound. */
         if (!channel.connection.is_nil())
           channel.queue.push_back(std::move(message_));
         else if (destination_ == 0 && shekyl_relay_zone_live_stems(zone_->relay.get()) == 0)
@@ -425,14 +429,13 @@ namespace levin
       }
     };
 
-    //! Updates the connection for a channel.
-    struct update_channel
+    //! Clears a channel whose stem slot went unbound.
+    struct clear_channel
     {
       std::shared_ptr<detail::zone> zone_;
       const std::size_t channel_;
-      const boost::uuids::uuid connection_;
 
-      //! \pre Called within `stem_.strand`.
+      //! \pre Called within `zone_->channels[channel_].strand`.
       void operator()() const
       {
         if (!zone_)
@@ -440,21 +443,22 @@ namespace levin
 
         noise_channel& channel = zone_->channels.at(channel_);
         assert(channel.strand.running_in_this_thread());
-        static_assert(
-          CRYPTONOTE_MAX_FRAGMENTS <= (noise_min_epoch / (noise_min_delay + noise_delay_range)),
-          "Max fragments more than the max that can be sent in an epoch"
-        );
 
-        /* This clears the active message so that a message "in-flight" is
-           restarted. DO NOT try to send the remainder of the fragments, this
-           additional send time can leak that this node was sending out a real
-           notify (tx) instead of dummy noise. */
+        /* The inherited nil-repoint semantics (`update_channel` with a nil
+           connection), kept exactly. Nil the binding so `queue_covert_notify`'s
+           enqueue guard reads the truth and stops queuing to a channel that no
+           longer fires; drop the in-flight remainder (never resume it — CV-1);
+           drop the queue, because every covert message was cloned to every
+           channel, so the surviving channels still carry it, and holding it
+           here would grow without bound on a node with fewer peers than
+           channels — a permanent state for a one-outbound-connection zone.
+           The bound-to-bound repoint has no analogue here: the new binding
+           travels with the next send, where `send_noise` rebinds and discards
+           the remainder. */
 
-        channel.connection = connection_;
+        channel.connection = boost::uuids::nil_uuid();
         channel.active = nullptr;
-
-        if (connection_.is_nil())
-          channel.queue.clear();
+        channel.queue.clear();
       }
     };
 
@@ -526,42 +530,31 @@ namespace levin
         }
       }
 
-      //! Re-point the covert channels at the new stem slots.
-      static void on_slots(void* ctx, const std::uint8_t* slots, std::size_t count) noexcept
+      //! A covert channel lost its stem slot: clear it.
+      //!
+      //! The other half of the deleted slot array (§20.3): the binding travels
+      //! with each send, and the *loss* of a binding travels here — one channel
+      //! index, no array, no width to reconcile. Runs on the zone strand (the
+      //! producing call fired there) and posts to the channel's own strand,
+      //! exactly like `on_covert` — nothing reads the zone handle off the zone
+      //! strand.
+      static void on_covert_unbind(void* ctx, std::size_t channel) noexcept
       {
         assert(ctx != nullptr);
         try
         {
-          const std::shared_ptr<detail::zone>& z = static_cast<relay_effects*>(ctx)->zone;
-
-          // only noise uses the "noise channels", only update when enabled
-          if (!shekyl_relay_zone_covert_enabled(z->relay.get()))
+          relay_effects& self = *static_cast<relay_effects*>(ctx);
+          if (!self.zone || channel >= self.zone->channels.size())
             return;
-
-          /* Slot order is load-bearing: channel `i` carries stem slot `i`, and an
-             empty slot arrives as a nil in position rather than being compacted
-             away. Indexing anything but positionally here would bind covert
-             channels to the wrong connections, silently (§16.1 contract 3). */
-          /* The snapshot may be NARROWER than the channel set: a stem map drawn
-             over fewer peers than the configured width has that many slots, which
-             is the normal state of a node with one outbound connection. The
-             inherited `post` handled it by iterating the map's span, not the
-             channels'. Only the reverse would be a bug. */
-          assert(count <= z->channels.size());
-          for (std::size_t i = 0; i < count && i < z->channels.size(); ++i)
-          {
-            boost::uuids::uuid connection{};
-            std::memcpy(std::addressof(connection), slots + (i * sizeof(connection)), sizeof(connection));
-            boost::asio::post(z->channels[i].strand, update_channel{z, i, connection});
-          }
+          boost::asio::post(self.zone->channels[channel].strand, clear_channel{self.zone, channel});
         }
         catch (const std::exception& e)
         {
-          MERROR("relay slots callback threw, covert channels not repointed: " << e.what());
+          MERROR("covert unbind dispatch threw, channel not cleared: " << e.what());
         }
         catch (...)
         {
-          MERROR("relay slots callback threw a non-standard exception, covert channels not repointed");
+          MERROR("covert unbind dispatch threw a non-standard exception, channel not cleared");
         }
       }
 
@@ -643,7 +636,7 @@ namespace levin
 
       relay_effects sink{zone};
       shekyl_relay_zone_update_stems(
-        zone->relay.get(), uuid_bytes(outs), outs.size(), std::addressof(sink), relay_effects::on_slots
+        zone->relay.get(), uuid_bytes(outs), outs.size(), std::addressof(sink), relay_effects::on_covert_unbind
       );
     }
 
@@ -687,7 +680,7 @@ namespace levin
         shekyl_relay_zone_poll(
           zone_->relay.get(), now_ms(),
           std::addressof(sink), relay_effects::on_outbound,
-          relay_effects::on_fluff, relay_effects::on_slots,
+          relay_effects::on_fluff, relay_effects::on_covert_unbind,
           relay_effects::on_covert
         );
 
@@ -767,7 +760,7 @@ namespace levin
           zone_->relay.get(), uuid_bytes(source_), local_origin,
           uuid_bytes(outs), outs.size(),
           reinterpret_cast<std::uint8_t*>(std::addressof(destination)),
-          std::addressof(sink), relay_effects::on_slots
+          std::addressof(sink), relay_effects::on_covert_unbind
         );
 
         if (plan != SHEKYL_RELAY_PLAN_FLUFF_EPOCH)
@@ -829,6 +822,10 @@ namespace levin
           return;
 
         assert(zone_->channels.at(channel_).strand.running_in_this_thread());
+        static_assert(
+          CRYPTONOTE_MAX_FRAGMENTS <= (noise_min_epoch / (noise_min_delay + noise_delay_range)),
+          "Max fragments more than the max that can be sent in an epoch"
+        );
 
         noise_channel& channel = zone_->channels.at(channel_);
         if (channel.connection != peer_)
@@ -981,7 +978,7 @@ namespace levin
       relay_effects sink{z};
       shekyl_relay_zone_force_epoch(
         z->relay.get(), now_ms(), uuid_bytes(outs), outs.size(),
-        std::addressof(sink), relay_effects::on_slots
+        std::addressof(sink), relay_effects::on_covert_unbind
       );
       relay_wake::arm(z, core);
     });
@@ -1014,7 +1011,7 @@ namespace levin
       shekyl_relay_zone_poll(
         z->relay.get(), shekyl_relay_zone_next_wake(z->relay.get()),
         std::addressof(sink), relay_effects::on_outbound,
-        relay_effects::on_fluff, relay_effects::on_slots, relay_effects::on_covert
+        relay_effects::on_fluff, relay_effects::on_covert_unbind, relay_effects::on_covert
       );
       relay_wake::arm(z, core);
     });
