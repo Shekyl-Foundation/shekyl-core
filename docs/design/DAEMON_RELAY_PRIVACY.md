@@ -4229,12 +4229,15 @@ not a nice-to-have.**
 > wake it did not cause. Wakes triggered by the fluff scheduler, an epoch
 > rollover, or another channel coming due must leave it untouched.
 
-State it here rather than in an implementation note, because the failure it
-excludes is invisible and the fold is what creates the opportunity for it. With N
-independent timers the property is free — nothing else can reach a channel's
-timer. Folding puts every deadline behind one wake that fires far more often, so
-a re-arm that redraws instead of preserving becomes *reachable* for the first
-time. And a redraw on every unrelated wake resamples `noise_min_delay +
+State it here rather than in an implementation note, because **the fold is what
+makes the bug reachable at all** — this is not a general hygiene rule that
+happens to apply, it is the specific hazard the fold introduces. With N
+independent timers the property is free and the defect is *structurally
+unavailable*: nothing but channel `i`'s own timer can reach channel `i`'s
+deadline. Folding creates the shared query path, and the shared query path
+creates the possibility of resampling on someone else's wake. A future
+implementer must be able to read this as the fold's own cost rather than as
+boilerplate, or they will fold without preserving. And a redraw on every unrelated wake resamples `noise_min_delay +
 U(0, noise_delay_range)` repeatedly and keeps the minimum, which biases the
 effective covert interval **short** — a covert channel emitting faster than its
 distribution says is a privacy defect, and it is one that:
@@ -4245,6 +4248,18 @@ distribution says is a privacy defect, and it is one that:
   pointed at the embargo and fluff delay, not the covert schedule);
 - looks like correct behaviour under casual inspection, because each individual
   draw *is* from the right distribution.
+
+That last point determines **what instrument CV-3's witness must be, and what it
+must not be.** The defect does not live in the draws; it lives in the *selection
+among* draws. Every sample is honestly distributed, and the bias is produced by
+repeatedly drawing and keeping the minimum — so a goodness-of-fit test against
+`noise_min_delay + U(0, noise_delay_range)` passes on defective and correct
+implementations alike. That is one level below where the crate's conformance
+instruments point, which is why aiming the existing embargo and fluff-delay
+machinery at the covert schedule would **not** catch this even after Q-11 gives
+those constants a derivation. CV-3's witness is therefore an *identity*
+assertion — this channel fires at the deadline it was armed with — not a
+distributional one.
 
 That last property is what makes it worse than option (a)'s races: a race
 eventually manifests as a crash or a corrupted send, whereas a biased-short
@@ -4502,8 +4517,8 @@ is a consequence of the port. Order: §20.4 split → §20.2 scheduling port →
    Checked by command, not by prose, because this is exactly the claim that
    survives while a renamed equivalent ships:
 
-   ```console
-   $ rg -n 'SlotsCb|on_slots' rust/ src/     # must return nothing
+   ```bash
+   rg -n 'SlotsCb|on_slots' rust/ src/     # must return nothing
    ```
 
    If the round ends with an ordered array still crossing the boundary, the
