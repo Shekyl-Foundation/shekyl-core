@@ -4692,8 +4692,33 @@ is a consequence of the port. Order: §20.4 split → §20.2 scheduling port →
 
    If the round ends with an ordered array still crossing the boundary, the
    consolidation did not happen and the round should say so rather than claim it.
-5. **`zone::noise`'s enable predicate has one owner.** No `.empty()` test
-   re-derives a fact the zone handle already holds.
+5. **`zone::noise`'s enable predicate has one owner.** The check is
+   **receiver-targeted**, and that is narrower than it first looks — the
+   property is *"no `.empty()` survives **as the enable predicate**"*, not *"no
+   `.empty()` survives"*. A census of the file finds **19** `.empty()` calls, of
+   which only the 9 on the payload object are the overloaded fact:
+
+   | Receiver | Sites | Kind | Disposition |
+   | --- | --- | --- | --- |
+   | `noise` | 357, 362, 529, 789, 849, 882, 884, 889, 985ᵃ | **the overloaded enable predicate** | **all migrate** |
+   | `noise` (in a comment) | 877 | doc drift on the same fact | migrates |
+   | `channel.active`, `channel.queue` | 803, 805, 815 | **buffer state** — this is CV-1's own machinery | **stays** |
+   | `channels`, `connections`, `ids`, `remote_heights`, `txs` | 985ᵇ, 825, 139, 154, 673, 707, 968 | **container guards** | **stays** |
+
+   A bare `\.empty\(\)` gate would flag ten legitimate uses and would be deleted
+   by the first person who ran it. Because the payload is only ever consumed by
+   `.size()` (the fragment unit) and `.clone()` (the dummy), **any `.empty()` on
+   the payload receiver is by definition the overloaded predicate** — so the gate
+   names the receiver and needs no allow-list:
+
+   ```bash
+   rg -n 'covert_payload\.empty\(\)' src/     # must return nothing
+   ```
+
+   The one permitted derivation is at **construction** (§20.4's transitional
+   window), where the bool is computed once from the payload and handed to
+   `shekyl_relay_zone_new`; it is a local, not a re-read, so it does not match
+   the gate.
 6. **The §18.5 inventory is amended, not appended to** — the `channels` and
    `noise_channel` rows are replaced by §20.2's decomposition, so the inventory
    describes the tree that exists.
