@@ -433,4 +433,81 @@ mod tests {
         let _ = d.force_epoch(0, &[id(1), id(2)], &mut rng);
         assert_ne!(d.zone().epoch_deadline(), before, "a new epoch was drawn");
     }
+
+    /// Covert channels emit **independently**: one `CovertSend` per advance.
+    ///
+    /// **This is a soundness property, not an implementation preference.**
+    /// Constant-rate cover works because the aggregate rate is constant. Two
+    /// channels firing together produce a 2×fragment burst against otherwise
+    /// empty intervals, making aggregate emission bursty and periodic — exactly
+    /// the shape the mechanism exists to deny an observer. So synchronization
+    /// is not merely different, it is a defect.
+    ///
+    /// **Why it lives here and not in the `levin_notify` gtests.** The C++
+    /// covert path draws deadlines from `SecureRelayRng` (`OsRng`), which has no
+    /// seam — so a per-advance count assertion there flakes whenever two draws
+    /// collide (~1 in 5,000 over a 5 s band at ms granularity). Making it
+    /// deterministic would need a test-only seeding hook, which is precisely the
+    /// test-drive divergence RP-3b removed everywhere else. Here the RNG is a
+    /// **generic parameter**, not a branch: production instantiates with
+    /// `SecureRelayRng`, this with `SplitMix64`, and the logic is byte-identical.
+    /// A parameter is not a test-only channel; a branch is. Same for `now`.
+    ///
+    /// The gtests keep what §20.5 says that oracle is for — counts, status,
+    /// payload identity — and assert them collision-robustly. Cadence is
+    /// asserted here, exactly, where it can be.
+    #[test]
+    fn covert_channels_emit_one_per_advance_not_synchronized() {
+        let mut rng = SplitMix64::new(11);
+        let mut d = Driver::new(Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::EveryPeer,
+            true,
+            0,
+            &mut rng,
+        ));
+
+        // Fixture requirement: distinct deadlines, or "one per advance" could
+        // hold by coincidence rather than by independence.
+        let (a, b) = (
+            d.zone().covert_deadline_at(0).expect("ch0 armed"),
+            d.zone().covert_deadline_at(1).expect("ch1 armed"),
+        );
+        assert_ne!(a, b, "the two channels must be armed independently");
+
+        // Advance to the earliest deadline: exactly one channel is due.
+        let first = d.next_wake();
+        let covert: Vec<usize> = d
+            .poll(first, Vec::new, &mut rng)
+            .into_iter()
+            .filter_map(|e| match e {
+                Effect::CovertSend { channel } => Some(channel),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            covert.len(),
+            1,
+            "one advance fires one channel; {covert:?} means the channels are              synchronized, which makes aggregate emission bursty"
+        );
+        let firstc = covert[0];
+
+        // Advance again: the other channel, and only it.
+        let second = d.next_wake();
+        assert!(second > first, "the next wake is strictly later");
+        let covert2: Vec<usize> = d
+            .poll(second, Vec::new, &mut rng)
+            .into_iter()
+            .filter_map(|e| match e {
+                Effect::CovertSend { channel } => Some(channel),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(covert2.len(), 1, "second advance also fires exactly one");
+        assert_ne!(
+            covert2[0], firstc,
+            "the second advance fires the OTHER channel — liveness, so a              scheduler that only ever serves channel 0 cannot pass"
+        );
+    }
 }
