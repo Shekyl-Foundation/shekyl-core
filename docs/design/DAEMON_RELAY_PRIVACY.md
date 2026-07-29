@@ -4093,3 +4093,247 @@ reject. It is paid here, bounded by the epoch (`rebuild_stems` re-draws every pi
 at the boundary), and how often honest churn actually reaches a source's whole
 set is the ambient-rate measurement §12.11 still owes — the same measurement the
 cooldown/threshold work is blocked on.
+
+---
+
+## 20. RP-3b design round — the covert-channel port, and the seam that inverts
+
+Short design leading the RP-3b implementation commits on
+`feat/rp3b-covert-channels-rust`. RP-3b is the **last structural round in the
+relay arc**: F-1…F-5 are closed (RP-1 measurement, RP-4 embargo, RP-3a
+scheduler), W3c is closed (RP-2b), and what remains in `levin_notify.cpp` that is
+not transport is the covert path — the noise channels, their timers, and the
+`on_slots` push RP-3a built to keep them working across the cut.
+
+Nothing here closes a finding. That is worth stating at the top, because it
+changes what the round is *for*: RP-3b is a **consolidation**, and a
+consolidation's whole value is that it removes a seam rather than adding a
+mechanism. If it ends with the seam still standing under a different name, it did
+not happen.
+
+### 20.1 Re-census — the covert path re-verified at source
+
+§18.3 proposed the 3a/3b split against a tree that has since moved twice (RP-3a's
+shim rewrite, RP-2b's `Pin` change). Re-verified at today's `dev`:
+
+| Anchor | Site | State |
+| --- | --- | --- |
+| `noise_channel` | [`:322–344`](../../src/cryptonote_protocol/levin_notify.cpp#L322-L344) | `active`, `queue`, `strand`, `next_noise`, `connection` — unchanged by 3a |
+| per-channel strand discipline | [`:374`](../../src/cryptonote_protocol/levin_notify.cpp#L374) | *"Never touch after init; only update elements on `noise_channel.strand`"* — holds |
+| the push seam | [`:521–557`](../../src/cryptonote_protocol/levin_notify.cpp#L521-L557) | `on_slots`, positional, nils in position, `assert(count <= channels.size())` |
+| covert send loop | [`:768–837`](../../src/cryptonote_protocol/levin_notify.cpp#L768-L837) | `send_noise` — drains `active`, then `queue`, else dummy |
+| enqueue | [`:389–421`](../../src/cryptonote_protocol/levin_notify.cpp#L389-L421) | `queue_covert_notify` — drops when the channel is nil |
+| repoint | [`:423–450`](../../src/cryptonote_protocol/levin_notify.cpp#L423-L450) | `update_channel` — **restarts the in-flight message** |
+| the misnamed hook | [`:939–950`](../../src/cryptonote_protocol/levin_notify.cpp#L939-L950) | `run_stems()` cancels noise timers; 3a left a handoff comment |
+
+One correction to §18.3's framing. It says RP-3b is where *"the noise channels
+follow, and the snapshot seam is deleted with them."* The seam is not deleted.
+See §20.3 — it **inverts**, and the difference decides the round's shape.
+
+### 20.2 Reconciling §18.5 — the ownership row that has to split
+
+§18.5's inventory assigns `channels` and `noise_channel::{active, queue,
+next_noise, connection}` to **asio (RP-3b)**. Read literally that is a null
+round: if every field stays where it is, nothing ports. Read as "these do not
+move to Rust" it contradicts §18.3, which says the channels follow.
+
+Both readings are wrong because the row is **not decomposed**. It was written
+during 3a, about state 3a did not touch, and it records *where the fields live*
+rather than *who decides their values* — the distinction 3a's own timer
+resolution turned on. Applying that resolution here splits the row cleanly:
+
+| Fact | Owner after RP-3b | Why |
+| --- | --- | --- |
+| *when* channel `i` next sends | **Rust** (deadline value) | same as `next_wake()`: a schedule fact |
+| the `next_noise` timer (the sleep) | **asio** | no reactor added; 3a's reason-2 seal holds |
+| the per-channel `strand` | **asio** | serialization primitive, nothing replaces it |
+| *which peer* channel `i` points at | **Rust** | it is stem slot `i` — Rust already owns the map |
+| *whether* this send is dummy or real | **Rust** | a schedule decision, not a byte operation |
+| `active` / `queue` **bytes** | **C++** | levin fragments; rule 36 — Rust holds no wire payloads it does not need |
+| the dummy payload and its size | **config** | see §20.4 — currently three facts in one field |
+
+So RP-3b moves **decisions**, not buffers. §18.5's row is amended to this table
+rather than left to be re-read charitably; an inventory that needs charitable
+reading has already stopped being an invariant (§18.5's own standing obligation).
+
+### 20.3 The seam inverts — and the seal migrates rather than dying
+
+Today Rust pushes an **ordered slot array** and C++ decides what to do with it:
+
+```
+Rust update_stems ──on_slots(slots[], count)──▶ C++ posts update_channel{i, slots[i]}
+```
+
+C++ is performing the channel→slot binding. But after §20.2 that binding is a
+Rust-owned fact, so the array crossing the boundary is C++ being handed the
+*inputs to a decision Rust already made*. The port replaces it with the decision
+itself:
+
+```
+Rust covert step ──on_covert_send(channel_i, peer, DUMMY|REAL)──▶ C++ sends bytes
+```
+
+The slot array stops crossing. **`SlotsCb` is deleted** — genuinely, not renamed
+— and with it the `count <= channels.size()` reconciliation, because Rust no
+longer publishes a width for C++ to reconcile against; it addresses a channel
+directly or does not.
+
+**What does not go away is the property.** "Covert channel `i` is bound to stem
+slot `i`, and an empty slot is a nil in position rather than a compaction" was
+true across the FFI and stays true *inside* Rust — it is the same requirement,
+one layer in. So `stem_slots_cross_in_index_order_with_nils_in_position`
+([`relay_zone_ffi/tests.rs`](../../rust/shekyl-ffi/src/relay_zone_ffi/tests.rs)),
+sealed in RP-3a as the sole witness, is **migrated, not deleted**.
+
+The migration is the round's sharpest edge and gets the RP-3a retirement
+treatment, in this order and no other:
+
+1. Build the successor witness on the Rust side, asserting the binding where it
+   now lives.
+2. **Negative-control it plural**: compaction *and* reordering *and* an
+   off-by-one in the channel index must each independently fail it. RP-3a's
+   first version of this same test passed while never producing a nil, and its
+   first *fix* passed under reversal because the expectation was sourced through
+   the transform under test. Both failure modes are on the record; neither is
+   hypothetical here.
+3. Only then remove the old test, in a commit that names the successor.
+
+Deleting the seam and the seal in one commit is the specific thing this round
+must not do, because the seal's justification (*"RP-3b consumes it
+positionally"*) is retired by the same change that retires its subject, and a
+reader reconstructing that later cannot tell whether the property was
+re-witnessed or merely dropped.
+
+### 20.4 `noise` is three facts in one field
+
+[`zone::noise`](../../src/cryptonote_protocol/levin_notify.cpp#L367) is an
+`epee::byte_slice` documented as *"`!empty()` means zone is using noise
+channels"*. Censused, it carries three distinct facts:
+
+| Fact | Sites | Count |
+| --- | --- | --- |
+| **enabled?** (`.empty()` as predicate) | `:357`, `:362`, `:529`, `:789`, `:849`, `:882`, `:884`, `:889`, `:985` | 9 |
+| **fragment size** (`.size()`) | `:804`, `:808`, `:1003`, `:1005` | 4 |
+| **the dummy payload** (`.clone()`) | `:811` | 1 |
+
+The predicate is nine of fourteen uses, and it is *already duplicated across the
+boundary*: [`:357`](../../src/cryptonote_protocol/levin_notify.cpp#L357) passes
+`!noise.empty()` into `make_relay_zone` at construction, so Rust has held the
+enable bit since RP-3a. Every later C++ `.empty()` test re-derives a fact Rust
+owns — two copies of one fact, which is one defect class (they disagree, or the
+copy goes stale) and is fixed by deletion plus a single owner, not by keeping
+them in step. It is the same class as the `PeerFluff::flush_at` bug §18.5 caught
+by asking *"who owns this fact?"*.
+
+It is benign today only because `noise` is `const` after construction. It stops
+being benign the moment covert scheduling is Rust-side and a caller asks C++
+whether noise is on — the answer would be a second copy of a Rust fact,
+synchronized by nothing but the constructor.
+
+**Decision:** split at the port. The payload and its size stay C++ config
+(`covert_payload`, and its `.size()` remains the fragment unit). The enable bit
+is **read from the zone handle**, not re-derived from the payload. This is a
+mechanical change with no behavioural delta, and it is done *before* the
+scheduling port rather than after, so the port is not written against an
+ambiguous predicate.
+
+### 20.5 The oracle is thinner here than it was for 3a — say so before building
+
+RP-3a had 33 gtests as its primary oracle and §18.4b stated their honest scope.
+The covert path has **two**: `noise` ([`levin.cpp:2278`](../../tests/unit_tests/levin.cpp#L2278))
+and `noise_stem` ([`:2372`](../../tests/unit_tests/levin.cpp#L2372)). What they
+actually assert, read from the bodies rather than the names:
+
+| Reached | Not reached |
+| --- | --- |
+| `status.has_noise` / `connections_filled` / `has_outgoing` transitions | which channel is bound to which slot — **no positional assertion at all** |
+| send **counts** (`EXPECT_EQ(2u, sent)`) | that a *dummy* is a dummy (only that it is not a notification: `notified_size() == 0`) |
+| a real tx arrives intact (`EXPECT_EQ(txs, notification.txs)`, `dandelionpp_fluff` false) | timing/dispersion of covert sends |
+| — | **fragment restart on repoint** — see below |
+
+So "the two noise gtests pass" is a much weaker statement than "the 33 pass" was,
+and it does **not** witness the property this port is most likely to break. Rust
+twins for the covert path are budgeted from the start, not discovered at
+acceptance. This is §18.4b's discipline applied before the build instead of
+after.
+
+**Finding — an inherited privacy invariant with no test anywhere.**
+[`update_channel`](../../src/cryptonote_protocol/levin_notify.cpp#L443-L449)
+carries this, in the imperative:
+
+> *"This clears the active message so that a message "in-flight" is restarted. DO
+> NOT try to send the remainder of the fragments, this additional send time can
+> leak that this node was sending out a real notify (tx) instead of dummy
+> noise."*
+
+It is a real covert-channel leak: finishing a partially-sent real message after a
+repoint makes the send *longer* than a dummy, and length is the one thing the
+covert channel exists to hold constant. Nothing tests it. The `make_fragment`
+tests ([`levin.cpp:506`](../../tests/unit_tests/levin.cpp#L506)) exercise
+`make_fragmented_notify` in isolation — three cases, none of them driving a
+channel; no test repoints a channel mid-message and asserts the remainder is
+discarded. Verified by grep over the whole gtest file, not by reading the two
+noise cases.
+
+This is the same shape as the i2p/tor outbound-only fluff rule RP-3a's first pass
+dropped — a one-line privacy rule inside a mechanism whose tests assert
+throughput. That one was caught only because eight `private_*` gtests happened to
+cover it. **Here nothing does.** So it is named as a porting invariant with its
+own witness *in this round*, written before the code moves:
+
+> **CV-1.** Repointing a covert channel discards any in-flight message remainder.
+> A real message interrupted by a repoint is restarted from its first fragment or
+> dropped — never resumed.
+
+### 20.6 Naming — the free rename, and why it is not the entry point
+
+§18.3's standing item stands: `run_stems()` cancels covert timers and has nothing
+to do with stem routing, and the three-way disagreement (name says stems, comment
+said stems, body cancels noise) is the dead-assumption detector. RP-3a left the
+name alone deliberately and wrote the handoff comment at
+[`:944–947`](../../src/cryptonote_protocol/levin_notify.cpp#L944-L947).
+
+The rename lands here, with the boundary rule 3a established: **old names at the
+ABI where the oracle needs them, honest names where the logic lives.** The gtests
+call `run_stems`, so the public hook keeps its name and gains a comment; the Rust
+function it forwards into is named for its body.
+
+It is explicitly **not** the round's entry point. It is the cheapest item and
+finishing it first would make the vocabulary sweep feel like the round, when it
+is a consequence of the port. Order: §20.4 split → §20.2 scheduling port →
+§20.3 seam inversion and seal migration → rename.
+
+### 20.7 Acceptance
+
+1. **`noise` and `noise_stem` pass unchanged**, plus the full 33 — the covert
+   port must not disturb the Dandelion++ path. Necessary, and per §20.5 nowhere
+   near sufficient.
+2. **CV-1 has a witness**, negative-controlled: a channel repointed mid-message
+   must fail the test if the remainder is resumed.
+3. **The index-order property has a live witness on the Rust side**, negative-
+   controlled against compaction, reordering, *and* channel-index off-by-one,
+   landed **before** the RP-3a seal test is removed, in a commit naming the
+   successor.
+4. **`SlotsCb` and the slot array are gone from the FFI** — deleted, not renamed.
+   If the round ends with an ordered array still crossing the boundary, the
+   consolidation did not happen and the round should say so rather than claim it.
+5. **`zone::noise`'s enable predicate has one owner.** No `.empty()` test
+   re-derives a fact the zone handle already holds.
+6. **The §18.5 inventory is amended, not appended to** — the `channels` and
+   `noise_channel` rows are replaced by §20.2's decomposition, so the inventory
+   describes the tree that exists.
+7. Covert-path Rust twins exist for the behaviours §20.5 lists as unreached, or
+   the gap is stated in the round's outcome section with the same explicitness
+   §18.4b used.
+
+### 20.8 What this round does not do
+
+- **No change to covert timing parameters.** `CRYPTONOTE_NOISE_MIN_DELAY` /
+  `_DELAY_RANGE` / `_MIN_EPOCH` are ported as-is. They have never been measured
+  the way the embargo and fluff delay were, and whether they carry an F-2-shaped
+  defect is an open question this round deliberately does not open — a port that
+  also re-derives its constants cannot attribute a behavioural change to either.
+  Registered as a successor question, not deferred work with a blocker.
+- **No reactor.** 3a's reason-2 seal holds; asio keeps every sleep.
+- **No Q-10 selection work.** §12.11's three tiers remain unimplemented and
+  blocked on the ambient background-failure-rate measurement (§19.3).
