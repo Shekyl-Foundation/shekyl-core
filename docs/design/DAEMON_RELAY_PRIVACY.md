@@ -4256,17 +4256,27 @@ distribution says is a privacy defect, and it is one that:
 - looks like correct behaviour under casual inspection, because each individual
   draw *is* from the right distribution.
 
-That last point determines **what instrument CV-3's witness must be, and what it
-must not be.** The defect does not live in the draws; it lives in the *selection
-among* draws. Every sample is honestly distributed, and the bias is produced by
-repeatedly drawing and keeping the minimum — so a goodness-of-fit test against
-`noise_min_delay + U(0, noise_delay_range)` passes on defective and correct
-implementations alike. That is one level below where the crate's conformance
-instruments point, which is why aiming the existing embargo and fluff-delay
-machinery at the covert schedule would **not** catch this even after Q-11 gives
-those constants a derivation. CV-3's witness is therefore an *identity*
-assertion — this channel fires at the deadline it was armed with — not a
-distributional one.
+That last point determines **what instrument CV-3's witness must be, and — more
+usefully — why no amount of sharpening the existing one can substitute.** The
+natural instinct on reading *"the instrument is aimed here and blind"* is *"then
+sharpen the instrument."* **That cannot work, and the reason is structural, not a
+matter of tuning.**
+
+Goodness-of-fit grades a **sample against a distribution**. In the resampling
+case every sample is drawn correctly from the right distribution — the draws are
+not the defect. The defect is that the *emitted interval* is a **minimum over
+several correct draws**, and a minimum of `k` draws is a **different random
+variable** from any one of them. So `grade_uniform` is not mis-calibrated, or
+under-powered, or pointed a little off: it is observing the wrong object. To see
+the defect an instrument would have to grade **the sequence of emissions**, not
+the sequence of draws — a different measurement, not a sharper version of this
+one.
+
+Hence CV-3's witness is an assertion about **mechanism**, not about
+distribution: *this channel fires at the deadline it was armed with*, checked by
+identity across foreign wakes. That is also why CV-3 survives Q-11 — even once
+those constants carry a derivation and a conformance grade, the grade will be
+over draws and this defect will still be invisible to it.
 
 That last property is what makes it worse than option (a)'s races: a race
 eventually manifests as a crash or a corrupted send, whereas a biased-short
@@ -4445,6 +4455,20 @@ the moment of the move, since construction still passes the payload in. So the
 acceptance test is that **no C++ `.empty()` survives as a predicate** — one
 owner, rather than two kept in step by the constructor.
 
+**The inventory line, written so it is true at every commit and not only at the
+end.** §18.5's obligation is that new state is inventoried with a named owner
+before it is written, and an entry reading simply *"Rust owns the covert enable
+bit"* would be **false during the port and true after it** — which makes the
+inventory uncheckable exactly while the port is in flight, the window it exists
+to cover. The honest line is:
+
+| State | Owner | Note |
+| --- | --- | --- |
+| covert enabled? | **Rust** | *transitionally duplicated at construction; resolved when the last C++ `.empty()` predicate is gone* |
+
+An inventory is a claim about now. Where a move has a transitional window, the
+window is part of the entry, and the acceptance test is what closes it.
+
 **Already built and unwired: `NoiseCadence`.**
 [`schedule.rs:690`](../../rust/shekyl-relay-privacy/src/schedule.rs#L690) already
 carries the covert cadence — `min_delay_secs`, `jitter_secs`, a `next_send()`
@@ -4455,6 +4479,51 @@ the same uniform primitive and raises the same conformance question, not because
 it is part of Dandelion++."* RP-3b's scheduling port therefore **wires an existing
 primitive** rather than writing one, which lowers the port's cost and is the
 reason §20.9 can call RP-3b the instrument for Q-11.
+
+**What that primitive has earned, and what it has not.** A component built during
+a measurement pass, wired to nothing, with a passing test is a known hazard
+shape: the test exercises it in isolation and no real caller has ever driven it.
+`noise_cadence_spans_its_band` establishes that a draw lands in
+`[min, min + jitter]`. It does **not** establish that the cadence behaves when
+consulted by a scheduler also serving other deadlines (that is CV-3), and it does
+**not** establish that its parameters correspond to the C++ constants it
+replaces. Three things are needed to wire it; the band test is one.
+
+**Parameter correspondence — checked at source before wiring, not after.** The
+`bounded_uniform` inclusive-`[0, max]` off-by-one already bit this arc once, in
+the two-slot occupancy instrument, so the same primitive gets the same scrutiny:
+
+| | C++ today | Rust `NoiseCadence` | Verdict |
+| --- | --- | --- | --- |
+| min delay | `CRYPTONOTE_NOISE_MIN_DELAY` = 10 s | `NOISE_MIN_DELAY_SECS` = 10 | ✅ |
+| jitter | `CRYPTONOTE_NOISE_DELAY_RANGE` = 5 s | `NOISE_DELAY_JITTER_SECS` = 5 | ✅ |
+| epoch | `CRYPTONOTE_NOISE_MIN_EPOCH` = 5 **min** | `NOISE_MIN_EPOCH_SECS` = 300 | ✅ — `relay_zone_params` converts `minutes`→`seconds` losslessly |
+| epoch jitter | `CRYPTONOTE_NOISE_EPOCH_RANGE` = 30 s | `NOISE_EPOCH_JITTER_SECS` = 30 | ✅ |
+| **bound semantics** | `rand_range` → `std::uniform_int_distribution(0, n)`, **inclusive** | `bounded_uniform` → **inclusive** `[0, max]` | ✅ — the off-by-one class does **not** recur |
+| **granularity** | inclusive `[0, 5×10⁹]` **ns** (`steady_clock::duration`) | inclusive `[0, 5000]` **ms** | ⚠️ **delta** |
+
+Five of six correspond exactly. The sixth is a real behavioural delta and is
+recorded rather than absorbed:
+
+> **The fold coarsens covert-deadline granularity from nanoseconds to
+> milliseconds** — same support, same uniform distribution, ~10⁶× fewer distinct
+> outcomes.
+
+It is **not** `NoiseCadence`'s doing: it follows from the FFI speaking whole
+milliseconds ([`:110–113`](../../src/cryptonote_protocol/levin_notify.cpp#L110-L113)),
+which §20.2a's fold routes covert deadlines through. RP-3a already moved the
+fluff and epoch schedules onto that contract; the covert path is the last
+ns-granularity timer in the relay layer, and folding it makes the layer uniform.
+
+Assessed as immaterial, with the reasoning stated so it can be challenged rather
+than inherited: the jitter is quantized to ~10⁻⁴ of a 10–15 s interval, which is
+well below the transport's own timing noise. Contrast the arc's one live
+granularity finding — whole-**second** timer granularity manufacturing ~20 % of
+observed preemption — where the quantum was *coarser than the signal* (seconds
+against a ~700 ms stem). Here it is far finer. But this is an *assessment*, not a
+measurement, and the two count-asserting gtests cannot see it either way, so it
+is named here and handed to **Q-11** to confirm rather than assume when those
+constants get their derivation.
 
 ### 20.5 The oracle is thinner here than it was for 3a — say so before building
 
