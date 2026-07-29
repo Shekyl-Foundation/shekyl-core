@@ -1223,8 +1223,12 @@ instruments for both are built or scoped. What remains is the *arguments*:
   the form "≥ `k` of the `STEMS` slots are anchor-backed and thus not re-rollable"
   is the shape of answer that would unblock `ρ`. (This "repeated-refills" bound is
   the obligation *under the current churn rotation*; the rotation-mechanism redesign
-  below **converts** it into a single-draw pin-formation bound by closing the
-  re-roll — a strictly easier thing to prove.)
+  below **converts** it into a single-draw-**per-epoch** pin-formation bound by
+  closing the re-roll — a strictly easier thing to prove. The qualifier is
+  load-bearing: the adversary gets one pin-formation draw *per epoch*, not one
+  ever — draws recur at epoch turnover and compound through the distinct-epoch
+  leak ledger above. Unqualified "single-draw" below is the generic one-shot
+  foil in contrasts, not this bound.)
 
   **`ρ` cannot be honestly chosen until this bound exists**: it must be decided
   against the largest `g` the anti-eclipse posture can *rule out* under repeated
@@ -1303,8 +1307,8 @@ instruments for both are built or scoped. What remains is the *arguments*:
   **It also simplifies what Q-10 owes.** With the re-roll closed, the p2p subsystem
   no longer owes "bound `g` under repeated adversary-induced refills" (the hard
   bound); it owes "bound `g` at pin formation under honest selection" — a
-  **single-draw bound, meaningfully more tractable**. The redesign does not just
-  lower `g_max`; it shrinks the unowned obligation.
+  **single-draw-per-epoch bound, meaningfully more tractable**. The redesign
+  does not just lower `g_max`; it shrinks the unowned obligation.
 
   **Pin + behavioural-floor = *conditional persistence*, which resolves the
   double-edge.** Pure pinning's eclipse cost is that a bad pin is durable; the floor

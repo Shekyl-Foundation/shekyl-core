@@ -47,6 +47,26 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Superseded-section cross-reference sweep (docs hygiene, split out by the
+  batching rule — added 2026-07-28).** The RP-2b ledger's #2 item (add a
+  cross-reference from a superseded section to its superseder) class-checked
+  decisively *class*: twenty-plus superseded banners across fifteen design
+  docs, most without a pointer to what superseded them. One sweep commit,
+  one idiom (banner names the superseder inline), not fifteen drive-by edits.
+  Not blocking anything; do it as a single docs pass.
+
+- **Live-pin index, independent of doc status (process-structural — added
+  2026-07-28, from the reopen-(d) Round-0 review).** The sweep-completed-too
+  rule has now bitten three times (latest: the Round-1 false-slash 0.002 —
+  a LIVE pin consulted by an open design round — filed in
+  `docs/completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`). Three occurrences
+  is a structural signal, not a recurring lesson: "completed" is the wrong
+  filing axis for *pins*, whose liveness outlasts their round's closure. An
+  index of live pins (name, value, authority doc, re-pin trigger) independent
+  of doc status would end the class. Candidate shape: a table in
+  `IMPLEMENTATION_INDEX.md` or a sibling `PINS.md`; decide at the next
+  occurrence or the next docs-hygiene pass, whichever first.
+
 - **Daemon chain store (`DRS-*`) — gap-close pass landed in design.** SoT:
   [`docs/design/DAEMON_REDB_STORE.md`](./design/DAEMON_REDB_STORE.md).
   **Tier A success criteria** (mission-ordered: journals, digest, warts,
