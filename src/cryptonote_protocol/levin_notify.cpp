@@ -82,30 +82,21 @@ namespace levin
     constexpr const std::chrono::minutes noise_min_epoch{CRYPTONOTE_NOISE_MIN_EPOCH};
     constexpr const std::chrono::seconds noise_epoch_range{CRYPTONOTE_NOISE_EPOCH_RANGE};
 
+    /* The covert send DELAY is drawn in `shekyl-relay` now (NoiseCadence); these
+       two survive only for the fragment-budget static_assert below, which is a
+       real invariant: a real notification must fit inside one covert epoch. */
+    constexpr const std::chrono::seconds noise_min_delay{CRYPTONOTE_NOISE_MIN_DELAY};
+    constexpr const std::chrono::seconds noise_delay_range{CRYPTONOTE_NOISE_DELAY_RANGE};
+
     constexpr const std::chrono::minutes dandelionpp_min_epoch{CRYPTONOTE_DANDELIONPP_MIN_EPOCH};
     constexpr const std::chrono::seconds dandelionpp_epoch_range{CRYPTONOTE_DANDELIONPP_EPOCH_RANGE};
 
-    constexpr const std::chrono::seconds noise_min_delay{CRYPTONOTE_NOISE_MIN_DELAY};
-    constexpr const std::chrono::seconds noise_delay_range{CRYPTONOTE_NOISE_DELAY_RANGE};
 
     /* The Dandelion++ fluff delay used to be drawn here, from a Poisson
        distribution over quarter-seconds. It is drawn in `shekyl-relay` now, from
        the memoryless family the derivation actually calls for — the inherited
        draw is F-4 of DAEMON_RELAY_PRIVACY.md, and it is gone rather than ported
        so it cannot be reintroduced by symmetry with the noise delays below. */
-
-    /*! Select a randomized duration from 0 to `range`. The precision will be to
-        the systems `steady_clock`. As an example, supplying 3 seconds to this
-        function will select a duration from [0, 3] seconds, and the increments
-        for the selection will be determined by the `steady_clock` precision
-        (typically nanoseconds).
-
-        \return A randomized duration from 0 to `range`. */
-    std::chrono::steady_clock::duration random_duration(std::chrono::steady_clock::duration range)
-    {
-      using rep = std::chrono::steady_clock::rep;
-      return std::chrono::steady_clock::duration{crypto::rand_range(rep(0), range.count())};
-    }
 
     /* The relay FFI speaks whole milliseconds on the caller's own monotonic
        clock. `steady_clock`'s epoch is arbitrary but fixed for the process, so
@@ -337,7 +328,6 @@ namespace levin
         : active(nullptr),
           queue(),
           strand(io_service),
-          next_noise(io_service),
           connection(boost::uuids::nil_uuid())
       {}
 
@@ -350,7 +340,6 @@ namespace levin
       epee::byte_slice active;
       std::deque<epee::byte_slice> queue;
       boost::asio::io_context::strand strand;
-      boost::asio::steady_timer next_noise;
       boost::uuids::uuid connection;
     };
   } // anonymous
@@ -488,6 +477,10 @@ namespace levin
        dropped relay or a skipped repoint is recoverable; a corrupted unwind is
        not. `core` and `outs` exist for `on_outbound`, which the epoch branch of
        `poll` calls back to gather the outbound set lazily. */
+    //! Post a covert send to `channel`'s strand. Defined after `send_noise`.
+    void post_covert_send(const std::shared_ptr<detail::zone>& zone, std::size_t channel,
+                          const i_core_events* core);
+
     struct relay_effects
     {
       std::shared_ptr<detail::zone> zone;
@@ -574,18 +567,32 @@ namespace levin
 
       //! A covert channel is due to send.
       //!
-      //! **Not yet wired to the channels.** The Rust zone now schedules covert
-      //! sends and emits this, but the per-channel `next_noise` timers still
-      //! drive the actual sends, so this deliberately does nothing for now.
-      //! Deleting those timers and routing sends through here is the next
-      //! commit; landing the seam first keeps that change a rewire rather than
-      //! a rewire plus a new boundary.
+      //! Runs on the **zone strand** (the wake fired there) and does no byte
+      //! work: it posts to the channel's own strand, which still serializes
+      //! `active`/`queue`/`connection` against `queue_covert_notify`. So the
+      //! zone handle is never touched from a channel strand — acceptance
+      //! item 8 — and the `:374` discipline comment keeps its referent.
       //!
       //! Note what it does NOT take: any hint of what is being sent (CV-4).
+      //! C++ picks dummy-or-real from a queue Rust cannot see.
       static void on_covert(void* ctx, std::size_t channel) noexcept
       {
-        (void)ctx;
-        (void)channel;
+        assert(ctx != nullptr);
+        try
+        {
+          relay_effects& self = *static_cast<relay_effects*>(ctx);
+          if (!self.zone || channel >= self.zone->channels.size())
+            return;
+          post_covert_send(self.zone, channel, self.core);
+        }
+        catch (const std::exception& e)
+        {
+          MERROR("covert send dispatch threw, channel not sent: " << e.what());
+        }
+        catch (...)
+        {
+          MERROR("covert send dispatch threw a non-standard exception");
+        }
       }
 
       //! Gather the outbound connection set on demand.
@@ -797,37 +804,27 @@ namespace levin
       }
     };
 
-    //! Sends a noise packet or real notification and sets timer for next call.
+    /*! Sends one covert packet on a channel the zone said is due.
+
+        No timer and no re-arm: the zone owns *when* (§20.2a), so this is a
+        handler posted to the channel's strand, not a self-perpetuating wait.
+        Deleting `next_noise` is what makes the zone strand the sole caller
+        into the relay handle — with per-channel timers, this ran on a channel
+        strand and would have had to reach the handle from there. */
     struct send_noise
     {
       std::shared_ptr<detail::zone> zone_;
       const std::size_t channel_;
       const i_core_events* core_;
 
-      static void wait(const std::chrono::steady_clock::time_point start, std::shared_ptr<detail::zone> zone, const std::size_t index, const i_core_events* core)
-      {
-        if (!zone)
-          return;
-
-        noise_channel& channel = zone->channels.at(index);
-        channel.next_noise.expires_at(start + noise_min_delay + random_duration(noise_delay_range));
-        channel.next_noise.async_wait(
-          boost::asio::bind_executor(channel.strand, send_noise{std::move(zone), index, core})
-        );
-      }
-
       //! \pre Called within `zone_->channels[channel_].strand`.
-      void operator()(boost::system::error_code error)
+      void operator()()
       {
-        if (!zone_ || !zone_->p2p || !shekyl_relay_zone_covert_enabled(zone_->relay.get()))
+        if (!zone_ || !zone_->p2p)
           return;
-
-        if (error && error != boost::system::errc::operation_canceled)
-          throw boost::system::system_error{error, "send_noise timer failed"};
 
         assert(zone_->channels.at(channel_).strand.running_in_this_thread());
 
-        const auto start = std::chrono::steady_clock::now();
         noise_channel& channel = zone_->channels.at(channel_);
 
         if (!channel.connection.is_nil())
@@ -865,9 +862,14 @@ namespace levin
           }
         }
 
-        wait(start, std::move(zone_), channel_, core_);
       }
     };
+
+    void post_covert_send(const std::shared_ptr<detail::zone>& zone, const std::size_t channel,
+                          const i_core_events* core)
+    {
+      boost::asio::post(zone->channels[channel].strand, send_noise{zone, channel, core});
+    }
   } // anonymous
 
   notify::notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::byte_slice noise, epee::net_utils::zone zone, const bool pad_txs, i_core_events& core)
@@ -893,8 +895,8 @@ namespace levin
         relay_wake::arm(z, core);
       });
 
-      for (std::size_t channel = 0; channel < zone_->channels.size(); ++channel)
-        send_noise::wait(now, zone_, channel, core_);
+      /* No per-channel timer to start: the zone armed every covert deadline at
+         construction and the single `wake` timer serves them (§20.2a). */
     }
   }
 
@@ -974,12 +976,32 @@ namespace levin
     if (!zone_)
       return;
 
-    /* Despite the name, this cancels the *noise* timers — it has nothing to do
-       with Dandelion++ stems, and never did. The name is the public test hook's
-       and is left alone here; RP-3b owns the covert path and can rename it
-       along with the rest of that vocabulary. */
-    for (noise_channel& channel : zone_->channels)
-      channel.next_noise.cancel();
+    /* Advance to the next scheduled event and run it. Despite the name this
+       has nothing to do with Dandelion++ stems and never did — the name is the
+       public test hook's, kept until the vocabulary sweep.
+
+       **No forcing path, deliberately.** `force_fluff`/`force_epoch` state the
+       house idiom — same code as `poll`, only which work counts as due differs
+       — but each still carries a force flag, so one branch diverges between
+       forced and scheduled. Covert needs zero branches: the entire difference
+       is the value of `now`, so this drives the *production* path and a covert
+       send here is a genuinely due send, re-armed exactly as production
+       re-arms it. Anyone adding a forcing path for another subsystem should
+       reach for this shape before `force_fluff`'s.
+
+       A pending fluff batch with an earlier deadline fires first and the
+       caller polls again. That is the real interleaving, not a wrinkle —
+       skipping past it to reach covert would be the test-only channel this
+       shape exists to avoid. */
+    boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
+      relay_effects sink{z, core};
+      shekyl_relay_zone_poll(
+        z->relay.get(), shekyl_relay_zone_next_wake(z->relay.get()),
+        std::addressof(sink), relay_effects::on_outbound,
+        relay_effects::on_fluff, relay_effects::on_slots, relay_effects::on_covert
+      );
+      relay_wake::arm(z, core);
+    });
   }
 
   void notify::run_fluff()
