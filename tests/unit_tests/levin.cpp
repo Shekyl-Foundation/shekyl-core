@@ -362,6 +362,40 @@ namespace
             return receiver_.notifier;
         }
 
+        /*! Advance the covert schedule until `stop(sent)` holds, or give up
+            after `max_advances`. Each advance processes every context's send
+            queue and accumulates the count.
+
+            One advance = one `run_stems()` = one poll at the zone's next
+            deadline = **one** channel firing (two only when independent draws
+            collide on the same millisecond). The inherited tests instead
+            cancelled every channel's timer per call, which synchronized the
+            channels — a state the production schedule structurally cannot
+            produce, and one that would be a covert-traffic defect if it could:
+            simultaneous emission makes the aggregate bursty and periodic,
+            the exact shape constant-rate cover exists to deny (§20.9). So this
+            oracle asserts what §20.5 scopes it to — counts, status, payload
+            identity — over however many advances a round needs, and the
+            per-advance cadence property lives where it can be held
+            deterministically:
+            `covert_channels_emit_one_per_advance_not_synchronized` in
+            `shekyl-relay`, whose RNG and clock are parameters. */
+        template<typename F>
+        std::size_t drive_covert(cryptonote::levin::notify& notifier, F&& stop, const unsigned max_advances = 16)
+        {
+            std::size_t sent = 0;
+            for (unsigned i = 0; i < max_advances && !stop(sent); ++i)
+            {
+                notifier.run_stems();
+                io_service_.restart();
+                if (io_service_.poll() == 0)
+                    break; // the drive is dead; the caller's assertions report it
+                for (auto& context : contexts_)
+                    sent += context.process_send_queue();
+            }
+            return sent;
+        }
+
         boost::uuids::random_generator random_generator_;
         boost::asio::io_context io_service_;
         test_receiver receiver_;
@@ -2301,31 +2335,26 @@ TEST_F(levin_notify, noise)
         EXPECT_TRUE(status.has_outgoing);
     }
 
-    notifier.run_stems();
-    io_service_.restart();
-    ASSERT_LT(0u, io_service_.poll());
     {
-        std::size_t sent = 0;
-        for (auto& context : contexts_)
-            sent += context.process_send_queue();
-
+        // Dummies only: advance until both sends are out. Which channel fired
+        // per advance is deliberately not asserted here — cadence is the Rust
+        // witness's job (see drive_covert).
+        const std::size_t sent = drive_covert(notifier, [](std::size_t s) { return 2u <= s; });
         EXPECT_EQ(2u, sent);
         EXPECT_EQ(0u, receiver_.notified_size());
     }
 
     EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::local));
-    notifier.run_stems();
-    io_service_.restart();
-    ASSERT_LT(0u, io_service_.poll());
-
-    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
     {
-        std::size_t sent = 0;
-        for (auto& context : contexts_)
-            sent += context.process_send_queue();
-
-        ASSERT_EQ(2u, sent);
-        while (sent--)
+        const std::size_t sent =
+            drive_covert(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
+        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
+        // ≥ rather than ==: a channel that comes due again after draining its
+        // queue sends a dummy, so real-notification count is the stop
+        // condition and the send count is a floor.
+        EXPECT_LE(2u, sent);
+        ASSERT_EQ(2u, receiver_.notified_size());
+        for (unsigned i = 0; i < 2u; ++i)
         {
             auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
             EXPECT_EQ(txs, notification.txs);
@@ -2336,30 +2365,19 @@ TEST_F(levin_notify, noise)
 
     txs[0].resize(3000, 'r');
     EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::fluff));
-    notifier.run_stems();
-    io_service_.restart();
-    ASSERT_LT(0u, io_service_.poll());
-
-    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
     {
-        std::size_t sent = 0;
-        for (auto& context : contexts_)
-            sent += context.process_send_queue();
-
-        EXPECT_EQ(2u, sent);
-        EXPECT_EQ(0u, receiver_.notified_size());
-    }
-
-    notifier.run_stems();
-    io_service_.restart();
-    ASSERT_LT(0u, io_service_.poll());
-    {
-        std::size_t sent = 0;
-        for (auto& context : contexts_)
-            sent += context.process_send_queue();
-
-        ASSERT_EQ(2u, sent);
-        while (sent--)
+        const std::size_t sent =
+            drive_covert(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
+        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
+        /* 3000 bytes against a 2048-byte covert payload fragments, so each
+           channel takes two sends per complete notification: two notifications
+           cost at least four sends. `sent == 2` here would mean the message
+           was not fragmented — the property the old two-block structure
+           (first fragments, then completions) could only see through hook
+           synchronization. */
+        EXPECT_LE(4u, sent);
+        ASSERT_EQ(2u, receiver_.notified_size());
+        for (unsigned i = 0; i < 2u; ++i)
         {
             auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
             EXPECT_EQ(txs, notification.txs);
@@ -2395,32 +2413,24 @@ TEST_F(levin_notify, noise_stem)
         EXPECT_TRUE(status.has_outgoing);
     }
 
-    notifier.run_stems();
-    io_service_.restart();
-    ASSERT_LT(0u, io_service_.poll());
     {
-        std::size_t sent = 0;
-        for (auto& context : contexts_)
-            sent += context.process_send_queue();
-
+        // Dummies only: advance until both sends are out. Which channel fired
+        // per advance is deliberately not asserted here — cadence is the Rust
+        // witness's job (see drive_covert).
+        const std::size_t sent = drive_covert(notifier, [](std::size_t s) { return 2u <= s; });
         EXPECT_EQ(2u, sent);
         EXPECT_EQ(0u, receiver_.notified_size());
     }
 
     EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::stem));
-    notifier.run_stems();
-    io_service_.restart();
-    ASSERT_LT(0u, io_service_.poll());
-
-    // downgraded to local when being notified
-    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
     {
-        std::size_t sent = 0;
-        for (auto& context : contexts_)
-            sent += context.process_send_queue();
-
-        ASSERT_EQ(2u, sent);
-        while (sent--)
+        const std::size_t sent =
+            drive_covert(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
+        // downgraded to local when being notified
+        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
+        EXPECT_LE(2u, sent);
+        ASSERT_EQ(2u, receiver_.notified_size());
+        for (unsigned i = 0; i < 2u; ++i)
         {
             auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
             EXPECT_EQ(txs, notification.txs);

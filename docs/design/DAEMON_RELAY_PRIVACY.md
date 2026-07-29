@@ -4680,9 +4680,30 @@ is a consequence of the port. Order: §20.4 split → §20.2 scheduling port →
 
 ### 20.7 Acceptance
 
-1. **`noise` and `noise_stem` pass unchanged**, plus the full 33 — the covert
-   port must not disturb the Dandelion++ path. Necessary, and per §20.5 nowhere
-   near sufficient.
+1. ~~`noise` and `noise_stem` pass unchanged~~ — **amended 2026-07-29: they pass
+   *changed*, and the change met the `gtest_dropped_connection` standard rather
+   than resting on "the new code does X".** The port's production-faithful drive
+   turned both red, and the discriminator showed the covert path routing
+   correctly (one dummy out, zero real notifications) with only the *count*
+   wrong: one send per advance instead of two. The showing that licensed
+   changing the expectation: the old `run_stems` cancelled every channel's timer
+   at once, **synchronizing** emission — a state the production schedule
+   structurally cannot produce, since each channel re-arms independently — so
+   `EXPECT_EQ(2u, sent)` per advance asserted a property of the hook's forcing,
+   not of the covert path. And synchronized emission is not neutral: it makes
+   the aggregate bursty and periodic, the exact shape constant-rate cover exists
+   to deny (§20.9). **The inherited expectation asserted the negation of a
+   security property.** Second instance of the
+   inherited-expectation-encodes-artifact class, after `gtest_dropped_connection`.
+
+   The rewritten tests assert what §20.5 scopes this oracle to — counts, status,
+   payload identity — collision-robustly (advance until N, not N per advance),
+   plus one recovered property: the 3000-byte round asserts `sent ≥ 4` for two
+   notifications, witnessing fragmentation without hook synchronization. The
+   per-advance cadence property lives in
+   `covert_channels_emit_one_per_advance_not_synchronized` (`shekyl-relay`),
+   where RNG and clock are **parameters** — a parameter is not a test-only
+   channel; a branch is. **The full 33 still pass**, 100-repeat stable.
 2. **CV-1 has a witness**, negative-controlled: a channel repointed mid-message
    must fail the test if the remainder is resumed. **It is a gtest, not a Rust
    twin.** After the port the invariant is enforced by whoever clears `active`,
