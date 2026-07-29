@@ -2440,6 +2440,91 @@ TEST_F(levin_notify, noise_stem)
     }
 }
 
+/*! CV-1 (§20.5): repointing a covert channel discards any in-flight message
+    remainder — the message is restarted from its first fragment or dropped,
+    never resumed. The inherited rule lived in `update_channel` as an
+    imperative comment ("DO NOT try to send the remainder of the fragments,
+    this additional send time can leak that this node was sending out a real
+    notify (tx) instead of dummy noise") and had no test anywhere — §20.5's
+    named finding, verified by grep over this whole file. After the §20.3
+    inversion the discard lives at exactly ONE site, `send_noise`'s
+    rebind-at-send, which is what makes this witness meaningful now and not
+    before part B: while the old repoint path was alive there were two
+    discard sites, and a resume injected into one could pass behind the
+    other's discard.
+
+    Fixture: ONE outbound peer, so the stem map holds one slot and channel 0
+    is the only sender. A 3000-byte tx against a 2048-byte covert payload
+    takes two sends per complete notification, so stopping after one send
+    leaves a genuine remainder in flight — asserted via
+    `notified_size() == 0`, without which this is the RP-3a seal's no-input
+    vacuity in covert costume. The peer is then closed, a successor added,
+    and the map refreshed: the churned slot rebinds (bound→bound crosses
+    with the next send, not as an unbind), and the next send must restart.
+
+    The property is asserted where the defect is observable: the SUCCESSOR
+    reassembles the complete, intact notification. A resumed remainder
+    cannot satisfy this — the successor receives a fragment stream with no
+    start fragment, and the message is popped from the queue once the
+    remainder drains, so no notification ever arrives.
+
+    Negative control (run and observed to fail): removing the rebind's
+    `channel.active = nullptr;` in `send_noise` fails this test — the final
+    drive exhausts its advances with zero notifications. */
+TEST_F(levin_notify, noise_repoint_discards_in_flight_remainder)
+{
+    add_connection(false); // the one outbound peer; channel 0's slot
+
+    std::vector<cryptonote::blobdata> txs(1);
+    txs[0].resize(3000, 'r'); // > 2048 ⇒ two fragments ⇒ interruptible
+
+    const boost::uuids::uuid incoming_id = random_generator_();
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(2048, false, true);
+    auto &notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+
+    // Bind channel 0 at its first (dummy) send. The enqueue guard opens at
+    // send time (§20.3), so the real message below must find it open, or it
+    // is dropped as unbound and nothing is ever in flight to interrupt.
+    {
+        const std::size_t sent = drive_covert(notifier, [](std::size_t s) { return 1u <= s; });
+        ASSERT_EQ(1u, sent);
+        EXPECT_EQ(0u, receiver_.notified_size());
+    }
+
+    EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::local));
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
+
+    // One more send = the first fragment, and only the first: the message
+    // is now genuinely in flight, and the send below proves it by NOT
+    // having completed a notification.
+    {
+        const std::size_t sent = drive_covert(notifier, [](std::size_t s) { return 1u <= s; });
+        ASSERT_EQ(1u, sent);
+        ASSERT_EQ(0u, receiver_.notified_size())
+            << "fixture: 3000 bytes must not complete in one 2048-byte send";
+    }
+
+    // Repoint mid-message: successor up, holder down, map refreshed — the
+    // production order for connection churn. All three queue onto the zone
+    // strand; one poll runs them.
+    add_connection(false);  // the successor
+    contexts_.pop_front();  // the holder closes; del_connection notifies
+    notifier.new_out_connection();
+    ASSERT_LT(0u, io_service_.poll());
+
+    {
+        drive_covert(notifier, [this](std::size_t) { return 1u <= receiver_.notified_size(); });
+        ASSERT_EQ(1u, receiver_.notified_size());
+        auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+        EXPECT_EQ(contexts_.front().get_id(), notification.first)
+            << "the restarted message must land on the successor";
+        EXPECT_EQ(txs, notification.second.txs);
+        EXPECT_TRUE(notification.second._.empty());
+        EXPECT_FALSE(notification.second.dandelionpp_fluff);
+    }
+}
+
 TEST_F(levin_notify, command_max_bytes)
 {
     static constexpr int ping_command = nodetool::COMMAND_PING::ID;

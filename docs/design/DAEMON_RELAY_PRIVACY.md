@@ -4703,6 +4703,20 @@ own witness *in this round*, written before the code moves:
 > A real message interrupted by a repoint is restarted from its first fragment or
 > dropped — never resumed.
 
+**Witnessed 2026-07-29**, after part B and deliberately not before:
+`noise_repoint_discards_in_flight_remainder`
+([`levin.cpp`](../../tests/unit_tests/levin.cpp)) interrupts a two-fragment
+message after its first send, churns the slot to a successor, and asserts the
+successor reassembles the **complete** notification — an assertion a resumed
+remainder cannot satisfy, since the successor receives a stream with no start
+fragment and the message pops when the remainder drains. Negative control run
+and observed to fail (resume injected at `send_noise`'s rebind): the successor
+rejects the orphan continuation fragment *and* the drive exhausts with zero
+notifications. The sequencing was load-bearing: before part B there were two
+discard sites (`update_channel` and the rebind), and a resume injected into one
+could pass behind the other's discard — the control only gained meaning when
+the deletion left a single site.
+
 ### 20.6 Naming — the free rename, and why it is not the entry point
 
 §18.3's standing item stands: `run_stems()` cancels covert timers and has nothing
