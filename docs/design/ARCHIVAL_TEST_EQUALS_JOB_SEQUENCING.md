@@ -1,7 +1,12 @@
 # Test ≡ job, and pruning is upstream — the archival market's sequencing ruling
 
 **Status:** Round 0 — two maintainer rulings recorded as binding (2026-07-29);
-census verified at source; TJ design questions open.
+census verified at source; TJ design questions open. **R1's necessity is
+established; its sufficiency is argued but unmeasured** — §5.3's bandwidth leg
+is price-ambiguous and §5.4's caching leg was withdrawn as circular, leaving the
+conclusion resting on the unquantified `T_risk` term that deliverable 2
+measures. **TJ-F (RED-2) is the unblocked genesis-critical item** and is
+sequenced ahead of TJ-A.
 **Family:** `TJ-*` (registered in `IMPLEMENTATION_INDEX.md` at birth, rule 94).
 **Supersedes in part:** the reopen-(d) fork as dispositioned
 (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6) and the reopen-(d)
@@ -187,6 +192,27 @@ change post-genesis.
   expensive way to do the job, and serving policy stays an **economics
   question** outside consensus. TJ-E is resolved after TJ-A, in TJ-A's
   terms.
+- **TJ-F — verification must fail against a poisoned leaf store.** *(Referred to
+  as **RED-2** in review; that label has no registered family and no prior home
+  in `docs/`, so it is registered here in `TJ-*` — rule 94 — with the alias kept
+  for traceability.)* The property: a responder supplying leaf-and-path material
+  must not be able to make verification **succeed** against leaves that are not
+  the committed ones. Post-pruning this *is* the scheme's soundness — the
+  validator no longer holds the leaves, so `R_k` is the only thing standing
+  between a supplied response and an accepted lie.
+  **Three properties make this the item to do first, ahead of TJ-A:**
+  1. **Genesis-frozen** — a property of what validators check, so it freezes
+     with the wire semantics (§3).
+  2. **Testable against current code today** — the `R_k`-anchored verify
+     machinery already exists (8C §§2–4, 6, retained by the reversal as the
+     verification substrate). It does not wait on pruned-daemon mode.
+  3. **Independent of TJ-A** — it holds identically whether the response is a
+     sampled opening or a receipt-attested full transfer. Both supply material
+     checked against `R_k`; both are unsound if a poisoned store verifies.
+
+  TJ-F therefore **freezes behaviour rather than concept** — the opposite posture
+  from TJ-A/TJ-B, where the concept is unresolved and behaviour is not yet
+  freezable. It is the genesis-critical work that is blocked on nothing.
 
 ## 5. The ROI ledger — why R1 closes it, and what the closure rests on
 
@@ -226,48 +252,113 @@ carries a premise:
 
 The opening failed on a quantity ratio — three orders of magnitude in the
 cheater's favour. **R1 does not win on quantity**: transferring 3.3 MB to avoid
-storing 3.3 MB is one-to-one in bytes. It wins because, at equal quantities, the
-*price* asymmetry decides — and a transfer costs far more per byte than fourteen
-days of disk for the same volume.
+storing 3.3 MB is one-to-one in bytes. Removing that 1000× is the whole of what
+R1 does, and it is necessary. It is **not sufficient**, because at equal
+quantities the decision passes to price per byte — and §5.3 shows that
+comparison is **ambiguous**, not favourable. The load-bearing margin is
+elsewhere (§5.4).
 
-### 5.3 Leg 1 — the price argument, and its two falsifiers
+### 5.3 Leg 1 — the bandwidth-vs-storage comparison is **ambiguous**, not favourable
 
-The relevant premise is **not** generic bandwidth-vs-storage. It is
-**Tor-borne transfer vs storage**, which is a stronger premise than cloud-egress
-pricing: Tor capacity is scarce and donated, so its effective cost per byte sits
-far above clearnet. That strength is also its narrowness — the premise is
-**transport-dependent**, not merely price-dependent.
+**Correction (2026-07-29).** An earlier version of this section claimed a
+transfer "costs far more per byte" than an epoch of storage, and an earlier
+framing of the ruling put free-riding "two orders of magnitude underwater."
+**Both overclaim.** The ratio is
 
-> **Falsifiers, both of which reopen this leg:**
->
+```text
+T / S  =  (transfer $/GB)  /  (storage $/GB-month × epoch-in-months)
+```
+
+with the epoch ≈ 13.9 days ≈ 0.457 months. Worked at three plausible
+infrastructure assumptions:
+
+| Free-rider transfer | Honest storage | `S` per GB-epoch | `T / S` | who wins |
+| --- | --- | --- | --- | --- |
+| clearnet egress ~$0.01/GB | cloud ~$0.02/GB-month | ~$0.0091 | **≈ 1.1** | ~tie |
+| clearnet egress ~$0.01/GB | amortized consumer disk ~$0.0002/GB-month | ~$0.000091 | **≈ 100** | honest |
+| flat-rate residential (marginal ≈ $0) | any | — | **→ 0** | **free-rider** |
+
+So this leg spans roughly **0 to 100 depending on whose infrastructure you
+assume**, and it *inverts* in the flat-rate case. It is not a margin; it is a
+coin-flip that depends on facts outside the protocol's control.
+
+The Tor framing narrows but does not rescue it. Tor capacity is scarce and
+donated, so effective cost per byte sits above clearnet — but that makes the
+premise **transport-dependent as well as price-dependent**, and it can be
+falsified two ways:
+
 > 1. Either term moves by ~3 orders of magnitude (storage becomes costly, or
 >    anonymous bulk transfer becomes ~free).
-> 2. **Serving moves off Tor.** The margin is computed against Tor's cost per
->    byte; a clearnet or subsidised-transport serve path is a different ledger.
->    Note this one can fire with **no economic input changing at all** — purely
->    from a transport decision taken elsewhere in the program.
+> 2. **Serving moves off Tor** — which can fire with **no economic input
+>    changing at all**, purely from a transport decision taken elsewhere in the
+>    program.
 
-### 5.4 Leg 2 — caching makes the free-rider category *unstable*
+**Verdict: this leg cannot carry the ruling.** It is retained as context, not as
+justification. R1's necessity does not depend on it — removing the 1000×
+quantity asymmetry (§5.2) is required regardless — but R1's *sufficiency* has to
+come from §5.4.
 
-The stronger leg, and it does not depend on §5.3's premise at all — only on
-storage being cheap, which is the same condition that motivated free-riding.
+### 5.4 Leg 2 — **risk**, not caching. (And why the caching leg was withdrawn.)
 
-1. Storage is cheap ⇒ once a shard is fetched to answer a challenge, **discarding
-   it is irrational** — retention costs ~nothing and eliminates every future
-   fetch for that shard.
-2. `held(P,E)` changes only by bond/unbond, so a bond faces **the same shards
-   every epoch**. The fetches recur; the cache pays off immediately and forever.
-3. Therefore the optimal free-rider strategy **converges on holding**.
+**Withdrawn (2026-07-29): the caching argument is not an independent leg.** It
+was recorded here as one, and it does not survive its own algebra.
 
-So the attack is not blocked — **its own optimum is the honest behaviour.** The
-"cheat helper" that downloads and writes to a storage device *is an archiver*,
-with extra steps and worse latency.
+The argument ran: storage is cheap, so once a shard is fetched, discarding it is
+irrational; `held(P,E)` changes only by bond/unbond so the same shards recur
+every epoch; therefore the rational free-rider converges on holding, and the
+attacker *category* dissolves. The failure is that **"keep after fetch is
+rational" and "free-riding is unprofitable" are the same inequality**:
 
-This is the same closure shape the program has used elsewhere, and the pattern is
-worth naming: reopen (c) closed because stuffing is negative-sum *for the
-stuffer*; §12.11.1 closed because the mechanism is monotone, leaving no
-oscillation to arbitrage. A threat whose rational play is the honest play does
-not need a deterrent.
+| Question | Condition |
+| --- | --- |
+| Is keeping a fetched shard rational? | `S < T` |
+| Is free-riding unprofitable? | `S < T` |
+
+where `S` = storage for one epoch, `T` = one transfer. So in the only world where
+the caching argument is *needed* — `T < S`, transfer cheap enough that
+free-riding pays — discarding after each fetch is **also** optimal, and nothing
+converges. The leg assumed "storage is cheap" in an absolute sense, but the
+operative comparison is storage *relative to transfer*, which is the profitability
+test itself. It restated the conclusion as if it were evidence for it.
+
+This matters beyond the local claim: the same reasoning was briefly generalized
+as a technique across reopen (c) and §12.11.1. Those two survive — **reopen (c)
+is negative-sum by accounting and §12.11.1 is monotone by construction**, both
+structural. TJ's convergence was **contingent on prices**, and it does not belong
+in that family.
+
+**The genuinely independent leg is risk.** The free-rider bears an exposure the
+holder does not:
+
+```text
+T_effective = T_bandwidth + T_risk
+```
+
+`T_risk` is the expected cost of fetch failures — a fetch that misses the
+challenge deadline against the m-of-n window, and the bond that a sustained
+failure run slashes. A holder answering from local disk simply does not have
+this term: a local read cannot miss a deadline the way a Tor-borne 3.33 MB
+transfer can, and it has no dependence on a third party's availability.
+
+`T_risk` is **structural — it exists at any byte price**, which is precisely what
+§5.3 lacks. It is also the term R1 *inflates*, and by much more than the payload
+ratio suggests: PD-F-2's total-latency/dispersion framing transfers directly, and
+a 3.33 MB Tor-borne fetch inside a fixed deadline has a **far heavier tail** than
+a 3 KB one. The free-rider does not merely move 1000× more bytes; it moves them
+through a two-leg anonymous path against a deadline, every shard, every epoch,
+with a slashable bond behind it.
+
+**So the ROI conclusion rests on `T_risk`, and `T_risk` is not yet quantified.**
+That is deliverable 2's job (§6), which is therefore **decisive rather than
+confirmatory** — it is not re-running a corrected number, it is measuring the
+term the ruling now stands on. The retained A5 machinery (absorbing-Markov
+aggregation, production-predicate absorption table) is the right instrument for
+exactly this.
+
+**Honest interim status of R1:** its *necessity* is established — the 1000×
+quantity asymmetry is real and removing it is required. Its *sufficiency* is
+**argued but unmeasured**, resting on a `T_risk` term whose magnitude is
+predicted (heavier tail at 1000× payload) but not computed.
 
 ### 5.5 Coverage is per-`(P,s,E)` **structurally** — it cannot be coarsened to per-`P`
 
@@ -347,11 +438,19 @@ structural achievement of test≡job.
    `⏸ PAUSED`; `FOLLOWUPS.md` grace + `m`/`n` entry annotated
    `⏸ SUPERSEDED IN PART`; `ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md` status
    `⚠️ REVERSED IN PART`, citing this record rather than restating it.
-2. **A5 re-measurement at shard-size payload** (sim-side, own branch) — the
-   corrected margin *in the pruned world*, as TJ's economic baseline; the
-   pre-pruning artifact number retained alongside for the record. §5 is the
-   analytic prediction it re-measures against, threshold in §5.1's marginal
-   form.
-3. The TJ-A/TJ-B challenge-spec design pass — the genesis-frozen half, now
-   scoped by §5.6 to *witnessing* a full transfer rather than choosing
+2. **A5 re-measurement at shard-size payload** (sim-side, own branch) —
+   **DECISIVE, not confirmatory.** §5.4 withdrew the caching leg and §5.3
+   admitted the bandwidth leg is price-ambiguous, so the ruling now rests on
+   `T_risk`: the free-rider's expected cost from deadline misses against the
+   m-of-n window and the slashable bond. This deliverable **quantifies that
+   term**. Threshold in §5.1's marginal form; the retained absorbing-Markov
+   machinery is the instrument; PD-F-2's dispersion framing supplies the tail
+   model for a 3.33 MB Tor-borne fetch. The pre-pruning artifact number is
+   retained alongside for the record.
+3. **TJ-F (RED-2) — poisoned-leaf-store verification**, sequenced **ahead of**
+   TJ-A: genesis-frozen, testable against current code today, and independent of
+   which TJ-A branch is taken. It freezes behaviour rather than concept and is
+   blocked on nothing.
+4. The TJ-A/TJ-B challenge-spec design pass — the rest of the genesis-frozen
+   half, now scoped by §5.6 to *witnessing* a full transfer rather than choosing
    between a compact test and a full one.
