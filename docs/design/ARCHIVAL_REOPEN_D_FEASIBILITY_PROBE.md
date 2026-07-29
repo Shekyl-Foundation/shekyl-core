@@ -2,8 +2,11 @@
 
 **Status:** Round 0 — reviewed at source 2026-07-28; review findings PD-1
 (i.i.d. direction) and PD-2 (marginal-map rule) folded, PD-3 ruled (predicate
-parameterization inverted to production-side). Dispositions PD-A…PD-F await
-ratification.
+parameterization inverted to production-side). Second-pass review same day:
+PD-F-1 folded (band grounding = named measurable anchors, not a direction
+argument), PD-3-1 folded (the delegate is load-bearing — the
+`shekyl_archival_failure_window_slashable` FFI export binds its signature).
+Dispositions PD-A…PD-F await ratification.
 **Spawned:** 2026-07-28, from the Stage-3 close-out ordering
 (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6 coordination paragraph).
 **Family:** `PD-*` (probe design questions `PD-A`…`PD-F`; Round-0 review
@@ -158,10 +161,18 @@ plausible `ρ` — even at the 0.098 end — is the PoRep-promotion finding.
   data**: one predicate body taking `FailureWindowParams { m, n }`, the
   config-generated values as the production instance, and the current
   `failure_window_slashable` signature retained as a one-line
-  production-instance delegate (**verified feasible at source**: the
-  predicate is a plain function whose only `(m, n)` dependence is two const
-  reads; delegation means zero caller ripple — proxy arm, staking-sim, and
-  any consensus wrapper keep their signatures). Parity becomes structural,
+  production-instance delegate (**verified feasible at source, with one
+  correction from the second-pass review, PD-3-1**: the predicate is a plain
+  function whose only `(m, n)` dependence is two const reads — but it is
+  *not* FFI-free: `shekyl-ffi/src/archival_ffi.rs` imports it and wraps it as
+  the `shekyl_archival_failure_window_slashable` C export. Zero caller ripple
+  holds *because the delegate preserves the signature that export binds* —
+  which makes the delegate **load-bearing, not a convenience shim**. Its
+  defeat condition, named so it cannot be met by accident: a later
+  "simplification" that deletes the delegate and updates Rust call sites
+  ripples straight into the C++ ABI surface. The delegate's doc comment must
+  say so — the `blockchain_height`-snapshot-clause class: a guard whose
+  defeat is invisible unless written down). Parity becomes structural,
   and dep-don't-mirror holds across the whole grid instead of at one cell.
   The shape invariants (`m ≥ 1`, `n ≥ m`) and the `n ≤ 25` retention-ceiling
   coupling move into a validated `FailureWindowParams` constructor
@@ -179,13 +190,22 @@ plausible `ρ` — even at the 0.098 end — is the PoRep-promotion finding.
 - **PD-F — the plausible-`ρ` band** (added with the §1 marginal rule, which
   reads against it). The band is an **a-priori input, not a sweep output**:
   it must be stated, grounded, and ratified with the other dispositions,
-  before any sweep executes. Its grounding obligation is an
-  order-of-magnitude argument from the two populations' failure modes at a
-  deadline tight enough to force `q_p = q*` — honest holders serve from local
-  disk inside the deadline; proxies complete a remote fetch — with the
-  argument committed in this doc's ratification record. No number is proposed
-  here: proposing one without that grounding would be inventing the bar this
-  round's discipline forbids.
+  before any sweep executes. **The grounding obligation is to cite the
+  measurable anchors on both sides, not to argue the separation's direction**
+  (Round-0 second-pass review PD-F-1): *local < remote* is true at every
+  deadline and therefore informative at none — the band requires the
+  **magnitude** of the separation, which is what places `ρ` at 10⁻¹ versus
+  10⁻⁴ and decides marginal-versus-comfortable. Left qualitative, an
+  "order-of-magnitude argument" has enough latitude to set the band where the
+  verdict lands well — the second-order form of the bar-after-numbers problem
+  §1 forbids. The anchors are available and cheap: A5 already grounded the
+  challenge response at ≈ 3 KB (128-B leaf + the shallow segment co-path,
+  §12.6), so the honest side is a **local read plus path construction over a
+  few KB** and the proxy side is **the same payload across a network
+  round-trip** — both with citable latency distributions. The ratification
+  record names those distributions and derives the band from their
+  separation. No number is proposed here: proposing one without the named
+  anchors would be inventing the bar this round's discipline forbids.
 
 ## 4. Deliverables
 
