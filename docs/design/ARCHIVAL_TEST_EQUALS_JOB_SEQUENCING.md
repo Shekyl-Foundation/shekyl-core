@@ -1,12 +1,18 @@
 # Test ≡ job, and pruning is upstream — the archival market's sequencing ruling
 
-**Status:** Round 0 — two maintainer rulings recorded as binding (2026-07-29);
-census verified at source; TJ design questions open. **R1's necessity is
-established; its sufficiency is argued but unmeasured** — §5.3's bandwidth leg
-is price-ambiguous and §5.4's caching leg was withdrawn as circular, leaving the
-conclusion resting on the unquantified `T_risk` term that deliverable 2
-measures. **TJ-F (RED-2) is the unblocked genesis-critical item** and is
-sequenced ahead of TJ-A.
+**Status:** Round 0 **closed**; **Round 1 OPEN on the witness problem (§8,
+opened 2026-07-29)**. Both maintainer rulings binding, census verified at
+source. **R1's necessity and sufficiency are both now argued with a
+measurement under them** — deliverable 2 landed (§6.2, PR #379), and the
+ledger's three legs are *located* rather than pooled: leg 1 price-contingent
+(§5.3, within-class per F-1), leg 2 `T_risk` structural and **measured**
+(§5.4/§6.2, `q_risk* ≈ 0.10`), leg 3 build cost a threshold-raiser in the
+metered cells that goes quiet in the flat-rate one (§5.7). Test gates landed
+(PR #378): `tj_g_…` red on challenge scope, `tj_f_forged_material…` green on
+soundness, the summand weld under the ledger; TJ-F's liveness face carried as
+a **type-level obligation** on TJ-A's output, not a test. **The one open gate
+this round does not own:** whether `q ≥ 0.10` is forceable on a 3.33 MB
+Tor-borne fetch — PD-F-2's dispersion measurement (§8.3).
 **Family:** `TJ-*` (registered in `IMPLEMENTATION_INDEX.md` at birth, rule 94).
 **Supersedes in part:** the reopen-(d) fork as dispositioned
 (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6) and the reopen-(d)
@@ -503,6 +509,88 @@ mechanism reopen (d) was dissolved for depending on. If that is taken, it is
 taken as a latency argument with its soundness dependency priced, not as a
 structural achievement of test≡job.
 
+### 5.7 Leg 3 — **build cost**, and the horizon error it fixes
+
+*Derived here from the repo's own constants (2026-07-29). Flagged for
+reconciliation: this leg was raised in a parallel session and its content did
+not reach the session that wrote this text, so what follows is a derivation
+against the four named beats — threshold-raiser, scaling inversion,
+commoditization caveat, profit-motivated scoping — not a transcription. If the
+originating formulation claims more than this (in particular, that build cost
+holds the **flat-rate** cell), the difference is substantive and should be
+settled here rather than averaged.*
+
+**What it is.** An archiver must *acquire* set B before it can hold it: one
+inbound pass over `MAX_HOLDINGS_SHARDS · SHARD_BYTES` ≈ **13.6 GB**. Call that
+`B`. Under test≡job, a challenge round for a maximal holding moves the **same
+13.6 GB** — so `B ≈ T`, one full rebuild, and the free-rider pays it **every
+epoch**.
+
+**The horizon error this fixes.** §5.3 compares one transfer against one epoch
+of storage. That is the right *ratio* on the wrong *time-base*, because the two
+sides amortize differently. Over `N` epochs:
+
+```text
+honest      =  B  +  N · S          (build once, store forever)
+free-rider  =  N · B                (rebuild every epoch, store nothing)
+```
+
+Free-riding wins iff `N·B < B + N·S`, i.e. `B < S · N/(N−1)`. At `N = 1` the
+free-rider always wins; as `N` grows the condition tightens to **`B < S`** —
+and the honest side's *average* per-epoch cost falls to `S` while the
+free-rider's stays at `B` forever. So the honest build is a **one-time barrier
+to entry that the free-rider pays perpetually**. That is the threshold-raiser:
+free-riding must beat storage not once but every epoch, against a competitor
+whose entry cost is already sunk.
+
+**The scaling inversion.** The honest archiver pays `B` at the chain size when
+it joins, and thereafter only the **marginal** build — the newly frozen
+segments, one increment per freeze. The free-rider's rebuild is over the
+**accumulated** holding, which grows without bound (the very growth D2's
+escalation exists to fund). So the two costs diverge with chain age: honest
+marginal cost collapses toward storage-only, free-rider cost grows linearly in
+history. The leg is weakest at genesis and strongest exactly where the archival
+market is load-bearing — the opposite slope from a bound that decays.
+
+**Commoditization caveat (the reopen).** `B` is denominated in the same
+transfer price as §5.3, so it inherits that section's contingency and adds one
+of its own: if bulk set-B transfer becomes **commoditized** — a caching or
+re-serve layer, or foundation `CompleteTree` nodes serving cheaply at scale —
+then `B` falls toward zero and the leg weakens with it. That second path is
+**TJ-E's** question, which is why TJ-E is a *soundness* input and not only an
+economics one: the source of last resort can commoditize the rebuild it is
+supposed to make expensive.
+
+**Scope — profit-motivated free-riders only.** This leg closes the *economic*
+category: an actor who free-rides **because it is cheaper**. It says nothing
+about an actor who pays the rebuild for non-economic reasons (Sybil reach,
+censorship positioning, or to appear as an archiver while holding nothing). That
+adversarial category is bounded elsewhere — the bond floor, the m-of-n slash,
+and the GF-7 reach analysis — and must not be treated as covered here. Naming
+what an argument covers is the same discipline §5.4 applied when the caching leg
+was withdrawn.
+
+**What this leg does NOT do — stated, because the flat-rate cell is where TJ-A's
+steering lives.** Because `B` is priced in transferred bytes, it **does not
+rescue the flat-rate cell**: where marginal transfer ≈ 0, `B ≈ 0` too, and the
+perpetual-rebuild argument goes quiet exactly where §5.3 inverted. In that cell
+the surviving barrier is not *cost* but **capacity against a deadline** — 4,096
+rebuilds must complete inside `CHALLENGE_RESOLUTION_BLOCKS`, which is
+**TJ-C's** question, not an independent leg. So the honest ledger reads:
+
+| cell | leg 1 (price) | leg 3 (build) | leg 2 (`T_risk`) |
+| --- | --- | --- | --- |
+| metered retail | decisive (~11×) | **raises it further** (perpetual vs sunk) | not needed |
+| metered cheap transit | marginal (~1.1×) | **the leg that makes it more than a tie** | backup |
+| flat-rate | inverted | ~0, goes quiet with leg 1 | **carries it alone**, `q_risk* ≈ 0.10` |
+
+Leg 3's contribution is therefore real but **located**: it converts the
+cheap-transit watch-cell from a coin-flip into a standing cost asymmetry, and
+it corrects a horizon error that understated both metered cells. The flat-rate
+cell still rests on `T_risk` plus TJ-C's deadline — which is precisely why
+TJ-A's charter (§8) treats that deadline as a named gate rather than an
+assumption.
+
 ## 6. First deliverables
 
 1. ~~This record, registered (index row, FOLLOWUPS annotations, probe pause).~~
@@ -572,3 +660,97 @@ gap until the implementation round lands.
 4. The TJ-A/TJ-B challenge-spec design pass — the rest of the genesis-frozen
    half, now scoped by §5.6 to *witnessing* a full transfer rather than choosing
    between a compact test and a full one.
+
+## 8. TJ-A/TJ-B Round 1 — **the witness problem** (charter, opened 2026-07-29)
+
+Opened on the strength of deliverable 2 (§6.2 measured) and the landed test
+gates (§7). This round designs **how a full transfer is witnessed compactly**.
+It does not re-open what the ledger already settled.
+
+### 8.1 Inherited, not re-litigated
+
+The round starts from these as **closed**, and a cycle spent rediscovering any
+of them is wasted:
+
+1. **The branches are not comparable.** Sampling at any `k < SEGMENT_LEAF_COUNT`
+   fails **three independent ways**: on its own cost ledger (§5.6 — ~52 MB/epoch
+   at `k = 100` against 13.6 GB of storage avoided, ~1:260), on 8C §4's
+   zero-storage-plus-reacquire text (cost `Θ(m)`, not `Θ(|segment|)`; *"`m` is
+   the wrong lever"*), and **in CI** — `tj_g_red_challenge_names_every_segment_leaf`
+   is red at every `k` short of 25,992. The round is therefore **not** choosing
+   between receipt and sampling.
+2. **Sampling survives only as sampling-plus-a-priced-deadline** — which
+   reintroduces the latency dependency reopen (d) was dissolved for needing. If
+   taken, it is taken as a *latency argument with its soundness dependency
+   priced*, never as a structural achievement of test≡job.
+3. **The material's origin is not open.** The responder supplies the leaf-layer
+   chunk; a validator that could derive it from retained state would have no
+   market to price (§4 TJ-F). The **standing constraint** on whatever shape wins:
+   the verify entry point takes **the response and `R_k` and nothing else** — no
+   store handle in scope at the assembly site.
+
+### 8.2 Where the difficulty actually is: **challenger integrity**
+
+Receipt-attested transfer is the only candidate that achieves test≡job
+*structurally*, and its cost is that **consensus stops observing the act**.
+The failure mode is not attestation as such — it is a **colluding
+prover/challenger pair signing a receipt for bytes never sent**. Everything
+hard about this round is downstream of that one sentence, which makes
+**challenger selection the load-bearing mechanism**: it must be
+**consensus-derived and unchooseable**, so that neither party selects its
+counterparty.
+
+Design questions (sub-items of the registered `TJ-A`; no new family):
+
+- **TJ-A1 — challenger derivation.** From what public, unpredictable-at-commit
+  state is the challenger set for `(P, s, E)` drawn, such that neither `P` nor
+  any candidate challenger can steer it? The `challenge_fire_height` /
+  `challenge_leaf_index` beacon idiom (`challenge.rs`) is the obvious
+  substrate — future-block-hash-style, domain-separated — but it currently
+  derives an *index*, not a *peer*, and a peer set is a membership question over
+  a permissionless population.
+- **TJ-A2 — attestation shape: `k`-of-`n` vs optimistic-with-dispute.**
+  `k`-of-`n` pays `k` transfers per challenge for collusion resistance
+  proportional to `k`; optimistic pays one and relies on a dispute path. Weigh
+  them on collusion cost, bandwidth, and consensus artifact size — and note
+  that a **`k`-of-`n` receipt multiplies the very transfer cost §5.7 says is the
+  deterrent**, so the two objectives trade against each other and the trade must
+  be priced, not assumed away.
+- **TJ-A3 — the dispute path, and the one legitimate return of the targeted
+  opening.** A dispute is the place a compact `VerifyPath` opening is **sound
+  again**: it is cheap in the rare case, and it reintroduces no `Θ(m)` hole
+  **because the default path is already the full transfer** — the opening
+  adjudicates a contested claim rather than substituting for the job. Question:
+  who can open a dispute, what does the loser forfeit, and what stops dispute
+  spam from becoming a griefing channel against honest archivers.
+- **TJ-A4 — what the on-chain artifact must contain** for a pruned validator to
+  check a receipt at all (signature over what preimage; how the receipt binds to
+  `(P, s, E)` and to the transferred bytes' commitment rather than to a bare
+  assertion), under the §8.1(3) entry-point constraint.
+- **TJ-B — serve/verify binding** (as registered): what ties the off-chain
+  serve to the on-chain proof — the sampling indices' unpredictability, a
+  challenger receipt, or both. Now answerable in TJ-A's terms rather than as a
+  separate axis.
+
+### 8.3 The named gate — TJ-C's deadline is a dependency, not this round's answer
+
+The round **does not pin its own answer** to a question it does not own — the
+same discipline PD-F applied when it named a band obligation without inventing
+the number:
+
+> **Gate (open):** is `q ≥ 0.10` forceable on a **3.33 MB Tor-borne fetch**
+> inside `CHALLENGE_RESOLUTION_BLOCKS`? The **threshold** comes from
+> deliverable 2 (`q_risk* = 0.1011` with the reward forfeit, §6.2); whether the
+> deadline **forces** it is **PD-F-2's dispersion measurement** (total
+> challenge→response latency, two Tor legs, circuit-latency dispersion as the
+> load-bearing parameter) — **unmeasured**.
+
+The gate's two outcomes are different rounds:
+
+- **Forceable** ⇒ sampling-plus-priced-deadline becomes live again and the fork
+  genuinely has two options; TJ-A weighs them.
+- **Not forceable** ⇒ receipt-attested transfer is the **only** branch, and this
+  round is really *a design of the attestation* — §8.2 is then the whole scope.
+
+Either way the flat-rate cell (§5.7's table) is where the receipt branch does
+its real work, and this gate determines whether that cell is reachable.
