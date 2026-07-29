@@ -1797,7 +1797,7 @@ reasons — *and a refuted one I record so it is not re-argued*:
 > into Rust, so `shekyl-relay::Zone` now owns a `StemMap` directly. The
 > mechanism this section specifies is unchanged; only its address moved.
 > `get_stem(source)` is `StemMap::stem_for` in
-> [`stem_map.rs`](../../rust/shekyl-relay-privacy/src/stem_map.rs), the cached
+> [`stem_map.rs`](../../rust/shekyl-relay-privacy/src/stem_map/mod.rs), the cached
 > `in_mapping_[source]` is its `inbound` map, and the caller that would choose
 > the alternate is `Zone::plan_relay` in
 > [`zone.rs`](../../rust/shekyl-relay/src/zone/mod.rs). **The line numbers below are
