@@ -95,10 +95,24 @@ impl Driver {
     /// armed. `next_wake_follows_a_newly_queued_batch_without_re_arming` is the
     /// test that fails if someone adds that cache.
     pub fn next_wake(&self) -> Millis {
-        match self.zone.fluff_deadline() {
-            Some(fluff) => fluff.min(self.zone.epoch_deadline()),
-            None => self.zone.epoch_deadline(),
+        // Three sources now, folded into one answer: the epoch always has a
+        // deadline; fluff has one only with a batch pending; covert has one
+        // only when the zone runs covert channels.
+        //
+        // **Folding the sleep is not folding the schedule** (§20.2a). Each
+        // covert channel keeps its own deadline in the zone; this only asks
+        // which is earliest. That distinction is the whole of CV-3: the shared
+        // wake is what makes a resample-on-foreign-wake bug *reachable*, so the
+        // re-arm stays in `Zone::due_covert_channels`, which touches only the
+        // channels that actually fired.
+        let mut wake = self.zone.epoch_deadline();
+        if let Some(fluff) = self.zone.fluff_deadline() {
+            wake = wake.min(fluff);
         }
+        if let Some(covert) = self.zone.covert_deadline() {
+            wake = wake.min(covert);
+        }
+        wake
     }
 
     /// Merge the caller's current outbound set into the stem map, pushing the

@@ -576,3 +576,85 @@ fn a_source_pins_to_one_stem_for_the_epoch() {
         assert_eq!(z.stem_for(source, &mut rng), Some(first));
     }
 }
+
+/// A covert channel's armed deadline survives wakes it did not cause (CV-3).
+///
+/// **Sole witness, and no future measurement can subsume it — read this before
+/// deciding it is redundant.** When Q-11 gives the covert cadence a derivation
+/// it will also give it a conformance grade aimed at exactly this subsystem,
+/// and "the cadence is measured now, CV-3 is covered" will look correct. It is
+/// not. A grade checks a *sample against a distribution*, and in the defect this
+/// guards every draw is honestly distributed — the emitted interval is a
+/// **minimum over k draws**, which is a different random variable. The grade
+/// would observe the wrong object, so it cannot subsume a mechanism assertion
+/// no matter how sharp it gets (§20.2a).
+///
+/// Why the property needs a test at all: with per-channel timers it was free —
+/// nothing but channel `i`'s timer could reach channel `i`'s deadline. Folding
+/// the sleep into one wake (§20.2a) creates the shared query path, and with it
+/// the possibility of re-arming on someone else's wake. Doing so resamples
+/// `min + U(0, jitter)` and keeps the minimum, biasing the covert interval
+/// **short** — a channel emitting faster than its own distribution claims. No
+/// count assertion sees it and no goodness-of-fit grade sees it.
+///
+/// So the assertion is **identity**, not distribution: this channel fires at
+/// the deadline it was armed with.
+#[test]
+fn a_covert_deadline_survives_wakes_it_did_not_cause() {
+    let mut rng = SplitMix64::new(7);
+    let mut z = Zone::new(
+        DandelionParams::inherited(),
+        2,
+        FluffReach::EveryPeer,
+        true, // covert on — otherwise there are no deadlines and this is vacuous
+        0,
+        &mut rng,
+    );
+
+    // Fixture requirement: the two channels must be armed, and armed
+    // *differently*, or "channel 1 unchanged" could hold by coincidence.
+    let d0 = z.covert_deadline_at(0).expect("channel 0 armed");
+    let d1 = z.covert_deadline_at(1).expect("channel 1 armed");
+    assert!(d0 > 0 && d1 > 0, "both channels armed at construction");
+
+    // Wake at a time no channel is due. This is the foreign wake: in
+    // production it is the fluff scheduler or an epoch rollover reaching the
+    // zone, and it must not touch any covert deadline.
+    let quiet = d0.min(d1) - 1;
+    let due = z.due_covert_channels(quiet, &mut rng);
+    assert!(due.is_empty(), "no channel is due before its deadline");
+    assert_eq!(
+        z.covert_deadline_at(0),
+        Some(d0),
+        "foreign wake re-armed ch0"
+    );
+    assert_eq!(
+        z.covert_deadline_at(1),
+        Some(d1),
+        "foreign wake re-armed ch1"
+    );
+
+    // Now fire only the earlier channel. The OTHER one must still hold the
+    // deadline it was armed with — this is the half a resample-all bug breaks.
+    let (early, late) = if d0 <= d1 {
+        (0usize, 1usize)
+    } else {
+        (1usize, 0usize)
+    };
+    let late_deadline = z.covert_deadline_at(late).expect("armed");
+    let due = z.due_covert_channels(z.covert_deadline_at(early).unwrap(), &mut rng);
+    assert_eq!(due, vec![early], "only the due channel fires");
+    assert_eq!(
+        z.covert_deadline_at(late),
+        Some(late_deadline),
+        "a sibling channel firing must not re-arm this one — \
+         re-arming here is the min-over-k-draws bias CV-3 forbids"
+    );
+
+    // Liveness: the fired channel really did advance, so a no-op
+    // `due_covert_channels` cannot pass the assertions above by doing nothing.
+    assert!(
+        z.covert_deadline_at(early).unwrap() > late_deadline.min(d0.max(d1)) - 1,
+        "the fired channel re-armed forward"
+    );
+}

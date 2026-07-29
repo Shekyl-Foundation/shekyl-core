@@ -17,7 +17,7 @@ use std::sync::Arc;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::{
-    DelayFamily, EpochScheduler, FluffScheduler, Millis, PeerDirection,
+    DelayFamily, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
 use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap, StemSetChange};
 
@@ -158,6 +158,31 @@ pub struct Zone {
     /// goes first so the scheduler is not written against an ambiguous
     /// predicate.
     covert_enabled: bool,
+    /// The covert send cadence, wired here from `shekyl-relay-privacy` where it
+    /// was built during RP-1's measurement pass and left connected to nothing.
+    ///
+    /// **What the primitive's existing test earns, and what it does not.** It
+    /// arrives with `noise_cadence_spans_its_band`, establishing that a draw
+    /// lands in `[min, min + jitter]`; parameter correspondence against
+    /// `CRYPTONOTE_NOISE_MIN_DELAY`/`_DELAY_RANGE` was confirmed separately
+    /// (§20.4). Neither says anything about behaviour under a scheduler that
+    /// also serves other deadlines. That is CV-3, and it is witnessed here
+    /// rather than inherited from the primitive.
+    covert: NoiseCadence,
+    /// Next send deadline per covert channel, indexed by channel.
+    ///
+    /// Empty when covert is disabled, so "is covert on" and "are there covert
+    /// deadlines" cannot disagree. Length is fixed at construction.
+    ///
+    /// **CV-3 lives in how this is mutated.** Each entry is drawn once and
+    /// re-drawn only when *that* channel fires. A wake caused by the fluff
+    /// scheduler, an epoch rollover, or another channel coming due must leave
+    /// every other entry untouched. Re-drawing on a foreign wake resamples
+    /// `min + U(0, jitter)` and keeps the minimum, which biases the effective
+    /// covert interval **short** — a privacy defect that no count assertion and
+    /// no goodness-of-fit grade can see, because every individual draw is honest
+    /// and the bias is in the *selection among* draws (§20.2a).
+    covert_deadlines: Vec<Millis>,
 }
 
 impl Zone {
@@ -188,7 +213,59 @@ impl Zone {
             stems,
             reach,
             covert_enabled,
+            covert: NoiseCadence::inherited(),
+            // One deadline per channel, armed at construction so the first
+            // send is a full interval away rather than immediate. Empty when
+            // covert is off — the disabled zone has no covert schedule at all,
+            // rather than a schedule nobody reads.
+            covert_deadlines: if covert_enabled {
+                let cadence = NoiseCadence::inherited();
+                (0..stems).map(|_| cadence.next_send(now, rng)).collect()
+            } else {
+                Vec::new()
+            },
         }
+    }
+
+    /// The earliest covert send deadline, or `None` when covert is disabled.
+    pub fn covert_deadline(&self) -> Option<Millis> {
+        self.covert_deadlines.iter().copied().min()
+    }
+
+    /// Channels due at `now`, in index order, each re-armed from **its own**
+    /// deadline.
+    ///
+    /// **This is the CV-3 mutation, and the loop is written for that property
+    /// rather than for brevity.** Only entries that are actually due are
+    /// touched; every other channel keeps the deadline it was armed with. The
+    /// tempting shorter form — re-arm all channels whenever the zone wakes —
+    /// is the resampling defect: it draws `min + U(0, jitter)` repeatedly and
+    /// effectively keeps the minimum, biasing the covert interval short in a
+    /// way that stays invisible to counts and to distribution grading alike.
+    ///
+    /// Re-armed from the **deadline**, not from `now`: arming from `now` would
+    /// let scheduling lateness accumulate into the cadence, so a loaded daemon
+    /// would drift slower than its own distribution claims.
+    pub fn due_covert_channels<R: RelayRng + ?Sized>(
+        &mut self,
+        now: Millis,
+        rng: &mut R,
+    ) -> Vec<usize> {
+        let mut due = Vec::new();
+        for i in 0..self.covert_deadlines.len() {
+            if self.covert_deadlines[i] <= now {
+                let from = self.covert_deadlines[i];
+                self.covert_deadlines[i] = self.covert.next_send(from, rng);
+                due.push(i);
+            }
+        }
+        due
+    }
+
+    /// A channel's armed deadline, for CV-3's witness.
+    #[cfg(test)]
+    pub(crate) fn covert_deadline_at(&self, channel: usize) -> Option<Millis> {
+        self.covert_deadlines.get(channel).copied()
     }
 
     /// Whether this zone runs covert (noise) channels.
