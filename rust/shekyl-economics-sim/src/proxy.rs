@@ -177,7 +177,7 @@ pub fn slash_prob_per_epoch(q: f64, m: u32, n: u32) -> f64 {
 /// Prior-window width: the `n − 1` observations preceding the decision epoch.
 const PRIOR_WIDTH: usize = FAILURE_WINDOW_N as usize - 1;
 /// Number of prior-window states (`2^(n-1)` = 4 096 at the shipped `n = 13`).
-const PRIOR_STATES: usize = 1 << PRIOR_WIDTH;
+pub(crate) const PRIOR_STATES: usize = 1 << PRIOR_WIDTH;
 
 /// For each prior-window state, does a **miss at the head** trigger a slash?
 ///
@@ -186,7 +186,7 @@ const PRIOR_STATES: usize = 1 << PRIOR_WIDTH;
 /// predicate — the fix removes the aggregation approximation without trading away
 /// dep-don't-mirror. Bit `i` of the state is a miss at the `i`-th preceding
 /// observation.
-fn absorb_table() -> &'static [bool] {
+pub(crate) fn absorb_table() -> &'static [bool] {
     static TABLE: OnceLock<Vec<bool>> = OnceLock::new();
     TABLE.get_or_init(|| {
         let base = FAILURE_WINDOW_N as u64 + 1;

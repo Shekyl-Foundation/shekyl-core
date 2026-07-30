@@ -1343,6 +1343,14 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
         max_shard_reward_per_epoch_skl,
         SKL_FIAT_PRICE_BAND[1],
     )?;
+    // `max_shard_reward_per_epoch_skl` is one shard's pool per epoch, which is
+    // both what a sole credited holder earns (r = 1) and the pool `g` the
+    // sybil dilution divides — so it serves as both operands.
+    crate::cartel::tj_inequalities_report(
+        out,
+        max_shard_reward_per_epoch_skl,
+        max_shard_reward_per_epoch_skl,
+    )?;
 
     let report = Stage2Report {
         burden_trajectories: trajectories,
