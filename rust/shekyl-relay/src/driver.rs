@@ -689,7 +689,8 @@ mod tests {
         assert_eq!(
             covert.len(),
             1,
-            "one advance fires one channel; {covert:?} means the channels are              synchronized, which makes aggregate emission bursty"
+            "one advance fires one channel; {covert:?} means the channels are \
+             synchronized, which makes aggregate emission bursty"
         );
         let firstc = covert[0];
 
@@ -707,7 +708,8 @@ mod tests {
         assert_eq!(covert2.len(), 1, "second advance also fires exactly one");
         assert_ne!(
             covert2[0], firstc,
-            "the second advance fires the OTHER channel — liveness, so a              scheduler that only ever serves channel 0 cannot pass"
+            "the second advance fires the OTHER channel — liveness, so a \
+             scheduler that only ever serves channel 0 cannot pass"
         );
     }
 

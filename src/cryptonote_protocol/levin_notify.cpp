@@ -995,9 +995,10 @@ namespace levin
     if (!zone_)
       return;
 
-    /* Advance to the next scheduled event and run it — the name is the body's
-       (§20.6; the inherited `run_stems` never touched stems, and after RP-3b
-       there are no noise timers left for it to cancel either).
+    /* Advance to the next scheduled event and run it — the function is named
+       for what its body does (§20.6; the inherited `run_stems` never touched
+       stems, and after RP-3b there are no noise timers left for it to cancel
+       either).
 
        **No forcing path, deliberately.** `force_fluff`/`force_epoch` state the
        house idiom — same code as `poll`, only which work counts as due differs
