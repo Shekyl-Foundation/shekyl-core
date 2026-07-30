@@ -6,20 +6,22 @@
 //! The zone: one Dandelion++ relay domain's state and its scheduled steps.
 //!
 //! A zone is the unit the inherited C++ calls `detail::zone` — public,
-//! or i2p/tor. This type owns the state §18.5's inventory assigned to Rust and
-//! nothing else; the covert-traffic channels remain C++-owned until RP-3b, and
-//! transport (framing, padding, the socket) stays C++ permanently, so a
-//! transaction body crosses the boundary only as an opaque blob.
+//! or i2p/tor. This type owns the state §18.5's inventory assigned to Rust:
+//! peer fluff queues, the stem map, the epoch role, and the covert **schedule**
+//! (enable bit, cadence, per-channel deadlines). Covert **buffers** and
+//! transport (framing, padding, the socket) stay C++ permanently, so a
+//! transaction body crosses the boundary only as an opaque blob. See
+//! `DAEMON_RELAY_PRIVACY.md` §20.2 / §20.4 for the post-RP-3b inventory.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use shekyl_relay_privacy::params::DandelionParams;
+use shekyl_relay_privacy::params::{inherited, DandelionParams};
 use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::{
     DelayFamily, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
-use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap, StemSetChange};
+use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap};
 
 /// One opaque transaction blob shared across every peer that accepted a fluff
 /// batch.
@@ -112,6 +114,83 @@ pub enum FluffReach {
     OutboundOnly,
 }
 
+/// Covert-channel schedule for a zone — or its deliberate absence.
+///
+/// One type so "enabled" and "has deadlines" cannot disagree: a disabled zone
+/// has no schedule; an enabled zone always has one deadline per stem slot.
+/// Channel `i` is bound to stem slot `i` (§20.3), so the deadline vector's
+/// length is the stem width, which production pins to
+/// [`inherited::NOISE_CHANNELS`] (`CRYPTONOTE_NOISE_CHANNELS` on the C++ side).
+///
+/// **CV-3 lives in how deadlines are mutated.** Each entry is drawn once and
+/// re-drawn only when *that* channel fires. A wake caused by the fluff
+/// scheduler, an epoch rollover, or another channel coming due must leave every
+/// other entry untouched. Re-drawing on a foreign wake resamples
+/// `min + U(0, jitter)` and keeps the minimum, which biases the effective
+/// covert interval **short** — a privacy defect no count assertion and no
+/// goodness-of-fit grade can see (§20.2a).
+#[derive(Debug)]
+enum CovertSchedule {
+    Off,
+    On {
+        cadence: NoiseCadence,
+        /// Next send deadline per channel, indexed by channel.
+        deadlines: Vec<Millis>,
+    },
+}
+
+impl CovertSchedule {
+    fn on<R: RelayRng + ?Sized>(channels: usize, now: Millis, rng: &mut R) -> Self {
+        let cadence = NoiseCadence::inherited();
+        let deadlines = (0..channels).map(|_| cadence.next_send(now, rng)).collect();
+        Self::On { cadence, deadlines }
+    }
+
+    fn enabled(&self) -> bool {
+        matches!(self, Self::On { .. })
+    }
+
+    fn earliest(&self) -> Option<Millis> {
+        match self {
+            Self::Off => None,
+            Self::On { deadlines, .. } => deadlines.iter().copied().min(),
+        }
+    }
+
+    /// The single earliest channel due at `now`, re-armed from **`now`**.
+    ///
+    /// At most one channel per call: multi-channel emission in one poll is a
+    /// synchronized burst — the soundness defect constant-rate cover exists to
+    /// deny. A late poll that finds several deadlines past still surfaces them
+    /// one wake at a time (`next_wake` re-arms immediately for the remainder).
+    ///
+    /// Re-armed from `now`, not the old deadline: arming from a past deadline
+    /// catch-up-bursts after a stall; arming from `now` preserves inter-send
+    /// spacing under load (phase may lag; rate does not). Only the fired entry
+    /// is touched — CV-3.
+    fn due_one<R: RelayRng + ?Sized>(&mut self, now: Millis, rng: &mut R) -> Option<usize> {
+        let Self::On { cadence, deadlines } = self else {
+            return None;
+        };
+        let (idx, _) = deadlines
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|&(_, d)| d <= now)
+            .min_by_key(|&(_, d)| d)?;
+        deadlines[idx] = cadence.next_send(now, rng);
+        Some(idx)
+    }
+
+    #[cfg(test)]
+    fn deadline_at(&self, channel: usize) -> Option<Millis> {
+        match self {
+            Self::Off => None,
+            Self::On { deadlines, .. } => deadlines.get(channel).copied(),
+        }
+    }
+}
+
 /// One relay zone's owned state.
 ///
 /// Single-owner by construction: every field is private and reachable only
@@ -140,49 +219,19 @@ pub struct Zone {
     /// Frozen relay parameters (`q`, epoch length, jitter).
     params: DandelionParams,
     /// Configured stem width — how many slots the map keeps.
+    ///
+    /// When covert is enabled this is also the covert channel count (channel
+    /// `i` ↔ slot `i`). Production pins it to [`inherited::NOISE_CHANNELS`].
     stems: usize,
     /// Which peers a fluff batch may reach. See [`FluffReach`].
     reach: FluffReach,
-    /// Whether this zone runs covert (noise) channels at all.
+    /// Covert schedule (enable + cadence + per-channel deadlines), or off.
     ///
-    /// **New state acquired by RP-3b, not a duplicated one** (§20.4). Before
-    /// this round the fact lived only in C++, encoded as
-    /// `!zone::noise.empty()` — the byte payload doing double duty as its own
-    /// enable flag — and it never crossed the FFI: `make_relay_zone` consumed
-    /// it C++-side to pick a parameter set and passed only the result.
-    ///
-    /// It moves here because the covert scheduling port needs it on Rust's own
-    /// account: a covert send cannot be scheduled without knowing whether
-    /// covert sends exist. Until that port lands this field is stored and read
-    /// back rather than acted on, which is deliberate — the predicate split
-    /// goes first so the scheduler is not written against an ambiguous
-    /// predicate.
-    covert_enabled: bool,
-    /// The covert send cadence, wired here from `shekyl-relay-privacy` where it
-    /// was built during RP-1's measurement pass and left connected to nothing.
-    ///
-    /// **What the primitive's existing test earns, and what it does not.** It
-    /// arrives with `noise_cadence_spans_its_band`, establishing that a draw
-    /// lands in `[min, min + jitter]`; parameter correspondence against
-    /// `CRYPTONOTE_NOISE_MIN_DELAY`/`_DELAY_RANGE` was confirmed separately
-    /// (§20.4). Neither says anything about behaviour under a scheduler that
-    /// also serves other deadlines. That is CV-3, and it is witnessed here
-    /// rather than inherited from the primitive.
-    covert: NoiseCadence,
-    /// Next send deadline per covert channel, indexed by channel.
-    ///
-    /// Empty when covert is disabled, so "is covert on" and "are there covert
-    /// deadlines" cannot disagree. Length is fixed at construction.
-    ///
-    /// **CV-3 lives in how this is mutated.** Each entry is drawn once and
-    /// re-drawn only when *that* channel fires. A wake caused by the fluff
-    /// scheduler, an epoch rollover, or another channel coming due must leave
-    /// every other entry untouched. Re-drawing on a foreign wake resamples
-    /// `min + U(0, jitter)` and keeps the minimum, which biases the effective
-    /// covert interval **short** — a privacy defect that no count assertion and
-    /// no goodness-of-fit grade can see, because every individual draw is honest
-    /// and the bias is in the *selection among* draws (§20.2a).
-    covert_deadlines: Vec<Millis>,
+    /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
+    /// in C++, encoded as `!zone::noise.empty()` — the byte payload doing
+    /// double duty as its own enable flag. C++ still holds the payload buffers;
+    /// Rust owns *whether* and *when* channels fire.
+    covert: CovertSchedule,
 }
 
 impl Zone {
@@ -190,6 +239,11 @@ impl Zone {
     ///
     /// The first epoch is drawn immediately, matching the inherited
     /// `start_epoch` running once at construction.
+    ///
+    /// When `covert_enabled`, `stems` is also the covert channel count and
+    /// must equal [`inherited::NOISE_CHANNELS`] in production (C++ sizes its
+    /// channel deque from `CRYPTONOTE_NOISE_CHANNELS`). A mismatch is a
+    /// debug assertion here and a silent OOB drop on the C++ side.
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,
@@ -198,7 +252,17 @@ impl Zone {
         now: Millis,
         rng: &mut R,
     ) -> Self {
+        debug_assert!(
+            !covert_enabled || stems == inherited::NOISE_CHANNELS,
+            "covert channel count must equal inherited::NOISE_CHANNELS \
+             (CRYPTONOTE_NOISE_CHANNELS); got stems={stems}"
+        );
         let epoch = EpochScheduler::new(params).start(now, rng);
+        let covert = if covert_enabled {
+            CovertSchedule::on(stems, now, rng)
+        } else {
+            CovertSchedule::Off
+        };
         Self {
             contexts: BTreeMap::new(),
             // Built at full width with no peers rather than `StemMap::empty()`,
@@ -212,60 +276,31 @@ impl Zone {
             params,
             stems,
             reach,
-            covert_enabled,
-            covert: NoiseCadence::inherited(),
-            // One deadline per channel, armed at construction so the first
-            // send is a full interval away rather than immediate. Empty when
-            // covert is off — the disabled zone has no covert schedule at all,
-            // rather than a schedule nobody reads.
-            covert_deadlines: if covert_enabled {
-                let cadence = NoiseCadence::inherited();
-                (0..stems).map(|_| cadence.next_send(now, rng)).collect()
-            } else {
-                Vec::new()
-            },
+            covert,
         }
     }
 
     /// The earliest covert send deadline, or `None` when covert is disabled.
     pub fn covert_deadline(&self) -> Option<Millis> {
-        self.covert_deadlines.iter().copied().min()
+        self.covert.earliest()
     }
 
-    /// Channels due at `now`, in index order, each re-armed from **its own**
-    /// deadline.
+    /// The single earliest channel due at `now`, re-armed from `now` (CV-3).
     ///
-    /// **This is the CV-3 mutation, and the loop is written for that property
-    /// rather than for brevity.** Only entries that are actually due are
-    /// touched; every other channel keeps the deadline it was armed with. The
-    /// tempting shorter form — re-arm all channels whenever the zone wakes —
-    /// is the resampling defect: it draws `min + U(0, jitter)` repeatedly and
-    /// effectively keeps the minimum, biasing the covert interval short in a
-    /// way that stays invisible to counts and to distribution grading alike.
-    ///
-    /// Re-armed from the **deadline**, not from `now`: arming from `now` would
-    /// let scheduling lateness accumulate into the cadence, so a loaded daemon
-    /// would drift slower than its own distribution claims.
-    pub fn due_covert_channels<R: RelayRng + ?Sized>(
+    /// See [`CovertSchedule::due_one`]: at most one channel per call so a late
+    /// poll cannot emit a multi-channel burst.
+    pub fn due_covert_channel<R: RelayRng + ?Sized>(
         &mut self,
         now: Millis,
         rng: &mut R,
-    ) -> Vec<usize> {
-        let mut due = Vec::new();
-        for i in 0..self.covert_deadlines.len() {
-            if self.covert_deadlines[i] <= now {
-                let from = self.covert_deadlines[i];
-                self.covert_deadlines[i] = self.covert.next_send(from, rng);
-                due.push(i);
-            }
-        }
-        due
+    ) -> Option<usize> {
+        self.covert.due_one(now, rng)
     }
 
     /// A channel's armed deadline, for CV-3's witness.
     #[cfg(test)]
     pub(crate) fn covert_deadline_at(&self, channel: usize) -> Option<Millis> {
-        self.covert_deadlines.get(channel).copied()
+        self.covert.deadline_at(channel)
     }
 
     /// Whether this zone runs covert (noise) channels.
@@ -276,7 +311,14 @@ impl Zone {
     /// comes from.
     #[must_use]
     pub fn covert_enabled(&self) -> bool {
-        self.covert_enabled
+        self.covert.enabled()
+    }
+
+    /// Configured stem width (slot count). When covert is on, also the channel
+    /// count — channel `i` follows slot `i`.
+    #[must_use]
+    pub fn stem_width(&self) -> usize {
+        self.stems
     }
 
     /// A peer finished its handshake and may now carry relay traffic.
@@ -307,19 +349,18 @@ impl Zone {
     /// **keeping** slots whose peer is still connected.
     ///
     /// The mid-epoch refresh: the inherited `connection_map::update`, reached
-    /// through `update_channels::run`. Returns whether downstream channels must
-    /// be re-armed — the exact predicate that call returned, carried through as
-    /// a type rather than a bare `bool`.
+    /// through `update_channels::run`. Post-inversion (§20.3) the stem-set
+    /// change predicate has no consumer: a rebound channel picks up its new
+    /// peer at the next send, and a channel the merge leaves unbound clears at
+    /// its next due tick — both read from the map itself via [`Driver::poll`].
     ///
     /// **Not what an epoch boundary does.** See [`Zone::rebuild_stems`]; the two
     /// are separate methods because collapsing them freezes the stem graph, and
     /// nothing about the merged result looks wrong when it happens.
-    pub fn update_stems<R: RelayRng + ?Sized>(
-        &mut self,
-        outbound: Vec<ConnectionId>,
-        rng: &mut R,
-    ) -> StemSetChange {
-        self.map.update(outbound, rng)
+    pub fn update_stems<R: RelayRng + ?Sized>(&mut self, outbound: Vec<ConnectionId>, rng: &mut R) {
+        // `StemMap::update` still returns `StemSetChange` for its own callers
+        // and tests; the zone no longer surfaces it — nothing re-points on push.
+        let _ = self.map.update(outbound, rng);
     }
 
     /// Draw a wholly new stem set over `outbound` — what an epoch rollover does.
@@ -331,19 +372,15 @@ impl Zone {
     /// a long-lived observer from correlating on a stable source -> successor
     /// mapping, and the embargo derivation assumes it happens.
     ///
-    /// Always [`StemSetChange::Changed`], matching the inherited
-    /// `change_channels` unconditionally re-pointing the channels: the slots
-    /// are new even when they name the same peers. Post-inversion (§20.3)
-    /// nothing re-points on this signal — a rebound channel picks up its new
-    /// peer at the next send, and a channel the redraw leaves unbound clears
-    /// at its next due tick, both read from the map itself.
+    /// Post-inversion (§20.3) nothing re-points on this signal — a rebound
+    /// channel picks up its new peer at the next send, and a channel the redraw
+    /// leaves unbound clears at its next due tick, both read from the map itself.
     pub fn rebuild_stems<R: RelayRng + ?Sized>(
         &mut self,
         outbound: Vec<ConnectionId>,
         rng: &mut R,
-    ) -> StemSetChange {
+    ) {
         self.map = StemMap::new(outbound, self.stems, rng);
-        StemSetChange::Changed
     }
 
     /// Begin a new epoch at `now`: re-draw the fluff/stem role and the end time.
@@ -435,21 +472,20 @@ impl Zone {
     /// 33-gtest oracle cannot see through the FFI (§18.4a).
     ///
     /// A settled [`RelayPlan::FluffEpoch`] does **not** refresh: retrying cannot
-    /// change an epoch decision. The second half of the return is whether the
-    /// mid-call refresh changed the live stem set (so the driver can push slots).
+    /// change an epoch decision.
     pub fn plan_relay_with_refresh<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,
         local_origin: bool,
         outbound: Vec<ConnectionId>,
         rng: &mut R,
-    ) -> (RelayPlan, StemSetChange) {
+    ) -> RelayPlan {
         match self.plan_relay(source, local_origin, rng) {
             RelayPlan::NoRoute => {
-                let change = self.update_stems(outbound, rng);
-                (self.plan_relay(source, local_origin, rng), change)
+                self.update_stems(outbound, rng);
+                self.plan_relay(source, local_origin, rng)
             }
-            plan => (plan, StemSetChange::Unchanged),
+            plan => plan,
         }
     }
 
@@ -565,9 +601,10 @@ impl Zone {
 
     /// The stem slots in index order, `None` for an emptied slot.
     ///
-    /// Pushed outward when it changes; never pulled by C++. With the zone
-    /// strand gone, a caller-initiated read would race this zone's mutations —
-    /// §18.5 finding 3, the call whose direction the inventory reversed.
+    /// Owned here; never pushed as an array and never pulled by C++ on its own
+    /// schedule. Post-§20.3 the binding travels with each [`crate::Effect::CovertSend`]
+    /// (or [`crate::Effect::CovertUnbind`] when unbound). A caller-initiated
+    /// read would race this zone's mutations — §18.5 finding 3.
     pub fn stem_slots(&self) -> &[Option<ConnectionId>] {
         self.map.slots()
     }

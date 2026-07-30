@@ -3118,6 +3118,10 @@ void shekyl_relay_zone_on_close(RelayZoneHandle* handle, const std::uint8_t* id)
 //! Stem slots backed by a live peer — the inherited `connection_count`. Reads a
 //! single-writer atomic, so it is safe from any thread.
 std::size_t shekyl_relay_zone_live_stems(const RelayZoneHandle* handle);
+//! Configured stem width (slot count). When covert is enabled this is also the
+//! channel count (channel i follows slot i). Size the C++ channel deque from
+//! this so the two widths cannot silently diverge.
+std::size_t shekyl_relay_zone_stem_width(const RelayZoneHandle* handle);
 //! Earliest time the zone has work; what the asio timer is armed against.
 std::uint64_t shekyl_relay_zone_next_wake(const RelayZoneHandle* handle);
 //! One of the SHEKYL_RELAY_PLAN_* codes. Three-way, not a bool: a transient

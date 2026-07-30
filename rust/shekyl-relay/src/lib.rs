@@ -38,15 +38,17 @@
 //! makes that move a non-event. So the inventory is an invariant this crate
 //! maintains rather than a check it passed once:
 //!
-//! - Zone state — peer fluff queues, the stem map, the epoch role — is owned
-//!   **here**, mutated only through `&mut Zone`. C++ connection events do not
-//!   mutate it; they arrive as calls into the owner.
+//! - Zone state — peer fluff queues, the stem map, the epoch role, and the
+//!   covert schedule — is owned **here**, mutated only through `&mut Zone`.
+//!   C++ connection events do not mutate it; they arrive as calls into the
+//!   owner. Covert buffers stay C++ (§20.2 / §20.4).
 //! - `connection_count` was the one genuine straddle in the inherited code
 //!   (*"only update in strand, can be read at any time"*). It stays derived
 //!   here and is published by the boundary as a single-writer atomic.
-//! - The stem-slot snapshot flows **outward** (Rust → C++) as a push. C++ never
-//!   pulls it: once the map is owned here, a caller-initiated read would race
-//!   this crate's mutations, which is exactly the hazard the seal named.
+//! - Stem bindings never cross as an array. Post-§20.3 each
+//!   [`Effect::CovertSend`] carries its peer, and an unbound slot clears via
+//!   [`Effect::CovertUnbind`] at its own cadence. C++ never pulls the map: a
+//!   caller-initiated read would race this crate's mutations (§18.5 finding 3).
 //!
 //! Any new shared state is a new inventory line that must resolve to
 //! single-owner-or-atomic before it lands.

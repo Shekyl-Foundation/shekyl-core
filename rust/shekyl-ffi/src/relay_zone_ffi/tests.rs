@@ -14,7 +14,8 @@ use std::cell::RefCell;
 struct Recorder {
     fluffed: Vec<([u8; 16], Vec<Vec<u8>>)>,
     unbinds: Vec<usize>,
-    covert: Vec<usize>,
+    /// `(channel, peer)` — peer bytes are the marshalling half of CV-2.
+    covert: Vec<(usize, [u8; 16])>,
 }
 
 thread_local! {
@@ -70,8 +71,7 @@ extern "C" fn rec_gather(_: *mut c_void, out_n: *mut usize) -> *const u8 {
 extern "C" fn rec_covert(_: *mut c_void, channel: usize, peer: *const u8) {
     let mut p = [0u8; 16];
     unsafe { p.copy_from_slice(slice::from_raw_parts(peer, 16)) };
-    let _ = p; // channel identity is what the poll seam tests consume today
-    REC.with(|r| r.borrow_mut().covert.push(channel));
+    REC.with(|r| r.borrow_mut().covert.push((channel, p)));
 }
 
 fn reset() {
@@ -229,6 +229,36 @@ fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
             );
         }
         shekyl_relay_zone_free(h);
+
+        // `keep` must outlive the recorder check below.
+        REC.with(|r| {
+            let rec = r.borrow();
+            assert!(
+                2 <= rec.unbinds.len(),
+                "the unbound channel's clear crosses at EVERY due tick — zero \
+                 means it never crossed, one means the emission became \
+                 transition-shaped and lossy"
+            );
+            assert!(
+                rec.unbinds.iter().all(|&c| c == 0),
+                "every unbind names the unbound channel's own index — 1 in \
+                 {:?} is the off-by-one defect",
+                rec.unbinds
+            );
+            assert!(
+                !rec.covert.is_empty(),
+                "the bound channel really sent — liveness"
+            );
+            for &(channel, peer) in &rec.covert {
+                assert_eq!(
+                    (channel, peer),
+                    (1, keep),
+                    "CovertSend must cross with the slot's own peer at its own \
+                     index — a wrong peer slice is invisible if only the \
+                     channel index is recorded"
+                );
+            }
+        });
     }
     GATHER.with(|g| {
         assert_eq!(
@@ -236,29 +266,6 @@ fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
             0,
             "fixture: no epoch rollover rewrote the slots mid-drive"
         )
-    });
-    REC.with(|r| {
-        let rec = r.borrow();
-        assert!(
-            2 <= rec.unbinds.len(),
-            "the unbound channel's clear crosses at EVERY due tick — zero \
-             means it never crossed, one means the emission became \
-             transition-shaped and lossy"
-        );
-        assert!(
-            rec.unbinds.iter().all(|&c| c == 0),
-            "every unbind names the unbound channel's own index — 1 in \
-             {:?} is the off-by-one defect",
-            rec.unbinds
-        );
-        assert!(
-            rec.covert.iter().all(|&c| c == 1),
-            "the bound channel's sends keep their own index"
-        );
-        assert!(
-            !rec.covert.is_empty(),
-            "the bound channel really sent — liveness"
-        );
     });
 }
 

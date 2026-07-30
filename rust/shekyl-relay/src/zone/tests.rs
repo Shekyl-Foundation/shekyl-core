@@ -90,16 +90,13 @@ fn live_stems_is_derived_not_cached() {
     let mut z = zone(&mut rng);
     assert_eq!(z.live_stems(), 0);
 
-    assert_eq!(
-        z.update_stems(vec![id(1), id(2), id(3)], &mut rng),
-        StemSetChange::Changed
-    );
+    z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
     assert_eq!(z.live_stems(), 2, "two stem slots at the configured width");
     assert_eq!(z.stem_slots().len(), 2);
 
     // Losing every outbound peer empties the slots, and the derived count
     // follows immediately with no separate update step.
-    assert_eq!(z.update_stems(Vec::new(), &mut rng), StemSetChange::Changed);
+    z.update_stems(Vec::new(), &mut rng);
     assert_eq!(z.live_stems(), 0);
 }
 
@@ -326,7 +323,7 @@ fn a_local_tx_stems_during_a_fluff_epoch_rd4() {
     let mut rng = SplitMix64::new(30);
     let mut z = zone_with_role(true, &mut rng);
     assert!(z.is_fluffing(), "fixture must be in a fluff epoch");
-    let _ = z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+    z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
 
     assert!(
         matches!(z.plan_relay(None, true, &mut rng), RelayPlan::Stem(_)),
@@ -342,7 +339,7 @@ fn a_relayed_tx_fluffs_during_a_fluff_epoch() {
     // be wrong, and in the other direction.
     let mut rng = SplitMix64::new(31);
     let mut z = zone_with_role(true, &mut rng);
-    let _ = z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+    z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
 
     assert_eq!(
         z.plan_relay(Some(id(7)), false, &mut rng),
@@ -355,7 +352,7 @@ fn a_relayed_tx_fluffs_during_a_fluff_epoch() {
 fn everything_stems_during_a_stem_epoch() {
     let mut rng = SplitMix64::new(32);
     let mut z = zone_with_role(false, &mut rng);
-    let _ = z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+    z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
 
     assert!(matches!(
         z.plan_relay(Some(id(7)), false, &mut rng),
@@ -391,10 +388,7 @@ fn an_epoch_rollover_rebuilds_the_stem_map_rather_than_merging_into_it() {
     let mut rng = SplitMix64::new(88);
     let mut z = zone(&mut rng);
     let peers = vec![id(1), id(2), id(3), id(4)];
-    assert_eq!(
-        z.update_stems(peers.clone(), &mut rng),
-        StemSetChange::Changed
-    );
+    z.update_stems(peers.clone(), &mut rng);
 
     let _ = z.stem_for(Some(id(9)), &mut rng);
     let _ = z.stem_for(None, &mut rng);
@@ -405,13 +399,7 @@ fn an_epoch_rollover_rebuilds_the_stem_map_rather_than_merging_into_it() {
     );
 
     z.start_epoch(0, &mut rng);
-    assert_eq!(
-        z.rebuild_stems(peers, &mut rng),
-        StemSetChange::Changed,
-        "a rollover re-draws the stem set even when every peer is still \
-         connected — if this reports Unchanged, the epoch merged instead of \
-         rebuilding and the stem graph is frozen"
-    );
+    z.rebuild_stems(peers, &mut rng);
     assert_eq!(
         z.pinned_sources(),
         0,
@@ -498,7 +486,7 @@ fn no_routable_slot_reports_no_route_not_a_fluff_epoch() {
     // fluff epoch reports `FluffEpoch` even with slots available, which is
     // the case where a retry would be wasted work.
     let mut z = zone_with_role(true, &mut rng);
-    let _ = z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+    z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
     assert_eq!(
         z.plan_relay(Some(id(7)), false, &mut rng),
         RelayPlan::FluffEpoch,
@@ -515,12 +503,7 @@ fn plan_relay_with_refresh_populates_an_empty_map_once() {
     let mut z = zone_with_role(false, &mut rng);
     assert_eq!(z.live_stems(), 0, "fixture: nothing populated yet");
 
-    let (plan, change) = z.plan_relay_with_refresh(None, true, vec![id(1), id(2), id(3)], &mut rng);
-    assert_eq!(
-        change,
-        StemSetChange::Changed,
-        "first population is a change"
-    );
+    let plan = z.plan_relay_with_refresh(None, true, vec![id(1), id(2), id(3)], &mut rng);
     assert!(
         matches!(plan, RelayPlan::Stem(_)),
         "after one refresh a stem-epoch local tx routes"
@@ -532,14 +515,8 @@ fn plan_relay_with_refresh_populates_an_empty_map_once() {
 fn plan_relay_with_refresh_does_not_touch_a_settled_fluff_epoch() {
     let mut rng = SplitMix64::new(35);
     let mut z = zone_with_role(true, &mut rng);
-    let (plan, change) =
-        z.plan_relay_with_refresh(Some(id(7)), false, vec![id(1), id(2), id(3)], &mut rng);
+    let plan = z.plan_relay_with_refresh(Some(id(7)), false, vec![id(1), id(2), id(3)], &mut rng);
     assert_eq!(plan, RelayPlan::FluffEpoch);
-    assert_eq!(
-        change,
-        StemSetChange::Unchanged,
-        "a fluff epoch must not refresh — retrying cannot change the answer"
-    );
     assert_eq!(z.live_stems(), 0, "outbound was not merged");
 }
 
@@ -568,7 +545,7 @@ fn fluff_fanout_shares_one_blob_handle_across_peers() {
 fn a_source_pins_to_one_stem_for_the_epoch() {
     let mut rng = SplitMix64::new(6);
     let mut z = zone(&mut rng);
-    let _ = z.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
+    z.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
 
     let source = Some(id(9));
     let first = z.stem_for(source, &mut rng).expect("a stem is available");
@@ -621,8 +598,8 @@ fn a_covert_deadline_survives_wakes_it_did_not_cause() {
     // production it is the fluff scheduler or an epoch rollover reaching the
     // zone, and it must not touch any covert deadline.
     let quiet = d0.min(d1) - 1;
-    let due = z.due_covert_channels(quiet, &mut rng);
-    assert!(due.is_empty(), "no channel is due before its deadline");
+    let due = z.due_covert_channel(quiet, &mut rng);
+    assert!(due.is_none(), "no channel is due before its deadline");
     assert_eq!(
         z.covert_deadline_at(0),
         Some(d0),
@@ -642,8 +619,8 @@ fn a_covert_deadline_survives_wakes_it_did_not_cause() {
         (1usize, 0usize)
     };
     let late_deadline = z.covert_deadline_at(late).expect("armed");
-    let due = z.due_covert_channels(z.covert_deadline_at(early).unwrap(), &mut rng);
-    assert_eq!(due, vec![early], "only the due channel fires");
+    let due = z.due_covert_channel(z.covert_deadline_at(early).unwrap(), &mut rng);
+    assert_eq!(due, Some(early), "only the due channel fires");
     assert_eq!(
         z.covert_deadline_at(late),
         Some(late_deadline),
@@ -652,9 +629,40 @@ fn a_covert_deadline_survives_wakes_it_did_not_cause() {
     );
 
     // Liveness: the fired channel really did advance, so a no-op
-    // `due_covert_channels` cannot pass the assertions above by doing nothing.
+    // `due_covert_channel` cannot pass the assertions above by doing nothing.
     assert!(
         z.covert_deadline_at(early).unwrap() > late_deadline.min(d0.max(d1)) - 1,
         "the fired channel re-armed forward"
     );
+}
+
+/// Production noise zones pass `stems == inherited::NOISE_CHANNELS`; C++ sizes
+/// its channel deque from `shekyl_relay_zone_stem_width`. Pin the coupling so a
+/// future parameter split cannot silently OOB-drop on the C++ side.
+#[test]
+fn covert_enabled_pins_stem_width_to_noise_channels() {
+    use shekyl_relay_privacy::params::inherited;
+    let mut rng = SplitMix64::new(19);
+    let z = Zone::new(
+        DandelionParams::inherited(),
+        inherited::NOISE_CHANNELS,
+        FluffReach::EveryPeer,
+        true,
+        0,
+        &mut rng,
+    );
+    assert!(z.covert_enabled());
+    assert_eq!(
+        z.stem_width(),
+        inherited::NOISE_CHANNELS,
+        "configured width is what C++ sizes its channel deque from"
+    );
+    // Covert deadlines are armed at full width at construction, even before
+    // any peer populates the map (an empty outbound set leaves stem_slots
+    // empty; the schedule still has one deadline per channel).
+    assert!(z.covert_deadline_at(0).is_some());
+    assert!(z
+        .covert_deadline_at(inherited::NOISE_CHANNELS - 1)
+        .is_some());
+    assert!(z.covert_deadline_at(inherited::NOISE_CHANNELS).is_none());
 }

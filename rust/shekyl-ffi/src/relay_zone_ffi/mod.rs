@@ -394,10 +394,21 @@ pub unsafe extern "C" fn shekyl_relay_zone_live_stems(handle: *const RelayZoneHa
     (*handle).live_stems.load(Ordering::Acquire)
 }
 
-/// The next time the driver has work, in the caller's millisecond clock.
+/// Configured stem width (slot count). When covert is enabled this is also the
+/// covert channel count — channel `i` follows slot `i`. C++ sizes its channel
+/// deque from this rather than from a parallel `#define`, so the two widths
+/// cannot silently diverge.
 ///
 /// # Safety
-/// `handle` must be live.
+/// `handle` must be null or live. Null returns 0.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_stem_width(handle: *const RelayZoneHandle) -> usize {
+    match handle.as_ref() {
+        Some(h) => h.driver.zone().stem_width(),
+        None => 0,
+    }
+}
+
 /// Whether this zone runs covert (noise) channels.
 ///
 /// The **single owner** of a fact C++ used to re-derive at nine sites from
@@ -502,10 +513,10 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay_with_refresh(
     let peers = read_ids(outbound, n);
     let h = &mut *handle;
     let source = read_id(source);
-    let (plan, _change) =
-        h.driver
-            .zone_mut()
-            .plan_relay_with_refresh(source, local_origin, peers, &mut h.rng);
+    let plan = h
+        .driver
+        .zone_mut()
+        .plan_relay_with_refresh(source, local_origin, peers, &mut h.rng);
     h.publish();
     write_plan(plan, out_dest)
 }
@@ -555,9 +566,9 @@ pub unsafe extern "C" fn shekyl_relay_zone_update_stems(
     }
     let peers = read_ids(outbound, n);
     let h = &mut *handle;
-    // The change predicate has no consumer here: since §20.3 nothing re-points
-    // on a push — an unbound channel clears at its next due tick via `poll`.
-    let _change = h.driver.zone_mut().update_stems(peers, &mut h.rng);
+    // Since §20.3 nothing re-points on a push — an unbound channel clears at
+    // its next due tick via `poll`.
+    h.driver.zone_mut().update_stems(peers, &mut h.rng);
     h.publish();
 }
 

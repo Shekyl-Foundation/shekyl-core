@@ -362,10 +362,13 @@ namespace levin
         /* Channel construction asks the zone, not the payload: the enable fact
            has exactly one birth site (the `make_relay_zone` argument above) and
            every other reader — this loop included — consumes the zone's copy.
+           Width comes from the zone's stem count (channel i ↔ slot i), not a
+           parallel `#define`, so the two sides cannot silently diverge.
            `relay` is fully initialized here because members initialize in
            declaration order and this is the constructor body. */
+        const std::size_t channel_width = shekyl_relay_zone_stem_width(relay.get());
         for (std::size_t count = 0;
-             shekyl_relay_zone_covert_enabled(relay.get()) && count < CRYPTONOTE_NOISE_CHANNELS;
+             shekyl_relay_zone_covert_enabled(relay.get()) && count < channel_width;
              ++count)
           channels.emplace_back(io_service);
       }
@@ -936,10 +939,11 @@ namespace levin
        single-writer atomic precisely because this method is callable from any
        thread (§18.5 finding 1). */
     const std::size_t connection_count = shekyl_relay_zone_live_stems(zone_->relay.get());
+    const bool noise = shekyl_relay_zone_covert_enabled(zone_->relay.get());
     bool has_outgoing = connection_count;
-    if (!shekyl_relay_zone_covert_enabled(zone_->relay.get()))
+    if (!noise)
       has_outgoing = zone_->p2p->get_out_connections_count();
-    return {shekyl_relay_zone_covert_enabled(zone_->relay.get()), CRYPTONOTE_NOISE_CHANNELS <= connection_count, has_outgoing};
+    return {noise, CRYPTONOTE_NOISE_CHANNELS <= connection_count, has_outgoing};
   }
 
   void notify::new_out_connection()
