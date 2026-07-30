@@ -1210,6 +1210,63 @@ fn oq4_deletion_recheck(out: &mut impl fmt::Write, params: &SimParams) -> fmt::R
     Ok(())
 }
 
+/// Per-shard post-D1/D2 reward per epoch across the scenario family.
+///
+/// Pool = A1's flat-ledger budget (emission + fee leg); one shard's slice is
+/// `1/n` at the small-bond equilibrium (work is proportional there — the A4
+/// invariant). Scope: only years where the full holding is realizable
+/// (`n ≥ MAX_HOLDINGS_SHARDS`), since A5 exposure sums over that many shards —
+/// an early-chain year with fewer shards would pair a small-n per-shard reward
+/// with 4 096 shards that do not exist.
+///
+/// Operand direction differs by arm:
+/// - **A5** takes [`Self::max_per_epoch_skl`] (larger forfeit ⇒ stronger
+///   deterrent ⇒ conservative).
+/// - **TJ-4 / TJ-7** take median + max (larger flow ⇒ more profitable attack ⇒
+///   max is alarm-raising; median is the representative cell).
+#[derive(Debug, Clone, Copy)]
+struct ShardRewardOperands {
+    median_per_epoch_skl: f64,
+    max_per_epoch_skl: f64,
+}
+
+fn shard_reward_operands(params: &SimParams) -> ShardRewardOperands {
+    let epy = crate::proxy::epochs_per_year();
+    let mut rewards: Vec<f64> = Vec::new();
+    let mut max_per_epoch_skl = 0.0_f64;
+    for config in all_scenarios(params) {
+        for a in a1_year_aggs(params, &config)
+            .iter()
+            .filter(|a| a.n >= MAX_HOLDINGS_SHARDS as u64)
+        {
+            let pool_atomic = a
+                .emission_leg_atomic
+                .saturating_add(mul_scale(a.whole_burn_atomic, flat_25().share(a.n)));
+            let pool_per_epoch_skl = (pool_atomic as f64 / COIN) / epy;
+            let per_shard = pool_per_epoch_skl / a.n as f64;
+            rewards.push(per_shard);
+            max_per_epoch_skl = max_per_epoch_skl.max(per_shard);
+        }
+    }
+    rewards.sort_by(|a, b| a.partial_cmp(b).expect("finite rewards"));
+    let median_per_epoch_skl = statistical_median(&rewards);
+    ShardRewardOperands {
+        median_per_epoch_skl,
+        max_per_epoch_skl,
+    }
+}
+
+/// Statistical median of a sorted non-empty slice: middle element for odd
+/// length, mean of the two central elements for even. Empty → 0 (no qualifying
+/// cells — A5/TJ arms then report a zero operand rather than panicking).
+fn statistical_median(sorted: &[f64]) -> f64 {
+    match sorted.len() {
+        0 => 0.0,
+        n if n % 2 == 1 => sorted[n / 2],
+        n => 0.5 * (sorted[n / 2 - 1] + sorted[n / 2]),
+    }
+}
+
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
 /// stdout, a human-readable summary to stderr.
 pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
@@ -1308,65 +1365,19 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     }
     let a4 = a4_stuffing_report(out, params)?;
 
-    // A5 (W10): the L14 slash forfeits the forgone post-D1/D2 reward stream — of
-    // the SLASHED SHARD only, matching the per-shard slash scope
-    // (`FOUNDATION_GENESIS_IDENTITY_SET.md` §3.2: a ShardSetCompact record's failed
-    // challenge slashes that shard's bond; other shards stay bonded). Take the
-    // highest PER-SHARD reward across the scenario set (biggest forfeit ⇒ the
-    // strongest deterrent the margin must STILL fail against). Pool = A1's
-    // flat-ledger budget (emission + fee leg); one shard's slice of n is 1/n at the
-    // small-bond equilibrium (work is proportional there — the A4 invariant).
-    // Scope consistency: only count years where the full holding is realizable
-    // (`n ≥ MAX_HOLDINGS_SHARDS`), since the exposure sums over that many shards
-    // at risk — an early-chain year with fewer shards in existence would pair a
-    // small-n per-shard reward with 4,096 shards that do not exist.
-    let epy = crate::proxy::epochs_per_year();
-    let mut max_shard_reward_per_epoch_skl = 0.0f64;
-    // Every qualifying (scenario, year) per-shard pool, retained so a MEDIAN can
-    // stand beside the MAX. The two operands point opposite ways: for A5 a larger
-    // forfeit is a stronger deterrent (max = conservative), for TJ-4 a larger
-    // reward makes the slash/Rebond cycle more profitable (max = alarm-raising),
-    // so quoting only the max would understate TJ-4's break-even fraction.
-    let mut shard_rewards_per_epoch_skl: Vec<f64> = Vec::new();
-    for config in all_scenarios(params) {
-        for a in a1_year_aggs(params, &config)
-            .iter()
-            .filter(|a| a.n >= MAX_HOLDINGS_SHARDS as u64)
-        {
-            let pool_atomic = a
-                .emission_leg_atomic
-                .saturating_add(mul_scale(a.whole_burn_atomic, flat_25().share(a.n)));
-            let pool_per_epoch_skl = (pool_atomic as f64 / COIN) / epy;
-            let per_shard = pool_per_epoch_skl / a.n as f64;
-            shard_rewards_per_epoch_skl.push(per_shard);
-            max_shard_reward_per_epoch_skl = max_shard_reward_per_epoch_skl.max(per_shard);
-        }
-    }
-    let median_shard_reward_per_epoch_skl = {
-        let mut v = shard_rewards_per_epoch_skl.clone();
-        v.sort_by(|a, b| a.partial_cmp(b).expect("finite rewards"));
-        if v.is_empty() {
-            0.0
-        } else {
-            v[v.len() / 2]
-        }
-    };
+    // A5 / TJ-4 / TJ-7 share one per-shard post-D1/D2 reward operand family
+    // (see [`shard_reward_operands`]). A5 takes the MAX (stronger forfeit ⇒
+    // conservative deterrent); TJ-4/TJ-7 take MEDIAN + MAX (larger flow is
+    // alarm-raising for the attacker).
+    let rewards = shard_reward_operands(params);
     // The absorption DP prices the stream forgone FROM the slash epoch, so it
     // takes the per-epoch rate rather than a horizon lump.
-    crate::proxy::a5_proxy_report(out, max_shard_reward_per_epoch_skl, SKL_FIAT_PRICE_BAND[1])?;
-    crate::proxy::tj_shard_payload_report(
-        out,
-        max_shard_reward_per_epoch_skl,
-        SKL_FIAT_PRICE_BAND[1],
-    )?;
-    // `max_shard_reward_per_epoch_skl` is one shard's pool per epoch, which is
-    // both what a sole credited holder earns (r = 1) and the pool `g` the
-    // sybil dilution divides — so it serves as both operands.
+    crate::proxy::a5_proxy_report(out, rewards.max_per_epoch_skl, SKL_FIAT_PRICE_BAND[1])?;
+    crate::proxy::tj_shard_payload_report(out, rewards.max_per_epoch_skl, SKL_FIAT_PRICE_BAND[1])?;
     crate::cartel::tj_inequalities_report(
         out,
-        median_shard_reward_per_epoch_skl,
-        max_shard_reward_per_epoch_skl,
-        max_shard_reward_per_epoch_skl,
+        rewards.median_per_epoch_skl,
+        rewards.max_per_epoch_skl,
     )?;
 
     let report = Stage2Report {

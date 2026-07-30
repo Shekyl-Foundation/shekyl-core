@@ -8,7 +8,12 @@
 //!
 //! Both were **asserted** in the design round and registered in `FOLLOWUPS.md`
 //! as underived. They share a structure — a gain that saturates against a cost
-//! that grows — so they share this module and one sweep.
+//! that grows — so they share this module and one report.
+//!
+//! First-slash *timing* is not re-derived here: it comes from
+//! [`crate::proxy::expected_epochs_to_first_slash`], which walks the same
+//! absorbing chain A5 prices. This module owns only the economics layered on
+//! that moment (break-even attestation fraction, sybil dilution rate).
 //!
 //! # TJ-4 — the slash/`Rebond` cycle
 //!
@@ -43,8 +48,9 @@
 //! operator dedup — so sybil-per-shard is bounded only by capital. But per-shard
 //! work is `C·g/r` across `r` credited bonds, so **the shard's pool is
 //! conserved**: `N` sybils against `h` honest co-holders take `N/(N+h)·g`, not
-//! `N·g`. The attack is **dilution**, its gain **saturates at `g`**, and its
-//! cost is **linear in `N`** — so it has a finite optimum and is priceable.
+//! `N·g`. The attack is **dilution**: total take saturates at `g`, the
+//! *marginal* gain over one bond saturates at `h/(1+h)·g`, and cost is
+//! **linear in `N`** — so it has a finite optimum and is priceable.
 //!
 //! Rather than invent an opportunity-cost rate, this module reports the
 //! **break-even rate**: the annual return on locked capital below which the
@@ -53,16 +59,38 @@
 
 use core::fmt;
 
-use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, FAILURE_WINDOW_M, FAILURE_WINDOW_N};
+use shekyl_archival_retention::{FAILURE_WINDOW_M, FAILURE_WINDOW_N};
 
-use crate::burden::COIN;
-use crate::proxy::{absorb_table, epochs_per_year, PRIOR_STATES};
+use crate::proxy::{bond_at_risk_skl, epochs_per_year, expected_epochs_to_first_slash};
 
-/// Per-shard bonded collateral at risk on one sustained-failure slash, SKL.
-#[must_use]
-pub fn bond_floor_skl() -> f64 {
-    ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN as f64
-}
+/// Horizon for TJ-4 first-slash timing.
+///
+/// Must be long enough that a randomly-drawn cartel still shows measurable
+/// absorption **above** the deterministic no-slash fraction (§9.6 ceiling).
+/// A5's reward-stream horizon ([`crate::proxy::A5_REWARD_HORIZON_EPOCHS`] ≈ 131,
+/// ~5 y) prices forgone reward after a slash; it is too short for the late tail
+/// of a low-miss process. 4 000 epochs is ~150 y at the settlement cadence —
+/// enough that the 99 % mass gate fails only where absorption is genuinely
+/// deferred past any practical rebond cycle.
+pub const TJ4_ABSORPTION_HORIZON_EPOCHS: u64 = 4_000;
+
+/// Table / search attestation fractions used by the report and tests.
+const REPORT_F_GRID: [f64; 6] = [0.0, 0.02, 0.05, 0.10, 0.15, 0.20];
+
+/// Highest attestation fraction the break-even search will consider. Above this
+/// the mass gate almost always fails inside [`TJ4_ABSORPTION_HORIZON_EPOCHS`];
+/// the measurable upper bound is found inside the interval, not assumed equal
+/// to it.
+const BREAKEVEN_F_SEARCH_HI: f64 = 0.95;
+
+/// Absolute tolerance on `f` for break-even / measurable-edge bisection.
+///
+/// The report quotes break-even to four decimals; half a unit in the last place
+/// (`5e-5`) is enough, and stops the search before the epoch-cache quantisation
+/// (`1e-6`) collapses midpoints onto the same key. Cap iterations so a pathological
+/// floating-point plateau cannot spin.
+const BREAKEVEN_F_TOL: f64 = 5e-5;
+const BISECT_STEPS_MAX: u32 = 32;
 
 /// The **deterministic** no-slash threshold: `(n − m + 1)/n` — §9.6's
 /// `f ≈ 0.23` at `m=11/n=13`.
@@ -88,58 +116,74 @@ pub fn no_slash_attestation_fraction() -> f64 {
 /// Expected epochs until a slash absorbs, for a pair credited on fraction `f`
 /// of its epochs (so miss rate `q = 1 − f`).
 ///
-/// Reuses [`absorb_table`] — the absorption condition **is** the production
-/// predicate `failure_window_slashable`, not a re-derivation of its rule
-/// (dep-don't-mirror, the same discipline the A5 arm's DP uses).
+/// Thin adapter over [`expected_epochs_to_first_slash`]: attestation fraction
+/// is the TJ-4 natural coordinate; the proxy primitive speaks miss rate.
 ///
 /// Returns `None` when less than 99 % of the mass has absorbed within
 /// `horizon_epochs` — the honest report that the horizon is truncating the
-/// tail, so any "expectation" would be a horizon artifact rather than a
-/// property of `f`. Note this happens at `f` well **above**
+/// tail. Note this happens at `f` well **above**
 /// [`no_slash_attestation_fraction`], not at it: random friendly draws do not
 /// prevent absorption, they defer it.
 #[must_use]
 pub fn expected_epochs_to_slash(f: f64, horizon_epochs: u64) -> Option<f64> {
     let q = (1.0 - f).clamp(0.0, 1.0);
-    let absorb = absorb_table();
-    let mask = PRIOR_STATES - 1;
-    let mut dist = vec![0.0_f64; PRIOR_STATES];
-    dist[0] = 1.0;
-    let mut next = vec![0.0_f64; PRIOR_STATES];
-    let mut expected = 0.0_f64;
-    let mut absorbed = 0.0_f64;
-    for epoch in 1..=horizon_epochs {
-        next.iter_mut().for_each(|v| *v = 0.0);
-        for (state, &p) in dist.iter().enumerate() {
-            if p < 1e-18 {
-                continue;
-            }
-            let miss = p * q;
-            if absorb[state] {
-                expected += miss * epoch as f64;
-                absorbed += miss;
-            } else {
-                next[((state << 1) | 1) & mask] += miss;
-            }
-            next[(state << 1) & mask] += p * (1.0 - q);
+    expected_epochs_to_first_slash(q, horizon_epochs)
+}
+
+/// Memoized `f → E[epochs to slash]` for one horizon.
+///
+/// The report evaluates the same `f` many times (table row, net, break-even
+/// bisection, measurable-domain edge). Each evaluation is a full absorbing DP;
+/// caching by a stable quantisation of `f` keeps the report O(distinct f) DPs
+/// instead of O(table × bisection × operands).
+struct EpochCache {
+    horizon: u64,
+    /// `(quantised f key, E[epochs])` — linear scan is fine at report scale.
+    entries: Vec<(u64, Option<f64>)>,
+}
+
+impl EpochCache {
+    fn new(horizon: u64) -> Self {
+        Self {
+            horizon,
+            entries: Vec::with_capacity(128),
         }
-        core::mem::swap(&mut dist, &mut next);
     }
-    // Require most of the mass to have absorbed before quoting a mean; below
-    // that the horizon is truncating the tail and the "expectation" would be a
-    // horizon artifact rather than a property of `f`.
-    if absorbed < 0.99 {
-        return None;
+
+    /// Quantise `f` so bisection midpoints and table points collide when equal
+    /// at micro-attestation precision.
+    fn key(f: f64) -> u64 {
+        (f.clamp(0.0, 1.0) * 1_000_000.0).round() as u64
     }
-    Some(expected / absorbed)
+
+    fn epochs(&mut self, f: f64) -> Option<f64> {
+        let k = Self::key(f);
+        if let Some((_, e)) = self.entries.iter().find(|(kk, _)| *kk == k) {
+            return *e;
+        }
+        let e = expected_epochs_to_slash(f, self.horizon);
+        self.entries.push((k, e));
+        e
+    }
 }
 
 /// One slash/`Rebond` cycle's net, SKL, for a pair credited on fraction `f`.
 ///
 /// `earnings = E[epochs to slash] · f · reward_per_epoch_skl`;
-/// `cost = bond_floor + friction`. Positive net means the cycle pays — the
+/// `cost = bond_at_risk + friction`. Positive net means the cycle pays — the
 /// "subscription fee" TJ-4 warned about.
+///
+/// `reward_per_epoch_skl` is what a **sole credited** holder earns on a credited
+/// epoch (pool `g` at `r = 1`). That is the attacker-favourable end: co-holders
+/// would dilute earnings and raise the break-even `f`.
+///
+/// The stage-2 report inlines [`expected_epochs_to_slash`] + [`cycle_net_from_epochs`]
+/// so a single DP fills both the E[epochs] and net columns. This one-shot form is
+/// the stable unit API (tests, composition by future arms).
 #[must_use]
+// Binary package: unit tests are a separate crate, so a pub helper used only
+// from `#[cfg(test)]` trips `-D dead-code` on the non-test bin.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn rebond_cycle_net_skl(
     f: f64,
     reward_per_epoch_skl: f64,
@@ -147,8 +191,43 @@ pub fn rebond_cycle_net_skl(
     horizon_epochs: u64,
 ) -> Option<f64> {
     let epochs = expected_epochs_to_slash(f, horizon_epochs)?;
-    let earnings = epochs * f * reward_per_epoch_skl;
-    Some(earnings - (bond_floor_skl() + friction_skl))
+    Some(cycle_net_from_epochs(
+        f,
+        epochs,
+        reward_per_epoch_skl,
+        friction_skl,
+    ))
+}
+
+fn cycle_net_from_epochs(f: f64, epochs: f64, reward_per_epoch_skl: f64, friction_skl: f64) -> f64 {
+    epochs * f * reward_per_epoch_skl - (bond_at_risk_skl() + friction_skl)
+}
+
+/// Highest `f` in `[0, BREAKEVEN_F_SEARCH_HI]` at which absorption is still
+/// measurable within the horizon. Monotone in `f` (more friendly draws ⇒ later
+/// slash ⇒ less mass inside a fixed window), so binary search finds the edge
+/// without an O(n) linear probe of the DP.
+fn measurable_f_hi(cache: &mut EpochCache) -> f64 {
+    if cache.epochs(0.0).is_none() {
+        return 0.0;
+    }
+    if cache.epochs(BREAKEVEN_F_SEARCH_HI).is_some() {
+        return BREAKEVEN_F_SEARCH_HI;
+    }
+    let mut lo = 0.0_f64;
+    let mut hi = BREAKEVEN_F_SEARCH_HI;
+    for _ in 0..BISECT_STEPS_MAX {
+        if hi - lo <= BREAKEVEN_F_TOL {
+            break;
+        }
+        let mid = 0.5 * (lo + hi);
+        if cache.epochs(mid).is_some() {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
 }
 
 /// The attestation fraction at which the cycle first breaks even.
@@ -159,33 +238,47 @@ pub fn rebond_cycle_net_skl(
 ///
 /// `None` means the burned bond is never covered where the cycle completes —
 /// the window is **not** a subscription fee at this reward level.
+///
+/// Memoizes `E[epochs](f)` for the bisection so each distinct `f` runs the
+/// absorbing DP at most once (the search probes the measurable edge and then
+/// the break-even root).
 #[must_use]
 pub fn rebond_breakeven_f(
     reward_per_epoch_skl: f64,
     friction_skl: f64,
     horizon_epochs: u64,
 ) -> Option<f64> {
-    // Upper bound: the highest f at which absorption is still measurable within
-    // the horizon; beyond it `expected_epochs_to_slash` reports None rather
-    // than a truncation artifact.
-    let mut hi_bound = 0.0_f64;
-    for i in 1..=95 {
-        let f = f64::from(i) / 100.0;
-        if expected_epochs_to_slash(f, horizon_epochs).is_some() {
-            hi_bound = f;
-        }
-    }
-    let (mut lo, mut hi) = (0.0_f64, hi_bound);
-    let net = |x: f64| rebond_cycle_net_skl(x, reward_per_epoch_skl, friction_skl, horizon_epochs);
-    if net(hi).is_none_or(|v| v < 0.0) {
+    let mut cache = EpochCache::new(horizon_epochs);
+    let net_at = |f: f64, cache: &mut EpochCache| -> Option<f64> {
+        let e = cache.epochs(f)?;
+        Some(cycle_net_from_epochs(
+            f,
+            e,
+            reward_per_epoch_skl,
+            friction_skl,
+        ))
+    };
+
+    // No measurable absorption even at f = 0 (should not happen for m-of-n).
+    cache.epochs(0.0)?;
+    let hi_bound = measurable_f_hi(&mut cache);
+    // Even at the latest measurable f the cycle still loses the bond.
+    if net_at(hi_bound, &mut cache).is_none_or(|v| v < 0.0) {
         return None;
     }
-    if net(lo).is_some_and(|v| v >= 0.0) {
+    // Degenerate: already non-negative at f = 0 (zero bond / infinite reward).
+    if net_at(0.0, &mut cache).is_some_and(|v| v >= 0.0) {
         return Some(0.0);
     }
-    for _ in 0..60 {
+
+    let mut lo = 0.0_f64;
+    let mut hi = hi_bound;
+    for _ in 0..BISECT_STEPS_MAX {
+        if hi - lo <= BREAKEVEN_F_TOL {
+            break;
+        }
         let mid = 0.5 * (lo + hi);
-        match net(mid) {
+        match net_at(mid, &mut cache) {
             Some(v) if v >= 0.0 => hi = mid,
             _ => lo = mid,
         }
@@ -193,10 +286,13 @@ pub fn rebond_breakeven_f(
     Some(hi)
 }
 
-/// TJ-7 gain: the share of shard `s`'s conserved pool `g` that `n_sybil` bonds
-/// take from `h_honest` co-holders, above what a single honest bond would take.
+/// TJ-7 *marginal* gain: extra share of shard pool `g` that `n_sybil` bonds
+/// take from `h_honest` co-holders, relative to a single bond among the same
+/// honest set.
 ///
-/// `[ N/(N+h) − 1/(1+h) ] · g`, saturating at `g` as `N → ∞`.
+/// `[ N/(N+h) − 1/(1+h) ] · g`. This is the cartel's **extra** take from
+/// diluting honest co-holders, not total take `N/(N+h)·g`. Saturates at
+/// `h/(1+h)·g` as `N → ∞` (strictly below `g`).
 #[must_use]
 pub fn sybil_dilution_gain(n_sybil: u64, h_honest: u64, pool_g_skl: f64) -> f64 {
     if n_sybil == 0 {
@@ -221,7 +317,7 @@ pub fn sybil_breakeven_opportunity_rate(
     if n_sybil <= 1 {
         return None;
     }
-    let locked = (n_sybil - 1) as f64 * bond_floor_skl();
+    let locked = (n_sybil - 1) as f64 * bond_at_risk_skl();
     if locked <= 0.0 {
         return None;
     }
@@ -230,15 +326,64 @@ pub fn sybil_breakeven_opportunity_rate(
     Some(annual_gain / locked)
 }
 
+fn fmt_breakeven_f(f: Option<f64>) -> String {
+    f.map_or_else(|| "none".to_string(), |x| format!("{x:.4}"))
+}
+
+fn fmt_rate_pct(rate: Option<f64>) -> String {
+    rate.map_or_else(|| "—".to_string(), |r| format!("{:.1}%", r * 100.0))
+}
+
+/// Write one TJ-7 rate table for a single pool operand.
+fn write_sybil_table(
+    out: &mut impl fmt::Write,
+    pool_g_per_epoch_skl: f64,
+    label: &str,
+) -> fmt::Result {
+    writeln!(
+        out,
+        "  TJ-7 at {label} pool g = {G:.4} SKL/epoch (sole credited holder; pool is\n\
+         CONSERVED — N sybils vs h honest take N/(N+h)*g, NOT N*g):",
+        G = pool_g_per_epoch_skl,
+    )?;
+    writeln!(
+        out,
+        "{:<8} {:>8} {:>16} {:>22}",
+        "N", "h", "gain SKL/epoch", "break-even rate/yr"
+    )?;
+    for &(n, h) in &[(2u64, 1u64), (5, 1), (5, 5), (20, 5), (100, 5), (100, 50)] {
+        let gain = sybil_dilution_gain(n, h, pool_g_per_epoch_skl);
+        let rate = sybil_breakeven_opportunity_rate(n, h, pool_g_per_epoch_skl);
+        writeln!(
+            out,
+            "{:<8} {:>8} {:>16.5} {:>22}",
+            n,
+            h,
+            gain,
+            fmt_rate_pct(rate)
+        )?;
+    }
+    Ok(())
+}
+
 /// TJ-4 + TJ-7 report — the two underived inequalities, derived.
+///
+/// Both operands are **per-shard pool per epoch** (what a sole credited holder
+/// earns at `r = 1`). That quantity is also the conserved pool `g` TJ-7
+/// dilutes — one concept, two economic readings.
+///
+/// - `reward_median_per_epoch_skl` — representative cell of the scenario family
+/// - `reward_max_per_epoch_skl` — family maximum (alarm-raising for TJ-4/TJ-7:
+///   larger flow makes the cycle and the dilution more profitable)
 pub fn tj_inequalities_report(
     out: &mut impl fmt::Write,
     reward_median_per_epoch_skl: f64,
     reward_max_per_epoch_skl: f64,
-    pool_g_per_epoch_skl: f64,
 ) -> fmt::Result {
-    let reward_per_epoch_skl = reward_median_per_epoch_skl;
+    let horizon = TJ4_ABSORPTION_HORIZON_EPOCHS;
     let ceiling = no_slash_attestation_fraction();
+    let bond = bond_at_risk_skl();
+
     writeln!(
         out,
         "\nTJ-4/TJ-7 — the two inequalities the (m,n) re-pin needs (m={M}/n={N}).\n\
@@ -247,13 +392,13 @@ pub fn tj_inequalities_report(
          deferred, not prevented, so the cycle question stays live across the range.\n\
          OPERAND DIRECTION (labelled at the number): A5 uses the scenario-family MAX\n\
          per-shard pool because there a larger forfeit is a STRONGER deterrent, so\n\
-         max is conservative. For TJ-4 it runs the OTHER WAY -- a larger reward\n\
-         makes the slash/Rebond cycle MORE profitable -- so max is the ALARM-RAISING\n\
-         end. The table below runs the MEDIAN ({RM:.4} SKL/shard/epoch); the max\n\
-         ({RX:.4}) is reported as the bound beneath it.",
+         max is conservative. For TJ-4/TJ-7 it runs the OTHER WAY -- a larger reward\n\
+         makes the slash/Rebond cycle and the dilution MORE profitable -- so max is\n\
+         the ALARM-RAISING end. Tables below run the MEDIAN ({RM:.4} SKL/shard/epoch);\n\
+         the max ({RX:.4}) is reported as the bound beneath each.",
         M = FAILURE_WINDOW_M,
         N = FAILURE_WINDOW_N,
-        BF = bond_floor_skl(),
+        BF = bond,
         C = ceiling,
         RM = reward_median_per_epoch_skl,
         RX = reward_max_per_epoch_skl,
@@ -264,30 +409,34 @@ pub fn tj_inequalities_report(
          (shard_work_micro returns 0 without serve credit; reward pays on credited\n\
          work), so the m-1 unslashable epochs are free of SLASH, not free MONEY.\n\
          The inequality is only non-trivial when the pair is being credited, i.e.\n\
-         at attestation fraction f > 0 — so the derived quantity is a break-even f."
+         at attestation fraction f > 0 — so the derived quantity is a break-even f.\n\
+         Earnings assume sole credited holder (r = 1) — attacker-favourable."
     )?;
     writeln!(
         out,
         "{:<10} {:>14} {:>16} {:>16}",
         "f", "E[epochs]", "earnings SKL", "cycle net SKL"
     )?;
-    for &f in &[0.0_f64, 0.02, 0.05, 0.10, 0.15, 0.20] {
-        match (
-            expected_epochs_to_slash(f, 4_000),
-            rebond_cycle_net_skl(f, reward_per_epoch_skl, 0.0, 4_000),
-        ) {
-            (Some(e), Some(net)) => writeln!(
-                out,
-                "{:<10.3} {:>14.2} {:>16.4} {:>16.4}",
-                f,
-                e,
-                e * f * reward_per_epoch_skl,
-                net
-            )?,
-            _ => writeln!(out, "{f:<10.3} {:>14} {:>16} {:>16}", "no slash", "—", "—")?,
+    // One DP per grid point: E[epochs] first, then the cycle net from that mean
+    // (same arithmetic as [`rebond_cycle_net_skl`], without a second walk).
+    for &f in &REPORT_F_GRID {
+        match expected_epochs_to_slash(f, horizon) {
+            Some(e) => {
+                let earnings = e * f * reward_median_per_epoch_skl;
+                let net = cycle_net_from_epochs(f, e, reward_median_per_epoch_skl, 0.0);
+                writeln!(
+                    out,
+                    "{:<10.3} {:>14.2} {:>16.4} {:>16.4}",
+                    f, e, earnings, net
+                )?;
+            }
+            None => writeln!(out, "{f:<10.3} {:>14} {:>16} {:>16}", "no slash", "—", "—")?,
         }
     }
-    match rebond_breakeven_f(reward_per_epoch_skl, 0.0, 4_000) {
+
+    // Break-even searches memoize E[epochs](f) internally (see [`rebond_breakeven_f`]).
+    let be_med = rebond_breakeven_f(reward_median_per_epoch_skl, 0.0, horizon);
+    match be_med {
         Some(f) => writeln!(
             out,
             "  -> TJ-4 break-even f = {f:.4} (friction 0 — the attacker-favourable end;\n\
@@ -307,15 +456,16 @@ pub fn tj_inequalities_report(
              attestation-resistance (the draw)."
         )?,
     }
+    let be_max = rebond_breakeven_f(reward_max_per_epoch_skl, 0.0, horizon);
     writeln!(
         out,
         "     bound at the MAX operand ({RX:.4} SKL/shard/epoch): break-even f = {BX}.\n\
              Both ends of the family are reported so the verdict is a RANGE, not a\n\
              point chosen by which operand happened to be at hand.",
         RX = reward_max_per_epoch_skl,
-        BX = rebond_breakeven_f(reward_max_per_epoch_skl, 0.0, 4_000)
-            .map_or("none".to_string(), |f| format!("{f:.4}")),
+        BX = fmt_breakeven_f(be_max),
     )?;
+
     // The ratio that makes the finding actionable: what a burned bond is WORTH,
     // denominated in the reward it is supposed to secure.
     if reward_median_per_epoch_skl > 0.0 {
@@ -328,46 +478,34 @@ pub fn tj_inequalities_report(
              cannot carry attestation-resistance while the collateral it forfeits is\n\
              this cheap relative to the flow. Raising m/lowering n does not fix a\n\
              floor problem.",
-            E = bond_floor_skl() / reward_median_per_epoch_skl,
-            BF = bond_floor_skl(),
+            E = bond / reward_median_per_epoch_skl,
+            BF = bond,
             RM = reward_median_per_epoch_skl,
         )?;
     }
+
     writeln!(
         out,
         "\n  TJ-7 sybil-per-shard: pool is CONSERVED (C*g/r over r credited bonds),\n\
          so N sybils vs h honest take N/(N+h)*g, NOT N*g — dilution, not\n\
-         multiplication. Gain saturates at g = {G:.4} SKL/epoch; cost is linear in N.\n\
-         Break-even = the ANNUAL return on locked capital below which it pays:",
-        G = pool_g_per_epoch_skl,
+         multiplication. Tables report MARGINAL gain over one bond\n\
+         ([N/(N+h) - 1/(1+h)]*g), which saturates at h/(1+h)*g, not at g.\n\
+         Cost is linear in N. Break-even = the ANNUAL return on locked capital\n\
+         below which it pays. Same operand-direction rule as TJ-4: median first,\n\
+         max as the alarm-raising bound."
     )?;
-    writeln!(
-        out,
-        "{:<8} {:>8} {:>16} {:>22}",
-        "N", "h", "gain SKL/epoch", "break-even rate/yr"
-    )?;
-    for &(n, h) in &[(2u64, 1u64), (5, 1), (5, 5), (20, 5), (100, 5), (100, 50)] {
-        let gain = sybil_dilution_gain(n, h, pool_g_per_epoch_skl);
-        let rate = sybil_breakeven_opportunity_rate(n, h, pool_g_per_epoch_skl);
-        writeln!(
-            out,
-            "{:<8} {:>8} {:>16.5} {:>22}",
-            n,
-            h,
-            gain,
-            rate.map_or("—".to_string(), |r| format!("{:.1}%", r * 100.0))
-        )?;
-    }
+    write_sybil_table(out, reward_median_per_epoch_skl, "MEDIAN")?;
+    write_sybil_table(out, reward_max_per_epoch_skl, "MAX")?;
     writeln!(
         out,
         "  -> the attack pays iff the cartel's real cost of locked capital is BELOW\n\
-         the listed rate. Gain saturating at g while cost grows linearly gives a\n\
-         finite optimal N — priceable, not unbounded. NOTE (§11.4): a single\n\
-         operator behind N personas is NOT a mechanism concern — service is the\n\
-         product, the linkage is unobservable by design (G-1), and participation\n\
-         distribution is a tacit-vote outcome. This table prices DILUTION OF\n\
-         HONEST CO-HOLDERS, which is a reward-fairness question, not a storage-\n\
-         accounting one."
+         the listed rate. Marginal gain saturating at h/(1+h)*g while cost grows\n\
+         linearly gives a finite optimal N — priceable, not unbounded. NOTE\n\
+         (§11.4): a single operator behind N personas is NOT a mechanism concern —\n\
+         service is the product, the linkage is unobservable by design (G-1), and\n\
+         participation distribution is a tacit-vote outcome. This table prices\n\
+         DILUTION OF HONEST CO-HOLDERS, which is a reward-fairness question, not a\n\
+         storage-accounting one."
     )?;
     Ok(())
 }
@@ -382,13 +520,14 @@ mod tests {
         // epoch, so earnings are 0 and the cycle is a pure loss of the bond at
         // ANY reward level. The "10 free epochs" are free of slash, not money.
         for &reward in &[0.0_f64, 1.0, 100.0, 10_000.0] {
-            let net = rebond_cycle_net_skl(0.0, reward, 0.0, 4_000).expect("absorbs at f=0");
+            let net = rebond_cycle_net_skl(0.0, reward, 0.0, TJ4_ABSORPTION_HORIZON_EPOCHS)
+                .expect("absorbs at f=0");
             assert!(
                 net < 0.0,
                 "f=0 must lose the bond at reward {reward}, got net {net}"
             );
             assert!(
-                (net + bond_floor_skl()).abs() < 1e-9,
+                (net + bond_at_risk_skl()).abs() < 1e-9,
                 "f=0 earnings must be exactly zero"
             );
         }
@@ -404,15 +543,16 @@ mod tests {
         // the ceiling, the draw has become placeable and §9.6's hard reading
         // would be the correct one again.
         let ceiling = no_slash_attestation_fraction();
-        let at = expected_epochs_to_slash(ceiling, 4_000);
-        let above = expected_epochs_to_slash(ceiling + 0.05, 4_000);
+        let h = TJ4_ABSORPTION_HORIZON_EPOCHS;
+        let at = expected_epochs_to_slash(ceiling, h);
+        let above = expected_epochs_to_slash(ceiling + 0.05, h);
         assert!(at.is_some(), "random draws at the ceiling still absorb");
         assert!(above.is_some(), "and above it");
         // Deferred, though: the wait grows with f.
         assert!(above.unwrap() > at.unwrap());
         // Far above, the horizon truncates and we report None rather than a
         // horizon artifact.
-        assert!(expected_epochs_to_slash(0.95, 4_000).is_none());
+        assert!(expected_epochs_to_slash(0.95, h).is_none());
     }
 
     #[test]
@@ -422,16 +562,68 @@ mod tests {
         let mut prev = 0.0;
         for i in 0..=8 {
             let f = f64::from(i) * 0.02;
-            let e = expected_epochs_to_slash(f, 4_000).expect("absorbs below ceiling");
+            let e = expected_epochs_to_slash(f, TJ4_ABSORPTION_HORIZON_EPOCHS)
+                .expect("absorbs below ceiling");
             assert!(e >= prev, "E[epochs] fell at f={f}: {e} < {prev}");
             prev = e;
         }
     }
 
     #[test]
+    fn rebond_breakeven_pins_at_representative_reward() {
+        // Representative run (2026-07-30): at ~2.4156 SKL/shard/epoch the cycle
+        // broke even near f = 0.0274; at the max end it was ~0.0002. Pin the
+        // order of magnitude so a DP or bond-scale regression cannot silently
+        // move the binding claim. Exact digit drift inside the band is fine;
+        // leaving the band is not.
+        let f_med = rebond_breakeven_f(2.4156, 0.0, TJ4_ABSORPTION_HORIZON_EPOCHS)
+            .expect("must break even at the median representative reward");
+        assert!(
+            (0.020..0.040).contains(&f_med),
+            "median-reward break-even f={f_med} drifted from ~0.027"
+        );
+
+        // At a high reward the break-even f collapses toward zero but stays > 0
+        // (f = 0 earns nothing). At a reward so low the bond is many epochs of
+        // flow, the cycle never pays inside the measurable domain.
+        let f_hi = rebond_breakeven_f(100.0, 0.0, TJ4_ABSORPTION_HORIZON_EPOCHS)
+            .expect("high reward must still have a positive break-even f");
+        assert!(f_hi > 0.0 && f_hi < 0.01, "high-reward f={f_hi}");
+
+        // Bond is 0.75 SKL; at 0.001 SKL/epoch the bond is 750 epochs of flow —
+        // far above E[T]·f for any measurable f.
+        assert!(
+            rebond_breakeven_f(0.001, 0.0, TJ4_ABSORPTION_HORIZON_EPOCHS).is_none(),
+            "tiny reward must not cover the bond"
+        );
+    }
+
+    #[test]
+    fn epoch_cache_agrees_with_direct_evaluation() {
+        let mut cache = EpochCache::new(TJ4_ABSORPTION_HORIZON_EPOCHS);
+        for &f in &[0.0_f64, 0.05, 0.15, no_slash_attestation_fraction()] {
+            let direct = expected_epochs_to_slash(f, TJ4_ABSORPTION_HORIZON_EPOCHS);
+            let cached = cache.epochs(f);
+            match (direct, cached) {
+                (Some(a), Some(b)) => {
+                    assert!((a - b).abs() < 1e-12, "cache mismatch at f={f}: {a} vs {b}")
+                }
+                (None, None) => {}
+                (a, b) => panic!("cache presence mismatch at f={f}: {a:?} vs {b:?}"),
+            }
+            // Second lookup must hit the same entry.
+            assert_eq!(
+                cache.epochs(f).map(|x| x.to_bits()),
+                cached.map(|x| x.to_bits())
+            );
+        }
+    }
+
+    #[test]
     fn sybil_gain_is_dilution_and_saturates_at_the_pool() {
-        // The conservation property: N sybils take N/(N+h)*g, never N*g, and the
-        // gain is bounded by g however large N grows.
+        // The conservation property: N sybils take a *marginal* gain of
+        // [N/(N+h) - 1/(1+h)]·g, never N·g, and the gain is bounded by g
+        // however large N grows (actually by h/(1+h)·g).
         let g = 10.0;
         let h = 5;
         let one = sybil_dilution_gain(1, h, g);
@@ -448,6 +640,9 @@ mod tests {
         }
         // Explicitly NOT multiplication: 100 sybils do not take 100x a single bond.
         assert!(sybil_dilution_gain(100, h, g) < 100.0 * (g / (1.0 + h as f64)));
+        // Asymptote: lim N→∞ gain = h/(1+h)·g.
+        let asymptote = (h as f64) / (1.0 + h as f64) * g;
+        assert!((sybil_dilution_gain(1_000_000, h, g) - asymptote).abs() < 1e-4);
     }
 
     #[test]
@@ -462,5 +657,13 @@ mod tests {
             "break-even rate must fall with N: {r100} !< {r2}"
         );
         assert!(sybil_breakeven_opportunity_rate(1, 5, g).is_none());
+    }
+
+    #[test]
+    fn bond_at_risk_is_the_canonical_floor() {
+        // No local bond_floor_skl alias: the cartel arm prices the same
+        // per-shard floor A5 exposes through bond_at_risk_skl.
+        assert!(bond_at_risk_skl() > 0.0);
+        assert!((bond_at_risk_skl() - 0.75).abs() < 1e-12);
     }
 }

@@ -170,14 +170,18 @@ pub fn slash_prob_per_epoch(q: f64, m: u32, n: u32) -> f64 {
     p
 }
 
-/// The proxy's total cost per epoch, fiat: re-fetch bandwidth + the L14 slash
-/// exposure.
-///
-/// **Aggregation is EXACT (the approximation was fixed, not labelled).** A slashed
 /// Prior-window width: the `n − 1` observations preceding the decision epoch.
 const PRIOR_WIDTH: usize = FAILURE_WINDOW_N as usize - 1;
 /// Number of prior-window states (`2^(n-1)` = 4 096 at the shipped `n = 13`).
-pub(crate) const PRIOR_STATES: usize = 1 << PRIOR_WIDTH;
+const PRIOR_STATES: usize = 1 << PRIOR_WIDTH;
+
+/// Negligible state mass; skipping it keeps the DP sweep cheap without changing
+/// verdicts at the precision the arms quote.
+const DP_MASS_EPS: f64 = 1e-18;
+
+/// Minimum absorbed probability mass required before a first-slash *mean* is
+/// treated as a property of `q` rather than a horizon truncation artifact.
+const ABSORPTION_MASS_THRESHOLD: f64 = 0.99;
 
 /// For each prior-window state, does a **miss at the head** trigger a slash?
 ///
@@ -186,7 +190,11 @@ pub(crate) const PRIOR_STATES: usize = 1 << PRIOR_WIDTH;
 /// predicate — the fix removes the aggregation approximation without trading away
 /// dep-don't-mirror. Bit `i` of the state is a miss at the `i`-th preceding
 /// observation.
-pub(crate) fn absorb_table() -> &'static [bool] {
+///
+/// Private: consumers must go through [`fold_first_slash_mass`] /
+/// [`expected_epochs_to_first_slash`] / [`expected_slash_cost_per_epoch`] so the
+/// window bitset does not leak into sibling arms.
+fn absorb_table() -> &'static [bool] {
     static TABLE: OnceLock<Vec<bool>> = OnceLock::new();
     TABLE.get_or_init(|| {
         let base = FAILURE_WINDOW_N as u64 + 1;
@@ -208,6 +216,70 @@ pub(crate) fn absorb_table() -> &'static [bool] {
     })
 }
 
+/// Fold over first-slash absorption events of the trailing-window Markov chain.
+///
+/// Starts from a clean prior (no misses). Each epoch, a miss from a prior-window
+/// state that is already at the slash threshold contributes mass at that epoch
+/// and is removed; non-absorbing misses and all passes advance the sliding
+/// window. Invokes `on_absorb(epoch, mass)` for every absorbed packet.
+///
+/// Returns total absorbed mass in `[0, 1]`. This is the **single** transition
+/// kernel for every arm that needs first-slash timing or pricing (A5 exposure,
+/// TJ-4 cycle length) — dep-don't-mirror on the production predicate, and
+/// one place to fix the chain if the window pin moves.
+fn fold_first_slash_mass(q: f64, horizon_epochs: u64, mut on_absorb: impl FnMut(u64, f64)) -> f64 {
+    if horizon_epochs == 0 {
+        return 0.0;
+    }
+    let q = q.clamp(0.0, 1.0);
+    let absorb = absorb_table();
+    let mask = PRIOR_STATES - 1;
+    let mut dist = vec![0.0_f64; PRIOR_STATES];
+    dist[0] = 1.0; // a pair that has been serving: no prior misses
+    let mut next = vec![0.0_f64; PRIOR_STATES];
+    let mut absorbed = 0.0_f64;
+    for epoch in 1..=horizon_epochs {
+        next.iter_mut().for_each(|v| *v = 0.0);
+        for (state, &p) in dist.iter().enumerate() {
+            if p < DP_MASS_EPS {
+                continue;
+            }
+            let miss = p * q;
+            if absorb[state] {
+                on_absorb(epoch, miss);
+                absorbed += miss;
+            } else {
+                next[((state << 1) | 1) & mask] += miss;
+            }
+            next[(state << 1) & mask] += p * (1.0 - q);
+        }
+        std::mem::swap(&mut dist, &mut next);
+    }
+    absorbed
+}
+
+/// Expected epochs until first slash under per-epoch miss rate `q`, conditioned
+/// on absorption within `horizon_epochs`.
+///
+/// Returns [`None`] when less than 99 % of the mass has absorbed inside the
+/// horizon — any mean would then be a horizon artifact, not a property of `q`.
+/// Callers that need attestation fraction `f` (friendly-draw share) pass
+/// `q = 1 − f`.
+///
+/// Used by the TJ-4 slash/`Rebond` cycle arm; the chain itself lives here so
+/// sibling modules never touch the window bitset.
+#[must_use]
+pub fn expected_epochs_to_first_slash(q: f64, horizon_epochs: u64) -> Option<f64> {
+    let mut sum_t = 0.0_f64;
+    let absorbed = fold_first_slash_mass(q, horizon_epochs, |epoch, mass| {
+        sum_t += mass * epoch as f64;
+    });
+    if absorbed < ABSORPTION_MASS_THRESHOLD {
+        return None;
+    }
+    Some(sum_t / absorbed)
+}
+
 /// Expected slash cost **per epoch** for ONE shard, from the first-slash
 /// distribution of an **absorbing** Markov chain over the trailing window.
 ///
@@ -215,7 +287,7 @@ pub(crate) fn absorb_table() -> &'static [bool] {
 /// double-count and *overstate the deterrent* — direction-safe only at today's
 /// `(m, n)`. Since this arm re-prices automatically at the Round-2 re-pin, that
 /// overstatement could silently flip a marginal verdict; the exposure therefore
-/// comes from [`expected_slash_cost_per_epoch`]'s absorbing Markov chain, priced
+/// comes from [`fold_first_slash_mass`]'s absorbing Markov chain, priced
 /// at the actual first-slash epoch.
 #[must_use]
 pub fn expected_slash_cost_per_epoch(
@@ -227,31 +299,12 @@ pub fn expected_slash_cost_per_epoch(
     if horizon_epochs == 0 {
         return 0.0;
     }
-    let q = q.clamp(0.0, 1.0);
-    let absorb = absorb_table();
-    let mask = PRIOR_STATES - 1;
-    let mut dist = vec![0.0_f64; PRIOR_STATES];
-    dist[0] = 1.0; // a pair that has been serving: no prior misses
     let mut expected = 0.0_f64;
-    let mut next = vec![0.0_f64; PRIOR_STATES];
-    for epoch in 1..=horizon_epochs {
-        next.iter_mut().for_each(|v| *v = 0.0);
-        for (state, &p) in dist.iter().enumerate() {
-            if p < 1e-18 {
-                continue; // negligible mass; keeps the sweep cheap
-            }
-            let miss = p * q;
-            if absorb[state] {
-                // Absorbed at `epoch`: bond forfeited + the remaining stream lost.
-                let remaining = horizon_epochs.saturating_sub(epoch) as f64;
-                expected += miss * (bond_loss_fiat + reward_per_epoch_fiat * remaining);
-            } else {
-                next[((state << 1) | 1) & mask] += miss;
-            }
-            next[(state << 1) & mask] += p * (1.0 - q);
-        }
-        std::mem::swap(&mut dist, &mut next);
-    }
+    fold_first_slash_mass(q, horizon_epochs, |epoch, mass| {
+        // Absorbed at `epoch`: bond forfeited + the remaining stream lost.
+        let remaining = horizon_epochs.saturating_sub(epoch) as f64;
+        expected += mass * (bond_loss_fiat + reward_per_epoch_fiat * remaining);
+    });
     expected / horizon_epochs as f64
 }
 
@@ -728,6 +781,31 @@ mod tests {
                 "DP table vs enumeration disagree at q={q}: {hazard} vs {enumerated}"
             );
         }
+    }
+
+    #[test]
+    fn first_slash_timing_and_cost_share_one_absorbing_chain() {
+        // Both consumers of [`fold_first_slash_mass`] must agree on when mass
+        // absorbs: at q = 1 every epoch misses, so first slash is deterministic
+        // and early; at low q the mean stretches and the mass gate can trip.
+        let horizon = 500_u64;
+        let e_sure = expected_epochs_to_first_slash(1.0, horizon).expect("q=1 absorbs");
+        // m-of-n with a clean prior: need m consecutive misses to fill the window.
+        assert!(
+            (e_sure - f64::from(SLASH_M)).abs() < 1e-9,
+            "sure-miss first slash at epoch m={SLASH_M}, got {e_sure}"
+        );
+        // Cost path: bond-only exposure at q=1 must be positive and scale with bond.
+        let c1 = expected_slash_cost_per_epoch(1.0, 10.0, 0.0, horizon);
+        let c2 = expected_slash_cost_per_epoch(1.0, 20.0, 0.0, horizon);
+        assert!(c1 > 0.0 && (c2 - 2.0 * c1).abs() < 1e-9);
+
+        // Low miss rate: mean is later; very low may be a horizon artifact.
+        let e_low = expected_epochs_to_first_slash(0.05, horizon);
+        if let Some(e) = e_low {
+            assert!(e > e_sure, "rarer misses must delay first slash");
+        }
+        assert!(expected_epochs_to_first_slash(0.0, horizon).is_none()); // q=0 never misses
     }
 
     /// One shard's bond at risk in fiat (per-shard slash scope, §3.2).
