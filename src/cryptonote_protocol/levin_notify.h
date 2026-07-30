@@ -108,17 +108,27 @@ namespace levin
     //! Run the logic for the next epoch immediately. Only use in testing.
     void run_epoch();
 
-    //! Run the logic for the next stem timeout imemdiately. Only use in  testing.
-    void run_stems();
+    /*! Advance to the zone's next scheduled event and run it — one poll at
+        `next_wake()`, exactly as the production timer would, then re-arm.
+        Only use in testing.
+
+        Renamed from the inherited `run_stems`, whose name was a dead
+        assumption twice over: it never touched Dandelion++ stems, and after
+        RP-3b its body no longer cancels noise timers either (there are none
+        to cancel — the zone folds every covert deadline into `next_wake()`).
+        The name follows the body (§20.6). */
+    void run_next_wake();
 
     //! Run the logic for flushing all Dandelion++ fluff queued txs. Only use in testing.
     void run_fluff();
 
     /*! Send txs using `cryptonote_protocol_defs.h` payload format wrapped in a
-        levin header. The message will be sent in a "discreet" manner if
-        enabled - if `!noise.empty()` then the `command`/`payload` will be
-        queued to send at the next available noise interval. Otherwise, a
-        Dandelion++ fluff algorithm will be used.
+        levin header. The message will be sent in a "discreet" manner if the
+        zone runs covert channels (`shekyl_relay_zone_covert_enabled` — the
+        zone's fact since §20.4, no longer the payload's emptiness) — then the
+        `command`/`payload` will be queued to send at the next available
+        covert interval. Otherwise, a Dandelion++ fluff algorithm will be
+        used.
 
         \note Eventually Dandelion++ stem sending will be used here when
           enabled.

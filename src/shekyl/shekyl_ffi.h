@@ -3042,15 +3042,35 @@ static_assert(sizeof(ShekylRelayBlob) == sizeof(const std::uint8_t*) + sizeof(st
 //! N notifications, leaking the batch size as a per-peer message count.
 typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
                                    const ShekylRelayBlob* blobs, std::size_t n);
-//! The stem slots changed: `count` x 16 bytes, slot order, nil for an empty
-//! slot. Order and nil-position are load-bearing — the consumer indexes by slot.
-typedef void (*ShekylRelaySlotsCb)(void* ctx, const std::uint8_t* slots, std::size_t count);
+//! Covert channel `channel` came due with its stem slot unbound: clear it —
+//! nil the binding, discard buffers — on the channel's own strand. The other
+//! half of the deleted slot array: the binding itself travels with each covert
+//! send, and the LOSS of a binding travels here, because an unbound channel
+//! emits no sends. One index crosses -- no array, no slot order, no width to
+//! reconcile. Fires at EVERY due tick while the slot stays unbound (derived
+//! from the map at each poll, never pushed once at a transition), so the
+//! receiver must be idempotent and a lost clear self-heals one covert interval
+//! later. Must not throw across the FFI boundary.
+typedef void (*ShekylRelayCovertUnbindCb)(void* ctx, std::size_t channel);
 //! Supply the outbound connection set on demand: write the id count through
 //! `out_n` and return a pointer to `*out_n` x 16 bytes valid until the poll
 //! returns (nullptr with `*out_n == 0` for none). shekyl_relay_zone_poll calls
 //! this ONLY at an epoch boundary, so a fluff-release wake never pays for the
 //! connection scan. Must not throw across the FFI boundary.
 typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out_n);
+
+//! Covert channel `channel` is due to send.
+//!
+//! Carries NO payload discriminant, and that is deliberate (CV-4): whether the
+//! send is a dummy or drains a queued real fragment is a queue question, and the
+//! queue is C++. Rust decides WHEN and WHICH CHANNEL; C++ decides WHAT. Adding a
+//! kind or a "has real pending" flag here would let the cadence react to traffic,
+//! and that change would look like a latency optimisation rather than the
+//! covert-channel leak it is. Must not throw across the FFI boundary.
+//! `peer` is the 16-byte connection id the channel's stem slot is bound to --
+//! never nil, since an unbound slot emits nothing (CV-2). The binding travels
+//! with the send (§20.3's inversion) rather than as a pushed slot array.
+typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel, const std::uint8_t* peer);
 
 //! Forward to the successor written into `out_dest`.
 #define SHEKYL_RELAY_PLAN_STEM        0
@@ -3059,17 +3079,36 @@ typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out
 //! Settled for this epoch: fluff. Retrying cannot change the answer.
 #define SHEKYL_RELAY_PLAN_FLUFF_EPOCH 2
 
+//! Zone-shape flags for `shekyl_relay_zone_new`.
+//!
+//! Named bits rather than two `bool` parameters, deliberately. Adjacent bools
+//! in a C signature transpose silently — and transposing THESE two swaps the
+//! i2p/tor outbound-only fluff rule with the covert enable, which is the exact
+//! regression RP-3a's first pass shipped (caught only because eight `private_*`
+//! gtests happened to cover it). This header is hand-written, not generated, so
+//! nothing mechanically checks it against the Rust definition in
+//! `relay_zone_ffi/mod.rs`; a bitmask removes the ordering question instead of
+//! relying on a check that does not exist.
+//!
+//! The i2p/tor rule follows the NETWORK, not covert mode: a hidden-service zone
+//! with covert disabled still needs it. That is why the bits are independent.
+//! Keep these values in sync with `SHEKYL_RELAY_ZONE_*` in `relay_zone_ffi`.
+#define SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY 1u
+#define SHEKYL_RELAY_ZONE_COVERT_ENABLED 2u
+
 //! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
-//! `outbound_fluff_only` is the i2p/tor rule — fluff to outbound connections
-//! only, never to an inbound peer, who on a hidden service is a stranger that
-//! dialled us. It follows the NETWORK, not noise mode: a hidden-service zone
-//! with noise disabled still needs it.
+//! `flags` is a mask of the `SHEKYL_RELAY_ZONE_*` bits above.
 //! Null when a zone cannot be built: SIZE_MAX stems, or a zero epoch — which
 //! would expire at every wake and spin the relay timer. Treat null as fatal.
 RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems,
                                        std::uint32_t min_epoch_secs,
                                        std::uint32_t epoch_jitter_secs,
-                                       bool outbound_fluff_only);
+                                       std::uint32_t flags);
+//! Whether this zone runs covert (noise) channels.
+//! The single owner of a fact this side used to re-derive at nine sites from
+//! `!zone::noise.empty()` — a byte payload doubling as its own enable flag.
+//! Frozen at construction, so this is a plain read. False for a null handle.
+bool shekyl_relay_zone_covert_enabled(const RelayZoneHandle* handle);
 //! Free a zone. Null is a no-op; free exactly once.
 void shekyl_relay_zone_free(RelayZoneHandle* handle);
 //! A peer completed its handshake.
@@ -3079,6 +3118,10 @@ void shekyl_relay_zone_on_close(RelayZoneHandle* handle, const std::uint8_t* id)
 //! Stem slots backed by a live peer — the inherited `connection_count`. Reads a
 //! single-writer atomic, so it is safe from any thread.
 std::size_t shekyl_relay_zone_live_stems(const RelayZoneHandle* handle);
+//! Configured stem width (slot count). When covert is enabled this is also the
+//! channel count (channel i follows slot i). Size the C++ channel deque from
+//! this so the two widths cannot silently diverge.
+std::size_t shekyl_relay_zone_stem_width(const RelayZoneHandle* handle);
 //! Earliest time the zone has work; what the asio timer is armed against.
 std::uint64_t shekyl_relay_zone_next_wake(const RelayZoneHandle* handle);
 //! One of the SHEKYL_RELAY_PLAN_* codes. Three-way, not a bool: a transient
@@ -3091,18 +3134,19 @@ std::uint64_t shekyl_relay_zone_next_wake(const RelayZoneHandle* handle);
 //! retry) and for tests.
 std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::uint8_t* source,
                                           bool local_origin, std::uint8_t* out_dest);
-//! Plan a relay; on NO_ROUTE merge `outbound` once and re-plan, pushing slots
-//! if the set changed. Settled fluff epochs do not refresh. This is the
-//! production notify path: the refresh policy lives in Rust with the zone.
+//! Plan a relay; on NO_ROUTE merge `outbound` once and re-plan. Settled fluff
+//! epochs do not refresh. This is the production notify path: the refresh
+//! policy lives in Rust with the zone. No callback — commands return nothing;
+//! a covert channel the refresh leaves unbound clears at its next due tick
+//! through shekyl_relay_zone_poll's on_unbind.
 std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
-    const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest, void* ctx,
-    ShekylRelaySlotsCb on_slots);
-//! Merge the current outbound set into the stem map mid-epoch, pushing the new
-//! slots if it changed. Used for connection churn, covert-send recovery, and
-//! the forced refresh after a stem send failure.
+    const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest);
+//! Merge the current outbound set into the stem map mid-epoch. Used for
+//! connection churn, covert-send recovery, and the forced refresh after a stem
+//! send failure. No callback — see plan_relay_with_refresh.
 void shekyl_relay_zone_update_stems(RelayZoneHandle* handle, const std::uint8_t* outbound,
-                                    std::size_t n, void* ctx, ShekylRelaySlotsCb on_slots);
+                                    std::size_t n);
 //! Accept a batch for fluffing to every peer but `source`. Returns how many
 //! peers took it — zero means nothing is connected to fluff to, or a blob span
 //! was invalid (null ptr with non-zero len). Empty blobs (`len == 0`) are valid
@@ -3116,14 +3160,16 @@ std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t
 //! release never triggers the connection scan.
 void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
                             ShekylRelayOutboundCb gather_outbound,
-                            ShekylRelayFluffCb on_fluff, ShekylRelaySlotsCb on_slots);
+                            ShekylRelayFluffCb on_fluff, ShekylRelayCovertUnbindCb on_unbind,
+                            ShekylRelayCovertSendCb on_covert);
 //! Release every pending fluff batch — what notify::run_fluff() drives.
 void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
                                    void* ctx, ShekylRelayFluffCb on_fluff);
-//! Start a new epoch immediately — what notify::run_epoch() drives.
+//! Start a new epoch immediately — what notify::run_epoch() drives. No
+//! callback — the rollover's covert consequences ride the schedule, exactly
+//! as a deadline-crossing rollover's do.
 void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms,
-                                   const std::uint8_t* outbound, std::size_t n,
-                                   void* ctx, ShekylRelaySlotsCb on_slots);
+                                   const std::uint8_t* outbound, std::size_t n);
 
 } // extern "C"
 
