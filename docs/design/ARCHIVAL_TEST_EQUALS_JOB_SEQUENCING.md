@@ -6,8 +6,11 @@ source. **R1's necessity and sufficiency are both now argued with a
 measurement under them** — deliverable 2 landed (§6.2, PR #379), and the
 ledger's three legs are *located* rather than pooled: leg 1 price-contingent
 (§5.3, within-class per F-1), leg 2 `T_risk` structural and **measured**
-(§5.4/§6.2, `q_risk* ≈ 0.10`), leg 3 build cost a threshold-raiser in the
-metered cells that goes quiet in the flat-rate one (§5.7). Test gates landed
+(§5.4/§6.2, `q_risk* ≈ 0.10`), and leg 3 build cost **split into its two
+incompatible quantities** (§5.7) — 3a acquisition *bytes*, which raise the bar
+in the metered cells and go quiet at flat-rate, and 3b engineering/operational
+*labor*, which survives flat-rate but is payoff-proportional and
+commoditizable and must not be leaned on. Test gates landed
 (PR #378): `tj_g_…` red on challenge scope, `tj_f_forged_material…` green on
 soundness, the summand weld under the ledger; TJ-F's liveness face carried as
 a **type-level obligation** on TJ-A's output, not a test. **The one open gate
@@ -509,16 +512,22 @@ mechanism reopen (d) was dissolved for depending on. If that is taken, it is
 taken as a latency argument with its soundness dependency priced, not as a
 structural achievement of test≡job.
 
-### 5.7 Leg 3 — **build cost**, and the horizon error it fixes
+### 5.7 Leg 3 — **build cost**, which is *two* thresholds, not one
 
-*Derived here from the repo's own constants (2026-07-29). Flagged for
-reconciliation: this leg was raised in a parallel session and its content did
-not reach the session that wrote this text, so what follows is a derivation
-against the four named beats — threshold-raiser, scaling inversion,
-commoditization caveat, profit-motivated scoping — not a transcription. If the
-originating formulation claims more than this (in particular, that build cost
-holds the **flat-rate** cell), the difference is substantive and should be
-settled here rather than averaged.*
+**An equivocation cleared before the legs are stated (2026-07-29).** "Build
+cost" was used for two incompatible quantities, and they behave differently
+across the ledger's cells, so they are separated here and never pooled:
+
+- **3a — acquisition bytes.** The 13.6 GB moved to *obtain* the holding.
+  Denominated in **transferred bytes**, therefore ~0 at flat-rate.
+- **3b — engineering and operational labor.** Building and running the
+  free-rider subsystem at all. Denominated in **labor**, therefore *not*
+  zeroed by a flat-rate link.
+
+Neither subsumes the other: 3a is a bytes-horizon asymmetry, 3b is a
+threshold on whether the tooling gets written. They cover different cells.
+
+#### 5.7a — Acquisition bytes, and the horizon error they fix
 
 **What it is.** An archiver must *acquire* set B before it can hold it: one
 inbound pass over `MAX_HOLDINGS_SHARDS · SHARD_BYTES` ≈ **13.6 GB**. Call that
@@ -570,26 +579,51 @@ and the GF-7 reach analysis — and must not be treated as covered here. Naming
 what an argument covers is the same discipline §5.4 applied when the caching leg
 was withdrawn.
 
-**What this leg does NOT do — stated, because the flat-rate cell is where TJ-A's
-steering lives.** Because `B` is priced in transferred bytes, it **does not
-rescue the flat-rate cell**: where marginal transfer ≈ 0, `B ≈ 0` too, and the
-perpetual-rebuild argument goes quiet exactly where §5.3 inverted. In that cell
-the surviving barrier is not *cost* but **capacity against a deadline** — 4,096
-rebuilds must complete inside `CHALLENGE_RESOLUTION_BLOCKS`, which is
-**TJ-C's** question, not an independent leg. So the honest ledger reads:
+**What 3a does NOT do.** Because `B` is priced in transferred bytes, it **does
+not rescue the flat-rate cell**: where marginal transfer ≈ 0, `B ≈ 0` too, and
+the perpetual-rebuild argument goes quiet exactly where §5.3 inverted. In that
+cell the surviving *byte-priced* barrier is not cost but **capacity against a
+deadline** — 4,096 rebuilds inside `CHALLENGE_RESOLUTION_BLOCKS` — which is
+**TJ-C's** question, not an independent leg.
 
-| cell | leg 1 (price) | leg 3 (build) | leg 2 (`T_risk`) |
-| --- | --- | --- | --- |
-| metered retail | decisive (~11×) | **raises it further** (perpetual vs sunk) | not needed |
-| metered cheap transit | marginal (~1.1×) | **the leg that makes it more than a tie** | backup |
-| flat-rate | inverted | ~0, goes quiet with leg 1 | **carries it alone**, `q_risk* ≈ 0.10` |
+#### 5.7b — The labor threshold (and why it is a threshold, not a defense)
 
-Leg 3's contribution is therefore real but **located**: it converts the
-cheap-transit watch-cell from a coin-flip into a standing cost asymmetry, and
-it corrects a horizon error that understated both metered cells. The flat-rate
-cell still rests on `T_risk` plus TJ-C's deadline — which is precisely why
-TJ-A's charter (§8) treats that deadline as a named gate rather than an
-assumption.
+The honest archiver's marginal engineering cost is **zero**: it runs the
+shipped daemon, retains, and serves. The free-rider must build a **subsystem
+that does not exist** — suppressing retention while appearing to retain,
+intercepting challenges, maintaining a live source map over a *churning* bonded
+set, deadline-bound fetch with retry and failover, and local verification
+before submit. That is engineer-months plus ongoing operations, set against a
+payoff measured in **single-digit dollars per bond-year**.
+
+Denominated in **labor**, so it survives the flat-rate cell that zeroes 3a: a
+residential ISP makes transfer free; it does not make software free to write or
+a real-time distributed fetcher free to operate. Its **scaling inversion** runs
+the same direction as 3a's — the honest path's effort stays flat as holdings
+grow while the free-rider's source map, failover surface, and operational
+burden grow with the holding.
+
+**But it is explicitly a barrier *proportional to payoff*, not an absolute one
+— and it must not be leaned on.** It is commoditizable (one competent
+implementation, published once, drops every subsequent free-rider's cost to
+running it) and it is **no defense at all against a determined builder**. It
+raises the threshold at which the tooling gets written; it does not decide
+anything above that threshold. Same scoping as 3a: **profit-motivated actors
+only** — an adversary with non-economic motives pays the engineering and the
+labor leg says nothing.
+
+#### 5.7c — The ledger, per cell, with every leg located
+
+| cell | leg 1 (price) | leg 3a (acquisition bytes) | leg 3b (labor) | leg 2 (`T_risk`) |
+| --- | --- | --- | --- | --- |
+| metered retail | decisive (~11×) | **raises it further** (perpetual vs sunk) | raises the entry bar | not needed |
+| metered cheap transit | marginal (~1.1×) | **converts the coin-flip into a standing asymmetry** | raises the entry bar | backup |
+| flat-rate | inverted | ~0 — quiet, with leg 1 | the only surviving *cost* leg, but payoff-proportional and commoditizable | **carries the cell**, `q_risk* ≈ 0.10` |
+
+So the flat-rate cell rests on **`T_risk` + TJ-C's deadline + a labor threshold
+nobody should lean on.** That is why §8.3 treats the deadline as a **named
+gate** rather than an assumption: it is load-bearing, and the labor leg
+underlines that rather than softening it.
 
 ## 6. First deliverables
 
@@ -702,13 +736,53 @@ counterparty.
 
 Design questions (sub-items of the registered `TJ-A`; no new family):
 
-- **TJ-A1 — challenger derivation.** From what public, unpredictable-at-commit
-  state is the challenger set for `(P, s, E)` drawn, such that neither `P` nor
-  any candidate challenger can steer it? The `challenge_fire_height` /
-  `challenge_leaf_index` beacon idiom (`challenge.rs`) is the obvious
-  substrate — future-block-hash-style, domain-separated — but it currently
-  derives an *index*, not a *peer*, and a peer set is a membership question over
-  a permissionless population.
+- **TJ-A1 — challenger derivation. Candidate direction: draw from the *bonded
+  persona set*, not the peer set.** The obstacle looked structural — the
+  `challenge_fire_height` / `challenge_leaf_index` beacon idiom
+  (`challenge.rs`) derives an *index* over a fixed domain, while a *peer* set is
+  membership over a permissionless population, a materially harder problem. But
+  **challengers need not come from the peer set.** The bonded persona set is
+  **consensus-visible, enumerable from chain state, and sybil-resistant by
+  capital** (a bond per identity, per-shard floors). Drawing from it converts
+  "membership over a permissionless population" into "membership over a
+  capital-gated set consensus already tracks" — and lets the beacon idiom be
+  **reused for selection** rather than replaced.
+  **The incentive property this buys — verified at source, and it cuts BOTH
+  ways.** `scarcity_micro` divides by `r_market`
+  (`reward_arithmetic.rs:71` — `WORK_MICRO_SCALE · g / (r_market ·
+  WORK_MILLI_SCALE)`), and `Σwork` is the emission denominator, so:
+  - **Against false *attestation* (collusion) — misaligned by default.** An
+    archiver who signs a receipt for bytes never sent certifies a
+    **competitor's** claim on the same finite pool: `r_market` on that shard
+    rises, dividing every co-holder's per-shard term, and `Σwork` rises,
+    diluting the whole pool. The natural challenger population therefore has a
+    *structural* reason not to collude — the opposite of the usual attestation
+    problem, where the witness is indifferent. It does not close **ring**
+    collusion on its own; `k`-of-`n` over a large bonded set with an
+    unchooseable draw is what bounds a ring's chance of drawing its own
+    members (TJ-A2).
+  - **Toward false *denial* (griefing) — aligned, and this is the new
+    obligation.** The same arithmetic that punishes false attestation
+    **rewards** falsely denying an honest serve: suppressing a legitimate
+    receipt lowers `r_market`, which *raises* the denier's own scarcity term on
+    that shard. So a co-holder challenger is the best-placed witness (it holds
+    the shard, so it can verify the bytes are the *right* bytes, not merely
+    that bytes arrived) **and** the most incentivized denier. Round 1 must
+    handle the denial direction explicitly — which is what makes **TJ-A3's
+    dispute path load-bearing rather than a nicety**, and it argues against
+    naive co-holder-only selection.
+  **Two things to verify before this direction is ratified:**
+  1. **Drift-free enumeration at the selection read-point** — the bonded set
+     must be read at a proven consensus state, not a cached or tip-relative
+     one. This is the **M3-1 cached-counter class** the D2 escalation closed
+     structurally with `parent_frozen_segment_count`; the same discipline
+     (assert the read-point, throw on violation) applies here and the idiom is
+     already in the tree.
+  2. **Ring-draw probability at plausible bonded-set size** — that the chance a
+     colluding ring draws its own members falls acceptably in the set size the
+     market actually reaches (the L11 attractor envelope, `N_P` lean ≈ 79 /
+     thick ≈ 154 / fee-era-thin 17–62, is the population to sweep against —
+     *not* an assumed-large set).
 - **TJ-A2 — attestation shape: `k`-of-`n` vs optimistic-with-dispute.**
   `k`-of-`n` pays `k` transfers per challenge for collusion resistance
   proportional to `k`; optimistic pays one and relies on a dispute path. Weigh
