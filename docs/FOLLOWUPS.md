@@ -1202,7 +1202,7 @@ sustainability is unaffected by the recalibration.
   round-trip):** Two Rust serializers
   emit structurally different bytes for the *same* FCMP++ spend:
   - **`reference_block`** — `shekyl-oxide`
-    ([`rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs`](../rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs)
+    (`rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs`
     `PrunableProof`, line 182) carries it as a `u64` height varint;
     `shekyl-wire`
     ([`rust/shekyl-wire/src/transaction.rs`](../rust/shekyl-wire/src/transaction.rs)
@@ -2113,7 +2113,7 @@ sustainability is unaffected by the recalibration.
   period is finite, not a standing property. **Disposition:** ship V3.0 with the
   documented residual; do **not** add decoy-injection machinery (a permanent attack
   surface and trust cost for a finite problem, per
-  [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)). **Reopen
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)). **Reopen
   criterion (rule-21):** only if carry-4's testnet **effective**-cover measurement shows
   the cold-start residual is *not* self-resolving (cover does not strengthen with
   organic traffic as modeled) **and** a non-attributable cover source becomes available
@@ -4419,7 +4419,7 @@ sustainability is unaffected by the recalibration.
     `// !!!` warning marker disappears with the parameter; Rule 75
     rationale-doc forward-template is carried on the new
     `SHEKYL_DAA_*` constants in
-    [`shekyl-consensus/build.rs`](../rust/shekyl-consensus/build.rs)
+    `shekyl-consensus/build.rs`
     via the `consensus_constants_generated.h` codegen pipeline.
 
   The original item is retained below for audit-trail context; the
@@ -5156,7 +5156,7 @@ sustainability is unaffected by the recalibration.
   - **Cross-party protocol contracts — migrate *only* via the owning spec, and
     *only* pre-genesis.** The v31 multisig hashes — `intent_hash`,
     `fcmp_proof_commitment`
-    ([`multisig/v31/{intent,prover}.rs`](../rust/shekyl-engine-core/src/multisig/v31/)),
+    ([`multisig/v31/{intent,prover}.rs`](../rust/shekyl-multisig/src/)),
     the key-container / `prover_index` derivations
     ([`crypto-pq/multisig.rs`](../rust/shekyl-crypto-pq/src/multisig.rs)), and the
     address fingerprint
@@ -13425,7 +13425,7 @@ Retained for citation in review; each links to the canonical record.
   (closed 2026-05-20, merged to `dev` 2026-05-21 at `fd6005e2a`).**
   Landed in PR 4 §7.X commit C6β: `FaultInjecting<L: LedgerEngine>`
   extracted to
-  [`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs);
+  `engine/fault_injecting_ledger.rs`;
   `LocalLedger::from_test_blocks(Vec<Block>)` added at
   [`engine/local_ledger.rs`](../rust/shekyl-engine-core/src/engine/local_ledger.rs)
   (V3.0 supports the empty-`Vec` case only; non-empty fixtures
@@ -13529,7 +13529,7 @@ Retained for citation in review; each links to the canonical record.
   `WALLET_LEDGER_FORMAT_VERSION` both bumped 3 → 4; two `.snap`
   schema snapshots regenerated; `.zeroize-allowlist` cleaned. Per-PR
   pre-flight investigations:
-  [`STAGE_1_PR_3_M3A_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3A_PREFLIGHT.md),
+  `STAGE_1_PR_3_M3A_PREFLIGHT.md`,
   [`STAGE_1_PR_3_M3B_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3B_PREFLIGHT.md),
   [`STAGE_1_PR_3_M3C_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3C_PREFLIGHT.md),
   [`STAGE_1_PR_3_M3D_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3D_PREFLIGHT.md).

@@ -7608,7 +7608,7 @@ during implementation):
 - **C5α — `PendingTxEngine` trait receivers: `&mut self → &self`.**
   The C5α trait declaration body below (lines ~8297–8313) shows
   `&mut self` on `build` / `submit` / `discard`; the
-  [V3_ENGINE_TRAIT_BOUNDARIES.md §2.4](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  [V3_ENGINE_TRAIT_BOUNDARIES.md §2.4](../V3_ENGINE_TRAIT_BOUNDARIES.md)
   Round 3 `&mut → &self` sweep moved all PR 5 trait surfaces
   to `&self` per §2.4's canonical trait spec. Implementer
   applies the sweep to C5α's declaration verbatim from §2.4;

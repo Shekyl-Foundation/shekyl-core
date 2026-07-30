@@ -1,0 +1,52 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Dead-relative-link gate for docs/ — every markdown link whose target is a
+# relative path must resolve in the checkout, or carry a reasoned entry in
+# docs/ci/link-allowlist.txt.
+#
+# Why a gate and not a periodic sweep: the rot regenerates. The RP-3a
+# follow-up counted a handful of dead links; the 2026-07-30 census that closed
+# it found 178 across 27 files, most introduced by ordinary file moves
+# (design/ -> completed/, crate splits, the RCT->CT rename) in the days after
+# each doc was written. docs/ is a grounding source in this repo — the
+# decision log, design rounds, and completed-round closeouts are read as
+# evidence — so a dead anchor silently converts a grounded claim into an
+# unverifiable one. One-time sweeps have been run and have not held.
+#
+# The checker needs only python3 (present on ubuntu-latest); no ripgrep.
+# Both failure modes are negative-controlled in the closing commit: an
+# injected dead link fails the run, and an allowlist entry without a reason
+# fails the allowlist itself.
+#
+# Structure mirrors consensus-invariants.yml: single job, single runner,
+# fast-running, superseded-run cancellation.
+
+name: ci/doc-links
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "docs/**"
+      - "scripts/ci/check_doc_links.py"
+      - ".github/workflows/doc-links.yml"
+
+concurrency:
+  group: doc-links-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check-doc-links:
+    name: "Dead-relative-link gate (docs)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run doc-link check
+        run: python3 scripts/ci/check_doc_links.py

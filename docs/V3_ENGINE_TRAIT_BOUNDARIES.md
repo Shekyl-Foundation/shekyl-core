@@ -1275,7 +1275,7 @@ wiring at
 test-substrate wrappers at
 [`engine/fault_injecting_refresh.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
 (commit `e9310542a`, PR 4 C6α) and
-[`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs)
+`engine/fault_injecting_ledger.rs`
 (commit `e94526dec`, PR 4 C6β). The PR 4 §7.X commit list and per-
 commit landing-SHA cross-references are in that doc's §7.X header.
 The trait as declared:
@@ -2803,7 +2803,7 @@ at Stage 4. Round 4a pins its origin, lifetime, and Stage 1 /
 Stage 4 field-relevance shift.
 
 **Origin.** `EngineConfig` exists at Stage 1 with all fields
-defined; lives in [`engine/config.rs`](../rust/shekyl-engine-core/src/engine/config.rs)
+defined; lives in `engine/config.rs`
 (new module, sibling to `engine/error.rs`). The struct is
 `#[non_exhaustive]` so future fields (V3.1 multisig, V3.x
 Component 3 adaptive-burn knobs) extend additively without
@@ -4923,7 +4923,7 @@ discipline pin saves re-litigation cost.
 
 **Anti-pattern 1 — Cost-benefit-defer-to-later at R-residual altitude.**
 Named in
-[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+[`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
 at load-bearing-question altitude; extended in
 [PR 5 segment 2b](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) to
 R-residual disposition altitude. The pattern: a residual disposition
@@ -4945,7 +4945,7 @@ questions. PR pre-flights run the anti-pattern check at *both* altitudes,
 not just the load-bearing-question altitude.
 
 **Anti-pattern 2 — Pre-provision-for-flexibility.** Named in
-[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc);
+[`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc);
 worked-example in
 [PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10 G1.
 The pattern: a wider trait-surface or enum shape *appears* extensible
@@ -4970,7 +4970,7 @@ adjudication on identical grounds*; consolidation is substrate-anchored,
 not convenience-anchored.
 
 **Anti-pattern 3 — Priority-hierarchy-rejection-as-evaluation.** Named
-in [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) priority
+in [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) priority
 ordering; worked-example in
 [PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10 G3.
 The pattern: a feature whose privacy cost (priority 2) is bounded but
@@ -5105,7 +5105,7 @@ type-of-change (rare in trait-extraction PRs).
 
 **Discipline 3 — Workspace-state verification before dependency
 recommendations.** Named in
-[`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc);
+[`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc);
 worked-example in
 [PR 5 segment 2g Copilot-fix follow-up](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
 The pattern: a dependency recommendation cites a Cargo.toml line as
@@ -5133,7 +5133,7 @@ rounds, beyond the baseline established at Round-5 acceptance.
 **Anchor 1 — Adversary-controlled-daemon as expected deployment.**
 Strengthened in
 [PR 5 segment 2a](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) per
-[`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md). Shekyl's Tor/I2P-first
+[`ANONYMITY_NETWORKS.md`](ANONYMITY_NETWORKS.md). Shekyl's Tor/I2P-first
 deployment posture means wallets routinely connect to daemons under
 adversary control — anonymous-network exit operators, hosted-wallet
 deployments, mixed-trust environments where the daemon operator's
@@ -5154,7 +5154,7 @@ rejected at design-rounds altitude.
 
 **Anchor 2 — HW-wallet as core, not edge.** Sharpened in
 [PR 5 segment 2b](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) per
-[`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) §1 (security as
+[`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §1 (security as
 precondition, not optimization). Hardware-backed secure-storage paths
 (Trezor / Ledger / YubiKey-class) are dominant for privacy-conscious
 users; the Shekyl Foundation's own release-key signing already uses
@@ -5216,7 +5216,7 @@ their pre-flight; substrate that emerges from PR 6+ extends §8.3 via
 the same Round-6-style amendment vehicle this section landed under.
 
 **Continuous-discipline corollary.** Per
-[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc),
+[`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc),
 the disciplines compound only as long as the per-engine PR design
 rounds *cite them at pre-flight*. The inheritance is not automatic;
 it is paid for by the pre-flight citation discipline. §8.3 makes the
