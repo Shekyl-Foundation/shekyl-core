@@ -2066,6 +2066,31 @@ the same epoch* — because an implementation can otherwise satisfy the letter o
 draw. This also tightens Q-10: the `g`-bound it owes is a bound under *repeated
 adversary-induced refills*, not a single draw (see §7).
 
+**Calibration inputs recorded 2026-07-30 — maintainer, from an external-review
+thread (Sharma et al., the P2P-anonymity-schemes analysis); recorded before
+they decay, with the provenance stated because it binds how they may be used.**
+These findings were produced in a review discussion outside this repo's
+sessions; the reasoning is the maintainer's, and every paper-specific fact
+below carries a **verify-at-source obligation** (the paper itself, then this
+tree) before any number derived from it gates a decision. They are inputs to
+the Q-10 `g_max` calibration, not conclusions of this document:
+
+1. **The Sharma numbers are optimistic for Shekyl in three directions**, so
+   using them as a `g_max` floor without adjustment would over-credit the
+   adversary's difficulty: they analyze the **spec, not an implementation**;
+   they model **no per-source pinning** (their Appendix A.1 states this
+   explicitly — verify); and their parameters differ where it matters —
+   `pf = 0.9` against Shekyl's 0.8, and **random rather than
+   occupancy-optimizing placement** for the adversary.
+2. **The paper's flat N-scaling line holds `C = 0.01·N`** — the adversary
+   grows proportionally with the network — so the flat line measures
+   *"anonymity does not grow against an adversary that grows with you"*, not
+   an absence of scaling benefit. The operative mechanism is **partition size
+   ≈ N/C**, not the distance decay the paper offers as the explanation.
+   Consequence for Q-10: the distinction is **targeted versus dragnet**, and
+   the scaling benefit lands back on **Sybil cost** — which is the same axis
+   the recruiting frame prices (§12.8's demonstrated-work direction).
+
 ### 12.7 Why `STEMS = 2` — the expander-minimum, and why the occupancy attack cannot be fixed by raising it
 
 `CRYPTONOTE_DANDELIONPP_STEMS = 2` is a **bare inherited constant**
@@ -2127,6 +2152,32 @@ contributor looking at the ProxyMark attack must not "fix" it by bumping STEMS t
 leak and moves off the expander-minimum. The constant now carries this reasoning
 here, at its C++ definition site, and on the `StemGraph::QuasiFourRegular` variant
 the crate uses.
+
+**Recorded 2026-07-30 — findings that touch this section's guard, from the
+maintainer's external-review thread (same provenance and verify-at-source
+obligation as the §12.6 note above). Recorded, not reopened: this section's
+reasoning stands as written until the premises below are grounded, and any
+change goes through the §12.5 reopen criteria on the record.**
+
+- **The maintainer retracts an earlier "`STEMS = 2` is a floor" claim, with the
+  mechanical reason**: per-source pinning means one successor per source
+  *regardless of out-degree* — a raised STEMS changes which pool a source's
+  single successor is drawn from, not how many successors a source's
+  transactions fan across — so the fan-out asserted in that claim does not
+  occur. Noted squarely: if this grounds, it also bears on **this section's
+  own fan-out leg** (*"raising STEMS fans the stem toward a tree"*, above),
+  which prices fan-out that pinning may prevent for the same reason. The
+  expander-minimum leg is untouched either way.
+- **Two premises of any raise-STEMS argument are currently ungrounded**, and
+  both must be grounded before the question is even well-posed: (a) whether
+  the paper's higher-degree anonymity benefit **survives pinning at all**
+  (their model has none — §12.6 note, direction 2); and (b) the **cap
+  arithmetic** — §12.3's `cap = min(STEMS − 1, smallest R meeting δ)` is
+  unambiguous at `STEMS = 2` where both arms equal 1, but at higher STEMS the
+  two arms diverge and the resolution decides whether extra alternates are
+  ever *tried*; unresolved, the arithmetic appears to leave the W3-improvement
+  arm at **zero** (extra slots that exist but are never retried into do not
+  reduce the both-tried-slots-adversarial event).
 
 ### 12.8 Rotation-mechanism grounding (the substrate the Q-10 round rests on)
 
