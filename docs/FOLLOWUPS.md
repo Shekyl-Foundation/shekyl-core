@@ -137,24 +137,31 @@ sustainability is unaffected by the recalibration.
   derived; does NOT hold as asserted.** A zero-service `P` earns nothing
   (`shard_work_micro` pays on credited work only), so the `m − 1` epochs are
   free of *slash*, not free *money*, and the derived quantity is a **break-even
-  attestation fraction**: `f ≈ 0.0300` at the median per-shard pool
+  attestation fraction**: `f ≈ 0.0331` at the median per-shard pool
   (2.4156 SKL/shard/epoch), `0.0002` at the family max, with friction at the
-  **structural floor** — 1 epoch of `r_market` exclusion, probed from
-  `rebond_connect` itself (`end_exclusive = E_rebond + 1`; same-epoch
-  reinstatement admitted), forgone earnings priced at the credited rate `f·R`,
-  not full `R`. The burned bond is worth **0.31 epochs** of the median flow it
-  secures — the floor coupling made quantitative. `--stage2` now reports a
-  **remedy curve** (break-even `f` vs post-slash exclusion per cycle):
-  "floor problem vs cooldown problem" is a **false dichotomy** (the bond is
-  `f`-independent and bounds the low-`f` attacker; the downtime term `d·f·R`
-  scales with `f`), and the knee is structural — past exclusion `> m = 11`
-  epochs the break-even floors at `E⁻¹(c+1)` regardless of reward
-  (≈ 0.20 hashrate share at `c = 16`, ~32 weeks). **Enforcement point:** a
-  `Rebond`-only cooldown is routed around by fresh personas (G-1; TJ-7's own
-  capital-bounded sybil), while a **credit-onset delay** (minimum observation
-  count — the original finding) yields the same exclusion term on every route;
-  the curve prices both identically. Input to the re-pin sweep; TJ-8's
-  briefing constraint and the over-determination warning stand.
+  **structural floor of 2 epochs** of `r_market` exclusion — 1 from
+  `rebond_connect`'s validation (`end_exclusive = E_rebond + 1`; its same-epoch
+  slack is not a route) + 1 of reachability (the interval a `Rebond` verifies
+  against is appended at the failed epoch's settlement fold, and dispatch
+  precedes the fold). A `Rebond` is **reinstatement, not re-entry** (P2B-9):
+  the slash burns one `FLOOR` and removes the shard atomically, so the
+  slash-emptied cycle pair re-adds at `FLOOR`; forgone earnings priced at the
+  credited rate `f·R`, not full `R`. Labelled attacker-favourable
+  approximation: the re-added shard's age resets (Pin 7), so steady-state `R`
+  overstates cycle earnings — break-evens are lower bounds. The burned bond is
+  worth **0.31 epochs** of the median flow it secures — the floor coupling made
+  quantitative. `--stage2` now reports a **remedy curve** (break-even `f` vs
+  post-slash exclusion per cycle): "floor problem vs cooldown problem" is a
+  **false dichotomy** (the bond is `f`-independent and bounds the low-`f`
+  attacker; the downtime term `d·f·R` scales with `f`), and the knee is
+  structural — past exclusion `> m = 11` epochs the break-even floors at
+  `E⁻¹(c+2)` regardless of reward (≈ 0.20–0.21 hashrate share at `c = 16`,
+  ~32 weeks). **Enforcement point:** a `Rebond`-only cooldown is routed around
+  by fresh personas (G-1; TJ-7's own capital-bounded sybil), while a
+  **credit-onset delay** (minimum observation count — the original finding)
+  yields the same exclusion term on every route; the curve prices both
+  identically. Input to the re-pin sweep; TJ-8's briefing constraint and the
+  over-determination warning stand.
 
 - **TJ-7 (HIGH, sweep input) — sybil-per-shard has NO uniqueness constraint,
   and the cartel attack is DILUTION not multiplication** (added 2026-07-29,

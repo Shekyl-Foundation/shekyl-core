@@ -48,8 +48,10 @@
 //! `Rebond` closes the slash's bad interval at `end_exclusive = E_rebond + 1`
 //! (`bond_connect.rs`), so the record is out of `r_market` from the slash
 //! epoch through the rebond epoch **inclusive** — a structural downtime floor
-//! no attacker speed avoids, derived by probing the production connect
-//! ([`rebond_structural_downtime_epochs`]). The forgone earnings are priced at
+//! no attacker speed avoids, derived from the production connect plus the
+//! fold/dispatch ordering ([`rebond_structural_downtime_epochs`], which also
+//! records what a `Rebond` IS: reinstatement, not re-entry — the slash burns
+//! one `FLOOR` and removes the shard atomically). The forgone earnings are priced at
 //! the **credited** rate `f · R`, not the full-service reward: a free-rider
 //! forgoes only what it would have drawn, so pricing downtime at full `R`
 //! overstates the deterrent `1/f`-fold. The report extends the floor with a
@@ -189,18 +191,34 @@ impl EpochCache {
 }
 
 /// Structural downtime of one slash/`Rebond` cycle: the epochs of `r_market`
-/// exclusion even a maximally fast attacker cannot avoid — **derived by
-/// calling [`rebond_connect`]**, not by restating its rule (dep-don't-mirror,
-/// as with the absorbing chain).
+/// exclusion even a maximally fast attacker cannot avoid.
 ///
-/// A record slashed at epoch `e` carries an open bad interval starting at `e`;
-/// the connect closes it at `end_exclusive = E_rebond + 1`, so the record is
-/// excluded for `[e, E_rebond]` **inclusive**. This probes the earliest
-/// `E_rebond` the connect admits and returns that span's length. Today the
-/// interval-ordering check admits `E_rebond = e` (same-epoch reinstatement),
-/// so the floor is ONE epoch; a next-epoch rebond gives two. If production
-/// ever grows a post-slash cooldown gate, this derivation follows it instead
-/// of quoting a stale constant.
+/// **What a `Rebond` IS (gate-4 §3.4 / P2B-9; `bond_post.rs`): reinstatement,
+/// not re-entry.** The slash burns one `FLOOR` and removes the failed shard
+/// **atomically** (floor-equality is preserved), so a `Rebond`'s credit is
+/// owed only for growth — zero for the common standing-only reinstatement.
+/// The single-shard cycle pair is therefore slash-EMPTIED and its `Rebond` is
+/// necessarily the growth form: re-adding the shard at `FLOOR`, with the
+/// re-added shard taking `add_epoch = E_rebond` (Pin 7 — its age resets).
+///
+/// The floor has two legs, and only the first is a code probe:
+///
+/// 1. **Validation leg (probed from [`rebond_connect`], dep-don't-mirror):**
+///    the connect closes the open interval at `end_exclusive = E_rebond + 1`,
+///    and its ordering check admits `E_rebond = e` — a one-epoch span. That is
+///    validation SLACK, not a route.
+/// 2. **Reachability leg (+1 epoch):** a `Rebond` verifies only against an
+///    interval that already EXISTS (`blockchain.cpp`: "Rebond requires an open
+///    bad interval"), the interval is appended by the slash fold at the failed
+///    epoch's settlement (the window verdict needs epoch `e`'s serve-credit
+///    outcome), and connect dispatch precedes the slash fold within a block
+///    (gate-4: `add_transaction` before the per-block slash hook). So the
+///    earliest reachable `E_rebond` is the NEXT epoch: excluded span
+///    `[e, e+1]` = TWO epochs.
+///
+/// If production grows a post-slash cooldown gate in the connect, leg 1
+/// follows it; if the fold/dispatch ordering changes, leg 2's `+1` is the pin
+/// to re-derive.
 ///
 /// (`release_cooldown.rs` is the VOLUNTARY-EXIT gate — `Unbond` /
 /// `HoldingsUpdate`-drop, gate-4 §4.3/§4.4 — and is not on the slash path;
@@ -214,13 +232,16 @@ pub fn rebond_structural_downtime_epochs() -> f64 {
         start_epoch: SLASH_EPOCH,
         end_exclusive: u64::MAX,
     }];
-    (SLASH_EPOCH..SLASH_EPOCH + 64)
+    let validation_span = (SLASH_EPOCH..SLASH_EPOCH + 64)
         .find_map(|e_rebond| {
             rebond_connect(bonded, &held, &open, &held, bonded, e_rebond)
                 .ok()
                 .map(|c| (c.interval_end_exclusive - SLASH_EPOCH) as f64)
         })
-        .expect("rebond_connect admits no reinstatement within 64 epochs of a slash")
+        .expect("rebond_connect admits no reinstatement within 64 epochs of a slash");
+    // Reachability: the slash exists only from the failed epoch's settlement
+    // fold onward and dispatch precedes the fold, so E_rebond >= e + 1.
+    validation_span + 1.0
 }
 
 /// One cycle's friction, SKL: the credited earnings forgone while the record
@@ -512,16 +533,25 @@ pub fn tj_inequalities_report(
     let d_struct = rebond_structural_downtime_epochs();
     writeln!(
         out,
-        "  FRICTION (derived, not assumed): Rebond closes the slash's bad interval\n\
-         at end_exclusive = E_rebond + 1 (bond_connect.rs), so the record is out\n\
-         of r_market from the slash epoch THROUGH the rebond epoch inclusive — a\n\
-         structural floor of {D:.0} epoch, probed from rebond_connect itself (the\n\
-         ordering check admits same-epoch reinstatement; a next-epoch rebond gives\n\
-         2). Forgone earnings are priced at the CREDITED rate f*R, not full R: a\n\
-         free-rider forgoes only what it would have drawn, so full-R pricing\n\
-         overstates the deterrent 1/f-fold. Zeroing this term was mislabelled\n\
-         'attacker-favourable' in the first cut — the attacker-favourable end is\n\
-         this floor, not zero. Table and break-evens run downtime = {D:.0}.",
+        "  FRICTION (derived, not assumed). What a Rebond IS (gate-4 SS 3.4/P2B-9):\n\
+         REINSTATEMENT, NOT RE-ENTRY — the slash burns one FLOOR and removes the\n\
+         shard atomically, so Rebond credit is owed for growth only (zero for the\n\
+         common standing-only form); the slash-EMPTIED single-shard cycle pair\n\
+         must therefore re-add its shard at FLOOR. Rebond closes the bad interval\n\
+         at end_exclusive = E_rebond + 1, so exclusion runs the slash epoch\n\
+         THROUGH the rebond epoch inclusive — structural floor {D:.0} epochs:\n\
+         the connect's validation admits a same-epoch close (probed; that is\n\
+         SLACK, not a route) + 1 epoch of reachability, because the interval a\n\
+         Rebond verifies against is appended at the failed epoch's settlement\n\
+         fold and dispatch precedes the fold. Forgone earnings are priced at the\n\
+         CREDITED rate f*R, not full R (full-R overstates the deterrent 1/f-fold).\n\
+         Zeroing this term was mislabelled 'attacker-favourable' in the first cut\n\
+         — the attacker-favourable end is this floor, not zero. LABELLED\n\
+         APPROXIMATION (attacker-favourable): the re-added shard takes add_epoch =\n\
+         E_rebond (Pin 7), so any age weighting of reward restarts each cycle;\n\
+         using the steady-state per-shard pool as R OVERSTATES cycle earnings,\n\
+         making every break-even below a LOWER BOUND. Table and break-evens run\n\
+         downtime = {D:.0}.",
         D = d_struct,
     )?;
     writeln!(
@@ -564,7 +594,7 @@ pub fn tj_inequalities_report(
         Some(f) => writeln!(
             out,
             "  -> TJ-4 break-even f = {f:.4} (downtime at the structural floor of\n\
-             {d_struct:.0} epoch; a cooldown only raises it — curve below). Below it the\n\
+             {d_struct:.0} epochs; a cooldown only raises it — curve below). Below it the\n\
              burned bond is not covered and the window is NOT a subscription fee;\n\
              above it the cycle pays and attestation-resistance is what must carry\n\
              the deterrent.\n\
@@ -737,14 +767,17 @@ mod tests {
     }
 
     #[test]
-    fn structural_downtime_is_derived_from_the_connect_and_is_one_epoch() {
-        // Derived by probing rebond_connect, not asserted from prose: the
-        // interval-ordering check admits a same-epoch reinstatement, so the
-        // unavoidable r_market exclusion is exactly the slash epoch itself.
-        // If this pin ever goes red, production grew a post-slash cooldown (or
-        // tightened the ordering check) — re-read the remedy curve's baseline
-        // from the new floor; do not patch the pin without doing so.
-        assert!((rebond_structural_downtime_epochs() - 1.0).abs() < 1e-12);
+    fn structural_downtime_is_two_epochs_probe_plus_reachability() {
+        // Two legs. The probe leg: rebond_connect's ordering check admits a
+        // same-epoch close (one-epoch span) — validation slack, not a route.
+        // The reachability leg: the interval a Rebond verifies against is
+        // appended at the failed epoch's settlement fold, and dispatch
+        // precedes the fold, so the earliest reachable E_rebond is the next
+        // epoch — +1, total 2. If this pin goes red the connect grew a
+        // cooldown gate (probe leg moved) or the fold/dispatch ordering
+        // changed (reachability leg wrong) — re-read the remedy curve's
+        // baseline from the new floor; do not patch the pin without doing so.
+        assert!((rebond_structural_downtime_epochs() - 2.0).abs() < 1e-12);
     }
 
     #[test]
