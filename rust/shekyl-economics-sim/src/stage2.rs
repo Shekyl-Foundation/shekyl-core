@@ -1322,6 +1322,12 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     // small-n per-shard reward with 4,096 shards that do not exist.
     let epy = crate::proxy::epochs_per_year();
     let mut max_shard_reward_per_epoch_skl = 0.0f64;
+    // Every qualifying (scenario, year) per-shard pool, retained so a MEDIAN can
+    // stand beside the MAX. The two operands point opposite ways: for A5 a larger
+    // forfeit is a stronger deterrent (max = conservative), for TJ-4 a larger
+    // reward makes the slash/Rebond cycle more profitable (max = alarm-raising),
+    // so quoting only the max would understate TJ-4's break-even fraction.
+    let mut shard_rewards_per_epoch_skl: Vec<f64> = Vec::new();
     for config in all_scenarios(params) {
         for a in a1_year_aggs(params, &config)
             .iter()
@@ -1331,10 +1337,20 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
                 .emission_leg_atomic
                 .saturating_add(mul_scale(a.whole_burn_atomic, flat_25().share(a.n)));
             let pool_per_epoch_skl = (pool_atomic as f64 / COIN) / epy;
-            max_shard_reward_per_epoch_skl =
-                max_shard_reward_per_epoch_skl.max(pool_per_epoch_skl / a.n as f64);
+            let per_shard = pool_per_epoch_skl / a.n as f64;
+            shard_rewards_per_epoch_skl.push(per_shard);
+            max_shard_reward_per_epoch_skl = max_shard_reward_per_epoch_skl.max(per_shard);
         }
     }
+    let median_shard_reward_per_epoch_skl = {
+        let mut v = shard_rewards_per_epoch_skl.clone();
+        v.sort_by(|a, b| a.partial_cmp(b).expect("finite rewards"));
+        if v.is_empty() {
+            0.0
+        } else {
+            v[v.len() / 2]
+        }
+    };
     // The absorption DP prices the stream forgone FROM the slash epoch, so it
     // takes the per-epoch rate rather than a horizon lump.
     crate::proxy::a5_proxy_report(out, max_shard_reward_per_epoch_skl, SKL_FIAT_PRICE_BAND[1])?;
@@ -1348,6 +1364,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     // sybil dilution divides — so it serves as both operands.
     crate::cartel::tj_inequalities_report(
         out,
+        median_shard_reward_per_epoch_skl,
         max_shard_reward_per_epoch_skl,
         max_shard_reward_per_epoch_skl,
     )?;

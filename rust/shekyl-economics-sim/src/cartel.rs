@@ -233,9 +233,11 @@ pub fn sybil_breakeven_opportunity_rate(
 /// TJ-4 + TJ-7 report — the two underived inequalities, derived.
 pub fn tj_inequalities_report(
     out: &mut impl fmt::Write,
-    reward_per_epoch_skl: f64,
+    reward_median_per_epoch_skl: f64,
+    reward_max_per_epoch_skl: f64,
     pool_g_per_epoch_skl: f64,
 ) -> fmt::Result {
+    let reward_per_epoch_skl = reward_median_per_epoch_skl;
     let ceiling = no_slash_attestation_fraction();
     writeln!(
         out,
@@ -243,17 +245,18 @@ pub fn tj_inequalities_report(
          BOND_FLOOR = {BF:.3} SKL per shard. Deterministic no-slash fraction {C:.4}\n\
          bounds a PLACING adversary only; under an unchooseable draw absorption is\n\
          deferred, not prevented, so the cycle question stays live across the range.\n\
-         !! OPERAND DIRECTION (label at the number): reward_per_epoch here is the\n\
-         SCENARIO-FAMILY MAXIMUM per-shard pool. A5 uses that operand because a\n\
-         larger forfeit is a STRONGER deterrent there, so max is conservative. For\n\
-         TJ-4 it runs the OTHER WAY -- a larger reward makes the cycle MORE\n\
-         profitable -- so every net below is the ALARM-RAISING end and the\n\
-         break-even f is a LOWER bound. A representative-reward run is the honest\n\
-         complement and is NOT yet done.",
+         OPERAND DIRECTION (labelled at the number): A5 uses the scenario-family MAX\n\
+         per-shard pool because there a larger forfeit is a STRONGER deterrent, so\n\
+         max is conservative. For TJ-4 it runs the OTHER WAY -- a larger reward\n\
+         makes the slash/Rebond cycle MORE profitable -- so max is the ALARM-RAISING\n\
+         end. The table below runs the MEDIAN ({RM:.4} SKL/shard/epoch); the max\n\
+         ({RX:.4}) is reported as the bound beneath it.",
         M = FAILURE_WINDOW_M,
         N = FAILURE_WINDOW_N,
         BF = bond_floor_skl(),
         C = ceiling,
+        RM = reward_median_per_epoch_skl,
+        RX = reward_max_per_epoch_skl,
     )?;
     writeln!(
         out,
@@ -303,6 +306,32 @@ pub fn tj_inequalities_report(
              does not arise and the binding constraint is entirely\n\
              attestation-resistance (the draw)."
         )?,
+    }
+    writeln!(
+        out,
+        "     bound at the MAX operand ({RX:.4} SKL/shard/epoch): break-even f = {BX}.\n\
+             Both ends of the family are reported so the verdict is a RANGE, not a\n\
+             point chosen by which operand happened to be at hand.",
+        RX = reward_max_per_epoch_skl,
+        BX = rebond_breakeven_f(reward_max_per_epoch_skl, 0.0, 4_000)
+            .map_or("none".to_string(), |f| format!("{f:.4}")),
+    )?;
+    // The ratio that makes the finding actionable: what a burned bond is WORTH,
+    // denominated in the reward it is supposed to secure.
+    if reward_median_per_epoch_skl > 0.0 {
+        writeln!(
+            out,
+            "  -> WHY it breaks even so low: the burned bond is worth {E:.2} EPOCHS of the\n\
+             per-shard reward it secures ({BF:.3} SKL vs {RM:.4} SKL/epoch at the median).\n\
+             A slash that costs a fraction of one epoch's earnings is not a penalty,\n\
+             which is TJ-4's BOND_FLOOR coupling made quantitative: the (m,n) re-pin\n\
+             cannot carry attestation-resistance while the collateral it forfeits is\n\
+             this cheap relative to the flow. Raising m/lowering n does not fix a\n\
+             floor problem.",
+            E = bond_floor_skl() / reward_median_per_epoch_skl,
+            BF = bond_floor_skl(),
+            RM = reward_median_per_epoch_skl,
+        )?;
     }
     writeln!(
         out,
