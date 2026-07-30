@@ -1311,3 +1311,147 @@ check**.
    `ARCHIVAL_REOPEN_D_FEASIBILITY_PROBE.md:19` and `:26` (status block, third
    review pass); the TJ doc references it at five sites. Not contested — located.
 
+## 11. The witness-binding problem — item 1 decided, the artifact ruled necessary-and-insufficient
+
+### 11.1 The coverage derivation — run against BOTH adversaries, and they converge
+
+Run before item 1 rather than after, deliberately: settling the read shape first
+and then checking coverage would validate a constraint already used to make the
+choice.
+
+- **Precompute adversary (no beacon).** Retaining `c·K` of `L = 25,992` leaves
+  erases the discount at `c·K ≥ L`; at `K = 26`, **`c ≈ 1000`**.
+- **Reacquire adversary (beacon restored).** Precomputation dies, but coverage
+  only multiplies the per-epoch fetch by `c` — 8C §4's own verdict, that raising
+  the sample count does not help until reacquisition is expensive. Parity with
+  storage at `c = 3.33 MB / 3136 B ≈ **1062**`.
+
+**Same number by two routes, and not a coincidence** — it is `L` measured in
+leaves and `L·128 B` measured in bytes. `K` is the free-rider's chosen operating
+horizon, not a protocol constant, so it is quoted as a family; the conclusion is
+insensitive to it because the reacquire route needs `c ≈ L` regardless.
+
+**Conclusion — item 1 is decided by arithmetic, not preference.** `1000`
+leaf-reads ≈ 3.14 MB ≈ **one job-shaped read**. A thousand round trips per shard
+per epoch (× 4,096 shards) is absurd as a leaf protocol; the same bytes as one
+bulk read are unremarkable. **There is no viable leaf-read parameterization.**
+
+### 11.2 The artifact problem MIGRATES from `P` to the witness
+
+The shipped vin carries the challenged `leaf_bytes` (`path.rs:85`) and consensus
+checks it against a leaf-layer chunk it derives itself — so **consensus already
+has the answer**, and the leaf is not evidence `P` stored anything. It is
+evidence the **witness performed the read**, and it works because
+**artifact ≡ payload**: a miner holds no shard, so carrying the leaf means
+obtaining it.
+
+**Test≡job breaks the identity.** Payload 3.33 MB, artifact ~32 B — and once
+artifact ≠ payload, the artifact is a **function of the payload, which `P`
+has**. `P` computes it and ships 32 bytes. **The witness has no rendezvous**;
+§9.4(iii)'s topology binds `P` and does not reach the witness at all.
+
+### 11.3 The MAC candidate — necessary, insufficient, and costly to verify
+
+`artifact = MAC(k_witness, payload)` requires **both** operands: the witness has
+the key and lacks the payload, `P` has the payload and lacks the key.
+
+- **Hard blocker (verification).** Nobody holds both, so nobody can verify.
+  Publishing `k_witness` destroys the binding; going public-key is *worse* —
+  `Sign(sk_w, H(payload))` lets `P` compute the digest and hand over 32 bytes to
+  sign, which is the migration with an extra step.
+- **Surviving form: commit-reveal on an ephemeral witness key.** Publish `H(k)`
+  bound by the identity key, read, then publish the MAC and reveal `k`. `P`
+  cannot precompute because `k` was secret at MAC time, and verification needs
+  only the payload.
+- **Architectural cost, named before the candidate is treated as cheap:** only
+  **archival nodes can verify**, so a consensus rule built on it is **not
+  pruned-validatable** — the very property R2 exists to protect. The escape is
+  optimistic-plus-bisection terminating in a single-leaf check against `R_k`
+  (pruned-validatable, `R_k` being set A), which reintroduces exactly the
+  dispute machinery §9 dissolved.
+
+### 11.4 The amortization family — three for three, one root cause
+
+| fix | binds | adversary amortizes along |
+| --- | --- | --- |
+| keyed HMAC on `P` (§9.4 ii) | per-challenge computation | share `k_P` once → attest forever |
+| MAC on the witness | possession | fetch once → attest every **epoch** |
+| MAC on the witness | possession | fetch once → attest for every **`P` claiming `s`** |
+
+Each fix binds one axis; the adversary amortizes along an unbound one, and
+**the unbound axis is always the one where the payload is identical across
+instances**. `R_k` is content-addressed and identical for every archiver of
+shard `s` — the same root property that closed the artifact class.
+
+**So the MAC's marginal contribution is narrower than "centerpiece":** it
+converts *attest having never held the data* into *hold one copy, then attest
+without limit*. That rules out the zero-storage colluder, which is real. It
+**does not** make collusion cost-neutral — an earlier draft of this section
+claimed the cartel's floor was `min(S, T)` **per attesting relationship**; it is
+`min(S, T)` **per shard, divided across however many claims the cartel fields**.
+And "the data is still stored" is the **wrong invariant**: the corpus survives
+every one of these attacks. **What the mechanism buys is replication** — `N`
+bonds on shard `s` are priced for `N` copies, and a cartel behind `N` identities
+delivers **1-fold at `N`-fold cost**. Redundancy is the product, and redundancy
+is what dies.
+
+### 11.5 What actually bounds it is the DRAW — and the sweep must not credit the MAC against the window
+
+Because witnesses are **drawn from block producers** (§8.2) rather than chosen,
+a cartel is drawn for its sybil at roughly its hashrate share `f`. The other
+`1 − f` of draws are honest witnesses reading a rendezvous that serves nothing,
+so those baselines **miss**. The sybil survives only if the window tolerates it:
+**3-of-13 ⇒ `f ≈ 0.23`** — the same number §9.6 produced.
+
+**The MAC does not move `f ≈ 0.23` by any amount.** After the one-time fetch the
+per-attestation cost is zero and the constraint is entirely the draw: a cartel
+at `f ≥ 0.23` pays a one-time 3.33 MB toll on an unbounded attack, and one below
+it was already dead by the window.
+
+> **Briefing constraint for the Round-2 re-pin (the stale-gate shape).** The
+> sweep **must not** be briefed as *"witness-binding is handled, so `m` and `n`
+> can relax."* That would rest a parameter decision on a claim about another
+> item's state where the item does not deliver what the claim assumes.
+> **Attestation-resistance is carried entirely by `(m, n)` and the draw.** The
+> MAC changes the adversary's **fixed cost**, not its **rate**.
+
+### 11.6 Sybil-per-shard — no constraint, but conservation reshapes the inequality
+
+**Verified at source:** `r_market_count` (`consensus_state.rs:150–168`) counts
+**every** credited row for the shard; there is **no `(P, shard)` uniqueness
+constraint and no operator dedup**. Sybil-per-shard is bounded only by capital
+(`bond_floor_of`, per-shard bonds).
+
+**But the gain is not `N × reward`.** Per-shard work is `C·g/r` across `r`
+credited bonds, so the shard's pool is **conserved** (§9.4): with `N` sybils
+against `h` honest co-holders the cartel takes **`N/(N+h) · g`**, not `N·g`.
+The attack is therefore **dilution of honest co-holders**, and its inequality —
+which belongs beside TJ-4's, in the same sweep and with the same structure — is
+
+```text
+gain  =  [ N/(N+h)  −  1/(1+h) ] · g        (bounded above by g)
+cost  =  (N − 1) · FLOOR_opportunity  +  min(S, T)   (linear in N)
+```
+
+**Gain saturates at `g` while cost grows linearly**, so the attack has a finite
+optimal `N` and is priceable rather than unbounded — which is what makes it a
+sweep input rather than a structural hole.
+
+### 11.7 Revised dependency order
+
+1. **TJ-2 — `CHALLENGE_RESPONSE_BLOCKS`.** Prerequisite, **not** a broken freeze
+   claim: the `n·I − S` margin, the helper round-trip, and the dumb-pipe case
+   are unevaluable until it has a value. **Gates the sweep, not the build.**
+2. **Item 1 — the read shape and the on-chain artifact.** §11.1 decides it:
+   bulk read, no viable leaf parameterization. Everything downstream is a
+   function of this.
+3. **TJ-3 — seal timing.** The lever is **seal-to-fire proximity**, not seal
+   delay: seal late, fire soon after.
+4. **TJ-1 — parallel, spec-conformance repair, OFF the critical path.** Under
+   §11.4's finding, possession is what binds and per-epoch content variation
+   adds nothing, so the beacon is *not* a prerequisite for the witness
+   candidate. (A prior draft made it one; withdrawn.)
+5. **TJ-4 — independent** of all of the above, and paired with §11.6 in one
+   sweep.
+6. ~~TJ-6~~ — **dropped**: a stale comment on a surface item 1 rewrites.
+

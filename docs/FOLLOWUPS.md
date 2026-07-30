@@ -134,13 +134,33 @@ sustainability is unaffected by the recalibration.
   caps `n ≤ 25`, and TJ-4 couples to `BOND_FLOOR` — a three-way constraint on
   two integers under a hard ceiling. Establish feasibility **before** the sweep.
 
-- **TJ-5/TJ-6 (MEDIUM/LOW, fix-in-place)** (added 2026-07-29, §10.5–§10.6).
+- **TJ-7 (HIGH, sweep input) — sybil-per-shard has NO uniqueness constraint,
+  and the cartel attack is DILUTION not multiplication** (added 2026-07-29,
+  §11.6). `r_market_count` (`consensus_state.rs:150–168`) counts every credited
+  row; there is no `(P, shard)` uniqueness and no operator dedup, so
+  sybil-per-shard is bounded only by capital. **But per-shard work is `C·g/r`
+  across `r` credited bonds, so the pool is CONSERVED** — `N` sybils against `h`
+  honest co-holders take `N/(N+h)·g`, not `N·g`. The attack dilutes honest
+  co-holders; **gain saturates at `g` while cost is linear in `N`**, so it has a
+  finite optimum and is priceable:
+  `gain = [N/(N+h) − 1/(1+h)]·g` vs `cost = (N−1)·FLOOR_opportunity + min(S,T)`.
+  **Same structure as TJ-4's un-derived inequality and belongs in the same
+  sweep.**
+
+- **TJ-8 (briefing constraint on the Round-2 re-pin) — do NOT credit the
+  witness-binding MAC against the window** (added 2026-07-29, §11.5). The MAC
+  converts *attest having never held the data* into *hold one copy, then attest
+  without limit* — it changes the adversary's **fixed cost, not its rate**, and
+  **does not move `f ≈ 0.23`**. Briefing the sweep as *"witness-binding is
+  handled, so `m`/`n` can relax"* is the stale-gate shape: a parameter decision
+  resting on a claim about another item's state that the item does not deliver.
+  **Attestation-resistance is carried entirely by `(m, n)` and the draw.**
+
+- **TJ-5 (MEDIUM, fix-in-place)** (added 2026-07-29, §10.5–§10.6).
   **TJ-5:** `challenge.rs:71` `u32::try_from(idx).unwrap_or(u32::MAX)` turns a
   geometry error into a wrong-but-accepted constant index for every `(P, shard,
   E)` — the unrepresentable-state rule inverted; latent at today's 25,992.
-  **TJ-6:** `challenge.rs:74`'s documented range `(H_open, H_close]` is wrong
-  (code yields `[h_seal+1, h_close−1]`), the test asserts only the loose bound,
-  and **two call sites cite that doc to omit range checks**.
+  **TJ-6 DROPPED 2026-07-29** — a stale comment on a surface item 1 rewrites.
 
 - **TJ price premise — NOT codeable, tracked here with its falsifiers as
   reopen triggers (added 2026-07-29,
