@@ -13,11 +13,17 @@ in the metered cells and go quiet at flat-rate, and 3b engineering/operational
 commoditizable and must not be leaned on. Test gates landed
 (PR #378): `tj_g_…` red on challenge scope, `tj_f_forged_material…` green on
 soundness, the summand weld under the ledger; TJ-F's liveness face carried as
-a **type-level obligation** on TJ-A's output, not a test. Round 1's
-sharpest finding so far (§8.2 TJ-A1): **false denial is the strictly easier
-attack** — it pays *unilaterally* while false attestation must be purchased —
-and the escape is TJ-F's own `R_k` property, which decouples witnessing from
-holding and lets the draw exclude the challenged shard's co-holders. **The one
+a **type-level obligation** on TJ-A's output, not a test. **Round 1's
+witness population is RULED (§8.2, 2026-07-29): miners, not the bonded set.**
+Both required properties are already proven rather than designed — indifference
+by §12.11.1 Leg 1 (`miner_fee_income` is invariant to the staker share, and
+serve credit only redistributes a budget it cannot resize), and liveness by
+PoW itself (being selected *is* proof of being online, the only population with
+that property). Two rounds of bonded-set mitigation — co-holder exclusion,
+denial-tolerant quorums, the `1/r` analysis — are **retracted as design and
+retained as diagnosis**: they were engineering around a threat the population
+choice manufactured. TJ-A3 **collapses** with it (verification is
+deterministic, so disagreement is *evidence*, not a judgment call). **The one
 open gate this round does not own:** whether `q ≥ 0.10` is forceable on a
 3.33 MB Tor-borne fetch — PD-F-2's dispersion measurement (§8.3).
 **Family:** `TJ-*` (registered in `IMPLEMENTATION_INDEX.md` at birth, rule 94).
@@ -727,153 +733,180 @@ of them is wasted:
    the verify entry point takes **the response and `R_k` and nothing else** — no
    store handle in scope at the assembly site.
 
-### 8.2 Where the difficulty actually is: **challenger integrity**
+### 8.2 The witness population: **miners**, not the bonded set
 
-Receipt-attested transfer is the only candidate that achieves test≡job
-*structurally*, and its cost is that **consensus stops observing the act**.
-The failure mode is not attestation as such — it is a **colluding
-prover/challenger pair signing a receipt for bytes never sent**. Everything
-hard about this round is downstream of that one sentence, which makes
-**challenger selection the load-bearing mechanism**: it must be
-**consensus-derived and unchooseable**, so that neither party selects its
-counterparty.
+**Ruled 2026-07-29, superseding this section's first two drafts.** Round 1
+opened by proposing challengers drawn from the **bonded persona set**, then
+spent two rounds designing mitigations — co-holder exclusion, denial-tolerant
+quorums, the `1/r` denial-to-monopolize analysis. Those mitigations were the
+tell. **The bonded set is the population whose members have a financial
+interest in the verdict**, and every one of those mechanisms was engineering
+around a threat the population choice *manufactured*. Same shape as the ~3 KB
+opening (§5.2): an efficiency-looking choice that creates the problem, followed
+by machinery to contain it.
 
-Design questions (sub-items of the registered `TJ-A`; no new family):
+**Process note, recorded because the failure mode is named in the rules:** the
+error survived two rounds of review because each round verified the *execution*
+of the population choice and never re-grounded the *choice*. That is
+`reground-the-whether-not-just-the-how` — verifying a costly decision's
+mechanics while assuming its necessity.
 
-- **TJ-A1 — challenger derivation. Candidate direction: draw from the *bonded
-  persona set*, not the peer set.** The obstacle looked structural — the
-  `challenge_fire_height` / `challenge_leaf_index` beacon idiom
-  (`challenge.rs`) derives an *index* over a fixed domain, while a *peer* set is
-  membership over a permissionless population, a materially harder problem. But
-  **challengers need not come from the peer set.** The bonded persona set is
-  **consensus-visible, enumerable from chain state, and sybil-resistant by
-  capital** (a bond per identity, per-shard floors). Drawing from it converts
-  "membership over a permissionless population" into "membership over a
-  capital-gated set consensus already tracks" — and lets the beacon idiom be
-  **reused for selection** rather than replaced.
-  **The incentive property this buys — verified at source, and it cuts BOTH
-  ways.** `scarcity_micro` divides by `r_market`
-  (`reward_arithmetic.rs:71` — `WORK_MICRO_SCALE · g / (r_market ·
-  WORK_MILLI_SCALE)`), and `Σwork` is the emission denominator, so:
-  - **Against false *attestation* (collusion) — misaligned by default.** An
-    archiver who signs a receipt for bytes never sent certifies a
-    **competitor's** claim on the same finite pool: `r_market` on that shard
-    rises, dividing every co-holder's per-shard term, and `Σwork` rises,
-    diluting the whole pool. The natural challenger population therefore has a
-    *structural* reason not to collude — the opposite of the usual attestation
-    problem, where the witness is indifferent. It does not close **ring**
-    collusion on its own; `k`-of-`n` over a large bonded set with an
-    unchooseable draw is what bounds a ring's chance of drawing its own
-    members (TJ-A2).
-  - **Toward false *denial* (griefing) — aligned, unilateral, and therefore the
-    STRICTLY EASIER attack.** Trace the two lies and they are not symmetric:
-    false attestation makes `P` earn, raising `Σwork` and **diluting the
-    attester** — so it is costly to the witness and must be **purchased**
-    (collusion with payment). False denial lowers `r_market(s)`, which
-    **raises the denier's own `scarcity_micro = g/r` directly** — profitable
-    **unilaterally, with no counterparty and no bribe**. Denial is not the
-    other direction of one problem; it is the only one of the two that pays by
-    itself.
-    **It scales as `1/r`, so it is strongest exactly where the stakes are
-    highest.** Removing one co-holder moves the denier's term from `g/r` to
-    `g/(r−1)` — a relative gain of `1/(r−1)`: **~0.1 % at `r = 1000`, 100 % at
-    `r = 2`**. Scarce shards are simultaneously the highest-paying and the most
-    denial-exposed, which names a threat: **denial-to-monopolize** — deny
-    co-holders on a scarce shard until the m-of-n window slashes them out, then
-    hold the maximal scarcity term alone. **Self-reinforcing**, since each
-    departure lowers `r` and raises the next denial's payoff.
-  - **The co-holder dilemma is FALSE, and TJ-F's own property is the escape.**
-    An earlier draft of this section called a co-holder "the best-placed
-    witness … *because* it holds the shard, so it can verify the bytes are the
-    right bytes." **That is wrong.** A witness does not need the shard: response
-    material **plus `R_k`** suffices — precisely the §8.1(3) entry-point
-    property — and **every lean node already has `R_k`** (set A, §1). Witnessing
-    is therefore **decoupled from holding**, and the draw can be **the bonded
-    set minus the challenged shard's co-holders**: they verify no better than a
-    non-holder, and excluding them removes the concentrated `O(1/r)` incentive.
-    This is the same TJ-F property doing **triple duty** — it unlocks pruning,
-    makes the test honest, and now decouples witnessing from stake. Without
-    `R_k` verification, non-co-holder selection would not be available at all.
-  - **How far the exclusion actually gets you — stronger than "diluted", and
-    the residual is elsewhere (verified at source).** The direct channel closes
-    to **≈ zero, not `O(1/N)`**: per-shard work is `C·g/r` and there are `r`
-    co-holders, so **shard `s` contributes `C·g` to `Σwork` regardless of
-    `r`** — the per-shard pool is *conserved*, denial only **redistributes** it
-    among the remaining co-holders. Since `reward_share_floor(budget,
-    credited, Σwork)` (`reward_arithmetic.rs:128`) is `credited/Σwork`, a
-    **non-co-holder's `credited` and `Σwork` are both unchanged by the denial,
-    so its reward is unchanged.** Consequence for the checks below: the
-    proposed remedy of excluding the challenger's own holdings from that
-    epoch's `Σwork` is **unnecessary** — there is no `Σwork` residual to
-    decouple. (Conservation is exact in real arithmetic and *approximate* under
-    the two flooring stages — the per-pair micro floor and the micro→milli
-    floor — so this is "no incentive", not "bit-exact invariance"; the residue
-    is the `micro_path_rounds_against_the_claimant` direction.)
-    **What survives is the INDIRECT channel**, and it is what should size the
-    exclusion: sustained denial pushes `P` across the m-of-n window into a
-    slash, and a slash's bad interval **excludes that bond from `r_market`
-    everywhere** (`epoch_close_bad_interval_excludes_bond_everywhere`) — so a
-    challenger sharing **any** shard with `P` still profits from `P`'s
-    eventual exit, even when excluded from the challenged shard. **The open
-    question is exclusion breadth**: co-holders of shard `s` (kills the direct
-    channel) versus anyone sharing *any* shard with `P` (kills the indirect one
-    too, but may thin the eligible set unacceptably at large holdings against
-    the L11 population). That trade-off — not the `Σwork` residual — is what
-    makes **TJ-A3's dispute path load-bearing rather than a nicety.**
-  **Things to verify before this direction is ratified** (one of the originally
-  posed pair is **already answered structurally** — see the conservation
-  finding above: there is no `Σwork` denial residual, so no explicit
-  `Σwork` decoupling is owed):
-  1. **Drift-free enumeration at the selection read-point — for BOTH sets.**
-     The bonded set *and* the challenged shard's co-holder set must be read at
-     a proven consensus state, not a cached or tip-relative one. "Who holds
-     shard `s`" is exactly the kind of set that moves between read and use, and
-     it now gates *eligibility*, not just accounting — so a drift here silently
-     admits an excluded co-holder as a challenger. This is the **M3-1
-     cached-counter class** the D2 escalation closed structurally with
-     `parent_frozen_segment_count`; the same discipline (assert the read-point,
-     throw on violation) applies, and the idiom is already in the tree.
-  2. **Ring-draw probability at plausible bonded-set size** — that the chance a
-     colluding ring draws its own members falls acceptably in the set size the
-     market actually reaches (the L11 attractor envelope, `N_P` lean ≈ 79 /
-     thick ≈ 154 / fee-era-thin 17–62, is the population to sweep against —
-     *not* an assumed-large set).
-- **TJ-A2 — attestation shape, with the quorum direction already DETERMINED by
-  the denial asymmetry.** `k`-of-`n` pays `k` transfers per challenge for
-  collusion resistance proportional to `k`; optimistic pays one and relies on a
-  dispute path. Weigh them on collusion cost, bandwidth, and consensus artifact
-  size — noting that a **`k`-of-`n` receipt multiplies the very transfer cost
-  §5.7a says is the deterrent**, so the two objectives trade against each other
-  and the trade must be priced, not assumed away.
-  **The threshold's direction is a constraint this round carries, not one it
-  discovers.** Counting colluders for each lie under a `k`-of-`n` quorum:
-  - **unanimity (`k = n`)** — a **single** denier blocks credit, and denial is
-    unilaterally profitable (TJ-A1). Trivially attackable; **excluded**.
-  - **general `k`** — false denial needs `n − k + 1` colluders; false
-    attestation needs `k`. These trade against each other, and since **denial
-    pays by itself while attestation must be bought**, the quorum should be
-    biased **denial-tolerant: `k` low relative to `n`.**
-  **With a floor, named so the bias is not read as "minimize `k`":** `k` must
-  stay high enough that a handful of *purchasable* attesters cannot grant
-  credit (at `k = 1` a single bribed witness certifies anything). So the
-  constraint is *directional with a floor* — `k` low relative to `n`, above the
-  purchasable-quorum floor — and Round 1 owes the floor's derivation against a
-  stated bribe cost, not a chosen number.
-- **TJ-A3 — the dispute path, and the one legitimate return of the targeted
-  opening.** A dispute is the place a compact `VerifyPath` opening is **sound
-  again**: it is cheap in the rare case, and it reintroduces no `Θ(m)` hole
-  **because the default path is already the full transfer** — the opening
-  adjudicates a contested claim rather than substituting for the job. Question:
-  who can open a dispute, what does the loser forfeit, and what stops dispute
-  spam from becoming a griefing channel against honest archivers.
-- **TJ-A4 — what the on-chain artifact must contain** for a pruned validator to
-  check a receipt at all (signature over what preimage; how the receipt binds to
-  `(P, s, E)` and to the transferred bytes' commitment rather than to a bare
-  assertion), under the §8.1(3) entry-point constraint.
-- **TJ-B — serve/verify binding** (as registered): what ties the off-chain
-  serve to the on-chain proof — the sampling indices' unpredictability, a
-  challenger receipt, or both. Now answerable in TJ-A's terms rather than as a
-  separate axis.
+#### The witness is a **miner**, and both required properties are already proven
+
+**1 — Indifference, proven at source by our own prior work.** §12.11.1's Leg 1
+established that `staker_pool_share` applies to `burned_amount` while
+`miner_fee_income = total_fees − burned_amount`, so the staker share **never
+enters miner income** — pinned across the whole `n` domain by
+`escalating_the_share_never_touches_miner_income` (`shekyl-ffi`). We proved that
+to show the D2 escalation could not harm the security budget. It now does
+**double duty as the witness-indifference proof**: serve credit moves value only
+*within* the archival budget's distribution (`reward_share_floor` is
+`credited/Σwork` over a budget the credit does not resize — and §8.2's earlier
+conservation finding shows a denial merely *redistributes* a shard's fixed
+pool), so **a miner's income is invariant to whether `P` passes or fails.**
+Structural, by the arithmetic — not policy, not an exclusion rule. This is the
+property the co-holder-exclusion machinery was trying to *manufacture*, sitting
+in the tree already.
+
+**2 — Liveness, and this is the property no other population has.** A witness
+drawn from a set with no liveness signal can be **offline at challenge time**,
+and an offline witness produces a stalled challenge that is
+**indistinguishable from a denial** — the prior scheme's failure mode was a
+liveness fault wearing the costume of the attack it defended against. A bonded
+archiver up 99 % of the time is down 1 % of the time, with nothing on-chain
+saying which. **Miners are the only population where being selected *is* proof
+of being online at that instant**, because PoW is a liveness attestation:
+block production is the one thing on this chain an absent party cannot fake.
+Not the best available option — **the only population with the property at
+all.**
+*Precision (do not over-read):* a block proves liveness at the **selection
+instant**; the transfer window that follows still needs the witness to stay up.
+Recently-mined is the highest-probability-online population available, not a
+guarantee across the window — which is an argument for `m`-of-`n` and for the
+selection window's width, not against miners.
+
+#### TJ-A3 **collapses** — deterministic verification leaves nothing to adjudicate
+
+Verification is deterministic: recompute the sub-root from the served bytes and
+compare to `R_k`. Two consequences, and together they dissolve the dispute
+*problem* while keeping a dispute *path*:
+
+- **Honest witnesses cannot disagree.** There is no measurement to disagree
+  about; there is a hash comparison.
+- **`P` cannot serve two different valid responses**, because exactly one
+  byte-string reproduces `R_k` — any correct response is *the* correct
+  response.
+
+So disagreement is **not a judgment call to adjudicate; it is itself evidence**
+that either a witness misreported or `P` **served selectively** (a newly named
+and newly *detectable* attack: serving honestly to one witness and not another).
+With a quorum, **majority resolves and the outlier is a signal rather than a
+puzzle** — the dispute path's job shrinks from "who is right about a contested
+measurement" to "identify which party misreported a deterministic computation,"
+and attribution is mechanical.
+
+#### What remains — a smaller and different set
+
+- **TJ-A1 — miner selection.** Which miners, over what window, derived how?
+  The beacon idiom (`challenge.rs`) now applies to a set that is **already
+  enumerable from block headers**, so the "membership over a permissionless
+  population" obstacle is gone: recent block producers are consensus-visible by
+  construction. Open: window width (recency buys liveness confidence, breadth
+  buys unpredictability), and whether selection is per-challenge or per-epoch.
+- **TJ-A2 — miner/bonder overlap, and the quorum's much weaker job.** A miner
+  who also bonds *does* carry the denial interest, and it **cannot be excluded
+  structurally**: excluding it would require linking miner identity to persona,
+  which the privacy architecture forbids (**G-1** — cross-identity linkage is
+  unavailable, and buying it here would be a priority-#2 regression to purchase
+  a priority-#3 property). So the quorum no longer defends against a
+  *systematically misaligned* witness population — only against the **fraction
+  that happens to overlap.** That is a far weaker requirement, and it is the
+  argument for `m`-of-`n` over a single witness. The overlap *rate* is the
+  quantity to bound, and it is bounded by economics (bonding is capital-gated)
+  rather than by exclusion.
+- **TJ-A2b — witness obligation, with one shape ruled out now.** Indifference
+  cuts both ways: an indifferent miner has no reason to *bother*.
+  - **Paid** — gives a stake in *witnessing* without a stake in the *verdict*.
+    Compatible with the indifference proof; the shape to develop.
+  - **Optional** — risks nobody doing it; a liveness fault by another route.
+  - **Block-validity requirement — RULED OUT EARLY (hazard).** It would couple
+    block production to a 3.33 MB Tor transfer completing inside the block
+    interval, putting **archival serving latency on the mining critical path**.
+    That is the invalid-blocks failure class the template/connect `n` agreement
+    was careful about (§7): a consensus rule whose satisfaction depends on a
+    network transfer produces unmineable-or-invalid blocks under ordinary
+    latency variance. Do not revisit without a mechanism that decouples the
+    validity condition from the transfer's completion time.
+- **TJ-A2c — quorum size, where the trade INVERTS from the earlier reading.**
+  Every witness receives the full shard, so `n` witnesses mean `n` transfers —
+  and the sizing question lands on **miners**, who are latency-sensitive in a
+  way archivers are not, so the ceiling may be lower than it looks. Scale as a
+  formula rather than an invented number: `challenges/block = (bonded (P,shard)
+  pairs × CHALLENGES_PER_EPOCH) / SEB`, times `3.33 MB` times `n`, against the
+  L11 population envelope (`N_P` lean ≈ 79 / thick ≈ 154 / fee-era-thin 17–62)
+  and the holdings distribution — the product spans trivial to several MB/s and
+  the round must sweep it, not assume it.
+  **The finding that inverts the trade:** raising `n` **dilutes the deterrent**.
+  Honest `P` pays `n` egress; free-riding `P` pays `n` egress **plus one
+  ingress** — the differential is *one fetch, constant in `n`*, while the shared
+  cost grows linearly. So the cost ratio falls from ~2:1 at `n = 1` toward
+  ~1:1 as `n` grows: **large quorums erode the very asymmetry §5.7a
+  establishes.** Combined with denial-tolerance wanting `n` large (§8.2's
+  retained analysis) and miner bandwidth wanting `n` small, that is a
+  **three-way tension with two of three pushing small.**
+- **TJ-A2d — the escape worth evaluating first: `k`-of-`n` over SEQUENTIAL
+  challenges, not `n` simultaneous witnesses.** Make the epoch carry `n`
+  challenges, each witnessed by **one** miner, and require `k` passes.
+  Properties, each of which addresses one arm of the tension above:
+  1. **Deterrent ratio preserved** — each challenge is one transfer, so the
+     free-rider pays one ingress *per challenge* rather than one per epoch.
+  2. **Denial tolerance without simultaneity** — a single denier costs `P` one
+     challenge, not the epoch; denial needs `n − k + 1` denials across
+     independently-drawn witnesses.
+  3. **Miner bandwidth spread** across the epoch instead of concentrated.
+  4. **And it multiplies the deterrent directly:** `CHALLENGES_PER_EPOCH` is
+     **`1` today** (`constants.rs:11`), which is the rate deliverable 2's
+     measurement assumed. Raising it to `n` multiplies the free-rider's
+     per-epoch transfer by `n` while honest storage is unchanged — which is
+     exactly the lever that could lift **§5.7c's marginal cheap-transit cell**
+     (~1.1×) out of coin-flip territory. **This is a measurable claim, not an
+     argument:** it re-runs through the same `tj_shard_payload_report` machinery
+     by changing one operand, and Round 1 should measure it rather than assert
+     it.
+  *Caveat to check, not to wave away:* a free-rider who **holds between**
+  sequential challenges pays one ingress for `n` challenges, collapsing (1) —
+  but holding between challenges **is archiving**, which is the honest
+  behaviour. That is a *mechanism* observation and must not be restated as the
+  withdrawn caching *argument* (§5.4): it does not prove free-riding
+  unprofitable, it observes that the cheapest way to pass `n` sequential
+  challenges is to become an archiver.
+
+#### Retained, as diagnosis rather than design (retraction hygiene)
+
+The bonded-set analysis is **not deleted** — it is why that population was
+wrong, and it stays correct on its own terms:
+
+- **False denial is the strictly easier attack.** False attestation makes `P`
+  earn, raising `Σwork` and diluting the attester — costly, so it must be
+  **purchased**. False denial lowers `r_market(s)`, raising the denier's own
+  `scarcity_micro = g/r` **unilaterally, no counterparty, no bribe.**
+- **It scales as `1/(r−1)`** — ~0.1 % at `r = 1000`, **100 % at `r = 2`** —
+  strongest exactly where stakes are highest, enabling
+  **denial-to-monopolize**: deny co-holders on a scarce shard until the m-of-n
+  window slashes them out, then hold the maximal scarcity term alone;
+  self-reinforcing, since each departure raises the next denial's payoff.
+- **Per-shard pool conservation.** Shard `s` contributes `C·g` to `Σwork`
+  regardless of `r`, so denial *redistributes* rather than inflates — which is
+  what makes a **non-interested** witness (a miner) indifferent by
+  construction, and what made a co-holder witness structurally interested.
+  ("No incentive," not "bit-exact invariance": two flooring stages leave a
+  residue in the rounds-against-the-claimant direction.)
+- **The indirect channel** (a slash's bad interval excludes the bond from
+  `r_market` **everywhere** — `epoch_close_bad_interval_excludes_bond_everywhere`)
+  is why co-holder exclusion could never have been sufficient: a challenger
+  sharing *any* shard with `P` profits from `P`'s exit. Under miner selection
+  this collapses to the overlap fraction (TJ-A2).
+
 
 ### 8.3 The named gate — TJ-C's deadline is a dependency, not this round's answer
 
