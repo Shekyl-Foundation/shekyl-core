@@ -1389,11 +1389,49 @@ without limit*. That rules out the zero-storage colluder, which is real. It
 **does not** make collusion cost-neutral — an earlier draft of this section
 claimed the cartel's floor was `min(S, T)` **per attesting relationship**; it is
 `min(S, T)` **per shard, divided across however many claims the cartel fields**.
-And "the data is still stored" is the **wrong invariant**: the corpus survives
-every one of these attacks. **What the mechanism buys is replication** — `N`
-bonds on shard `s` are priced for `N` copies, and a cartel behind `N` identities
-delivers **1-fold at `N`-fold cost**. Redundancy is the product, and redundancy
-is what dies.
+~~And "the data is still stored" is the wrong invariant — what the mechanism
+buys is replication, and a cartel behind `N` identities delivers 1-fold at
+`N`-fold cost; redundancy is the product.~~
+**CORRECTED 2026-07-29 — that framing contradicts a ratified disposition and
+reintroduces a storage-accounting posture this project is not.** The tree
+already rules the product: *"Foundation owns durability; market owns **reach +
+privacy + participation**"* (8C §7.5) and *"a free-rider equilibrium degrades
+**reach**, not corpus survival"* (§12.6). **Service is the product, not
+storage.** A single operator serving 5 or 50 personas from one reliable
+platform is **not a mechanism concern**: the service is checked, the service is
+what is paid for, and a consumer of shard data cannot tell and has no reason to
+care. Two independent reasons the mechanism must not reach for it — and they
+reinforce rather than merely coexist:
+1. **It is unobservable by design.** Detecting one operator behind `N` personas
+   requires linking persona to principal, which the privacy architecture
+   forbids (**G-1**). A finding whose remedy is *"observe more"* is arguing
+   against the architecture without saying so.
+2. **It serves no coherent purpose.** Correct service is correct service. The
+   durability floor is the foundation's, by disposition; participation
+   distribution is a **tacit-vote outcome** (§11.5a), not drift to be
+   corrected.
+**What the earlier text got right and keeps:** the artifact cannot bind the
+witness, and the amortization runs along the P-dimension. **What it got wrong:**
+calling the consequence a redundancy/durability failure. The consequence is
+bounded by the draw (§11.5), and past that bound it is a participation outcome,
+not a defect.
+
+### 11.5a The governance reading — a range of outcomes IS the mechanism working
+
+Recorded because it changes how every parameter in this family should be read.
+The staking share is **governance by tacit vote**: stakers pull the economy
+toward staking, miners toward mining, and where it settles is the participants'
+answer, not a set-point. **Pinning it tightly is overriding the vote.**
+
+This retroactively grounds the escalation's **no-controller constraint** (§6.1
+constraint 5, `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`) better than the
+reason that doc carries. *No EMA, no rate-limiter* is not merely avoiding
+control-theory complexity or inheriting smoothness from a slow operand — it is
+**declining to steer a quantity that is supposed to settle where participants
+put it.** The systems are mutually reinforcing rather than separately
+engineered: privacy forecloses the observation, governance makes the
+observation pointless, and the wide guardrail is the design rather than a
+concession.
 
 ### 11.5 What actually bounds it is the DRAW — and the sweep must not credit the MAC against the window
 

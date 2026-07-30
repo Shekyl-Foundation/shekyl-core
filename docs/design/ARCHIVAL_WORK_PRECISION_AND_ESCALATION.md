@@ -445,6 +445,17 @@ The constraints §6.0 and the operand imply, to be pinned at Stage 3:
 > and a rate-limiter would only slow a *paid, one-way ratchet that already does not
 > pay*, while adding exactly the stateful machinery this section forbids. Same
 > conclusion; honest premises.
+>
+> **§11.5a addendum (2026-07-29, `ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`) — a
+> third and better grounding.** Both justifications above argue the operand
+> cannot move fast enough to need damping. The stronger reason is that **it
+> should not be steered at all**: the staking share is **governance by tacit
+> vote** — stakers pull the economy toward staking, miners toward mining, and
+> where it settles is the participants' answer, not a set-point a controller
+> should correct toward. A rate-limiter would not merely be redundant
+> machinery; it would **override the vote**. This is why the constraint
+> survives every re-derivation of its premises: the premises were never load-
+> bearing.
 ### 6.2 The ratchet cuts both ways — durable output-stuffing (wargame W9)
 
 The same monotonicity that defeats fast-swing manipulation (W8) *enables* a
