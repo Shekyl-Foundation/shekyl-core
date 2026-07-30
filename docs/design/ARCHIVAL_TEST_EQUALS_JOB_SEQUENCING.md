@@ -1186,3 +1186,128 @@ miner witnesses, denial is the hard attack and attestation the easy one.
    floor's derivation against a stated bribe cost" now has its correct form:
    **attestation-resistance derived against the zero-service reward take** —
    the `(m, n)` re-pin prices the bribe, not a chosen `k`.
+
+## 10. Live-surface audit (2026-07-29) — six findings, all verified at source
+
+Round 1's rulings were reasoned against the *intended* design. This audit reads
+the **shipped** surfaces. Every finding below is confirmed at the cited line.
+
+### 10.1 TJ-1 (CRITICAL) — the challenged leaf index carries no beacon, and this is a **spec/code divergence**
+
+`challenge_leaf_index` (`challenge.rs:55–71`) derives `τ` from
+`p_id ‖ shard_id ‖ settlement_epoch` — **every input fixed at join or a
+counter**. The whole future challenge schedule is precomputable today.
+
+**The spec did not get this wrong; the implementation dropped it.** 8C §4's
+**pinned BUILD pattern** is
+`τ = H( block_hash[H_challenge] ‖ P_id ‖ s ‖ E ‖ domain_sep )`, with the
+rationale stated in the same section: *"leaf index unknown before that block
+exists (future-block-hash style)."* The shipped derivation omits
+`block_hash[H_challenge]` entirely. Contrast `challenge_fire_height`
+(`challenge.rs:86+`), which **does** take `block_hash_at_seal` — so **when** is
+sealed and **what** is not.
+
+**The exploit, on the live path.** The vin carries only the 128-byte challenged
+leaf (`path.rs:85`), consensus checks index-match at
+`shekyl-ffi/src/archival_ffi.rs:612` (reached from `blockchain.cpp:5209` via
+`shekyl_archival_verify_serve_credit_vin`). So `P` precomputes `ℓ(E)` across its
+claim horizon, retains those leaves plus openings, **discards the shard**, and
+passes every baseline: at `RESPONSE_BYTES = 3136` over a 26-epoch horizon,
+**~82 KB stands in for 3.33 MB.**
+
+**Topology does not bind it** — `P` genuinely holds and serves what it is asked
+for; no helper, no relay, no onion key. §9.4(iii)'s argument prices
+`I = SHARD_BYTES`; the shipped path's `I` is 3.1 KB. This is an **independent
+free-riding path that none of Round 1's rulings cover**, and it is live now.
+
+**Disposition:** the finding does not argue for patching the beacon into a path
+TJ-B will replace. **TJ-B's charter is amended: the vin-carried opening path is
+to be DELETED, not extended.** Interim mitigation named in case TJ-B lands late:
+restore the `block_hash[H_challenge]` input to `τ` per 8C §4 (a spec-conformance
+fix, not a new design).
+
+### 10.2 TJ-2 (CRITICAL) — response semantics are **not** frozen, and this corrects a claim in §9
+
+`constants.rs:24`: `pub const CHALLENGE_RESPONSE_BLOCKS: Option<u64> = None;` —
+*"Not yet byte-pinned in gate-2 §3.1."* **The acceptance deadline after `H_fire`
+has no value.**
+
+**Correction to §9.4/§3:** the claim "response semantics are consensus-critical
+and freeze at genesis" was a statement about what **must** freeze, and it was
+written as though it **had**. It has not. Every cost statement in this round —
+the ~100-byte helper round-trip *"inside the deadline"* (§9.4(ii)), the
+dumb-pipe margin (§9.4(iii)), the whole `n·I − S` framing — is quantified
+against **a deadline that does not exist**. Until `CHALLENGE_RESPONSE_BLOCKS` is
+pinned, the free-rider's round-trip budget is **unbounded** and the margin is
+**not evaluable**. This is a **freeze item, not a build item**, and it gates the
+evaluability of §9.4 and §9.5.
+
+### 10.3 TJ-3 (HIGH) — the fire beacon seals one block into a 10,000-block epoch
+
+`CHALLENGE_BEACON_SEAL_BLOCKS = 1` (`constants.rs:19`) against
+`SETTLEMENT_EPOCH_BLOCKS = 10_000` (`:27`). `H_seal = H_open + 1`, so `H_fire`
+is **public from the second block of the epoch** and sits up to ~9,998 blocks
+(~20 days) out: a **published appointment, not unpredictable scrutiny**.
+
+It contradicts the failure-window pin's own load-bearing rationale
+(`failure_window.rs:31–37`): a predictable recheck *"is the gaming surface — a
+mostly-offline `P` surfaces for the probe and evades."* Escalation was **rejected
+for exactly this** while the baseline it protects is scheduled weeks ahead.
+Under **attestation-resistance** (§9.6) it is worse than an uptime issue: a known
+fire time is the cheapest possible coordination signal for arranging a co-holder
+fetch.
+
+### 10.4 TJ-4 (HIGH) — no minimum observation count; the "conservative direction" is now backwards
+
+`failure_window_slashable` evaluates short sequences as-is against the same `m`
+(`failure_window.rs:291`), documented as *"the conservative direction (fewer
+observations can only mean fewer misses)"* — conservative **toward not
+slashing**, which was correct when false-slash was the only objective and is
+**backwards under attestation-resistance**. A fresh or reinstated pair is
+**unslashable for its first `m − 1 = 10` observations.**
+
+Combined with the ratified clean-window-on-`Rebond`, the free-rider's steady
+state is not §9.6's 3-of-13 friendly draws — it is **zero service, 10 free
+epochs, slash, `Rebond`, 10 more.** The module argues `Rebond` is not a cheap
+reset because *"the burned collateral is the price,"* but **never states the
+inequality**: `10 × zero_service_reward_per_epoch` versus
+`ARCHIVAL_BOND_FLOOR + rebond friction`. **Not derived anywhere in the tree.**
+If it fails, the window is a **subscription fee**. Deriving it is a Round-2
+obligation, and it **couples the `(m, n)` re-pin to `BOND_FLOOR`**.
+
+### 10.5 TJ-5 (MEDIUM) — silent saturation in a consensus derivation
+
+`challenge.rs:71`: `u32::try_from(idx).unwrap_or(u32::MAX)` over a `u64`
+`segment_leaf_count`. Any geometry above `u32::MAX` **collapses the challenge to
+a constant index for every `P`, shard, and epoch**. `unwrap_or` converts a
+geometry error into a **wrong-but-accepted answer** — the unrepresentable-state
+rule inverted. (Today's geometry is 25,992, so this is latent; it is exactly the
+class the D1 truncation was.)
+
+### 10.6 TJ-6 (LOW) — the documented range is wrong, and two call sites cite it
+
+`challenge.rs:74` claims `H_fire ∈ (H_open, H_close]` and `:78–85` instructs
+**both consumers to skip range checks on that basis**. The code at `:96–106`
+yields `[h_seal+1, h_close−1]` — `H_close` is unreachable. The test at
+`:138–146` asserts only `h_fire <= h_close`, so nothing catches the drift.
+Harmless today; it is the **authority two call sites cite for omitting a
+check**.
+
+### 10.7 Corrections to §9's claims
+
+1. **"Response semantics genesis-frozen" — WRONG as written.** See §10.2. They
+   *must* freeze; they have *not*. Corrected in place.
+2. **"A third objective" — I named two.** The deterrence objective was suspended
+   with reopen (d) (§2), so the live set is **false-slash + attestation-
+   resistance**. And the feasible band is **already boxed**: the const-assert
+   pins `m = 11, n = 13` (`failure_window.rs:132`) and the prune-horizon assert
+   caps `n + LAG ≤ MAX_CLAIM_AGE_W + 1`, i.e. **`n ≤ 25`**. Attestation-
+   resistance pushes `m` **down** and `n` **up** — and raising `n` is *precisely*
+   the edit that assert exists to catch. TJ-4 adds a coupling to `BOND_FLOOR`.
+   **That is a three-way constraint on two integers under a hard ceiling: the
+   re-pin may be OVER-DETERMINED**, which is worth establishing *before* the
+   sweep rather than discovering inside it.
+3. **PD-F-2 — present, and here is where.**
+   `ARCHIVAL_REOPEN_D_FEASIBILITY_PROBE.md:19` and `:26` (status block, third
+   review pass); the TJ doc references it at five sites. Not contested — located.
+

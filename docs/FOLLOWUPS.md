@@ -94,6 +94,54 @@ sustainability is unaffected by the recalibration.
   Not blocking anything. `cbindgen` is not installed on the dev box, so the
   full-surface diff (all crates, not just relay) is still unmeasured.
 
+- **TJ-1 (CRITICAL, live consensus path) — the challenged leaf index carries no
+  beacon: a SPEC/CODE DIVERGENCE** (added 2026-07-29,
+  `design/ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §10.1). 8C §4's **pinned
+  BUILD pattern** is `τ = H( block_hash[H_challenge] ‖ P_id ‖ s ‖ E ‖ dom )`
+  with the rationale *"leaf index unknown before that block exists"*;
+  `challenge.rs:55–71` derives `τ` from `p_id ‖ shard_id ‖ settlement_epoch`
+  **only** — the beacon input is absent. Consequence: the entire future
+  challenge schedule is precomputable, so a `P` retains just the challenged
+  leaves + openings (**~82 KB across a 26-epoch horizon**) and passes every
+  baseline having discarded the 3.33 MB shard. **Topology does not bind it**
+  (no helper, no relay), so this is an independent free-riding path none of the
+  TJ rulings cover. **Disposition:** TJ-B's charter amended to **DELETE** the
+  vin-carried opening path rather than extend it; **interim mitigation if TJ-B
+  lands late** — restore `block_hash[H_challenge]` to `τ` (spec conformance,
+  not new design).
+
+- **TJ-2 (CRITICAL, freeze item) — `CHALLENGE_RESPONSE_BLOCKS` is unpinned**
+  (added 2026-07-29, §10.2). `constants.rs:24` is `None` — *"not yet byte-pinned
+  in gate-2 §3.1"*. The acceptance deadline after `H_fire` **has no value**, so
+  the free-rider's round-trip budget is **unbounded** and every `n·I − S` cost
+  statement in the TJ round is quantified against a deadline that does not
+  exist. **Not evaluable until pinned**; gates §9.4/§9.5's arithmetic and is
+  upstream of the PD-F-2 dispersion question (which asks whether a threshold is
+  forceable *within a deadline*).
+
+- **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
+  **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
+  `H_fire` ~9,998 blocks ahead — a scheduled appointment, contradicting the
+  failure-window pin's own anti-gaming rationale (`failure_window.rs:31–37`,
+  which *rejected escalation* for exactly this). **TJ-4:** no minimum
+  observation count, so a fresh/reinstated pair is unslashable for its first
+  `m − 1 = 10` observations; with clean-window-on-`Rebond` the free-rider's
+  steady state is *10 free epochs → slash → Rebond → 10 more*, and the
+  inequality `10 × zero_service_reward` vs `BOND_FLOOR + rebond friction` is
+  **not derived anywhere in the tree**. If it fails the window is a
+  subscription fee. **Over-determination warning for the re-pin:**
+  attestation-resistance pushes `m` down and `n` up, the prune-horizon assert
+  caps `n ≤ 25`, and TJ-4 couples to `BOND_FLOOR` — a three-way constraint on
+  two integers under a hard ceiling. Establish feasibility **before** the sweep.
+
+- **TJ-5/TJ-6 (MEDIUM/LOW, fix-in-place)** (added 2026-07-29, §10.5–§10.6).
+  **TJ-5:** `challenge.rs:71` `u32::try_from(idx).unwrap_or(u32::MAX)` turns a
+  geometry error into a wrong-but-accepted constant index for every `(P, shard,
+  E)` — the unrepresentable-state rule inverted; latent at today's 25,992.
+  **TJ-6:** `challenge.rs:74`'s documented range `(H_open, H_close]` is wrong
+  (code yields `[h_seal+1, h_close−1]`), the test asserts only the loose bound,
+  and **two call sites cite that doc to omit range checks**.
+
 - **TJ price premise — NOT codeable, tracked here with its falsifiers as
   reopen triggers (added 2026-07-29,
   `design/ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §5.3).** The test≡job
