@@ -42,6 +42,23 @@
 //! unchooseable draw is doing more work than §9.6 credited, and the cycle
 //! question stays live across the whole range.
 //!
+//! **A third correction (2026-07-30): the friction term is derived, not
+//! assumed.** The first cut zeroed it and mislabelled the zero
+//! "attacker-favourable" — deleting a real term favours no one's analysis.
+//! `Rebond` closes the slash's bad interval at `end_exclusive = E_rebond + 1`
+//! (`bond_connect.rs`), so the record is out of `r_market` from the slash
+//! epoch through the rebond epoch **inclusive** — a structural downtime floor
+//! no attacker speed avoids, derived by probing the production connect
+//! ([`rebond_structural_downtime_epochs`]). The forgone earnings are priced at
+//! the **credited** rate `f · R`, not the full-service reward: a free-rider
+//! forgoes only what it would have drawn, so pricing downtime at full `R`
+//! overstates the deterrent `1/f`-fold. The report extends the floor with a
+//! hypothetical post-slash cooldown and quotes break-even as a function of its
+//! length — the remedy curve the `(m, n)` re-pin needs. `BOND_FLOOR` is
+//! `f`-independent while the downtime term scales with `f`, so the bond bounds
+//! the low-`f` attacker and downtime the high-`f` one: "floor problem vs
+//! cooldown problem" is a **false dichotomy**.
+//!
 //! # TJ-7 — sybil-per-shard dilution
 //!
 //! `r_market_count` counts every credited row — no `(P, shard)` uniqueness, no
@@ -59,7 +76,11 @@
 
 use core::fmt;
 
-use shekyl_archival_retention::{FAILURE_WINDOW_M, FAILURE_WINDOW_N};
+use shekyl_archival_retention::bond_floor::bond_floor_of;
+use shekyl_archival_retention::{
+    rebond_connect, BadInterval, HoldingsKind, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
+    MAX_HOLDINGS_SHARDS,
+};
 
 use crate::proxy::{bond_at_risk_skl, epochs_per_year, expected_epochs_to_first_slash};
 
@@ -167,10 +188,63 @@ impl EpochCache {
     }
 }
 
+/// Structural downtime of one slash/`Rebond` cycle: the epochs of `r_market`
+/// exclusion even a maximally fast attacker cannot avoid — **derived by
+/// calling [`rebond_connect`]**, not by restating its rule (dep-don't-mirror,
+/// as with the absorbing chain).
+///
+/// A record slashed at epoch `e` carries an open bad interval starting at `e`;
+/// the connect closes it at `end_exclusive = E_rebond + 1`, so the record is
+/// excluded for `[e, E_rebond]` **inclusive**. This probes the earliest
+/// `E_rebond` the connect admits and returns that span's length. Today the
+/// interval-ordering check admits `E_rebond = e` (same-epoch reinstatement),
+/// so the floor is ONE epoch; a next-epoch rebond gives two. If production
+/// ever grows a post-slash cooldown gate, this derivation follows it instead
+/// of quoting a stale constant.
+///
+/// (`release_cooldown.rs` is the VOLUNTARY-EXIT gate — `Unbond` /
+/// `HoldingsUpdate`-drop, gate-4 §4.3/§4.4 — and is not on the slash path;
+/// verified at source 2026-07-29. Nothing today enforces a longer wait.)
+#[must_use]
+pub fn rebond_structural_downtime_epochs() -> f64 {
+    const SLASH_EPOCH: u64 = 100;
+    let held = [0u64];
+    let bonded = bond_floor_of(HoldingsKind::ShardSetCompact, held.len());
+    let open = [BadInterval {
+        start_epoch: SLASH_EPOCH,
+        end_exclusive: u64::MAX,
+    }];
+    (SLASH_EPOCH..SLASH_EPOCH + 64)
+        .find_map(|e_rebond| {
+            rebond_connect(bonded, &held, &open, &held, bonded, e_rebond)
+                .ok()
+                .map(|c| (c.interval_end_exclusive - SLASH_EPOCH) as f64)
+        })
+        .expect("rebond_connect admits no reinstatement within 64 epochs of a slash")
+}
+
+/// One cycle's friction, SKL: the credited earnings forgone while the record
+/// is out of `r_market` — `downtime · f · R`.
+///
+/// Priced at the **credited** rate `f · R`, NOT the full-service reward `R`
+/// (the correction to the downtime-is-3–6×-collateral estimate, which priced
+/// the exclusion as if the free-rider were earning full service): a pair
+/// credited on fraction `f` of its epochs forgoes only what it would have
+/// drawn. At `f = 0` downtime costs nothing — which is exactly right, because
+/// a never-credited pair has nothing to forgo.
+#[must_use]
+pub fn rebond_friction_skl(f: f64, downtime_epochs: f64, reward_per_epoch_skl: f64) -> f64 {
+    downtime_epochs * f * reward_per_epoch_skl
+}
+
 /// One slash/`Rebond` cycle's net, SKL, for a pair credited on fraction `f`.
 ///
 /// `earnings = E[epochs to slash] · f · reward_per_epoch_skl`;
-/// `cost = bond_at_risk + friction`. Positive net means the cycle pays — the
+/// `cost = bond_at_risk + friction`, with the friction **derived** from the
+/// cycle's downtime ([`rebond_friction_skl`]) rather than passed as an opaque
+/// number. `downtime_epochs` is the full `r_market` exclusion per cycle: the
+/// structural floor ([`rebond_structural_downtime_epochs`]) plus any
+/// hypothetical post-slash cooldown. Positive net means the cycle pays — the
 /// "subscription fee" TJ-4 warned about.
 ///
 /// `reward_per_epoch_skl` is what a **sole credited** holder earns on a credited
@@ -187,7 +261,7 @@ impl EpochCache {
 pub fn rebond_cycle_net_skl(
     f: f64,
     reward_per_epoch_skl: f64,
-    friction_skl: f64,
+    downtime_epochs: f64,
     horizon_epochs: u64,
 ) -> Option<f64> {
     let epochs = expected_epochs_to_slash(f, horizon_epochs)?;
@@ -195,7 +269,7 @@ pub fn rebond_cycle_net_skl(
         f,
         epochs,
         reward_per_epoch_skl,
-        friction_skl,
+        rebond_friction_skl(f, downtime_epochs, reward_per_epoch_skl),
     ))
 }
 
@@ -230,44 +304,36 @@ fn measurable_f_hi(cache: &mut EpochCache) -> f64 {
     lo
 }
 
-/// The attestation fraction at which the cycle first breaks even.
+/// Break-even search core against a caller-supplied cache and measurable edge.
 ///
-/// Searched across the whole regime where absorption is measurable, **not**
-/// capped at [`no_slash_attestation_fraction`] — see this module's second
-/// correction: a randomly-drawn cartel still absorbs above that fraction.
-///
-/// `None` means the burned bond is never covered where the cycle completes —
-/// the window is **not** a subscription fee at this reward level.
-///
-/// Memoizes `E[epochs](f)` for the bisection so each distinct `f` runs the
-/// absorbing DP at most once (the search probes the measurable edge and then
-/// the break-even root).
-#[must_use]
-pub fn rebond_breakeven_f(
+/// Split out so one cache (and one `measurable_f_hi` probe — the high-`f`
+/// DPs are the slowest) can serve the headline break-evens AND every
+/// `(cooldown, operand)` cell of the remedy curve: `E[f]` depends on neither
+/// the downtime nor the reward. Single-crossing holds with the downtime term —
+/// once `(E(f) − d) · f · R` clears the bond it stays cleared, because `E` is
+/// monotone in `f`.
+fn breakeven_in_measurable(
+    cache: &mut EpochCache,
+    hi_bound: f64,
     reward_per_epoch_skl: f64,
-    friction_skl: f64,
-    horizon_epochs: u64,
+    downtime_epochs: f64,
 ) -> Option<f64> {
-    let mut cache = EpochCache::new(horizon_epochs);
     let net_at = |f: f64, cache: &mut EpochCache| -> Option<f64> {
         let e = cache.epochs(f)?;
         Some(cycle_net_from_epochs(
             f,
             e,
             reward_per_epoch_skl,
-            friction_skl,
+            rebond_friction_skl(f, downtime_epochs, reward_per_epoch_skl),
         ))
     };
 
-    // No measurable absorption even at f = 0 (should not happen for m-of-n).
-    cache.epochs(0.0)?;
-    let hi_bound = measurable_f_hi(&mut cache);
     // Even at the latest measurable f the cycle still loses the bond.
-    if net_at(hi_bound, &mut cache).is_none_or(|v| v < 0.0) {
+    if net_at(hi_bound, cache).is_none_or(|v| v < 0.0) {
         return None;
     }
     // Degenerate: already non-negative at f = 0 (zero bond / infinite reward).
-    if net_at(0.0, &mut cache).is_some_and(|v| v >= 0.0) {
+    if net_at(0.0, cache).is_some_and(|v| v >= 0.0) {
         return Some(0.0);
     }
 
@@ -278,12 +344,43 @@ pub fn rebond_breakeven_f(
             break;
         }
         let mid = 0.5 * (lo + hi);
-        match net_at(mid, &mut cache) {
+        match net_at(mid, cache) {
             Some(v) if v >= 0.0 => hi = mid,
             _ => lo = mid,
         }
     }
     Some(hi)
+}
+
+/// The attestation fraction at which the cycle first breaks even, at a given
+/// per-cycle downtime ([`rebond_friction_skl`] prices it per probed `f`).
+///
+/// Searched across the whole regime where absorption is measurable, **not**
+/// capped at [`no_slash_attestation_fraction`] — see this module's second
+/// correction: a randomly-drawn cartel still absorbs above that fraction.
+///
+/// `None` means the burned bond is never covered anywhere the cycle completes
+/// within the horizon — the window is **not** a subscription fee at this
+/// reward level and downtime.
+///
+/// Memoizes `E[epochs](f)` for the bisection so each distinct `f` runs the
+/// absorbing DP at most once (the search probes the measurable edge and then
+/// the break-even root).
+#[must_use]
+// Binary package: unit tests are a separate crate, so a pub helper used only
+// from `#[cfg(test)]` trips `-D dead-code` on the non-test bin (the report
+// shares one cache via [`breakeven_in_measurable`] instead).
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn rebond_breakeven_f(
+    reward_per_epoch_skl: f64,
+    downtime_epochs: f64,
+    horizon_epochs: u64,
+) -> Option<f64> {
+    let mut cache = EpochCache::new(horizon_epochs);
+    // No measurable absorption even at f = 0 (should not happen for m-of-n).
+    cache.epochs(0.0)?;
+    let hi_bound = measurable_f_hi(&mut cache);
+    breakeven_in_measurable(&mut cache, hi_bound, reward_per_epoch_skl, downtime_epochs)
 }
 
 /// TJ-7 *marginal* gain: extra share of shard pool `g` that `n_sybil` bonds
@@ -412,37 +509,65 @@ pub fn tj_inequalities_report(
          at attestation fraction f > 0 — so the derived quantity is a break-even f.\n\
          Earnings assume sole credited holder (r = 1) — attacker-favourable."
     )?;
+    let d_struct = rebond_structural_downtime_epochs();
     writeln!(
         out,
-        "{:<10} {:>14} {:>16} {:>16}",
-        "f", "E[epochs]", "earnings SKL", "cycle net SKL"
+        "  FRICTION (derived, not assumed): Rebond closes the slash's bad interval\n\
+         at end_exclusive = E_rebond + 1 (bond_connect.rs), so the record is out\n\
+         of r_market from the slash epoch THROUGH the rebond epoch inclusive — a\n\
+         structural floor of {D:.0} epoch, probed from rebond_connect itself (the\n\
+         ordering check admits same-epoch reinstatement; a next-epoch rebond gives\n\
+         2). Forgone earnings are priced at the CREDITED rate f*R, not full R: a\n\
+         free-rider forgoes only what it would have drawn, so full-R pricing\n\
+         overstates the deterrent 1/f-fold. Zeroing this term was mislabelled\n\
+         'attacker-favourable' in the first cut — the attacker-favourable end is\n\
+         this floor, not zero. Table and break-evens run downtime = {D:.0}.",
+        D = d_struct,
     )?;
-    // One DP per grid point: E[epochs] first, then the cycle net from that mean
-    // (same arithmetic as [`rebond_cycle_net_skl`], without a second walk).
+    writeln!(
+        out,
+        "{:<10} {:>14} {:>16} {:>14} {:>16}",
+        "f", "E[epochs]", "earnings SKL", "friction SKL", "cycle net SKL"
+    )?;
+    // One shared cache for the table, the headline break-evens, and the remedy
+    // curve: E[f] depends on neither the reward nor the downtime, and the
+    // measurable-edge probe (the slowest, highest-f DPs) runs once.
+    let mut cache = EpochCache::new(horizon);
     for &f in &REPORT_F_GRID {
-        match expected_epochs_to_slash(f, horizon) {
+        match cache.epochs(f) {
             Some(e) => {
                 let earnings = e * f * reward_median_per_epoch_skl;
-                let net = cycle_net_from_epochs(f, e, reward_median_per_epoch_skl, 0.0);
+                let friction = rebond_friction_skl(f, d_struct, reward_median_per_epoch_skl);
+                let net = cycle_net_from_epochs(f, e, reward_median_per_epoch_skl, friction);
                 writeln!(
                     out,
-                    "{:<10.3} {:>14.2} {:>16.4} {:>16.4}",
-                    f, e, earnings, net
+                    "{:<10.3} {:>14.2} {:>16.4} {:>14.4} {:>16.4}",
+                    f, e, earnings, friction, net
                 )?;
             }
-            None => writeln!(out, "{f:<10.3} {:>14} {:>16} {:>16}", "no slash", "—", "—")?,
+            None => writeln!(
+                out,
+                "{f:<10.3} {:>14} {:>16} {:>14} {:>16}",
+                "no slash", "—", "—", "—"
+            )?,
         }
     }
 
-    // Break-even searches memoize E[epochs](f) internally (see [`rebond_breakeven_f`]).
-    let be_med = rebond_breakeven_f(reward_median_per_epoch_skl, 0.0, horizon);
+    let hi_bound = if cache.epochs(0.0).is_some() {
+        measurable_f_hi(&mut cache)
+    } else {
+        0.0
+    };
+    let be_med =
+        breakeven_in_measurable(&mut cache, hi_bound, reward_median_per_epoch_skl, d_struct);
     match be_med {
         Some(f) => writeln!(
             out,
-            "  -> TJ-4 break-even f = {f:.4} (friction 0 — the attacker-favourable end;\n\
-             friction only raises it). Below it the burned bond is not covered and\n\
-             the window is NOT a subscription fee; above it the cycle pays and\n\
-             attestation-resistance is what must carry the deterrent.\n\
+            "  -> TJ-4 break-even f = {f:.4} (downtime at the structural floor of\n\
+             {d_struct:.0} epoch; a cooldown only raises it — curve below). Below it the\n\
+             burned bond is not covered and the window is NOT a subscription fee;\n\
+             above it the cycle pays and attestation-resistance is what must carry\n\
+             the deterrent.\n\
              NOTE: {ceiling:.4} is the DETERMINISTIC no-slash fraction, which bounds an\n\
              adversary that can PLACE its passing epochs. Under SS 8.2's unchooseable\n\
              draw the cartel cannot place them, so absorption still occurs above it\n\
@@ -451,12 +576,12 @@ pub fn tj_inequalities_report(
         None => writeln!(
             out,
             "  -> TJ-4: NO break-even f where the cycle completes — the burned bond is\n\
-             never covered at this reward level, so the 'subscription fee' shape\n\
-             does not arise and the binding constraint is entirely\n\
+             never covered at this reward level and downtime, so the 'subscription\n\
+             fee' shape does not arise and the binding constraint is entirely\n\
              attestation-resistance (the draw)."
         )?,
     }
-    let be_max = rebond_breakeven_f(reward_max_per_epoch_skl, 0.0, horizon);
+    let be_max = breakeven_in_measurable(&mut cache, hi_bound, reward_max_per_epoch_skl, d_struct);
     writeln!(
         out,
         "     bound at the MAX operand ({RX:.4} SKL/shard/epoch): break-even f = {BX}.\n\
@@ -483,6 +608,78 @@ pub fn tj_inequalities_report(
             RM = reward_median_per_epoch_skl,
         )?;
     }
+
+    // The remedy curve the (m,n) re-pin needs: break-even f as a function of a
+    // hypothetical post-slash cooldown, every cell off the one shared cache.
+    let weeks_per_epoch = 52.0 / epochs_per_year();
+    writeln!(
+        out,
+        "\n  REMEDY CURVE — break-even f vs a hypothetical POST-SLASH COOLDOWN c\n\
+         (Rebond not admitted until c epochs after the slash; excluded span =\n\
+         c + {D:.0}). f is the cartel's share of the UNCHOOSEABLE witness draw — its\n\
+         hashrate share — so each row reads 'the cycle pays only above this\n\
+         fraction of network hashrate'. 'none' = the cycle never pays anywhere\n\
+         absorption is measurable within the horizon.",
+        D = d_struct,
+    )?;
+    writeln!(
+        out,
+        "{:<10} {:>8} {:>20} {:>20}",
+        "cooldown", "~weeks", "break-even f (med)", "break-even f (max)"
+    )?;
+    for &c in &[0u64, 1, 2, 4, 8, 16, 32, 64] {
+        let d = d_struct + c as f64;
+        let med = breakeven_in_measurable(&mut cache, hi_bound, reward_median_per_epoch_skl, d);
+        let mx = breakeven_in_measurable(&mut cache, hi_bound, reward_max_per_epoch_skl, d);
+        writeln!(
+            out,
+            "{:<10} {:>8.1} {:>20} {:>20}",
+            c,
+            c as f64 * weeks_per_epoch,
+            fmt_breakeven_f(med),
+            fmt_breakeven_f(mx),
+        )?;
+    }
+    writeln!(
+        out,
+        "  -> READING THE CURVE (the false dichotomy dissolved): BOND_FLOOR is\n\
+         f-INDEPENDENT, so it bounds the low-f attacker; the downtime term d*f*R\n\
+         SCALES with f, so it does its work at high f. 'Floor problem vs cooldown\n\
+         problem' names two regimes, not two rival remedies — and the low-f regime\n\
+         is what the structural floor alone leaves unpriced. HONEST LIMIT: no\n\
+         finite cooldown makes the cycle unprofitable at literally every f;\n\
+         E[epochs] grows without bound toward the measurable ceiling, so a cartel\n\
+         with enough of the draw outlasts any fixed exclusion. What a cooldown\n\
+         does is push break-even INTO the hashrate-expensive regime, where f\n\
+         itself is the deterrent. REMEDY STAKES: raising BOND_FLOOR is linear in\n\
+         shard count (a {SH}-shard honest archiver already posts {POST:.0} SKL) and\n\
+         taxes exactly the mid-size participants distribution depends on; a\n\
+         post-slash cooldown costs nothing to anyone who is not slashed and\n\
+         scales with the offense. The curve is an INPUT to the (m,n) re-pin\n\
+         sweep, not a verdict — TJ-8's briefing constraint carries unchanged.",
+        SH = MAX_HOLDINGS_SHARDS,
+        POST = MAX_HOLDINGS_SHARDS as f64 * bond,
+    )?;
+    writeln!(
+        out,
+        "  -> ENFORCEMENT POINT (briefing constraint, TJ-8 shape): the x-axis is\n\
+         EXCLUSION EPOCHS PER CYCLE, however enforced. A Rebond-only cooldown is\n\
+         the WEAKEST enforcement: personas are free (G-1) and sybil-per-shard is\n\
+         capital-bounded only (TJ-7), so a cartel abandons the slashed record and\n\
+         bonds a FRESH pair on the same shard — same burned bond, no cooldown\n\
+         served. A CREDIT-ONSET delay (minimum observation count — TJ-4's\n\
+         original finding) yields the same per-cycle exclusion term on EVERY\n\
+         route, fresh or reinstated; this curve prices both mechanisms\n\
+         identically, so briefing it as 'add a Rebond cooldown' would claim\n\
+         resistance the record-scoped gate cannot carry.\n\
+         THE KNEE: E[epochs] >= m always (a slash needs m misses), so up to\n\
+         c + {D:.0} = m = {M} the reward decides; past it break-even is FLOORED at\n\
+         the f where E[epochs] = c + {D:.0} REGARDLESS of reward — the cycle is\n\
+         excluded longer than it can possibly earn — which is why the median and\n\
+         max columns converge once c + {D:.0} > {M}.",
+        D = d_struct,
+        M = FAILURE_WINDOW_M,
+    )?;
 
     writeln!(
         out,
@@ -519,17 +716,81 @@ mod tests {
         // The TJ-4 correction, as a test: at f = 0 the pair is credited on no
         // epoch, so earnings are 0 and the cycle is a pure loss of the bond at
         // ANY reward level. The "10 free epochs" are free of slash, not money.
+        // Downtime is priced as FORGONE CREDITED earnings, so at f = 0 even an
+        // enormous cooldown adds nothing — a never-credited pair has nothing
+        // to forgo. Net is exactly -bond_at_risk at every (reward, downtime).
         for &reward in &[0.0_f64, 1.0, 100.0, 10_000.0] {
-            let net = rebond_cycle_net_skl(0.0, reward, 0.0, TJ4_ABSORPTION_HORIZON_EPOCHS)
-                .expect("absorbs at f=0");
+            for &downtime in &[0.0_f64, 1.0, 1_000.0] {
+                let net =
+                    rebond_cycle_net_skl(0.0, reward, downtime, TJ4_ABSORPTION_HORIZON_EPOCHS)
+                        .expect("absorbs at f=0");
+                assert!(
+                    net < 0.0,
+                    "f=0 must lose the bond at reward {reward}, got net {net}"
+                );
+                assert!(
+                    (net + bond_at_risk_skl()).abs() < 1e-9,
+                    "f=0 earnings and friction must both be exactly zero"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn structural_downtime_is_derived_from_the_connect_and_is_one_epoch() {
+        // Derived by probing rebond_connect, not asserted from prose: the
+        // interval-ordering check admits a same-epoch reinstatement, so the
+        // unavoidable r_market exclusion is exactly the slash epoch itself.
+        // If this pin ever goes red, production grew a post-slash cooldown (or
+        // tightened the ordering check) — re-read the remedy curve's baseline
+        // from the new floor; do not patch the pin without doing so.
+        assert!((rebond_structural_downtime_epochs() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn friction_prices_downtime_at_the_credited_rate_not_full_service() {
+        // The magnitude correction, as a test. Downtime was estimated at the
+        // FULL-SERVICE reward (3-6x the collateral); the cycle forgoes only
+        // what it would have DRAWN. Pin the delta exactly: d epochs of
+        // downtime move the cycle net by d*f*R — at f = 0.05 that is 20x
+        // smaller than the d*R the full-service pricing would charge.
+        let (f, r, d) = (0.05, 2.0, 8.0);
+        let base = rebond_cycle_net_skl(f, r, 0.0, TJ4_ABSORPTION_HORIZON_EPOCHS).expect("absorbs");
+        let with = rebond_cycle_net_skl(f, r, d, TJ4_ABSORPTION_HORIZON_EPOCHS).expect("absorbs");
+        let delta = base - with;
+        assert!(
+            (delta - d * f * r).abs() < 1e-9,
+            "downtime must cost exactly d*f*R = {}, got {delta}",
+            d * f * r
+        );
+        assert!(
+            delta < d * r * 0.5,
+            "full-service pricing (d*R = {}) must NOT be what is charged",
+            d * r
+        );
+    }
+
+    #[test]
+    fn cooldown_raises_the_breakeven_monotonically() {
+        // The remedy curve's shape: more downtime => the cycle needs a larger
+        // attestation fraction to pay. Strictly rising, and every value in the
+        // measurable range so the curve is well-defined where quoted.
+        //
+        // Horizon 800, not TJ4_ABSORPTION_HORIZON_EPOCHS: the break-evens here
+        // live at f where E[epochs] is a few dozen, fully measurable at 800,
+        // and the full horizon's only role is the far tail near the measurable
+        // ceiling — paying its ~5x DP cost in a debug-mode test buys nothing.
+        let horizon = 800;
+        let r = 2.4;
+        let mut prev = -1.0_f64;
+        for &d in &[1.0_f64, 3.0, 9.0, 17.0] {
+            let b =
+                rebond_breakeven_f(r, d, horizon).expect("break-even exists at modest downtime");
             assert!(
-                net < 0.0,
-                "f=0 must lose the bond at reward {reward}, got net {net}"
+                b > prev,
+                "break-even must rise with downtime: {b} !> {prev}"
             );
-            assert!(
-                (net + bond_at_risk_skl()).abs() < 1e-9,
-                "f=0 earnings must be exactly zero"
-            );
+            prev = b;
         }
     }
 
