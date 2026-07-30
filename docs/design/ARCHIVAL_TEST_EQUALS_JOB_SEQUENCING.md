@@ -23,7 +23,21 @@ that property). Two rounds of bonded-set mitigation — co-holder exclusion,
 denial-tolerant quorums, the `1/r` analysis — are **retracted as design and
 retained as diagnosis**: they were engineering around a threat the population
 choice manufactured. TJ-A3 **collapses** with it (verification is
-deterministic, so disagreement is *evidence*, not a judgment call). **The one
+deterministic, so disagreement is *evidence*, not a judgment call). **MECHANISM RULED (§9,
+2026-07-29): the test IS a read.** Miners use the same mechanism any wallet
+uses; `P` cannot tell a test from a read, which makes passing require *actually
+being able to serve* (a distinguishable challenge would let `P` fast-path tests
+and let real requests rot). The ~3 KB opening is revealed as **forced, not
+chosen** — `P` self-attested on chain, and an artifact that fits in a tx can
+only prove **capability**, never **service**; service needs a counterparty, so
+the rulings are forced in sequence rather than accumulated (§9.2). L14's
+read-credit is **subsumed** (§9.3 — it bridged two events test≡job collapses
+into one), and cadence is **uniform by construction**. **What remains is two
+items** (§9.4): the client-facing read/serve protocol (TJ-B's real surface —
+unblocks and promotes `SP-T3`), and **TJ-A5** — `P` holds no evidence it
+served, making false denial cheap regardless of miner indifference; the
+candidate is ephemeral-key-signed requests, with delivery treated as
+**unprovable** and cost-binding separated from delivery-attestation. **The one
 open gate this round does not own:** whether `q ≥ 0.10` is forceable on a
 3.33 MB Tor-borne fetch — PD-F-2's dispersion measurement (§8.3).
 **Family:** `TJ-*` (registered in `IMPLEMENTATION_INDEX.md` at birth, rule 94).
@@ -854,9 +868,13 @@ and attribution is mechanical.
   establishes.** Combined with denial-tolerance wanting `n` large (§8.2's
   retained analysis) and miner bandwidth wanting `n` small, that is a
   **three-way tension with two of three pushing small.**
-- **TJ-A2d — the escape worth evaluating first: `k`-of-`n` over SEQUENTIAL
-  challenges, not `n` simultaneous witnesses.** Make the epoch carry `n`
-  challenges, each witnessed by **one** miner, and require `k` passes.
+- **TJ-A2d — `k`-of-`n` over SEQUENTIAL challenges, not `n` simultaneous
+  witnesses. (CONFIRMED by §9's mechanism ruling, which makes this the shape
+  that falls out rather than one that must be constructed: each miner-draw *is*
+  one ordinary read, so cadence is uniform over the bonded pairs by
+  construction — see §9.3 for why uniform is correct rather than a fallback.)**
+  The epoch carries `n` challenges, each witnessed by **one** miner, and `k`
+  passes are required.
   Properties, each of which addresses one arm of the tension above:
   1. **Deterrent ratio preserved** — each challenge is one transfer, so the
      free-rider pays one ingress *per challenge* rather than one per epoch.
@@ -930,3 +948,162 @@ The gate's two outcomes are different rounds:
 
 Either way the flat-rate cell (§5.7's table) is where the receipt branch does
 its real work, and this gate determines whether that cell is reachable.
+
+## 9. The mechanism ruling — **the test IS a read**, and what actually remains
+
+**Ruled 2026-07-29.** Miners use **the same mechanism any wallet uses** to read a
+shard from a persona. Mining confers no special channel: a miner is a regular
+client that happens to have been drawn. It selects the designated `P`, issues an
+ordinary read over `P`'s rendezvous, and **`P` does not know it is a test** —
+`P` is not necessarily tracking consensus, and the request is indistinguishable
+from any other. `P` serves it like any other request.
+
+### 9.1 Why this is load-bearing, not a style preference
+
+If a challenge were **distinguishable** from a read, `P` could fast-path
+challenges and let real client requests rot — **passing every test while
+providing no service.** That is teaching-to-the-test in the precise sense, and
+it is the same failure the harness rule forecloses elsewhere: *the harness
+conforms to consensus; consensus does not accommodate the harness.* `P` not
+knowing is what makes **passing require actually being able to serve.**
+
+R1 said the test must *demand what a client demands* (payload). This extends it
+to the mechanism: the test must also **ask the way a client asks.** A separate
+challenge path would test `P`'s challenge-answering code, not `P`'s service.
+
+### 9.2 The archaeology — the ~3 KB opening was **forced**, not chosen
+
+`ArchivalServeCreditResponse` carries `p_canonical_id` and `hybrid_signature`:
+**`P` signs it. `P` self-attests.** And the artifact had to fit inside a
+transaction, which 3.33 MB cannot. So the opening's size was **forced by putting
+the proof on chain in `P`'s own transaction** — and what that design proves is
+**capability** ("I can produce the opening"), not **service** ("I served
+someone").
+
+R1 is exactly the correction from *capability* to *service* — and **service
+cannot be self-attested; it needs a counterparty.** So the rulings do not
+accumulate, they are forced in sequence:
+
+```text
+test ≡ job  ⇒  serve moves off-chain  ⇒  someone other than P must attest
+            ⇒  the attester must be indifferent + live  (miners, §8.2)
+            ⇒  the request must be indistinguishable from a read  (§9)
+```
+
+### 9.3 L14's read-credit is **SUBSUMED**, not in question
+
+An earlier framing asked how organic reads get credited without a witness, and
+offered three shapes. All three solved a problem the ruling had already
+dissolved: they carried the **old design's split** — a 3 KB synthetic
+micro-demand no client makes *versus* a 3.33 MB real read — into a world where
+that split does not exist. L14's read-credit existed to **bridge** those two
+events; test≡job **collapses them into one**. Its measured 65 % saving was a
+saving on *artificial* tests, and **there are no artificial tests anymore.**
+Nothing to bridge.
+
+**Consequence — the "target the cold tail" conclusion does not survive, and its
+replacement is simpler and better.** That conclusion assumed organic reads cover
+hot shards for free, leaving cold shards as a weak point needing synthetic
+top-up. With one mechanism there is no organic/synthetic axis to target across:
+every challenge *is* a real read, and cadence is **uniform over the bonded pairs
+by construction** — whatever the miner-draw produces. Uniform is the *correct*
+answer rather than a fallback: **the archiver is paid to be *able* to serve**, so
+testing availability uniformly is right, and letting a shard's popularity reduce
+its test rate would pay **least attention to exactly the holdings nobody else is
+checking.**
+
+*(Closing one loop rather than leaving it open: on a shard with no organic
+readers, `P` can infer that every request is a test — indistinguishability is
+weakest in the cold tail. It is **benign**: with no real clients there, there is
+no one for `P` to fail while passing, which is the only thing indistinguishability
+exists to prevent.)*
+
+### 9.4 What genuinely remains — **two** items
+
+- **TJ-B (restated) — the client-facing read/serve protocol is the thing to
+  build.** Under the old design there was a challenge-response wire riding a
+  vin; under this one there is a **client-facing shard read over the persona's
+  rendezvous**, and miners are simply clients of it. That is the implementation
+  surface TJ-B is actually about. **Status dependency:** this path is not built.
+  `SP-T3` (P inbound onion serving) was deferred as *"consumer-less
+  infrastructure whose onion had no byte-defined payload at all"* — this ruling
+  supplies **both** missing halves (payload = the shard, consumer = the drawn
+  miner), so SP-T3 unblocks *and* is promoted from wallet convenience to
+  **challenge substrate**. `SP-T4b`'s absent producer changes hands: from `P`
+  assembling an opening (deferred as upstream GATE2 wallet work) to a
+  **witness submitting a receipt** — nothing built is wasted, and the new
+  producer is the simpler of the two.
+  **Freeze consequence to accept deliberately:** making the test the read path
+  promotes the **response semantics** to consensus-critical, so they freeze at
+  genesis under §3's split. The request/transport side stays node-local; what
+  freezes is what a validator checks.
+- **TJ-A5 (new, and the real content of the dispute path) — `P` has no evidence
+  it served.** Determinism covers *what* was served (one byte-string reproduces
+  `R_k`, so byte-correctness is never in dispute) but **not *whether* a transfer
+  happened.** Under a plain read protocol `P` retains nothing, so a miner
+  attesting *"`P` failed"* against a `P` saying *"I was never asked"* is
+  **unfalsifiable in both directions — which makes false denial cheap
+  regardless of miner indifference.** So the read protocol must **evidence the
+  exchange from both sides.**
+  **Candidate shape (satisfies both constraints at once): requests signed under
+  ephemeral keys.** `P` cannot identify a miner at request time
+  (indistinguishability preserved, §9.1), the miner can later prove the request
+  was theirs (publishing an identity-key binding over the ephemeral public key
+  at attestation time — the binding must *not* be publicly derivable earlier, or
+  `P` could compute it and identify the witness), and `P` can produce the signed
+  request plus its response as evidence of service.
+  **Refinement — do not try to prove delivery; it cannot be done.** `P` can prove
+  it *was asked* (the signed request) and can produce *what it would send*, but
+  **no party can prove a message arrived to a recipient who denies it.** The
+  design should therefore **separate two jobs that have different provability**:
+  1. **Cost-binding (provable).** Bind that `P` had the bytes *within the
+     deadline* — e.g. a cheap, compact **timely commitment over the response**.
+     This is what the deterrent actually needs, and it is why the deterrent
+     **survives even the weakest adjudication**: a free-rider can only produce a
+     valid response by **fetching**, so `P`'s cost is incurred whichever way a
+     dispute resolves. Note the timing requirement is load-bearing — a
+     commitment produced only *at dispute time* would let `P` skip the transfer
+     in the common case and pay only when challenged.
+  2. **Delivery-attestation (not provable).** Only the recipient can speak to
+     arrival. The dispute rule weights the miner's attestation against `P`'s
+     timely commitment; it must not be designed as though delivery were
+     establishable.
+  Separating them keeps the unprovable half from blocking the provable half.
+  **This is one design question, not three, and it outranks quorum sizing:** a
+  quorum bounds *how many liars you need*, while evidence determines *whether
+  lying works at all.*
+
+### 9.5 Sizing `n` — and the constraint that turned out **not** to bind
+
+Worked through 2026-07-29 against the sim's own constants
+(`SKL_FIAT_PRICE_BAND[1]` = $0.10). Recorded because two of these are the kind
+of thing a reviewer would flag as a hole, and one is a *disproved* worry:
+
+1. **Honest egress CANCELS — which validates deliverable 2's model rather than
+   exposing a gap.** Both parties serve the response, so honest pays `S + n·E`
+   and the free-rider pays `n·I + n·E`; the margin is **`n·I − S`**. The A5
+   model omits honest egress, and that omission is **correct by cancellation**.
+   (At the opening payload honest egress was ~12.5 MB/epoch and negligible; at
+   shard payload it is 13.6 GB and would have been a real hole had it not
+   cancelled.)
+2. **Reward cancels too, and dwarfs both costs — so there is NO honest-viability
+   ceiling.** This was checked *first* because it looked like the binding
+   constraint. Per shard-year: `S ≈ $0.0008`, `I ≈ $0.00087`, against a reward
+   of **$0.65–$4.34** (pool 26.6 k–177.7 k SKL/yr ÷ 4,096 shards) — **389×–2,598×
+   coverage.** Both strategies are profitable; the competition is purely on
+   cost, which is what the margin measures. Honest archiving stays profitable
+   until **`n ≈ 747`** at the pessimistic end.
+3. **Reward magnitude still matters — but only through `T_risk`.** It cancels
+   from the *cost* leg and drives the *risk* leg; that is why `q_risk*` is
+   `0.10` with the reward forfeit versus `0.28` bond-only.
+4. **So the deterrent needs very little `n`.** At the marginal cheap-transit
+   cell `S/I ≈ 0.91`, so **`n = 1` already breaks even** (the measured 1.09×)
+   and **`n ≈ 10` buys a 10× margin** — far inside the viability headroom.
+5. **Miner bandwidth is an AGGREGATE figure divided by the miner population.**
+   At `n = 10` and the extreme pairs count (L11 lean `N_P ≈ 79` × 4,096 shards)
+   the total is ~9 MB/s network-wide — about **9 KB/s per miner across 1,000
+   miners.** The aggregate is not the constraint; **a small miner set
+   concentrating it is**, which couples witness load to mining
+   decentralization and is the quantity to sweep (against the holdings
+   distribution, not an assumed maximum).
+
