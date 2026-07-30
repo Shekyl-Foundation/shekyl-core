@@ -2309,6 +2309,73 @@ TEST_F(levin_notify, fluff_with_duplicate)
 
 }
 
+/*! The fluff oracle's assertions, reached through the SCHEDULED path.
+    Closes the force-flag half of the §20.10 carry-forward and part of the
+    §18.4c honest-scope gap ("the production timer path has no C++-side
+    coverage — every gtest drives through force hooks").
+
+    The audit this test seals: `flush_fluff(now, force)`'s flag selects
+    `drain()` over `due(now)` and nothing else — sort, dedup, batching and
+    source exclusion are shared below the flag — and every fluff assertion in
+    this file is a TOTAL (per-peer counts, aggregate counts, payload
+    identity, source exclusion), none a per-advance or timing claim. So,
+    unlike the noise expectations the RP-3b port had to rewrite (which
+    asserted the forcing hook's synchronization as if it were the property),
+    the fluff assertions must be reachable with no forcing at all. This test
+    is that claim, executed: the same assertions as `fluff_without_padding`,
+    driven by polling at the zone's own reported wakes — per-peer deadlines
+    fall due across several advances instead of releasing together, and the
+    totals must come out identical. If it ever needs the force hook to pass,
+    a fluff assertion has started encoding the forced side. */
+TEST_F(levin_notify, fluff_via_scheduled_drive)
+{
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    std::vector<cryptonote::blobdata> txs(2);
+    txs[0].resize(100, 'f');
+    txs[1].resize(200, 'e');
+
+    ASSERT_EQ(10u, contexts_.size());
+    auto context = contexts_.begin();
+    EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::fluff));
+    io_service_.restart();
+    ASSERT_LT(0u, io_service_.poll());
+
+    // Advance at the zone's reported wakes until every eligible peer's batch
+    // has released. Each advance runs whatever is genuinely due — one peer's
+    // deadline, several that collide, or none (an epoch wake) — which is the
+    // real interleaving, exactly as drive_covert accepts it for noise.
+    for (unsigned advance = 0; advance < 64 && receiver_.notified_size() < 9u; ++advance)
+    {
+        notifier.run_next_wake();
+        io_service_.restart();
+        if (io_service_.poll() == 0)
+            break; // drive is dead; the assertions below report it
+        for (auto& c : contexts_)
+            c.process_send_queue();
+    }
+
+    EXPECT_EQ(0u, context->process_send_queue());
+
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
+    std::sort(txs.begin(), txs.end());
+    ASSERT_EQ(9u, receiver_.notified_size());
+    for (unsigned count = 0; count < 9; ++count)
+    {
+        auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
+        EXPECT_EQ(txs, notification.txs);
+        EXPECT_TRUE(notification._.empty());
+        EXPECT_TRUE(notification.dandelionpp_fluff);
+    }
+}
+
 TEST_F(levin_notify, noise)
 {
     for (unsigned count = 0; count < 10; ++count)
