@@ -409,12 +409,27 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
             ptr: blob.as_ptr(),
             len: 1,
         }];
-        shekyl_relay_zone_queue_fluff(h, 0, batch.as_ptr(), 1, std::ptr::null());
+        // Queue at a nonzero clock so `due == QUEUED_AT` is distinguishable
+        // from "no wake". The contract under test is wake/poll AGREEMENT —
+        // poll at the reported wake releases, poll before it does not — NOT
+        // strict futurity: the fluff table is a discrete geometric with
+        // genuine mass at zero ticks, so a same-tick flush (`due ==
+        // QUEUED_AT`) is a legitimate ~5%-probability outcome of the shipped
+        // distribution, and asserting `due > QUEUED_AT` was a flake
+        // (CI, PR #378). Do not "fix" this back by shifting the draw's
+        // support instead — the delay tables are a pinned, measured
+        // relay-privacy surface (survival quantiles, F-1); changing the
+        // distribution is that lane's design decision, not a test repair.
+        const QUEUED_AT: u64 = 1_000;
+        shekyl_relay_zone_queue_fluff(h, QUEUED_AT, batch.as_ptr(), 1, std::ptr::null());
 
         let due = shekyl_relay_zone_next_wake(h);
-        assert!(due > 0, "a queued batch must report a future wake");
+        assert!(
+            due >= QUEUED_AT,
+            "a queued batch must report a wake at or after the queue time"
+        );
 
-        if due > 1 {
+        if due > QUEUED_AT {
             shekyl_relay_zone_poll(
                 h,
                 due - 1,

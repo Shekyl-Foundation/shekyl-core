@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **8C retention-proof Status REVERSED in part — the challenge payload is
+  superseded by the test≡job sequencing ruling**
+  (`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md` ↔
+  `ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`, 2026-07-29). The Round-1 BUILD
+  statement (~3 KB Merkle opening as the serve challenge) is reversed on its
+  payload: the test must demand the shard (~3.3 MB), because pricing the
+  test three orders of magnitude below the service manufactured the A5
+  free-rider margin, and the doc's own §3 (public CT tuples — any
+  opening-shaped test is reacquirable by construction) and §4 ("`m` is the
+  wrong lever until §7.5 closes") already carried the root cause. §7.5's
+  reacquisition *hinge* is reinstated while Round 1's fetch-on-demand
+  *doctrine* survives — payload corrected, doctrine preserved. The
+  `R_k`-anchored verify machinery survives as TJ-A's substrate. Do not
+  build the challenge from the Round-1 statement.
+
 ### Added
 
 - **Shard-indexed staker-share escalation — shape frozen and wired live,

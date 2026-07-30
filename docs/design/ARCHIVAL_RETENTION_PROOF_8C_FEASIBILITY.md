@@ -1,6 +1,28 @@
 # Archival retention proof (loud 8c) — constructibility pass
 
-**Status:** **BUILD for on-demand serving obligation (2026-06-08, Round 1).** Merkle opening
+**Status: ⚠️ REVERSED IN PART 2026-07-29 — the challenge payload is superseded
+by the test≡job sequencing ruling
+([`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md) R1/R2).**
+The Round-1 BUILD statement below stands **reversed on its payload**: a ~3 KB
+Merkle opening is a synthetic micro-demand no client makes, and pricing the
+test three orders of magnitude below the service is what manufactured the
+free-rider margin (measured: A5, `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`
+§12.6 — re-fetch beats holding 4–40× *at this payload*). The root cause was
+already in this doc's own §3: classic PoR's opening proves possession only for
+**private** content, where the challenger cannot name the leaf without the
+prover's copy; our leaves are **public CT tuples**, so any opening-shaped test
+is reacquirable by construction. §4's own conclusion — *"`m` is the wrong
+lever until §7.5 closes"* — was the tripwire, and §7.5's **hinge is
+reinstated** (see the §7.5 annotation): soundness rests on reacquisition cost
+versus the job, and the test must therefore *be* the job — the full shard.
+What is **not** reversed: Round 1's serving doctrine (*fetch-on-demand at test
+time IS the service*) survives — R1 corrects the demanded payload, not the
+doctrine — and the `R_k`-anchored verify machinery (§§2–4, 6) survives as the
+verification substrate (TJ-A: responder-supplied material verified against
+`R_k`). The challenge *spec* is now TJ's to ratify; do not build from the
+Round-1 statement below.
+
+**Status (Round 1, historical):** **BUILD for on-demand serving obligation (2026-06-08, Round 1).** Merkle opening
 to `R_k` + consensus verify + affirmative serve-credit is the correct statement for the
 market layer ([`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md) §0). Continuous
 offline possession is **out of scope**; §7.5 reacquisition "hinge" retired as wrong statement.
@@ -218,7 +240,20 @@ subset. It does **not** prevent reacquiring the revealed `ℓ` after `H_anchor`.
 - **"Verify is cheap"** — true and irrelevant; soundness rests on **generate/reacquire** cost
   vs deadline, not verify cost.
 
-### 7.5 Retired — "reacquisition hinge" (wrong statement)
+### 7.5 ~~Retired~~ — "reacquisition hinge" — **HINGE REINSTATED 2026-07-29**
+
+> **Un-retirement (test≡job ruling,
+> [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md) R1).**
+> Round 1 retired two things together and only one was wrong. The retired
+> *statement* — "fetch-on-demand at test time = failure" — **stays retired**:
+> a responder who reacquires the shard and serves it in-deadline did provide
+> the service. The retired *hinge* — soundness rests on reacquisition cost —
+> **is reinstated**, because §7.4 and §4 kept asserting it after this section
+> retired it ("soundness rests on generate/reacquire cost vs deadline";
+> "`m` is the wrong lever until §7.5 closes"). The resolution: the demanded
+> payload must equal the job (the shard, ~3.3 MB), so reacquisition cost
+> equals service cost by construction rather than by deadline pressure on a
+> 3 KB opening. Doctrine preserved, payload corrected.
 
 Round 0 treated fetch-on-demand at test time as failure. **Round 1 (gate-2 §0):** that *is*
 the service when tested — the paid good is **response to demand**, not 24/7 disk attestation.

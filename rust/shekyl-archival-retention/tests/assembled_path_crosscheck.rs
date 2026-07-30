@@ -174,3 +174,69 @@ fn assembled_path_verifies_as_segment_opening() {
     )
     .expect("assembled path verifies to consensus root");
 }
+
+/// TJ-F soundness face (GREEN — frozen now): responder-supplied material must
+/// not verify against leaves that are not the committed ones. Post-pruning
+/// this is the whole soundness — `R_k` is all that stands between a supplied
+/// response and an accepted lie. Two forgeries, both rejected today at the
+/// pure-function level; this test pins that behaviour so the TJ-A rewire
+/// inherits it rather than re-deriving it.
+#[test]
+fn tj_f_forged_material_does_not_verify() {
+    let blocks = main_chain();
+    let mut client = CurveTreeClient::new();
+    for blk in &blocks {
+        let txs = [TxLeafInputs {
+            is_miner: true,
+            leaf_hash_blob: Some(&blk.blob),
+            outputs: &blk.outputs,
+        }];
+        client
+            .ingest_block(BlockLeaves {
+                height: BlockHeight(blk.height),
+                txs: &txs,
+            })
+            .unwrap();
+    }
+    let tip = blocks.last().expect("non-empty chain");
+    let reference = ReferenceBlock {
+        height: BlockHeight(tip.height),
+        curve_tree_root: tip.root,
+        block_hash: [0xC7u8; 32],
+    };
+    let last_drained = reference.height.0.saturating_sub(61);
+    let founder = coinbase_input(&blocks, last_drained);
+    let path = client
+        .assemble_path(&founder, &reference)
+        .expect("assemble founder path");
+    let cl = path
+        .leaf_chunk
+        .iter()
+        .find(|cl| cl.output_key == founder.output_key)
+        .expect("founder in leaf chunk");
+    let leaf_bytes =
+        construct_leaf(&cl.output_key, &cl.commitment, &cl.h_pqc).expect("construct 128-byte leaf");
+    let opening = SegmentPathOpening {
+        c1_layers: path.c1_layers.clone(),
+        c2_layers: path.c2_layers.clone(),
+    };
+    let layer_scalars = leaf_layer_scalars(&path.leaf_chunk);
+
+    // Forgery 1: tampered leaf-layer material — the supplied chunk no longer
+    // contains the challenged leaf's scalars coherently.
+    let mut tampered = layer_scalars.clone();
+    tampered[0][0] ^= 0x01;
+    assert!(
+        verify_segment_path(&leaf_bytes, &tampered, &opening, &reference.curve_tree_root).is_err(),
+        "tampered leaf-layer material must not verify"
+    );
+
+    // Forgery 2: consistent material against the wrong commitment — the
+    // response is internally coherent but R_k is not the committed sub-root.
+    let mut wrong_rk = reference.curve_tree_root;
+    wrong_rk[0] ^= 0x01;
+    assert!(
+        verify_segment_path(&leaf_bytes, &layer_scalars, &opening, &wrong_rk).is_err(),
+        "coherent material against a non-committed R_k must not verify"
+    );
+}

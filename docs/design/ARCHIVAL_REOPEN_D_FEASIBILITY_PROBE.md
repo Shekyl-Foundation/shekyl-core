@@ -1,12 +1,30 @@
 # Reopen-(d) feasibility probe — does any `(grace, m, n)` serve both masters?
 
-**Status:** Round 0 — reviewed at source 2026-07-28; review findings PD-1
+**Status: ⏸ PAUSED 2026-07-29 — superseded in premise by the test≡job
+sequencing ruling (`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`).** The charter
+presumed the ~3 KB-payload `q*` band; R1 (test ≡ job) corrects the payload and
+R2 (pruning is upstream) shows the A5 margin compared costs that do not exist
+pre-pruning. Everything ratified here survives for reuse — PD-D's
+parameterized predicate for any future `(m, n)` re-pin, the conditional-map
+form, PD-F-2's total-latency/dispersion framing (which transfers directly to
+TJ-C's deadline design). Resumption condition: TJ challenge spec ratified +
+pruned-daemon mode designed + A5 re-measured under both. The pre-pause record
+follows unchanged.
+
+**Status (pre-pause):** Round 0 — three review passes, 2026-07-28. First pass: PD-1
 (i.i.d. direction) and PD-2 (marginal-map rule) folded, PD-3 ruled (predicate
-parameterization inverted to production-side). Second-pass review same day:
-PD-F-1 folded (band grounding = named measurable anchors, not a direction
-argument), PD-3-1 folded (the delegate is load-bearing — the
-`shekyl_archival_failure_window_slashable` FFI export binds its signature).
-Dispositions PD-A…PD-F await ratification.
+parameterization inverted to production-side). Second pass: PD-F-1 folded
+(band grounding = named measurable anchors), PD-3-1 folded (the delegate is
+load-bearing — the `shekyl_archival_failure_window_slashable` FFI export
+binds its signature). Third pass: PD-F-2 folded, **ratification-blocking**
+(the anchors compare TOTAL challenge→response latency — both populations pay
+two Tor legs; the separation is one fetch RTT and the load-bearing parameter
+is circuit-latency dispersion).
+**Ratification state:** PD-A, PD-B, PD-C **RATIFIED** (with PD-1 folded);
+PD-D **RATIFIED** as ruled (with PD-3-1); PD-E pending reviewer read; PD-F
+**shape RATIFIED** (a-priori-input framing, no-number-without-grounding),
+**band OPEN** pending the PD-F-2 total-latency anchors. The arm's code
+branch waits on PD-E and the band.
 **Spawned:** 2026-07-28, from the Stage-3 close-out ordering
 (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6 coordination paragraph).
 **Family:** `PD-*` (probe design questions `PD-A`…`PD-F`; Round-0 review
@@ -198,14 +216,39 @@ plausible `ρ` — even at the 0.098 end — is the PoRep-promotion finding.
   10⁻⁴ and decides marginal-versus-comfortable. Left qualitative, an
   "order-of-magnitude argument" has enough latitude to set the band where the
   verdict lands well — the second-order form of the bar-after-numbers problem
-  §1 forbids. The anchors are available and cheap: A5 already grounded the
-  challenge response at ≈ 3 KB (128-B leaf + the shallow segment co-path,
-  §12.6), so the honest side is a **local read plus path construction over a
-  few KB** and the proxy side is **the same payload across a network
-  round-trip** — both with citable latency distributions. The ratification
-  record names those distributions and derives the band from their
-  separation. No number is proposed here: proposing one without the named
-  anchors would be inventing the bar this round's discipline forbids.
+  §1 forbids. **The anchor specification is corrected by PD-F-2 (third-pass
+  review, ratification-blocking): the deadline races TOTAL
+  challenge→response latency as measured by the challenger, and the earlier
+  disk-versus-network framing compared the wrong two quantities.** Both
+  populations pay the same two network legs — the challenge arrives at `P`'s
+  onion rendezvous and the signed response returns
+  (`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md` §5, verified), so both legs
+  are Tor circuits, and the honest holder's local read is negligible against
+  legs it also pays. What the proxy adds is **one extra fetch round-trip to a
+  serving source** before it can answer: the proxy's total-latency
+  distribution is the honest one **convolved with a single RTT**. That is a
+  *mean displacement* — and whether it separates the populations depends on
+  the **dispersion of the shared circuit legs, not their mean**. Multi-hop
+  onion routing under variable relay load is heavy-tailed; if one circuit's
+  latency spread is comparable to or larger than one RTT, the two
+  distributions overlap substantially, and a deadline tight enough to force
+  `q_p ≥ q*` (failing ≈ 27.8 % of proxy attempts at the conservative end)
+  sits well inside the honest tail — a large `ρ`, and the difference between
+  "feasible with room" and "marginal, PoRep-substrate promotes." The
+  correction can flip the verdict direction, which is why it blocks the
+  band's ratification rather than riding along.
+  **Corrected anchor obligation:** the ratification record names the
+  distribution of *total* challenge→response latency for each population —
+  honest = two circuit legs + local read; proxy = the same convolved with one
+  fetch round-trip — and derives the band from the **overlap at the deadline
+  that forces `q_p = q*`**. The load-bearing parameter is **circuit-latency
+  dispersion**, named as such. A5's ≈ 3 KB response (128-B leaf + shallow
+  segment co-path, §12.6) survives as the payload anchor. Anchor sources:
+  published Tor circuit-latency measurements, and — preferably — the
+  project's own timing instrumentation in `shekyl-relay-privacy`, which makes
+  the band a **measured input rather than a literature estimate**. No number
+  is proposed here: proposing one without the named distributions would be
+  inventing the bar this round's discipline forbids.
 
 ## 4. Deliverables
 
