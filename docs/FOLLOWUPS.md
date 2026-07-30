@@ -194,6 +194,16 @@ sustainability is unaffected by the recalibration.
   stressnet re-pin of `m`/`n` proceeds against that objective alone —
   re-JOINTed with a deterrence term only if TJ's post-pruning re-measurement
   resurrects one.
+  **THIRD OBJECTIVE ADDED 2026-07-29 (test≡job §9.6): ATTESTATION-RESISTANCE.**
+  Under miner-witnessed reads the window's asymmetry is inverted: denying an
+  honest `P` into a slash needs ~`m` of `n` hostile draws (`f ≈ 0.85` at
+  11/13), while a zero-service `P` survives on `n − m + 1` friendly draws
+  (`f ≈ 0.23` per shard at 11/13) — the outage-absorption forgiveness IS the
+  attestation-forgiveness, same parameter, same direction. The re-pin must now
+  balance false-slash (outages) against attestation-resistance (bribed
+  passes), with the bribe priced against the zero-service reward take and the
+  portfolio arithmetic (4,096 independent per-pair windows) swept via PD-D's
+  parameterized predicate.
 - **~~D3 — archival-reward per-bond `curve_milli` cap is dodgeable at no bond
   cost~~** **✅ RESOLVED (§12.9, round closed 2026-07-26) + IMPLEMENTED
   (§12.9.1, PR #371, `feat/archival-d3-reward-path`) — status annotations sit at

@@ -32,12 +32,22 @@ chosen** — `P` self-attested on chain, and an artifact that fits in a tx can
 only prove **capability**, never **service**; service needs a counterparty, so
 the rulings are forced in sequence rather than accumulated (§9.2). L14's
 read-credit is **subsumed** (§9.3 — it bridged two events test≡job collapses
-into one), and cadence is **uniform by construction**. **What remains is two
-items** (§9.4): the client-facing read/serve protocol (TJ-B's real surface —
-unblocks and promotes `SP-T3`), and **TJ-A5** — `P` holds no evidence it
-served, making false denial cheap regardless of miner indifference; the
-candidate is ephemeral-key-signed requests, with delivery treated as
-**unprovable** and cost-binding separated from delivery-attestation. **The one
+into one), and cadence is **uniform by construction**. **What remains is ONE
+build item** (§9.4): the client-facing read/serve protocol (TJ-B's real
+surface — unblocks and promotes `SP-T3`). **TJ-A5 DISSOLVED** (§9.4): the
+evidence had no consumer (no tribunal exists; the m-of-n window over
+independent draws IS the adjudication), the timely-commitment candidate is
+**retracted** (any co-holder computes the deterministic commitment — ~100
+bytes across the free-rider's link, zero adjudication information; the keyed
+variant fails on horizon and lands in the outsourcing bucket), and what binds
+is **TOPOLOGY** — the bytes traverse `P`'s rendezvous, the `n·I − S` margin
+enforced by path position, no artifact from `P` needed. **The `(m, n)` window
+asymmetry is INVERTED** (§9.6, correcting the earlier direction): denying an
+honest `P` needs ~11/13 hostile draws (`f ≈ 0.85`) while sustaining a
+zero-service `P` needs only ~3/13 friendly (`f ≈ 0.23` per shard) —
+outage-absorption and attestation-forgiveness are the same parameter
+(`n − m + 1`), so the Round-2 re-pin gains a third objective:
+**ATTESTATION-RESISTANCE**, priced against the zero-service reward take. **The one
 open gate this round does not own:** whether `q ≥ 0.10` is forceable on a
 3.33 MB Tor-borne fetch — PD-F-2's dispersion measurement (§8.3).
 **Family:** `TJ-*` (registered in `IMPLEMENTATION_INDEX.md` at birth, rule 94).
@@ -1037,41 +1047,66 @@ exists to prevent.)*
   promotes the **response semantics** to consensus-critical, so they freeze at
   genesis under §3's split. The request/transport side stays node-local; what
   freezes is what a validator checks.
-- **TJ-A5 (new, and the real content of the dispute path) — `P` has no evidence
-  it served.** Determinism covers *what* was served (one byte-string reproduces
-  `R_k`, so byte-correctness is never in dispute) but **not *whether* a transfer
-  happened.** Under a plain read protocol `P` retains nothing, so a miner
-  attesting *"`P` failed"* against a `P` saying *"I was never asked"* is
-  **unfalsifiable in both directions — which makes false denial cheap
-  regardless of miner indifference.** So the read protocol must **evidence the
-  exchange from both sides.**
-  **Candidate shape (satisfies both constraints at once): requests signed under
-  ephemeral keys.** `P` cannot identify a miner at request time
-  (indistinguishability preserved, §9.1), the miner can later prove the request
-  was theirs (publishing an identity-key binding over the ephemeral public key
-  at attestation time — the binding must *not* be publicly derivable earlier, or
-  `P` could compute it and identify the witness), and `P` can produce the signed
-  request plus its response as evidence of service.
-  **Refinement — do not try to prove delivery; it cannot be done.** `P` can prove
-  it *was asked* (the signed request) and can produce *what it would send*, but
-  **no party can prove a message arrived to a recipient who denies it.** The
-  design should therefore **separate two jobs that have different provability**:
-  1. **Cost-binding (provable).** Bind that `P` had the bytes *within the
-     deadline* — e.g. a cheap, compact **timely commitment over the response**.
-     This is what the deterrent actually needs, and it is why the deterrent
-     **survives even the weakest adjudication**: a free-rider can only produce a
-     valid response by **fetching**, so `P`'s cost is incurred whichever way a
-     dispute resolves. Note the timing requirement is load-bearing — a
-     commitment produced only *at dispute time* would let `P` skip the transfer
-     in the common case and pay only when challenged.
-  2. **Delivery-attestation (not provable).** Only the recipient can speak to
-     arrival. The dispute rule weights the miner's attestation against `P`'s
-     timely commitment; it must not be designed as though delivery were
-     establishable.
-  Separating them keeps the unprovable half from blocking the provable half.
-  **This is one design question, not three, and it outranks quorum sizing:** a
-  quorum bounds *how many liars you need*, while evidence determines *whether
-  lying works at all.*
+- **TJ-A5 — ~~the evidence question~~ DISSOLVED (2026-07-29), and the
+  dissolution is three separate findings.**
+
+  **(i) The evidence had no consumer.** "`P` has no evidence it served" assumed
+  a tribunal that would weigh it. There is none: consensus has no appeals
+  process, and the m-of-n window over **independent per-epoch draws** *is* the
+  adjudication — statistical, over repetition, not forensic over a single
+  disputed event. Asking "who is the evidence for" collapses the design: the
+  ephemeral-key request-signing candidate is **dropped**, and the read protocol
+  stays a plain read. (Protection against false denial is the window's own
+  arithmetic plus miner indifference — quantified in §9.6, where it turns out
+  to be the *strong* direction.)
+
+  **(ii) The cost-binding refinement is RETRACTED — the commitment carries zero
+  adjudication information.** The retracted claim was that a *timely commitment
+  over the response* binds `P`'s cost because "a free-rider can only produce a
+  valid response by fetching." **False for commitments.** The response is a
+  deterministic function of `(shard, challenge params)` — exactly one
+  byte-string recomputes to `R_k` — so any commitment `C = f(response, params)`
+  is computable by **anyone holding the shard**. The free-rider forwards the
+  params (tens of bytes) to a co-holder and receives `C` back (32 bytes):
+  **~100 bytes across the free-rider's link, inside any deadline.** And since
+  an honest `P` and a free-riding `P` produce **byte-identical** commitments,
+  `C` distinguishes nothing and can adjudicate nothing.
+  *The keyed variant nearly rescues it and fails on horizon:*
+  `C = HMAC(k_P, response)` blocks the helper — until `P` shares `k_P` **once**,
+  after which the helper answers every challenge forever. A one-time cost
+  unlocking unlimited commitment generation is §5.7a inverted (the free-rider
+  must pay *perpetually*, not once). Second-order, and worth keeping: sharing
+  `k_P` lets the helper impersonate `P` outright — collect its rewards, unbond
+  it — so the free-rider only shares with infrastructure it controls (at which
+  point the helper *is* `P`'s storage and this is **honest archiving across two
+  machines**) or with a trusted third party carrying the bond (a real,
+  recurring risk premium). The keyed variant produces **outsourcing**, not
+  cheap free-riding: someone holds the shard and serves it. That is a
+  centralization question, not a soundness one.
+
+  **(iii) What actually binds is TOPOLOGY, and it needs no artifact from `P` at
+  all.** The witness connects to **`P`'s onion rendezvous**, reachable only
+  with `P`'s onion key — so the response bytes traverse `P`'s link even in the
+  degenerate dumb-pipe case: 3.33 MB in from a helper, 3.33 MB out to the
+  witness, against the honest holder's egress alone. That is exactly the
+  `n·I − S` margin deliverable 2 priced, enforced by **where `P` sits in the
+  path** rather than by anything `P` computes. The only escape is sharing the
+  onion key — which lands in the same outsourcing bucket as `k_P`.
+
+  **Corollary — the "inseparable signature" question, answered.** Can a shard
+  response carry a signature that a relaying `P1` cannot launder (query co-holder
+  `P2`, re-wrap `P2`'s signed response, forward)? **No, and it is not needed.**
+  Not possible: the bytes are the bytes — determinism means any transformation
+  `P1` must apply is one `P1` *can* apply, and data carries no provenance a
+  relayer cannot strip or recompute. Not needed, twice over: **integrity**
+  needs no signature because the response is **self-authenticating against
+  `R_k`** (the verify path *is* the integrity check), and **attribution** needs
+  no signature because topology already prices the relay — `P1` re-serving
+  `P2`'s bytes through `P1`'s own rendezvous *is* fetch-on-demand service at
+  full freight, which gate-2 §0 rules service and deliverable 2 prices. The
+  old wire's `hybrid_signature` existed because `P` **self-attested on chain**
+  (§9.2); under §9 the only signature that matters is the **witness's**
+  attestation.
 
 ### 9.5 Sizing `n` — and the constraint that turned out **not** to bind
 
@@ -1107,3 +1142,47 @@ of thing a reviewer would flag as a hole, and one is a *disproved* worry:
    decentralization and is the quantity to sweep (against the holdings
    distribution, not an assumed maximum).
 
+### 9.6 The window correction — the `(m, n)` asymmetry is INVERTED
+
+**Corrected 2026-07-29 (the prior direction was wrong and is superseded): the
+failure window is far more permissive to false ATTESTATION than to false
+denial.** With slash at ≥ `m = 11` misses of `n = 13`, per `(P, shard)` window
+(`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6 — the windows are
+per-pair, independent):
+
+- **Denying an honest `P` into a slash needs ~11 of 13 draws hostile** — a
+  hostile-miner draw fraction near **`f ≈ 0.85`**. With miners indifferent by
+  §8.2 and draws independent per epoch, false denial is the *strong*
+  direction. (This is what replaces TJ-A5's evidence design as the
+  denial protection.)
+- **Sustaining a zero-service `P` needs only ~3 of 13 draws friendly** —
+  honest witnesses truthfully deny a `P` that cannot serve, so the liar
+  survives at ≥ `n − m + 1 = 3` false passes per window: **`f ≈ 0.23`**
+  colluding draw fraction, per shard.
+
+**The tension this exposes is new, and test≡job is what created it:**
+`m = 11` was tuned to absorb honest transient outages (p99 single-outage span
+≈ 10 baselines), and **that same forgiveness is what a zero-service `P`
+exploits** — outage-absorption and attestation-forgiveness are the *same
+parameter* (`k_effective = n − m + 1 = 3`) pulled in the same direction. The
+Round-2 `(m, n)` re-pin therefore gains a **third objective:
+ATTESTATION-RESISTANCE** — explicitly *not* the "denial-tolerance" direction
+proposed under the bonded-set population, which this section supersedes: under
+miner witnesses, denial is the hard attack and attestation the easy one.
+
+**Two refinements that sharpen without reversing:**
+
+1. **Portfolio arithmetic.** `f ≈ 0.23` sustains *one* shard in expectation; a
+   zero-service `P` with a maximal holding must beat 4,096 **independent**
+   per-pair windows *simultaneously and indefinitely*, and at the expectation
+   threshold roughly half the windows fail per pass — so the effective
+   colluding fraction for portfolio survival is materially higher than 0.23.
+   The exact curve belongs to the re-pin's sim, and **PD-D's parameterized
+   window predicate survives for precisely this**.
+2. **The bribe-floor connection.** The colluding draws must be *purchased*
+   (miners are indifferent), and the bribe budget is bounded by the
+   zero-service `P`'s reward take (§9.5: up to ~$2.7 k–17.8 k/yr on a maximal
+   holding at the modeled band). The earlier demand that "Round 1 owes the
+   floor's derivation against a stated bribe cost" now has its correct form:
+   **attestation-resistance derived against the zero-service reward take** —
+   the `(m, n)` re-pin prices the bribe, not a chosen `k`.
