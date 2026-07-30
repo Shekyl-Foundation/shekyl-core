@@ -359,7 +359,14 @@ namespace levin
           nzone(zone),
           pad_txs(pad_txs)
       {
-        for (std::size_t count = 0; !covert_payload.empty() && count < CRYPTONOTE_NOISE_CHANNELS; ++count)
+        /* Channel construction asks the zone, not the payload: the enable fact
+           has exactly one birth site (the `make_relay_zone` argument above) and
+           every other reader — this loop included — consumes the zone's copy.
+           `relay` is fully initialized here because members initialize in
+           declaration order and this is the constructor body. */
+        for (std::size_t count = 0;
+             shekyl_relay_zone_covert_enabled(relay.get()) && count < CRYPTONOTE_NOISE_CHANNELS;
+             ++count)
           channels.emplace_back(io_service);
       }
 
