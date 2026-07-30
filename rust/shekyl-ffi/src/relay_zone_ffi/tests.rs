@@ -160,34 +160,30 @@ fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
     });
 }
 
-/// A slot going unbound crosses as a `CovertUnbind` at its own channel index —
-/// the marshalling half of the property whose decision half lives in
-/// `shekyl-relay`'s `a_slot_going_unbound_emits_covert_unbind_at_its_own_index`.
+/// A due channel with an unbound slot crosses as a `CovertUnbind` at its own
+/// channel index, at every due tick — the marshalling half of the property
+/// whose decision half lives in `shekyl-relay`'s
+/// `a_due_channel_with_an_unbound_slot_clears_at_every_tick`.
 ///
 /// This is the FFI-layer successor of the retired RP-3a seal
 /// (`stem_slots_cross_in_index_order_with_nils_in_position`): there is no
 /// pushed array left to check for compaction or reordering, so what remains to
 /// witness at this layer is that the channel **index survives `dispatch`
-/// intact**. Ground truth is read from the zone directly, never from the
-/// recorded emission — the sourcing discipline the seal established.
+/// intact**, on the poll path production actually drives. Ground truth is
+/// read from the zone directly, never from the recorded emission — the
+/// sourcing discipline the seal established.
 ///
 /// Negative-controlled: an off-by-one injected into `dispatch`'s
 /// `CovertUnbind` arm (`unbind(ctx, channel + 1)`) fails the index assertion.
 #[test]
-fn an_unbinding_slot_crosses_as_covert_unbind_at_its_index() {
+fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
     reset();
     unsafe {
         let peers: Vec<u8> = [id(1), id(2)].concat();
         let h = shekyl_relay_zone_new(0, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
         shekyl_relay_zone_on_handshake(h, id(2).as_ptr(), false);
-        shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2, std::ptr::null_mut(), rec_unbind);
-        REC.with(|r| {
-            assert!(
-                r.borrow().unbinds.is_empty(),
-                "a first population unbinds nothing — no channel was bound"
-            )
-        });
+        shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
 
         // Ground truth from the owning structure: which peer holds slot 1.
         let zone = h.as_ref().expect("live zone").driver.zone();
@@ -201,23 +197,67 @@ fn an_unbinding_slot_crosses_as_covert_unbind_at_its_index() {
         // The hole recipe: close slot 0's peer AND re-offer only the survivor,
         // so nothing backfills.
         shekyl_relay_zone_on_close(h, gone.as_ptr());
-        shekyl_relay_zone_update_stems(h, keep.as_ptr(), 1, std::ptr::null_mut(), rec_unbind);
-
+        shekyl_relay_zone_update_stems(h, keep.as_ptr(), 1);
         let zone = h.as_ref().expect("live zone").driver.zone();
         assert_eq!(
             zone.stem_slots()[0],
             None,
             "fixture: the hole is at index 0"
         );
+
+        // Poll at the reported wakes until both kinds have crossed. Twelve
+        // covert ticks at 10–15 s sit far inside the 600 s epoch minimum; the
+        // gather-call count is asserted zero below to prove no rollover
+        // rewrote the fixture mid-drive.
+        for _ in 0..12 {
+            let done = REC.with(|r| {
+                let r = r.borrow();
+                2 <= r.unbinds.len() && !r.covert.is_empty()
+            });
+            if done {
+                break;
+            }
+            let due = shekyl_relay_zone_next_wake(h);
+            shekyl_relay_zone_poll(
+                h,
+                due,
+                std::ptr::null_mut(),
+                rec_gather,
+                rec_fluff,
+                rec_unbind,
+                rec_covert,
+            );
+        }
         shekyl_relay_zone_free(h);
     }
-    REC.with(|r| {
+    GATHER.with(|g| {
         assert_eq!(
-            r.borrow().unbinds,
-            vec![0],
-            "exactly the unbound channel crossed, at its own index — index 1 \
-             here is the off-by-one defect, and an empty list means the \
-             unbind never crossed the boundary"
+            g.borrow().calls,
+            0,
+            "fixture: no epoch rollover rewrote the slots mid-drive"
+        )
+    });
+    REC.with(|r| {
+        let rec = r.borrow();
+        assert!(
+            2 <= rec.unbinds.len(),
+            "the unbound channel's clear crosses at EVERY due tick — zero \
+             means it never crossed, one means the emission became \
+             transition-shaped and lossy"
+        );
+        assert!(
+            rec.unbinds.iter().all(|&c| c == 0),
+            "every unbind names the unbound channel's own index — 1 in \
+             {:?} is the off-by-one defect",
+            rec.unbinds
+        );
+        assert!(
+            rec.covert.iter().all(|&c| c == 1),
+            "the bound channel's sends keep their own index"
+        );
+        assert!(
+            !rec.covert.is_empty(),
+            "the bound channel really sent — liveness"
         );
     });
 }
@@ -235,7 +275,7 @@ fn live_stems_atomic_tracks_the_derived_value_after_every_mutation() {
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
         assert_eq!(shekyl_relay_zone_live_stems(h), 0, "no stems drawn yet");
 
-        shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3, std::ptr::null_mut(), rec_unbind);
+        shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3);
         assert_eq!(
             shekyl_relay_zone_live_stems(h),
             h.as_ref().expect("live zone").driver.zone().live_stems(),
@@ -273,21 +313,14 @@ fn the_three_plan_outcomes_stay_distinct_across_the_boundary() {
 
         // Refresh, exactly as `dandelionpp_notify`'s retry does.
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        shekyl_relay_zone_update_stems(h, peers.as_ptr(), 3, std::ptr::null_mut(), rec_unbind);
+        shekyl_relay_zone_update_stems(h, peers.as_ptr(), 3);
 
         // Drive to a fluff epoch. The role is drawn from OS entropy, so it
         // is reached by re-drawing rather than by construction; at q = 20%
         // the loop bound is astronomically slack.
         let mut rolls = 0;
         while !h.as_ref().expect("live zone").driver.zone().is_fluffing() {
-            shekyl_relay_zone_force_epoch(
-                h,
-                0,
-                peers.as_ptr(),
-                3,
-                std::ptr::null_mut(),
-                rec_unbind,
-            );
+            shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3);
             rolls += 1;
             assert!(rolls < 10_000, "no fluff epoch in 10k draws");
         }
@@ -328,18 +361,11 @@ fn the_nil_uuid_means_locally_originated_which_is_what_cpp_actually_sends() {
     unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
         let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
-        shekyl_relay_zone_update_stems(h, peers.as_ptr(), 3, std::ptr::null_mut(), rec_unbind);
+        shekyl_relay_zone_update_stems(h, peers.as_ptr(), 3);
 
         let mut rolls = 0;
         while !h.as_ref().expect("live zone").driver.zone().is_fluffing() {
-            shekyl_relay_zone_force_epoch(
-                h,
-                0,
-                peers.as_ptr(),
-                3,
-                std::ptr::null_mut(),
-                rec_unbind,
-            );
+            shekyl_relay_zone_force_epoch(h, 0, peers.as_ptr(), 3);
             rolls += 1;
             assert!(rolls < 10_000, "no fluff epoch in 10k draws");
         }
@@ -512,12 +538,11 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
                 std::ptr::null(),
                 0,
                 out.as_mut_ptr(),
-                std::ptr::null_mut(),
-                rec_unbind,
             ),
             SHEKYL_RELAY_PLAN_NO_ROUTE,
         );
-        shekyl_relay_zone_update_stems(null, std::ptr::null(), 0, std::ptr::null_mut(), rec_unbind);
+        shekyl_relay_zone_update_stems(null, std::ptr::null(), 0);
+        shekyl_relay_zone_force_epoch(null, 0, std::ptr::null(), 0);
         shekyl_relay_zone_poll(
             null,
             0,
@@ -548,8 +573,6 @@ fn plan_relay_with_refresh_fills_an_empty_map() {
             peers.as_ptr(),
             3,
             out.as_mut_ptr(),
-            std::ptr::null_mut(),
-            rec_unbind,
         );
         assert_eq!(
             plan, SHEKYL_RELAY_PLAN_STEM,

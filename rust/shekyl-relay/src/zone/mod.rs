@@ -333,10 +333,10 @@ impl Zone {
     ///
     /// Always [`StemSetChange::Changed`], matching the inherited
     /// `change_channels` unconditionally re-pointing the channels: the slots
-    /// are new even when they name the same peers. Post-inversion (§20.3) the
-    /// re-point itself happens at the next send, but the driver's unbind diff
-    /// still keys off this — a set redrawn narrower, or over fewer peers, must
-    /// clear the channels it no longer binds.
+    /// are new even when they name the same peers. Post-inversion (§20.3)
+    /// nothing re-points on this signal — a rebound channel picks up its new
+    /// peer at the next send, and a channel the redraw leaves unbound clears
+    /// at its next due tick, both read from the map itself.
     pub fn rebuild_stems<R: RelayRng + ?Sized>(
         &mut self,
         outbound: Vec<ConnectionId>,

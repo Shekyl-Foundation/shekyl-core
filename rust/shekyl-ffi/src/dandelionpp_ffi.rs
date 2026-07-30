@@ -29,9 +29,10 @@
 //! going unbound crosses as its own per-channel decision. The property's
 //! witnesses moved with it, into `shekyl-relay`'s
 //! `covert_sends_carry_the_slots_own_peer_at_its_own_index` /
-//! `an_unbound_channel_emits_nothing_and_shifts_no_other` (the decision) and
-//! `relay_zone_ffi`'s `an_unbinding_slot_crosses_as_covert_unbind_at_its_index`
-//! (the marshalling).
+//! `an_unbound_channel_emits_no_send_and_shifts_no_other` (the decision) and
+//! `relay_zone_ffi`'s
+//! `an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index` (the
+//! marshalling).
 
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::{EmbargoTimer, PROPAGATION_FALSE_FAIL_ONE_IN};

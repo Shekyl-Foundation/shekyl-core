@@ -97,8 +97,8 @@ pub struct ShekylRelayBlob {
 pub type FluffCb =
     extern "C" fn(ctx: *mut c_void, peer: *const u8, blobs: *const ShekylRelayBlob, n: usize);
 
-/// Called when covert channel `channel` loses its stem slot: clear it — nil
-/// the binding, discard buffers — on the channel's strand.
+/// Called when covert channel `channel` comes due with its stem slot unbound:
+/// clear it — nil the binding, discard buffers — on the channel's strand.
 ///
 /// **The other half of the deleted slot array** (§20.3). The binding itself
 /// travels with each [`CovertSendCb`] call; the *loss* of a binding cannot,
@@ -106,6 +106,13 @@ pub type FluffCb =
 /// enqueue guard reads a stale binding forever, so a dormant channel
 /// accumulates queued messages without bound. One channel index crosses: no
 /// array, no slot order, no width for C++ to reconcile.
+///
+/// **Fires at every due tick while the slot stays unbound** — derived from the
+/// map at each poll, never pushed once at the transition — so the receiver
+/// must be idempotent (clearing a cleared channel is a no-op) and a lost or
+/// swallowed clear self-heals one covert interval later. This is why only
+/// [`shekyl_relay_zone_poll`] takes this callback: commands mutate and return
+/// nothing, and every covert consequence rides the schedule.
 pub type CovertUnbindCb = extern "C" fn(ctx: *mut c_void, channel: usize);
 
 /// Called when covert channel `channel` is due to send.
@@ -220,8 +227,11 @@ fn dispatch(
     }
 }
 
-/// Ignore covert sends — for the forced hooks, which drive one specific step.
-extern "C" fn noop_covert(_: *mut c_void, _: usize, _: *const u8) {}
+/// See [`noop_unbind`] — `force_fluff` releases batches and can produce
+/// neither covert variant.
+extern "C" fn noop_covert(_: *mut c_void, _: usize, _: *const u8) {
+    debug_assert!(false, "force_fluff produced a CovertSend effect");
+}
 
 /// # Safety
 /// `ids` must point to `n * 16` readable bytes, or be null with `n == 0`.
@@ -463,19 +473,20 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay(
 }
 
 /// Plan a relay; on `NO_ROUTE`, merge `outbound` into the stem map once and
-/// re-plan, clearing any covert channel the merge left unbound through
-/// `on_unbind`.
+/// re-plan.
 ///
 /// This is the production path for `dandelionpp_notify`: the refresh policy
 /// lives in Rust with the rest of zone scheduling, so the C++ shim only offers
 /// the outbound snapshot and performs transport. A settled fluff epoch does not
-/// refresh. See [`shekyl_relay::Zone::plan_relay_with_refresh`].
+/// refresh. See [`shekyl_relay::Zone::plan_relay_with_refresh`]. No callback:
+/// commands return nothing, and a covert channel the refresh leaves unbound
+/// clears at its next due tick through [`shekyl_relay_zone_poll`]'s
+/// `on_unbind`.
 ///
 /// # Safety
 /// `handle` must be live; `source` must point to 16 readable bytes or be null;
 /// `outbound` must point to `n * 16` readable bytes or be null with `n == 0`;
-/// `out_dest` must point to 16 writable bytes; the callback must be valid for
-/// the call.
+/// `out_dest` must point to 16 writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_plan_relay_with_refresh(
     handle: *mut RelayZoneHandle,
@@ -484,8 +495,6 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay_with_refresh(
     outbound: *const u8,
     n: usize,
     out_dest: *mut u8,
-    ctx: *mut c_void,
-    on_unbind: CovertUnbindCb,
 ) -> i32 {
     if handle.is_null() || out_dest.is_null() {
         return SHEKYL_RELAY_PLAN_NO_ROUTE;
@@ -493,11 +502,11 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay_with_refresh(
     let peers = read_ids(outbound, n);
     let h = &mut *handle;
     let source = read_id(source);
-    let (plan, effects) =
+    let (plan, _change) =
         h.driver
-            .plan_relay_with_refresh(source, local_origin, &peers, &mut h.rng);
+            .zone_mut()
+            .plan_relay_with_refresh(source, local_origin, peers, &mut h.rng);
     h.publish();
-    dispatch(effects, ctx, noop_fluff, on_unbind, noop_covert);
     write_plan(plan, out_dest)
 }
 
@@ -522,32 +531,34 @@ unsafe fn write_plan(plan: RelayPlan, out_dest: *mut u8) -> i32 {
     }
 }
 
-/// Merge the caller's current outbound set into the stem map mid-epoch,
-/// clearing any covert channel the merge left unbound through `on_unbind`.
+/// Merge the caller's current outbound set into the stem map mid-epoch.
 ///
 /// Ports `update_channels::run`. On a public zone this is the only thing that
 /// ever populates the map: `notify` is constructed before any peer connects, so
-/// without it every transaction would fluff.
+/// without it every transaction would fluff. The daemon reaches it on three
+/// paths: a new outbound connection, a covert send that failed, and the forced
+/// refresh after a stem send failure. No callback: commands return nothing,
+/// and a covert channel the merge leaves unbound clears at its next due tick
+/// through [`shekyl_relay_zone_poll`]'s `on_unbind`.
 ///
 /// # Safety
 /// `handle` must be live; `outbound` must point to `n * 16` readable bytes or be
-/// null with `n == 0`; the callback must be valid for the call.
+/// null with `n == 0`.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_update_stems(
     handle: *mut RelayZoneHandle,
     outbound: *const u8,
     n: usize,
-    ctx: *mut c_void,
-    on_unbind: CovertUnbindCb,
 ) {
     if handle.is_null() {
         return;
     }
     let peers = read_ids(outbound, n);
     let h = &mut *handle;
-    let effects = h.driver.update_stems(&peers, &mut h.rng);
+    // The change predicate has no consumer here: since §20.3 nothing re-points
+    // on a push — an unbound channel clears at its next due tick via `poll`.
+    let _change = h.driver.zone_mut().update_stems(peers, &mut h.rng);
     h.publish();
-    dispatch(effects, ctx, noop_fluff, on_unbind, noop_covert);
 }
 
 /// Accept a batch of transaction blobs for fluffing to every peer but `source`.
@@ -682,35 +693,32 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_fluff(
     dispatch(effects, ctx, on_fluff, noop_unbind, noop_covert);
 }
 
-/// Start a new epoch immediately — what `notify::run_epoch()` drives.
+/// Start a new epoch immediately — what `notify::run_epoch()` drives. No
+/// callback: the rollover's covert consequences ride the schedule, exactly as
+/// a deadline-crossing rollover's do.
 ///
 /// # Safety
 /// `handle` must be live; `outbound` must point to `n * 16` readable bytes or be
-/// null with `n == 0`; the callback must be valid for the call.
+/// null with `n == 0`.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(
     handle: *mut RelayZoneHandle,
     now_ms: u64,
     outbound: *const u8,
     n: usize,
-    ctx: *mut c_void,
-    on_unbind: CovertUnbindCb,
 ) {
     if handle.is_null() {
         return;
     }
     let peers = read_ids(outbound, n);
     let h = &mut *handle;
-    let effects = h.driver.force_epoch(now_ms, &peers, &mut h.rng);
+    h.driver.force_epoch(now_ms, &peers, &mut h.rng);
     h.publish();
-    dispatch(effects, ctx, noop_fluff, on_unbind, noop_covert);
 }
 
-/// Placeholders for the exports that cannot produce the other variant. Reaching
-/// one is a dispatch bug, so they assert in debug rather than failing silently.
-extern "C" fn noop_fluff(_: *mut c_void, _: *const u8, _: *const ShekylRelayBlob, _: usize) {
-    debug_assert!(false, "force_epoch produced a Fluff effect");
-}
+/// Placeholders for the exports that cannot produce the other variants.
+/// Reaching one is a dispatch bug, so they assert in debug rather than failing
+/// silently.
 extern "C" fn noop_unbind(_: *mut c_void, _: usize) {
     debug_assert!(false, "force_fluff produced a CovertUnbind effect");
 }

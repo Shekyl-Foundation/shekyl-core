@@ -417,10 +417,10 @@ namespace levin
         noise_channel& channel = zone_->channels.at(destination_);
         assert(channel.strand.running_in_this_thread());
 
-        /* Truthful by push: `clear_channel` nils this when the stem slot goes
-           unbound and `send_noise` nils it on a send failure, so nil here means
-           the channel will not fire and queuing would accumulate without
-           bound. */
+        /* Truthful within one covert interval: `clear_channel` nils this at
+           every due tick the stem slot spends unbound, and `send_noise` nils
+           it on a send failure — so nil here means the channel will not fire
+           and queuing would accumulate without bound. */
         if (!channel.connection.is_nil())
           channel.queue.push_back(std::move(message_));
         else if (destination_ == 0 && shekyl_relay_zone_live_stems(zone_->relay.get()) == 0)
@@ -429,7 +429,7 @@ namespace levin
       }
     };
 
-    //! Clears a channel whose stem slot went unbound.
+    //! Clears a channel whose stem slot is unbound at a due tick.
     struct clear_channel
     {
       std::shared_ptr<detail::zone> zone_;
@@ -454,7 +454,14 @@ namespace levin
            channels — a permanent state for a one-outbound-connection zone.
            The bound-to-bound repoint has no analogue here: the new binding
            travels with the next send, where `send_noise` rebinds and discards
-           the remainder. */
+           the remainder.
+
+           Runs at EVERY due tick while the slot stays unbound, not once at
+           the transition — Rust derives it from the map at each poll rather
+           than remembering what the binding used to be. Every line below is
+           idempotent, which is what makes that repetition free, and it is
+           what makes a lost or swallowed clear self-heal one covert interval
+           later instead of leaving the enqueue guard stale forever. */
 
         channel.connection = boost::uuids::nil_uuid();
         channel.active = nullptr;
@@ -530,14 +537,15 @@ namespace levin
         }
       }
 
-      //! A covert channel lost its stem slot: clear it.
+      //! A covert channel came due with its stem slot unbound: clear it.
       //!
       //! The other half of the deleted slot array (§20.3): the binding travels
       //! with each send, and the *loss* of a binding travels here — one channel
-      //! index, no array, no width to reconcile. Runs on the zone strand (the
-      //! producing call fired there) and posts to the channel's own strand,
-      //! exactly like `on_covert` — nothing reads the zone handle off the zone
-      //! strand.
+      //! index, no array, no width to reconcile. Fires per due tick while the
+      //! slot stays unbound (see `clear_channel` for why that repetition is
+      //! the design). Runs on the zone strand (the wake fired there) and posts
+      //! to the channel's own strand, exactly like `on_covert` — nothing reads
+      //! the zone handle off the zone strand.
       static void on_covert_unbind(void* ctx, std::size_t channel) noexcept
       {
         assert(ctx != nullptr);
@@ -634,10 +642,7 @@ namespace levin
 
       assert(zone->strand.running_in_this_thread());
 
-      relay_effects sink{zone};
-      shekyl_relay_zone_update_stems(
-        zone->relay.get(), uuid_bytes(outs), outs.size(), std::addressof(sink), relay_effects::on_covert_unbind
-      );
+      shekyl_relay_zone_update_stems(zone->relay.get(), uuid_bytes(outs), outs.size());
     }
 
     //! Runs every relay step that has come due, and re-arms the single timer.
@@ -753,14 +758,12 @@ namespace levin
            gtest oracle cannot see through. */
         boost::uuids::uuid destination{};
         const bool local_origin = (tx_relay == relay_method::local);
-        relay_effects sink{zone_};
         std::vector<boost::uuids::uuid> outs = get_out_connections(*zone_->p2p, core_);
 
         std::int32_t plan = shekyl_relay_zone_plan_relay_with_refresh(
           zone_->relay.get(), uuid_bytes(source_), local_origin,
           uuid_bytes(outs), outs.size(),
-          reinterpret_cast<std::uint8_t*>(std::addressof(destination)),
-          std::addressof(sink), relay_effects::on_covert_unbind
+          reinterpret_cast<std::uint8_t*>(std::addressof(destination))
         );
 
         if (plan != SHEKYL_RELAY_PLAN_FLUFF_EPOCH)
@@ -975,11 +978,7 @@ namespace levin
 
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
       const std::vector<boost::uuids::uuid> outs = get_out_connections(*z->p2p, core);
-      relay_effects sink{z};
-      shekyl_relay_zone_force_epoch(
-        z->relay.get(), now_ms(), uuid_bytes(outs), outs.size(),
-        std::addressof(sink), relay_effects::on_covert_unbind
-      );
+      shekyl_relay_zone_force_epoch(z->relay.get(), now_ms(), uuid_bytes(outs), outs.size());
       relay_wake::arm(z, core);
     });
   }

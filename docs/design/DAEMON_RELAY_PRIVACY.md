@@ -4395,16 +4395,48 @@ inherited repoint preserved the queue across a live successor — clearing it on
 rebind would drop messages the old code delivered. CV-2's witnesses are
 untouched: an unbind is not a send, and the successors filter on `CovertSend`.
 
-One delta this leaves, stated rather than smoothed over: on a **nil→bound**
-transition the enqueue guard now opens at the channel's *first send* (where
-`send_noise` rebinds) rather than at the instant of the old repoint post — so
-for up to one covert interval after a slot binds, an enqueue still drops as if
-the channel were unbound. The loss is a redundant clone (`send_txs` offers every
-channel, and the transaction still relays through the zone's other channels and
-the node's other zones), and the window is intrinsic to the inversion's shape:
-closing it would need a bind push, and bind-push plus unbind-push is the slot
-array reassembled in pieces. Q-11's wire-observer assessment inherits the
-cadence bound either way.
+**When it fires — per due tick, not per transition (amended at review, same
+day).** The first cut emitted `CovertUnbind` at the mutation that unbound the
+slot, detected by diffing the slots around each mutating call. Rejected twice
+over, at review: the diff needs the driver to know what the binding *was*,
+which is a shadow of a fact the map owns — the duplicate-fact class
+`PeerFluff::flush_at` named and `live_stems` was designed out of, held here for
+a call's duration rather than stored, but the same class — and a transition
+effect is **one-shot**, so a clear that fails to take effect (`on_covert_unbind`
+catches and logs; a swallowed exception is a *documented* path) leaves the
+guard stale **permanently**, which is the exact failure the effect exists to
+prevent, reinstated with a narrower trigger. Adopted instead: the unbind rides
+the cadence. Each due channel emits exactly one effect, send or unbind by the
+binding's current state, read from `stem_slots()` at the poll — derived, never
+remembered. A lost clear self-heals one covert interval later; `clear_channel`
+is idempotent, so repetition is free; and the covert-disabled gate is
+structural (a disabled zone arms no covert deadlines, so there is no tick for
+an unbind to ride). The mutating exports (`update_stems`,
+`plan_relay_with_refresh`, `force_epoch`) consequently lost their callback
+parameter entirely: **commands mutate and return nothing; every effect leaves
+through `poll` or a force hook.**
+
+Two deltas this leaves, stated rather than smoothed over — both directions of
+the enqueue guard now ride the cadence, each bounded by one covert interval:
+
+- **nil→bound**: the guard opens at the channel's *first send* (where
+  `send_noise` rebinds) rather than at the instant of the old repoint post — so
+  for up to one interval after a slot binds, an enqueue still drops as if the
+  channel were unbound. The loss is a redundant clone (`send_txs` offers every
+  channel, and the transaction still relays through the zone's other channels
+  and the node's other zones).
+- **bound→nil**: the guard closes at the channel's first *due tick* after the
+  slot unbinds rather than at the mutation — so for up to one interval, enqueues
+  still land on the dormant channel before the clear drops them; and a slot that
+  unbinds and rebinds *within* one interval never fires an unbind at all, so its
+  queue survives to the successor where the inherited code dropped it at the nil
+  push. Privacy-neutral either way — the wire carries the same constant-size
+  sends at the same cadence — and the accumulation bound the fix exists for
+  still holds: a *permanently* dormant channel clears at its first due tick.
+
+Closing either window would need the transition push back, and bind-push plus
+unbind-push is the slot array reassembled in pieces. Q-11's wire-observer
+assessment inherits the cadence bound either way.
 
 **What does not go away is the property.** "Covert channel `i` is bound to stem
 slot `i`, and an empty slot is a nil in position rather than a compaction" was
