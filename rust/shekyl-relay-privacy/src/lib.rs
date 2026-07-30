@@ -11,13 +11,15 @@
 //! Shekyl inherits a complete Dandelion++ implementation in C++
 //! (`src/net/dandelionpp.cpp`, `src/cryptonote_protocol/levin_notify.cpp`,
 //! plus the stem embargo in `src/cryptonote_core/tx_pool.cpp`). It works. It
-//! is also, on inspection, **entirely unmeasured**: the 33 `levin_notify` cases
-//! in `tests/unit_tests/levin.cpp` drive the relay path through
-//! `run_epoch()` / `run_stems()` / `run_fluff()`, every one of which cancels
-//! the pending timer to force immediate execution. The suite verifies routing
-//! mechanics — who receives what, with which fluff flag — and not one case
-//! observes a delay. The randomized timing that *is* the privacy mechanism has
-//! no test at all.
+//! was also, on inspection, **entirely unmeasured**: at census time the 33
+//! `levin_notify` cases in `tests/unit_tests/levin.cpp` drove the relay path
+//! through `run_epoch()` / `run_stems()` / `run_fluff()`, every one of which
+//! cancelled the pending timer to force immediate execution. The suite
+//! verified routing mechanics — who receives what, with which fluff flag —
+//! and not one case observed a delay. The randomized timing that *is* the
+//! privacy mechanism had no test at all. (RP-3a/3b have since replaced the
+//! timer-cancelling hooks with force-steps over the same production code —
+//! `run_stems` is now `run_next_wake`, a plain poll at the next deadline.)
 //!
 //! This crate is the measurement instrument **and** the production primitives
 //! for the daemon relay-privacy rewrite (`docs/design/DAEMON_RELAY_PRIVACY.md`).

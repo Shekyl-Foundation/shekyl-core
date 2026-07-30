@@ -983,14 +983,14 @@ namespace levin
     });
   }
 
-  void notify::run_stems()
+  void notify::run_next_wake()
   {
     if (!zone_)
       return;
 
-    /* Advance to the next scheduled event and run it. Despite the name this
-       has nothing to do with Dandelion++ stems and never did — the name is the
-       public test hook's, kept until the vocabulary sweep.
+    /* Advance to the next scheduled event and run it — the name is the body's
+       (§20.6; the inherited `run_stems` never touched stems, and after RP-3b
+       there are no noise timers left for it to cancel either).
 
        **No forcing path, deliberately.** `force_fluff`/`force_epoch` state the
        house idiom — same code as `poll`, only which work counts as due differs

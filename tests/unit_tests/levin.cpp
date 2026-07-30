@@ -366,7 +366,7 @@ namespace
             after `max_advances`. Each advance processes every context's send
             queue and accumulates the count.
 
-            One advance = one `run_stems()` = one poll at the zone's next
+            One advance = one `run_next_wake()` = one poll at the zone's next
             deadline = **one** channel firing (two only when independent draws
             collide on the same millisecond). The inherited tests instead
             cancelled every channel's timer per call, which synchronized the
@@ -386,7 +386,7 @@ namespace
             std::size_t sent = 0;
             for (unsigned i = 0; i < max_advances && !stop(sent); ++i)
             {
-                notifier.run_stems();
+                notifier.run_next_wake();
                 io_service_.restart();
                 if (io_service_.poll() == 0)
                     break; // the drive is dead; the caller's assertions report it

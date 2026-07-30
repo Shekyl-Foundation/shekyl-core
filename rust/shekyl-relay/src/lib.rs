@@ -14,9 +14,9 @@
 //! actor does the last two, so folding it in would violate the crate's own
 //! charter — and the charter is load-bearing, not tidiness. The primitives stay
 //! dependency-light, synchronous, and pure `&mut self` steps precisely because
-//! that is what the daemon's `run_epoch` / `run_stems` / `run_fluff` force-step
-//! hooks forward into, and therefore what keeps the 33 `levin_notify` cases
-//! usable as an oracle across the loop-cut (§18.1). If the actor lived in the
+//! that is what the daemon's `run_epoch` / `run_next_wake` / `run_fluff`
+//! force-step hooks forward into, and therefore what keeps the `levin_notify`
+//! cases usable as an oracle across the loop-cut (§18.1). If the actor lived in the
 //! timing crate, the timing crate would grow an async surface and the next
 //! reader would reasonably make the primitives async "for consistency" —
 //! eroding the property that made this round tractable.

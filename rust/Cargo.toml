@@ -54,8 +54,8 @@ members = [
     # drives the timing primitives above. Deliberately separate — that crate's
     # charter is "timing only, nothing chooses peers or touches a socket", and
     # a zone actor does both. The split is what keeps the primitives
-    # synchronous and pure, which is what the daemon's run_epoch/run_stems/
-    # run_fluff force-step hooks — and therefore the 33-test oracle — rest on.
+    # synchronous and pure, which is what the daemon's run_epoch/run_next_wake/
+    # run_fluff force-step hooks — and therefore the gtest oracle — rest on.
     # See docs/design/DAEMON_RELAY_PRIVACY.md §18.
     "shekyl-relay",
 

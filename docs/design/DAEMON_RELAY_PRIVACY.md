@@ -4767,6 +4767,25 @@ finishing it first would make the vocabulary sweep feel like the round, when it
 is a consequence of the port. Order: §20.4 split → §20.2 scheduling port →
 §20.3 seam inversion and seal migration → rename.
 
+**Landed 2026-07-29, differently than this section predicted — the difference
+recorded rather than stepped around.** The prediction was *"the public hook
+keeps its name and gains a comment"*, on the boundary rule that old names stay
+at the ABI where the oracle needs them. By the time the rename came due, the
+oracle no longer needed it: the noise-gtest rewrite (§20.7 item 1) left
+`run_stems` exactly **one** oracle call site, inside the `drive_covert` fixture
+helper — so keeping a lying name to spare the oracle would have spared one
+line. The hook is therefore renamed with its call site in the same commit:
+`notify::run_stems` → **`notify::run_next_wake`** — named for the current body
+(advance to the next scheduled event: one poll at `next_wake()`, then re-arm),
+not the historical one (the noise-timer cancellation is not merely the wrong
+description; the timers it cancelled no longer exist). The three-way
+disagreement §18.3 used as its dead-assumption detector is resolved by making
+all three agree. Prose that described the inherited hooks in the present tense
+(`shekyl-relay-privacy`'s and `shekyl-relay`'s crate docs, the workspace
+manifest) was re-anchored to past tense or the new name in the same commit —
+the stale-claim class this round kept catching in acceptance items, swept from
+its own artifacts.
+
 ### 20.7 Acceptance
 
 1. ~~`noise` and `noise_stem` pass unchanged~~ — **amended 2026-07-29: they pass
