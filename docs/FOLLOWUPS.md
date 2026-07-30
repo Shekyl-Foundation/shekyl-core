@@ -79,20 +79,65 @@ sustainability is unaffected by the recalibration.
   the defect is not demonstrated at all, and promoting one to the other without
   evidence is the error that discipline exists to prevent.
 
-  **Gate shape is NOT yet grounded — do not design it from here.** "Generate and
-  diff in CI" is the obvious answer and is probably wrong, because the project
-  already evaluated wholesale cbindgen and narrowed it. Open questions the round
-  must answer first: (a) what, if anything, cbindgen cannot express for this
-  header (the `RelayZoneHandle` opaque type, the callback typedefs, the
-  `ShekylRelayBlob` `#[repr(C)]` struct are the candidates); (b) whether a
-  signature check can be had more cheaply than full generation — e.g. a
-  link-time-only compile unit that takes the address of every export under the
-  header's declared type, which fails to compile on arity/type mismatch without
-  generating anything; (c) whether the remaining 33 non-consensus constants want
-  the same treatment or stay on per-constant pins.
+  **Grounded 2026-07-30; relay-surface gate SHIPPED. The remaining open item
+  is the full-surface extension.** The three questions above, answered at
+  source and by execution:
 
-  Not blocking anything. `cbindgen` is not installed on the dev box, so the
-  full-surface diff (all crates, not just relay) is still unmeasured.
+  (b) first, because its candidate died: **the link-only TU is refuted, and
+  the refutation is the entry's own hazard restated.** The compiler
+  type-checks the address-of against the header's declaration — the artifact
+  under suspicion — and the linker then resolves by name alone because C
+  linkage carries no type information. Nothing in that compilation ever sees
+  the Rust side: the probe verifies the header against itself. That is the
+  assert-a-constant-against-itself shape at the language level, the fourth
+  instance of the pattern in the relay arc (after the flags witness's first
+  draft, the seal-fix that sourced truth through the transform, and the
+  count-gate that matched its own construction feeds). Its narrow salvage —
+  undefined-symbol on a removed export — is also redundant on this surface,
+  because `levin_notify.cpp` calls every relay export, so a removed export
+  already fails the daemon link. Cross-language LTO was also checked and
+  dies on the toolchain: the build's `-flto` is gcc GIMPLE, the Rust
+  staticlib carries machine code, so the boundary is opaque at link and no
+  mismatch diagnostic can fire across it.
+
+  (a) **cbindgen expresses the relay surface completely** — the opaque
+  handle emits as a forward declaration, the callback typedefs as `using`
+  aliases with identical underlying types, `usize` as `size_t` — measured by
+  generating and compiling, not by reading docs. What it **cannot** express,
+  also measured: **cross-crate constant re-exports** (`pub const SHEKYL_X =
+  other_crate::X` renders the unresolved Rust identifier into the C++
+  initializer, `parse_deps` notwithstanding), which breaks full-crate
+  generation on the account/PQ surface's constants and constant-sized struct
+  arrays. The 2026-05 narrowing was therefore *scope* (constants, JSON
+  authority) — signature generation was never evaluated and is not
+  contradicted.
+
+  **The shipped gate** (`scripts/ci/check_relay_ffi_signatures.sh` +
+  `cbindgen-relay-signatures.toml` + `relay_ffi_signature_gate.cpp`,
+  workflow `ffi-signatures.yml`): single-file cbindgen over
+  `relay_zone_ffi/mod.rs` — exact, because the relay module defines every
+  crossing type in-file — emitting functions/typedefs/opaque only, compiled
+  into one TU **after** the hand-written header, where `extern "C"`
+  redeclaration rules turn any arity/type/return disagreement into a
+  conflicting-declaration compile error. Both declaration sets derive from
+  the artifacts under test; the C++ compiler performs the comparison. A
+  coverage guard pins generated-export count to the Rust module's export
+  count (and caught its own first draft under-counting the
+  pointer-returning export). Negative controls run and observed to fail:
+  dropped parameter and changed parameter type both produce the
+  conflicting-declaration error. Struct layout and flag values are
+  deliberately out of this gate's scope — the header's `static_assert` and
+  the `zone_flag_bits_do_not_transpose` ABI pins own those.
+
+  **Still open (the extension):** the non-relay export surfaces
+  (account/embargo/difficulty/…) remain signature-unchecked. Extending the
+  gate needs either per-surface single-file generation where a module is
+  self-contained (the relay pattern), or the call-and-echo fallback (the
+  ABI-value-pin idiom extended from constants to signatures: call each
+  export with known values, assert on the Rust side what arrived) for
+  surfaces the cbindgen limitation blocks. (c) from the original list — the
+  remaining non-consensus constants — stays as filed: per-constant pins
+  until the full generator migration.
 
 - **TJ-1 (CRITICAL, live consensus path) — the challenged leaf index carries no
   beacon: a SPEC/CODE DIVERGENCE** (added 2026-07-29,
