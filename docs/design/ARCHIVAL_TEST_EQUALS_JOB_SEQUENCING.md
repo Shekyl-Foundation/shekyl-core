@@ -13,9 +13,13 @@ in the metered cells and go quiet at flat-rate, and 3b engineering/operational
 commoditizable and must not be leaned on. Test gates landed
 (PR #378): `tj_g_…` red on challenge scope, `tj_f_forged_material…` green on
 soundness, the summand weld under the ledger; TJ-F's liveness face carried as
-a **type-level obligation** on TJ-A's output, not a test. **The one open gate
-this round does not own:** whether `q ≥ 0.10` is forceable on a 3.33 MB
-Tor-borne fetch — PD-F-2's dispersion measurement (§8.3).
+a **type-level obligation** on TJ-A's output, not a test. Round 1's
+sharpest finding so far (§8.2 TJ-A1): **false denial is the strictly easier
+attack** — it pays *unilaterally* while false attestation must be purchased —
+and the escape is TJ-F's own `R_k` property, which decouples witnessing from
+holding and lets the draw exclude the challenged shard's co-holders. **The one
+open gate this round does not own:** whether `q ≥ 0.10` is forceable on a
+3.33 MB Tor-borne fetch — PD-F-2's dispersion measurement (§8.3).
 **Family:** `TJ-*` (registered in `IMPLEMENTATION_INDEX.md` at birth, rule 94).
 **Supersedes in part:** the reopen-(d) fork as dispositioned
 (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6) and the reopen-(d)
@@ -761,35 +765,100 @@ Design questions (sub-items of the registered `TJ-A`; no new family):
     collusion on its own; `k`-of-`n` over a large bonded set with an
     unchooseable draw is what bounds a ring's chance of drawing its own
     members (TJ-A2).
-  - **Toward false *denial* (griefing) — aligned, and this is the new
-    obligation.** The same arithmetic that punishes false attestation
-    **rewards** falsely denying an honest serve: suppressing a legitimate
-    receipt lowers `r_market`, which *raises* the denier's own scarcity term on
-    that shard. So a co-holder challenger is the best-placed witness (it holds
-    the shard, so it can verify the bytes are the *right* bytes, not merely
-    that bytes arrived) **and** the most incentivized denier. Round 1 must
-    handle the denial direction explicitly — which is what makes **TJ-A3's
-    dispute path load-bearing rather than a nicety**, and it argues against
-    naive co-holder-only selection.
-  **Two things to verify before this direction is ratified:**
-  1. **Drift-free enumeration at the selection read-point** — the bonded set
-     must be read at a proven consensus state, not a cached or tip-relative
-     one. This is the **M3-1 cached-counter class** the D2 escalation closed
-     structurally with `parent_frozen_segment_count`; the same discipline
-     (assert the read-point, throw on violation) applies here and the idiom is
-     already in the tree.
+  - **Toward false *denial* (griefing) — aligned, unilateral, and therefore the
+    STRICTLY EASIER attack.** Trace the two lies and they are not symmetric:
+    false attestation makes `P` earn, raising `Σwork` and **diluting the
+    attester** — so it is costly to the witness and must be **purchased**
+    (collusion with payment). False denial lowers `r_market(s)`, which
+    **raises the denier's own `scarcity_micro = g/r` directly** — profitable
+    **unilaterally, with no counterparty and no bribe**. Denial is not the
+    other direction of one problem; it is the only one of the two that pays by
+    itself.
+    **It scales as `1/r`, so it is strongest exactly where the stakes are
+    highest.** Removing one co-holder moves the denier's term from `g/r` to
+    `g/(r−1)` — a relative gain of `1/(r−1)`: **~0.1 % at `r = 1000`, 100 % at
+    `r = 2`**. Scarce shards are simultaneously the highest-paying and the most
+    denial-exposed, which names a threat: **denial-to-monopolize** — deny
+    co-holders on a scarce shard until the m-of-n window slashes them out, then
+    hold the maximal scarcity term alone. **Self-reinforcing**, since each
+    departure lowers `r` and raises the next denial's payoff.
+  - **The co-holder dilemma is FALSE, and TJ-F's own property is the escape.**
+    An earlier draft of this section called a co-holder "the best-placed
+    witness … *because* it holds the shard, so it can verify the bytes are the
+    right bytes." **That is wrong.** A witness does not need the shard: response
+    material **plus `R_k`** suffices — precisely the §8.1(3) entry-point
+    property — and **every lean node already has `R_k`** (set A, §1). Witnessing
+    is therefore **decoupled from holding**, and the draw can be **the bonded
+    set minus the challenged shard's co-holders**: they verify no better than a
+    non-holder, and excluding them removes the concentrated `O(1/r)` incentive.
+    This is the same TJ-F property doing **triple duty** — it unlocks pruning,
+    makes the test honest, and now decouples witnessing from stake. Without
+    `R_k` verification, non-co-holder selection would not be available at all.
+  - **How far the exclusion actually gets you — stronger than "diluted", and
+    the residual is elsewhere (verified at source).** The direct channel closes
+    to **≈ zero, not `O(1/N)`**: per-shard work is `C·g/r` and there are `r`
+    co-holders, so **shard `s` contributes `C·g` to `Σwork` regardless of
+    `r`** — the per-shard pool is *conserved*, denial only **redistributes** it
+    among the remaining co-holders. Since `reward_share_floor(budget,
+    credited, Σwork)` (`reward_arithmetic.rs:128`) is `credited/Σwork`, a
+    **non-co-holder's `credited` and `Σwork` are both unchanged by the denial,
+    so its reward is unchanged.** Consequence for the checks below: the
+    proposed remedy of excluding the challenger's own holdings from that
+    epoch's `Σwork` is **unnecessary** — there is no `Σwork` residual to
+    decouple. (Conservation is exact in real arithmetic and *approximate* under
+    the two flooring stages — the per-pair micro floor and the micro→milli
+    floor — so this is "no incentive", not "bit-exact invariance"; the residue
+    is the `micro_path_rounds_against_the_claimant` direction.)
+    **What survives is the INDIRECT channel**, and it is what should size the
+    exclusion: sustained denial pushes `P` across the m-of-n window into a
+    slash, and a slash's bad interval **excludes that bond from `r_market`
+    everywhere** (`epoch_close_bad_interval_excludes_bond_everywhere`) — so a
+    challenger sharing **any** shard with `P` still profits from `P`'s
+    eventual exit, even when excluded from the challenged shard. **The open
+    question is exclusion breadth**: co-holders of shard `s` (kills the direct
+    channel) versus anyone sharing *any* shard with `P` (kills the indirect one
+    too, but may thin the eligible set unacceptably at large holdings against
+    the L11 population). That trade-off — not the `Σwork` residual — is what
+    makes **TJ-A3's dispute path load-bearing rather than a nicety.**
+  **Things to verify before this direction is ratified** (one of the originally
+  posed pair is **already answered structurally** — see the conservation
+  finding above: there is no `Σwork` denial residual, so no explicit
+  `Σwork` decoupling is owed):
+  1. **Drift-free enumeration at the selection read-point — for BOTH sets.**
+     The bonded set *and* the challenged shard's co-holder set must be read at
+     a proven consensus state, not a cached or tip-relative one. "Who holds
+     shard `s`" is exactly the kind of set that moves between read and use, and
+     it now gates *eligibility*, not just accounting — so a drift here silently
+     admits an excluded co-holder as a challenger. This is the **M3-1
+     cached-counter class** the D2 escalation closed structurally with
+     `parent_frozen_segment_count`; the same discipline (assert the read-point,
+     throw on violation) applies, and the idiom is already in the tree.
   2. **Ring-draw probability at plausible bonded-set size** — that the chance a
      colluding ring draws its own members falls acceptably in the set size the
      market actually reaches (the L11 attractor envelope, `N_P` lean ≈ 79 /
      thick ≈ 154 / fee-era-thin 17–62, is the population to sweep against —
      *not* an assumed-large set).
-- **TJ-A2 — attestation shape: `k`-of-`n` vs optimistic-with-dispute.**
-  `k`-of-`n` pays `k` transfers per challenge for collusion resistance
-  proportional to `k`; optimistic pays one and relies on a dispute path. Weigh
-  them on collusion cost, bandwidth, and consensus artifact size — and note
-  that a **`k`-of-`n` receipt multiplies the very transfer cost §5.7 says is the
-  deterrent**, so the two objectives trade against each other and the trade must
-  be priced, not assumed away.
+- **TJ-A2 — attestation shape, with the quorum direction already DETERMINED by
+  the denial asymmetry.** `k`-of-`n` pays `k` transfers per challenge for
+  collusion resistance proportional to `k`; optimistic pays one and relies on a
+  dispute path. Weigh them on collusion cost, bandwidth, and consensus artifact
+  size — noting that a **`k`-of-`n` receipt multiplies the very transfer cost
+  §5.7a says is the deterrent**, so the two objectives trade against each other
+  and the trade must be priced, not assumed away.
+  **The threshold's direction is a constraint this round carries, not one it
+  discovers.** Counting colluders for each lie under a `k`-of-`n` quorum:
+  - **unanimity (`k = n`)** — a **single** denier blocks credit, and denial is
+    unilaterally profitable (TJ-A1). Trivially attackable; **excluded**.
+  - **general `k`** — false denial needs `n − k + 1` colluders; false
+    attestation needs `k`. These trade against each other, and since **denial
+    pays by itself while attestation must be bought**, the quorum should be
+    biased **denial-tolerant: `k` low relative to `n`.**
+  **With a floor, named so the bias is not read as "minimize `k`":** `k` must
+  stay high enough that a handful of *purchasable* attesters cannot grant
+  credit (at `k = 1` a single bribed witness certifies anything). So the
+  constraint is *directional with a floor* — `k` low relative to `n`, above the
+  purchasable-quorum floor — and Round 1 owes the floor's derivation against a
+  stated bribe cost, not a chosen number.
 - **TJ-A3 — the dispute path, and the one legitimate return of the targeted
   opening.** A dispute is the place a compact `VerifyPath` opening is **sound
   again**: it is cheap in the rare case, and it reintroduces no `Θ(m)` hole
