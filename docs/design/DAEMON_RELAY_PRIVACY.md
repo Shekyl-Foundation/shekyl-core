@@ -1,9 +1,11 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
-**Status:** ROUND 3 dispositioned — clean break. The measurement that motivates
-this document landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 19
-measurement tests + the suite), so every number below is reproducible rather than
-asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
+**Status:** ROUND 3 dispositioned — clean break; the RP-1…RP-3b port arc is
+**structurally complete** (§20.10), and the mechanism's definition of done is
+scored at **2/7 parameters derived** (§21 — the live ledger the remaining
+rounds tick). The measurement that motivates this document landed alongside it
+in the same PR (`rust/shekyl-relay-privacy`, 19 measurement tests + the
+suite), so every number below is reproducible rather than asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
 priority-order improvement (§14); the embargo derivation is held block-time-*unaware*
 by construction, with the block-time boundary reconciled at the integration layer
 (§15); the W3 residual is measured as `W3(g)` (§12.6); and **`ρ` is
