@@ -2098,13 +2098,24 @@ below carries a **verify-at-source obligation** (the paper itself, then this
 tree) before any number derived from it gates a decision. They are inputs to
 the Q-10 `g_max` calibration, not conclusions of this document:
 
-1. **The Sharma numbers are optimistic for Shekyl in three directions**, so
+1. **The Sharma numbers are optimistic for Shekyl in two directions**, so
    using them as a `g_max` floor without adjustment would over-credit the
    adversary's difficulty: they analyze the **spec, not an implementation**;
-   they model **no per-source pinning** (their Appendix A.1 states this
-   explicitly — verify); and their parameters differ where it matters —
-   `pf = 0.9` against Shekyl's 0.8, and **random rather than
-   occupancy-optimizing placement** for the adversary.
+   and their parameters differ where it matters — `pf = 0.9` against Shekyl's
+   0.8, and **random rather than occupancy-optimizing placement** for the
+   adversary.
+
+   **Corrected 2026-07-31 (§27.6) — the third direction was two claims with
+   OPPOSITE signs collapsed into one, and only the optimistic half was
+   recorded.** Split: (i) Sharma models forwarding as **i.i.d. among two
+   successors** rather than one-to-one, and by Dandelion++ Theorem 2 that is
+   the *worse* scheme — Θ(p) against pinning's Θ(p² log(1/p)) — so modelling
+   it makes Sharma **pessimistic** here; (ii) Sharma notes an adversary who
+   **knows** the mapping does better, which is adversary *knowledge* and makes
+   Sharma **optimistic**. *Protocol-pins-or-not* and
+   *adversary-knows-the-pin-map* are different variables pointing opposite
+   ways. **Net sign is unclear; do not cite this item again before the split
+   is priced.**
 2. **The paper's flat N-scaling line holds `C = 0.01·N`** — the adversary
    grows proportionally with the network — so the flat line measures
    *"anonymity does not grow against an adversary that grows with you"*, not
@@ -5328,8 +5339,8 @@ is this ledger. Scored honestly:
 | --- | --- | --- |
 | embargo mean (144 s) | ✅ | the exact survival solve, RD-1/RD-4 corrections, `derive.rs` bisection with Monte-Carlo cross-check (§10) |
 | fluff delay family (memoryless) | ✅ | the residual-phase argument — memoryless is the family whose residual equals its full distribution (RD-2, D-3) |
-| `q = 0.2` (stem-continue) | ❌ | inherited; deferred at Q-3 / D-6 as not-demonstrably-wrong, never derived |
-| `STEMS = 2` | ❌ | inherited; §12.7's expander-minimum argument is a rationale, not a derivation from an adversary bound — and its fan-out leg now carries two recorded ungrounded premises (§12.7, 2026-07-30 note) |
+| `q = 0.2` (stem-continue) | ❌ | **not "underived" — derived against the wrong objective, on a topology we do not run** (corrected 2026-07-31, §27.3): D++ §5.3.1 chose `q = 0.1`/`0.2` from a **4.5 s latency goal** at 300 ms/hop measured on EC2 **Bitcoin** nodes with the INV/GETDATA/TX exchange. Same disease as `FORWARD_DELAY` and the `MAX_FRAGMENTS` equality. Q-3 reopens against *our* budget and *our* relay semantics |
+| `STEMS = 2` | ❌ | inherited; §12.7's expander-minimum argument is a rationale, not a derivation. **Question reframed 2026-07-31 (§27.5): the degree effect *reverses* on adversary graph knowledge** (D++ Fig. 3) and D++'s Theorems 1–2 are scoped to `d = 4` — so the question is not "does higher degree help" but **"does our anonymity graph stay unknown?"**, which Sharma's Appendix B prices as *no* at our parameters |
 | noise covert constants — `NOISE_MIN_DELAY`, `_DELAY_RANGE`, `_MIN_EPOCH`, `_BYTES`, `_CHANNELS` | ❌ | Q-11 — **derivation target relocated at Unit 1 review to the active prober** (§24.2: the passive-wire argument does not carry — under CV-4 the emission series is payload-blind under *any* family, so randomness must be justified by the phase-tag channel, not by the lineage); the row widened at Unit 0 (§22.1, Q11-D: rate has a bytes axis this ledger had omitted); the inherited triple is a *capacity* solution at exact equality (Q11-B), the oracle is production-aimed since Unit 0 (Q11-C), and the §20.9 order runs from a now-known feasible region |
 | forward-delay mean (`FORWARD_DELAY_AVERAGE = 22 s`) | ❌ | **Q-12** (§22.2, live) — decoupled from the covert constants at Unit 0 (Q11-A); stated anonymity-set objective never derived; drawn Poisson (the F-2/F-4 family signature) at `tx_pool.cpp:311` |
 | cooldown / eviction threshold | ❌ | unbuilt — the §12.11 selection-mechanism tier, blocked with Q-10 |
@@ -5338,12 +5349,27 @@ is this ledger. Scored honestly:
 **Two of eight** *(amended 2026-07-31 — Q-11 Unit 0's census added the
 forward-delay row the coupling had hidden and widened the covert row by the
 rate's bytes axis; the denominator grew because the census looked, which is
-the ledger working as intended)*. That is the honest measure of where the
+the ledger working as intended. Amended again the same day: reading the
+Dandelion++ paper at source showed two ❌ rows were mis-**reasoned** rather
+than mis-scored — `q` and `STEMS` are not "inherited, never derived" but
+derived against a foreign objective and reframed by a regime question
+respectively (§27.3, §27.5). The score is unchanged; what changed is what
+each row tells the round that reopens it, which is the difference between a
+ledger and a tally)*. That is the honest measure of where the
 mechanism stands, and it makes the remaining work countable in a way a list
 of open Q-items does not. A round that derives one of the ❌ rows ticks it here, in the same commit
 — this table is a live scorecard, not a snapshot, and a stale row is the same
 defect class as a stale acceptance criterion (§20.10 measured that class at
 four-of-ten).
+
+**One framing correction (2026-07-31, §27.2).** *"The arc moved the
+implementation toward the specification; the specification's ceiling is where
+it was"* is right about the ceiling and wrong about the embargo: Dandelion++'s
+Proposition 3 carries **no return-propagation term**, so RD-1 corrected the
+**paper's arithmetic**, not only the inherited implementation. Our `F` is an
+addition to the spec. This does not put our anonymity above Sharma's curve —
+that curve measures spy precision, which the embargo does not move — but it
+changes what *"correctly-specified Dandelion++"* cites to.
 
 **What the arc bought, priced honestly.** Four measured deltas, one trade, one
 unmoved ceiling. Unconditional: the fluff delay is memoryless on every
@@ -6112,3 +6138,166 @@ configuration C's under-provisioned embargo (**a defect**, F-7) and
 reverse-parity (**a question**, §25.5) — which makes it **its own unit**, not a
 coda to either. Order: F-6/configuration B (§25.1) → the directed-flood unit
 (F-7 magnitude, then reverse-parity's three readouts) → Unit 2 (shape) on (b).
+
+## 27. The Dandelion++ paper read at source — (b) pinned, and four corrections it forces
+
+**2026-07-31, maintainer, from Dandelion++ (Fanti et al.) §4.4, §5.3.1,
+Proposition 3, Theorems 1–2, Fig. 3.** The paper §20.9 said we should *not*
+reach for on the cadence question turns out to settle the cadence question's
+anchor, and to correct three things this document had recorded.
+
+### 27.1 (b) is pinned — and the anchor is our own embargo
+
+D++ §4.4, Eq. (7): `T_out(v) ~ current_time + exp(1/T_base)`, i.i.d. across
+relays, and the argument that follows it:
+
+> *"the protocol also ensures that the first relay node to broadcast is
+> approximately uniformly selected among all relays that have received the
+> message. This is due to the **memorylessness of the exponential clocks**:
+> conditioned on a given node blocking the message, each of the remaining
+> clocks **can be reset**, assuming propagation latency in the stem is
+> negligible."*
+
+**That is (b)'s argument, in the lineage, about a mechanism we already
+implement.** An adversary who *acts* — blocks — learns nothing positional from
+the subsequent timing, because conditioned on the block every surviving clock
+is fresh. (b) says an adversary who delays or drops a covert emission cannot
+tag the stream, because with exponential inter-arrival the post-perturbation
+process is indistinguishable from a fresh one.
+
+**The gap stays visible, because the observables differ**: Fanti's is *which
+node fires first among `k` clocks* — identity and order; (b)'s is *when a
+single stream's next emission lands* — phase on one link. So §25.4's status
+upgrades from *"my extension of Loopix Lemma 2"* to **"the property the lineage
+already invokes for our own embargo, applied to a different observable."** Not
+a citation *of* (b), but a far better anchor than Loopix — because **the arc
+has already adopted this conclusion once, for F-4.**
+
+### 27.2 RD-1 corrected the paper, not only the implementation
+
+Proposition 3 derives `T_base ≥ −k(k−1)·δ_hop / (2 log(1−ε))` from
+`Δ₁ = k·δ_hop` — **forward travel only.** There is no return-propagation term
+anywhere in it, and the uniform-selection argument above is explicitly
+conditioned on *"assuming propagation latency in the stem is negligible."*
+
+**So RD-1 — disarm happens when the fluff *reaches* the relay, hence every stem
+node's window carries a diffusion-return term — is a correction to Dandelion++'s
+model, not only to the inherited implementation.** Our `F` is an *addition to
+the spec's arithmetic*.
+
+**This revises a standing framing of §21.** *"The arc moved the implementation
+toward the specification; the specification's ceiling is where it was"* is
+right about the ceiling and **wrong here**: on the embargo derivation the arc
+moved **past** the spec. Stated precisely, because the two must not blur: the
+spec's *arithmetic* was incomplete for its own stated goal, and we corrected it
+— which does **not** mean our anonymity sits above Sharma's ~5-bit curve, since
+that curve measures deanonymization precision against a spy, an axis the
+embargo does not move (§6.6/§14: it moves C3 adversely). What changes is **what
+"correctly-specified Dandelion++" cites to** when we compare our numbers
+against that ceiling.
+
+### 27.3 `q = 0.2` is derived — from a latency budget, on Bitcoin
+
+D++ §5.3.1, which had not been in this arc's frame:
+
+> *"we estimated that each additional hop adds an expected **300 milliseconds**
+> to the propagation latency. There is also a constant 2.5 second delay added
+> to each transaction due to the exponential process of propagation when it
+> first enters the fluff phase. Taking a propagation delay of **4.5 seconds as
+> our goal**, we chose q = 0.1 or q = 0.2 as our parameter."*
+
+**§21's ledger entry was wrong in a way that matters, and is corrected in
+place.** `q = 0.2` is not underived — it is **derived from a 4.5-second latency
+goal, against 300 ms/hop measured on EC2 Bitcoin nodes with the INV/GETDATA/TX
+exchange.** That is the same disease as `FORWARD_DELAY` and the
+`MAX_FRAGMENTS` equality: **a real derivation against a non-privacy objective,
+on a foreign network.** *"Underived"* invites a fresh derivation; *"derived
+from a latency budget we didn't set, on a topology we don't run"* tells Q-3
+exactly **what to reopen and against what**.
+
+### 27.4 `time_between_hop_ms = 175` sits against a published 300 ms — F-7 has a sibling
+
+Same passage: D++ measured **300 ms/hop** over 20 trials at stem lengths up to
+12. [`params.rs:148`](../../rust/shekyl-relay-privacy/src/params.rs#L148)
+carries **175**, with the doc's own concession that it comes from a C++
+comment's arithmetic rather than a measurement.
+
+Monero's relay semantics differ from Bitcoin's three-message exchange, so 300
+does not transplant. But **175 has no measurement behind it and the nearest
+published figure for the nearest protocol is 1.7× higher.** Both `δ_hop` and
+`F` feed `S(h) = Σ ceil((k·hop + F)/τ)`, and **both are plausibly
+under-estimated in the same, privacy-losing direction.** F-7 has a sibling, and
+**the directed-flood unit (§26.5) should measure hop latency while it is in
+there** — same instrument family, same derivation consumer, and measuring one
+without the other leaves `S(h)` half-corrected.
+
+### 27.5 STEMS — the raise leaves proven territory three ways, and its sign flips
+
+Figure 3's trend, stated in the text:
+
+> *"If the adversary has **not** learned the topology, then line graphs have the
+> lowest expected precision and hence offer the best anonymity. As the degree
+> `d` increases, the expected precision progressively worsens until `d = n`…
+> On the other hand, **if the topologies are known to the adversary, then the
+> performance trend reverses.**"*
+
+**The degree effect reverses on adversary graph knowledge.** Raising STEMS
+helps only in the **known**-graph regime; in the unknown-graph regime it hurts.
+And two theorems are scoped to `d = 4` specifically — Theorem 1 (first-spy
+within a constant factor of optimal, `D_OPT ≤ 8·D_FS + 6p² + O(p³)`) and
+Theorem 2's branching-process analysis, which *"exploits the tree-like
+neighborhoods of random 4-regular graphs."* **Raising STEMS exits both.**
+
+**So the raise's real question is not §12.7's premise (a) as written. It is:
+do we believe our anonymity graph stays unknown?** And Sharma's Appendix B
+answers it — **> 90 % PSG recovery at 50 tx/node, ~98.5 % at 100**, at roughly
+half that cost against our `q`. If the graph is cheaply learnable we are in the
+**known** regime, where higher degree helps, and D++'s reason for choosing
+4-regular (a hedge across *both* regimes) does not bind us the way it bound
+them. **That is a cleaner and more defensible basis for the raise than the
+entropy argument — and it says that *not* raising is a bet on the graph staying
+unknown, which Sharma prices as a bad bet at our parameters.**
+
+**Consequence beyond STEMS (ours):** if the graph is learnable, that also bears
+on **Q-10's `g_max`** — a known graph makes *targeted* occupancy materially
+easier than the random-placement model Sharma uses, which is one of the two
+optimism directions §12.6 still records. The graph-knowledge question is
+therefore an input to two open items, not one, and it should be settled once
+rather than assumed separately in each.
+
+### 27.6 Correction — our Sharma pinning item had the sign wrong
+
+Theorem 2, graph unknown, arbitrary transactions per node, adversary can link
+same-user transactions:
+
+| forwarding | expected optimal precision |
+| --- | --- |
+| one-to-one (**pinned**) | Θ(p² log(1/p)) |
+| all-to-one | Θ(p) |
+| per-incoming-edge | Ω(p) |
+
+with `p²` the fundamental lower bound. Plus the volume property: *"if nodes were
+to generate arbitrarily many transactions, the pseudorandom lines would stay
+the same, whereas… the per-transaction curve could increase arbitrarily close
+to 1."*
+
+**Pinning's value is invariance to transaction volume** — without it, precision
+→ 1 as an origin transacts more. That is a strong endorsement of `in_mapping_`
+and it **independently corroborates §6.8's velocity analysis.**
+
+But it means §12.6's standing item — *"no per-source pinning, filed under three
+ways Sharma is optimistic"* — **collapsed two claims with opposite signs, and
+recorded only one.** Split (and corrected at the site): Sharma modelling
+i.i.d.-among-two-successors rather than one-to-one makes them **pessimistic**
+here (Theorem 2 says that is the worse scheme); Sharma noting that an adversary
+who *knows* the mapping does better makes them **optimistic**.
+*Protocol-pins-or-not* and *adversary-knows-the-pin-map* are different
+variables pointing opposite ways. **Net sign unclear; the item is not to be
+cited again before the split is priced.**
+
+### 27.7 What is still unread
+
+The Bitcoin-diffusion negative result — D++ §1's [50], Sharma's [19]/[20],
+likely the same Fanti–Viswanath work — **is the one paper of the four still not
+in hand**, and Unit 2's (b) has to answer it. Recorded so that the gap is
+visible at the point of use rather than discovered inside the shape argument.
