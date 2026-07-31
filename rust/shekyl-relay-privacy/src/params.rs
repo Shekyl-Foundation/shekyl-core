@@ -287,11 +287,14 @@ pub mod inherited {
     /// λ for the inbound fluff draw, in quarter-seconds.
     pub const FLUFF_AVERAGE_IN_QUARTER_SECS: u32 = 20;
 
-    /// `CRYPTONOTE_NOISE_MIN_EPOCH` — 5 minutes, in seconds.
-    pub const NOISE_MIN_EPOCH_SECS: u32 = 300;
-    /// `CRYPTONOTE_NOISE_EPOCH_RANGE`, in seconds.
-    pub const NOISE_EPOCH_JITTER_SECS: u32 = 30;
     /// `CRYPTONOTE_NOISE_MIN_DELAY`, in seconds.
+    ///
+    /// The epoch pair (`CRYPTONOTE_NOISE_MIN_EPOCH` / `_EPOCH_RANGE`) is
+    /// deliberately NOT mirrored here: those values are C++-owned and cross
+    /// the FFI as `shekyl_relay_zone_new` arguments. Rust mirrors of them
+    /// existed briefly with zero consumers and were deleted (Q-11 Unit 0) —
+    /// a dead duplicate of a C++-owned fact is the delete-don't-synchronize
+    /// class, not documentation.
     pub const NOISE_MIN_DELAY_SECS: u32 = 10;
     /// `CRYPTONOTE_NOISE_DELAY_RANGE`, in seconds.
     pub const NOISE_DELAY_JITTER_SECS: u32 = 5;
