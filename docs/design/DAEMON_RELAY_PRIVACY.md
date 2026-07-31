@@ -14,7 +14,7 @@ whole form at §25.1: `proxy.noise` defaults true, so the DEFAULT Tor
 deployment (configuration B) runs neither Dandelion++ nor the embargo** — the
 arc's entire output is bypassed on the deployment a privacy-motivated user
 selects, and two live §6 claims are false there. That outranks the cadence
-work — as does **F-7** (§26): `F = 2250` is an undirected/`EveryPeer`
+work — as does **F-7** (§26); Corollary 5.1 puts configuration B's ranking on a literature footing (§28.5): `F = 2250` is an undirected/`EveryPeer`
 measurement fed to the embargo derivation for *every* transport, so
 configuration C's embargo is under-provisioned in the direction the policy
 itself calls a privacy loss. **Q-12 is registered and live** (§22.2). The measurement that motivates this document landed alongside it
@@ -6295,9 +6295,159 @@ who *knows* the mapping does better makes them **optimistic**.
 variables pointing opposite ways. **Net sign unclear; the item is not to be
 cited again before the split is priced.**
 
-### 27.7 What is still unread
+### 27.7 What is still unread — **closed 2026-07-31, see §28**
 
-The Bitcoin-diffusion negative result — D++ §1's [50], Sharma's [19]/[20],
-likely the same Fanti–Viswanath work — **is the one paper of the four still not
-in hand**, and Unit 2's (b) has to answer it. Recorded so that the gap is
-visible at the point of use rather than discovered inside the shape argument.
+The Bitcoin-diffusion negative result — D++ §1's [50], Sharma's [19]/[20], the
+Fanti–Viswanath work — was the one paper of the four not in hand, and Unit 2's
+(b) had to answer it. **Read: the objection dissolves, and was retracted on the
+merits (§28).** The attack that beats diffusion is *reporting centrality*,
+which the paper states twice is **timestamp-blind and θ-independent** — so the
+negative result shows a timing defense is worthless where timing is not the
+binding channel, not that memorylessness fails against a timing adversary. It
+converts into a **scope rule** (§28.2) that retroactively licenses (b),
+explains F-4, and **externally corroborates §6.9**.
+
+## 28. The diffusion negative result — retracted as a threat, kept as a scope rule
+
+**2026-07-31, maintainer, from Fanti–Viswanath (the Bitcoin-diffusion analysis;
+§27.7's outstanding paper).** Raised as the objection Unit 2's (b) would have to
+answer. **Read, it dissolves — and the reason it dissolves is worth more than
+the objection was.**
+
+### 28.1 The retraction, and why it is on the merits
+
+The headline holds: trickle and diffusion have order-equal detection
+probabilities (first-timestamp at θ = 1 is `log(d)/(d log 2)` for trickle,
+`log(d−1)/(d−2)` for diffusion; ML is Θ(1) for both, approaching ½ and ≈ 0.307).
+**Switching Bitcoin to memoryless delays bought essentially nothing.**
+
+**But the attack that wins against diffusion is not a timing attack.** Their
+Theorem 4.2 estimator — *reporting centrality* — counts reporting nodes per
+adjacent subtree, and the paper is explicit twice over:
+
+> *"Notice that reporting centrality does not use the adversary's observed
+> timestamps—it only counts the number of reporting nodes in each of a node's
+> adjacent subtrees."*
+
+> *"the constant `C_d` in Theorem 4.2 does not depend on θ—this is because the
+> reporting centrality estimator makes no use of timestamp information, so the
+> noisy delays in the observed timestamps do not affect the estimator's
+> asymptotic behavior."*
+
+And their own conclusion names the cause as **symmetry**, not distribution:
+*"diffusion and trickle both propagate content over the underlying graph in all
+directions at roughly the same rate. This symmetry enables powerful
+centrality-based attacks. Thus, a natural solution is to break the symmetry."*
+— which is the seed of Dandelion; the stem **is** the asymmetry.
+
+**So the finding is: timing randomization failed there because the adversary had
+a topological observable that bypasses timing entirely. That is not evidence
+that memorylessness fails against a timing adversary; it is evidence that a
+timing defense is worthless when timing is not the binding channel.**
+
+### 28.2 The scope rule, and it retroactively explains three things we believe
+
+> **Timing randomization is a defense only where timing is the adversary's sole
+> observable.**
+
+- **(b) qualifies.** A single covert link, constant-rate, payload-independent:
+  no infected subgraph, no adjacent subtrees, no centrality — **there is
+  nothing for a topological estimator to count.** The covert channel is
+  *topologically trivial by construction* (one link, N streams, encrypted), and
+  that is precisely why timing is the sole channel and therefore why a timing
+  derivation is worth doing at all. **This is the licence Unit 2 needed**, and
+  the rule should be applied as a **predicate before spending derivation
+  effort**, not discovered after.
+- **F-4 qualified.** The embargo / black-hole channel is timing-only, which is
+  why fixing the family moved a real number.
+- **§6.9's out-of-scope verdict is now *sourced*, not asserted.** *"The floor
+  `C1 ≈ f` is untouchable by stem-and-fluff"* is the same claim as reporting
+  centrality being **θ-independent and timestamp-blind**. Fanti–Viswanath
+  proved a topological estimator is insensitive to the timing defense; §6.9
+  says timing mechanisms cannot reach the passive first-successor. **Same
+  fact, arrived at independently** — external corroboration of a scope
+  decision that had been a project-local judgement call.
+
+### 28.3 θ is an axis our supernode instrument does not have
+
+Theorem 4.1 gives first-timestamp detection in closed form as
+`(θ/(d−2))·log((d+θ−2)/θ)`, where **θ is adversary connections *per honest
+node***. Two properties the paper draws out: **diminishing returns in θ** —
+*"the adversary reaps the largest gains from the first few connections it
+establishes per node"* — and **θ → ∞ ⇒ detection → 1 regardless of protocol.**
+In the practical attacks, *"the eavesdropper was able to establish as many as
+50 connections to some nodes."*
+
+**Verified in the tree:**
+[`simulate_transport_observation`](../../rust/shekyl-relay-privacy/src/conformance/transport.rs#L69)
+takes `dial_fraction` — *what fraction of nodes the supernode dials*, i.e.
+**breadth** — and has **no θ parameter**. §6.5's 5/10/30 % sweep therefore
+measures breadth **while the demonstrated attack maxed depth**, and per
+Theorem 4.1 the two are not interchangeable.
+
+**And this prices reverse-parity better than §25.5 did.** Outbound-only fluff
+does not *reduce* θ for an inbound-connecting adversary — **it sets it to
+zero.** Per Theorem 4.1's diminishing-returns shape the first connection is the
+highest-value one, so removing the inbound vantage removes **the steepest
+increment, not a tail margin.** That is the mechanism behind §6.5's measured
+`0.0000`, now with a closed form behind it.
+
+### 28.4 `peers = 8` — provenance corrected, and the pin is a modelling decision
+
+§26.3 guessed at `peers`' meaning. Better-supported now: Fanti–Viswanath model
+8 outbound / 125 total, and state that *"the resulting sparse random graph
+between servers can be modeled approximately as a 16-regular graph; in
+practice, the average degree is closer to 8 due to nonhomogeneities"* — citing
+Miller et al.'s 2015 topology measurement. **So `FloodParams::peers = 8` is
+very likely the measured mean degree of the real 2015 Bitcoin *server* graph —
+not Bitcoin's outbound default, and not a Shekyl quantity.** Its doc says only
+*"Fluff peers each node relays to"*, recording neither.
+
+**This also corrects the §25.5 fanout estimate downward**: "~6× reach
+reduction (12 outbound vs ~64 inbound)" overstates it, because the *relaying*
+graph is far sparser than the connection count.
+
+**Caveat that blocks a straight lift:** they exclude clients — NAT'd nodes
+accepting no inbound — on the grounds that *"clients do not relay
+transactions."* **That is a Bitcoin fact.** In our tree a NAT'd node makes its
+12 outbound and relays normally, so the client/server split does not map and
+their degree figures must not be transplanted wholesale. **The pin is therefore
+a modelling decision for the directed-flood unit, not a number to adopt.**
+
+### 28.5 Corollary 5.1 — configuration B, from the literature
+
+Corollary 5.1 extends reporting centrality to the **spy-based** adversary and
+shows `C_d > 0` **independent of `p`** as `t → ∞` — strictly stronger than the
+previously-known bound of `p`. Applied here: **the fluff phase is
+asymptotically deanonymizable to its initiator by a topological estimator no
+matter how small the adversary.** The initiator is the **stem terminus**, not
+the origin, so this does *not* contradict `C1 ≈ f` for the origin. What it says
+is that **the entire anonymity budget sits in the stem, and any configuration
+without one has no budget at all.**
+
+**That is configuration B (§25.1), stated from the literature rather than from
+our call graph** — and it is the F-6 ranking argument in its strongest form.
+Precisely: config B is not *"no anonymity"* — it has the covert channel, which
+defends the **wire** observer. It is **wire-unobservability with no
+peer-anonymity budget**, while config A is the reverse. **Two adversaries, two
+mechanisms, and each shipped configuration has exactly one of them.** The
+covert channel does not substitute for the stem against a topological
+adversary, which is the substitution claim §25.2 already found resting on a
+fallacy — now refuted from the other direction too.
+
+### 28.6 The disease table gains a fourth row
+
+§26.4's pattern — *correct for the case it was built for, then over-applied* —
+now has an instrument-side sibling:
+
+| | one thing | silently serving two |
+| --- | --- | --- |
+| Q11-A | one numeral (15 / 22) | two adversaries |
+| Configuration B | one design document | two deployment configurations |
+| `F = 2250` | one topology measurement | two fluff rules |
+| **§6.5's sweep** | **one attack axis (breadth, `dial_fraction`)** | **read as the supernode attack, which also has depth (θ)** |
+
+Two of the four are instrument gaps found in one session, both by asking *"can
+this fixture express the input?"* — which is now the cheapest question in the
+review kit and should be asked of an instrument **before** its number is cited,
+not when a new consumer appears.
