@@ -2367,7 +2367,7 @@ is replaced in Phase 2d. T1–T8 spec-vector parity tests.
 Cache-derive + compute-hash-allocation benchmarks within Phase 0
 budgets (≤200 ms / ≤100 µs).
 
-Scope per [`RANDOMX_V2_PHASE2C_PLAN.md`](docs/design/RANDOMX_V2_PHASE2C_PLAN.md);
+Scope per [`RANDOMX_V2_PHASE2C_PLAN.md`](RANDOMX_V2_PHASE2C_PLAN.md);
 F4 absorption rationale at §5.4 (Cache::derive absorbed from
 originally-scoped 2e). Round 2 substrate-finding pass tightened the
 public surface (`compute_hash` as transform, `VmState` private,

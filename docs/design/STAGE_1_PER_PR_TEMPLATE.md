@@ -8,7 +8,7 @@ shape that WALLET_REWRITE_PLAN.md Phases 1–4 will adopt where their
 surface admits it.
 
 **Provenance.**
-[`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+[`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
 §8.3 (cross-PR discipline inheritance) is the spec-level substrate;
 [`docs/WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) operating
 principles 4–8 are the plan-altitude substrate; this template is the
@@ -72,7 +72,7 @@ the design doc's pre-flight section.
 ### 3.1 Engine identification
 
 - [ ] Cite the
-  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.X subsection binding this engine's trait surface.
 - [ ] Confirm trait existence per §1.5 three-condition test (distinct
   state ownership at Stage 4; distinct failure-isolation domain;
@@ -546,7 +546,7 @@ Once Round 3 closes and §7.X commit decomposition is finalized:
 3. C8 lands locally with a passing CI run before the PR opens
    against `dev`.
 4. Cross-cutting amendments to
-   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
    §2.X follow §8.2's amendment co-landing rule (trait amendment
    commit + consumer commit + PR description bullet).
 5. Substrate-level disciplines that emerged during the PR (extending

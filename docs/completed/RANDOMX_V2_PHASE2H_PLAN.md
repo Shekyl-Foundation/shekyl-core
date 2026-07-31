@@ -3586,7 +3586,7 @@ rule 2.
   cadence). Both gating mechanisms convert to active gates
   via one-line workflow edits when the FOLLOWUP closes.
 - **C9 — M5 citation-validation script.** Lands at
-  [`scripts/ci/check_phase2h_citations.sh`](../../scripts/ci/check_phase2h_citations.sh)
+  `scripts/ci/check_phase2h_citations.sh`
   per the R2-D4 close + Pass 2 disposition (shell script in
   `scripts/ci/` per Phase 2f precedent; `grep -E` plus `awk`
   for cite-format parsing; no `regex` workspace dep). Catches

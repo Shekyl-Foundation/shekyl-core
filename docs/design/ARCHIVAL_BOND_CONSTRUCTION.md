@@ -43,7 +43,7 @@ unbuilt, permanent code.
 JoinMarket is the only kind with a complete verify counterpart today
 ([`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs)
 `verify_join_market_bond_post`;
-[`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_rct_balance.rs)).
+[`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_ct_balance.rs)).
 Rebond / Unbond / HoldingsUpdate have wire types
 ([`bond_wire.rs`](../../rust/shekyl-archival-retention/src/bond_wire.rs)
 `BondPostKind`) but **no verify implementation** ("V3.0 open"). Their
@@ -345,7 +345,7 @@ as `fee` (today: `bond_credit -> extra_outputs`, `bond_debit -> extra_inputs`).
 
 **Single-source the equation (§11.1 Q2, resolved).** The lean shape -- a generic
 term added in `shekyl-tx-builder` (construct) while
-[`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_rct_balance.rs)
+[`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_ct_balance.rs)
 holds the equation (verify) -- is rejected: it is *two* implementations of a
 genesis-frozen consensus equation, the R-3 divergence risk single-sourced
 everywhere else. Instead the term definitions, their fixed sides, and the

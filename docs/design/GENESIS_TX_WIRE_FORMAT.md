@@ -63,7 +63,7 @@ the obligations above. Scope (single wave, **no separate Wave 2**):
 membership-only, §2.1), `tagged_key` output, ct, header, pow-blob, tx `version=3`.
 **rule-21 reopen** (a testnet-revealed change) stays free pre-genesis. **Process:**
 multi-round design ([`26-sub-pr-design-discipline`]) — consensus + FFI surface.
-**Parents:** [`CONSENSUS_PORT_SEQUENCE.md`](CONSENSUS_PORT_SEQUENCE.md) (Stage 1d),
+**Parents:** `CONSENSUS_PORT_SEQUENCE.md` (Stage 1d),
 [`TRACK2_REGTEST_PARITY.md`](TRACK2_REGTEST_PARITY.md).
 
 **Round-0 review outcome:** direction + both locked decisions approved. Two

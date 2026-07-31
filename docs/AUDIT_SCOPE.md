@@ -390,7 +390,7 @@ weaken soundness, zero-knowledge, or inflation bounds established for spends.
    The entitlement Schnorr challenge is
    `keccak256_to_scalar("shekyl-stake-entitlement-v1" ‖ G ‖ H ‖ N_le ‖ D_le ‖ C~ ‖ C_claim ‖ C_ρ ‖ R ‖ μ_claim)`;
    its **field set and order** are locked in
-   [`entitlement::transcript`](../rust/shekyl-staking/src/entitlement/transcript.rs) (KAT) so the
+   `entitlement::transcript` (KAT) so the
    prover and C++/FFI verifier cannot drift. **Audit:** (i) every public input and `μ_claim` is
    absorbed by each component (a dropped field is a splice hole); (ii) distinct domain separators
    prevent cross-component challenge reuse; (iii) `C~`/`C_claim`/`C_ρ` are single public points
