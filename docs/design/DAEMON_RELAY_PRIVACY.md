@@ -14,7 +14,10 @@ whole form at §25.1: `proxy.noise` defaults true, so the DEFAULT Tor
 deployment (configuration B) runs neither Dandelion++ nor the embargo** — the
 arc's entire output is bypassed on the deployment a privacy-motivated user
 selects, and two live §6 claims are false there. That outranks the cadence
-work. **Q-12 is registered and live** (§22.2). The measurement that motivates this document landed alongside it
+work — as does **F-7** (§26): `F = 2250` is an undirected/`EveryPeer`
+measurement fed to the embargo derivation for *every* transport, so
+configuration C's embargo is under-provisioned in the direction the policy
+itself calls a privacy loss. **Q-12 is registered and live** (§22.2). The measurement that motivates this document landed alongside it
 in the same PR (`rust/shekyl-relay-privacy`, 19 measurement tests + the
 suite), so every number below is reproducible rather than asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
 priority-order improvement (§14); the embargo derivation is held block-time-*unaware*
@@ -5979,3 +5982,133 @@ immutable — the architectural-inheritance error rule 16 names, in one word.
    §6 anchor sweep — six stale `:448` citations repointed to
    `zone/mod.rs:521-526` in this commit, since RP-3a/3b moved the rule to Rust
    and §6 is the section everything else cites.
+
+## 26. F-7 — `F` is a clearnet measurement applied to every transport, and the instrument cannot express the alternative
+
+**2026-07-31, maintainer review round three; verified at source.** §25.5 closed
+by proposing that F-5's instrument produce the reverse-parity number. **That
+proposal was itself the vacuity mechanism it should have caught**, and finding
+out why surfaced a defect that stands independently of whether reverse-parity
+is ever adopted.
+
+### 26.1 The instrument models `EveryPeer` by construction
+
+[`conformance/flood.rs:78-80`](../../rust/shekyl-relay-privacy/src/conformance/flood.rs#L78-L80):
+
+```rust
+initiated.push(other);
+adjacency[node].push(other);
+adjacency[other].push(node);   // <- the reciprocal edge
+```
+
+The adjacency is **symmetric**: every edge is inserted both ways, so the
+Dijkstra relaxation traverses an **undirected** graph. `simulate_fluff_return`
+therefore models `FluffReach::EveryPeer` *by construction* and has **no way to
+express `OutboundOnly`** — which is precisely *"traverse only the edges I
+initiated,"* a directed graph. The `initiated` vector is built and then
+discarded as a dedup scratchpad. **The same construction appears twice in the
+file** (`:78` and `:175`), so a fix has two sites.
+
+Running it unmodified would have returned a number that reads like an answer
+while re-measuring the topology we already have: **fixture-cannot-express-the-
+input**, §20.3a's first vacuity mechanism, in a proposal made by the party who
+wrote that list. Recorded rather than quietly corrected, because the lesson is
+that the mechanism does not stop applying to the person holding it.
+
+### 26.2 F-7 — the embargo is under-provisioned on configuration C
+
+`fluff_return_ms = 2_250` ([`params.rs:158`](../../rust/shekyl-relay-privacy/src/params.rs#L158))
+is documented *"Measured p90 first-passage for a memoryless fluff flood at 8
+peers (`simulate_fluff_return`)"* — so **F is a measurement taken on the
+undirected/`EveryPeer` graph**, and it is fed into the embargo derivation for
+**every** transport (`S(h) = Σ ceil((k·hop + F)/τ)`, `derive.rs`).
+
+On **configuration C** (Tor + `disable_noise`: Dandelion++ runs, embargo arms,
+fluff reach is `OutboundOnly`) the real fluff graph is **directed**. First
+passage on a directed out-degree-`d` graph is strictly slower than on the
+undirected graph the instrument builds — fewer usable edges per hop (out-degree
+`peers` versus effective ~`2·peers`) *and* direction-constrained paths, both
+pushing the same way. **So the true `F` on configuration C exceeds 2250.**
+
+**The direction is the unsafe one, and the policy already says so** —
+[`params.rs:128-130`](../../rust/shekyl-relay-privacy/src/params.rs#L128-L130),
+verbatim: *"set from a high quantile rather than a mean because
+over-estimating lengthens the embargo (safe) while under-estimating shortens it
+(a privacy loss)."*
+
+**F-7: the 446-tick / 144 s embargo is under-provisioned on configuration C by
+an unmeasured amount, because the measurement producing its input models a
+fluff rule that configuration does not use.** Evidential status matches F-6's:
+the showing is decisive (symmetric adjacency; outbound-only fluff on
+anonymity-network zones), the direction is derivable by construction, and only
+the **magnitude** awaits the directed instrument. Configuration A is unaffected
+— there the instrument's rule and the deployed rule agree, and 2250 is right.
+
+### 26.3 The coupling — three readouts off one input, not a coverage check
+
+§25.5 framed reverse-parity's cost as time-to-coverage. **That is the wrong
+axis, and the correction is accepted**: connectivity is not where the
+consequence lives. `F` is, and it feeds two derivations that move in **opposite
+directions**:
+
+- **Into the embargo.** `F` rises ⇒ `S(h)` rises ⇒ the embargo must lengthen to
+  hold the same survival posture. §6.7 prices lengthening: the embargo-only
+  path to the exposure target needs ~1050 s with ~2400 s p90 recovery.
+- **Into §6.7's leak decomposition, adversely** — *"a larger `F` gives every
+  prefix embargo longer to fire, so it pushes the leak opposite to the embargo
+  mean."* `F` rises ⇒ the §6.6 embargo-phase clearnet leak (0.0114 at 144 s)
+  rises.
+
+So reverse-parity zeroes §6.5's inbound-supernode channel (π₀ up to **0.4463**
+at 30 % reach) while **worsening** §6.6's channel through `F`, and forces an
+embargo re-derivation. **That is exactly the signature §6.6 says it hunts —
+"a fix that helps one channel and quietly worsens another"** — and adopting or
+dismissing it on a coverage number would be asserting on the wrong axis. The
+expectation is still strongly net-positive (0.4463 dwarfs 0.0114), but *getting
+it right* means producing `F′` from a directed instrument and feeding it through
+`derive` **and** through `simulate_passive_neighbor_leak`, at the high quantile
+the existing policy mandates.
+
+**Pin the parameter's meaning before the comparison.** `FloodParams::peers`
+defaults to **8** ([`flood.rs:32`](../../rust/shekyl-relay-privacy/src/conformance/flood.rs#L32))
+while `P2P_DEFAULT_CONNECTIONS_COUNT = 12`, and under the symmetric
+construction each node's effective fluff degree is ~**16**. Nothing states
+whether `peers` means outbound count, total, or a deliberate under-degree.
+Building the directed variant without settling that would compare
+directed-degree-`d` against undirected-degree-`2d` — **conflating the rule
+change with a degree change**, so the before/after would measure two things at
+once and attribute the result to one.
+
+### 26.4 Third instance of one disease — and the structural fix it argues for
+
+| | one thing | silently serving two |
+| --- | --- | --- |
+| **Q11-A** | one numeral (15 / 22) | two adversaries |
+| **Configuration B** | one design document | two deployment configurations |
+| **F = 2250** | one topology measurement | two fluff rules |
+
+Each was invisible because **the shared object was correct for the case it was
+built for**: `simulate_fluff_return`'s symmetric adjacency is right for RD-1 and
+clearnet — it was never *wrong*, only **over-applied**, exactly as
+`FORWARD_DELAY_BASE` was a perfectly good expansion of the wrong two constants.
+The pattern is now the finding rather than any of its members.
+
+**The census it generates:** *what else in `params.rs` is a measured input whose
+measurement encodes a configuration?* `time_between_hop_ms = 175` is the next to
+check — it is marked as coming from a C++ comment's arithmetic rather than a
+measurement at all, which the doc itself calls *"part of the problem."*
+
+**And the structural fix, which is worth more than the audit:** a measured input
+should carry **the configuration it was measured under** at its definition site,
+the way §22's constants now carry their provenance. A one-time census finds
+today's over-applications; recording the configuration makes the *next* one
+visible where the value is read. Same lesson as the gates — an audit closes a
+census, a record keeps it closed.
+
+### 26.5 Queue
+
+The **directed-flood variant** is a small change with **two consumers now** —
+configuration C's under-provisioned embargo (**a defect**, F-7) and
+reverse-parity (**a question**, §25.5) — which makes it **its own unit**, not a
+coda to either. Order: F-6/configuration B (§25.1) → the directed-flood unit
+(F-7 magnitude, then reverse-parity's three readouts) → Unit 2 (shape) on (b).
