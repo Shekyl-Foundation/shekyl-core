@@ -183,6 +183,65 @@ sustainability is unaffected by the recalibration.
      multiplies that cost linearly and is free for honest liveness; whether
      TJ-B's credit wire gets reserved space or fee priority is the spec
      question that decides how much headroom the pin needs.
+  **PIN CRITERIA DERIVED (2026-07-30, maintainer round 2 — supersedes two
+  claims above):**
+  1. *"`W` defends nothing" — said twice above (TJ-2 RE-FRAMED; the W-FLOOR
+     note) — is WRONG, and the 30 % failure rate is what corrects it.* With
+     per-attempt success ≈ 0.7, `W` buys RETRY DEPTH, and retry depth is what
+     keeps an honest archiver from being recorded missing when the witness's
+     circuit died — a false-miss source with nothing to do with `P`. `W`
+     defends against **noise**, not an adversary. The pin criterion is
+     therefore **derived, not marginned**: failure after `k` attempts is
+     `0.3^k` (k=4 ⇒ 0.8 %, k=6 ⇒ 0.07 %); at ~1 block/attempt, ~6–10 blocks
+     of retry budget puts per-epoch false-miss into the noise. `W = 100`
+     stands, but stated as **~100 attempts against a target false-miss
+     rate** — it couples to `(m, n)` and moves with it.
+  2. *`N` is not a judgment call — it is FLOORED BY REORG FINALITY:*
+     `ARCHIVAL_REORG_DEPTH_BLOCKS = 720` (the horizon the P-scan already
+     treats as final everywhere else). A reorg reaching `H_seal` changes
+     `block_hash(H_seal)` and moves `H_fire`, so a `P` that served at the old
+     fire height has its credit denied on the reorged chain — a false-miss
+     the `P` cannot avoid. `N ≥ 720` buries the seal beyond that depth by
+     settlement. **Named consequence: the shipped `B = 1` was reorg-safe BY
+     CONSTRUCTION — the enormous notice is what bought the safety.
+     Shortening notice is what creates the exposure; the real trade is
+     unpredictability against BEACON FINALITY**, and finality sits on the
+     side of the objective being defended (false-slash). Residual flagged: a
+     fire EARLY in the window is still served against a shallow seal, so a
+     sub-720 reorg during the window can orphan that single epoch's credit —
+     an isolated miss the m-of-n window forgives by design; it joins
+     transport failure in the same per-epoch false-miss budget.
+  3. **`B ≥ SEB − N − W = 10_000 − 720 − 100 = 9_180**, and the
+     `challenge_fire_height` fix reserves `W` as planned.* Honest note on
+     what it buys: notice drops ~9,998 → ~820 blocks, so announced-window
+     uptime goes from trivial to 8.2 % — still trivial. `B` does not force
+     continuous availability and cannot, at one challenge per epoch; it is
+     worth doing because it is free and the right direction. The
+     availability lever is `CHALLENGES_PER_EPOCH`, not `B`.
+  **`CHALLENGES_PER_EPOCH` (`c`) — proposed 2–5, and the pin is
+  `(c, aggregation rule)`, not `c` alone (2026-07-30).** The bail scenario
+  survives any shippable `c`: all fire times derive from the seal, so `P`
+  schedules `c` appearances — uptime `c·W/SEB` (1 % → 5 % at `c = 5`),
+  scheduling unchanged; tiling the epoch needs `c ≈ 100`, the regime the
+  read-shape arithmetic ruled out; staggered per-challenge seals only
+  stagger when `P` learns each appointment. **The real argument is
+  statistical power:** `c = 1` yields ONE coarse bit per epoch of a noisy
+  process (measured witness-side transport failure ≈ 30 %), and the window's
+  whole job is separating honest-with-outage from durably-absent. Raising
+  `c` sharpens each observation — spendable as faster detection at the same
+  false-slash rate or lower false-slash at the same speed, both the
+  objective `(m, n)` carries. **Forced decision:** `serve_credit_bit` is
+  keyed `(P, shard, epoch)` — one bit, and the `release_cooldown`
+  reverse-cursor derivation depends on that shape — so `c` challenges must
+  COLLAPSE to it. Any-success ⇒ false-miss → 0 but the bit degrades toward
+  "reachable once" (today's coarse signal); all-success ⇒ multiplies the
+  30 % noise by `c` — a false-slash generator; **majority is the interesting
+  middle where the sharpening lives.** Choose `(c, aggregation)` JOINTLY
+  with `W`'s retry depth against one false-slash target — retry depth,
+  `c`+rule, `N`'s residual reorg rate, and `(m, n)` are **the same
+  budget**. Cost named: `c` multiplies witness bandwidth linearly
+  (~16.65 MB/shard/epoch/witness at `c = 5`) — real load on miners, who are
+  not paid for it (TJ-A2b's "paid" shape is where that lands).
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
