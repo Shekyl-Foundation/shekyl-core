@@ -6860,8 +6860,12 @@ supply a candidate separator — a persistently-held slot sees the node's own
 traffic in *every* epoch while relayed traffic varies with the node's rotating
 predecessors, so *steady* origins may be separable where bursty ones are not
 (which is §6.8's recorded double-edge). **Checkable with instruments already
-built.** If the check holds, §6.9's floor is a **bounded identification
-concession** rather than the redesign-territory loss it currently reads as.
+built — but NOT independently schedulable: see §32.2.** The separator's
+strength is set by *persistence* and *isolation*, which are occupancy
+quantities (`W3(g)`, `g_max`, cooldown), so this check is **downstream of
+Q-10** and must not be queued as self-contained. If the check holds, §6.9's
+floor is a **bounded identification concession** rather than the
+redesign-territory loss it currently reads as.
 
 ### 31.6 The cost of the reframe, in the goal rather than a clause
 
@@ -6927,3 +6931,139 @@ phase).** That fixture *can* express the input, which
 `inference_precision` — built to grade per-observation inference — cannot.
 **Per §26.4's pattern, that question gets asked of the fixture before any
 number it produces is cited.**
+
+## 32. The §6.9 check's dependencies, the linkage fixture's shape, and the grid
+
+**2026-07-31, maintainer, with amendments.** §31.5 recorded the §6.9
+counter-hypothesis as a check to run. Working the mechanism through settles
+where it can be scheduled, hands `STEMS` a third argument, and forecloses one
+obvious response.
+
+### 32.1 The separator is a cross-epoch mixture-separation problem
+
+The adversary holds outbound stem slots of the origin and **cannot see the
+origin's inbound peers**, so every transaction it receives looks alike at the
+edge. Within an epoch, `in_mapping_[nil]` sends **all** of the origin's own
+transactions to one slot, while relayed transactions land on slots keyed by
+predecessor. So the separator is: **isolate the component whose rate is
+invariant under the origin's peer churn from components that rotate with the
+predecessor mapping.**
+
+Well-formed, and its strength is set by three quantities:
+
+- **Persistence** — epochs the adversary holds position; one epoch gives no
+  contrast.
+- **Isolation** — fraction of the `STEMS` slot set held. With one slot it does
+  not know whether it holds the nil-mapped one; with the **full set** the
+  invariant component is at least *present* in what it sees every epoch.
+- **Rate contrast** — the origin's own rate against its aggregate relay rate,
+  which is **§6.8's velocity double-edge stated in a different variable**.
+
+### 32.2 The check cannot resolve before Q-10 — a scheduling constraint, stated in the check itself
+
+**Persistence and isolation are occupancy quantities** — `W3(g)`, `g_max`,
+cooldown length. So *"is §6.9's floor an enumeration concession?"* is **not
+independently answerable**; it is **downstream of the selection round.**
+
+**Recorded here and in the check's own text**, because otherwise it gets
+scheduled as self-contained and stalls — the failure mode being that a
+"cheap check with instruments already built" is queued early, blocks on a
+number it does not own, and its blockage is discovered rather than predicted.
+
+### 32.3 `STEMS` gains a third argument, and this one is unambiguously signed
+
+**Holding the full slot set is what makes the invariant isolable, and full-set
+occupancy gets harder in `STEMS`.** So the list is now:
+
+| argument | direction | ambiguity |
+| --- | --- | --- |
+| (a) degree / entropy | — | **sign flips** on adversary graph knowledge (D++ Fig. 3, §27.5) |
+| (b) PSG-learning cost (Sharma App. B) | toward **raising** | unambiguous |
+| (c) **invariant-isolation resistance** (this section) | toward **raising** | unambiguous |
+
+**Only (a) is ambiguous** — a materially better position for the raise than it
+had, arrived at from a check that was supposed to be about something else.
+
+**Amendment (mine) — the unification, which is worth more than the third
+argument.** §29.4/§30.4 found `NOISE_CHANNELS` raising makes capture *easier*
+(`1 − (1−f)^S`, increasing); this section finds `STEMS` raising makes the
+separator *harder* (full-set occupancy, decreasing in `S`). Both follow from
+one question:
+
+> **The sign of a slot-count parameter is set by whether the attack needs ONE
+> slot or ALL slots.**
+
+`NOISE_CHANNELS` today: **one suffices**, because the covert send is a
+broadcast ⇒ more channels is worse. `STEMS`: **invariant-isolation needs the
+full set** ⇒ more slots is better. And this is exactly why §30.4's remedy flips
+the covert sign back — restoring the backstop makes **unicast** safe, which
+converts `NOISE_CHANNELS` from *one-suffices* to *one-of-S*. **A rule for
+reading these parameters, rather than a table to memorize.**
+
+### 32.4 Loopix's answer does not transfer here — a clean negative that forecloses the obvious response
+
+The separator is **the Loopix superposition problem viewed from the
+adversary's side**: decompose a mixture into components. Loopix's answer is
+that **memoryless components resist decomposition**.
+
+**It does not transfer.** Stem forwards fire **on transaction arrival**, not on
+a timer, so **there is no component-level memorylessness to invoke.** Recorded
+as a clean negative because it **forecloses "just randomize the forwarding"**
+before someone proposes it — the same service §25.3's negative result performed
+for the cadence.
+
+### 32.5 The linkage fixture — four constraints, before it is built
+
+**1. A matching test, not a prediction test.** *"Is post-stall phase
+predictable from pre-stall?"* yields a scalar error **with no natural
+threshold**, and threshold prose written ahead of measurement is what this arc
+is 0-for-N on. The adversary's actual question is **"are these two windows the
+same node?"** — so the fixture generates **M streams**, perturbs one, and asks
+whether an estimator matches the post-stall window to the correct pre-stall
+stream. **The quantity is advantage over `1/M`** — a number with a meaning
+rather than a number needing a threshold.
+
+**2. The negative control is the metronome, and it is *also* the decision's
+comparison arm.** The instrument is not complete until a control has been run
+and observed to fail — here, a family where linkage *should* succeed: a
+**deterministic metronome with a random per-node phase**. But it is not only a
+control: **its advantage figure *is* the answer to whether phase-randomized-once
+suffices or per-interval memorylessness is required.** One fixture, one run,
+control and result. *(Worth naming as a pattern: when the control's failure
+mode is itself a candidate design, the control does double duty — rare, and to
+be taken when it appears.)*
+
+**3. The perturbation drives production, with zero test-only code.**
+[`Zone::covert_deadline()`](../../rust/shekyl-relay/src/zone/mod.rs#L284) and
+[`Zone::due_covert_channel(now, rng)`](../../rust/shekyl-relay/src/zone/mod.rs#L292)
+both take `now` as a **parameter** (verified). **A stall is simply not calling
+`due_covert_channel` across a range of `now` and then resuming** — which
+reproduces the re-arm-from-`now` semantics **because it is that code path.**
+That is the *"the entire difference is the value of `now`"* form this round
+named as best achieved (§20.7 item 1), available here **without a force flag or
+a shim.**
+
+**4. State the adversary's capability before the sweep.** A stall inducible
+**once** is a different threat from one inducible **repeatedly and cheaply**:
+repeated perturbation lets the adversary **re-tag after every rotation**, which
+changes what *"linkable"* means over the epoch horizon §6.8's product is
+measured against. **The capability statement determines the perturbation
+schedule, so it comes first** — name `T` and its channel before the sweep, not
+after.
+
+### 32.6 The portable form of §31.7 — and the empty cell is the argument
+
+|  | **recall denial** (deny the count) | **assembly denial** (deny the link) |
+| --- | --- | --- |
+| **wire observer** | payload-independence → **0** | memorylessness — **(b)** |
+| **peer adversary** | **floored at `p` — unreachable** | stem asymmetry + FCMP++ |
+
+**Both wire-observer cells are achievable outright**, because that adversary
+appears in **no floor theorem**. The peer adversary's recall cell is **the one
+place where the honest answer is "you cannot"** — which is precisely why the
+goal had to become non-enumerability (§31.1), and why **the remaining work
+concentrates in the other three cells.**
+
+**Configuration B reads off it immediately: it fills the top-left and *inverts*
+the bottom-right.** The grid is the compact form of every scope argument in
+this document, and it is the form to carry.
