@@ -1,9 +1,11 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
-**Status:** ROUND 3 dispositioned — clean break. The measurement that motivates
-this document landed alongside it in the same PR (`rust/shekyl-relay-privacy`, 19
-measurement tests + the suite), so every number below is reproducible rather than
-asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
+**Status:** ROUND 3 dispositioned — clean break; the RP-1…RP-3b port arc is
+**structurally complete** (§20.10), and the mechanism's definition of done is
+scored at **2/7 parameters derived** (§21 — the live ledger the remaining
+rounds tick). The measurement that motivates this document landed alongside it
+in the same PR (`rust/shekyl-relay-privacy`, 19 measurement tests + the
+suite), so every number below is reproducible rather than asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
 priority-order improvement (§14); the embargo derivation is held block-time-*unaware*
 by construction, with the block-time boundary reconciled at the integration layer
 (§15); the W3 residual is measured as `W3(g)` (§12.6); and **`ρ` is
@@ -2066,6 +2068,31 @@ the same epoch* — because an implementation can otherwise satisfy the letter o
 draw. This also tightens Q-10: the `g`-bound it owes is a bound under *repeated
 adversary-induced refills*, not a single draw (see §7).
 
+**Calibration inputs recorded 2026-07-30 — maintainer, from an external-review
+thread (Sharma et al., the P2P-anonymity-schemes analysis); recorded before
+they decay, with the provenance stated because it binds how they may be used.**
+These findings were produced in a review discussion outside this repo's
+sessions; the reasoning is the maintainer's, and every paper-specific fact
+below carries a **verify-at-source obligation** (the paper itself, then this
+tree) before any number derived from it gates a decision. They are inputs to
+the Q-10 `g_max` calibration, not conclusions of this document:
+
+1. **The Sharma numbers are optimistic for Shekyl in three directions**, so
+   using them as a `g_max` floor without adjustment would over-credit the
+   adversary's difficulty: they analyze the **spec, not an implementation**;
+   they model **no per-source pinning** (their Appendix A.1 states this
+   explicitly — verify); and their parameters differ where it matters —
+   `pf = 0.9` against Shekyl's 0.8, and **random rather than
+   occupancy-optimizing placement** for the adversary.
+2. **The paper's flat N-scaling line holds `C = 0.01·N`** — the adversary
+   grows proportionally with the network — so the flat line measures
+   *"anonymity does not grow against an adversary that grows with you"*, not
+   an absence of scaling benefit. The operative mechanism is **partition size
+   ≈ N/C**, not the distance decay the paper offers as the explanation.
+   Consequence for Q-10: the distinction is **targeted versus dragnet**, and
+   the scaling benefit lands back on **Sybil cost** — which is the same axis
+   the recruiting frame prices (§12.8's demonstrated-work direction).
+
 ### 12.7 Why `STEMS = 2` — the expander-minimum, and why the occupancy attack cannot be fixed by raising it
 
 `CRYPTONOTE_DANDELIONPP_STEMS = 2` is a **bare inherited constant**
@@ -2127,6 +2154,32 @@ contributor looking at the ProxyMark attack must not "fix" it by bumping STEMS t
 leak and moves off the expander-minimum. The constant now carries this reasoning
 here, at its C++ definition site, and on the `StemGraph::QuasiFourRegular` variant
 the crate uses.
+
+**Recorded 2026-07-30 — findings that touch this section's guard, from the
+maintainer's external-review thread (same provenance and verify-at-source
+obligation as the §12.6 note above). Recorded, not reopened: this section's
+reasoning stands as written until the premises below are grounded, and any
+change goes through the §12.5 reopen criteria on the record.**
+
+- **The maintainer retracts an earlier "`STEMS = 2` is a floor" claim, with the
+  mechanical reason**: per-source pinning means one successor per source
+  *regardless of out-degree* — a raised STEMS changes which pool a source's
+  single successor is drawn from, not how many successors a source's
+  transactions fan across — so the fan-out asserted in that claim does not
+  occur. Noted squarely: if this grounds, it also bears on **this section's
+  own fan-out leg** (*"raising STEMS fans the stem toward a tree"*, above),
+  which prices fan-out that pinning may prevent for the same reason. The
+  expander-minimum leg is untouched either way.
+- **Two premises of any raise-STEMS argument are currently ungrounded**, and
+  both must be grounded before the question is even well-posed: (a) whether
+  the paper's higher-degree anonymity benefit **survives pinning at all**
+  (their model has none — §12.6 note, direction 2); and (b) the **cap
+  arithmetic** — §12.3's `cap = min(STEMS − 1, smallest R meeting δ)` is
+  unambiguous at `STEMS = 2` where both arms equal 1, but at higher STEMS the
+  two arms diverge and the resolution decides whether extra alternates are
+  ever *tried*; unresolved, the arithmetic appears to leave the W3-improvement
+  arm at **zero** (extra slots that exist but are never retried into do not
+  reduce the both-tried-slots-adversarial event).
 
 ### 12.8 Rotation-mechanism grounding (the substrate the Q-10 round rests on)
 
@@ -5190,3 +5243,61 @@ the `force_fluff` force-flag same-disease pass (fluff assertions that may
 depend on the forced side — same class as finding 3, separate surface); Q-10
 selection still blocked on the ambient-rate measurement (§12.11); the FFI
 signature-drift hazard in `FOLLOWUPS.md` (gate shape still needs grounding).
+
+## 21. Mechanism definition of done — the derived-parameter ledger
+
+**Recorded 2026-07-30, maintainer-stated at the arc retrospective, because the
+criterion existed only implicitly and an implicit criterion cannot be scored.**
+
+The *port* has a definition of done and it is reached: no timing decision made
+in C++, F-1…F-5 closed and witnessed, every mechanism invariant carrying an
+armed witness with a run-and-observed-to-fail control, honest scope recorded
+at each oracle (§18.4b, §20.10). §18's seam was designed rather than leaked —
+*Rust decides when and to whom, C++ frames and sends* is a terminus, not a
+stopping point.
+
+The *mechanism* has no written definition of done. The arc's own standard,
+generalized, is one:
+
+> **Every parameter derived from a stated adversary bound, and every invariant
+> witnessed by a test that fails on its defect.**
+
+The second half is enforced by the standing control discipline. The first half
+is this ledger. Scored honestly:
+
+| Parameter | Derived? | Where it stands |
+| --- | --- | --- |
+| embargo mean (144 s) | ✅ | the exact survival solve, RD-1/RD-4 corrections, `derive.rs` bisection with Monte-Carlo cross-check (§10) |
+| fluff delay family (memoryless) | ✅ | the residual-phase argument — memoryless is the family whose residual equals its full distribution (RD-2, D-3) |
+| `q = 0.2` (stem-continue) | ❌ | inherited; deferred at Q-3 / D-6 as not-demonstrably-wrong, never derived |
+| `STEMS = 2` | ❌ | inherited; §12.7's expander-minimum argument is a rationale, not a derivation from an adversary bound — and its fan-out leg now carries two recorded ungrounded premises (§12.7, 2026-07-30 note) |
+| noise cadence constants | ❌ | Q-11 — the arc's last unexamined timing numbers; adversary→shape→constants order set (§20.9), instrument built and aimed |
+| cooldown / eviction threshold | ❌ | unbuilt — the §12.11 selection-mechanism tier, blocked with Q-10 |
+| `ε_explore` | ❌ | unbuilt — §12.11's anti-ossification term; ~0.05 from the RL lineage is a starting point, not a derivation |
+
+**Two of seven.** That is the honest measure of where the mechanism stands,
+and it makes the remaining work countable in a way a list of open Q-items does
+not. A round that derives one of the ❌ rows ticks it here, in the same commit
+— this table is a live scorecard, not a snapshot, and a stale row is the same
+defect class as a stale acceptance criterion (§20.10 measured that class at
+four-of-ten).
+
+**What the arc bought, priced honestly.** Four measured deltas, one trade, one
+unmoved ceiling. Unconditional: the fluff delay is memoryless on every
+transaction at every node (fixed-offset inversion 0.4236 → 0.2165 at ±0.5 s,
+and the inherited draw's 93 % late-phase invertibility is gone — RD-2/F-4);
+network diffusion is ~7× faster (F-5), which is also what held the corrected
+embargo at 144 s instead of 521 s; the churn re-roll amplifier is closed
+(RP-2b freeze-at-first-pin — the arc's one measured defense against a
+*demonstrated* attack class rather than a modeled one). **The trade:** the
+black-hole backstop now actually fires (F-2 — it was inert, full-travel
+1.0000), and making it fire opened the C3 channel, measured at 1.14 %
+any-prefix / 0.22 % origin-attribution per transaction on clearnet and
+structurally zero on Tor (§6.6, §6.8) — censorship resistance bought at a
+bounded, measured privacy cost, with reshape specced to drive the origin term
+toward zero (§14). **The ceiling:** correctly-specified Dandelion++ sits near
+~5 bits median entropy against a 20 % adversary (Sharma et al., §12.6
+calibration note — verify-at-source obligation attached), and the arc moved
+the implementation *toward* the specification, below that curve on three
+recorded counts. The specification's ceiling is where it was; raising it is a
+different mechanism, not a better port.

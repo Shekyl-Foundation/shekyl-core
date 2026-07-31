@@ -295,7 +295,7 @@ some metadata leakages to unknown hidden service operators.
 
 The transaction-broadcast transport above is inherited from Monero and is a
 *light, latency-tolerant, public-content* path. The **staker-archival** subsystem
-(see [`design/V3_STAKER_ARCHIVAL.md`](design/V3_STAKER_ARCHIVAL.md) and the sim in
+(see [`design/V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) and the sim in
 [`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md)) introduces a
 *second* traffic class with a different threat profile, and the transport choice
 turns out to be coupled to the sim's latency findings rather than independent of

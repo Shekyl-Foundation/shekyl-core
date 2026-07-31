@@ -1267,8 +1267,8 @@ slashing**, which was correct when false-slash was the only objective and is
 **unslashable for its first `m − 1 = 10` observations.**
 
 Combined with the ratified clean-window-on-`Rebond`, the free-rider's steady
-state is not §9.6's 3 friendly draws in the 13-observation window — it is
-**zero service, 10 free epochs, slash, `Rebond`, 10 more.** The module argues `Rebond` is not a cheap
+state is not §9.6's 3-of-13 friendly draws — it is **zero service, 10 free <!-- doc-literal-gate-allow: archival failure-window m-of-n (slash observations), not multisig operator config -->
+epochs, slash, `Rebond`, 10 more.** The module argues `Rebond` is not a cheap
 reset because *"the burned collateral is the price,"* but **never states the
 inequality**: `10 × zero_service_reward_per_epoch` versus
 `ARCHIVAL_BOND_FLOOR + rebond friction`. **Not derived anywhere in the tree.**
@@ -1439,7 +1439,7 @@ Because witnesses are **drawn from block producers** (§8.2) rather than chosen,
 a cartel is drawn for its sybil at roughly its hashrate share `f`. The other
 `1 − f` of draws are honest witnesses reading a rendezvous that serves nothing,
 so those baselines **miss**. The sybil survives only if the window tolerates it:
-**`(n − m + 1)/n = 3/13` ⇒ `f ≈ 0.23`** — the same number §9.6 produced.
+**3-of-13 ⇒ `f ≈ 0.23`** — the same number §9.6 produced. <!-- doc-literal-gate-allow: archival failure-window m-of-n (slash observations), not multisig operator config -->
 
 **The MAC does not move `f ≈ 0.23` by any amount.** After the one-time fetch the
 per-attestation cost is zero and the constraint is entirely the draw: a cartel

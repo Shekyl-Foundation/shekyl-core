@@ -504,7 +504,7 @@ weighted-atomic per block) is **sub-integer**, so `Σ_S K_S` must carry a rate-p
 `D = D_tier · SCALE_rate` intrinsically. Two levers minimize `D` (and the range-proof width):
 
 - **`D_tier = 2`** — the LCD of the pinned tier multipliers `{1.0, 1.5, 2.0}` (§3 /
-  [`tiers.rs`](../../rust/shekyl-staking/src/tiers.rs)); `tier_num_reduced ∈ {2, 3, 4}`
+  `tiers.rs`); `tier_num_reduced ∈ {2, 3, 4}`
   represents them **exactly** (one bit). The 1e6 fixed-point tier scale is a representation
   artifact, not a denominator the entitlement needs.
 - **`SCALE_rate = 2^k`** — the **sole** precision dial. Both being powers of two makes
@@ -518,7 +518,7 @@ weighted-atomic per block) is **sub-integer**, so `Σ_S K_S` must carry a rate-p
 governs **rate quantization** — the smallest representable `ρ_e` increment.
 
 **`D = 2⁴⁹` (k = 48) — data-determined, at the floor-dominated knee.** The precision sweep
-([`shekyl-staking/src/entitlement.rs`](../../rust/shekyl-staking/src/entitlement.rs),
+(`shekyl-staking/src/entitlement.rs`,
 `precision_sweep` / `recommend_k_knee`) sweeps `SCALE_rate` over the realistic rate range
 (per-block staker emission ÷ weighted band, from `config/economics_params.json` magnitudes),
 excluding rates below 0.001 % per-unit yield as economically negligible. **Decision 1(b)
@@ -530,7 +530,7 @@ at `k = 48, 52, 56, 60`): past the knee the irreducible reward floor `floor(N·a
 the rate scale, sets the error, so finer quantization cannot improve payout accuracy. `k = 48`
 is the smallest `k` at that knee — rate quantization as fine as it can matter — with a **139-bit**
 field-wrap margin and a **132-bit** `N·amount` overflow headroom (both test-locked,
-[`SCALE_RATE_K`](../../rust/shekyl-staking/src/entitlement.rs)). `2⁴⁹ < 2⁶⁴` folds into the
+`SCALE_RATE_K`). `2⁴⁹ < 2⁶⁴` folds into the
 64-bit slot with 15 bits to spare. The `9.7e-4` error at the former `k = 38` is now a stale
 optimum — the right call only while precision traded against proof width. **Lifetime
 invariance:** the knee is set by the smallest *meaningful* rate, floored by the
@@ -600,7 +600,7 @@ remainder bound is the **lower** bound `ρ ≥ 0`, **not** a tight upper bound `
   field wrap making `ρ' + ℓ` land back in `[0, 2⁶⁴)`, which needs
   `reward+j > (ℓ − 2⁶⁴)/D ≈ 2²⁰³`. But the **reward output's own range proof** already bounds
   `reward+j < 2⁶⁴` — a **139-bit margin** (`252 − 49 − 64` at the pinned `k = 48`;
-  [`entitlement.rs::wraparound_over_claim_margin_bits`](../../rust/shekyl-staking/src/entitlement.rs),
+  `entitlement.rs::wraparound_over_claim_margin_bits`,
   test-locked). So **any** width `w ∈ [⌈log2 D⌉ … ~203]` is inflation-sound, and the honest
   `ρ < D = 2⁴⁹ < 2⁶⁴` always fits the 64-bit slot.
 - **Therefore fold, don't add a proof.** `C_ρ = ρ_blind·G + ρ·H` matches Monero's commitment
@@ -676,7 +676,7 @@ splice a valid component from claim A onto claim B.
           ‖ C~ ‖ C_claim ‖ C_ρ ‖ R ‖ μ_claim )
     ```
     The byte field-set and order are locked dependency-free in
-    [`entitlement::transcript`](../../rust/shekyl-staking/src/entitlement/transcript.rs)
+    `entitlement::transcript`
     (KAT-tested) so the prover and the C++/FFI verifier cannot drift on *what* is hashed —
     dropping any public input or `μ_claim` is the splicing hole this layout forecloses.
 

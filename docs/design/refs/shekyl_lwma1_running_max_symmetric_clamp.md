@@ -4,7 +4,7 @@
 is [`zawy12_issue_3_lwma1.md`](./zawy12_issue_3_lwma1.md) in this directory.
 
 **Purpose.** This file is the executable C++ form of the
-[`../DAA_LWMA1.md`](../DAA_LWMA1.md) §5.3 step 2/3 specification — canonical
+[`../DAA_LWMA1.md`](../../completed/DAA_LWMA1.md) §5.3 step 2/3 specification — canonical
 zawy12 LWMA-1 (Issue #3, `LWMA1_()`) with the running-max + signed-solvetime
 trick from LWMA-3 inlaid at step 2 and the symmetric `±6*T` clamp at step 3.
 The `previous_timestamp` scalar of canonical LWMA-1 is replaced by `prev_max`,
@@ -165,5 +165,5 @@ The above C++ has been compiled and run alongside canonical `LWMA1_()` from
 the pinned [`zawy12_issue_3_lwma1.md`](./zawy12_issue_3_lwma1.md) at Phase 0
 close; the harness produced the empirical results recorded above. The
 harness source is reproduced in
-[`../DAA_LWMA1_PLAN.md`](../DAA_LWMA1_PLAN.md) Phase 1 pre-flight
+[`../DAA_LWMA1_PLAN.md`](../../completed/DAA_LWMA1_PLAN.md) Phase 1 pre-flight
 verification section so the result is reproducible by any reviewer.

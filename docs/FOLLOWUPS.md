@@ -79,20 +79,67 @@ sustainability is unaffected by the recalibration.
   the defect is not demonstrated at all, and promoting one to the other without
   evidence is the error that discipline exists to prevent.
 
-  **Gate shape is NOT yet grounded — do not design it from here.** "Generate and
-  diff in CI" is the obvious answer and is probably wrong, because the project
-  already evaluated wholesale cbindgen and narrowed it. Open questions the round
-  must answer first: (a) what, if anything, cbindgen cannot express for this
-  header (the `RelayZoneHandle` opaque type, the callback typedefs, the
-  `ShekylRelayBlob` `#[repr(C)]` struct are the candidates); (b) whether a
-  signature check can be had more cheaply than full generation — e.g. a
-  link-time-only compile unit that takes the address of every export under the
-  header's declared type, which fails to compile on arity/type mismatch without
-  generating anything; (c) whether the remaining 33 non-consensus constants want
-  the same treatment or stay on per-constant pins.
+  **Grounded 2026-07-30; relay-surface gate SHIPPED. The remaining open item
+  is the full-surface extension.** The three questions above, answered at
+  source and by execution:
 
-  Not blocking anything. `cbindgen` is not installed on the dev box, so the
-  full-surface diff (all crates, not just relay) is still unmeasured.
+  (b) first, because its candidate died: **the link-only TU is refuted, and
+  the refutation is the entry's own hazard restated.** The compiler
+  type-checks the address-of against the header's declaration — the artifact
+  under suspicion — and the linker then resolves by name alone because C
+  linkage carries no type information. Nothing in that compilation ever sees
+  the Rust side: the probe verifies the header against itself. That is the
+  assert-a-constant-against-itself shape at the language level, the fourth
+  instance of the pattern in the relay arc (after the flags witness's first
+  draft, the seal-fix that sourced truth through the transform, and the
+  count-gate that matched its own construction feeds). Its narrow salvage —
+  undefined-symbol on a removed export — is also redundant on this surface,
+  because `levin_notify.cpp` calls every relay export, so a removed export
+  already fails the daemon link. Cross-language LTO was also checked and
+  dies on the toolchain: the build's `-flto` is gcc GIMPLE, the Rust
+  staticlib carries machine code, so the boundary is opaque at link and no
+  mismatch diagnostic can fire across it.
+
+  (a) **cbindgen expresses the relay surface completely** — the opaque
+  handle emits as a forward declaration, the callback typedefs as `using`
+  aliases with identical underlying types, `usize` as `size_t` — measured by
+  generating and compiling, not by reading docs. What it **cannot** express,
+  also measured: **cross-crate constant re-exports** (`pub const SHEKYL_X =
+  other_crate::X` renders the unresolved Rust identifier into the C++
+  initializer, `parse_deps` notwithstanding), which breaks full-crate
+  generation on the account/PQ surface's constants and constant-sized struct
+  arrays. The 2026-05 narrowing was therefore *scope* (constants, JSON
+  authority) — signature generation was never evaluated and is not
+  contradicted.
+
+  **The shipped gate** (`scripts/ci/check_relay_ffi_signatures.sh` +
+  `cbindgen-relay-signatures.toml` + `relay_ffi_signature_gate.cpp`,
+  workflow `ffi-signatures.yml`): single-file cbindgen over
+  `relay_zone_ffi/mod.rs` — exact, because the relay module defines every
+  crossing type in-file — emitting functions/typedefs/opaque only, compiled
+  into one TU **after** the hand-written header, where `extern "C"`
+  redeclaration rules turn any arity/type/return disagreement into a
+  conflicting-declaration compile error. Both declaration sets derive from
+  the artifacts under test; the C++ compiler performs the comparison. A
+  coverage guard pins a three-way equality — Rust export count, generated
+  count, and handwritten-header count (and caught its own first draft
+  under-counting the pointer-returning export; the header leg closes the
+  "omitted declaration still compiles" hole, because a missing handwritten
+  name is not a conflicting redeclaration). Negative controls run and observed to fail:
+  dropped parameter and changed parameter type both produce the
+  conflicting-declaration error. Struct layout and flag values are
+  deliberately out of this gate's scope — the header's `static_assert` and
+  the `zone_flag_bits_do_not_transpose` ABI pins own those.
+
+  **Still open (the extension):** the non-relay export surfaces
+  (account/embargo/difficulty/…) remain signature-unchecked. Extending the
+  gate needs either per-surface single-file generation where a module is
+  self-contained (the relay pattern), or the call-and-echo fallback (the
+  ABI-value-pin idiom extended from constants to signatures: call each
+  export with known values, assert on the Rust side what arrived) for
+  surfaces the cbindgen limitation blocks. (c) from the original list — the
+  remaining non-consensus constants — stays as filed: per-constant pins
+  until the full generator migration.
 
 - **TJ-1 (CRITICAL, live consensus path) — the challenged leaf index carries no
   beacon: a SPEC/CODE DIVERGENCE** (added 2026-07-29,
@@ -1470,7 +1517,7 @@ sustainability is unaffected by the recalibration.
   round-trip):** Two Rust serializers
   emit structurally different bytes for the *same* FCMP++ spend:
   - **`reference_block`** — `shekyl-oxide`
-    ([`rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs`](../rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs)
+    (`rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs`
     `PrunableProof`, line 182) carries it as a `u64` height varint;
     `shekyl-wire`
     ([`rust/shekyl-wire/src/transaction.rs`](../rust/shekyl-wire/src/transaction.rs)
@@ -2381,7 +2428,7 @@ sustainability is unaffected by the recalibration.
   period is finite, not a standing property. **Disposition:** ship V3.0 with the
   documented residual; do **not** add decoy-injection machinery (a permanent attack
   surface and trust cost for a finite problem, per
-  [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)). **Reopen
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)). **Reopen
   criterion (rule-21):** only if carry-4's testnet **effective**-cover measurement shows
   the cold-start residual is *not* self-resolving (cover does not strengthen with
   organic traffic as modeled) **and** a non-attributable cover source becomes available
@@ -4687,7 +4734,7 @@ sustainability is unaffected by the recalibration.
     `// !!!` warning marker disappears with the parameter; Rule 75
     rationale-doc forward-template is carried on the new
     `SHEKYL_DAA_*` constants in
-    [`shekyl-consensus/build.rs`](../rust/shekyl-consensus/build.rs)
+    `shekyl-consensus/build.rs`
     via the `consensus_constants_generated.h` codegen pipeline.
 
   The original item is retained below for audit-trail context; the
@@ -5424,7 +5471,7 @@ sustainability is unaffected by the recalibration.
   - **Cross-party protocol contracts — migrate *only* via the owning spec, and
     *only* pre-genesis.** The v31 multisig hashes — `intent_hash`,
     `fcmp_proof_commitment`
-    ([`multisig/v31/{intent,prover}.rs`](../rust/shekyl-engine-core/src/multisig/v31/)),
+    ([`multisig/v31/{intent,prover}.rs`](../rust/shekyl-multisig/src/)),
     the key-container / `prover_index` derivations
     ([`crypto-pq/multisig.rs`](../rust/shekyl-crypto-pq/src/multisig.rs)), and the
     address fingerprint
@@ -13693,7 +13740,7 @@ Retained for citation in review; each links to the canonical record.
   (closed 2026-05-20, merged to `dev` 2026-05-21 at `fd6005e2a`).**
   Landed in PR 4 §7.X commit C6β: `FaultInjecting<L: LedgerEngine>`
   extracted to
-  [`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs);
+  `engine/fault_injecting_ledger.rs`;
   `LocalLedger::from_test_blocks(Vec<Block>)` added at
   [`engine/local_ledger.rs`](../rust/shekyl-engine-core/src/engine/local_ledger.rs)
   (V3.0 supports the empty-`Vec` case only; non-empty fixtures
@@ -13797,7 +13844,7 @@ Retained for citation in review; each links to the canonical record.
   `WALLET_LEDGER_FORMAT_VERSION` both bumped 3 → 4; two `.snap`
   schema snapshots regenerated; `.zeroize-allowlist` cleaned. Per-PR
   pre-flight investigations:
-  [`STAGE_1_PR_3_M3A_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3A_PREFLIGHT.md),
+  `STAGE_1_PR_3_M3A_PREFLIGHT.md`,
   [`STAGE_1_PR_3_M3B_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3B_PREFLIGHT.md),
   [`STAGE_1_PR_3_M3C_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3C_PREFLIGHT.md),
   [`STAGE_1_PR_3_M3D_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3D_PREFLIGHT.md).

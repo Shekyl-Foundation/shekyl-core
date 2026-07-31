@@ -7022,7 +7022,7 @@
   `subaddress_lookahead` (settings v2, prefs schema v2),
   `AddressBookEntry::is_subaddress` (`BOOKKEEPING_BLOCK_VERSION` 5);
   paired `WALLET_LEDGER_FORMAT_VERSION` 6→7 (`wallet_ledger.snap`).
-  Spec: [`PRIMARY_CLAIM_DERIVATION_RENAME.md`](design/PRIMARY_CLAIM_DERIVATION_RENAME.md).
+  Spec: [`PRIMARY_CLAIM_DERIVATION_RENAME.md`](completed/PRIMARY_CLAIM_DERIVATION_RENAME.md).
 
 - **staking-sim: L14b pins sliding-window over escalation FSM (2026-06-08).**
   `failure_confirmation.rs` — paired dodge slash (esc 0 / slide 1), sliding `m` sweep,
@@ -8599,7 +8599,7 @@
     when the FOLLOWUP closes.
 
   - **C9 M5 mechanical citation-validation script.** New
-    [`scripts/ci/check_phase2h_citations.sh`](../scripts/ci/check_phase2h_citations.sh)
+    `scripts/ci/check_phase2h_citations.sh`
     implements R2-D4's mechanical citation validation: parses
     recipe `rationale` fields and validates per-category prefix
     (R1-D8 taxonomy invariant), cited plan-doc existence under
@@ -10403,7 +10403,7 @@
     [`benches/cache_derive.rs`](../rust/shekyl-pow-randomx/benches/cache_derive.rs)
     + [`benches/compute_hash_alloc.rs`](../rust/shekyl-pow-randomx/benches/compute_hash_alloc.rs)
     landing the §5.8 PR-gate baseline measurement infrastructure.
-    [`tests/perf/per_hash_latency.rs`](../rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs)
+    `tests/perf/per_hash_latency.rs`
     placeholder (`#[ignore]` + `unimplemented!()` cross-referencing
     F8 + §13 forward-path 2g inheritance) at the canonical 2g
     deliverable path per R3-minor-2 — structural code out-survives
@@ -11105,7 +11105,7 @@
   *C6β — `FaultInjecting<L: LedgerEngine>` + `LocalLedger::from_test_blocks`
   + `MockLedger` retirement*:
   - Adds
-    [`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs)
+    `engine/fault_injecting_ledger.rs`
     implementing `FaultInjecting<L: LedgerEngine>` with the same
     Option (i) wrapper shape (queue-of-`RefreshError`,
     `queue_failure` / `queue_concurrent_mutation` /
@@ -11500,7 +11500,7 @@
     fix in
     [`rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
     and
-    [`rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs).
+    `rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs`.
     Both Drop messages told test authors to "drain via
     `queued_failures()` and `consume_or_inject`". Neither
     instruction was usable: `consume_or_inject` does not
@@ -12192,8 +12192,8 @@
 - **LWMA-1 difficulty-adjustment migration — Phase 0 design docs**
   (`feat/daa-lwma1-phase0-design`, 2026-05-17). Adds two Phase 0
   design documents under `docs/design/`:
-  [`DAA_LWMA1.md`](./design/DAA_LWMA1.md) (the primary design) and
-  [`DAA_LWMA1_PLAN.md`](./design/DAA_LWMA1_PLAN.md) (the phased
+  [`DAA_LWMA1.md`](./completed/DAA_LWMA1.md) (the primary design) and
+  [`DAA_LWMA1_PLAN.md`](./completed/DAA_LWMA1_PLAN.md) (the phased
   execution plan, five phases sequential, no parallel tracks). The
   primary design records the disposition to replace the inherited
   CryptoNote cut-windowed-average DAA (`src/cryptonote_basic/difficulty.cpp`,
@@ -17339,7 +17339,7 @@
     `SpendPublicKey`) lands as a separate short-lived branch
     between M3a and M3b.
   - **Subaddress derivation primitives relocated to
-    [`shekyl_crypto_pq::subaddress`](../rust/shekyl-crypto-pq/src/subaddress.rs).**
+    `shekyl_crypto_pq::subaddress`.**
     Classical Edwards-curve `subaddress_derivation_scalar` and
     `subaddress_keys` (formerly methods on
     `shekyl_scanner::ViewPair`) move to a dedicated module per the
@@ -17356,7 +17356,7 @@
     [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)).
     `SubaddressIndex::to_canonical_bytes` accessor and the
     `PRIMARY` constant added to
-    [`shekyl_engine_state::SubaddressIndex`](../rust/shekyl-engine-state/src/subaddress.rs)
+    `shekyl_engine_state::SubaddressIndex`
     per
     [`.cursor/rules/18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc):
     state-shaped types whose serialization is cryptographically
@@ -17978,7 +17978,7 @@
     - [`rust/shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs`](../rust/shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs)
       lines 216 and 220 (BP++ inner-product reduction
       `g_bold` / `h_bold` recursion).
-    - [`rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/plus/weighted_inner_product.rs`](../rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/plus/weighted_inner_product.rs)
+    - [`rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/plus/weighted_inner_product.rs`](../rust/shekyl-bulletproofs/src/plus/weighted_inner_product.rs)
       line 380 (verifier folding loop over commitment pairs
       `(L_i, R_i)`).
   - `clippy::unnecessary_sort_by` (×2 in Shekyl-native

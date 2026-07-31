@@ -368,7 +368,7 @@ check.
 ### 1.5 Existing `tests/perf/per_hash_latency.rs` placeholder
 
 Per [`rust/shekyl-pow-randomx/Cargo.toml`](../../rust/shekyl-pow-randomx/Cargo.toml)
-lines 149–159 + [`rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`](../../rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs):
+lines 149–159 + `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`:
 
 ```rust
 #[test]
@@ -1615,7 +1615,7 @@ catches the edge cases by exhaustive search, V4-decoupled.
 ### R1-D7 — Per-hash latency benchmark population (per 2c §13 R3-minor-2)
 
 **Decision.** How does 2g populate the placeholder body at
-[`rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`](../../rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs)?
+`rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`?
 The placeholder asserts the Rust/C ratio ≤ 3.0× per parent plan §6.
 
 **Options.**
@@ -1670,7 +1670,7 @@ can consume the same in-process bindings as the binary.
 
 **Placeholder end-of-life audit-trail pin.** Phase 2c §13
 R3-minor-2 created the placeholder pending 2g implementation
-(see [`rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`](../../rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs)
+(see `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`
 + [`rust/shekyl-pow-randomx/Cargo.toml`](../../rust/shekyl-pow-randomx/Cargo.toml)
 lines 149–159). 2g's R1-D7 disposition (c) is the **planned
 end-of-life** for the placeholder, not architectural drift —

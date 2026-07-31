@@ -171,7 +171,7 @@ that most will be familiar with):
 
 This would translate to:
 
-![Epee binary storage format example](/docs/images/storage_binary_example.png)
+![Epee binary storage format example](images/storage_binary_example.png)
 
 ## Shekyl / CryptoNote specifics
 

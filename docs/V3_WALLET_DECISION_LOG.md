@@ -2036,7 +2036,7 @@ commit without any signature change.
 
 **Stub error variant.** `OpenError::CapabilityNotYetImplemented` is
 explicitly transient. It carries a deletion-target prose comment in
-[`rust/shekyl-wallet-core/src/wallet/error.rs`](../rust/shekyl-wallet-core/src/wallet/error.rs)
+`rust/shekyl-wallet-core/src/wallet/error.rs`
 naming `docs/FOLLOWUPS.md` *V3.0 → "View/HW lifecycle bodies in
 `shekyl-wallet-core`"* as the deletion gate. When the constructors
 land and the stub bodies are filled in, the variant is removed in

@@ -362,26 +362,26 @@ namespace
             return receiver_.notifier;
         }
 
-        /*! Advance the covert schedule until `stop(sent)` holds, or give up
-            after `max_advances`. Each advance processes every context's send
-            queue and accumulates the count.
+        /*! Advance the zone schedule until `stop(sent)` holds, or give up after
+            `max_advances`. Each advance processes every context's send queue and
+            accumulates the count. Used for covert noise *and* scheduled fluff —
+            both ride `run_next_wake()` / the production timer path.
 
             One advance = one `run_next_wake()` = one poll at the zone's next
-            deadline = **one** channel firing (two only when independent draws
-            collide on the same millisecond). The inherited tests instead
-            cancelled every channel's timer per call, which synchronized the
-            channels — a state the production schedule structurally cannot
-            produce, and one that would be a covert-traffic defect if it could:
-            simultaneous emission makes the aggregate bursty and periodic,
-            the exact shape constant-rate cover exists to deny (§20.9). So this
-            oracle asserts what §20.5 scopes it to — counts, status, payload
-            identity — over however many advances a round needs, and the
-            per-advance cadence property lives where it can be held
-            deterministically:
+            deadline. For covert, that is **one** channel firing (two only when
+            independent draws collide on the same millisecond). The inherited
+            tests instead cancelled every channel's timer per call, which
+            synchronized the channels — a state the production schedule
+            structurally cannot produce, and one that would be a covert-traffic
+            defect if it could: simultaneous emission makes the aggregate bursty
+            and periodic, the exact shape constant-rate cover exists to deny
+            (§20.9). Oracles that drive through this helper assert totals over
+            however many advances a round needs; the per-advance cadence property
+            lives where it can be held deterministically:
             `covert_channels_emit_one_per_advance_not_synchronized` in
             `shekyl-relay`, whose RNG and clock are parameters. */
         template<typename F>
-        std::size_t drive_covert(cryptonote::levin::notify& notifier, F&& stop, const unsigned max_advances = 16)
+        std::size_t drive_schedule(cryptonote::levin::notify& notifier, F&& stop, const unsigned max_advances = 16)
         {
             std::size_t sent = 0;
             for (unsigned i = 0; i < max_advances && !stop(sent); ++i)
@@ -394,6 +394,26 @@ namespace
                     sent += context.process_send_queue();
             }
             return sent;
+        }
+
+        /*! Fluff totals oracle shared by the force-driven and schedule-driven
+            paths. Payload identity, aggregate count, padding empty, and the
+            fluff bit are force-independent (§20.10 audit): if either driver
+            needs different totals, a fluff assertion has started encoding the
+            forced side. Source exclusion and per-peer queue counts stay at the
+            call site — those interact with when queues are drained. */
+        void expect_fluff_totals(std::vector<cryptonote::blobdata> txs, const std::size_t eligible_peers = 9)
+        {
+            EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
+            std::sort(txs.begin(), txs.end());
+            ASSERT_EQ(eligible_peers, receiver_.notified_size());
+            for (std::size_t count = 0; count < eligible_peers; ++count)
+            {
+                auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
+                EXPECT_EQ(txs, notification.txs);
+                EXPECT_TRUE(notification._.empty());
+                EXPECT_TRUE(notification.dandelionpp_fluff);
+            }
         }
 
         boost::uuids::random_generator random_generator_;
@@ -668,16 +688,7 @@ TEST_F(levin_notify, fluff_without_padding)
         for (++context; context != contexts_.end(); ++context)
             EXPECT_EQ(1u, context->process_send_queue());
 
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
-        std::sort(txs.begin(), txs.end());
-        ASSERT_EQ(9u, receiver_.notified_size());
-        for (unsigned count = 0; count < 9; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_TRUE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
+        expect_fluff_totals(txs);
     }
 }
 
@@ -2309,6 +2320,49 @@ TEST_F(levin_notify, fluff_with_duplicate)
 
 }
 
+/*! The fluff totals oracle, reached through the SCHEDULED path.
+    Closes the force-flag half of the §20.10 carry-forward and part of the
+    §18.4c honest-scope gap ("the production timer path has no C++-side
+    coverage — every gtest drives through force hooks").
+
+    Shares `expect_fluff_totals` with `fluff_without_padding` — the coupling is
+    structural, not prose. Drive is `drive_schedule` (same helper noise uses),
+    so per-peer deadlines fall due across several advances instead of releasing
+    together under `run_fluff`. The force branch's per-peer simultaneous queue
+    counts are not re-asserted here: those are force-path-shaped. If this ever
+    needs the force hook to pass, a fluff assertion has started encoding the
+    forced side. */
+TEST_F(levin_notify, fluff_via_scheduled_drive)
+{
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    std::vector<cryptonote::blobdata> txs(2);
+    txs[0].resize(100, 'f');
+    txs[1].resize(200, 'e');
+
+    ASSERT_EQ(10u, contexts_.size());
+    auto context = contexts_.begin();
+    EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::fluff));
+    io_service_.restart();
+    ASSERT_LT(0u, io_service_.poll());
+
+    // 64 > default 16: fluff releases one peer (or a small collision set) per
+    // advance, so nine eligible peers need headroom for epoch wakes in between.
+    drive_schedule(notifier,
+        [this](std::size_t) { return receiver_.notified_size() >= 9u; },
+        64);
+
+    EXPECT_EQ(0u, context->process_send_queue());
+    expect_fluff_totals(txs);
+}
+
 TEST_F(levin_notify, noise)
 {
     for (unsigned count = 0; count < 10; ++count)
@@ -2338,8 +2392,8 @@ TEST_F(levin_notify, noise)
     {
         // Dummies only: advance until both sends are out. Which channel fired
         // per advance is deliberately not asserted here — cadence is the Rust
-        // witness's job (see drive_covert).
-        const std::size_t sent = drive_covert(notifier, [](std::size_t s) { return 2u <= s; });
+        // witness's job (see drive_schedule).
+        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 2u <= s; });
         EXPECT_EQ(2u, sent);
         EXPECT_EQ(0u, receiver_.notified_size());
     }
@@ -2347,7 +2401,7 @@ TEST_F(levin_notify, noise)
     EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::local));
     {
         const std::size_t sent =
-            drive_covert(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
+            drive_schedule(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
         EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
         // ≥ rather than ==: a channel that comes due again after draining its
         // queue sends a dummy, so real-notification count is the stop
@@ -2367,7 +2421,7 @@ TEST_F(levin_notify, noise)
     EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::fluff));
     {
         const std::size_t sent =
-            drive_covert(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
+            drive_schedule(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
         EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
         /* 3000 bytes against a 2048-byte covert payload fragments, so each
            channel takes two sends per complete notification: two notifications
@@ -2416,8 +2470,8 @@ TEST_F(levin_notify, noise_stem)
     {
         // Dummies only: advance until both sends are out. Which channel fired
         // per advance is deliberately not asserted here — cadence is the Rust
-        // witness's job (see drive_covert).
-        const std::size_t sent = drive_covert(notifier, [](std::size_t s) { return 2u <= s; });
+        // witness's job (see drive_schedule).
+        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 2u <= s; });
         EXPECT_EQ(2u, sent);
         EXPECT_EQ(0u, receiver_.notified_size());
     }
@@ -2425,7 +2479,7 @@ TEST_F(levin_notify, noise_stem)
     EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::stem));
     {
         const std::size_t sent =
-            drive_covert(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
+            drive_schedule(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
         // downgraded to local when being notified
         EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
         EXPECT_LE(2u, sent);
@@ -2487,7 +2541,7 @@ TEST_F(levin_notify, noise_repoint_discards_in_flight_remainder)
     // send time (§20.3), so the real message below must find it open, or it
     // is dropped as unbound and nothing is ever in flight to interrupt.
     {
-        const std::size_t sent = drive_covert(notifier, [](std::size_t s) { return 1u <= s; });
+        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 1u <= s; });
         ASSERT_EQ(1u, sent);
         EXPECT_EQ(0u, receiver_.notified_size());
     }
@@ -2499,7 +2553,7 @@ TEST_F(levin_notify, noise_repoint_discards_in_flight_remainder)
     // is now genuinely in flight, and the send below proves it by NOT
     // having completed a notification.
     {
-        const std::size_t sent = drive_covert(notifier, [](std::size_t s) { return 1u <= s; });
+        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 1u <= s; });
         ASSERT_EQ(1u, sent);
         ASSERT_EQ(0u, receiver_.notified_size())
             << "fixture: 3000 bytes must not complete in one 2048-byte send";
@@ -2514,7 +2568,7 @@ TEST_F(levin_notify, noise_repoint_discards_in_flight_remainder)
     ASSERT_LT(0u, io_service_.poll());
 
     {
-        drive_covert(notifier, [this](std::size_t) { return 1u <= receiver_.notified_size(); });
+        drive_schedule(notifier, [this](std::size_t) { return 1u <= receiver_.notified_size(); });
         ASSERT_EQ(1u, receiver_.notified_size());
         auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
         EXPECT_EQ(contexts_.front().get_id(), notification.first)

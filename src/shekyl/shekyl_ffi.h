@@ -3085,10 +3085,11 @@ typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel, const st
 //! in a C signature transpose silently — and transposing THESE two swaps the
 //! i2p/tor outbound-only fluff rule with the covert enable, which is the exact
 //! regression RP-3a's first pass shipped (caught only because eight `private_*`
-//! gtests happened to cover it). This header is hand-written, not generated, so
-//! nothing mechanically checks it against the Rust definition in
-//! `relay_zone_ffi/mod.rs`; a bitmask removes the ordering question instead of
-//! relying on a check that does not exist.
+//! gtests happened to cover it). Function *signatures* on this surface are
+//! gated by `scripts/ci/check_relay_ffi_signatures.sh` (conflicting-declaration
+//! TU over a cbindgen-generated header). Flag *values* are not: the ABI pin
+//! `zone_flag_bits_do_not_transpose` owns those, and a bitmask removes the
+//! ordering question the signature gate cannot see.
 //!
 //! The i2p/tor rule follows the NETWORK, not covert mode: a hidden-service zone
 //! with covert disabled still needs it. That is why the bits are independent.
