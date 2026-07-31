@@ -367,6 +367,101 @@ sustainability is unaffected by the recalibration.
   (`construct_miner_tx` encapsulates to the miner's PQC key), so a hybrid
   proof-of-control may have something on-chain to bind against. Both are
   the design round's questions.
+  **DIRECTION SUPERSEDED (2026-07-31, maintainer): the predicate's public
+  derivation publishes a TARGET LIST — and so does every public variant,
+  including the shipped seal.** Under test≡job, anyone who can compute that
+  block `h` tests `(P, s)` knows exactly which archiver must serve and
+  when; flooding a residential operator for the response window is cheap
+  and produces a miss the operator cannot avoid — `m` repetitions slash
+  someone for having a known appointment, no mining required. (The shipped
+  `B = 1` is the WORST variant: the whole epoch's schedule is public
+  ~9,998 blocks ahead; the channel goes live the moment `W` pins.)
+  **Resolution: the challenge set is MINER-CHOSEN, revealed only in the
+  winning coinbase — verifiable after the fact, unknowable before.**
+  Secrecy is the point: nobody can be flooded on schedule because nobody
+  knows who is under test until the attestation is already in a block.
+  Chooseability resolves as expected: a cartel picking its own pairs is
+  the f-fraction lie already priced (dominated ~20× on clearance —
+  maintainer-stated; verify at the clearance record before quoting the
+  factor). No beacon, no seal, no derivation, no fire height, NO
+  SCHEDULE — the timing-parameter family (`B`, `N`, `W`-as-deadline, the
+  fire-height defect) dies entirely.
+  **Checked (2026-07-31), three findings:**
+  1. *The third cost DISSOLVES for free:* the attestation rides the
+     coinbase of the block itself, so authorship IS the block — no
+     witness key, no producer commitment, no cross-block linkage.
+     Residual: choice-pattern clustering is a soft behavioral channel;
+     default-client uniform random set choice keeps it flat.
+  2. *The miss channel is the open structural question.* With posed-ness
+     secret, the chain cannot distinguish untested from
+     tested-and-failed. Either miners attest FAILURES too — unverifiable
+     assertions, and the f-threshold analysis must be redone for the new
+     asymmetry (fabricated misses are free; credits require real
+     service) — or the window moves to rate-based absence-of-credit,
+     which collides with the confirmation pin's rule that
+     bonded-but-untested epochs never count against `P`. Must be
+     designed, not assumed.
+  3. *Freshness binding revives TJ-8 in stronger form:* with no fresh
+     challenge nonce, "hold one copy, attest without limit" becomes
+     "read once, attest forever" — for honest miners too. The serve
+     response must bind recent chain state (e.g., MAC over a recent
+     block hash) so every attestation certifies a RECENT read. Small but
+     consensus-relevant machinery.
+  **CLARIFIED (2026-07-31, maintainer): the miner chooses WHICH pairs to
+  test, not WHETHER to test — attestation is a block-validity
+  requirement with miner-chosen membership.** Three corrections to the
+  check follow. (a) *Witness pay demotes to unnecessary-for-coverage*:
+  the "indifferent miner has no reason to bother" problem is solved by
+  requirement, not compensation, and the read cost scales with win rate
+  = hashrate share — proportionally borne by construction. TJ-A2b's
+  "paid" arm answered a question that no longer exists. (b) *TJ-A2b's
+  block-validity hazard is disarmed by its own reopen criterion* ("do
+  not revisit without a mechanism that decouples the validity condition
+  from the transfer's completion time"): miner choice + read-ahead IS
+  the decoupling — validity depends on possessing completed attestations
+  at mining time, never on completing an assigned transfer in a window;
+  a miner swaps in any completed read. The ruling was against
+  mandatory-ASSIGNED reads. (c) *Freshness/binding promotes to the
+  load-bearing integrity leg*: the universal pressure under a
+  requirement is fake compliance (attest without the bandwidth), and
+  what makes it real is `P`'s countersignature over a fresh nonce — an
+  honest `P`'s signature cannot be fabricated; a cartel `P`
+  countersigning its own miner's fake read is the f-fraction lie
+  already priced. A pinnable constant returns: the REQUIRED SET SIZE
+  per block; selection distribution remains the policy surface; `c`
+  (tests/pair/epoch) is emergent from set size × block rate ÷
+  population.
+  **THE IDEAL CORNER, EXAMINED (2026-07-31 — maintainer: "ideally the
+  miner doesn't even get to choose which `P` — deterministic, but only
+  at the point the block is live"; race-condition worry flagged): the
+  race is STRUCTURAL, and the corner is a trilemma.** Three derivations
+  exist and each fails a named test: (a) from the block's OWN hash —
+  circular (the attestation is in the hashed content), and the escape is
+  rejection-sampling over nonces, i.e. miner-chosen via free grinding;
+  (b) from the PREVIOUS hash, one assignment for all — the read moves
+  inside the block interval (median 16 s / tail 113 s / 30 % retry vs
+  exponentially-distributed 2-min-mean intervals = TJ-A2b's
+  unmineable-block hazard verbatim), the assignment is public for one
+  interval (flood notice returns), and if the assigned pair is
+  validity-required, **flooding one residential `P` stalls block
+  production for every miner** — a chain-halt DoS coupled to the weakest
+  operator; (c) from the previous hash + miner identity — requires
+  producer identity pre-block, the privacy cost the coinbase-reveal
+  shape just dissolved. A miner-committed secret seed collapses to (a):
+  grinding seeds is free. **Trilemma: secret-until-block / unchooseable
+  / off-the-critical-path — pick two.** The target-list finding forces
+  the first; read-vs-interval arithmetic forces the third; chooseability
+  is the concession — and it is safe because discretion's residual
+  levers route through channels already priced or already open
+  (self-testing = the f-fraction lie; never-testing = non-observation,
+  harmless by the window's semantics; over-testing an honest `P` only
+  mints credits; all remaining harm routes through the miss channel,
+  already TJ-B's named question). Reopen criterion (rule-21 shape): the
+  ideal becomes reachable only if the read leaves the critical path —
+  sub-interval reads — which item 1's whole-shard ruling forecloses.
+  **Status: direction ruling + check; the TJ-B round designs the miss
+  channel, the freshness/countersignature binding, and the set-size pin
+  before anything else.**
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
