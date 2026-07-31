@@ -34,11 +34,15 @@ by construction, with the block-time boundary reconciled at the integration laye
 *underspecified*, blocked on Q-10 — the outbound-selection eclipse bound `g_max`**,
 which is a **p2p-subsystem** grounding (anchors, white/gray discipline, IP-group
 diversity, churn resistance), not a relay-timing one (§7, §13.5). The seal is in the
-open where the p2p round owns it. **Scope boundary (§6.9, settled):** this mechanism
+open where the p2p round owns it. **Scope boundary (§6.9 — PENDING, not settled: §31.5 opened a counter-hypothesis that the concession may be about *identification* rather than *enumeration*, and §32.2 shows the check is blocked on Q-10):** this mechanism
 defends the *active* adversary (must misbehave or actively position); the *passive,
 correctly-behaving* observer is explicitly **not defended** — a known limitation
-shared with Dandelion++ and Tor, closable only by p2p redesign (mixnet / cover
-traffic / cryptographic sender-anonymity), deliberately out of scope. §6.10 records
+shared with Dandelion++ and Tor. **Closable only by p2p redesign (mixnet /
+cryptographic sender-anonymity) — NOT by cover traffic**, which an earlier
+version of this line listed: cover traffic denies the *wire* observer's count
+and does nothing against the *peer* first-successor, and treating it as a
+closer here is precisely the substitution §29 and §31 refuted. Deliberately out
+of scope. §6.10 records
 the one thing that reaches it: an *economic* deterrent (behaviour-floor + pinning
 taxes the observer into being infrastructure, un-budgetable for most covert
 institutional adversaries) — effective-population, not theoretical; economics, not
@@ -5348,7 +5352,7 @@ is this ledger. Scored honestly:
 | embargo mean (144 s) | ✅ | the exact survival solve, RD-1/RD-4 corrections, `derive.rs` bisection with Monte-Carlo cross-check (§10) |
 | fluff delay family (memoryless) | ✅ | the residual-phase argument — memoryless is the family whose residual equals its full distribution (RD-2, D-3) |
 | `q = 0.2` (stem-continue) | ❌ | **not "underived" — derived against the wrong objective, on a topology we do not run** (corrected 2026-07-31, §27.3): D++ §5.3.1 chose `q = 0.1`/`0.2` from a **4.5 s latency goal** at 300 ms/hop measured on EC2 **Bitcoin** nodes with the INV/GETDATA/TX exchange. Same disease as `FORWARD_DELAY` and the `MAX_FRAGMENTS` equality. Q-3 reopens against *our* budget and *our* relay semantics |
-| `STEMS = 2` | ❌ | inherited; §12.7's expander-minimum argument is a rationale, not a derivation. **Question reframed 2026-07-31 (§27.5): the degree effect *reverses* on adversary graph knowledge** (D++ Fig. 3) and D++'s Theorems 1–2 are scoped to `d = 4` — so the question is not "does higher degree help" but **"does our anonymity graph stay unknown?"**, which Sharma's Appendix B prices as *no* at our parameters |
+| `STEMS = 2` | ❌ **(not yet derivable — needs a regime determination first, see the ledger arithmetic below)** | inherited; §12.7's expander-minimum argument is a rationale, not a derivation. **Question reframed 2026-07-31 (§27.5): the degree effect *reverses* on adversary graph knowledge** (D++ Fig. 3) and D++'s Theorems 1–2 are scoped to `d = 4` — so the question is not "does higher degree help" but **"does our anonymity graph stay unknown?"**, which Sharma's Appendix B prices as *no* at our parameters |
 | noise covert constants — `NOISE_MIN_DELAY`, `_DELAY_RANGE`, `_MIN_EPOCH`, `_BYTES`, `_CHANNELS` | ❌ | Q-11 — **derivation target relocated at Unit 1 review to the active prober** (§24.2: the passive-wire argument does not carry — under CV-4 the emission series is payload-blind under *any* family, so randomness must be justified by the phase-tag channel, not by the lineage); the row widened at Unit 0 (§22.1, Q11-D: rate has a bytes axis this ledger had omitted); the inherited triple is a *capacity* solution at exact equality (Q11-B), the oracle is production-aimed since Unit 0 (Q11-C), and the §20.9 order runs from a now-known feasible region |
 | forward-delay mean (`FORWARD_DELAY_AVERAGE = 22 s`) | ❌ | **Q-12** (§22.2, live) — decoupled from the covert constants at Unit 0 (Q11-A); stated anonymity-set objective never derived; drawn Poisson (the F-2/F-4 family signature) at `tx_pool.cpp:311` |
 | cooldown / eviction threshold | ❌ | unbuilt — the §12.11 selection-mechanism tier, blocked with Q-10 |
@@ -5369,6 +5373,28 @@ of open Q-items does not. A round that derives one of the ❌ rows ticks it here
 — this table is a live scorecard, not a snapshot, and a stale row is the same
 defect class as a stale acceptance criterion (§20.10 measured that class at
 four-of-ten).
+
+**Ledger arithmetic — which of the six ❌ rows is *reachable* (added
+2026-07-31).** A count of undérived rows is not a work estimate unless it says
+which can be worked:
+
+| reachable now | blocked on Q-10 (`g_max` — **p2p, not relay**) |
+| --- | --- |
+| noise covert constants — **Q-11, in flight** | cooldown / eviction threshold |
+| forward-delay mean — **Q-12, live** (§22.2) | `ε_explore` |
+| `q = 0.2` — **Q-3, reopens against *our* budget** (§27.3) | — |
+
+**`STEMS = 2` sits in neither column**, and the row as written reads reachable
+when it is not: §27.5 reframed it as *"does our anonymity graph stay
+unknown?"*, which is answered by **PSG-learning economics**, not by a
+derivation — so it needs a **regime determination first**, and only then
+becomes a derivable parameter.
+
+**So Q-10 is the single largest blocker in this document**: it gates **two
+ledger rows**, **`ρ`**, **§12.11's selection tier**, and — since §32.2 — **the
+§6.9 check**. It is **not relay work**, which is the point: the arc's remaining
+critical path runs through a p2p subsystem round, and no amount of relay effort
+shortens it.
 
 **One framing correction (2026-07-31, §27.2).** *"The arc moved the
 implementation toward the specification; the specification's ceiling is where
@@ -5392,11 +5418,23 @@ black-hole backstop now actually fires (F-2 — it was inert, full-travel
 any-prefix / 0.22 % origin-attribution per transaction on clearnet and
 structurally zero on Tor (§6.6, §6.8) — censorship resistance bought at a
 bounded, measured privacy cost, with reshape specced to drive the origin term
-toward zero (§14). **The ceiling:** correctly-specified Dandelion++ sits near
-~5 bits median entropy against a 20 % adversary (Sharma et al., §12.6
-calibration note — verify-at-source obligation attached), and the arc moved
-the implementation *toward* the specification, below that curve on three
-recorded counts. The specification's ceiling is where it was; raising it is a
+toward zero (§14). **The ceiling — corrected 2026-07-31, and the error was
+mine in two directions at once.** This paragraph read *"~5 bits median entropy
+against a 20 % adversary."* Sharma's prose gives **5 bits for Dandelion** and
+**7 bits for Dandelion++**, both at **`C = 1 %`** — so the line **quoted the
+weaker scheme's number for the stronger scheme**, at an adversary fraction
+**the text does not state**. Corrected: the citable figure is **~7 bits median
+entropy for Dandelion++ at `C = 1 %`**; the *"20 %"* is **withdrawn as
+unsourced** and needs a Fig. 7 pin before it is used again. *(Provenance
+unchanged: maintainer-read, §12.6's verify-at-source obligation still attached
+— which is the obligation working, since it is what made this checkable.)*
+**Both errors ran pessimistic** — a lower entropy for the scheme we ship and a
+20× larger adversary than the source states — which does not make them less
+wrong in the section written to be scored honestly, and does mean anyone who
+reasoned against the old line was reasoning against a ceiling stricter than the
+evidence supports. The arc still moved the implementation *toward* the
+specification, and remains below that curve on the recorded counts (two, after
+§27.6's split). The specification's ceiling is where it was; raising it is a
 different mechanism, not a better port.
 
 ## 22. Q-11 round — Unit 0: the feasible-region census, and the decoupling it forced
@@ -6205,9 +6243,10 @@ toward the specification; the specification's ceiling is where it was"* is
 right about the ceiling and **wrong here**: on the embargo derivation the arc
 moved **past** the spec. Stated precisely, because the two must not blur: the
 spec's *arithmetic* was incomplete for its own stated goal, and we corrected it
-— which does **not** mean our anonymity sits above Sharma's ~5-bit curve, since
-that curve measures deanonymization precision against a spy, an axis the
-embargo does not move (§6.6/§14: it moves C3 adversely). What changes is **what
+— which does **not** mean our anonymity sits above Sharma's curve (**~7 bits for
+Dandelion++ at `C = 1 %`**; see §21's corrected ceiling — an earlier draft here
+carried the same 5-bit misquote), since that curve measures deanonymization
+precision against a spy, an axis the embargo does not move (§6.6/§14: it moves C3 adversely). What changes is **what
 "correctly-specified Dandelion++" cites to** when we compare our numbers
 against that ceiling.
 
