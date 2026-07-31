@@ -226,12 +226,15 @@ fn fluff_delay_draws_match_their_claimed_means() {
 /// every `NoiseCadence` consumer in the tree and found none that graded it.
 ///
 /// Verified at re-aim (run and observed to fail): pinning `next_send`'s
-/// jitter to a constant fails this grade. Note what the landed control below
-/// is NOT: `BiasedRng` through `next_send` — `bounded_uniform` is a rejection
-/// sampler, so word-level bias is laundered back to uniform residues and that
-/// control would pass. The control that bites on this path is the file's
-/// shifted-target idiom: the same production draws graded against a wrong
-/// band.
+/// jitter to a constant fails this grade. Note what the landed controls below
+/// are NOT: `BiasedRng` through `next_send` — `bounded_uniform` is a
+/// rejection sampler, and rejection launders **modulo bias specifically**
+/// (the truncation-residue class `BiasedRng` manufactures), so that control
+/// would pass. This is not a claim that no RNG-level control can bite the
+/// production path: a generator with structured word output — even-only
+/// words, say — survives rejection and skews the residues. `BiasedRng` is
+/// the wrong control here; the landed pair are the wrong-band grade and the
+/// wrong-family grade.
 #[test]
 fn noise_cadence_jitter_is_uniform() {
     let c = NoiseCadence::inherited();
@@ -257,9 +260,13 @@ fn noise_cadence_grade_rejects_a_wrong_band() {
     // structurally empty and the chi-square must explode — proving the
     // positive test's pass is a property of the draws matching THEIR band,
     // not of the grade passing anything it is handed. (A `BiasedRng` control
-    // cannot do this job here: `bounded_uniform` is a rejection sampler, so
-    // word-level bias is laundered out before the draw — the file's existing
-    // modulo-bias control bypasses the sampler for exactly that reason.)
+    // cannot do this job here: rejection sampling launders modulo bias
+    // specifically, so `BiasedRng`'s truncation-residue skew never reaches
+    // the draw — the file's existing modulo-bias control bypasses the
+    // sampler for exactly that reason.)
+    //
+    // Band sensitivity is HALF the instrument's job; the wrong-family
+    // control below is the other half.
     let c = NoiseCadence::inherited();
     let min_ms = u64::from(inherited::NOISE_MIN_DELAY_SECS) * 1_000;
     let max = u64::from(inherited::NOISE_DELAY_JITTER_SECS) * 1_000;
@@ -272,6 +279,37 @@ fn noise_cadence_grade_rejects_a_wrong_band() {
         "production draws spanning [0, {max}] passed a grade against \
          [0, {wrong}] with statistic {:.2} (critical {:.2}) — the grade is \
          not band-sensitive",
+        g.statistic, g.critical
+    );
+}
+
+#[test]
+fn noise_cadence_grade_rejects_right_support_wrong_family() {
+    // The durable form of the injection control run at the re-aim (jitter
+    // pinned to a constant — observed to fail at chi-square 9.8e6, then
+    // reverted): the wrong-band control above proves BAND sensitivity only,
+    // and the defect §20.9 names as the live threat is right-support,
+    // wrong-FAMILY. Min-of-two production draws is that defect in the shape
+    // this arc has already named — CV-3's resampling fold keeps the minimum
+    // — so its support is exactly [0, max], its density is not uniform, and
+    // every ingredient is a real `next_send` draw. The grade must see the
+    // density skew, or the positive test above is a support pin wearing a
+    // distribution oracle's name.
+    let c = NoiseCadence::inherited();
+    let min_ms = u64::from(inherited::NOISE_MIN_DELAY_SECS) * 1_000;
+    let max = u64::from(inherited::NOISE_DELAY_JITTER_SECS) * 1_000;
+    let mut rng = SplitMix64::new(0x0157);
+    let samples: Vec<u64> = (0..N)
+        .map(|_| {
+            let a = c.next_send(0, &mut rng);
+            let b = c.next_send(0, &mut rng);
+            a.min(b) - min_ms
+        })
+        .collect();
+    let g = grade_uniform(&samples, max, 50);
+    assert!(
+        !g.passed,
+        "min-of-two production draws (right support, wrong family — the CV-3          resampling shape) passed the uniform grade with statistic {:.2}          (critical {:.2}) — the instrument is band-only",
         g.statistic, g.critical
     );
 }
