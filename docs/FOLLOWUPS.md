@@ -211,8 +211,8 @@ sustainability is unaffected by the recalibration.
      sub-720 reorg during the window can orphan that single epoch's credit —
      an isolated miss the m-of-n window forgives by design; it joins
      transport failure in the same per-epoch false-miss budget.
-  3. **`B ≥ SEB − N − W = 10_000 − 720 − 100 = 9_180**, and the
-     `challenge_fire_height` fix reserves `W` as planned.* Honest note on
+  3. **`B ≥ SEB − N − W = 10_000 − 720 − 100 = 9_180`, and the
+     `challenge_fire_height` fix reserves `W` as planned.** Honest note on
      what it buys: notice drops ~9,998 → ~820 blocks, so announced-window
      uptime goes from trivial to 8.2 % — still trivial. `B` does not force
      continuous availability and cannot, at one challenge per epoch; it is
@@ -242,6 +242,45 @@ sustainability is unaffected by the recalibration.
   budget**. Cost named: `c` multiplies witness bandwidth linearly
   (~16.65 MB/shard/epoch/witness at `c = 5`) — real load on miners, who are
   not paid for it (TJ-A2b's "paid" shape is where that lands).
+  **PROPOSAL (maintainer, 2026-07-30) — DELETE THE SEAL: per-block hash
+  predicate replaces the beacon. CHECKED against the tree; compatible, and
+  stronger than proposed.** Nothing requires advance `H_fire`: `P` needs
+  only reachability (notice is pure loss), verifiers recompute after the
+  fact, and a §8.2 witness learns it is drawn when it produces a block. The
+  seal buys only *determinism*, and determinism is what costs the notice.
+  Replace with 8C §4's own idiom applied to TIMING instead of content
+  (`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md:133` — "unknown before that
+  block exists"): the challenge for `(P, s, E)` fires at any block where
+  `H(block_hash[h] ‖ P_id ‖ s ‖ E) < threshold`. Notice = 0 by
+  construction; the threshold sets expected `c` directly. **Check
+  outcomes:** (1) TJ-A2d already ruled sequential single-witness
+  challenges "the shape that falls out rather than one that must be
+  constructed" — this is the falling-out mechanism, and it **resolves
+  TJ-A1 by collapse** (witness = the trigger block's producer,
+  per-challenge; the f = hashrate-share model becomes EXACT). (2) Reorg
+  dissolution is real but **one-directional**: reorged-OUT triggers are
+  non-observations by the window's own semantics (`failure_window.rs`:
+  untested ≠ miss) — no depth requirement; but reorged-IN triggers (a new
+  branch carrying a trigger in its past) have partly-closed windows on
+  arrival — bounded by reorg depth ≳ remaining `W` (realistic reorgs 1–2
+  blocks ≪ `W`), an isolated miss m-of-n forgives; joins the false-miss
+  budget. (3) The `challenge_fire_height` defect TRANSFORMS rather than
+  persists: an epoch-tail trigger needs credit acceptance spanning
+  `H_close`, which `CHALLENGE_RESOLUTION_BLOCKS`' one-epoch grace already
+  anticipates. (4) Grinding arithmetic verified: at expected `c = 3` over a
+  4,096-pair holding, `1 − e^(−1.23)` ≈ 70.7 % of own blocks trigger an own
+  pair — withhold-to-protect burns most mining income; gradient
+  `1 − e^(−c·n/SEB)` rises with holding size. (5) Costs: trigger count
+  ~ Poisson(`c`) — `P(untested epoch) = e^(−c)` ≈ 5 % at `c = 3` (absorbed
+  as non-observation, but `constants.rs`' "**Guaranteed** on-demand tests"
+  becomes probabilistic — the doc word changes); the aggregation rule
+  becomes rule-over-VARIABLE-count. **If adopted this supersedes the
+  (B, N) budget above** — the seal, `B`, `N`, the reorg floor,
+  `challenge_fire_height` + its defect, TJ-3, and TJ-A1 are all deleted,
+  and the pin becomes `(threshold, aggregation rule, W-retry)`. The
+  witness = producer collapse also gives TJ-A2b's "paid" shape a natural
+  anchor (the producer is already paid a coinbase). **Status: proposal +
+  check, NOT a decision — graduates at the TJ-B round.**
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
