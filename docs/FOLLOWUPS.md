@@ -150,6 +150,39 @@ sustainability is unaffected by the recalibration.
   one-vantage prudence ⇒ **floor ≈ 12–15 blocks (~25–30 min). The budget
   example's `W = 100` carries ~7× this floor** — generous liveness headroom,
   free under test≡job since `W` defends nothing.
+  **CORRECTIONS to the note above (2026-07-30, maintainer arithmetic check +
+  self-correction, both verified):**
+  1. *Speed labels were wrong; times and the floor stand.* The quoted rates
+     were curl's whole-operation averages (bytes ÷ total incl. first-byte
+     wait), not body-phase rates. Body-phase: **median ≈ 2.1 Mbit/s, worst
+     ≈ 0.54 Mbit/s** (bimodal — five samples 2.1–2.4, two at ~0.55); the
+     probe's "157 kbit/s" was the same artifact (its 3.33 MB body ran 48.4 s
+     ≈ 551 kbit/s, exactly the maintainer's reconciliation). The floor
+     composition used wall-clock totals only and is unchanged.
+  2. *Thin-sample tail + vantage, sharpened:* max-of-10 under a heavy right
+     tail systematically understates the true upper percentiles, and `W` too
+     small produces STRUCTURAL misses — the bias points at false slashes,
+     `(m, n)`'s one remaining objective. The ×2 retry allowance offsets in
+     the other direction by an unknown amount, not by design. Sharper still:
+     the witness is a randomly drawn MINER, so the operative distribution is
+     over the miner population's network positions — between-vantage
+     variance, which resampling from this box cannot estimate at any n.
+     Floor-scope only; the pin wants multi-vantage data or design margin.
+  3. *`W` is NOT pure liveness — resolved at source:* `fill_block_template`
+     selects strictly by fee-per-weight (`tx_pool.cpp:1231`) with only the
+     archival block-unique dedup pass — **the serve-credit tx competes for
+     block space today; no reserved lane, no fee priority.** Mempool
+     congestion pushing credit txs past `W` is therefore a live channel, and
+     **this measured floor is a LOWER BOUND on the pin, not the pin.** Shape
+     worth carrying to the pin round: one inclusion anywhere in `W`
+     suffices, so a suppressor must outbid the credit tx for ~`W`
+     consecutive blocks, and a slash needs `m` suppressed observations —
+     ~`m·W` blocks of sustained whole-blockspace outbidding (`W = 100`,
+     `m = 11` ⇒ ~1,100 blocks ≈ 1.5 days per targeted slash, hitting every
+     overlapping challenge as a side effect). Adversarial headroom in `W`
+     multiplies that cost linearly and is free for honest liveness; whether
+     TJ-B's credit wire gets reserved space or fee priority is the spec
+     question that decides how much headroom the pin needs.
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
