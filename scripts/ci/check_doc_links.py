@@ -23,6 +23,9 @@
 #     (`E[K](E[K]-1)`) and rustdoc-style intra-doc links quoted in prose
 #     (`[x](super::Engine::foo)`).
 #   - fragments (`#L123`, `#section`) are not validated -- file existence only.
+#   - the resolved path must stay under the repository root. Absolute targets
+#     and `..` escapes that leave the checkout are dead, not probes of the
+#     CI runner's filesystem.
 #
 # Deliberate exceptions live in docs/ci/link-allowlist.txt, one path-suffix or
 # exact `file:target` pair per line -- for template placeholders that must
@@ -54,22 +57,34 @@ def path_shaped(target: str) -> bool:
     return "/" in target or target.endswith(PATH_EXTS)
 
 
+def in_checkout(resolved: str) -> bool:
+    """True iff `resolved` is under ROOT (after normpath). Absolute targets and
+    `..` escapes that leave the tree are out of contract."""
+    abs_resolved = os.path.abspath(resolved)
+    try:
+        return os.path.commonpath([ROOT, abs_resolved]) == ROOT
+    except ValueError:
+        # Different drives on Windows, or empty paths — never in-checkout.
+        return False
+
+
 def load_allowlist() -> tuple[set, set]:
     exact, suffixes = set(), set()
     if not os.path.exists(ALLOWLIST):
         return exact, suffixes
-    for n, raw in enumerate(open(ALLOWLIST, encoding="utf-8"), 1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "#" not in line:
-            print(f"{ALLOWLIST}:{n}: allowlist entry has no reason comment", file=sys.stderr)
-            sys.exit(2)
-        entry = line.split("#", 1)[0].strip()
-        if ":" in entry:
-            exact.add(tuple(entry.split(":", 1)))
-        else:
-            suffixes.add(entry)
+    with open(ALLOWLIST, encoding="utf-8") as fh:
+        for n, raw in enumerate(fh, 1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "#" not in line:
+                print(f"{ALLOWLIST}:{n}: allowlist entry has no reason comment", file=sys.stderr)
+                sys.exit(2)
+            entry = line.split("#", 1)[0].strip()
+            if ":" in entry:
+                exact.add(tuple(entry.split(":", 1)))
+            else:
+                suffixes.add(entry)
     return exact, suffixes
 
 
@@ -82,15 +97,18 @@ def main() -> int:
                 continue
             p = os.path.join(dirpath, f)
             rel = os.path.relpath(p, ROOT)
-            text = open(p, encoding="utf-8", errors="replace").read()
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
             for m in LINK_RE.finditer(text):
                 target = m.group(1)
                 if not path_shaped(target):
                     continue
                 if (rel, target) in exact or any(target.endswith(s) for s in suffixes):
                     continue
+                # Absolute targets: join drops dirpath on POSIX and would probe
+                # the runner FS; reject via in_checkout rather than exists().
                 resolved = os.path.normpath(os.path.join(dirpath, target))
-                if not os.path.exists(resolved):
+                if not in_checkout(resolved) or not os.path.exists(resolved):
                     line = text[: m.start()].count("\n") + 1
                     dead.append((rel, line, target))
     for rel, line, target in dead:
