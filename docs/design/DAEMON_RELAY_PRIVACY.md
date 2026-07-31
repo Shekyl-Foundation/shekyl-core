@@ -2,8 +2,10 @@
 
 **Status:** ROUND 3 dispositioned — clean break; the RP-1…RP-3b port arc is
 **structurally complete** (§20.10), and the mechanism's definition of done is
-scored at **2/7 parameters derived** (§21 — the live ledger the remaining
-rounds tick). The measurement that motivates this document landed alongside it
+scored at **2/8 parameters derived** (§21 — the live ledger the remaining
+rounds tick; denominator widened by the Q-11 Unit 0 census, §22). Q-11 is in
+flight (Unit 0 landed; Unit 1 = adversary and capability next) and **Q-12 is
+registered and live** (§22.2). The measurement that motivates this document landed alongside it
 in the same PR (`rust/shekyl-relay-privacy`, 19 measurement tests + the
 suite), so every number below is reproducible rather than asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
 priority-order improvement (§14); the embargo derivation is held block-time-*unaware*
@@ -899,8 +901,15 @@ selection / anti-eclipse layer (Q-10, `g_max`), which is **bounded, specified p2
 work with a named deliverable — a design round, not a redesign**.
 
 **Out of scope — the passive, rule-following observer**, and everything downstream
-of trying to defeat it. Three independent arguments confirm no mechanism in this
-class reaches it:
+of trying to defeat it. *(Carve-out, 2026-07-31 — §22.3: "observer" here means
+the passive **peer** — a protocol-following participant, which is what every
+argument below is about. The passive **wire** observer — the ISP/on-path
+adversary who is not a peer at all — is a different channel with a different
+mechanism: the covert/noise channels exist for it, their charter is §20.9, and
+their constants are Q-11's subject. This section's boundary does not scope
+that mechanism out; reading the banner broadly would conclude the noise
+channels defend nothing, which is false.)* Three independent arguments confirm
+no mechanism in this class reaches the passive peer:
 
 - **Topological.** The origin's first stem successor, if it is an observer,
   attributes the origin with precision `≈ f` (`Precision(C1)`, §13) — set on the
@@ -4371,7 +4380,14 @@ distribution says is a privacy defect, and it is one that:
   pointed elsewhere; they are not, and the correction strengthens the point
   rather than weakening it: the machinery is already aimed at this draw and
   **still** cannot see the defect, because it grades the draw and the defect is
-  in the selection among draws;
+  in the selection among draws; *(amended 2026-07-31, §22.1 Q11-C: "aimed" was
+  itself an overstatement — the doc-comment named the cadence, but the test
+  invoking the grader sampled the conformance helper and production
+  `next_send` was never in the loop. The structural argument here survives
+  doubly strengthened: the instrument was blind to selection-among-draws AND
+  not wired to production. The wiring half was fixed at Unit 0; the
+  structural half is permanent, which is why CV-3's witness is an identity
+  assertion, not a grade.)*;
 - looks like correct behaviour under casual inspection, because each individual
   draw *is* from the right distribution.
 
@@ -5052,6 +5068,18 @@ attribution: a port that also re-derives its constants cannot attribute a
 behavioural change to either half. That is the same separation RP-3a kept between
 the faithful port and the F-4/F-5 correction, and it held.
 
+**Amended 2026-07-31 (Q-11 Unit 0, §22): the ledger above was incomplete and
+the constants were not free.** `CRYPTONOTE_NOISE_BYTES` and
+`CRYPTONOTE_NOISE_CHANNELS` join the list — the aggregate rate is bytes per
+interval, and this section named only the interval axis (§22.1, Q11-D). The
+`FORWARD_DELAY_*` pair *derived from* these constants until Unit 0 decoupled
+them (Q11-A), so the derivation this section charters could not previously
+have moved its own subject without rewriting a second mechanism's mean. And
+the triple sits on a compile-time capacity boundary at exact equality (Q11-B),
+whose family-surviving restatement is a §22.1 obligation the shape question
+inherits. The dependency order below stands — with a step zero before it,
+now discharged.
+
 **But "not in this round" is not "low priority", and the record should not read
 as though it were.** Three facts stack, and none of them is speculative:
 
@@ -5237,6 +5265,14 @@ and grading a distribution requires the target Q-11 has not yet derived.
 `grade_uniform` exists and is aimed; it waits for a derivation to grade
 against, and closing that is Q-11's first measurable deliverable.
 
+**Amended 2026-07-31 (§22.1, Q11-C): "aimed" overstated the state.** The
+grader's doc named the cadence, but the test invoking it sampled the
+conformance crate's own helper — production `next_send` was never in the
+loop, so "waits for a derivation" implied a re-target when a rebuild was
+owed. The rebuild landed at Q-11 Unit 0: the test now drives production, its
+controls ran and failed, and the gap is genuinely target-only from that
+commit forward.
+
 **Carry-forwards, unchanged by the close-out:** Q-11 next (mechanism question
 with constants attached, wire-observer adversary, dependency order per §20.9);
 the `force_fluff` force-flag same-disease pass (fluff assertions that may
@@ -5271,13 +5307,17 @@ is this ledger. Scored honestly:
 | fluff delay family (memoryless) | ✅ | the residual-phase argument — memoryless is the family whose residual equals its full distribution (RD-2, D-3) |
 | `q = 0.2` (stem-continue) | ❌ | inherited; deferred at Q-3 / D-6 as not-demonstrably-wrong, never derived |
 | `STEMS = 2` | ❌ | inherited; §12.7's expander-minimum argument is a rationale, not a derivation from an adversary bound — and its fan-out leg now carries two recorded ungrounded premises (§12.7, 2026-07-30 note) |
-| noise cadence constants | ❌ | Q-11 — the arc's last unexamined timing numbers; adversary→shape→constants order set (§20.9), instrument built and aimed |
+| noise covert constants — `NOISE_MIN_DELAY`, `_DELAY_RANGE`, `_MIN_EPOCH`, `_BYTES`, `_CHANNELS` | ❌ | Q-11 — the row widened at Unit 0 (§22.1, Q11-D: rate has a bytes axis this ledger had omitted); the inherited triple is a *capacity* solution at exact equality (Q11-B), the oracle is production-aimed since Unit 0 (Q11-C), and the §20.9 order runs from a now-known feasible region |
+| forward-delay mean (`FORWARD_DELAY_AVERAGE = 22 s`) | ❌ | **Q-12** (§22.2, live) — decoupled from the covert constants at Unit 0 (Q11-A); stated anonymity-set objective never derived; drawn Poisson (the F-2/F-4 family signature) at `tx_pool.cpp:311` |
 | cooldown / eviction threshold | ❌ | unbuilt — the §12.11 selection-mechanism tier, blocked with Q-10 |
 | `ε_explore` | ❌ | unbuilt — §12.11's anti-ossification term; ~0.05 from the RL lineage is a starting point, not a derivation |
 
-**Two of seven.** That is the honest measure of where the mechanism stands,
-and it makes the remaining work countable in a way a list of open Q-items does
-not. A round that derives one of the ❌ rows ticks it here, in the same commit
+**Two of eight** *(amended 2026-07-31 — Q-11 Unit 0's census added the
+forward-delay row the coupling had hidden and widened the covert row by the
+rate's bytes axis; the denominator grew because the census looked, which is
+the ledger working as intended)*. That is the honest measure of where the
+mechanism stands, and it makes the remaining work countable in a way a list
+of open Q-items does not. A round that derives one of the ❌ rows ticks it here, in the same commit
 — this table is a live scorecard, not a snapshot, and a stale row is the same
 defect class as a stale acceptance criterion (§20.10 measured that class at
 four-of-ten).
@@ -5301,3 +5341,131 @@ calibration note — verify-at-source obligation attached), and the arc moved
 the implementation *toward* the specification, below that curve on three
 recorded counts. The specification's ceiling is where it was; raising it is a
 different mechanism, not a better port.
+
+## 22. Q-11 round — Unit 0: the feasible-region census, and the decoupling it forced
+
+**Landed 2026-07-31, before the adversary question is opened, deliberately.**
+§20.9's dependency order (adversary → shape → constants) presumed the constants
+were free variables. The census below shows they were not: one of them defined
+a second mechanism's mean, the triple sits on a compile-time capacity boundary
+at exact equality, the sole distribution oracle on the cadence was vacuous, and
+the constant list omitted one of the two axes of the aggregate rate. A
+derivation that does not know its feasible region is not one, so census-shaped
+work gets its own unit and never rides as a coda. Unit 1 (adversary and
+capability, per §20.9) starts from the literature, untouched by any of this.
+
+### 22.1 The census, verified at source (maintainer census; re-anchored on live dev)
+
+- **G-0 (anchor correction).** The ISP/sybil split comment lives at
+  [`levin_notify.cpp:1053-1057`](../../src/cryptonote_protocol/levin_notify.cpp#L1053),
+  and its second half — *"Noise is currently only enabled over I2P/Tor — those
+  networks provide protection against sybil attacks (we only send to outgoing
+  connections)"* — is the half §20.9 needs: the wire-observer charter survives
+  verification. Wiring confirmed live: the public zone is constructed with
+  `nullptr` noise ([`net_node.inl:478`](../../src/p2p/net_node.inl#L478)); only
+  `--tx-proxy` zones get a payload, default-on, opt-out via `disable_noise`.
+- **Q11-A — one numeral, two adversaries.** `CRYPTONOTE_FORWARD_DELAY_BASE`
+  *derived from* `NOISE_MIN_DELAY + NOISE_DELAY_RANGE`, and `_AVERAGE` from it
+  — the i2p/tor→clearnet forwarding delay (peer/sybil adversary, stated
+  anonymity-set objective at
+  [`cryptonote_config.h:132-133`](../../src/cryptonote_config.h#L132))
+  inherited its mean from the covert cadence (wire adversary). Q-11 could not
+  re-derive one without silently rewriting the other. **Resolved in this
+  commit, value-neutrally**: `FORWARD_DELAY_BASE = 15`, `_AVERAGE = 22` as
+  free-standing literals with the provenance and the do-not-recouple rule at
+  the definition site. This fires Q-12's reopen criterion (a) by design — see
+  §22.2.
+- **Q11-B — the cadence triple is a capacity solution, not a privacy one.**
+  `send_noise`'s `static_assert(MAX_FRAGMENTS ≤ noise_min_epoch /
+  (noise_min_delay + noise_delay_range))` evaluates 300 s / 15 s = 20 against
+  `MAX_FRAGMENTS = 20`: **exact equality, zero slack** — and
+  `cryptonote_config.h:137`'s own comment states the capacity objective. The
+  inherited triple was *derived, from the wrong objective*: a maximum-size
+  fragmented transaction must clear one epoch under worst-case draws, and no
+  privacy term entered the selection. Consequences: any increase to
+  `MIN_DELAY`/`DELAY_RANGE` or decrease to `MIN_EPOCH` is a **build break**;
+  and the constraint's *form* assumes a bounded family (it divides by the
+  maximum interval), so it does not survive a memoryless candidate. **The
+  family-surviving restatement, which Unit 1's shape question inherits as an
+  obligation:** *a `MAX_FRAGMENTS`-send message must complete within one
+  covert epoch with probability ≥ 1 − δ, for a δ the derivation states* —
+  under the current bounded family this reduces to the worst-case count and
+  the existing `static_assert` is its exact (and exactly tight) compile-time
+  form; under an unbounded family the assert's form is invalid and the
+  constraint becomes a probabilistic pin the derivation must re-emit (a
+  derived table bound, not a division). The shape choice and this constraint
+  are not separable.
+- **Q11-C — the cadence's distribution oracle was vacuous; re-aimed in this
+  commit.** `noise_cadence_jitter_is_uniform` graded `sample_uniform` — the
+  conformance crate's own helper — against `grade_uniform`; production
+  `NoiseCadence::next_send` was never in the loop, in the one test whose name
+  claims the cadence, inside a file whose module doc demands production draws.
+  Now the test drives `next_send` directly; the landed negative control grades
+  the same production draws against a wrong band (a `BiasedRng` control cannot
+  work here — `bounded_uniform` is a rejection sampler and launders word-level
+  bias); and the injection control was run and observed to fail (jitter pinned
+  to a constant: chi-square 9.8 × 10⁶ against critical 111.6 — the same
+  injection left the old test green). The support-only band test
+  (`noise_cadence_spans_its_band`) stands as a complement; it is not a
+  distribution oracle and no longer has to pretend to be.
+- **Q11-D — the constant list gains the rate's second axis.**
+  `CRYPTONOTE_NOISE_BYTES = 3 KiB` (no Rust representation; C++-owned payload
+  size) and `CRYPTONOTE_NOISE_CHANNELS = 2` (Rust-mirrored and
+  construction-refusing at
+  [`zone/mod.rs:256`](../../rust/shekyl-relay/src/zone/mod.rs#L256)) join the
+  Q-11 ledger. The aggregate is ≈ 2 × 3072 B / 12.5 s ≈ **491 B/s per noise
+  zone**, and a rate target trades bytes against interval — a derivation
+  scoped to intervals alone can only see one axis, with the other bound by
+  Q11-B's capacity constraint.
+- **Q11-E — split ownership reconciled.** The cadence values are Rust-owned
+  (`params.rs`) with the C++ copies load-bearing only through Q11-A — the
+  decoupling above makes the C++ cadence constants single-purpose again. The
+  epoch pair was C++-owned with **dead Rust mirrors** (zero consumers,
+  verified by grep): mirrors deleted in this commit, with a comment at the
+  deletion site stating why the epoch pair is deliberately not mirrored.
+  Adjacent: `random_poisson_subseconds` has zero consumers;
+  `random_poisson_seconds` has exactly one (`tx_pool.cpp:311` — Q-12's
+  subject). The F-4 primitive is one call site from deletable.
+
+### 22.2 Q-12 — the forward-delay draw: registered, and live by its own criterion (a)
+
+[`tx_pool.cpp:311`](../../src/cryptonote_core/tx_pool.cpp#L311) draws the
+i2p/tor→clearnet forwarding delay as
+`crypto::random_poisson_seconds{22 s}` — Poisson, σ ≈ 4.7 s, **not
+memoryless**: the F-2/F-4 family signature, under a mean whose stated design
+objective is an anonymity-set claim (*"2+ incoming connections could have sent
+the tx"*) that no derivation has been shown to satisfy. It is **not** folded
+into Q-11, because that would grade one adversary's mechanism against the
+other's threat model — the forward delay defends the peer/sybil observer at
+the zone boundary; the covert cadence defends the wire observer. One numeral,
+two adversaries was the defect Q11-A removed; re-merging them analytically
+would reinstate it. Q-shaped, not F-numbered, by §20.9's own reasoning:
+F-shaped in provenance, and the instrument that measured F-4 (inversion
+0.4236 → 0.2165) applies directly, so promotion comes from measurement, not
+renumbering.
+
+**Reopen criteria, with (a) already fired**: (a) the Q11-A decoupling landing
+— *this commit* — since `FORWARD_DELAY_*` is now a free constant with no
+stated source and a defective family: **Q-12 is live, not deferred**; (b) any
+measurement of the forward path's inference precision, on either adversary;
+(c) `random_poisson_seconds` acquiring a second caller — the primitive's
+near-death is load-bearing for the claim that F-4's family error is contained.
+Deliverables when taken up: derive the mean from the stated anonymity-set
+objective; fix the family from measurement; retire the last
+`random_poisson_seconds` caller and the primitive with it.
+
+### 22.3 Prose corrected by the census (the stale-claim class, again)
+
+Two "aimed" claims and one banner, each amended in place with a dated note:
+§20.2a's *"already aimed here and still blind"* rested on `grade_uniform`'s
+doc-comment — doc-aimed, never production-aimed; the CV-3 structural argument
+survives **strengthened** (the instrument was doubly unable: blind to
+selection-among-draws *and* not wired to production). §20.10's *"exists and is
+aimed; it waits for a derivation"* implied re-targeting sufficed when a
+rebuild was owed — the rebuild landed in this commit, so the gap is now
+genuinely target-only. §6.9's banner (*"the passive, correctly-behaving
+observer — NOT DEFENDED"*) is universally phrased over a body whose three
+arguments are all **peer**-topological; the passive **wire** observer is the
+covert mechanism's charter (§20.9) and Q-11's subject — the carve-out sentence
+now says so, so a cold read of §6.9 no longer concludes the noise channels
+defend nothing.
