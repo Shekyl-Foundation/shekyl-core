@@ -4,8 +4,9 @@
 **structurally complete** (§20.10), and the mechanism's definition of done is
 scored at **2/8 parameters derived** (§21 — the live ledger the remaining
 rounds tick; denominator widened by the Q-11 Unit 0 census, §22). Q-11 is in
-flight (Unit 0 landed; Unit 1 = adversary and capability next) and **Q-12 is
-registered and live** (§22.2). The measurement that motivates this document landed alongside it
+flight — Unit 0 (feasible-region census, §22) and Unit 1 (adversary and
+capability, §23) landed; **Unit 2 = the emission shape** is next — and **Q-12
+is registered and live** (§22.2). The measurement that motivates this document landed alongside it
 in the same PR (`rust/shekyl-relay-privacy`, 19 measurement tests + the
 suite), so every number below is reproducible rather than asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
 priority-order improvement (§14); the embargo derivation is held block-time-*unaware*
@@ -5153,10 +5154,21 @@ measured into existence:
 1. **The adversary and its capability.** Passive timing observation only, or
    active probing? The relevant literature is the traffic-analysis
    cover-traffic lineage (**Loopix** and descendants), *not* Dandelion++ —
-   a different body of work with a different threat model.
+   a different body of work with a different threat model. **ANSWERED at Unit 1
+   (§23), from the source text:** T is the GPA restricted to the node's
+   Tor/I2P link; the property is Loopix's *sender online unobservability*; the
+   capability is **passive-only**, with the active (n−1) detector Loopix builds
+   from loop cover named as absent-by-scope rather than owed. The lineage's own
+   boundary is the confirmation — Loopix excludes Sybil, Dandelion++ excludes
+   the GPA: complementary, not competing.
 2. **The emission shape that defeats it.** Independence across channels,
    cadence family (uniform vs memoryless — F-2's exact question, one subsystem
-   over), aggregate-rate target. What the shape argument already gives:
+   over), aggregate-rate target. **Unit 2's subject; §23.5 carries four
+   grounded inputs into it** (the lineage's exponential-emission family and its
+   superposition argument; the mixing half that does *not* transfer; Q11-B's
+   capacity constraint becoming probabilistic under an unbounded family; and
+   the traffic-adaptive rate knob that must be re-derived against CV-4 before
+   any import). What the shape argument already gives:
    per-channel independence is *required*, not incidental — the mechanism
    witness (`covert_channels_emit_one_per_advance_not_synchronized`) pins it as
    soundness, and it survives whatever family the derivation picks.
@@ -5469,3 +5481,172 @@ arguments are all **peer**-topological; the passive **wire** observer is the
 covert mechanism's charter (§20.9) and Q-11's subject — the carve-out sentence
 now says so, so a cold read of §6.9 no longer concludes the noise channels
 defend nothing.
+
+## 23. Q-11 Unit 1 — the adversary and its capability, from the Loopix lineage
+
+**Read at source, 2026-07-31** (Piotrowska, Hayes, Elahi, Meiser, Danezis,
+*The Loopix Anonymity System*, USENIX Security 2017; arXiv:1703.00536, §§2–5).
+§20.9 set the order — adversary → shape → constants — and this unit answers
+only the first. Quotations are from the paper; the mapping onto Shekyl's
+covert channel is ours and is marked as such.
+
+### 23.1 The adversary, named — and the lineage's boundary is the load-bearing part
+
+Loopix assumes **three distinct capabilities**, and stratifies them
+deliberately: *"An adversary is always assumed to have the GPA capability, but
+other capabilities depend on the adversary."*
+
+1. **The global passive adversary (GPA)** — *"able to observe all network
+   traffic between users and providers and between mix servers … launch network
+   attacks such as BGP re-routing or conduct indirect observations such as load
+   monitoring and off-path attacks. Thus, the GPA is an abstraction that
+   represents many different classes of adversaries able to observe some or all
+   information between network nodes."*
+2. **Corrupt mixes / providers** — internal state, and *"may inject, drop, or
+   delay messages"*.
+3. **Compromised users** (a *conversation insider*) — **and this is the
+   boundary that matters here**: *"We assume that the adversary can control a
+   limited number of such users — **excluding Sybil attacks** … since we assume
+   that honest providers are able to ensure that at least a large known
+   fraction of their users base are genuine."*
+
+**The finding, and it is a structural confirmation rather than a detail:
+Loopix's threat model explicitly excludes the Sybil adversary, and
+Dandelion++'s threat model *is* the Sybil/peer adversary.** The two lineages
+are **complementary, not competing** — each excludes precisely what the other
+defends. That is the source-grounded form of the charter §20.9 asserted and
+of the separation Q11-A enforced in code: nothing in the Loopix lineage will
+answer a peer-adversary question, and nothing in Dandelion++ will answer a
+wire-adversary one. A reviewer who reads a cadence result as a Sybil claim, or
+grades the covert channel by a peer metric, has crossed the lineages.
+
+**Shekyl's T, instantiated (ours).** The covert channel runs only on
+`--tx-proxy` zones (G-0), i.e. node ↔ Tor/I2P entry point. So **T is the GPA
+restricted to that link**: it observes encrypted-link byte timing and volume,
+and nothing else — not the peer (the transport encrypts it), not the payload,
+not the dummy-vs-real bit. Shekyl deliberately does not assume the full global
+GPA, because the property below is achievable per-link and the arc's standing
+scope rule (§6.9 as carved out in §22.3) puts network-global observation out
+of reach of any mechanism in this document.
+
+### 23.2 The property, named — Loopix's *sender online unobservability*
+
+The Loopix goal that matches the covert channel is not unlinkability but
+observability of the sender at all:
+
+> **Sender online unobservability** — *"the inability of an adversary to decide
+> whether a specific sender S is communicating with any receiver {S→} or not
+> {S↛}"*.
+
+That is exactly what the noise channels exist to provide (ours): T must not be
+able to decide **whether this node originated or relayed a transaction**. Not
+*to whom* — the transport already hides that — but *whether at all*.
+
+**Loopix's mechanism for it is, structurally, Shekyl's mechanism** — verified
+against both texts rather than assumed:
+
+> *"Each sender periodically checks, following the exponential distribution
+> with parameter 1/λ_P, whether there is any scheduled message to be sent in
+> their buffer. If there is a scheduled message, the sender pops this message
+> from the buffer queue and sends it, otherwise a **drop cover message** is
+> generated … Thus, **regardless of whether a user actually wants to send a
+> message or not**, there is always a stream of messages being sent according
+> to a Poisson process Pois(λ_P)."* (§3.2) — and the conclusion: *"from an
+> adversarial perspective, all traffic emitted modeled by Pois(λ_P) … Thus we
+> achieve **perfect sender unobservability**, since the adversary cannot tell
+> whether a genuine message or a drop cover message is sent."* (§4.1.2)
+
+`send_noise` is that loop: drain `active`, else pop `queue`, else emit the
+dummy — on a schedule that **cannot consult the queue**. So **CV-4
+(payload-blindness) is not a Shekyl idiosyncrasy: it is the structural
+precondition of the lineage's own unobservability argument**, arrived at
+independently in §20.2 from an ownership table. The arc built the right
+invariant for a reason the literature states outright, which is the strongest
+form of confirmation available short of a proof.
+
+### 23.3 Capability: passive-only, and the active gap is real and named
+
+§20.9 asked *"passive timing observation only, or active probing?"* The
+lineage's answer, and ours:
+
+- **Loopix defends active attacks with a mechanism Shekyl does not have.**
+  Client loops (λ_L) and mix loops (λ_M) are cover traffic that *returns to its
+  sender*, so a node that stops seeing its own loops knows it is being blocked
+  — the (n−1) detector (§4.2.1). Theorem 2 quantifies the resulting
+  obfuscation.
+- **Shekyl's covert channel implements only the λ_P analogue** —
+  payload-or-dummy emission. There is no loop cover, therefore **no
+  active-attack detector on the covert path**.
+- **Scope call (ours): passive wire observation is what the covert channel
+  defends, and that is stated rather than quietly assumed.** The active wire
+  adversary — a guard that drops or delays — is a *liveness* attack on this
+  path, not a deanonymization one: dropping covert sends does not reveal
+  whether they were real (CV-4 holds regardless), it stops traffic. The
+  deanonymizing active adversary in this system is the *peer* black-holer,
+  which is Dandelion++'s embargo/reshape lane (§14) and not this one. A loop-
+  cover analogue is therefore **not** owed by Q-11; if it is ever wanted, it is
+  a new mechanism with its own round, and §23.1's lineage rule says it would
+  be answering a question the covert channel was not built for.
+
+### 23.4 What the lineage does **not** give us — stated now, not discovered at the end
+
+**There is no closed-form derivation of the cover rate from an adversary bound
+in the lineage.** Loopix's own parameter results are *empirical*: Figure 4
+plots entropy against incoming rate for a range of delay parameters from
+simulation; §4.3.1's guidance is a threshold read off a curve (*"We consider
+values λ/μ ≥ 2 to be a good choice in terms of anonymity"*), and the
+implementation's rates (λ_P = λ_L = λ_D = 10–60 per minute) are chosen for the
+evaluation, not derived. The one closed-form results are Theorems 1–2, which
+bound an adversary's *linking* probability inside a mix pool — a structure
+Shekyl does not have (no pool, no per-hop delay: the covert channel is
+link-level cover, not a mix).
+
+**Consequence for the §21 ledger, recorded before the shape unit starts:** the
+covert-constants row will most plausibly terminate in *a stated adversary
+bound plus a measurement*, not a solved equation — the embargo's form (an
+exact survival solve) is not available here, because the quantity being
+defended (a decision problem over an emission stream) has no equivalent
+closed-form survival equation. That is a legitimate ✅ for the ledger provided
+the bound is stated a priori and the measurement is instrumented and
+controlled — the Q-9 discipline (§13), applied to a different question. What
+would **not** be legitimate is picking a rate off a curve and calling it
+derived, which is the shape of the 39 s defect one subsystem over.
+
+### 23.5 Carried into Unit 2 (shape) — inputs, not decisions
+
+Recorded because the read produced them and they constrain the shape question;
+**Unit 2 decides, this unit does not**:
+
+1. **The current cadence is not the lineage's family.** Shekyl emits
+   `10 s + U[0, 5 s]` — bounded, CV ≈ 0.115, near-deterministic. Loopix emits
+   on an **exponential inter-arrival** (Poisson process). The lineage's stated
+   reason is superposition: *"Aggregating Poisson processes results in a
+   Poisson process with the sum of their rates"*, so the aggregate an observer
+   sees is characterized by **one number** and inter-arrival timing carries no
+   further information. A near-deterministic cadence aggregated over
+   `NOISE_CHANNELS = 2` is instead a near-metronome, and a metronome's
+   *deviations* are informative.
+2. **But the mixing half of Loopix does not transfer.** Loopix has two
+   exponential parameters doing different jobs — λ_P (client emission) and μ
+   (per-hop mix delay, whose memorylessness is Lemma 2's subject). Shekyl has
+   **no mix**: no pool, no per-hop delay, nothing to be indistinguishable
+   *within*. Only the λ_P analogue is in scope, and importing μ-shaped
+   reasoning would be the phantom-channel error (§12.6's lesson, one lineage
+   over).
+3. **Q11-B's capacity constraint is the binding interaction.** An exponential
+   family has unbounded support, so the worst-case form
+   (`MAX_FRAGMENTS ≤ epoch / max_interval`) is not merely re-parameterized but
+   **invalid**, exactly as §22.1 anticipated. Under the lineage's family the
+   constraint must be re-emitted probabilistically — *a `MAX_FRAGMENTS`-send
+   message completes within one epoch with probability ≥ 1 − δ* — and δ becomes
+   a stated quantity Unit 2 owes.
+4. **Rate has two axes and the lineage uses both.** Loopix tunes cover *rate*
+   against real-traffic volume (§4.2: *"once the volume of real communication
+   traffic λ_P increases, users can tune down the rate of cover traffic"*);
+   Shekyl's aggregate is ≈ 491 B/s per zone from `NOISE_BYTES × NOISE_CHANNELS
+   / interval` (Q11-D). Whether Shekyl wants a traffic-adaptive rate is a
+   **CV-4 question**, not a bandwidth one: adapting the rate to real volume is
+   precisely letting the cadence react to having something to say. The lineage
+   does it at the *client* granularity where the sender is the only party
+   affected; Shekyl's channel carries relayed traffic too. Unit 2 must not
+   import this knob without re-deriving it against CV-4.
