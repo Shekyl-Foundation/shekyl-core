@@ -118,6 +118,15 @@ sustainability is unaffected by the recalibration.
   exist. **Not evaluable until pinned**; gates §9.4/§9.5's arithmetic and is
   upstream of the PD-F-2 dispersion question (which asks whether a threshold is
   forceable *within a deadline*).
+  **RE-FRAMED (2026-07-30, maintainer ruling): `W` is a LIVENESS parameter,
+  not a security one, and TJ-2/TJ-3 are ONE parameter set** coupled through
+  the epoch budget. Under test≡job (whole-shard service) the free-rider moves
+  3.33 MB in and 3.33 MB out regardless of how long it has — the cost is
+  bandwidth, not latency — so the deadline defends nothing; its bounds are
+  operational: floor = an honest serve plus the witness's tx reaching a block
+  (**measurable, not argued**), ceiling = `H_close` with
+  `CHALLENGE_RESOLUTION_BLOCKS` grace behind it. Size for the slowest honest
+  participant to keep; see TJ-3's coupling equation and pin order.
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
@@ -165,6 +174,35 @@ sustainability is unaffected by the recalibration.
   yields the same exclusion term on every route; the curve prices both
   identically. Input to the re-pin sweep; TJ-8's briefing constraint and the
   over-determination warning stand.
+  **TJ-3 RE-SCOPED (2026-07-30, maintainer ruling): `B` is the SECURITY
+  parameter of the TJ-2/TJ-3 pair, and test≡job sharpens what it defends.**
+  The test IS a client read, so announcing it converts *"is this shard
+  retrievable"* into *"is this shard retrievable at an announced moment"* —
+  not the same property: a `P` that surfaces once per epoch on schedule
+  passes while serving no actual client. The seal wants to be **late** (`B`
+  near the top of the epoch), making notice short. Grinding does not argue
+  against it: withhold-and-retry on the seal block costs one block reward per
+  attempt **wherever the seal sits** — moving it late changes *who* grinds,
+  not what it costs. **Budget (one equation, two free parameters):** for
+  notice cap `N` and response window `W`, `B ≥ SEB − N − W` (at
+  `SEB = 10_000`, `N = 50`, `W = 100` ⇒ `B ≥ 9_850`); `W`'s floor is
+  measurable. **Pin order:** measure `W`'s floor (honest serve +
+  confirmation) → pick `N` → derive `B` → fix the fire-height derivation to
+  reserve `W` — the last step is NOT optional once `W` lands.
+  **DEFECT (found 2026-07-30, confirmed at source): `challenge_fire_height`
+  reserves no response room.** `challenge.rs:96–106`: `modulus = span − 1`,
+  `h_fire = h_seal + offset + 1` ⇒ fire range `(H_seal, H_close − 1]` — the
+  latest fire lands one block before close while `constants.rs` requires the
+  response to *end before `H_close`*. Invisible while
+  `CHALLENGE_RESPONSE_BLOCKS = None`; the moment `W` is pinned, epochs whose
+  fire lands past `H_close − W` produce **structural misses that are not the
+  `P`'s fault — a false-slash source, the one objective `(m, n)` still
+  carries.** Fix belongs WITH the `W` pin (modulus → `span − W − 1`, or an
+  explicit fire ceiling `H_close − W`), on the **surviving** surface —
+  `challenge_fire_height` outlives TJ-B's leaf-path deletion, unlike its
+  `challenge_leaf_index` neighbour. The fn's doc-comment range claim
+  `(H_open, H_close]` is also loose (code yields `(H_seal, H_close − 1]`)
+  and its rule-21 reopen criterion must be rewritten with the fix.
 
 - **TJ-7 (HIGH, sweep input) — sybil-per-shard has NO uniqueness constraint,
   and the cartel attack is DILUTION not multiplication** (added 2026-07-29,
