@@ -46,7 +46,12 @@ jobs:
     name: "Dead-relative-link gate (docs)"
     runs-on: ubuntu-latest
     steps:
+      # Submodules required: docs cite files under external/* (e.g.
+      # randomx-v2 headers). Without them the gate false-fails on correct
+      # links — measured 2026-07-31 on this workflow's first green path.
       - uses: actions/checkout@v5
+        with:
+          submodules: true
 
       - name: Run doc-link check
         run: python3 scripts/ci/check_doc_links.py
