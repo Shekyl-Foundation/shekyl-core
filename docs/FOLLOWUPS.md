@@ -281,6 +281,45 @@ sustainability is unaffected by the recalibration.
   witness = producer collapse also gives TJ-A2b's "paid" shape a natural
   anchor (the producer is already paid a coinbase). **Status: proposal +
   check, NOT a decision — graduates at the TJ-B round.**
+  **THIRD COST (maintainer, 2026-07-30 — the check missed it, and it lands
+  on the PRIVACY side of the priority order):** the shipped wire has **no
+  witness at all** — `ArchivalServeCreditResponse` (`wire.rs:44–54`) is
+  `p_canonical_id` + `hybrid_signature`, `P` self-attesting per §9 — so
+  witness identity is new surface under ANY TJ-B credit wire. But
+  witness-as-producer needs the producer of block `h` to be *verifiably*
+  that witness, and the coinbase pays a fresh one-time stealth key per
+  block (`construct_miner_tx`: fresh tx keypair + derived out_key,
+  verified) — producers are unidentifiable and unlinkable BY DESIGN. A
+  producer commitment published at mining time is (a) a new
+  consensus-visible, genesis-frozen block field — heavier than the seal
+  deletion it pays for — and (b) **a miner fingerprint**: a repeatedly
+  attesting witness key clusters the blocks it produced, cross-block
+  linkability where the design has none. Privacy cannot rank behind
+  performance or features, so this outranks everything the predicate buys
+  **unless the binding is clusterless.** The collapse is real but NOT a net
+  reduction in frozen surface: it trades seal/`B`/`N`/reorg-floor for a
+  producer-identity binding that must be designed against the privacy
+  constraint — **a design round of its own, priced before TJ-B graduates
+  it.**
+  *Candidate clusterless shape (found during verification; unchecked
+  beyond what is cited):* the per-block disposable key already exists —
+  **the trigger block's own coinbase one-time output key**. Fresh per
+  block by construction, consensus-visible, controlled by exactly the
+  producer; signing the credit with it proves control of block `h`'s
+  coinbase with **no new block field and no cross-block key linkage** (a
+  reused witness key never exists). The omission arm of the self-selection
+  question dissolves — every block has a coinbase key regardless of
+  intent — leaving only SILENCE, which with unattested-trigger =
+  non-observation buys denial nothing and costs an attestation-paid
+  witness its fee (TJ-A2b's liveness/pay question, already named). Named
+  caveats, not waved: (1) pools — the "producer" is the pool operator;
+  duty and pay concentrate there, and behavioral clustering (attestation
+  timing/patterns) remains a soft channel even with unlinkable keys;
+  (2) rule-30 hybrid: the coinbase output key is classical — though the
+  v3 coinbase output already carries per-output KEM material
+  (`construct_miner_tx` encapsulates to the miner's PQC key), so a hybrid
+  proof-of-control may have something on-chain to bind against. Both are
+  the design round's questions.
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
