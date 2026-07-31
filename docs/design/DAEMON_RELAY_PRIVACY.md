@@ -1,5 +1,13 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
+**Goal statement (§31, 2026-07-31): NON-ENUMERABILITY.** Dandelion Theorem 2
+floors any policy at `D_OPT ≥ p²`, `R_OPT ≥ p`, so *invisibility against the
+peer adversary was never reachable* — the available residual is that **the
+adversary may hold observations it cannot turn into a list**. Criteria are
+written against §6.8's joint `L × labelable × linkable` over a stated horizon,
+not per-observation precision; the goal **borrows from FCMP++'s linkability
+gate**, which is therefore a reopening trigger for this document (§31.6).
+
 **Status:** ROUND 3 dispositioned — clean break; the RP-1…RP-3b port arc is
 **structurally complete** (§20.10), and the mechanism's definition of done is
 scored at **2/8 parameters derived** (§21 — the live ledger the remaining
@@ -6522,6 +6530,12 @@ symmetry in the wrong direction:** the stem's asymmetry makes origin and relay
 traffic **indistinguishable**; this asymmetry makes them **distinguishable by
 destination class**. Same word, opposite sign.
 
+**Corrected further at §31.3: the binding quantity is the JOINT product, and
+configuration B fails both terms — precision ≈ 1 *and* recall ≈ 1, because the
+broadcast means the slot holder receives the origin's whole stream rather than
+sampling it. Precision 1 with recall 1 over an epoch window is a *list*: the
+complete enumeration failure, not a degraded floor.**
+
 **F-6 is restated to carry both halves** — omission (§25.1: neither Dandelion++
 nor the embargo) and **commission** (this section: a positive source oracle,
 precision ≈ f → ≈ 1 conditional on slot occupancy). Without the second half a
@@ -6750,3 +6764,166 @@ reasons, the third being the one I weight most:
 that a trade is recorded as a trade; the alternative is a future reader finding
 cover traffic deleted with no note that anything was given up. If B is removed,
 the removal commit states what was lost, to whom, and what restores it.
+
+## 31. The goal statement — non-enumerability, and what it settles
+
+**2026-07-31, maintainer.** The arc has been operating without an explicit
+objective function, and several open questions were open *because* of that.
+This section states it, and records what it settles, what it costs, and what it
+corrects.
+
+### 31.1 Invisibility was provably never available
+
+Dandelion (1701.04439) Theorem 2 bounds **any** networking policy on a network
+with adversary fraction `p`:
+
+```text
+D_OPT ≥ p²        R_OPT ≥ p
+```
+
+Both floors are **irreducible** — no spreading strategy, no topology, no
+timing. **So "make the origin invisible" was never a reachable target against
+the peer adversary**, and stating it as the goal would have made every
+mechanism a partial failure *by construction*.
+
+That is this project's own **greenable-gate rule at the design level**: an
+acceptance criterion the correct fix cannot meet is a broken gate, not
+demanding work. **Non-enumerability is the greenable form** — and it is a claim
+about **assembly** rather than observation:
+
+> **The adversary may hold observations it cannot turn into a list.**
+
+### 31.2 §6.8 is already this analysis, and the composition argument gets stronger
+
+§6.8's `detection = L × labelable × linkable`, with FCMP++ shutting the linker
+and the intersection attack needing **≥ 2 leaks in distinct epochs**, is
+**a non-enumerability analysis wearing a detection-probability label.** It had
+the right shape and had not been told it was the objective.
+
+**And the two adversaries have different floors, which is a better argument for
+the composition than "they defend different adversaries":**
+
+| adversary | floor | consequence |
+| --- | --- | --- |
+| peer / topological | `R_OPT ≥ p` — **irreducible** (Thm 2) | cannot be driven to zero; the best available is to **sit near the floor and deny assembly** |
+| wire observer | **none** — it is not in Dandelion's model at all | constant-rate payload-independent cover drives its recall to **zero**: it cannot even *count* your transactions, let alone list them |
+
+**So C + noise is not "two mechanisms for completeness." It is taking the free
+win on the one axis where zero is actually achievable, and staying near an
+irreducible floor on the other.**
+
+### 31.3 Configuration B fails **both** terms — correcting §29's pricing
+
+§29 priced configuration B at **precision ≈ 1**. Under the goal the binding
+quantity is **joint**, and B fails both:
+
+- **Precision ≈ 1** — the zone rule labels origin
+  ([`net_node.inl:2211`](../../src/p2p/net_node.inl#L2211)).
+- **Recall ≈ 1** — `send_txs` clones to **every** channel
+  ([`levin_notify.cpp:1090-1096`](../../src/cryptonote_protocol/levin_notify.cpp#L1090-L1096))
+  and **all** originated transactions route to that zone. **The slot holder
+  does not sample the origin's stream; it receives the whole of it.**
+
+**Precision 1 with recall 1 over an epoch window is a list.** Not a floor
+violation — **the complete enumeration failure**, which is the one thing the
+goal names as unacceptable. And `1 − (1−f)^S` is therefore **the probability of
+getting the list**, not of getting an observation. §29.4's framing understated
+this by pricing capture as access rather than as completion.
+
+### 31.4 Acceptance criteria move to the joint product
+
+**"Per-observation precision ≤ X" is the wrong gate.** An adversary with
+precision 1 on 0.02 % of transactions cannot enumerate; one with precision 0.3
+on all of them can. The remedy's gate is written against **§6.8's three-gate
+product with a stated time horizon.**
+
+**So R-1's success condition (§30.1) sharpens further** — beyond the
+quantitative amendment already recorded:
+
+> not *"cannot infer origin from which channel"*, and not merely *"precision ≤
+> some bound"*, but **"cannot assemble a per-node transaction list over N
+> epochs."**
+
+### 31.5 §6.9 may concede more than the goal requires — a **check**, not a conclusion
+
+§6.9 concedes the passive first-successor at `C1 ≈ f` as a structural loss.
+**Under non-enumerability that concession is about *identification*, and it is
+not obviously an *enumeration* loss:** the spy accumulates `(tx, node)` tuples
+of which fraction ~`f` are that node's own, **cannot separate origin from
+relay**, and — with FCMP++ shutting transaction-to-transaction linkage —
+**cannot group them.** Ungrouped tuples do not assemble.
+
+**Recorded as a check to run, with its own counter-hypothesis, because §6.9 is
+the section every scope argument cites and an over-eager reading would be worse
+than the current one.** The counter to test: §6.8's own intersection dynamics
+supply a candidate separator — a persistently-held slot sees the node's own
+traffic in *every* epoch while relayed traffic varies with the node's rotating
+predecessors, so *steady* origins may be separable where bursty ones are not
+(which is §6.8's recorded double-edge). **Checkable with instruments already
+built.** If the check holds, §6.9's floor is a **bounded identification
+concession** rather than the redesign-territory loss it currently reads as.
+
+### 31.6 The cost of the reframe, in the goal rather than a clause
+
+**Non-enumerability borrows from FCMP++.** Invisibility would have been a
+relay-layer property; **non-enumerability depends on the linkability gate
+holding**, so an external side-channel — exchange KYC, wallet fingerprinting,
+an application-layer timing leak — **converts per-observation precision back
+into enumeration.** §6.8 already says *"absent an external side-channel"*
+parenthetically; **under the goal statement that parenthetical is load-bearing
+and belongs in the goal.**
+
+**Two consequences (mine).** It makes the goal **falsifiable in a named way** —
+anything that links transactions to a persona outside the chain breaks it,
+which is a testable class rather than a caveat. And it registers a **cross-layer
+dependency with a reopening trigger**: if FCMP++'s linkability gate ever
+weakens, **the relay layer's goal degrades with no relay change**, so that
+weakening is a reopen condition for this document and not only for the crypto
+one.
+
+### 31.7 Unit 1's answer falls out — and the shape question is a **linkability** question
+
+§20.9's order was adversary → shape → constants, and adversary-and-capability
+was the open item. **The goal supplies it:**
+
+> **The carrier's job is recall denial against the wire observer. Deny the
+> count.**
+
+That is the objective function §20.9 lacked, and it sorts the shape candidates
+immediately:
+
+- **Payload-independence does all the count-denial work, and a deterministic
+  metronome does it perfectly.** This is exactly Loopix §4.1.2's negative
+  result (§25.3) — **now with a reason rather than an absence of one.**
+- **So the only remaining reason to randomize is (b) — and under this goal (b)
+  is not a side argument, it is the main one.** Tagging is precisely how a wire
+  observer converts two separate observations into *"same node"*, which **is
+  the assembly step. A phase-shifted stream is a linkable stream.**
+
+**So the carrier's shape question is a linkability question, not an
+unobservability question, and Unit 2 is graded on whether an active prober can
+link two observations of the same carrier — not on inference precision about
+emission times.**
+
+**The synthesis this yields (mine), which is the strongest form of the
+carrier-level argument:**
+
+| property | job | denies |
+| --- | --- | --- |
+| **payload-independence** (CV-4) | the count | **recall** — the observer cannot tell whether anything was sent |
+| **memorylessness** (b) | the link | **assembly** — the observer cannot join two observations of one carrier across a perturbation |
+
+**Two properties, two jobs, neither substituting for the other**, and both
+needed only because the goal is a *joint* quantity. That is why the metronome
+argument (§25.3) and the tagging argument (§24.2) both survive without
+contradicting each other — they were answering different terms.
+
+**And it names the instrument, which `inference_precision` is not.** The
+measurement is a **linkage test across a perturbation**: two observation
+windows separated by an adversary-induced stall, asking whether post-stall
+phase is predictable from pre-stall phase. **Under a bounded family it is
+(phase persists — that is (b)); under an exponential it is not (there is no
+phase).** That fixture *can* express the input, which
+`inference_precision` — built to grade per-observation inference — cannot.
+**Per §26.4's pattern, that question gets asked of the fixture before any
+number it produces is cited.**
