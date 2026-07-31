@@ -565,7 +565,7 @@ below the Ed25519 scalar order `ℓ ≈ 2²⁵²`, so the cancel relation never 
 N · C~  −  D · C_claim  −  C_ρ  ∈  ⟨G⟩
   C~     = a·G + amount·H            (public, from membership; G-leg only rerandomized)
   C_claim= z_claim·G + reward·H      (the claimed reward output commitment)
-  C_ρ    = ρ_blind·G + ρ·H           (committed remainder; honest ρ ∈ 0,D), ρ < 2⁴⁹)
+  C_ρ    = ρ_blind·G + ρ·H           (committed remainder; honest ρ ∈ [0,D), ρ < 2⁴⁹)
                                      proven ρ ≥ 0 via the folded 64-bit range proof (1(b))
 ```
 
@@ -600,7 +600,7 @@ remainder bound is the **lower** bound `ρ ≥ 0`, **not** a tight upper bound `
   field wrap making `ρ' + ℓ` land back in `[0, 2⁶⁴)`, which needs
   `reward+j > (ℓ − 2⁶⁴)/D ≈ 2²⁰³`. But the **reward output's own range proof** already bounds
   `reward+j < 2⁶⁴` — a **139-bit margin** (`252 − 49 − 64` at the pinned `k = 48`;
-  [`entitlement.rs::wraparound_over_claim_margin_bits`,
+  `entitlement.rs::wraparound_over_claim_margin_bits`,
   test-locked). So **any** width `w ∈ [⌈log2 D⌉ … ~203]` is inflation-sound, and the honest
   `ρ < D = 2⁴⁹ < 2⁶⁴` always fits the 64-bit slot.
 - **Therefore fold, don't add a proof.** `C_ρ = ρ_blind·G + ρ·H` matches Monero's commitment
