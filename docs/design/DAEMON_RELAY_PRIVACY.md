@@ -9,8 +9,12 @@ capability, §23) landed, with Unit 1's review producing **F-6: the covert
 path has no black-hole backstop** (§24.1 — the derived embargo arms only on
 `dandelionpp_stem`, which the noise zone's stem→local demotion clears, so the
 privacy-maximal path carries *weaker* censorship resistance than clearnet) and
-reframing Unit 2's target as an **active prober** (§24.2). **Q-12 is
-registered and live** (§22.2). The measurement that motivates this document landed alongside it
+reframing Unit 2's target as an **active prober** (§24.2). **Read F-6 in its
+whole form at §25.1: `proxy.noise` defaults true, so the DEFAULT Tor
+deployment (configuration B) runs neither Dandelion++ nor the embargo** — the
+arc's entire output is bypassed on the deployment a privacy-motivated user
+selects, and two live §6 claims are false there. That outranks the cadence
+work. **Q-12 is registered and live** (§22.2). The measurement that motivates this document landed alongside it
 in the same PR (`rust/shekyl-relay-privacy`, 19 measurement tests + the
 suite), so every number below is reproducible rather than asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
 priority-order improvement (§14); the embargo derivation is held block-time-*unaware*
@@ -588,7 +592,7 @@ The relay-privacy adversary is a **P2P-network-layer observer of the origin
 daemon's peer traffic** — a peer, a set of sybil peers, or a passive network
 observer — reached only through the P2P interface, never the RPC one. Its
 visibility of a node's *fluff* is gated by transport, at
-[`levin_notify.cpp:448-449`](../../src/cryptonote_protocol/levin_notify.cpp#L448-L449):
+[`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/zone/mod.rs#L521-L526):
 
 ```text
 // When i2p/tor, only fluff to outbound connections
@@ -603,7 +607,7 @@ if (source != id && (zone->nzone == public_ || !context.m_is_income))
   `!context.m_is_income`: fluff goes to **outbound connections only**. A spy
   cannot receive a node's fluff by connecting *in*. Reinforced by the noise/Tor
   path, which *"only send[s] to outgoing connections"*
-  ([`levin_notify.cpp:831-832`](../../src/cryptonote_protocol/levin_notify.cpp#L831-L832)).
+  ([`levin_notify.cpp:1054-1058`](../../src/cryptonote_protocol/levin_notify.cpp#L1054-L1058)).
 
 **This makes an entire adversary class transport-conditional, not universal**
 (§10.8): the passive inbound-spy observable is real on clearnet and structurally
@@ -661,7 +665,7 @@ The delta is stark and structural: a clearnet supernode observes **every** fluff
 and attributes the source with the paper's first-spy precision (rising with its
 reach to ~0.45 at a 30 % attack); the same supernode over Tor observes
 **nothing**, because fluff never traverses its inbound edges
-([`levin_notify.cpp:448`](../../src/cryptonote_protocol/levin_notify.cpp#L448)).
+([`zone/mod.rs:521`](../../rust/shekyl-relay/src/zone/mod.rs#L521)).
 That collapse is the measured additional security of the Tor configuration.
 
 **Honest scope of the Tor benefit.** It collapses the *passive*
@@ -1696,7 +1700,7 @@ structurally — not by simulation.** The candidate was a passive out-neighbour:
 spy that receives a prefix node's *forced fluff* by neighbouring it, whose leak
 (unlike the black-hole's) would *scale down* with the embargo mean and so reopen
 `ε` as a live lever. Whether that observable exists is decided entirely by who a
-fluff reaches, and [`levin_notify.cpp:448-449`](../../src/cryptonote_protocol/levin_notify.cpp#L448-L449)
+fluff reaches, and [`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/zone/mod.rs#L521-L526)
 settles it (§6.3): on the public zone fluff reaches inbound peers, so an
 inbound sybil *does* see it — the observable is **real on clearnet**; on I2P/Tor
 fluff is outbound-only, so an inbound sybil sees nothing — the observable is
@@ -1928,7 +1932,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 - **Coupling note — the outbound structure read on two channels (net, don't
   double-count).** Two *distinct* source facts both flow from the origin's use of
   outbound connections: fluff is outbound-only on Tor
-  ([levin_notify.cpp:448](../../src/cryptonote_protocol/levin_notify.cpp#L448)),
+  ([zone/mod.rs:521](../../rust/shekyl-relay/src/zone/mod.rs#L521)),
   which makes the inbound passive supernode structurally absent (§6.3, reshape's
   *friend*); and the stem pool is the outbound set
   (dandelionpp.cpp:103,
@@ -2253,7 +2257,7 @@ mechanism* of §12.9, under which the broadcast disappears as a consequence.
 *Reconciliation with §6.5/§6.6 (verified at source; those sections are already
 pushed):* they model the **fluff phase's** inbound observability — the
 *channel-observer* axis — transport-gated at
-[levin_notify.cpp:448](../../src/cryptonote_protocol/levin_notify.cpp#L448)
+[zone/mod.rs:521](../../rust/shekyl-relay/src/zone/mod.rs#L521)
 (`fluff_notify` runs per-zone; on Tor it fluffs outbound-only). That is a *different
 phase and a different axis* from stem occupancy, so §6.5's "Tor collapses the
 inbound supernode" is correct **for the channel-observer axis** and must not be read
@@ -5662,7 +5666,7 @@ at source before it was built on.** Two results: a defect that re-ranks the
 round, and a correction to §23 that relocates Q-11's adversary question from
 the passive wire observer to an active prober.
 
-### 24.1 F-6 — the covert path has no black-hole backstop
+### 24.1 F-6 — the covert path has no black-hole backstop *(scope corrected below: see §24.5, this is the symptom; the disease is configuration B)*
 
 Traced by call graph, and the trace is decisive rather than suggestive:
 
@@ -5795,3 +5799,183 @@ circuit, (c) is live at N = 2 and argues alongside (b).
    **(c)**'s circuit question as the parallel factual thread, and the
    passive-observer argument as the consistency check rather than the load
    bearer.
+
+## 25. F-6 seen whole — configuration B, and what Loopix actually licenses
+
+**2026-07-31, maintainer review round two; every claim re-verified at source.**
+§24.1 numbered a symptom. Read whole, the defect is larger and it re-ranks the
+queue above the shape question.
+
+### 25.1 There are three configurations, and §6 models the one we do not ship
+
+| | stem routing | embargo armed | fluff reach | covert |
+| --- | --- | --- | --- | --- |
+| **A. clearnet** | Dandelion++ | yes | every peer | no |
+| **B. Tor, DEFAULT** | **none** | **no** | outbound only | 2 channels |
+| **C. Tor + `disable_noise`** | Dandelion++ | yes | outbound only | no |
+
+`proxy.noise` defaults **true** ([`net_node.h:76`](../../src/p2p/net_node.h#L76)),
+so a plain `--tx-proxy tor,...` gets **B**. In B the stem→local demotion clears
+`dandelionpp_stem` (§24.1's chain), and with it both halves of the arc's
+output: **neither Dandelion++ nor the derived black-hole backstop runs on the
+default anonymity-network deployment.**
+
+**Two live claims in §6 are false on B**, and this is the stale-claim class
+landing in the section everything else cites:
+
+- **§6.5's honest-scope paragraph** says Tor collapses the passive supernode
+  but *"the black-hole channel is unchanged, and remains the reason the
+  mechanism itself must be correct regardless of transport."* On B the channel
+  is not unchanged — **the mechanism that answers it is absent.**
+- **§6.6's lever table** assigns the active channel to *"every origin"* with
+  Q-8a reshape as the lever. Reshape is a **re-stem**; there is no stem in B.
+
+**Ranking (accepted).** §24.1 traced one call chain and named the covert path's
+missing backstop. Configuration B is that defect seen whole: not a gap in one
+path but the arc's entire output bypassed on the deployment a
+privacy-motivated user actually selects, replaced by a covert channel whose
+substitution claim rests on the fallacy in §25.2. **This outranks the cadence
+work**, on §00's own ordering — a derived cadence on a channel that cannot
+detect being swallowed is the fix-one-ignore-the-other pattern §14 ruled
+against.
+
+**The fix shape, and the open design question inside it.** §24.1 identified
+one flag serving two meanings; the whole-form version is that **the embargo
+does two separable jobs** — stem-phase timeout *and* black-hole backstop — and
+`dandelionpp_stem` gates both, so demoting for routing reasons discards the
+half B still needs. **Unbundling is cheaper than a new mechanism and adds
+nothing that can rot** (discipline #17: the primitive is already owned —
+*emit something you expect to see again, treat absence as signal*). What
+unbundling does **not** answer, and a round must: **what the backstop does when
+it fires on B.** On clearnet it fluffs. On a noise zone there is no fluff path
+— everything leaves through the covert channels — so the remedy is a design
+choice (re-point to a different covert channel, i.e. reshape's analogue; or
+fluff to the zone's outbound set) and not a mechanical re-flag.
+
+### 25.2 The inbound rule protects unmintability, and the comment misattributes it
+
+Three statements of the same rule, in increasing strength:
+
+1. **Inherited C++** ([`levin_notify.cpp:1054-1058`](../../src/cryptonote_protocol/levin_notify.cpp#L1054-L1058))
+   — *anonymity networks provide sybil protection*.
+2. **Our Rust doc** ([`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/zone/mod.rs#L521-L526))
+   — selection-based: an inbound peer is a stranger who dialled us; only
+   outbound are ones we chose.
+3. **Correct, and it subsumes both** — on an anonymity network **inbound peer
+   identity is free to mint**: an onion address is a keypair. It is not that
+   you might have one inbound peer; it is that you can **never establish you
+   have more than one distinct one**. Effective inbound anonymity set ≈ 1
+   against anyone willing to generate keys.
+
+**The Tor-is-magic fallacy is present in the comment, not in the code.** The
+code does the right thing; the comment attributes to the *network* a property
+the *rule* supplies. And the misattribution is load-bearing, because
+`zone/mod.rs:113-114` leans on it — *"it is why noise-mode networks can
+substitute for Dandelion++'s sybil resistance at all"* — so the substitution
+claim inherits the fallacy.
+
+**Loopix settles it against the comment.** §2.2 excludes sybil attacks from its
+threat model *on the assumption that providers authenticate users and can cap
+the adversarial fraction*; §7 states that provider-mediated access is what
+brings sybil resistance. **The canonical cover-traffic system buys its sybil
+resistance with exactly the privileged class this project rejects, and says
+so.** So the governance rejection is stronger than stated: it does not merely
+decline Loopix's economics, it **removes the premise Loopix's parameters are
+calibrated against.** We cannot take their numbers. We can take mechanisms
+that do not route through provider identity.
+
+### 25.3 Loopix contains no argument for randomizing our cadence — a negative result, with a citation
+
+**Its own sender-unobservability argument does not use the distribution.**
+§4.1.2 reasons purely from payload-independence: the adversary *"cannot tell
+whether a genuine message or a drop cover message is sent"*, therefore
+unobservability. The word "Poisson" appears in the claim and does no work in
+it — **the identical argument goes through verbatim for a metronome.**
+
+Where the exponential *does* work is §3.3: aggregating Poisson processes yields
+a Poisson process, which licenses the M/M/∞ model, which yields Lemma 1,
+Lemma 2 (memorylessness) and Theorem 1. **The randomization is a
+mixing-composition requirement.** It buys nothing at the sender's link.
+
+**This is the most useful form of result available here**: it removes the
+"cover traffic wants randomness" default the inherited constants were
+presumably chosen under, *by citation rather than by assertion* — and it
+retires §23.5 item 1 entirely rather than merely correcting it (§24.2 corrected
+the superposition argument; this shows the lineage never made the sender-side
+argument at all).
+
+**The structural analogue is exact, which is what makes the negative result
+citable rather than analogical**: Loopix §3.2's sender checks a FIFO on a
+schedule, pops if queued, else emits drop cover; `send_noise`
+([`levin_notify.cpp:860-867`](../../src/cryptonote_protocol/levin_notify.cpp#L860-L867))
+takes `channel.active.take_slice(...)` if a fragment run is live, else clones
+`covert_payload`. Same primitive.
+
+### 25.4 (b)'s epistemic status — an extension, not a citation
+
+**Loopix does not make the phase-tagging argument and cannot**: its client
+stream is already exponential, so there is no phase to tag. What §24.2 does is
+**apply Lemma 2 to the emission process rather than to the pool.** That is a
+defensible extension and I believe it is correct — but it is an *extension*,
+and Unit 1 carries it as such rather than as a cited result. If the
+Dandelion++ paper calls out memorylessness in a related function, that is a
+better anchor; **neither of us has that paper in hand, and the section is to be
+pinned before either of us cites it.**
+
+**Version pin for every Loopix citation in this document:** read from
+**arXiv:1703.00536v1, 1 Mar 2017**. The citable artifact is USENIX Security '17
+pp. 1199–1216 and the two differ — v1's abstract claims *"upwards of 300
+messages per second"* while its own §5 reports throughput stabilizing near
+**225**. Any throughput claim must prefer the final version; the §§2–4 material
+cited here is structural and unaffected, but the version is named so a future
+reader can check rather than assume.
+
+### 25.5 Parity runs the other way too, and §6 never asks
+
+§6.5 measures the clearnet inbound supernode at π₀ = **0.1155 / 0.1967 /
+0.4463** at 5/10/30 % reach, and measures outbound-only fluff collapsing it to
+**0.0000**. That is a measured leak and its measured fix — **and we apply the
+fix only where the leak is structurally smaller.**
+
+The cost is fanout: `P2P_DEFAULT_CONNECTIONS_COUNT = 12`
+([`cryptonote_config.h:150`](../../src/cryptonote_config.h#L150)) outbound
+against up to ~64 inbound, so per-hop reach drops ~6×. **The relevant quantity
+is not per-hop reach but time-to-coverage under a flood on an expander**, which
+scales with the *log of the degree* — so the cost is a small multiple of hops,
+each costing one fluff delay, not a connectivity break. F-5's instrument
+(`simulate_transport_observation`, first-passage) measures it directly and the
+number should be produced before the argument is either adopted or dismissed.
+
+**What outbound-only clearnet actually does is convert the
+cheap-unlimited-inbound adversary into the occupancy adversary** — W3 /
+ProxyMark, already in scope, already receiving Q-10 / `g_max`. That is not a
+redesign; it is **moving a live unmitigated channel into a class we are already
+building a defense for, priced in latency.** §6 does not consider it. Recorded
+as an open question for the §6 round, not decided here.
+
+### 25.6 The zone field is a data-model gap, not a capability limit
+
+The inherited claim ([`levin_notify.cpp:1060-1062`](../../src/cryptonote_protocol/levin_notify.cpp#L1060-L1062))
+is that Dandelion++ over I2P/Tor needs *"the mempool/stempool to know the zone
+a tx originated from."* Checked: `txpool_tx_meta_t`
+([`blockchain_db.h:177-206`](../../src/blockchain_db/blockchain_db.h#L177-L206))
+has **no zone field**, so the claim is accurate *as a description*. It is
+**false as a statement of feasibility**: the struct carries `bf_padding : 2` —
+the bitfield's exact remainder, and a zone enum is two bits — plus
+`padding[44]`. It is a node-local LMDB record with no consensus role,
+pre-genesis. **The space is already reserved.** Somebody read an inherited
+struct, saw no field, and wrote *"needs to know"* as though the struct were
+immutable — the architectural-inheritance error rule 16 names, in one word.
+
+### 25.7 Order, restated again
+
+1. **Configuration B** (§25.1) — F-6 seen whole; outranks the shape work, and
+   the remedy's design question (what the backstop does when it fires on a
+   noise zone) is a round of its own.
+2. ~~U0-b family-sensitivity control~~ — **closed** at `bf0d2f52d`.
+3. **Unit 2 (shape)** on (b) as the extension it is (§25.4), with (c)'s circuit
+   question parallel.
+4. **Open for the §6 round**: outbound-only fluff on clearnet (§25.5), and the
+   §6 anchor sweep — six stale `:448` citations repointed to
+   `zone/mod.rs:521-526` in this commit, since RP-3a/3b moved the rule to Rust
+   and §6 is the section everything else cites.
