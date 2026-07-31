@@ -5,8 +5,12 @@
 scored at **2/8 parameters derived** (§21 — the live ledger the remaining
 rounds tick; denominator widened by the Q-11 Unit 0 census, §22). Q-11 is in
 flight — Unit 0 (feasible-region census, §22) and Unit 1 (adversary and
-capability, §23) landed; **Unit 2 = the emission shape** is next — and **Q-12
-is registered and live** (§22.2). The measurement that motivates this document landed alongside it
+capability, §23) landed, with Unit 1's review producing **F-6: the covert
+path has no black-hole backstop** (§24.1 — the derived embargo arms only on
+`dandelionpp_stem`, which the noise zone's stem→local demotion clears, so the
+privacy-maximal path carries *weaker* censorship resistance than clearnet) and
+reframing Unit 2's target as an **active prober** (§24.2). **Q-12 is
+registered and live** (§22.2). The measurement that motivates this document landed alongside it
 in the same PR (`rust/shekyl-relay-privacy`, 19 measurement tests + the
 suite), so every number below is reproducible rather than asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
 priority-order improvement (§14); the embargo derivation is held block-time-*unaware*
@@ -5319,7 +5323,7 @@ is this ledger. Scored honestly:
 | fluff delay family (memoryless) | ✅ | the residual-phase argument — memoryless is the family whose residual equals its full distribution (RD-2, D-3) |
 | `q = 0.2` (stem-continue) | ❌ | inherited; deferred at Q-3 / D-6 as not-demonstrably-wrong, never derived |
 | `STEMS = 2` | ❌ | inherited; §12.7's expander-minimum argument is a rationale, not a derivation from an adversary bound — and its fan-out leg now carries two recorded ungrounded premises (§12.7, 2026-07-30 note) |
-| noise covert constants — `NOISE_MIN_DELAY`, `_DELAY_RANGE`, `_MIN_EPOCH`, `_BYTES`, `_CHANNELS` | ❌ | Q-11 — the row widened at Unit 0 (§22.1, Q11-D: rate has a bytes axis this ledger had omitted); the inherited triple is a *capacity* solution at exact equality (Q11-B), the oracle is production-aimed since Unit 0 (Q11-C), and the §20.9 order runs from a now-known feasible region |
+| noise covert constants — `NOISE_MIN_DELAY`, `_DELAY_RANGE`, `_MIN_EPOCH`, `_BYTES`, `_CHANNELS` | ❌ | Q-11 — **derivation target relocated at Unit 1 review to the active prober** (§24.2: the passive-wire argument does not carry — under CV-4 the emission series is payload-blind under *any* family, so randomness must be justified by the phase-tag channel, not by the lineage); the row widened at Unit 0 (§22.1, Q11-D: rate has a bytes axis this ledger had omitted); the inherited triple is a *capacity* solution at exact equality (Q11-B), the oracle is production-aimed since Unit 0 (Q11-C), and the §20.9 order runs from a now-known feasible region |
 | forward-delay mean (`FORWARD_DELAY_AVERAGE = 22 s`) | ❌ | **Q-12** (§22.2, live) — decoupled from the covert constants at Unit 0 (Q11-A); stated anonymity-set objective never derived; drawn Poisson (the F-2/F-4 family signature) at `tx_pool.cpp:311` |
 | cooldown / eviction threshold | ❌ | unbuilt — the §12.11 selection-mechanism tier, blocked with Q-10 |
 | `ε_explore` | ❌ | unbuilt — §12.11's anti-ossification term; ~0.05 from the RL lineage is a starting point, not a derivation |
@@ -5650,3 +5654,144 @@ Recorded because the read produced them and they constrain the shape question;
    does it at the *client* granularity where the sender is the only party
    affected; Shekyl's channel carries relayed traffic too. Unit 2 must not
    import this knob without re-deriving it against CV-4.
+
+## 24. F-6 and the Unit 1 reframing — the census that outranked its own round
+
+**2026-07-31, from the maintainer's Unit 1 review; every claim below re-verified
+at source before it was built on.** Two results: a defect that re-ranks the
+round, and a correction to §23 that relocates Q-11's adversary question from
+the passive wire observer to an active prober.
+
+### 24.1 F-6 — the covert path has no black-hole backstop
+
+Traced by call graph, and the trace is decisive rather than suggestive:
+
+1. [`levin_notify.cpp:1071-1074`](../../src/cryptonote_protocol/levin_notify.cpp#L1071)
+   — on a noise zone, `relay_method::stem` is demoted to `relay_method::local`
+   *before* `on_transactions_relayed`, under the comment *"do not put into
+   stempool embargo"*.
+2. [`blockchain_db.cpp`](../../src/blockchain_db/blockchain_db.cpp) — `local`
+   sets `is_local = 1`; `dandelionpp_stem` is a **different case arm** and
+   stays `0`.
+3. [`tx_pool.cpp:1054`](../../src/cryptonote_core/tx_pool.cpp#L1054) — the
+   derived embargo arms **only** under `if (meta.dandelionpp_stem)`.
+
+**So a transaction sent over the covert channel never arms the backstop this
+arc spent RP-4 deriving (144 s, memoryless, exact survival solve).** Its
+fallback is `get_relay_delay` — a blind retry at ≥ 300 s backing off toward
+4 h, which *retries* rather than *detects*, and retries to the same covert
+channels, i.e. through the same peer that may be dropping.
+
+**Why this is a defect and not a scope decision.** The demotion's stated reason
+is routing — Dandelion++ stem is genuinely not supported over noise zones, and
+the noise branch short-circuits before `dandelionpp_notify` ever runs. But the
+embargo is not routing; it is **detection**, and the black-hole threat is
+transport-independent (§6.5, measured: the active dropper is the one adversary
+Tor does *not* remove). The two meanings ride one flag: `dandelionpp_stem`
+answers both *"route this as a stem"* and *"arm the backstop"*, so switching
+off the first switches off the second silently. **That is Q11-A's defect one
+layer up — one symbol, two mechanisms — and it is why the fix shape is a
+split, not a re-flag:** the backstop's real predicate is *"this transaction
+went down a path whose progress I cannot observe"*, which is true of the covert
+path exactly as it is of a stem.
+
+**The priority-order inversion is the part that ranks it.** The covert path is
+the privacy-maximal path — selected precisely when the user most needs it — and
+it currently carries **strictly weaker censorship resistance than clearnet**.
+§14 established that spending privacy for recovery latency is backwards from
+the priority order; this is the same axis landing the same way, and not even as
+a trade: nothing was bought. A cadence that perfectly defeats a wire observer
+is worth little on a channel that cannot tell it is being swallowed.
+
+**Numbered F-6, deliberately, and §20.9's caution does not bar it.** That
+caution — *promote by measuring, not renumbering* — guards against promoting an
+**unmeasured** Q into the F-family. This is not that: the showing is complete,
+the same way F-1's was arithmetic (log10-for-ln) and F-3's was algebra rather
+than measurement. The F-family's bar is a *decisive showing*, not a
+*measurement specifically*, and a call graph proving a mechanism is structurally
+unreachable on a path clears it. What is owed at fix time is the measurement of
+the **remedy**, not of the defect.
+
+### 24.2 Unit 1 reframed — the passive-wire argument does not carry, and (b) does
+
+**The maintainer's burden-inversion, which I accept and which corrects §23.5.**
+If dummy and real are indistinguishable in length and content — the covert
+channel's entire premise, and CV-4's structural guarantee — then the emission
+time series carries **zero** payload information under *any* emission
+distribution. Randomizing cannot reduce leakage below zero; what it can do is
+put positive entropy into a timing channel, which is capacity a modulating
+sender can use. **On the pure passive single-link model, constant-rate strictly
+dominates** — which is why the constant-rate padding literature is
+deterministic on purpose.
+
+**§23.5 item 1 is corrected accordingly.** It carried Loopix's exponential
+family in on the superposition argument while §23.5 item 2 had already ruled
+that the mixing half does not transfer — but **superposition is itself a
+mix-structure argument**: it earns its keep where streams aggregate at a pool,
+not at the sender's wire. Importing it without a carrier is the phantom-channel
+error (§12.6) at one remove, caught here by asking *"what does randomness buy
+against T?"* rather than *"what does the lineage do?"*.
+
+**What survives — and it is stronger than what it replaces. (b), verified at
+source.**
+[`CovertSchedule::due_one`](../../rust/shekyl-relay/src/zone/mod.rs#L171)
+re-arms from **`now`**, not from the elapsed deadline. Its own comment states
+the trade — *"phase may lag; rate does not"* — and that decomposition is
+correct **against load**, which is the only case it was evaluated against.
+Against an adversary who *chooses* when to stall the link, phase-lag is an
+**adversary-chosen, durable, per-node mark**: tag at position A, recognize at
+position B, with no further interaction. Bounded-uniform jitter does not close
+it — phase still shifts and still persists.
+
+**And the dilemma is an artifact of the bounded family, which is the result
+that makes the shape question answerable.** Both re-arm choices are defective,
+dually:
+
+| Re-arm from | Failure under a stall | Character |
+| --- | --- | --- |
+| the elapsed deadline (RP-3b as landed) | catch-up **burst** on recovery | transient — but a burst is what constant-rate exists to deny |
+| `now` (live dev) | permanent **phase shift** | durable, adversary-chosen: the tag |
+
+Under a **memoryless** family the two collapse into the same non-event:
+`next_send(now)` and `next_send(deadline)` are *equal in distribution*, because
+`Pr[X > s + t | X > t] = Pr[X > s]` — there is no phase to shift and no backlog
+to burst, and the post-perturbation process is indistinguishable from the
+pre-perturbation one **by construction**. So the choice the code currently
+makes by picking a horn stops being a choice at all.
+
+**This is what relocates Q-11's adversary.** The target is an **active prober**
+— it must stall the link to plant the mark — which sits on the in-scope side of
+this document's own act-versus-watch line (§6.9 as carved out in §22.3), where
+the pure passive wire observer is charter but not a derivation target. It is
+decisive at **N = 1**, needs no literature, and is measurable with
+`inference_precision`, already built. Unit 2's shape question therefore has a
+target that is in scope by the project's existing dividing line, and the
+passive-observer framing demotes to a consistency check.
+
+### 24.3 The aggregation question (c) — the point exists; the isolation does not
+
+Superposition still matters if streams aggregate, so: **they do, by
+construction.** `CRYPTONOTE_NOISE_CHANNELS = 2` runs two covert streams per
+zone through **one** SOCKS endpoint —
+[`net_node.inl:621-622`](../../src/p2p/net_node.inl#L621), a single
+`m_proxy_address` per zone. Whether they share a *circuit* is the open part,
+and the tree answers it asymmetrically: `shekyl-p-transport` carries **explicit
+per-persona circuit isolation** (Tor's `IsolateSOCKSAuth`, a per-`P` SOCKS
+username — [`p-transport/src/lib.rs:10-11`](../../rust/shekyl-p-transport/src/lib.rs#L10)),
+while the daemon's `--tx-proxy` path carries **no isolation credential at
+all**. Two subsystems, two answers to the same question, and only one wrote
+down why. Unit 2 owes the circuit determination; if the streams share a
+circuit, (c) is live at N = 2 and argues alongside (b).
+
+### 24.4 Order, restated
+
+1. **F-6 disposition** (§24.1) — it may outrank the cadence work entirely, and
+   a fix is a mechanism change with its own round.
+2. ~~U0-b's family-sensitivity control~~ — **closed** at `bf0d2f52d`
+   (`noise_cadence_grade_rejects_right_support_wrong_family`: min-of-two
+   production draws, right support, non-uniform density; run and observed to
+   fail). The oracle can see families now.
+3. **Unit 2 (shape)** opens on **(b)** as the adversary-and-capability, with
+   **(c)**'s circuit question as the parallel factual thread, and the
+   passive-observer argument as the consistency check rather than the load
+   bearer.
