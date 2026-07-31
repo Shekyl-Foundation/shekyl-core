@@ -6546,6 +6546,14 @@ configuration.
 
 ### 29.4 Consequence — `NOISE_CHANNELS` is a security parameter with the opposite sign to `STEMS`
 
+> **Corrected at §30.4: the inverse sign is *conditional on F-6's omission
+> half*, not an independent property.** The broadcast is functionally the
+> backstop — with no embargo on this path, redundancy across `S` channels is
+> the only thing catching a black-holing proxy. Restore the backstop and
+> unicast-to-one-pinned-channel becomes safe, giving `P(capture) = f`
+> independent of `S`. The sign is a symptom, and it is fixed by the same
+> remedy.
+
 `send_txs` clones the covert message to **every** channel
 ([`levin_notify.cpp:1082-1088`](../../src/cryptonote_protocol/levin_notify.cpp#L1082-L1088)),
 so **capturing one covert slot yields the origin's entire originated stream.**
@@ -6586,3 +6594,159 @@ moved a security parameter without knowing.
 | | one thing | silently serving two |
 | --- | --- | --- |
 | **`MIN_EPOCH`** | **one epoch constant** | **covert cadence *and* the adversary's slot re-roll clock** |
+
+## 30. The configuration-B remedy — ratified constraint set, before any implementation
+
+**2026-07-31.** Maintainer-proposed constraints, ratified with amendments. **No
+code is attached to any of this deliberately**: R-1 and the capacity collision
+are design questions that gate everything downstream, so configuration B's unit
+opens as a **design round on eligibility-and-capacity** with §25.1's backstop
+question inside it, and an implementation plan is drawn only after.
+
+### 30.1 R-1 (ratified) — the oracle must close before a stem is worth building
+
+**The tempting sequence is a no-op.** Add the zone field, implement Dandelion++
+over Tor, done — fixes nothing on its own. If origin transactions stem over the
+anonymity zone while relayed transactions still route to clearnet
+(`net_node.inl:2211`), a peer receiving anything over its Tor connection
+**still knows the sender originated it**. That is a stem whose first edge has
+precision ≈ 1, and the stem's entire value is that the first successor cannot
+separate *"you made this"* from *"you relayed this"* — **a separation supplied
+by the zone rule, not by the presence of a stem.**
+
+**So the load-bearing change is `net_node.inl:2211-2215`: relayed transactions
+must become eligible for the anonymity zone.** Everything else is downstream.
+This also re-justifies the `txpool_tx_meta_t` zone field better than the
+inherited claim did (§25.6): it is not needed *"for the stempool to work"* — it
+is needed **to make the eligibility set mixed.**
+
+> **Acceptance criterion.** The remedy is complete when **a peer holding a
+> covert slot cannot infer origin from which channel a transaction arrived
+> on.** Anything that leaves the two classes routed by destination class has
+> not fixed configuration B, however much stem machinery sits on top.
+
+**Amendment (mine): capacity forces that criterion to be *quantitative*, not
+binary.** §30.2 shows full mixed eligibility is impossible, so the achievable
+state is a **mix ratio**, and a peer seeing a transaction on the covert channel
+updates toward "originated" by a **likelihood ratio set by that ratio**.
+Precision lands somewhere in `[f, 1]` — so **the eligibility rule *is* the
+anonymity parameter**, and the design round's output is a **precision target
+with the capacity bound as its constraint**, not a yes/no.
+
+### 30.2 R-1 collides with Q11-B at zero slack
+
+Mixed eligibility means the carrier transports relayed traffic as well as
+originated. The carrier is **2 channels × 3 KiB per 10 + U[0,5] s ≈ 491 B/s per
+zone**, and per-epoch capacity is bounded by the `static_assert` Q11-B showed
+holds at **exact equality** (§22.1).
+
+**Made vivid:** one epoch is ~300 s at ~12.5 s mean spacing ⇒ **~24 sends per
+channel per epoch**, and a maximum-size message is `MAX_FRAGMENTS = 20`
+fragments — so **a single max-size transaction consumes ~83 % of one channel's
+entire epoch.** At Shekyl transaction sizes (FCMP++ proofs plus hybrid PQ
+signatures; `shekyl-tx-weight` holds the real model) **the carrier cannot
+absorb network relay rate.**
+
+So R-1 **cannot** mean "all relayed traffic over Tor." It must mean something
+weaker that still produces ambiguity. The design space, with the fourth option
+added:
+
+1. a **sampled fraction** of relayed traffic;
+2. eligibility restricted to **stem-phase forwards**;
+3. a **per-epoch budget**;
+4. **(mine) the constants move** — `NOISE_BYTES` and the cadence are both in the
+   Q-11 ledger and are not fixed by nature. This must be *priced*, not assumed
+   away: loosening the cadence is a **build break** (Q11-B), and it is
+   **Q11-A's decoupling that now stops it silently rewriting the forward
+   delay**. The unit that decoupled them is what makes this option safe to
+   consider at all.
+
+Each carries a different anonymity argument, and **this is the second consumer
+of §22.1's family-surviving `MAX_FRAGMENTS` restatement** — landed for the
+shape question, and now gating the remedy.
+
+### 30.3 R-2 (ratified) — payload-independence survives, and is already structurally guarded
+
+Adding relayed traffic to the carrier **does not** make emission
+data-dependent: `CovertSchedule` arms deadlines independently of queue contents
+and sends real-if-queued-else-dummy. Higher occupancy changes the **dummy/real
+ratio** — unobservable by construction — not the **cadence**, which is what the
+wire observer sees. Loopix §4.1.2 covers exactly this case (§23.2).
+
+**Amendment (mine): R-2 is not merely satisfied, it is *enforced*.** CV-4's
+structural guarantee — no payload discriminant in the callback signature
+(§20.2) — means the scheduler **cannot** consult the queue even to try. The
+thing to guard is therefore narrow and nameable: **no part of the remedy may
+introduce a timer keyed on queue depth**, which would be a *new* path around an
+invariant the existing signature already closes.
+
+### 30.4 The broadcast is functionally the backstop — which **corrects §29.4**
+
+`levin_notify.cpp:1090-1096` clones to every channel with no selection, priced
+in §29.4 as `1 − (1−f)^S`. **The design consequence changes that finding's
+character:** the reason a covert send *can* be a broadcast is that **nothing
+else catches a black-holing proxy.** With no embargo on this path, redundancy
+across `S` channels is the only thing between a swallowed transaction and
+silent loss — remove it today and one adversarial proxy black-holes the
+origin's traffic undetected.
+
+**So `NOISE_CHANNELS`' inverse sign is *conditional on F-6's omission half*, not
+an independent property.** §29.4 recorded it as static; it is a **symptom**. The
+chain:
+
+```text
+§25.1 (what the backstop does on a noise zone) → embargo restored on the covert
+path → unicast-to-one-pinned-channel becomes safe → P(capture) = f, independent
+of S → NOISE_CHANNELS stops being inverse-signed
+```
+
+**Unicast costs nothing in cover** — the unselected channels keep emitting
+dummy, so the wire observer sees an unchanged carrier. And it is the same
+one-to-one pinning D++ Theorem 2 prices at **Θ(p² log(1/p))** against **Θ(p)**
+for the alternatives (§27.6); the mechanism already exists as `in_mapping_` on
+the clearnet side.
+
+### 30.5 One implementation of §25.1 is forbidden, and it is the obvious one
+
+> **The backstop must never fall out to the public zone.** On a dual-stack node
+> that publishes the transaction to clearnet **from the origin's own IP** — the
+> exact first-spy scenario this entire arc exists to prevent, triggered by the
+> mechanism meant to protect it.
+
+**Admissible answers are in-zone**: re-point to another covert channel
+(reshape's analogue, which §6.7 already prices at **0.026 %** worst-case origin
+exposure at R = 1), or in-zone fluff to the zone's outbound set. **Named at the
+definition site rather than caught in review**, because the forbidden path is
+the one a reasonable implementer reaches for first.
+
+### 30.6 The interim trade — recorded as a decision, with a recommendation
+
+If configuration B is removed before the composition lands, the fallback is
+**configuration C** (Tor + `disable_noise`): stem and embargo present, the
+constant-rate carrier gone, so a wire observer at the guard regains emission
+timing. **That is a real loss on the axis §20.9 was chartered to defend.**
+
+**C strictly dominates B on the peer axis** (B is not merely absent there — it
+is *inverted* to ≈ 1) and **loses to B on the wire axis.**
+
+**Recommendation: remove B in the interim, and record the trade.** Three
+reasons, the third being the one I weight most:
+
+1. **B's failure is near-certain in occurrence and unbounded in consequence.**
+   Slots re-roll every epoch (§29.5), so `P(capture at least once over k
+   epochs) → 1` for any persistent adversary with `f > 0`; once captured,
+   precision ≈ 1 on *all* originated traffic.
+2. **C's failure is bounded and positionally expensive.** The guard learns
+   *that* the node transacted and *when* — not what, not to whom, and not
+   linked on-chain without further correlation — and it must be the guard.
+3. **An inverted mechanism is worse than an absent one, because of what the
+   user believes they bought.** Selecting Tor is an affirmative act to improve
+   privacy; in B it makes the peer axis *strictly worse than clearnet*. That is
+   rule 82's worst class — a failure mode that presents as a protection — and
+   it is not a magnitude judgement, which is why it carries the most weight
+   here.
+
+**What must not happen is shipping the interim silently.** This arc's idiom is
+that a trade is recorded as a trade; the alternative is a future reader finding
+cover traffic deleted with no note that anything was given up. If B is removed,
+the removal commit states what was lost, to whom, and what restores it.
