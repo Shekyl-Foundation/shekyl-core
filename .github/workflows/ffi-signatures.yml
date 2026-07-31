@@ -50,9 +50,10 @@ jobs:
 
       # Version-pinned: cbindgen's generated output differs across versions,
       # and the gate compares generated output against a hand-written header.
-      # `cargo install --locked` is the house idiom (rust-audit-test.yml).
+      # Pin lives in the gate script (--print-pin) so install and check cannot
+      # drift. `cargo install --locked` is the house idiom (rust-audit-test.yml).
       - name: Install cbindgen (pinned)
-        run: cargo install cbindgen --version 0.29.4 --locked
+        run: cargo install cbindgen --version "$(scripts/ci/check_relay_ffi_signatures.sh --print-pin)" --locked
 
       - name: Run relay FFI signature gate
         run: scripts/ci/check_relay_ffi_signatures.sh

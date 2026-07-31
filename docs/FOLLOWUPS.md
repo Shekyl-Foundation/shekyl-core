@@ -121,9 +121,11 @@ sustainability is unaffected by the recalibration.
   redeclaration rules turn any arity/type/return disagreement into a
   conflicting-declaration compile error. Both declaration sets derive from
   the artifacts under test; the C++ compiler performs the comparison. A
-  coverage guard pins generated-export count to the Rust module's export
-  count (and caught its own first draft under-counting the
-  pointer-returning export). Negative controls run and observed to fail:
+  coverage guard pins a three-way equality — Rust export count, generated
+  count, and handwritten-header count (and caught its own first draft
+  under-counting the pointer-returning export; the header leg closes the
+  "omitted declaration still compiles" hole, because a missing handwritten
+  name is not a conflicting redeclaration). Negative controls run and observed to fail:
   dropped parameter and changed parameter type both produce the
   conflicting-declaration error. Struct layout and flag values are
   deliberately out of this gate's scope — the header's `static_assert` and
