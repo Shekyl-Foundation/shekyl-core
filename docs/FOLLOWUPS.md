@@ -139,11 +139,14 @@ sustainability is unaffected by the recalibration.
   free of *slash*, not free *money*, and the derived quantity is a **break-even
   attestation fraction**: `f ≈ 0.0331` at the median per-shard pool
   (2.4156 SKL/shard/epoch), `0.0002` at the family max, with friction at the
-  **structural floor of 2 epochs** of `r_market` exclusion — 1 from
-  `rebond_connect`'s validation (`end_exclusive = E_rebond + 1`; its same-epoch
-  slack is not a route) + 1 of reachability (the interval a `Rebond` verifies
-  against is appended at the failed epoch's settlement fold, and dispatch
-  precedes the fold). A `Rebond` is **reinstatement, not re-entry** (P2B-9):
+  **structural floor of 2 epochs** of forgone earnings: the slash for epoch `e`
+  folds only past `H_close(e) + CHALLENGE_RESOLUTION_BLOCKS` (one epoch of
+  slash grace), retroactive to `start = e`, so the earliest reachable `Rebond`
+  is in `e+2` and epochs `e+1..=e+2` are voided — epoch `e` is the absorbing
+  miss, already unpaid; claim order enforces the retro void (`e+1` claims open
+  at `e+3`, after the fold). `rebond_connect`'s validation admits a same-epoch
+  close — probed slack, not a route; no deadline bounds when a `Rebond` may
+  happen. A `Rebond` is **reinstatement, not re-entry** (P2B-9):
   the slash burns one `FLOOR` and removes the shard atomically, so the
   slash-emptied cycle pair re-adds at `FLOOR`; forgone earnings priced at the
   credited rate `f·R`, not full `R`. Labelled attacker-favourable

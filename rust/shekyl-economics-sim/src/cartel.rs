@@ -80,8 +80,8 @@ use core::fmt;
 
 use shekyl_archival_retention::bond_floor::bond_floor_of;
 use shekyl_archival_retention::{
-    rebond_connect, BadInterval, HoldingsKind, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
-    MAX_HOLDINGS_SHARDS,
+    rebond_connect, BadInterval, HoldingsKind, CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_M,
+    FAILURE_WINDOW_N, MAX_HOLDINGS_SHARDS, SETTLEMENT_EPOCH_BLOCKS,
 };
 
 use crate::proxy::{bond_at_risk_skl, epochs_per_year, expected_epochs_to_first_slash};
@@ -201,28 +201,33 @@ impl EpochCache {
 /// necessarily the growth form: re-adding the shard at `FLOOR`, with the
 /// re-added shard taking `add_epoch = E_rebond` (Pin 7 — its age resets).
 ///
-/// The floor has two legs, and only the first is a code probe:
+/// The floor is `max(reachability, validation)`, and today reachability binds:
 ///
-/// 1. **Validation leg (probed from [`rebond_connect`], dep-don't-mirror):**
-///    the connect closes the open interval at `end_exclusive = E_rebond + 1`,
-///    and its ordering check admits `E_rebond = e` — a one-epoch span. That is
-///    validation SLACK, not a route.
-/// 2. **Reachability leg (+1 epoch):** a `Rebond` verifies only against an
-///    interval that already EXISTS (`blockchain.cpp`: "Rebond requires an open
-///    bad interval"), the interval is appended by the slash fold at the failed
-///    epoch's settlement (the window verdict needs epoch `e`'s serve-credit
-///    outcome), and connect dispatch precedes the slash fold within a block
-///    (gate-4: `add_transaction` before the per-block slash hook). So the
-///    earliest reachable `E_rebond` is the NEXT epoch: excluded span
-///    `[e, e+1]` = TWO epochs.
-///
-/// If production grows a post-slash cooldown gate in the connect, leg 1
-/// follows it; if the fold/dispatch ordering changes, leg 2's `+1` is the pin
-/// to re-derive.
+/// 1. **Reachability leg (derived from the timing constants):** the slash for
+///    epoch `e` folds only past `h_slash_deadline(e) = H_close(e) +
+///    CHALLENGE_RESOLUTION_BLOCKS` (`db_lmdb.cpp`
+///    `process_archival_slash_at_height`), writing the interval
+///    **retroactively** at `start_epoch = e`. The earliest reachable
+///    `E_rebond` is therefore the fold's epoch:
+///    `e + 1 + CHALLENGE_RESOLUTION_BLOCKS/SETTLEMENT_EPOCH_BLOCKS`. The
+///    forgone-earnings span is `E_rebond − e` — epochs `e+1 ..= E_rebond`
+///    are voided (epoch `e` is also interval-covered, but it is the absorbing
+///    MISS epoch, already unpaid in the cycle model, so it adds no friction).
+///    The retroactive void is enforced by claim order, not by a race: epoch
+///    `e+1` becomes claimable only from epoch `e+3`
+///    (`claimed_epochs::epoch_is_not_settled` — only CLOSED epochs claim, one
+///    epoch behind), and the fold for `e` ran at `e+2`'s first block, so
+///    `r_market`'s `market_member_at_epoch` always sees the interval.
+/// 2. **Validation leg (probed from [`rebond_connect`], dep-don't-mirror):**
+///    the connect's ordering check admits `E_rebond = e` — MORE permissive
+///    than reachability allows (slack, not a route). It would bind only if
+///    production grew a post-slash cooldown gate in the connect; the probe is
+///    kept so such a gate moves this floor automatically.
 ///
 /// (`release_cooldown.rs` is the VOLUNTARY-EXIT gate — `Unbond` /
 /// `HoldingsUpdate`-drop, gate-4 §4.3/§4.4 — and is not on the slash path;
-/// verified at source 2026-07-29. Nothing today enforces a longer wait.)
+/// verified at source 2026-07-29. Nothing bounds WHEN a `Rebond` may happen —
+/// the interval stays open indefinitely; there is no rebond deadline.)
 #[must_use]
 pub fn rebond_structural_downtime_epochs() -> f64 {
     const SLASH_EPOCH: u64 = 100;
@@ -232,16 +237,19 @@ pub fn rebond_structural_downtime_epochs() -> f64 {
         start_epoch: SLASH_EPOCH,
         end_exclusive: u64::MAX,
     }];
-    let validation_span = (SLASH_EPOCH..SLASH_EPOCH + 64)
+    // Probed validation downtime: earliest admitted E_rebond − slash epoch
+    // (today 0 — the connect admits a same-epoch close).
+    let validation_downtime = (SLASH_EPOCH..SLASH_EPOCH + 64)
         .find_map(|e_rebond| {
             rebond_connect(bonded, &held, &open, &held, bonded, e_rebond)
                 .ok()
-                .map(|c| (c.interval_end_exclusive - SLASH_EPOCH) as f64)
+                .map(|c| (c.interval_end_exclusive - 1 - SLASH_EPOCH) as f64)
         })
         .expect("rebond_connect admits no reinstatement within 64 epochs of a slash");
-    // Reachability: the slash exists only from the failed epoch's settlement
-    // fold onward and dispatch precedes the fold, so E_rebond >= e + 1.
-    validation_span + 1.0
+    // Reachable downtime: the fold's epoch minus the slash epoch.
+    let reachability_downtime =
+        1.0 + (CHALLENGE_RESOLUTION_BLOCKS / SETTLEMENT_EPOCH_BLOCKS) as f64;
+    reachability_downtime.max(validation_downtime)
 }
 
 /// One cycle's friction, SKL: the credited earnings forgone while the record
@@ -539,11 +547,15 @@ pub fn tj_inequalities_report(
          common standing-only form); the slash-EMPTIED single-shard cycle pair\n\
          must therefore re-add its shard at FLOOR. Rebond closes the bad interval\n\
          at end_exclusive = E_rebond + 1, so exclusion runs the slash epoch\n\
-         THROUGH the rebond epoch inclusive — structural floor {D:.0} epochs:\n\
-         the connect's validation admits a same-epoch close (probed; that is\n\
-         SLACK, not a route) + 1 epoch of reachability, because the interval a\n\
-         Rebond verifies against is appended at the failed epoch's settlement\n\
-         fold and dispatch precedes the fold. Forgone earnings are priced at the\n\
+         THROUGH the rebond epoch inclusive — structural floor {D:.0} epochs of\n\
+         FORGONE EARNINGS: the slash for epoch e folds only past H_close(e) +\n\
+         CHALLENGE_RESOLUTION_BLOCKS (one epoch of slash grace), writing the\n\
+         interval RETROACTIVELY at start = e, so the earliest reachable rebond\n\
+         is in epoch e+2 and epochs e+1..=e+2 are voided (epoch e is the\n\
+         absorbing miss — already unpaid; claim order enforces the retro void:\n\
+         e+1 claims open only at e+3, after the fold). The connect's validation\n\
+         admits a same-epoch close — probed, and MORE permissive than\n\
+         reachability allows: slack, not a route. Forgone earnings are priced at the\n\
          CREDITED rate f*R, not full R (full-R overstates the deterrent 1/f-fold).\n\
          Zeroing this term was mislabelled 'attacker-favourable' in the first cut\n\
          — the attacker-favourable end is this floor, not zero. LABELLED\n\
@@ -767,16 +779,17 @@ mod tests {
     }
 
     #[test]
-    fn structural_downtime_is_two_epochs_probe_plus_reachability() {
-        // Two legs. The probe leg: rebond_connect's ordering check admits a
-        // same-epoch close (one-epoch span) — validation slack, not a route.
-        // The reachability leg: the interval a Rebond verifies against is
-        // appended at the failed epoch's settlement fold, and dispatch
-        // precedes the fold, so the earliest reachable E_rebond is the next
-        // epoch — +1, total 2. If this pin goes red the connect grew a
-        // cooldown gate (probe leg moved) or the fold/dispatch ordering
-        // changed (reachability leg wrong) — re-read the remedy curve's
-        // baseline from the new floor; do not patch the pin without doing so.
+    fn structural_downtime_is_two_epochs_and_reachability_binds() {
+        // max(reachability, validation), reachability binding today: the slash
+        // for epoch e folds past H_close(e) + CHALLENGE_RESOLUTION_BLOCKS
+        // (one epoch of grace), retroactive to start = e, so the earliest
+        // rebond lands in e+2 and the forgone span is {e+1, e+2} = 2 (epoch e
+        // is the absorbing miss, already unpaid in the model). The probed
+        // validation leg admits a same-epoch close (downtime 0) — slack. If
+        // this pin goes red: CHALLENGE_RESOLUTION_BLOCKS moved, or the
+        // connect grew a cooldown gate that now out-binds reachability —
+        // re-read the remedy curve's baseline from the new floor; do not
+        // patch the pin without doing so.
         assert!((rebond_structural_downtime_epochs() - 2.0).abs() < 1e-12);
     }
 
