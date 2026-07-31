@@ -5241,3 +5241,61 @@ the `force_fluff` force-flag same-disease pass (fluff assertions that may
 depend on the forced side — same class as finding 3, separate surface); Q-10
 selection still blocked on the ambient-rate measurement (§12.11); the FFI
 signature-drift hazard in `FOLLOWUPS.md` (gate shape still needs grounding).
+
+## 21. Mechanism definition of done — the derived-parameter ledger
+
+**Recorded 2026-07-30, maintainer-stated at the arc retrospective, because the
+criterion existed only implicitly and an implicit criterion cannot be scored.**
+
+The *port* has a definition of done and it is reached: no timing decision made
+in C++, F-1…F-5 closed and witnessed, every mechanism invariant carrying an
+armed witness with a run-and-observed-to-fail control, honest scope recorded
+at each oracle (§18.4b, §20.10). §18's seam was designed rather than leaked —
+*Rust decides when and to whom, C++ frames and sends* is a terminus, not a
+stopping point.
+
+The *mechanism* has no written definition of done. The arc's own standard,
+generalized, is one:
+
+> **Every parameter derived from a stated adversary bound, and every invariant
+> witnessed by a test that fails on its defect.**
+
+The second half is enforced by the standing control discipline. The first half
+is this ledger. Scored honestly:
+
+| Parameter | Derived? | Where it stands |
+| --- | --- | --- |
+| embargo mean (144 s) | ✅ | the exact survival solve, RD-1/RD-4 corrections, `derive.rs` bisection with Monte-Carlo cross-check (§10) |
+| fluff delay family (memoryless) | ✅ | the residual-phase argument — memoryless is the family whose residual equals its full distribution (RD-2, D-3) |
+| `q = 0.2` (stem-continue) | ❌ | inherited; deferred at Q-3 / D-6 as not-demonstrably-wrong, never derived |
+| `STEMS = 2` | ❌ | inherited; §12.7's expander-minimum argument is a rationale, not a derivation from an adversary bound — and its fan-out leg now carries two recorded ungrounded premises (§12.7, 2026-07-30 note) |
+| noise cadence constants | ❌ | Q-11 — the arc's last unexamined timing numbers; adversary→shape→constants order set (§20.9), instrument built and aimed |
+| cooldown / eviction threshold | ❌ | unbuilt — the §12.11 selection-mechanism tier, blocked with Q-10 |
+| `ε_explore` | ❌ | unbuilt — §12.11's anti-ossification term; ~0.05 from the RL lineage is a starting point, not a derivation |
+
+**Two of seven.** That is the honest measure of where the mechanism stands,
+and it makes the remaining work countable in a way a list of open Q-items does
+not. A round that derives one of the ❌ rows ticks it here, in the same commit
+— this table is a live scorecard, not a snapshot, and a stale row is the same
+defect class as a stale acceptance criterion (§20.10 measured that class at
+four-of-ten).
+
+**What the arc bought, priced honestly.** Four measured deltas, one trade, one
+unmoved ceiling. Unconditional: the fluff delay is memoryless on every
+transaction at every node (fixed-offset inversion 0.4236 → 0.2165 at ±0.5 s,
+and the inherited draw's 93 % late-phase invertibility is gone — RD-2/F-4);
+network diffusion is ~7× faster (F-5), which is also what held the corrected
+embargo at 144 s instead of 521 s; the churn re-roll amplifier is closed
+(RP-2b freeze-at-first-pin — the arc's one measured defense against a
+*demonstrated* attack class rather than a modeled one). **The trade:** the
+black-hole backstop now actually fires (F-2 — it was inert, full-travel
+1.0000), and making it fire opened the C3 channel, measured at 1.14 %
+any-prefix / 0.22 % origin-attribution per transaction on clearnet and
+structurally zero on Tor (§6.6, §6.8) — censorship resistance bought at a
+bounded, measured privacy cost, with reshape specced to drive the origin term
+toward zero (§14). **The ceiling:** correctly-specified Dandelion++ sits near
+~5 bits median entropy against a 20 % adversary (Sharma et al., §12.6
+calibration note — verify-at-source obligation attached), and the arc moved
+the implementation *toward* the specification, below that curve on three
+recorded counts. The specification's ceiling is where it was; raising it is a
+different mechanism, not a better port.
