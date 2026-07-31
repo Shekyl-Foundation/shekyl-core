@@ -165,6 +165,208 @@ sustainability is unaffected by the recalibration.
   exist. **Not evaluable until pinned**; gates §9.4/§9.5's arithmetic and is
   upstream of the PD-F-2 dispersion question (which asks whether a threshold is
   forceable *within a deadline*).
+  **RE-FRAMED (2026-07-30, maintainer ruling): `W` is a LIVENESS parameter,
+  not a security one, and TJ-2/TJ-3 are ONE parameter set** coupled through
+  the epoch budget. Under test≡job (whole-shard service) the free-rider moves
+  3.33 MB in and 3.33 MB out regardless of how long it has — the cost is
+  bandwidth, not latency — so the deadline defends nothing; its bounds are
+  operational: floor = an honest serve plus the witness's tx reaching a block
+  (**measurable, not argued**), ceiling = `H_close` with
+  `CHALLENGE_RESOLUTION_BLOCKS` grace behind it. Size for the slowest honest
+  participant to keep; see TJ-3's coupling equation and pin order.
+  **W-FLOOR MEASURED (2026-07-30; one vantage, floor-scoping — the pin may
+  want more vantages):** 10 cold-path fetches of a 3,330,000-byte blob
+  (= `SHARD_BYTES`) over a real onion-v3 path — SP-T0c-pinned Tor `0.4.9.11`
+  (bundle `4621e157…` and binary `660a8c54…` both re-verified against
+  `shekyl-tor::CURRENT_PIN`), fresh circuits + cleared descriptor cache per
+  sample (`NEWNYM`), local HTTP origin; client and service co-located on one
+  box/instance, which is slightly optimistic (shared last mile). Raw
+  `idx,connect,first_byte,total,B/s,exit`:
+  `1,·,—,120.4,0,97 · 2,·,2.5,51.5,64617,0 · 3,·,47.0,58.0,57447,0 ·
+  4,·,2.2,14.2,234739,0 · 5,·,3.7,16.4,203164,0 · 6,·,—,120.1,0,97 ·
+  7,·,2.7,14.2,234480,0 · 8,·,64.8,113.2,29406,0 · 9,·,2.3,15.1,219994,0 ·
+  10,·,—,119.6,0,97`; fresh-service first contact (descriptor just
+  published): 170.0 s total. **Result: 7/10 succeeded** — first byte
+  2.2–64.8 s (median 2.7), transfer 10.9–49.1 s (median 12.7; median
+  ~1.6 Mbit/s, worst 235 kbit/s), total 14.2–113.2 s. **3/10 attempts FAILED
+  outright at tor's default 120 s SOCKS timeout — one failed attempt ≈
+  exactly one block, and the retry budget, not the transfer, dominates the
+  floor.** Composition: 2 failed attempts (240 s; P(2 consecutive) ≈ 9 % at
+  the observed rate) + worst serve incl. fresh-descriptor contact (170 s)
+  ≈ 410 s ≈ 4 blocks, + ~2 blocks credit-tx inclusion ⇒ ~6 blocks; ×2
+  one-vantage prudence ⇒ **floor ≈ 12–15 blocks (~25–30 min). The budget
+  example's `W = 100` carries ~7× this floor** — generous liveness headroom,
+  free under test≡job since `W` defends nothing.
+  **CORRECTIONS to the note above (2026-07-30, maintainer arithmetic check +
+  self-correction, both verified):**
+  1. *Speed labels were wrong; times and the floor stand.* The quoted rates
+     were curl's whole-operation averages (bytes ÷ total incl. first-byte
+     wait), not body-phase rates. Body-phase: **median ≈ 2.1 Mbit/s, worst
+     ≈ 0.54 Mbit/s** (bimodal — five samples 2.1–2.4, two at ~0.55); the
+     probe's "157 kbit/s" was the same artifact (its 3.33 MB body ran 48.4 s
+     ≈ 551 kbit/s, exactly the maintainer's reconciliation). The floor
+     composition used wall-clock totals only and is unchanged.
+  2. *Thin-sample tail + vantage, sharpened:* max-of-10 under a heavy right
+     tail systematically understates the true upper percentiles, and `W` too
+     small produces STRUCTURAL misses — the bias points at false slashes,
+     `(m, n)`'s one remaining objective. The ×2 retry allowance offsets in
+     the other direction by an unknown amount, not by design. Sharper still:
+     the witness is a randomly drawn MINER, so the operative distribution is
+     over the miner population's network positions — between-vantage
+     variance, which resampling from this box cannot estimate at any n.
+     Floor-scope only; the pin wants multi-vantage data or design margin.
+  3. *`W` is NOT pure liveness — resolved at source:* `fill_block_template`
+     selects strictly by fee-per-weight (`tx_pool.cpp:1231`) with only the
+     archival block-unique dedup pass — **the serve-credit tx competes for
+     block space today; no reserved lane, no fee priority.** Mempool
+     congestion pushing credit txs past `W` is therefore a live channel, and
+     **this measured floor is a LOWER BOUND on the pin, not the pin.** Shape
+     worth carrying to the pin round: one inclusion anywhere in `W`
+     suffices, so a suppressor must outbid the credit tx for ~`W`
+     consecutive blocks, and a slash needs `m` suppressed observations —
+     ~`m·W` blocks of sustained whole-blockspace outbidding (`W = 100`,
+     `m = 11` ⇒ ~1,100 blocks ≈ 1.5 days per targeted slash, hitting every
+     overlapping challenge as a side effect). Adversarial headroom in `W`
+     multiplies that cost linearly and is free for honest liveness; whether
+     TJ-B's credit wire gets reserved space or fee priority is the spec
+     question that decides how much headroom the pin needs.
+  **PIN CRITERIA DERIVED (2026-07-30, maintainer round 2 — supersedes two
+  claims above):**
+  1. *"`W` defends nothing" — said twice above (TJ-2 RE-FRAMED; the W-FLOOR
+     note) — is WRONG, and the 30 % failure rate is what corrects it.* With
+     per-attempt success ≈ 0.7, `W` buys RETRY DEPTH, and retry depth is what
+     keeps an honest archiver from being recorded missing when the witness's
+     circuit died — a false-miss source with nothing to do with `P`. `W`
+     defends against **noise**, not an adversary. The pin criterion is
+     therefore **derived, not marginned**: failure after `k` attempts is
+     `0.3^k` (k=4 ⇒ 0.8 %, k=6 ⇒ 0.07 %); at ~1 block/attempt, ~6–10 blocks
+     of retry budget puts per-epoch false-miss into the noise. `W = 100`
+     stands, but stated as **~100 attempts against a target false-miss
+     rate** — it couples to `(m, n)` and moves with it.
+  2. *`N` is not a judgment call — it is FLOORED BY REORG FINALITY:*
+     `ARCHIVAL_REORG_DEPTH_BLOCKS = 720` (the horizon the P-scan already
+     treats as final everywhere else). A reorg reaching `H_seal` changes
+     `block_hash(H_seal)` and moves `H_fire`, so a `P` that served at the old
+     fire height has its credit denied on the reorged chain — a false-miss
+     the `P` cannot avoid. `N ≥ 720` buries the seal beyond that depth by
+     settlement. **Named consequence: the shipped `B = 1` was reorg-safe BY
+     CONSTRUCTION — the enormous notice is what bought the safety.
+     Shortening notice is what creates the exposure; the real trade is
+     unpredictability against BEACON FINALITY**, and finality sits on the
+     side of the objective being defended (false-slash). Residual flagged: a
+     fire EARLY in the window is still served against a shallow seal, so a
+     sub-720 reorg during the window can orphan that single epoch's credit —
+     an isolated miss the m-of-n window forgives by design; it joins
+     transport failure in the same per-epoch false-miss budget.
+  3. **`B ≥ SEB − N − W = 10_000 − 720 − 100 = 9_180`, and the
+     `challenge_fire_height` fix reserves `W` as planned.** Honest note on
+     what it buys: notice drops ~9,998 → ~820 blocks, so announced-window
+     uptime goes from trivial to 8.2 % — still trivial. `B` does not force
+     continuous availability and cannot, at one challenge per epoch; it is
+     worth doing because it is free and the right direction. The
+     availability lever is `CHALLENGES_PER_EPOCH`, not `B`.
+  **`CHALLENGES_PER_EPOCH` (`c`) — proposed 2–5, and the pin is
+  `(c, aggregation rule)`, not `c` alone (2026-07-30).** The bail scenario
+  survives any shippable `c`: all fire times derive from the seal, so `P`
+  schedules `c` appearances — uptime `c·W/SEB` (1 % → 5 % at `c = 5`),
+  scheduling unchanged; tiling the epoch needs `c ≈ 100`, the regime the
+  read-shape arithmetic ruled out; staggered per-challenge seals only
+  stagger when `P` learns each appointment. **The real argument is
+  statistical power:** `c = 1` yields ONE coarse bit per epoch of a noisy
+  process (measured witness-side transport failure ≈ 30 %), and the window's
+  whole job is separating honest-with-outage from durably-absent. Raising
+  `c` sharpens each observation — spendable as faster detection at the same
+  false-slash rate or lower false-slash at the same speed, both the
+  objective `(m, n)` carries. **Forced decision:** `serve_credit_bit` is
+  keyed `(P, shard, epoch)` — one bit, and the `release_cooldown`
+  reverse-cursor derivation depends on that shape — so `c` challenges must
+  COLLAPSE to it. Any-success ⇒ false-miss → 0 but the bit degrades toward
+  "reachable once" (today's coarse signal); all-success ⇒ multiplies the
+  30 % noise by `c` — a false-slash generator; **majority is the interesting
+  middle where the sharpening lives.** Choose `(c, aggregation)` JOINTLY
+  with `W`'s retry depth against one false-slash target — retry depth,
+  `c`+rule, `N`'s residual reorg rate, and `(m, n)` are **the same
+  budget**. Cost named: `c` multiplies witness bandwidth linearly
+  (~16.65 MB/shard/epoch/witness at `c = 5`) — real load on miners, who are
+  not paid for it (TJ-A2b's "paid" shape is where that lands).
+  **PROPOSAL (maintainer, 2026-07-30) — DELETE THE SEAL: per-block hash
+  predicate replaces the beacon. CHECKED against the tree; compatible, and
+  stronger than proposed.** Nothing requires advance `H_fire`: `P` needs
+  only reachability (notice is pure loss), verifiers recompute after the
+  fact, and a §8.2 witness learns it is drawn when it produces a block. The
+  seal buys only *determinism*, and determinism is what costs the notice.
+  Replace with 8C §4's own idiom applied to TIMING instead of content
+  (`ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md:133` — "unknown before that
+  block exists"): the challenge for `(P, s, E)` fires at any block where
+  `H(block_hash[h] ‖ P_id ‖ s ‖ E) < threshold`. Notice = 0 by
+  construction; the threshold sets expected `c` directly. **Check
+  outcomes:** (1) TJ-A2d already ruled sequential single-witness
+  challenges "the shape that falls out rather than one that must be
+  constructed" — this is the falling-out mechanism, and it **resolves
+  TJ-A1 by collapse** (witness = the trigger block's producer,
+  per-challenge; the f = hashrate-share model becomes EXACT). (2) Reorg
+  dissolution is real but **one-directional**: reorged-OUT triggers are
+  non-observations by the window's own semantics (`failure_window.rs`:
+  untested ≠ miss) — no depth requirement; but reorged-IN triggers (a new
+  branch carrying a trigger in its past) have partly-closed windows on
+  arrival — bounded by reorg depth ≳ remaining `W` (realistic reorgs 1–2
+  blocks ≪ `W`), an isolated miss m-of-n forgives; joins the false-miss
+  budget. (3) The `challenge_fire_height` defect TRANSFORMS rather than
+  persists: an epoch-tail trigger needs credit acceptance spanning
+  `H_close`, which `CHALLENGE_RESOLUTION_BLOCKS`' one-epoch grace already
+  anticipates. (4) Grinding arithmetic verified: at expected `c = 3` over a
+  4,096-pair holding, `1 − e^(−1.23)` ≈ 70.7 % of own blocks trigger an own
+  pair — withhold-to-protect burns most mining income; gradient
+  `1 − e^(−c·n/SEB)` rises with holding size. (5) Costs: trigger count
+  ~ Poisson(`c`) — `P(untested epoch) = e^(−c)` ≈ 5 % at `c = 3` (absorbed
+  as non-observation, but `constants.rs`' "**Guaranteed** on-demand tests"
+  becomes probabilistic — the doc word changes); the aggregation rule
+  becomes rule-over-VARIABLE-count. **If adopted this supersedes the
+  (B, N) budget above** — the seal, `B`, `N`, the reorg floor,
+  `challenge_fire_height` + its defect, TJ-3, and TJ-A1 are all deleted,
+  and the pin becomes `(threshold, aggregation rule, W-retry)`. The
+  witness = producer collapse also gives TJ-A2b's "paid" shape a natural
+  anchor (the producer is already paid a coinbase). **Status: proposal +
+  check, NOT a decision — graduates at the TJ-B round.**
+  **THIRD COST (maintainer, 2026-07-30 — the check missed it, and it lands
+  on the PRIVACY side of the priority order):** the shipped wire has **no
+  witness at all** — `ArchivalServeCreditResponse` (`wire.rs:44–54`) is
+  `p_canonical_id` + `hybrid_signature`, `P` self-attesting per §9 — so
+  witness identity is new surface under ANY TJ-B credit wire. But
+  witness-as-producer needs the producer of block `h` to be *verifiably*
+  that witness, and the coinbase pays a fresh one-time stealth key per
+  block (`construct_miner_tx`: fresh tx keypair + derived out_key,
+  verified) — producers are unidentifiable and unlinkable BY DESIGN. A
+  producer commitment published at mining time is (a) a new
+  consensus-visible, genesis-frozen block field — heavier than the seal
+  deletion it pays for — and (b) **a miner fingerprint**: a repeatedly
+  attesting witness key clusters the blocks it produced, cross-block
+  linkability where the design has none. Privacy cannot rank behind
+  performance or features, so this outranks everything the predicate buys
+  **unless the binding is clusterless.** The collapse is real but NOT a net
+  reduction in frozen surface: it trades seal/`B`/`N`/reorg-floor for a
+  producer-identity binding that must be designed against the privacy
+  constraint — **a design round of its own, priced before TJ-B graduates
+  it.**
+  *Candidate clusterless shape (found during verification; unchecked
+  beyond what is cited):* the per-block disposable key already exists —
+  **the trigger block's own coinbase one-time output key**. Fresh per
+  block by construction, consensus-visible, controlled by exactly the
+  producer; signing the credit with it proves control of block `h`'s
+  coinbase with **no new block field and no cross-block key linkage** (a
+  reused witness key never exists). The omission arm of the self-selection
+  question dissolves — every block has a coinbase key regardless of
+  intent — leaving only SILENCE, which with unattested-trigger =
+  non-observation buys denial nothing and costs an attestation-paid
+  witness its fee (TJ-A2b's liveness/pay question, already named). Named
+  caveats, not waved: (1) pools — the "producer" is the pool operator;
+  duty and pay concentrate there, and behavioral clustering (attestation
+  timing/patterns) remains a soft channel even with unlinkable keys;
+  (2) rule-30 hybrid: the coinbase output key is classical — though the
+  v3 coinbase output already carries per-output KEM material
+  (`construct_miner_tx` encapsulates to the miner's PQC key), so a hybrid
+  proof-of-control may have something on-chain to bind against. Both are
+  the design round's questions.
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
@@ -180,6 +382,67 @@ sustainability is unaffected by the recalibration.
   attestation-resistance pushes `m` down and `n` up, the prune-horizon assert
   caps `n ≤ 25`, and TJ-4 couples to `BOND_FLOOR` — a three-way constraint on
   two integers under a hard ceiling. Establish feasibility **before** the sweep.
+  **TJ-4 RESOLVED (2026-07-30, PR #381 — `shekyl-economics-sim/src/cartel.rs`):
+  derived; does NOT hold as asserted.** A zero-service `P` earns nothing
+  (`shard_work_micro` pays on credited work only), so the `m − 1` epochs are
+  free of *slash*, not free *money*, and the derived quantity is a **break-even
+  attestation fraction**: `f ≈ 0.0331` at the median per-shard pool
+  (2.4156 SKL/shard/epoch), `0.0002` at the family max, with friction at the
+  **structural floor of 2 epochs** of forgone earnings: the slash for epoch `e`
+  folds only past `H_close(e) + CHALLENGE_RESOLUTION_BLOCKS` (one epoch of
+  slash grace), retroactive to `start = e`, so the earliest reachable `Rebond`
+  is in `e+2` and epochs `e+1..=e+2` are voided — epoch `e` is the absorbing
+  miss, already unpaid; claim order enforces the retro void (`e+1` claims open
+  at `e+3`, after the fold). `rebond_connect`'s validation admits a same-epoch
+  close — probed slack, not a route; no deadline bounds when a `Rebond` may
+  happen. A `Rebond` is **reinstatement, not re-entry** (P2B-9):
+  the slash burns one `FLOOR` and removes the shard atomically, so the
+  slash-emptied cycle pair re-adds at `FLOOR`; forgone earnings priced at the
+  credited rate `f·R`, not full `R`. Labelled attacker-favourable
+  approximation: the re-added shard's age resets (Pin 7), so steady-state `R`
+  overstates cycle earnings — break-evens are lower bounds. The burned bond is
+  worth **0.31 epochs** of the median flow it secures — the floor coupling made
+  quantitative. `--stage2` now reports a **remedy curve** (break-even `f` vs
+  post-slash exclusion per cycle): "floor problem vs cooldown problem" is a
+  **false dichotomy** (the bond is `f`-independent and bounds the low-`f`
+  attacker; the downtime term `d·f·R` scales with `f`), and the knee is
+  structural — past exclusion `> m = 11` epochs the break-even floors at
+  `E⁻¹(c+2)` regardless of reward (≈ 0.20–0.21 hashrate share at `c = 16`,
+  ~32 weeks). **Enforcement point:** a `Rebond`-only cooldown is routed around
+  by fresh personas (G-1; TJ-7's own capital-bounded sybil), while a
+  **credit-onset delay** (minimum observation count — the original finding)
+  yields the same exclusion term on every route; the curve prices both
+  identically. Input to the re-pin sweep; TJ-8's briefing constraint and the
+  over-determination warning stand.
+  **TJ-3 RE-SCOPED (2026-07-30, maintainer ruling): `B` is the SECURITY
+  parameter of the TJ-2/TJ-3 pair, and test≡job sharpens what it defends.**
+  The test IS a client read, so announcing it converts *"is this shard
+  retrievable"* into *"is this shard retrievable at an announced moment"* —
+  not the same property: a `P` that surfaces once per epoch on schedule
+  passes while serving no actual client. The seal wants to be **late** (`B`
+  near the top of the epoch), making notice short. Grinding does not argue
+  against it: withhold-and-retry on the seal block costs one block reward per
+  attempt **wherever the seal sits** — moving it late changes *who* grinds,
+  not what it costs. **Budget (one equation, two free parameters):** for
+  notice cap `N` and response window `W`, `B ≥ SEB − N − W` (at
+  `SEB = 10_000`, `N = 50`, `W = 100` ⇒ `B ≥ 9_850`); `W`'s floor is
+  measurable. **Pin order:** measure `W`'s floor (honest serve +
+  confirmation) → pick `N` → derive `B` → fix the fire-height derivation to
+  reserve `W` — the last step is NOT optional once `W` lands.
+  **DEFECT (found 2026-07-30, confirmed at source): `challenge_fire_height`
+  reserves no response room.** `challenge.rs:96–106`: `modulus = span − 1`,
+  `h_fire = h_seal + offset + 1` ⇒ fire range `(H_seal, H_close − 1]` — the
+  latest fire lands one block before close while `constants.rs` requires the
+  response to *end before `H_close`*. Invisible while
+  `CHALLENGE_RESPONSE_BLOCKS = None`; the moment `W` is pinned, epochs whose
+  fire lands past `H_close − W` produce **structural misses that are not the
+  `P`'s fault — a false-slash source, the one objective `(m, n)` still
+  carries.** Fix belongs WITH the `W` pin (modulus → `span − W − 1`, or an
+  explicit fire ceiling `H_close − W`), on the **surviving** surface —
+  `challenge_fire_height` outlives TJ-B's leaf-path deletion, unlike its
+  `challenge_leaf_index` neighbour. The fn's doc-comment range claim
+  `(H_open, H_close]` is also loose (code yields `(H_seal, H_close − 1]`)
+  and its rule-21 reopen criterion must be rewritten with the fix.
 
 - **TJ-7 (HIGH, sweep input) — sybil-per-shard has NO uniqueness constraint,
   and the cartel attack is DILUTION not multiplication** (added 2026-07-29,
@@ -193,6 +456,11 @@ sustainability is unaffected by the recalibration.
   `gain = [N/(N+h) − 1/(1+h)]·g` vs `cost = (N−1)·FLOOR_opportunity + min(S,T)`.
   **Same structure as TJ-4's un-derived inequality and belongs in the same
   sweep.**
+  **TJ-7 RESOLVED (2026-07-30, PR #381 — same module): derived; HOLDS.**
+  Dilution, not multiplication: the *marginal* gain over one bond saturates at
+  `h/(1+h)·g` against cost linear in `N`, so the attack has a finite optimum;
+  the sim reports the annual return on locked capital below which it pays, at
+  both pool operands (median and family max).
 
 - **TJ-8 (briefing constraint on the Round-2 re-pin) — do NOT credit the
   witness-binding MAC against the window** (added 2026-07-29, §11.5). The MAC
