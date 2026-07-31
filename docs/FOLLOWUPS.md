@@ -127,6 +127,29 @@ sustainability is unaffected by the recalibration.
   (**measurable, not argued**), ceiling = `H_close` with
   `CHALLENGE_RESOLUTION_BLOCKS` grace behind it. Size for the slowest honest
   participant to keep; see TJ-3's coupling equation and pin order.
+  **W-FLOOR MEASURED (2026-07-30; one vantage, floor-scoping — the pin may
+  want more vantages):** 10 cold-path fetches of a 3,330,000-byte blob
+  (= `SHARD_BYTES`) over a real onion-v3 path — SP-T0c-pinned Tor `0.4.9.11`
+  (bundle `4621e157…` and binary `660a8c54…` both re-verified against
+  `shekyl-tor::CURRENT_PIN`), fresh circuits + cleared descriptor cache per
+  sample (`NEWNYM`), local HTTP origin; client and service co-located on one
+  box/instance, which is slightly optimistic (shared last mile). Raw
+  `idx,connect,first_byte,total,B/s,exit`:
+  `1,·,—,120.4,0,97 · 2,·,2.5,51.5,64617,0 · 3,·,47.0,58.0,57447,0 ·
+  4,·,2.2,14.2,234739,0 · 5,·,3.7,16.4,203164,0 · 6,·,—,120.1,0,97 ·
+  7,·,2.7,14.2,234480,0 · 8,·,64.8,113.2,29406,0 · 9,·,2.3,15.1,219994,0 ·
+  10,·,—,119.6,0,97`; fresh-service first contact (descriptor just
+  published): 170.0 s total. **Result: 7/10 succeeded** — first byte
+  2.2–64.8 s (median 2.7), transfer 10.9–49.1 s (median 12.7; median
+  ~1.6 Mbit/s, worst 235 kbit/s), total 14.2–113.2 s. **3/10 attempts FAILED
+  outright at tor's default 120 s SOCKS timeout — one failed attempt ≈
+  exactly one block, and the retry budget, not the transfer, dominates the
+  floor.** Composition: 2 failed attempts (240 s; P(2 consecutive) ≈ 9 % at
+  the observed rate) + worst serve incl. fresh-descriptor contact (170 s)
+  ≈ 410 s ≈ 4 blocks, + ~2 blocks credit-tx inclusion ⇒ ~6 blocks; ×2
+  one-vantage prudence ⇒ **floor ≈ 12–15 blocks (~25–30 min). The budget
+  example's `W = 100` carries ~7× this floor** — generous liveness headroom,
+  free under test≡job since `W` defends nothing.
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
