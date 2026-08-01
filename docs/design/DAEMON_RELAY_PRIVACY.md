@@ -8111,6 +8111,17 @@ Clearnet is then over-provisioned relative to its own `F` (1250 → 98 s), which
 is the safe direction and is *already* the status quo's posture: the shipped
 2250 over-provisions clearnet at Shekyl's real degree too.
 
+> **Two amendments at §43, both from the configuration-B deletion, and both
+> must be applied before this paragraph is used as the F-7 unit's premise.**
+> **(a)** The two configurations are now **clearnet and Tor-C**, not B and C —
+> the conclusion holds verbatim but the reason named a configuration that no
+> longer exists (§43.1). **(b)** `params.rs`'s policy is **incomplete**:
+> over-estimating `F` is safe on the *disarm* axis and **adverse on the leak
+> axis** (§6.7), so *"set it to the worst"* is defensible but not
+> obviously-safe, **per-zone `F` becomes a real option** now that the zones
+> differ by a measured amount, and the policy is **re-examined at the top of
+> the unit rather than inherited through it** (§43.2).
+
 ### 40.3 The cascade — `F` is an input to the arc's whole measured set
 
 **Landing `fluff_return_ms = 3250` was attempted and reverted, because it does
