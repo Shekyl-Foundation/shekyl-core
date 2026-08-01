@@ -7441,7 +7441,134 @@ enthusiastically-run young network — which is the opposite of the naive
 envelope is what Q-10.2 produces, and the point is that **the corner to check
 hardest is not the one intuition names.**
 
+**Necessary but not sufficient — see §35:** `obs(r)` is a **mean**, and the
+threshold decision consumes a **count**, so the binding constraint is the
+binomial tail. The full deliverable is `obs(r)` **then** `n_min` from an
+eclipse-bounded false-cooldown rate **then** `warm-up = n_min / obs`.
+
 **Q-10.2 remains first to produce and still gates the parameters, the
 convergence condition, and now the whitewash cost — but it is a different kind
 of artifact than §33.4 said, and a cheaper one than "parametric study"
 implies.**
+
+## 35. The closed form is a mean — the binding constraint is in the tail
+
+**2026-08-01, maintainer, with one arithmetic correction and three amendments.**
+§34.5's `obs(r)` is necessary and **not sufficient**: the threshold decision
+does not consume a rate, it consumes a **count**, and at these counts the
+decision is dominated by **binomial variance**.
+
+**Precision note carried rather than assumed:** the epoch is
+`MIN_EPOCH + U[0, 30 s]`, mean **615 s**, so §34.5's closed form runs **~2.5 %
+low**. Below transport noise on this quantity, recorded because it was checked.
+
+### 35.1 Black-hole separation was never the constraint; the honest tail is
+
+Threshold 50 %, honest peer at the ~12 % ambient floor
+(**recomputed independently**):
+
+| `n` | P(false cooldown) | × 12 peers | P(black hole caught) |
+| --- | --- | --- | --- |
+| 3 | **3.97 %** | **0.48** | 1.000 |
+| 5 | 1.43 % | 0.17 | 1.000 |
+| 10 | **0.37 %** | 0.045 | 1.000 |
+| 15 | 0.013 % | 0.002 | 1.000 |
+| 20 | 0.004 % | 0.000 | 1.000 |
+
+**Black-hole detection is trivial at every `n`.** §12.11's clean-separation
+claim is right **and was never the constraint.** The constraint is the honest
+tail: at `n = 3`, ~4 % per peer across 12 peers is **roughly half a false
+cooldown per decision window.**
+
+**So the axis where the defect lives is the variance, not the mean — the same
+shape as F-4**, which was mean-correct and wrong in the second moment. **A
+mean-only deliverable would grade this mechanism as fine.**
+
+**Correction (mine): the `n = 10` figure is `0.37 %`, not `0.06 %`** — ~6×
+higher. It does not touch the finding's structure (the tail is still the
+constraint, and detection is still trivial), but it **moves `n_min`**, and
+`n_min` drives warm-up, so it propagates into every downstream number. At
+`n = 10` roughly **1 decision window in 22** sees a false cooldown somewhere in
+the pool; whether that is acceptable is what §35.2 decides.
+
+### 35.2 The false-positive rate has a derivation source, not a taste setting
+
+False cooldown **shrinks the eligible pool** — the same currency §12.11 part C
+already measured for `ε = 0`, where **collapse to 2 of 12 is a self-inflicted
+eclipse.** So the acceptable false-cooldown rate is **bounded by the
+eclipse-resistance requirement**, and **part C's measured result is the
+anchor** rather than a chosen number.
+
+**And that gives cooldown its derivation.** Because §12.11 chose
+**cooldown-not-eviction**, a false positive is temporary and the steady-state
+damage is:
+
+```text
+fraction of pool falsely cooled ≈ false_rate × (cooldown / decision_interval)
+```
+
+Bound that fraction by what part C's diversity requirement admits, and
+**cooldown falls out of `false_rate` and `obs`.** **Two of §12.11's three owed
+parameters then derive from one measurement plus one already-measured result** —
+a materially better position than "derive them against a three-way trade-off."
+
+**The third parameter, and it now has a visible coupling (mine).**
+`ε_explore` sets how fast unproven peers accumulate observations at all, so it
+is the knob on warm-up — **and it moves warm-up for *everyone symmetrically*.**
+That is the **quantitative form of §34.3's claim** that ε cannot reach the
+recruitment half: raising ε accelerates the adversary's convergence exactly as
+much as the honest peer's, so it changes **when** the ranking settles and never
+**who wins it.** ε is therefore derivable against warm-up and cold-start, but
+**not** against recruitment — which is a scope statement for it, not a gap.
+
+### 35.3 Wall-clock is non-compressible but **not scarce** — correcting my §34.4 addition
+
+I wrote that gating on wall-clock reduces the question to *"can the adversary
+wait?"* because wall-clock is what bandwidth cannot buy. **The correction:
+holding a connection open costs almost nothing, so an adversary can pre-warm
+identities in parallel and the aged-identity pool grows linearly at negligible
+cost.** So the gate **defeats reactive whitewash** (drop, cool down, return
+immediately) and **does nothing against stockpiled identities prepared in
+advance.**
+
+> **It buys latency, not cost.** Stated that way at the definition site, or
+> someone later prices it as a cost and over-credits it.
+
+**The repair, and it is the same move that saved the distinct-source candidate
+(mine): denominate tenure in something that requires occupancy.** Count tenure
+from **first draw by explore**, not from first connect — a stockpiled identity
+then has to have been *in the pool and selected*, which costs an inbound slot,
+which **collapses the stockpile's cost into the inbound-occupancy budget
+§12.10 regime 3 already prices.** Same shape, same subsystem, and per part D's
+rule the capability is paid for once.
+
+### 35.4 The distinct-source metric probably lacks the resolution to be a score
+
+Sources mapped to one successor ≈ `inbound_count / STEMS`, so with ~12 inbound
+that is a range of roughly **0–6** — too coarse for a threshold input, and it
+**compounds** §34.4's cold-start concern rather than sitting beside it.
+
+**But it survives as a binary admissibility gate:** *"at least 2 distinct
+source-mappings before any promotion."* Farming still cannot satisfy that
+cheaply, and it **degrades to "cannot promote" rather than "promotes wrongly"**
+for a poorly-connected node — failing **closed**. Worth testing in that form
+before discarding.
+
+**Composition note (mine): as a gate it fits the other two rather than
+competing with them.** Promotion then requires **three independent conditions**
+— minimum observations, minimum occupancy-denominated tenure (§35.3), minimum
+distinct sources — of which **the adversary must satisfy all three** while an
+honest node fails at most the third, and fails safe.
+
+### 35.5 One positive falls out of pinning, correctly signed
+
+The origin's own transactions all resolve through `in_mapping_[nil]` to a
+**single** successor, so **that slot accumulates observations faster than the
+others.** The node therefore **builds evidence quickest about the one peer with
+precision-1 visibility into its own stream.** Modest in volume, and correctly
+signed.
+
+*Sharpening (mine): it is also self-reinforcing in the right direction* — the
+slot the node learns about fastest is exactly the slot where a dropper costs it
+most, so if that peer is malicious it is **evicted soonest.** The mechanism
+converges quickest precisely where its failure would be most expensive.
