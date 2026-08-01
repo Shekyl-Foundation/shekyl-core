@@ -17,8 +17,12 @@ capability, §23) landed, with Unit 1's review producing **F-6: the covert
 path has no black-hole backstop** (§24.1 — the derived embargo arms only on
 `dandelionpp_stem`, which the noise zone's stem→local demotion clears, so the
 privacy-maximal path carries *weaker* censorship resistance than clearnet) and
-reframing Unit 2's target as an **active prober** (§24.2). **Read F-6 in its
-whole form at §25.1: `proxy.noise` defaults true, so the DEFAULT Tor
+reframing Unit 2's target as an **active prober** (§24.2). **F-6 is CLOSED in
+its shipped form as of 2026-08-01 — configuration B is deleted (§41), covert
+channels default off, and no deployed configuration reaches the origin oracle.
+F-7 is now the top item, because C is the only anonymity configuration and its
+embargo is provisioned from the defective `F`.** Historical form: **Read F-6 at
+§25.1: `proxy.noise` defaults true, so the DEFAULT Tor
 deployment (configuration B) runs neither Dandelion++ nor the embargo** — the
 arc's entire output is bypassed on the deployment a privacy-motivated user
 selects, and two live §6 claims are false there. That outranks the cadence
@@ -5893,7 +5897,7 @@ queue above the shape question.
 | | stem routing | embargo armed | fluff reach | covert |
 | --- | --- | --- | --- | --- |
 | **A. clearnet** | Dandelion++ | yes | every peer | no |
-| **B. Tor, DEFAULT** | **none** | **no** | outbound only | 2 channels |
+| ~~**B. Tor, DEFAULT**~~ | ~~none~~ | ~~no~~ | ~~outbound only~~ | ~~2 channels~~ — **DELETED 2026-08-01, §41** |
 | **C. Tor + `disable_noise`** | Dandelion++ | yes | outbound only | no |
 
 `proxy.noise` defaults **true** ([`net_node.h:76`](../../src/p2p/net_node.h#L76)),
@@ -7944,3 +7948,90 @@ unchanged and the gate holds.
 independent and remains the cheapest thing on the list** — it needs no
 envelope, no re-baselining, and it decides whether F-8 makes §12.11 inert at
 all.
+
+## 41. Configuration B deleted — and why it did not wait for F-7
+
+**2026-08-01.** `proxy::noise` now defaults **false**
+([`net_node.h`](../../src/p2p/net_node.h)), and `disable_noise` is retired —
+accepted with a warning so existing command lines still start, but with no
+effect and **deliberately no flag to turn covert channels on.**
+
+### 41.1 The gate was inverted
+
+The ordered plan gated this on closing F-7, reasoning that promoting C to
+default with an under-provisioned embargo *"lands a known defect on every Tor
+user at genesis."* **The reasoning is sound and the ordering it produced was
+backwards**, because it compares the wrong two things:
+
+| | what a Tor user gets |
+| --- | --- |
+| **B (shipped until today)** | **no Dandelion++, no embargo at all**, plus an **origin oracle**: precision ≈ 1 *and* recall ≈ 1 given slot occupancy — which §31.3 established is **a list**, the complete enumeration failure |
+| **C with the uncorrected embargo** | both mechanisms running; embargo 144 s where 190 s is derived — **short by 24 %** |
+
+**Holding B to avoid shipping a 24 % under-provisioning kept the enumeration
+oracle in place to prevent the lesser defect.** And the gate's own stated
+reason is satisfied by *both landing before genesis*, not by B waiting on F-7 —
+which is a scheduling claim, and F-7 turned out to be a re-baselining unit
+(§40.3), so the wait was open-ended.
+
+**Standing cost, visible all session:** with three configurations in the tree
+and §6 modelling the one we did not ship, *"which configuration?"* was a
+variable in every analysis, and it generated §25.1, §29 and §31.3
+independently. **Deleting B collapses three to two and removes that axis from
+every subsequent round.**
+
+### 41.2 The trade, recorded as §30.6 required
+
+**What is lost:** constant-rate cover on anonymity zones. A wire observer at
+the guard regains **emission timing** — it can see *that* this node
+transmitted and *when*. That is a real loss on the axis §20.9 charters, and it
+is the **only** cell of §32.6's grid where the answer was previously *zero*.
+
+**To whom:** operators running `--tx-proxy`. Nobody else — the public zone never
+had covert channels.
+
+**What restores it:** the §30 composition, in this order — **R-1** (relayed
+traffic made eligible for the anonymity zone, so the channel stops being an
+origin oracle), the **restored backstop** (§25.1's design question: what the
+embargo does when it fires on a noise zone, with the public-zone fallback
+forbidden per §30.5), and then covert re-enabled. **The machinery is retained,
+not deleted** — it is Q-11 Unit 2's substrate — but it is **unreachable from
+configuration**, deliberately: an opt-in flag would be an opt-in to the oracle.
+
+**What is gained:** Tor users get Dandelion++ and the black-hole embargo, which
+they have never had, and lose an attribution channel that was **strictly worse
+than clearnet's floor**.
+
+### 41.3 The configuration table, now two rows
+
+| | stem routing | embargo armed | fluff reach | covert |
+| --- | --- | --- | --- | --- |
+| **A. clearnet** | Dandelion++ | yes | every peer | no |
+| **C. Tor / I2P (now the only anonymity configuration)** | Dandelion++ | yes | outbound only | no |
+| ~~B. Tor + noise~~ | ~~none~~ | ~~no~~ | ~~outbound only~~ | ~~2 channels~~ — **deleted 2026-08-01** |
+
+**§6 now models what we ship**, which it did not before.
+
+### 41.4 What this does and does not close
+
+**Closes:** F-6 in its shipped form — both the omission half (§25.1) and the
+commission half (§29). No deployed configuration reaches the origin-routing
+oracle, because no deployed configuration enables covert channels.
+
+**Does not close, and each is now *more* urgent rather than less:**
+
+- **F-7** — configuration C is now the **only** anonymity configuration and its
+  embargo is provisioned from the defective `F`. The gate is gone but the
+  defect is not, and it now affects every Tor user rather than none of them
+  (they previously had no embargo at all, which is worse, but the comparison
+  no longer excuses it). **This is the top item.**
+- **§25.1's backstop design question** — still required before covert returns.
+- **Q-11 Unit 2** — unaffected: the substrate is retained and the shape
+  question is unchanged by the default.
+- **F-8, Q-10** — unaffected; they concern the peer axis, which configuration C
+  exercises fully for the first time.
+
+**The historical analysis of B (§§25, 29, 31.3) is kept rather than pruned.**
+It records why the composition has the shape §30 gives it, and a reader who
+finds covert channels re-enabled later needs to know what made them unsafe the
+first time.
