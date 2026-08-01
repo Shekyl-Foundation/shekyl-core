@@ -7018,10 +7018,9 @@ occupancy gets harder in `STEMS`.** So the list is now:
 | --- | --- | --- |
 | (a) degree / entropy | — | **sign flips** on adversary graph knowledge (D++ Fig. 3, §27.5) |
 | (b) PSG-learning cost (Sharma App. B) | toward **raising** | unambiguous |
-| (c) **invariant-isolation resistance** (this section) | toward **raising** | unambiguous |
+| ~~(c) invariant-isolation resistance (this section)~~ | ~~toward raising~~ | **WITHDRAWN 2026-07-31 (§33.1) — no mechanism: per-source pinning sends the own-stream to ONE slot regardless of `S`, so full-set occupancy was never required. Its corrected form (camouflage-thinning) points *against* raising.** |
 
-**Only (a) is ambiguous** — a materially better position for the raise than it
-had, arrived at from a check that was supposed to be about something else.
+~~**Only (a) is ambiguous**~~ — **superseded at §33.1**: (c) is withdrawn and replaced by an argument pointing the other way, so the raise's position is *not* improved by this line of reasoning. §32.3's unification (one-slot versus all-slots) survives the retraction and is what explains why: the own-stream attack needs **one** slot, so `S` does not defend it.
 
 **Amendment (mine) — the unification, which is worth more than the third
 argument.** §29.4/§30.4 found `NOISE_CHANNELS` raising makes capture *easier*
@@ -7106,3 +7105,195 @@ concentrates in the other three cells.**
 **Configuration B reads off it immediately: it fills the top-left and *inverts*
 the bottom-right.** The grid is the compact form of every scope argument in
 this document, and it is the form to carry.
+
+## 33. STEMS argument (c) retracted and inverted; Q-10 in operational terms
+
+**2026-07-31, maintainer, verified at source.** Two items: a retraction that
+strengthens §12.7 rather than weakening it, and a decomposition of Q-10 that
+finds the mechanism reading a signal production does not record.
+
+### 33.1 Argument (c) is withdrawn — and its corrected form points the other way
+
+§32.3 offered **invariant-isolation resistance** as a third argument for
+*raising* `STEMS`. **Withdrawn: it had no mechanism under it.** §12.7's recorded
+note supplies the reason — **per-source pinning means one successor per source
+regardless of out-degree**, so the origin's own transactions all resolve through
+`in_mapping_[nil]` to **exactly one slot whatever `STEMS` is.** The adversary
+never needed full-set occupancy to see the own-stream; it needs **that one
+slot, at probability ≈ `f`, independent of `S`.**
+
+**The corrected version inverts the sign, and it is stronger than the argument
+it replaces.** On the pinned slot, **relayed traffic is the cover for own
+traffic**:
+
+| `STEMS` | what the nil-mapped slot carries | own : relayed contrast |
+| --- | --- | --- |
+| 2 | own-stream + ~½ of the node's relayed stem traffic | lower |
+| 8 | own-stream + ~⅛ of it | **higher** |
+
+**So raising `STEMS` thins the camouflage on exactly the slot that matters** —
+a **fourth argument against raising**, on the non-enumerability axis, which
+§12.7 does not currently carry.
+
+**And it matters structurally beyond scorekeeping.** §12.7's own note concedes
+the pinning retraction **may undercut its fan-out leg**. This argument
+**depends on pinning being true** rather than being defeated by it — so if the
+fan-out leg falls, **§12.7 is not left standing on the expander-minimum
+alone.**
+
+**Revised argument list:**
+
+| argument | direction | status |
+| --- | --- | --- |
+| (a) degree / entropy | — | **sign flips** on adversary graph knowledge (D++ Fig. 3) |
+| (b) PSG-learning cost (Sharma App. B) | toward **raising** | unambiguous |
+| ~~(c) invariant-isolation resistance~~ | ~~raising~~ | **withdrawn 2026-07-31 — no mechanism** |
+| (d) **camouflage-thinning on the pinned slot** | **against raising** | unambiguous; survives the pinning retraction *because* it assumes pinning |
+
+### 33.2 §12.11 reads an oracle that production does not wire
+
+**Verified at source today:** `PeerFluff`
+([`zone/mod.rs:41-53`](../../rust/shekyl-relay/src/zone/mod.rs#L41-L53))
+carries **`queued` and `direction` — nothing else.** A grep for `disarm` across
+`rust/` and `src/` returns only *derivation* (`derive.rs`), *doc comments*
+(`params.rs`) and *simulation* (`conformance/stem.rs`) — **no production code
+records, per successor, whether an embargo disarmed or fired.**
+
+**§12.11 is not short a design. It is short a signal that exists in
+production.** That reorders its open questions:
+
+### 33.3 Q-10.1 — which side of the seam owns the reputation state
+
+The signal is **relay-owned, Rust-side**; the consumer — outbound selection,
+anchors, connection lifecycle — is **p2p-owned, C++-side** in `net_node.inl`. A
+per-peer disarm-rate accumulator lives on one side and crosses. **That decision
+determines whether Q-10 is a relay round with a p2p consumer or the reverse**,
+and it carries the standing duplicate-fact hazard: **the peer table and the
+reputation store must not become two owners of "who is eligible."**
+
+### 33.4 Q-10.2 — the denominator, and it is the blocker
+
+§12.11 owes the **ambient background failure rate** (the threshold's
+*numerator* input). **It does not owe the observation count**, and a rate
+threshold separating ~12 % from ~100 % is only estimable if a node accumulates
+enough stem outcomes per successor per decision window:
+
+```text
+obs(peer, epoch) ≈ tx_rate × mean_stem_length / node_count × epoch
+                   × (sources mapped to that peer / total)
+```
+
+**Illustratively** at Monero-like figures — 20 k tx/day, mean stem `1/q = 5`,
+5 000 nodes, 10-minute epoch, two successors — **≈ 0.07 observations per
+(peer, epoch)**: order one observation per successor every couple of hours, and
+**order a day to separate 12 % from 100 % with any confidence**, against a peer
+set that churns on a shorter timescale than that.
+
+**Sharpening (mine), and it makes the denominator worse:** reputation
+accumulates *per peer* across epochs, but **a peer is only a successor in some
+fraction of epochs** — the map re-draws at every rollover. So the effective
+observation rate per peer per unit wall-clock is **lower than
+`obs(peer, epoch) × epochs`** by that occupancy fraction, and the "order a day"
+figure is optimistic.
+
+**Inputs are illustrative on a pre-genesis chain and the real numbers need the
+measurement — but the shape is robust to them, and if it holds it dominates
+every parameter question in §12.11**: cooldown length, rate-decay threshold and
+`ε_explore` are **all unanswerable** if the signal arrives at 0.07 per window.
+The mechanism would need **cross-epoch retained history not as a refinement but
+as its only mode**, which changes the whitewash analysis, the memoryless-explore
+edge and cold-start behaviour **together**.
+
+**This is a plain measurement in the same class as `F` and hop latency, it
+needs no design decision, and it gates the other three. It belongs in the
+directed-flood unit or beside it.**
+
+### 33.5 Q-10.3 — re-entry cost, and it cannot be computed before Q-10.2
+
+§12.10's answer is that the toll is paid in **work, not identity**, so a fresh
+onion address starts unproven and must earn through the explore tier.
+Operationally the whitewash cost is **expected wait to be drawn by explore +
+observations needed to reach threshold** — both functions of `ε` and of
+Q-10.2. **On an anonymity network key-minting is free, so that wait is the
+entire cost**, and it must be *computed* rather than assumed positive. **The
+trade is single-knobbed and adverse:** a small denominator makes proving slow,
+which raises whitewash cost (good) and lengthens honest bootstrap (bad).
+
+### 33.6 Q-10.4 — persistence, re-scoped from defence to **requirement**
+
+**The framing this replaces was wrong, and the maintainer withdrew it before I
+could build on it**: an *induced*-restart capability fails part D's own rule —
+remote crash is a bug to fix rather than a threat-model input, resource
+exhaustion has no found vector against existing connection caps, and presence
+at the moment of restart is **already priced** as §12.10 regime 3's occupancy
+budget, so naming induction separately **double-counts it**.
+
+**The concern survives in a better form and needs no adversary at all.
+Restarts are ambient** — upgrades, host reboots, power, container churn,
+operator action. The question is whether the mechanism **converges**:
+
+```text
+warm-up  ≪  mean uptime
+```
+
+Warm-up is a direct function of Q-10.2's denominator. If ~0.07 per peer-epoch
+is even roughly right, **warm-up is order days**, against mean uptime of order
+weeks for a server and **far less for a laptop or a container.**
+
+- **Convergent regime:** a slice of node-time is lost to warm-up.
+- **Non-convergent regime:** the mechanism is **not degraded — it is inert.**
+  Every node sits permanently in explore-only, which is uniform random
+  selection, which is **today's behaviour plus machinery.**
+
+**And §12.11 would grade green in simulation either way, because a simulation
+runs a node continuously.** That is **§20.3a's first vacuity mechanism —
+fixture cannot express the input — applied to a design validation rather than a
+test**, and it is the third instance of that check paying this session
+(`flood.rs`'s symmetric adjacency, the missing θ, and now a simulation that
+cannot express a restart).
+
+**Two consequences.** **Q-10.2 gains a second consumer and moves up**: it was
+gating the parameters; it now gates **whether the round is about parameters at
+all.** And **persistence is re-scoped** — not *"persist and accept a forensic
+artifact"* but **"persist, or the mechanism may not function"**, because
+persistence is what makes warm-up a once-per-node-lifetime cost instead of
+once-per-restart.
+
+**The forensic cost is also smaller than it was priced.** Verified:
+`store_config()` already writes the peer list to `P2P_NET_DATA_FILENAME`
+([`net_node.inl:1013`](../../src/p2p/net_node.inl#L1013)), and **anchors
+already persist and reconnect on restart**
+([`:1347`](../../src/p2p/net_node.inl#L1347),
+[`:1419`](../../src/p2p/net_node.inl#L1419)) **specifically as the anti-eclipse
+mechanism.** The node already keeps an on-disk record of who it connects to and
+that cost was accepted; reputation **deepens the artifact from address history
+to behavioural history**, which is not a new category. The marginal question —
+*how much more does per-peer disarm-rate reveal than the anchor list already
+does* — is narrower and more answerable than the one first posed.
+
+**Amendment (mine): if persistence is a requirement rather than a hardening,
+its bounding is part of the specification, not a nice-to-have.** Bucketed
+counts rather than event logs, bounded retention, no peer identifiers at rest —
+these must be specified **at the same time** as the requirement, because a
+mechanism that cannot function without persistence will get persistence in
+whatever form is convenient if the bound is left to implementation.
+
+### 33.7 The same test run on (b) — and the test discriminates
+
+The capability check that killed the induced-restart framing was **run on (b)
+as well, before Unit 2 spends derivation effort on it.** **It passes:** the
+perturbation capability is **delay-or-drop on the link**, which is **Loopix's
+active adversary** (§4.2.1's blocking analysis) and **D++'s §4.4 blocker** —
+**named in the sources rather than assumed.**
+
+**Worth recording that the test *discriminated*** — it rejected induced-restart
+and accepted delay-or-drop. A check that passes everything is decoration; this
+one has now produced both answers on the same day, which is the evidence that
+it is doing work.
+
+### 33.8 Standing obligation before anything is built on §12.11
+
+Per §12.11's own first-move instruction, **its anchors are three weeks old.**
+`PeerFluff` and the absence of production disarm state were **verified today**;
+**`get_stem` / `out_mapping_` / the embargo-disarm path were not**, and must be
+re-verified before anything is built on them.
