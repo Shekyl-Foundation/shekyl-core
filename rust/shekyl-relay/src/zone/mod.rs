@@ -23,6 +23,8 @@ use shekyl_relay_privacy::schedule::{
 };
 use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap};
 
+use crate::stem_watch::{StemTally, StemWatch, TxId};
+
 /// One opaque transaction blob shared across every peer that accepted a fluff
 /// batch.
 ///
@@ -232,6 +234,9 @@ pub struct Zone {
     /// double duty as its own enable flag. C++ still holds the payload buffers;
     /// Rust owns *whether* and *when* channels fire.
     covert: CovertSchedule,
+    /// Per-successor stem outcomes — §12.11's signal, **derived here rather
+    /// than imported from `tx_pool`** (§38.1). Records; never judges.
+    stem_watch: StemWatch,
 }
 
 impl Zone {
@@ -264,6 +269,7 @@ impl Zone {
             CovertSchedule::Off
         };
         Self {
+            stem_watch: StemWatch::default(),
             contexts: BTreeMap::new(),
             // Built at full width with no peers rather than `StemMap::empty()`,
             // so `update_stems` can grow into it. An empty map has no slots to
@@ -332,6 +338,60 @@ impl Zone {
             .or_insert_with(|| PeerFluff::new(direction));
     }
 
+    /// Record that `txs` were stemmed to `successor`, keyed under `source`
+    /// (`None` = locally originated, matching `in_mapping_[nil]`), and must be
+    /// seen again by `deadline`.
+    ///
+    /// **The caller supplies the window rather than this type choosing it.**
+    /// Today it is the adopted embargo draw, because that is the same question
+    /// (*did my successor propagate this?*); but §12.11's decision window is an
+    /// open parameter and need not equal the embargo, so freezing them
+    /// together here would decide something the round has left open.
+    pub fn record_stem(
+        &mut self,
+        txs: &[TxId],
+        successor: ConnectionId,
+        source: Option<ConnectionId>,
+        deadline: Millis,
+    ) {
+        for tx in txs {
+            self.stem_watch.stemmed(*tx, successor, source, deadline);
+        }
+    }
+
+    /// Resolve every stem observation whose deadline has passed as *silent*.
+    ///
+    /// Driven from [`crate::Driver::poll`]'s `now`, so the outcome is a
+    /// function of the same clock every other relay decision uses — no second
+    /// timer, no reactor, and the force hooks exercise it for free. Returns
+    /// how many resolved, so a witness can assert the drive ran.
+    pub fn expire_stem_observations(&mut self, now: Millis) -> usize {
+        self.stem_watch.expire(now)
+    }
+
+    /// Record that `txs` arrived — from any peer, by any path.
+    ///
+    /// Resolves any pending observation as propagated. This is the *only*
+    /// input the outcome needs from outside, and it is **data, not a
+    /// decision** (§38.1).
+    pub fn record_arrival(&mut self, txs: &[TxId]) {
+        for tx in txs {
+            self.stem_watch.seen(tx);
+        }
+    }
+
+    /// Per-successor stem outcomes, for a future selection consumer.
+    #[must_use]
+    pub fn stem_tally(&self, successor: &ConnectionId) -> Option<&StemTally> {
+        self.stem_watch.tally(successor)
+    }
+
+    /// Observations still in flight — liveness witness for the drive.
+    #[must_use]
+    pub fn stem_observations_in_flight(&self) -> usize {
+        self.stem_watch.in_flight()
+    }
+
     /// A peer disconnected.
     ///
     /// Mirrors `notify::on_connection_close`. Anything still queued for that
@@ -340,6 +400,11 @@ impl Zone {
     /// step is not entitled to make.
     pub fn on_connection_close(&mut self, id: &ConnectionId) {
         self.contexts.remove(id);
+        // Reputation and in-flight observations go with the peer. Retention
+        // across a disconnect is §33.6's open question — a *requirement* if
+        // warm-up exceeds mean uptime, a forensic artifact either way — and
+        // this must not decide it by quietly keeping state.
+        self.stem_watch.forget(id);
         // The scheduler holds its own pending-deadline map; leaving the peer
         // there would keep waking the driver for a connection that is gone.
         self.fluff.forget(*id);
