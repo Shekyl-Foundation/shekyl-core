@@ -221,12 +221,27 @@ impl StemWatch {
 
     /// Drop all state for a peer that is gone.
     ///
-    /// **Deliberately drops the tally too.** Persisting reputation across a
-    /// disconnect is §33.6's open question — it is a *requirement* if warm-up
-    /// exceeds mean uptime, and a forensic artifact either way — so this type
-    /// does not quietly decide it by retaining. In-flight observations naming
-    /// the departed peer are dropped rather than charged: a peer that
-    /// disconnected was not given its deadline.
+    /// **Two different things happen here and only one of them is obvious.**
+    ///
+    /// Dropping the **in-flight** observations is uncontroversial: a peer that
+    /// disconnected was not given its deadline, so charging it a silence would
+    /// be charging it for our own disconnect.
+    ///
+    /// Dropping the **tally** is a decision, not cleanup — **it answers
+    /// §33.6's persistence question, and the answer is "no"** (F-8, §39). An
+    /// earlier version of this comment claimed the type "does not quietly
+    /// decide" persistence; it does, and the consequence is tighter than
+    /// §33.6 analysed: reset happens at **connection** granularity, not
+    /// process granularity, so the convergence condition is
+    /// `warm-up ≪ mean outbound connection lifetime` — strictly stronger,
+    /// since connection lifetime is bounded above by uptime.
+    ///
+    /// **Retention is not a one-line alternative.** [`ConnectionId`] is
+    /// per-connection, so retaining across a disconnect needs a **durable peer
+    /// key**, which is an address or an onion identity — a p2p-owned fact this
+    /// layer deliberately does not hold. So retention pulls against Q-10.1's
+    /// own answer (Rust owns the reputation state) and is a seam question in
+    /// its own right, not a change of one line.
     pub fn forget(&mut self, peer: &ConnectionId) {
         self.tallies.remove(peer);
         self.pending.retain(|_, p| p.successor != *peer);
