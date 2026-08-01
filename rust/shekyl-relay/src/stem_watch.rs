@@ -1,0 +1,355 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Per-successor stem outcomes — the signal §12.11 specifies and production
+//! does not currently record (`DAEMON_RELAY_PRIVACY.md` §33.2).
+//!
+//! # Why this derives the outcome instead of importing it
+//!
+//! The obvious wiring is to let `tx_pool` report each embargo's resolution,
+//! since that is where the embargo arms and fires today. **Rejected under rule
+//! 20.** `tx_pool` holds no relay-zone handle, so importing the outcome means
+//! building a new C++ path from the mempool into the relay layer, and every
+//! byte of that path is C++ deciding something Rust could decide.
+//!
+//! The relay layer already sees **both directions**: it *chooses* the stem
+//! successor, and it is told the `source` of every transaction that arrives.
+//! So *"did my successor propagate this?"* is answerable here, from facts this
+//! layer already owns, and the only thing C++ must hand over is the
+//! transaction's identity — data, not a decision.
+//!
+//! **The definitions differ slightly, and this one is the more correct for the
+//! purpose.** `tx_pool` disarms on `upgrade_relay_method` — pool *admission*.
+//! This disarms on re-arrival — *propagation*. A transaction that comes back
+//! and is then rejected by the pool still proves the successor relayed it,
+//! which is exactly what the reputation signal is asking about. The divergence
+//! is named here rather than discovered when the two are compared.
+//!
+//! # What is deliberately NOT decided here
+//!
+//! This type **records**; it does not judge. Three parameters are open in the
+//! design doc and none is baked in:
+//!
+//! - **Accumulator memory** (§37.3) — windowed versus cumulative is *upstream*
+//!   of every threshold, and under cumulative memory §36.1's integer-ladder
+//!   finding does not even apply. [`StemTally`] therefore exposes raw counts
+//!   and lets a consumer window them; it does not decay, reset, or average.
+//! - **The `(n_min, cut)` pair** (§36.1) — a *rate* threshold is the wrong
+//!   parameterisation at these counts, so nothing here compares a ratio.
+//! - **Distinct source-mappings** (§35.4) — tracked, because `in_mapping_`
+//!   already holds the information and it is the admissibility gate's input,
+//!   but not thresholded.
+//!
+//! Baking any of them in would freeze a decision the round has explicitly left
+//! open, and would do it in the layer hardest to change later.
+
+use std::collections::HashMap;
+
+use shekyl_relay_privacy::schedule::Millis;
+use shekyl_relay_privacy::stem_map::ConnectionId;
+
+/// A transaction's identity, as the relay layer sees it.
+///
+/// Opaque 32 bytes: this layer never interprets them, it only joins on them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TxId([u8; 32]);
+
+impl TxId {
+    /// Wrap 32 bytes of transaction identity.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// The underlying bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// What a stem observation resolved to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StemOutcome {
+    /// The transaction came back before its deadline — the successor relayed
+    /// it. `tx_pool`'s embargo would have disarmed.
+    Propagated,
+    /// The deadline passed with no re-arrival. Either the successor dropped
+    /// it, or this is an **ambient** failure — and the two are
+    /// indistinguishable *by construction*, which is why the ambient rate is a
+    /// security input (§37.1) and not merely a calibration constant.
+    Silent,
+}
+
+/// Per-successor outcome counts, plus the admissibility-gate input.
+///
+/// **Raw counts only.** See the module note: memory policy, thresholds and the
+/// `(n_min, cut)` pair are all open decisions, and a tally that decayed or
+/// compared would have chosen one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StemTally {
+    /// Observations that resolved as [`StemOutcome::Propagated`].
+    pub propagated: u32,
+    /// Observations that resolved as [`StemOutcome::Silent`].
+    pub silent: u32,
+    /// Distinct `in_mapping_` keys that contributed observations — the
+    /// §35.4 admissibility-gate input. Farmed observations all arrive under
+    /// **one** key (the farmer's own), honest traffic under many.
+    ///
+    /// A locally-originated transaction has no source, and its key is
+    /// recorded as `None`, matching `in_mapping_[nil]`.
+    sources: std::collections::BTreeSet<Option<ConnectionId>>,
+}
+
+impl StemTally {
+    /// Total resolved observations — `n` in §36's `(n_min, cut)`.
+    #[must_use]
+    pub fn observations(&self) -> u32 {
+        self.propagated + self.silent
+    }
+
+    /// How many distinct source-mappings contributed (§35.4).
+    #[must_use]
+    pub fn distinct_sources(&self) -> usize {
+        self.sources.len()
+    }
+}
+
+/// Stem observations in flight, and their per-successor resolutions.
+///
+/// One instance per zone, owned by [`crate::Zone`]. Sync by construction:
+/// nothing here sleeps or spawns — [`StemWatch::expire`] is driven from the
+/// same `now` the rest of the zone's schedule uses, so the outcome is a
+/// function of the poll clock exactly as every other relay decision is.
+#[derive(Debug, Default)]
+pub struct StemWatch {
+    /// `tx → (successor, source, deadline)` for observations not yet resolved.
+    pending: HashMap<TxId, Pending>,
+    /// Resolved counts, per successor.
+    tallies: HashMap<ConnectionId, StemTally>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Pending {
+    successor: ConnectionId,
+    source: Option<ConnectionId>,
+    deadline: Millis,
+}
+
+impl StemWatch {
+    /// Record that `tx` was stemmed to `successor`, keyed under `source`
+    /// (`None` for locally originated — `in_mapping_[nil]`), and must be seen
+    /// again by `deadline`.
+    ///
+    /// A repeat stem of the same `tx` **replaces** the pending entry rather
+    /// than adding a second: the reshape path re-stems a transaction to a
+    /// different successor, and the observation belongs to whoever holds it
+    /// now. Without this the original successor would be charged for a
+    /// silence it was never given the chance to break.
+    pub fn stemmed(
+        &mut self,
+        tx: TxId,
+        successor: ConnectionId,
+        source: Option<ConnectionId>,
+        deadline: Millis,
+    ) {
+        self.pending.insert(
+            tx,
+            Pending {
+                successor,
+                source,
+                deadline,
+            },
+        );
+    }
+
+    /// Record that `tx` was seen again — from any peer, by any path.
+    ///
+    /// Resolves a pending observation as [`StemOutcome::Propagated`].
+    /// Unknown transactions are ignored: this node either never stemmed it or
+    /// already resolved it, and neither is an error.
+    pub fn seen(&mut self, tx: &TxId) {
+        if let Some(p) = self.pending.remove(tx) {
+            self.resolve(p, StemOutcome::Propagated);
+        }
+    }
+
+    /// Resolve every observation whose deadline has passed as
+    /// [`StemOutcome::Silent`]. Driven from the zone's poll clock.
+    ///
+    /// Returns how many resolved, so a caller can assert the drive ran rather
+    /// than inferring it from an unchanged tally — the liveness half of the
+    /// standing witness discipline.
+    pub fn expire(&mut self, now: Millis) -> usize {
+        let due: Vec<TxId> = self
+            .pending
+            .iter()
+            .filter(|(_, p)| p.deadline <= now)
+            .map(|(tx, _)| *tx)
+            .collect();
+        for tx in &due {
+            if let Some(p) = self.pending.remove(tx) {
+                self.resolve(p, StemOutcome::Silent);
+            }
+        }
+        due.len()
+    }
+
+    fn resolve(&mut self, p: Pending, outcome: StemOutcome) {
+        let tally = self.tallies.entry(p.successor).or_default();
+        match outcome {
+            StemOutcome::Propagated => tally.propagated += 1,
+            StemOutcome::Silent => tally.silent += 1,
+        }
+        tally.sources.insert(p.source);
+    }
+
+    /// The tally for one successor, if it has any resolved observations.
+    #[must_use]
+    pub fn tally(&self, successor: &ConnectionId) -> Option<&StemTally> {
+        self.tallies.get(successor)
+    }
+
+    /// Observations still in flight — for the liveness assertions a witness
+    /// needs, and for bounding the pending map in review.
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Drop all state for a peer that is gone.
+    ///
+    /// **Deliberately drops the tally too.** Persisting reputation across a
+    /// disconnect is §33.6's open question — it is a *requirement* if warm-up
+    /// exceeds mean uptime, and a forensic artifact either way — so this type
+    /// does not quietly decide it by retaining. In-flight observations naming
+    /// the departed peer are dropped rather than charged: a peer that
+    /// disconnected was not given its deadline.
+    pub fn forget(&mut self, peer: &ConnectionId) {
+        self.tallies.remove(peer);
+        self.pending.retain(|_, p| p.successor != *peer);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tx(b: u8) -> TxId {
+        let mut x = [0u8; 32];
+        x[0] = b;
+        TxId::from_bytes(x)
+    }
+    fn peer(b: u8) -> ConnectionId {
+        let mut x = [0u8; 16];
+        x[0] = b;
+        ConnectionId::from_bytes(x)
+    }
+
+    #[test]
+    fn a_transaction_that_returns_before_its_deadline_counts_as_propagated() {
+        let mut w = StemWatch::default();
+        w.stemmed(tx(1), peer(9), None, 1_000);
+        assert_eq!(w.in_flight(), 1, "fixture: the observation is armed");
+        w.seen(&tx(1));
+        assert_eq!(w.in_flight(), 0, "resolution clears the pending entry");
+        let t = w.tally(&peer(9)).expect("resolved against its successor");
+        assert_eq!((t.propagated, t.silent), (1, 0));
+        assert_eq!(t.observations(), 1);
+    }
+
+    #[test]
+    fn a_transaction_that_never_returns_counts_as_silent_at_its_deadline() {
+        let mut w = StemWatch::default();
+        w.stemmed(tx(1), peer(9), None, 1_000);
+        assert_eq!(w.expire(999), 0, "not due yet");
+        assert!(w.tally(&peer(9)).is_none(), "nothing resolved before due");
+        assert_eq!(w.expire(1_000), 1, "due at exactly the deadline");
+        let t = w.tally(&peer(9)).expect("resolved");
+        assert_eq!((t.propagated, t.silent), (0, 1));
+    }
+
+    #[test]
+    fn a_re_stem_moves_the_observation_to_the_new_successor() {
+        // The reshape path re-stems to a different successor. Charging the
+        // ORIGINAL peer for the silence would blame it for a deadline it was
+        // no longer holding — and reshape fires precisely when a successor
+        // looks dark, so this is the operative case, not an edge one.
+        let mut w = StemWatch::default();
+        w.stemmed(tx(1), peer(1), None, 1_000);
+        w.stemmed(tx(1), peer(2), None, 2_000);
+        assert_eq!(w.in_flight(), 1, "one observation, not two");
+        assert_eq!(w.expire(2_000), 1);
+        assert!(
+            w.tally(&peer(1)).is_none(),
+            "the original successor is not charged for a silence it was not \
+             given the chance to break"
+        );
+        assert_eq!(w.tally(&peer(2)).expect("re-stem target").silent, 1);
+    }
+
+    #[test]
+    fn distinct_sources_counts_mappings_not_observations() {
+        // §35.4's admissibility-gate input. Farmed observations arrive under
+        // one key; this must count the keys, not the volume — a farmer
+        // supplying 100 transactions still contributes ONE distinct source.
+        let mut w = StemWatch::default();
+        for i in 0..100u8 {
+            w.stemmed(tx(i), peer(9), Some(peer(42)), 1_000);
+            w.seen(&tx(i));
+        }
+        let t = w.tally(&peer(9)).expect("resolved");
+        assert_eq!(t.observations(), 100, "volume is counted");
+        assert_eq!(
+            t.distinct_sources(),
+            1,
+            "but 100 observations under one mapping are ONE source — if this \
+             counts 100, the gate cannot distinguish farming from breadth"
+        );
+
+        w.stemmed(tx(200), peer(9), None, 1_000);
+        w.seen(&tx(200));
+        assert_eq!(
+            w.tally(&peer(9)).expect("resolved").distinct_sources(),
+            2,
+            "local origin is its own mapping (in_mapping_[nil])"
+        );
+    }
+
+    #[test]
+    fn forgetting_a_peer_drops_its_tally_and_its_in_flight_observations() {
+        let mut w = StemWatch::default();
+        w.stemmed(tx(1), peer(9), None, 1_000);
+        w.seen(&tx(1));
+        w.stemmed(tx(2), peer(9), None, 5_000);
+        assert!(w.tally(&peer(9)).is_some());
+        w.forget(&peer(9));
+        assert!(w.tally(&peer(9)).is_none(), "tally dropped, not retained");
+        assert_eq!(
+            w.in_flight(),
+            0,
+            "a disconnected peer is not charged for a deadline it never had"
+        );
+    }
+
+    #[test]
+    fn the_tally_records_and_does_not_judge() {
+        // The type must not encode §37.3's memory policy or §36.1's (n_min,
+        // cut) pair — both are open, and a tally that decayed or compared
+        // would have chosen one. This asserts the surface stays raw: counts
+        // in, counts out, no ratio and no decay.
+        let mut w = StemWatch::default();
+        for i in 0..10u8 {
+            w.stemmed(tx(i), peer(9), None, 1_000);
+        }
+        assert_eq!(w.expire(1_000), 10);
+        let t = w.tally(&peer(9)).expect("resolved");
+        assert_eq!(
+            (t.propagated, t.silent, t.observations()),
+            (0, 10, 10),
+            "counts are exact and undecayed after ten silences"
+        );
+    }
+}
