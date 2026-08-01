@@ -7204,9 +7204,13 @@ The mechanism would need **cross-epoch retained history not as a refinement but
 as its only mode**, which changes the whitewash analysis, the memoryless-explore
 edge and cold-start behaviour **together**.
 
-**This is a plain measurement in the same class as `F` and hop latency, it
-needs no design decision, and it gates the other three. It belongs in the
-directed-flood unit or beside it.**
+~~**This is a plain measurement in the same class as `F` and hop latency**~~ —
+**corrected at §34: it is not.** `F` needs no economic input; this needs a
+transaction rate, which pre-genesis does not exist. **Q-10.2 is a parametric
+study over an envelope**, which changes who can produce it and when — though
+§34.5 shows the envelope collapses to **one axis** (`r = tx_rate/node_count`)
+with a closed form, so it is cheaper than "study" implies. It still gates the
+other three, and now the whitewash cost as well.
 
 ### 33.5 Q-10.3 — re-entry cost, and it cannot be computed before Q-10.2
 
@@ -7297,3 +7301,147 @@ Per §12.11's own first-move instruction, **its anchors are three weeks old.**
 `PeerFluff` and the absence of production disarm state were **verified today**;
 **`get_stem` / `out_mapping_` / the embargo-disarm path were not**, and must be
 re-verified before anything is built on them.
+
+## 34. Q-10.2 is a parametric study, not a measurement — and both denominators fail
+
+**2026-07-31, maintainer, correcting §33.4's own framing.** §33.4 called
+Q-10.2 *"a plain measurement, same class as `F` and hop latency."* **It is
+not.** `F` is measurable on a synthetic topology with **no economic input**;
+the denominator needs a **transaction rate**, and pre-genesis there is not one.
+**Q-10.2 is a parametric study across an envelope**, which changes who can
+produce it and when.
+
+### 34.1 The parameters cannot be constants in time
+
+If observations arrive at a rate set by chain activity, then cooldown length,
+promotion threshold and warm-up **expressed in epochs or seconds** carry a
+statistical meaning that **drifts with volume**: same numeral, different
+confidence, different false-eviction rate at every point on the adoption curve.
+
+**That is derive-don't-hardcode with a moving target — worse than the 39 s,
+because the 39 s was at least wrong at a fixed point.**
+
+### 34.2 The obvious repair fails the other way — the adversary supplies its own denominator
+
+Denominate in **observations** rather than time, and whoever produces
+observations fastest reaches every threshold first. A peer holding an outbound
+slot at `O` accumulates observations from `O`'s sources mapped to it — **and an
+adversary that also holds an *inbound* connection to `O` is one of those
+sources.** It can pump transactions into `O`, have them routed back to itself
+with probability ~`1/STEMS`, forward them correctly, and **mint its own disarm
+events.** It need not even originate them: relaying anything `O` has not yet
+seen works, so a well-connected adversary that wins the race to deliver
+**converts bandwidth into observations at no fee cost.**
+
+> **Correction carried before it propagates (maintainer's own): this does NOT
+> inflate the score.** The signal is a **rate**, so supplying volume does not
+> raise disarms/observations — it **converges you to your true rate faster.**
+> **Farming buys speed, not standing.**
+
+**And speed is exactly what Q-10.3 was pricing.** Whitewash cost was *expected
+explore-wait + observations-to-threshold*; under observation-denominated
+windows **the second term collapses for a well-provisioned adversary and does
+not for an honest low-volume peer.** So **re-entry cost becomes
+adversary-specific, and it is cheapest for precisely the adversary the
+mechanism exists to tax.**
+
+### 34.3 This is the live half of the ranking-preference clause, and ε does not reach it
+
+The standing clause is *"reputation as eviction of droppers, never preferential
+selection of good actors — ranking-preference recruits the best-provisioned
+adversary."* **§12.11's exploit tier *is* ranking-preference.** The measured
+ossification (2 of 12) is the clause's **first** half and `ε = 0.05` fixes it.
+**The second half — recruitment of the best-provisioned — is untouched by ε**,
+because exploration restores *diversity* without changing **who wins the
+ranking or how fast.**
+
+§12.10 answers the objection at the level of **work demonstrated**, but **work
+demonstrated on traffic the adversary supplied to itself is counterfeit coin.**
+
+**Refinement this forces on a principle already recorded (mine).** The
+recruiting frame — *an adversary that must sustain work to hold position is
+conscripted into maintaining the network* — carries an **unstated
+precondition**: **conscription requires the work to be useful to someone other
+than the worker.** Relaying your own traffic back to yourself is *work* but it
+is not *carriage*. The precondition belongs in the frame, because without it
+the frame licenses exactly the farm described above.
+
+### 34.4 The shape the answer probably has — scope, not decision
+
+**Neither pure-time nor pure-observation gating survives alone.**
+Time-denominated is volume-sensitive (§33.6's convergence problem);
+observation-denominated is adversary-accelerable (§34.2). **Gate promotion on
+both** — minimum observations **and** minimum wall-clock tenure — so each party
+pays **the slower of the two**, which is the honest peer's real constraint and
+the adversary's binding one.
+
+*Addition (mine): that reduces the design's security question to **"can the
+adversary wait?"** rather than **"can the adversary farm?"** — and wall-clock
+is the one input bandwidth cannot buy. It is the same shape as this document's
+take-the-max-of-two-constraints idiom elsewhere.*
+
+**A structural candidate worth testing before any threshold work: count
+*distinct source-mappings* contributing to a successor's observations, not raw
+observations.** Farmed events all arrive under **one** `in_mapping_` key — the
+adversary's own — while honest traffic arrives under many. **`in_mapping_`
+already holds exactly this information, so it costs no new state.** The
+adversary's counter-move is to open many inbound connections under distinct
+identities, free on Tor but **capped by `set_max_in_peers`** — so **the farm's
+cost collapses into the inbound-occupancy budget §12.10 regime 3 already
+prices.** Per part D's rule that is the right outcome: **pay for the capability
+once, in the subsystem that already owns it.** And it is **a metric farming
+cannot move rather than a detector for farming**, which is the preferred shape.
+
+**One check on the candidate before it is adopted (mine).** The metric's floor
+is set by the **observing** node's inbound diversity, not the observed peer's
+honesty: a poorly-connected honest node has few source-mappings and therefore
+**cannot accumulate distinct-source evidence about anyone.** That conflates
+*few sources* with *farmed* — possibly acceptable, since both mean
+low-confidence signal — but it **interacts with §33.6's cold-start problem and
+may compound it**, so the two must be evaluated together rather than in
+sequence.
+
+### 34.5 What the deliverable becomes — and it is smaller than "parametric study" suggests
+
+Not *"the denominator"* but **`obs(peer, epoch)` over the plausible envelope**,
+parameterised on the **ratio `tx_rate / node_count`** rather than each term
+separately — the two plausibly grow together, and the ratio is likely closer to
+scale-invariant.
+
+**Sharpening (mine): the envelope collapses to one axis, with a closed form.**
+Substituting `sources-mapped/total ≈ 1/STEMS` under even mapping:
+
+```text
+obs(peer, epoch) ≈ (tx_rate / node_count) × (1/q) × epoch / STEMS
+```
+
+`q`, `epoch` and `STEMS` are known constants, so **`r = tx_rate / node_count`
+is the only free variable** — this is **a formula with one axis, not a
+multi-dimensional sweep**, and the "study" is choosing the envelope of `r` and
+reading off. At `q = 0.2`, a 600 s epoch and `STEMS = 2` that is
+`obs ≈ 1500 · r`, which reproduces §33.4's illustrative 0.07 at Monero-like
+figures — an internal consistency check on both.
+
+**And the launch corner may run the *other* way from the intuition, which is
+why it must be checked rather than assumed.** Since `obs` scales with
+`tx_rate / node_count`, a young chain is only worse if **node count shrinks
+more slowly than volume**:
+
+| envelope point (illustrative) | `r` (tx/s/node) | `obs`/(peer, epoch) |
+| --- | --- | --- |
+| Monero-like — 20 k tx/day, 5 000 nodes | 4.6 × 10⁻⁵ | **0.069** |
+| young — 1 k tx/day, **100** nodes | 1.2 × 10⁻⁴ | **0.174** |
+| young — 1 k tx/day, **500** nodes | 2.3 × 10⁻⁵ | **0.035** |
+| tiny — 200 tx/day, 50 nodes | 4.6 × 10⁻⁵ | 0.069 |
+
+**A small chain with proportionally few nodes is *better* for the signal, not
+worse.** The dangerous corner is **many nodes on low volume** — an
+enthusiastically-run young network — which is the opposite of the naive
+"launch is worst" reading. Illustrative inputs on a pre-genesis chain; the real
+envelope is what Q-10.2 produces, and the point is that **the corner to check
+hardest is not the one intuition names.**
+
+**Q-10.2 remains first to produce and still gates the parameters, the
+convergence condition, and now the whitewash cost — but it is a different kind
+of artifact than §33.4 said, and a cheaper one than "parametric study"
+implies.**
