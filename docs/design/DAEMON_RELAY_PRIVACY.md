@@ -7554,6 +7554,11 @@ cheaply, and it **degrades to "cannot promote" rather than "promotes wrongly"**
 for a poorly-connected node — failing **closed**. Worth testing in that form
 before discarding.
 
+**Upgraded at §36.3: the minimum-observations gate is not one of three
+conditions but a *well-posedness precondition* — heterogeneous `n` puts peers
+on different rungs of the ladder, so judging below `n_min` penalizes the peers
+the mechanism knows least about.**
+
 **Composition note (mine): as a gate it fits the other two rather than
 competing with them.** Promotion then requires **three independent conditions**
 — minimum observations, minimum occupancy-denominated tenure (§35.3), minimum
@@ -7572,3 +7577,121 @@ signed.
 slot the node learns about fastest is exactly the slot where a dropper costs it
 most, so if that peer is malicious it is **evicted soonest.** The mechanism
 converges quickest precisely where its failure would be most expensive.
+
+## 36. The threshold is a discrete ladder, not a rate — and the rung is only gradeable against an adversary nobody has written down
+
+**2026-08-01, maintainer, with the `n = 10` figure retracted and reproduced
+(0.37 %, not 0.06 %).** The correction exposes something structural.
+
+### 36.1 At these counts the sensitivity is in the integer cut, not in `n`
+
+Recomputed independently (honest floor `p = 0.12`):
+
+| `n` | cut | P(false cooldown) |
+| --- | --- | --- |
+| 10 | ≥ 5 | **0.372 %** |
+| 10 | ≥ 6 | **0.041 %** |
+| 12 | ≥ 7 | 0.016 % |
+| 15 | ≥ 8 | 0.013 % |
+
+**Two adjacent integers at `n = 10` differ by 9×, which is larger than the
+effect of adding five observations.** So *"a 50 % rate threshold"* **is not a
+specification at these counts** — `5/10` and `6/10` are both defensible
+readings of it and they are an order of magnitude apart.
+
+**That propagates into §35.2's derivation chain.** `cooldown ≈ eclipse_bound ×
+interval / false_rate` treated `false_rate` as a **continuous dial**. It is
+not: it takes only the values the ladder offers at the achievable `n`. **So the
+chain runs the other way — pick the rung, then read off cooldown — and the
+deliverable owes the ladder, not a rate.**
+
+> **A rate threshold is the wrong parameterization to write down at all. The
+> honest form is `(n_min, cut)` — an integer pair.**
+
+### 36.2 The rung's cost is invisible against the adversary §12.11 models
+
+**Computed, and this is what makes the rung choice undecidable as posed:**
+
+| `n = 10`, drop rate → | 40 % | 60 % | 80 % | 100 % |
+| --- | --- | --- | --- | --- |
+| cut ≥ 5 | 0.367 | 0.834 | 0.994 | **1.000** |
+| cut ≥ 6 | 0.166 | 0.633 | 0.967 | **1.000** |
+
+**Against a *total* black hole the two rungs are indistinguishable — both catch
+it with probability 1.** The cost of the safer rung appears **only against a
+partial dropper**: at 40 % drop, moving from `≥5` to `≥6` cuts detection from
+0.37 to 0.17, **less than half**.
+
+**So the rung trades false-cooldown rate against *partial*-drop detection, and
+§12.11's clean-separation framing (12 % versus 100 %) is precisely the case
+where the trade is invisible.** The specification therefore owes a
+**partial-drop adversary model** — what drop rate an adversary would actually
+choose, given that dropping less is stealthier and drops less — and **no such
+model exists in this document.** Without it the ladder can be enumerated but
+the rung cannot be chosen: enumerating is Q-10.2's job, choosing needs a
+threat statement.
+
+### 36.3 Heterogeneous `n` makes the count gate a well-posedness precondition, not a condition
+
+Observations accumulate **at different rates per successor** — the sources
+mapped to each differ, and the nil-mapped slot runs ahead (§35.5). So a fixed
+rate threshold evaluated *whenever a decision falls due* is evaluated **at
+different `n` per peer**, hence at **different rungs of the ladder**, hence a
+sparsely-mapped peer faces a **materially higher false-cooldown probability
+than a well-mapped one for identical honest behaviour.**
+
+**That is not a tuning wrinkle — it is the mechanism systematically penalizing
+the peers it knows least about.**
+
+**So the minimum-observations gate is upgraded**: §35.4 listed it as one of
+three composable conditions; it is **a precondition for the decision to be
+well-posed at all.** No peer is judged below `n_min`; below it a peer is
+**unproven, not suspect.** Fails closed, which is the right direction.
+
+*Consequence (mine): the decision schedule then interacts.* If decisions fall
+due on a **fixed clock**, sparse peers accumulate less between them and the
+heterogeneity persists inside every window. If decisions fall due on
+**reaching `n_min`**, the schedule becomes peer-specific — arguably more
+correct, but `decision_interval` is then **no longer constant across peers**,
+which changes §35.2's cooldown arithmetic. The two must be chosen together.
+
+### 36.4 The tenure repair holds, and the reason it holds is a constraint on the explore tier
+
+Denominating tenure from **first draw by explore** works **because the explore
+tier draws from current *outbound connections*** — you can only stem to a peer
+you are connected to. So the clock starts when `O` **dials** the adversary,
+which is **`O`'s decision, not the adversary's**. Getting dialed means being in
+`O`'s peerlist and winning a selection — **peerlist influence — which is the
+anti-eclipse posture, regime 3**, and the stockpile collapses into a budget
+already priced.
+
+> **Named invariant, because the alternative reads naturally: the explore tier
+> must draw from live outbound connections, never from the peerlist.**
+> Announcing yourself into peerlists is cheap; if explore ever drew from there,
+> **the repair evaporates** and stockpiling costs nothing again.
+
+**One wrinkle to check, p2p-side and unverified here.** Anchors **persist and
+are preferentially re-dialed on restart**
+([`net_node.inl:1347`](../../src/p2p/net_node.inl#L1347),
+[`:1419`](../../src/p2p/net_node.inl#L1419)). An adversary that once held an
+anchor slot therefore has a **standing claim on being re-dialed** — so **anchor
+status is a durable head start on the tenure clock that survives the restart
+which otherwise resets everything.** Whether that is acceptable depends on
+**how anchors are earned**, which is p2p-side and outside what has been
+verified in this document.
+
+### 36.5 `ε_explore` gains a third consumer, adversely signed
+
+§35.2 gave ε two: it moves warm-up **symmetrically**, so it is derivable
+against warm-up and cold-start but never against recruitment.
+
+**Under §35.3's tenure repair it acquires a third, and the pairing is not
+visible from either of the first two: ε is also the rate at which *stockpiled*
+identities get their clocks started.** Raising ε shortens honest warm-up **and
+simultaneously accelerates stockpile activation.**
+
+**So ε trades cold-start against whitewash latency**, and that trade must be on
+the list **before ε is derived against warm-up alone** — otherwise the
+derivation optimizes one consumer and silently pays the third. *(Which is this
+document's recurring shape: a parameter with an unlisted consumer, found by
+asking what else reads it — Q11-A, `MIN_EPOCH`, and now ε.)*
