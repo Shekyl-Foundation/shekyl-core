@@ -7899,9 +7899,45 @@ fail:**
   return the observation count → 100 reads as 100 distinct sources, and the
   gate can no longer distinguish farming from breadth.)*
 
-### 38.3 Deliberately unwired, and that is stated rather than closed
+### 38.3 Lifecycle wired; the FFI half is blocked on a named, verified fact
 
-**Nothing calls `StemWatch` yet.** Wiring needs transaction identity on the
+**Wired 2026-08-01, same day.** `Zone` owns the `StemWatch`;
+`Driver::poll` calls `expire_stem_observations(now)` — **on the poll clock, no
+second timer, so the force hooks exercise it for free** — and
+`on_connection_close` calls `forget`. Two lifecycle witnesses in
+`driver/tests.rs`, each **negative-controlled and observed to fail**: removing
+the `expire` call leaves the silence unresolved; removing `forget` leaves a
+departed peer's reputation retained.
+
+**Placement inside `poll` is deliberate**: after the epoch block, so a
+rollover's fresh map cannot retroactively change who an in-flight observation
+was charged to.
+
+**The window is supplied by the caller, not chosen here.** Today it is the
+adopted embargo draw — the same question — but §12.11's decision window is an
+open parameter and need not equal the embargo, so binding them in this type
+would decide something the round left open.
+
+**What remains is the FFI half, and it is blocked on a fact verified today
+rather than on an unknown:** `notify::send_txs(std::vector<blobdata>, source,
+relay_method)` carries **opaque blobs and no transaction identity**, and
+`levin_notify.cpp` computes no hash anywhere. So `record_stem` / `record_arrival`
+cannot be called until identity reaches that layer, and there are exactly two
+ways to get it: **hash the blobs in the notify path** (new work in a layer that
+deliberately treats them as opaque) or **plumb hashes from `cryptonote_core`,
+which already has them**, through `net_node` → `notify`. The second is the
+rule-20 direction — core hands over data it already holds — and it is a
+signature change through two layers, which is its own commit.
+
+**So §33.2's finding is *not* closed: the signal still does not exist in
+production, and F-6 / §12.11 remain blocked on it.** What is closed is the
+architecture (§38.1), the shape (§38.2) and the lifecycle (this section) —
+leaving a mechanical plumbing step with a known blocker rather than an open
+design question.
+
+### 38.4 The original unwired note, kept for lineage
+
+**When `StemWatch` first landed, nothing called it.** Wiring needs transaction identity on the
 paths that already cross the FFI, which is a signature change and a C++ edit —
 a second commit, not this one.
 

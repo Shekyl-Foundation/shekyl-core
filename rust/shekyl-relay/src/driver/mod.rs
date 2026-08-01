@@ -201,6 +201,13 @@ impl Driver {
             self.zone.rebuild_stems(gather_outbound(), rng);
         }
 
+        // Stem observations resolve here: a deadline passed with no re-arrival
+        // is a silence (§38). After the epoch block, so a rollover's fresh map
+        // cannot retroactively change who an in-flight observation was charged
+        // to; and on this clock rather than a timer of its own, so the force
+        // hooks exercise it for free.
+        let _resolved = self.zone.expire_stem_observations(now);
+
         for (peer, blobs) in self.zone.flush_fluff(now, false) {
             effects.push(Effect::Fluff { peer, blobs });
         }
