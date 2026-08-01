@@ -8131,3 +8131,80 @@ that option is 4.3× over capacity and was never available.**
 4. **CV-4 is unaffected** — the schedule still cannot consult the queue, and
    restricting *which* class enters the queue is not the schedule reacting to
    its contents.
+
+## 43. Three corrections the configuration-B deletion forces on the F-7 unit
+
+**2026-08-01, maintainer review of the deletion.**
+
+### 43.1 The singleton's constituents changed — restate the reason before it goes stale
+
+§40.2 argued *"one value must serve both configurations, set to the worst"*
+when the pair was **B and C**. **The pair is now clearnet and Tor-C:**
+
+| | fluff rule | usable degree |
+| --- | --- | --- |
+| clearnet | `EveryPeer`, 12 outbound + inbound | ~24 |
+| **Tor-C** | `OutboundOnly`, 12 outbound | **12 exact** |
+
+**Still two, still one process-wide value, still set to the worst — Tor-C's
+3250.** The conclusion holds **verbatim**; the *stated reason* names a
+configuration that no longer exists. **Restated here before it becomes the next
+stale citation**, which is the class §21's ceiling and §6.9's banner both
+belonged to.
+
+### 43.2 `params.rs`'s safety policy is incomplete, and the re-baselining rests on it
+
+The policy: *over-estimating `F` lengthens the embargo (safe); under-estimating
+shortens it (a privacy loss).* **But §6.7's own note says a larger `F` gives
+every prefix embargo longer to fire, pushing the leak *opposite* to the embargo
+mean.**
+
+> **So over-estimating `F` is safe on the disarm axis and adverse on the leak
+> axis. The policy names one consumer, and was written when only one existed.**
+
+**This is the one-fact-two-consumers shape again — the third instance after
+`FORWARD_DELAY` (§22) and `F` itself (§26.4)** — and it matters concretely:
+**a dual-stack node now runs 3250 on *both* zones**, over-provisioning clearnet
+by the full degree ratio and **paying §6.6 leak for it.**
+
+*"Set it to the worst"* remains defensible **but is no longer the
+obviously-safe answer**, and **the entire re-baselining derives from that
+policy — so the policy is re-examined at the *top* of the F-7 unit rather than
+inherited through it.** Inheriting it would be deriving five measured
+quantities from a rule whose second consumer nobody priced.
+
+**Per-zone `F` is now a real option**, because the zones differ by a **measured**
+amount rather than a suspected one. Not free — a second constant, and a seam
+question about who owns it — but **"one process-wide value" was a convenience,
+not a derivation**, and it should be defended or dropped on that basis.
+
+### 43.3 The substrate jig already exists; what is missing is a *deletion* guard
+
+**Correction to the review's premise.** The covert machinery is **not**
+unobserved. Three `levin_notify` gtests — `noise`, `noise_stem`,
+`noise_repoint_discards_in_flight_remainder` — construct notifiers via
+`make_notifier(2048, …)`, **passing the payload explicitly and bypassing
+`proxy::noise` entirely**, so `send_noise`, `clear_channel`,
+`queue_covert_notify`, the FFI covert dispatch and the covert scheduler are all
+still driven. **Verified after the flip: 3/3 pass.** The Rust side is covered
+independently (`covert_channels_emit_one_per_advance_not_synchronized`, the
+CV-2 pair, the unbind pair).
+
+**So no new substrate jig is owed.** What *is* now unguarded is the **other
+direction**: nothing asserts that the **configuration path** produces a
+covert-disabled zone. The deletion is held by a default and a retired flag,
+with **no automation that fails if either is reverted** — which is the
+deletion-stays-deleted guard, not the substrate guard, and it is one small
+test (parse a `--tx-proxy tor,…` argument, assert `noise == false`).
+
+**Folded into the next unit touching that code, per the review's own
+instruction** — recorded here so the distinction between *the substrate is
+exercised* and *the deletion is guarded* does not blur, since only the second
+is missing.
+
+### 43.4 Unchanged
+
+- **The 0 s diagnosis is the first step inside F-7** — it decides whether
+  §14's restatement is a *strengthening* or a *reversal*, and it is small and
+  isolated.
+- **Mean outbound connection lifetime** remains independent and cheapest.
