@@ -16,13 +16,55 @@ use crate::schedule::{DelayFamily, DelayTable};
 
 use super::util::usize_from;
 
+/// Which edges a fluffing node relays across — the instrument's model of
+/// [`crate::FluffReach`].
+///
+/// **Added at F-7 (§26).** The instrument previously inserted every edge in
+/// *both* directions, so it modelled `EveryPeer` **by construction** and had
+/// no way to express `OutboundOnly` — which is exactly *"traverse only the
+/// edges I initiated"*, a directed graph. `fluff_return_ms` was measured under
+/// the symmetric build and is fed to the embargo derivation for **every**
+/// transport, so on an anonymity zone (outbound-only fluff) the input is
+/// measured on a rule that configuration does not use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloodReach {
+    /// Relay to every peer, initiated or not — the clearnet rule. Undirected.
+    EveryPeer,
+    /// Relay only across edges this node initiated — the i2p/tor rule.
+    /// Directed: first passage is strictly slower, because a node has
+    /// `peers` usable out-edges rather than ~`2 × peers`, *and* paths must
+    /// respect direction.
+    OutboundOnly,
+}
+
 /// Topology inputs for the fluff-flood first-passage measurement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FloodParams {
     /// Nodes in the simulated network.
     pub nodes: usize,
-    /// Fluff peers each node relays to.
+    /// Fluff peers each node **initiates** to.
+    ///
+    /// **Provenance, recorded because it was not (§28.4):** the default `8` is
+    /// very likely the *measured mean degree of the 2015 Bitcoin server graph*
+    /// (Miller et al., via Fanti–Viswanath, who model 8 outbound / 125 total
+    /// and note the effective average is "closer to 8 due to
+    /// nonhomogeneities"). It is **not** Bitcoin's outbound default and
+    /// **not** a Shekyl quantity — `P2P_DEFAULT_CONNECTIONS_COUNT` is 12. The
+    /// Shekyl pin is a modelling decision that is *not* settled here: their
+    /// figure excludes NAT'd clients because "clients do not relay
+    /// transactions", which is a Bitcoin fact that does not map, since a NAT'd
+    /// Shekyl node makes its 12 outbound and relays normally.
+    ///
+    /// Under [`FloodReach::EveryPeer`] the effective degree is ~`2 × peers`
+    /// (each node initiates `peers` and receives ~`peers`); under
+    /// [`FloodReach::OutboundOnly`] the out-degree is exactly `peers`. **A
+    /// before/after comparison that changes only `reach` therefore changes the
+    /// effective degree too** — that is the rule change and the degree change
+    /// arriving together, and it must be reported as such rather than
+    /// attributed to the rule alone.
     pub peers: usize,
+    /// Which edges relay (see [`FloodReach`]).
+    pub reach: FloodReach,
 }
 
 impl Default for FloodParams {
@@ -30,6 +72,7 @@ impl Default for FloodParams {
         Self {
             nodes: 512,
             peers: 8,
+            reach: FloodReach::EveryPeer,
         }
     }
 }
@@ -77,7 +120,12 @@ pub fn simulate_fluff_return<R: RelayRng + ?Sized>(
                 if other != node && !initiated.contains(&other) {
                     initiated.push(other);
                     adjacency[node].push(other);
-                    adjacency[other].push(node);
+                    if flood.reach == FloodReach::EveryPeer {
+                        // Reciprocal edge: the receiver relays back across a
+                        // link it did not initiate. Omitted under
+                        // `OutboundOnly` — that omission IS the rule (F-7).
+                        adjacency[other].push(node);
+                    }
                 }
             }
         }
@@ -174,7 +222,12 @@ pub fn simulate_diffusion_first_spy<R: RelayRng + ?Sized>(
                 if other != node && !initiated.contains(&other) {
                     initiated.push(other);
                     adjacency[node].push(other);
-                    adjacency[other].push(node);
+                    if flood.reach == FloodReach::EveryPeer {
+                        // Reciprocal edge: the receiver relays back across a
+                        // link it did not initiate. Omitted under
+                        // `OutboundOnly` — that omission IS the rule (F-7).
+                        adjacency[other].push(node);
+                    }
                 }
             }
         }

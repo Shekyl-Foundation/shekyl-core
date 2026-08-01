@@ -308,7 +308,9 @@ fn black_hole_attack_leak_is_mean_invariant() {
 /// defend against, and the baseline the ε argument's leakage weights reference.
 #[test]
 fn first_spy_precision_rises_with_spy_fraction() {
-    use shekyl_relay_privacy::conformance::{simulate_diffusion_first_spy, FloodParams};
+    use shekyl_relay_privacy::conformance::{
+        simulate_diffusion_first_spy, FloodParams, FloodReach,
+    };
 
     println!("\nπ₀: first-spy source-attribution precision (memoryless flood, 512 nodes, 8 peers)");
     println!("{:>6} {:>12} {:>18}", "f", "precision", "mean hops to spy");
@@ -321,6 +323,7 @@ fn first_spy_precision_rises_with_spy_fraction() {
             FloodParams {
                 nodes: 512,
                 peers: 8,
+                reach: FloodReach::EveryPeer,
             },
             20,
             DelayFamily::Geometric,

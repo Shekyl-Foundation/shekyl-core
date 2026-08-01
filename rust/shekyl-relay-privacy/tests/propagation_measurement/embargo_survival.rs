@@ -11,6 +11,7 @@
 
 use shekyl_relay_privacy::conformance::{
     simulate_fluff_return, simulate_propagation, solve_embargo_secs_for_target, FloodParams,
+    FloodReach,
 };
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
@@ -537,8 +538,17 @@ fn fluff_return_dominates_the_embargo_derivation() {
     ] {
         for peers in [4_usize, 8] {
             let mut rng = SplitMix64::new(0xF100_D000 + peers as u64);
-            let s =
-                simulate_fluff_return(FloodParams { nodes: 512, peers }, 20, dist, 24, &mut rng);
+            let s = simulate_fluff_return(
+                FloodParams {
+                    nodes: 512,
+                    peers,
+                    reach: FloodReach::EveryPeer,
+                },
+                20,
+                dist,
+                24,
+                &mut rng,
+            );
             println!(
                 "{label:<34} {peers:>8} {:>9.0}ms {:>9}ms",
                 s.mean_ms, s.p90_ms
