@@ -7835,3 +7835,80 @@ all.**
 **But the two schedules now differ in *three* ways, not two: heterogeneity,
 whether `decision_interval` is constant, and whether the adversary controls the
 timing of its own judgement.** All three belong in the comparison.
+
+## 38. Q-10.1 answered: Rust owns it — and rule 20 dissolves the plumbing problem
+
+**2026-08-01, maintainer ruling: the reputation state is Rust's, and per rule
+20 Rust should own as much of this as possible.** That does not merely assign
+the accumulator — **it changes the architecture, because the obvious wiring
+becomes the wrong one.**
+
+### 38.1 The tx_pool path is rejected, not deferred
+
+The obvious design lets `tx_pool` report each embargo's resolution, since that
+is where it arms and fires today. **`tx_pool` holds no relay-zone handle**, so
+importing the outcome means **building a new C++ path from the mempool into
+the relay layer** — and every byte of that path is **C++ deciding something
+Rust could decide.** Rejected under rule 20.
+
+**The relay layer already sees both directions**: it *chooses* the stem
+successor, and it is told the `source` of every arriving transaction. So
+*"did my successor propagate this?"* is answerable **here**, from facts this
+layer already owns — and **the only thing C++ must hand over is transaction
+identity, which is data, not a decision.** The plumbing problem does not get
+solved; it stops existing.
+
+**The two definitions differ, and the relay-layer one is the more correct for
+this purpose — named now rather than discovered at comparison.** `tx_pool`
+disarms on `upgrade_relay_method` (pool **admission**); this disarms on
+re-arrival (**propagation**). A transaction that comes back and is *then*
+rejected by the pool still proves the successor relayed it, which is exactly
+what the reputation signal asks.
+
+### 38.2 What landed — `StemWatch`, recording without judging
+
+[`shekyl-relay/src/stem_watch.rs`](../../rust/shekyl-relay/src/stem_watch.rs):
+a pending join (`tx → successor, source, deadline`) and per-successor tallies,
+driven from the zone's existing poll clock so the outcome is a function of the
+same `now` every other relay decision uses.
+
+**Three open decisions are deliberately not encoded**, because encoding one
+would freeze it in the layer hardest to change:
+
+- **Accumulator memory** (§37.3) — windowed versus cumulative is upstream of
+  every threshold, and under cumulative memory §36.1's ladder does not apply.
+  `StemTally` therefore **does not decay, reset, or average**; it exposes raw
+  counts and lets a consumer window them.
+- **The `(n_min, cut)` pair** (§36.1) — a rate threshold is the wrong
+  parameterisation at these counts, so **nothing here compares a ratio.**
+- **Reputation persistence** (§33.6) — `forget()` drops a departed peer's
+  tally rather than retaining it, because retention is a *requirement if
+  warm-up exceeds mean uptime* and a *forensic artifact either way*, and the
+  type must not decide that by default.
+
+**Two properties it does encode, each with its control run and observed to
+fail:**
+
+- **A re-stem moves the observation to the new successor.** Reshape fires
+  precisely when a successor looks dark, so charging the *original* peer for a
+  silence it was no longer holding is the operative case, not an edge one.
+  *(Control: make the insert additive → the original peer is charged, named
+  assertion fails.)*
+- **`distinct_sources` counts mappings, not volume.** A farmer supplying 100
+  transactions contributes **one** source (§35.4's gate input). *(Control:
+  return the observation count → 100 reads as 100 distinct sources, and the
+  gate can no longer distinguish farming from breadth.)*
+
+### 38.3 Deliberately unwired, and that is stated rather than closed
+
+**Nothing calls `StemWatch` yet.** Wiring needs transaction identity on the
+paths that already cross the FFI, which is a signature change and a C++ edit —
+a second commit, not this one.
+
+**Recorded explicitly because "unwired-is-closed" is a fossil this project has
+had to dig out before.** This commit closes the *architectural* question
+(Q-10.1: Rust owns it; no tx_pool path) by landing the shape that answer
+implies. It does **not** close §33.2's finding — **the signal still does not
+exist in production**, and F-6/§12.11 remain blocked on it. The next step is
+named: `TxId` in at the stem plan and at arrival, `expire()` on the poll, and
+`forget()` on connection close.
