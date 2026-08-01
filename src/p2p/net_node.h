@@ -73,7 +73,23 @@ namespace nodetool
       : max_connections(-1),
         address(),
         zone(epee::net_utils::zone::invalid),
-        noise(true)
+        // Covert ("noise") channels default OFF as of the configuration-B
+        // deletion. They are not merely unfinished: with noise enabled the
+        // zone runs NEITHER Dandelion++ NOR the derived black-hole embargo
+        // (the stem->local demotion clears `dandelionpp_stem`, which gates
+        // both), *and* net_node.inl's origin routing sends only
+        // locally-originated transactions to the anonymity zone — so a peer
+        // holding a covert slot attributes the origin with precision ~1 and,
+        // because send_txs clones to every channel, recall ~1. That pair is
+        // an enumeration list, and it is strictly worse on the peer axis than
+        // the clearnet floor it was meant to improve on.
+        //
+        // The machinery is retained as Q-11 Unit 2's substrate and is NOT
+        // reachable from configuration: re-enabling it requires the §30
+        // composition (relayed traffic eligible for the anonymity zone, so
+        // the channel stops being an origin oracle) plus the restored
+        // backstop. See docs/design/DAEMON_RELAY_PRIVACY.md §§25, 29-31, 41.
+        noise(false)
     {}
 
     std::int64_t max_connections;

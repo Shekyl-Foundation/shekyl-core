@@ -207,8 +207,15 @@ namespace nodetool
                     return std::nullopt;
                 }
 
+                // `disable_noise` retired with the configuration-B deletion:
+                // covert channels are off by default and there is deliberately
+                // no flag to turn them on, because doing so re-creates the
+                // origin oracle (see net_node.h's `noise` note). Accepted and
+                // ignored so existing command lines keep working rather than
+                // failing to start.
                 if (boost::string_ref{next->begin(), next->size()} == "disable_noise")
-                    proxies.back().noise = false;
+                    MWARNING("--" << arg_tx_proxy.name << " 'disable_noise' is accepted but "
+                             "has no effect: covert channels are off by default");
                 else
                 {
                     proxies.back().max_connections = get_max_connections(*next);
