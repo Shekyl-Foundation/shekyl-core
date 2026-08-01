@@ -19,7 +19,7 @@ fn f7_directed_first_passage_exceeds_the_shipped_input() {
     println!("\n  peers | reach         |  mean_ms |  p50_ms |  p90_ms");
     println!("  ------+---------------+----------+---------+--------");
     let mut p90 = std::collections::HashMap::new();
-    for peers in [8_usize, 12] {
+    for peers in [8_usize, 12, 16] {
         for (reach, label) in [
             (FloodReach::EveryPeer, "EveryPeer"),
             (FloodReach::OutboundOnly, "OutboundOnly"),

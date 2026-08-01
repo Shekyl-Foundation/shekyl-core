@@ -8051,3 +8051,112 @@ hash makes the correspondence **structural rather than positional**, costs no
 extra array, and cannot transpose. If a future caller genuinely needs them
 separate, it owes the argument at that point — but the default is one array of
 paired elements.
+
+## 40. Closing F-7 is a bigger unit than two constants — the degree-matched result, and the cascade
+
+**2026-08-01.** The ordered plan puts *"close F-7: re-derive the embargo at
+`F′ = 3250` and land both together"* first, gating the configuration-B
+deletion. **Both halves were attempted; the first produced a cleaner result
+than expected and the second produced a scope discovery that stops it being a
+two-constant change.**
+
+### 40.1 The degree-matched pair — F-7's gap is a *degree* effect, not a direction effect
+
+The commit that built the directed variant named this as owed. Run:
+
+| | usable out-degree | p90 |
+| --- | --- | --- |
+| `EveryPeer` @ `peers = 8` | ~16 (8 initiated + ~8 received) | 2500 ms |
+| `OutboundOnly` @ `peers = 16` | 16 (exact) | **2250 ms** |
+
+**At matched usable degree the direction constraint costs nothing** — the
+directed run is marginally *faster*, consistent with its degree being exact
+rather than Poisson-spread around the mean.
+
+**So §26.2's stated mechanism was half right and the half that mattered is the
+other one.** It said directed first passage is slower *"fewer usable edges per
+hop **and** direction-constrained paths, both pushing the same way."* Measured:
+**the second term is negligible.** The correct statement is that **an
+outbound-only node has half the usable fluff degree of a clearnet node at the
+same peer count**, and `F` scales with that.
+
+**That changes the new constant's provenance**, which is why the pair was worth
+running before writing it: `F` is not "the price of the anonymity-network fluff
+rule," it is **the price of running at half the effective degree**.
+
+### 40.2 The re-derivation reproduces, and gives `F′ → 190 s`
+
+Using the shipped tick and target (`DEFAULT_EMBARGO_TICK_MILLIS`,
+`EMBARGO_FULL_TRAVEL_PROBABILITY = 0.90`):
+
+| `fluff_return_ms` | derived embargo |
+| --- | --- |
+| 1250 (configuration A at Shekyl's real degree 12) | 98 s |
+| **2250 (shipped)** | **144 s** ← reproduces the adopted value |
+| **3250 (configuration C at degree 12)** | **190 s** |
+
+**The 144 s reproduction is the instrument validating**: the derivation path is
+the one that produced the shipped constant, so the 190 s is comparable rather
+than a different calculation.
+
+**And one value must serve both configurations**, because the embargo draw is a
+process-wide singleton with no zone parameter. Per `params.rs`'s own policy —
+*over-estimating lengthens the embargo (safe), under-estimating shortens it (a
+privacy loss)* — that value is **the worst configuration's, 3250 ms → 190 s.**
+Clearnet is then over-provisioned relative to its own `F` (1250 → 98 s), which
+is the safe direction and is *already* the status quo's posture: the shipped
+2250 over-provisions clearnet at Shekyl's real degree too.
+
+### 40.3 The cascade — `F` is an input to the arc's whole measured set
+
+**Landing `fluff_return_ms = 3250` was attempted and reverted, because it does
+not stop at the embargo.** Five recorded measurement pins fail, and **none of
+them is a test bug** — each was correct at `F = 2250` and is simply measured
+against the wrong `F` now:
+
+| test | what moves |
+| --- | --- |
+| `black_hole_recovery_scales_with_holder_count` | origin-alone p90 recovery (§10.6) |
+| `origin_exposure_meets_target_via_reshape_not_embargo` | §6.7's exposure arithmetic — and **qualitatively**: the embargo-only path to target now solves at 0 s rather than ~1050 s, which is §14's own comparison |
+| `precision_increment_reproduces_delta_table` | §13's δ table (0.0027 against the recorded 0.0019 at `f = 0.1`) |
+| `inherited_versus_derived_versus_paper_faithful_embargo` | the shipped-vs-corrected separation (§10) |
+| `fluff_probability_trade_curve` | the Poisson-fires-effectively-never claim at `q = 20 %` |
+
+**So closing F-7 means re-running and re-recording the arc's measured numbers,
+not editing two constants.** The doc records those figures in §6.7, §10, §13
+and §14, and §14's *conclusion* rests on one of them — the embargo-only path
+being liveness-breaking is the argument that adopted reshape unconditionally.
+**If that path now solves at 0 s, §14's comparison needs restating even though
+its conclusion probably survives** (reshape still buys the same censorship
+resistance without C3).
+
+**Not attempted at this depth, deliberately.** Mass-re-baselining five measured
+quantities and their four doc sections is exactly the work this arc has
+repeatedly caught errors in — and the errors it caught were *pessimistic
+mis-citations of numbers nobody re-ran*. Doing it carelessly would manufacture
+the class the session has been closing.
+
+### 40.4 What this means for the ordering
+
+The plan's item 1 gates item 2 (deleting configuration B) for a good reason:
+**promoting C to default while its embargo is provisioned from a defective `F`
+lands a known defect on every Tor user at genesis.** That reasoning is
+unchanged and the gate holds.
+
+**What changes is item 1's size.** It is not *"two constants"* but:
+
+1. set `fluff_return_ms = 3250` with the §40.1 provenance (degree, not
+   direction);
+2. re-run the five measurement pins and record their new values;
+3. restate §14's embargo-versus-reshape comparison against the new baseline,
+   checking whether its conclusion survives its numbers;
+4. re-check §15's block-time reconciliation — 190 s still crosses exactly one
+   120 s interval, so the qualitative finding holds, but the paragraph names
+   144 s;
+5. **then** the reverse-parity readouts, which §26.3 already said must run
+   against `F′` rather than the stale baseline.
+
+**Item 3 of the plan (mean outbound connection lifetime) is genuinely
+independent and remains the cheapest thing on the list** — it needs no
+envelope, no re-baselining, and it decides whether F-8 makes §12.11 inert at
+all.
