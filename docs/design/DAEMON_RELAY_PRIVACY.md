@@ -8251,3 +8251,99 @@ oracle, because no deployed configuration enables covert channels.
 It records why the composition has the shape §30 gives it, and a reader who
 finds covert channels re-enabled later needs to know what made them unsafe the
 first time.
+
+## 42. Cover traffic over configuration C — the capacity collision is a *fluff* problem, and RD-4 already separates the classes
+
+**2026-08-01. Candidate output of the §30 design round, not an implementation.**
+§30.2 said R-1 collides with capacity at zero slack and left three options plus
+one. **Measuring where the traffic actually is collapses the option set.**
+
+### 42.1 The collision is entirely fluff; stem is 0.5 % of the carrier
+
+Carrier: `300 s / 12.5 s × 2 channels = 48 sends/epoch/zone` = 144 KiB = 492 B/s.
+Traffic classes at Monero-like figures (20 k tx/day, 5 000 nodes, `q = 0.2`):
+
+| class | per epoch | against carrier (at ~8 KiB/tx) |
+| --- | --- | --- |
+| **fluff** — a node relays everything it sees | **69.4 tx** | **4.3× over capacity** |
+| **stem forwards** — `tx_rate × (1/q) / node_count` | 0.069 tx | — |
+| **own originations** — ~1/day | 0.0035 tx | — |
+| **stem + own together** | **0.073 tx** | **0.005× — 0.5 % utilisation** |
+
+**So "the carrier cannot absorb network relay rate" is true of *fluff* and
+false of *stem* by three orders of magnitude.** §30.2's framing treated the
+carrier as uniformly over-subscribed; it is over-subscribed by one class and
+almost entirely idle for the other.
+
+### 42.2 RD-4 already puts every origination in the cheap class
+
+**The origin always stems — even during a fluff epoch** (`!fluffing ||
+local_origin`, §10.5's RD-4). So:
+
+- **every origination is in the stem class**, which costs 0.5 % of the carrier;
+- **fluff carries relayed traffic only** — a transaction this node did not
+  originate, by construction.
+
+**That is the separation R-1 needs, and it already exists as an invariant
+rather than needing to be built.**
+
+### 42.3 The proposal — covert carries the stem phase; fluff takes the ordinary connection
+
+**Covert channels carry the stem phase**: all originations (RD-4) *plus* stem
+forwards. **Fluff goes over the zone's ordinary Tor connection.**
+
+**This satisfies R-1 with capacity to spare.** The covert channel now carries
+both originations and relayed stem forwards, so a peer holding a covert slot
+**cannot separate them** — the oracle closes. Measured mix:
+
+```text
+own / (own + stem-forwarded) = 0.0035 / 0.073 ≈ 0.048
+```
+
+**~5 % origination share against the previous 100 %.** §30.1's amendment said
+the eligibility rule *is* the anonymity parameter and precision lands in
+`[f, 1]`; this lands it at the **bottom** of that interval — at or below C1's
+own floor, because a node forwards roughly twenty times what it originates.
+
+**And the carrier stays ~99.5 % dummy**, which is what cover is. Capacity
+utilisation goes from *impossible* to *negligible*.
+
+### 42.4 What the carrier's job narrows to, stated because it is a real narrowing
+
+§31.7 gave the carrier **recall denial — deny the count.** Under this proposal
+that becomes: **deny the count of *originations*, not of all traffic.** A wire
+observer sees the node's fluff volume and learns *"this node relays
+transactions"* — **true of every node, and carrying no origination signal,
+precisely because RD-4 keeps originations out of the fluff class.**
+
+**This is a narrowing and it must not be read as free.** The observer regains
+one thing: **whether this node is *online and relaying*** — a liveness/activity
+signal it previously did not have on a noise zone. Against §32.6's grid, the
+wire-observer recall cell goes from *zero* to *zero for originations, one for
+activity*. Whether that is acceptable is a scope call this round owes, and the
+honest framing is that **the alternative on offer is not "cover everything" —
+that option is 4.3× over capacity and was never available.**
+
+### 42.5 What remains open
+
+1. **The ordering problem, and it is the implementation question.**
+   `net_node.inl:2211` picks the **zone** by origin *before* the zone's
+   notifier picks **stem or fluff**. Routing "stem-phase traffic to the
+   anonymity zone" therefore needs the phase before the zone — a cross-layer
+   query, or a restructure so the zone decision follows the phase decision.
+   **This is where the change is non-mechanical**, and it is the first thing
+   the implementing round must settle.
+2. **The backstop** (§25.1) — still required before covert returns, still with
+   the public-zone fallback forbidden (§30.5).
+3. **The mix ratio is an *estimate from Monero-like figures*, and §34
+   established that class of input is an envelope rather than a measurement.**
+   `own / (own + forwarded)` moves with `tx_rate/node_count` exactly as
+   `obs(peer, epoch)` does — and the dangerous corner is the same one:
+   **a node that originates much and forwards little** sees its mix approach 1
+   and the oracle partially reopen. A high-volume merchant on a small network
+   is that node. **The eligibility rule may therefore need a floor on
+   forwarded-traffic share rather than resting on the ambient ratio**, which is
+   a design question this proposal does not settle.
+4. **CV-4 is unaffected** — the schedule still cannot consult the queue, and
+   restricting *which* class enters the queue is not the schedule reacting to
+   its contents.
