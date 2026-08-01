@@ -7612,7 +7612,9 @@ deliverable owes the ladder, not a rate.**
 
 **Computed, and this is what makes the rung choice undecidable as posed:**
 
-| `n = 10`, drop rate → | 40 % | 60 % | 80 % | 100 % |
+**⚠ Axis mislabelled — corrected at §37.1: these are FIRE rates, not drop rates (`p = 0.12 + 0.88·d`), so the "40 %" column is a 32 % dropper. The corrected table is in §37.1, and the relabelling exposes a structural floor: a sub-ambient dropper is invisible at every rung.**
+
+| `n = 10`, fire rate → | 40 % | 60 % | 80 % | 100 % |
 | --- | --- | --- | --- | --- |
 | cut ≥ 5 | 0.367 | 0.834 | 0.994 | **1.000** |
 | cut ≥ 6 | 0.166 | 0.633 | 0.967 | **1.000** |
@@ -7695,3 +7697,114 @@ the list **before ε is derived against warm-up alone** — otherwise the
 derivation optimizes one consumer and silently pays the third. *(Which is this
 document's recurring shape: a parameter with an unlisted consumer, found by
 asking what else reads it — Q11-A, `MIN_EPOCH`, and now ε.)*
+
+## 37. The ambient floor is adversarial cover — and the accumulator's memory decides everything upstream of the rung
+
+**2026-08-01, maintainer, with one correction to §36.2's own table.**
+
+### 37.1 Correction — §36.2 mislabelled its axis, and the fix is a structural floor
+
+§36.2's table passed the **drop rate directly** as the binomial parameter. A
+peer's observed **fire** rate is `p = 0.12 + 0.88·d`, so the column marked
+*"40 % drop"* was really a **32 % dropper**. **The ambient failure rate is a
+free grant of dropping to the adversary.** Corrected:
+
+| `n = 10`, **drop** `d` → | 10 % | 20 % | 32 % | 50 % | 80 % | 100 % |
+| --- | --- | --- | --- | --- | --- | --- |
+| cut ≥ 5 | 0.038 | 0.143 | 0.371 | 0.759 | 0.997 | 1.000 |
+| cut ≥ 6 | 0.008 | 0.044 | 0.169 | 0.530 | 0.981 | 1.000 |
+
+**And the consequence is stronger than the relabelling. An adversary dropping
+at or below the ambient rate (~12 %) is invisible at every `n` and every rung,
+because its distribution *is* the honest distribution. No threshold reaches
+it.**
+
+> **This is a structural floor on the mechanism, of the same character as
+> `C1 ≈ f`** — stated as one here rather than discovered during tuning.
+
+**And it is the first argument for measuring the ambient rate as a *security
+input* rather than as threshold calibration** — §12.11 owes it as a numerator;
+this makes it also the **width of the adversary's free cover.**
+
+**Addition (mine): the floor's cost is computable in a currency this document
+already prices.** An invisible dropper is not merely degrading liveness — each
+drop it induces **fires an embargo, which produces an origin-attributed
+fluff**, which is **C3**, measured at §6.6 (1.14 % any-prefix / 0.22 %
+origin-attribution per transaction on clearnet). So a sub-ambient dropper
+**harvests C3 at a rate the reputation mechanism structurally cannot punish**,
+and the floor's price is `≈ ambient_rate × C3-per-fire` rather than an unpriced
+"some residual." That makes the floor's acceptability **derivable** instead of
+a judgement call.
+
+### 37.2 The missing threat statement, inverted into a computable form
+
+*"What drop rate would an adversary choose?"* is a preference question and
+probably unanswerable. **Invert it: what sustainable drop rate does each rung
+*permit*?** That is a **mechanism property**, computable from the ladder.
+
+**Verified** — an adversary holding per-decision cooldown risk ≤ 5 % can sit
+at:
+
+| rung (`n = 10`) | tolerated fire rate | **implied sustainable drop** |
+| --- | --- | --- |
+| cut ≥ 5 | 0.222 | **11.6 %** |
+| cut ≥ 6 | 0.304 | **20.9 %** |
+
+**So the safer rung's real cost is not "misses a 32 % dropper" — it is that it
+licenses roughly double the drop rate a patient adversary can sustain
+indefinitely.** And sustainable drop converts **directly into origin-exposure
+through §6.7's arithmetic**, a currency already priced.
+
+> **That makes the rung derivable without any adversary-preference guess:
+> choose the rung whose licensed drop rate keeps exposure under what §6.7
+> admits, subject to false-cooldown under part C's eclipse bound. Two
+> constraints, one integer pair.**
+
+### 37.3 The accumulator's memory is upstream of the rung, and §12.11 never specifies it
+
+Everything above assumes the adversary is judged **on a fresh count each
+decision**. Whether it is depends on the accumulator's **memory**, which
+§12.11 does not specify:
+
+| memory | consequence |
+| --- | --- |
+| **windowed / reset each decision** | **memoryless.** A patient adversary at ~11 % survives **forever**: each window is an independent 5 % roll, re-rolled after cooldown expires. **Sustained low-rate dropping is fully viable.** |
+| **cumulative / EMA** | **evidence compounds.** At 11 % sustained the count drifts above the honest distribution and detection becomes **a matter of time rather than luck**. Sustained dropping stops being viable; the adversary is **forced to burst**, which is the visible mode. |
+
+**This is a bigger determinant of the mechanism's value than the rung is, and
+it is upstream of it — the ladder means something different under each.** It is
+also the parameter that **most affects false cooldown**, because compounding
+memory raises the false-positive rate on honest peers **by the same mechanism
+that raises true detection.** **It goes ahead of the rung in the round's
+ordering.**
+
+**Interaction (mine), and it bounds §36.1's own finding:** under **cumulative**
+memory `n` grows without bound, so the achievable false-positive rates form an
+ever-finer grid and **the discreteness washes out — the ladder is specifically
+a property of *windowed* accumulation.** So the memory choice determines
+**whether §36.1's finding even applies**, which is a second reason it is
+upstream.
+
+> **Transfer note, stated explicitly so it is not imported by analogy: the
+> economics work ruled out EMA and rate-limiter terms on wide-guardrails
+> grounds. Different subsystem, opposite requirement — here memory is precisely
+> what denies a patient adversary.** The earlier decision does not carry.
+
+### 37.4 The schedule choice also decides whether the adversary controls *when* it is judged
+
+§36.3 compared the two schedules on heterogeneity and on whether
+`decision_interval` stays constant. **There is a third axis, and it is a gaming
+vector.**
+
+Deciding **on reaching `n_min`** makes the schedule peer-specific — and
+**observation arrival is partly adversary-controllable** (§34.2's farming). So
+an adversary can **drop during a lull, then farm observations to pull its
+decision forward while its recent record is clean**, or **go quiet to push the
+decision back.** Under a **fixed clock it cannot move the decision boundary at
+all.**
+
+**That does not settle it** — the fixed clock carries the heterogeneity problem
+§36.3 named, which is why the count gate became a well-posedness precondition.
+**But the two schedules now differ in *three* ways, not two: heterogeneity,
+whether `decision_interval` is constant, and whether the adversary controls the
+timing of its own judgement.** All three belong in the comparison.
