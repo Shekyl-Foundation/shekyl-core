@@ -26,7 +26,7 @@ embargo is provisioned from the defective `F`.** Historical form: **Read F-6 at
 deployment (configuration B) runs neither Dandelion++ nor the embargo** — the
 arc's entire output is bypassed on the deployment a privacy-motivated user
 selects, and two live §6 claims are false there. That outranks the cadence
-work — as does **F-7** (§26); Corollary 5.1 puts configuration B's ranking on a literature footing (§28.5): `F = 2250` is an undirected/`EveryPeer`
+work — as does **F-7** (§26) — **CLOSED 2026-08-01, §44: `fluff_return_ms = 3250` landed with the re-derived 190 s embargo and the measured set re-recorded**; Corollary 5.1 puts configuration B's ranking on a literature footing (§28.5): `F = 2250` was an undirected/`EveryPeer`
 measurement fed to the embargo derivation for *every* transport, so
 configuration C's embargo is under-provisioned in the direction the policy
 itself calls a privacy loss. **Q-12 is registered and live** (§22.2). The measurement that motivates this document landed alongside it
@@ -709,8 +709,13 @@ Measured (supernode reach φ = 0.10,
 
 | embargo mean | transport | leak rate | origin share of leaks |
 | --- | --- | --- | --- |
+> **Re-measured 2026-08-01 at the F-7-corrected pair (`F′ = 3250`, embargo
+> 190 s), §44:** the adopted row is now **190 s → 1.08 % / 0.20** (the 144 s
+> row at `F′` reads 1.49 %). The derivation's embargo lengthening holds this
+> channel at its designed level across the `F` correction.
+
 | 31 s (pre-correction) | clearnet | 0.0465 | 0.21 |
-| 144 s (adopted) | clearnet | 0.0114 | 0.20 |
+| 144 s (adopted **until F-7**; now 190 s, see banner) | clearnet | 0.0114 | 0.20 |
 | 300 s | clearnet | 0.0056 | 0.20 |
 | 500 s | clearnet | 0.0032 | 0.20 |
 | *any* | **Tor/I2P** | **0.0000** | — |
@@ -785,6 +790,12 @@ leak = P(preempt)  ×  neighbour(supernode reach)  ×  origin-attribution
 **Measured, worst case** (`origin_exposure_meets_target_via_reshape_not_embargo`,
 a *whole-prefix* supernode — the upper bound, not the independent-neighbour lower
 reading of §6.6):
+
+> **Re-measured 2026-08-01 at the F-7-corrected pair (§44):** adopted row is
+> now **190 s / `F′ = 3250` → 2.23 %** (compensation: the derived embargo
+> lengthening cancels the larger `F`); reshape 1 retry → **0.027 %**, still an
+> order under target; embargo-only path now needs **~1500 s** (p90 recovery
+> ~3450 s) — the inefficient lever got *worse*, strengthening the conclusion.
 
 | lever setting | worst-case origin exposure | note |
 | --- | --- | --- |
@@ -2868,6 +2879,16 @@ both-slots-adversarial fallback where the fluff is genuine last-resort availabil
 ---
 
 ## 14. Reframe — fluff-on-expiry spends privacy for performance (Round 3)
+
+> **Restated 2026-08-01 under F-7 (§44) — conclusion unchanged and
+> STRENGTHENED.** The comparison's numbers move (adopted embargo 144 → 190 s;
+> worst-case p90 recovery 331 → ~437 s; embargo-only path to target 1050 →
+> **~1500 s**), and every move widens the gap the argument rests on: the
+> embargo-only lever is further from viable, reshape still meets the target
+> with an order of magnitude to spare (0.027 %), and its cost is unchanged.
+> The "0 s" that appeared during the F′ landing was a **test sentinel
+> artifact** — the ladder never reached the target and reported the
+> never-fired sentinel as a solution (§44.1).
 
 Stepping back from the `ρ` exercise (§13): the question "how much amplification
 do we tolerate" prices a mechanism as if it were load-bearing. It is not. When
@@ -7916,7 +7937,7 @@ against the wrong `F` now:
 | test | what moves |
 | --- | --- |
 | `black_hole_recovery_scales_with_holder_count` | origin-alone p90 recovery (§10.6) |
-| `origin_exposure_meets_target_via_reshape_not_embargo` | §6.7's exposure arithmetic — and **qualitatively**: the embargo-only path to target now solves at 0 s rather than ~1050 s, which is §14's own comparison |
+| `origin_exposure_meets_target_via_reshape_not_embargo` | §6.7's exposure arithmetic — ~~and **qualitatively**: the embargo-only path to target now solves at 0 s rather than ~1050 s~~ **corrected §44.1: the "0 s" was the test's never-fired sentinel — the target had become *unreachable* on the ladder (first rung is now 1500 s), which *strengthens* §14 rather than reversing it** |
 | `precision_increment_reproduces_delta_table` | §13's δ table (0.0027 against the recorded 0.0019 at `f = 0.1`) |
 | `inherited_versus_derived_versus_paper_faithful_embargo` | the shipped-vs-corrected separation (§10) |
 | `fluff_probability_trade_curve` | the Poisson-fires-effectively-never claim at `q = 20 %` |
@@ -8219,3 +8240,109 @@ is missing.
   §14's restatement is a *strengthening* or a *reversal*, and it is small and
   isolated.
 - **Mean outbound connection lifetime** remains independent and cheapest.
+
+## 44. F-7 closed — the 0 s diagnosis, the compensation result, and the policy re-exam
+
+**2026-08-01. `fluff_return_ms = 3250` is landed with the re-derived 190 s
+embargo; the five measurement pins are re-recorded; §14 is restated
+(strengthened).** This section is the record §40.4's plan required, in its
+order: the policy re-exam at the top, then the constant, then the pins.
+
+### 44.1 The 0 s diagnosis — a sentinel artifact, and the sign was backwards
+
+§40.3 recorded the reshape comparison failing with *"the embargo-only path now
+solves at 0 s"* and flagged §14 as possibly reversed. **Diagnosed at source:
+`embargo_only_secs` initialised to `0` and was set at the first ladder rung
+whose exposure dropped under target — `0` in the failure message meant "no
+rung ever fired", not "solved at zero".** At `F′` the target had become
+**unreachable** on the old `[144..1050]` ladder:
+
+| embargo | exposure at `F′ = 3250` | |
+| --- | --- | --- |
+| 144 s | 2.92 % | |
+| 300 s | 1.40 % | |
+| 600 s | 0.73 % | |
+| 1050 s | 0.39 % | *(old first-reach: 1050 s at `F = 2250`)* |
+| **1500 s** | **0.28 %** | **new first-reach** |
+| 2100 s | 0.20 % | |
+
+**So §14 is strengthened, not reversed**: the inefficient lever moved from
+"needs ~1050 s" to "needs ~1500 s" (p90 recovery ~3450 s), while reshape still
+meets the target at **0.027 %** — an order of magnitude under — with unchanged
+cost. **The test defect is the finding's mirror:** its strongest possible
+supporting evidence (target unreachable at any tested mean) *failed* it. Fixed:
+the sentinel is an `Option`, the ladder extends to 2100 s, and the assert now
+guards the axis that matters — the target must not be reachable *below* 600 s.
+Negative control run and observed to fail (target loosened to 0.012 → reached
+at 300 s → named assertion fires).
+
+### 44.2 The compensation result — the derivation holds every leak at its designed level
+
+The same comparison, across three independent instruments, at each era's
+**adopted pair** (`F`, derived embargo):
+
+| instrument | old pair (2250, 144 s) | new pair (3250, 190 s) |
+| --- | --- | --- |
+| worst-case origin exposure (cap 0) | 2.24 % | **2.23 %** |
+| §13 δ table (f = 0.05/0.10/0.30) | 0.0010 / 0.0019 / 0.0045 | **0.0010 / 0.0021 / 0.0048** |
+| §6.6 C3 any-prefix | 1.14 % | **1.08 %** |
+
+**Lengthening the embargo in step with `F` is precisely what the derivation is
+for, and these are three measurements of it doing its job**: at fixed embargo
+the larger `F` raises each leak (§6.7's sign, measured — 2.24 → 2.91 % at
+e144), and the derived 190 s pulls each back to its designed level. The δ pin
+was re-pinned at the shipping pair rather than frozen at the review's
+(freezing inputs to keep a reproduction green is the shim-oracle trap); the
+review's column is retained as provenance.
+
+### 44.3 The policy re-exam (§43.2's gate) — the sign resolves, and worst-of is privacy-safe
+
+§43.2 held that over-estimating `F` is *"adverse on the leak axis"*, citing
+§6.7. **Resolved by separating two referents that share the name `F`:**
+
+- **§6.7's `F` is the *wire* quantity** — the real first-passage time of the
+  return flood. Disarm is the physical arrival of that flood
+  (`upgrade_relay_method` on re-arrival), not a constant timeout. A larger
+  *real* `F` does raise the leak — measured above.
+- **`fluff_return_ms` is a *derivation input*** whose only production consumer
+  is the embargo solve. Over-estimating **it** does not change the wire; it
+  **lengthens the derived embargo**, which *reduces* the prefix-fire leak
+  (measured: 2.91 → 2.23 % at `F′` real).
+
+**So on the over-provisioned zone (clearnet, real `F ≈ 1250`, embargo 190 s),
+both privacy axes improve; the cost is black-hole recovery latency** — p90
+~437 s against ~331 s at 144 s, or ~225 s at clearnet's own 98 s derivation.
+**"Set to the worst zone" is therefore privacy-safe by construction, and
+per-zone `F` would buy recovery latency, not privacy** — which reframes it
+from a privacy option to a liveness optimisation, and it is left unbuilt on
+that basis. *(The one-fact-two-consumers instinct was right; pricing the
+second consumer showed it carries the opposite sign from the first.)*
+
+### 44.4 The pins, each with its reason
+
+| pin | change | why |
+| --- | --- | --- |
+| `ADOPTED_PROPAGATION_TIMEOUT_SECS` | 664 → **874** | rides the embargo term |
+| FFI `mean_secs()` | 144 → **190** | the exact solve at `F′` |
+| FFI draw band | 115..175 → **152..231** | re-centred, same relative slack |
+| recovery p90 band | 315..350 → **415..460** | mean × ln 10 at 190 s |
+| Poisson "never fires" guards (×3) | 0.001 → **0.002** | the 17 s Poisson's lower tail clips ~0.13 % against the longer return; still two orders under a working backstop |
+| shortfall-spread rail | 0.60 → **0.75** | the fixed return term grew 44 %, and the spread *growing* with `F` is the RD-1 mechanism working |
+| δ table | re-pinned at the shipping pair | §44.2 |
+| §6.6 sweep | 190 s row added | the adopted mean measured, not interpolated |
+
+§15's finding is re-checked, not just renamed: **190 s still crosses exactly
+one 120 s block interval** (120 < 190 < 240), so the reconciliation holds with
+more margin than at 144 s.
+
+### 44.5 What this closes and what it leaves
+
+**Closes F-7** — measured (§40.1: a degree effect), derived (§40.2), landed,
+re-baselined, and §14 restated. Configuration C's embargo is now provisioned
+from the fluff rule it actually uses.
+
+**Leaves, unchanged in order:** mean outbound connection lifetime (F-8's
+convergence check — independent, cheapest); the tx-hash plumbing (§39.6's
+element-type constraint); the reverse-parity readouts — **now unblocked**,
+since §26.3 required them to run against `F′` rather than the stale baseline;
+and Unit 2 with its substrate.

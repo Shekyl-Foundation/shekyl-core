@@ -189,11 +189,15 @@ fn black_hole_recovery_scales_with_holder_count() {
             let p90_ticks = p90_samples[n * 90 / 100];
             let p90_s = p90_ticks as f64 * tick_ms as f64 / 1000.0;
             println!("  origin-alone (j=0) recovery p90 = {p90_s:.1}s (MIN_RELAY_TIME = 300s)");
+            // Band tracks the adopted mean × ln(10): 144 s → ~331 s under
+            // RD-4, re-centred to 190 s → ~437 s when F-7 corrected the
+            // `fluff_return_ms` input (§44). Same ±5 % slack.
             assert!(
-                (315.0..350.0).contains(&p90_s),
+                (415.0..460.0).contains(&p90_s),
                 "origin-alone p90 {p90_s:.1}s outside the reproduced band"
             );
-            // RD-4 pushed the embargo to 144 s, so the worst-case recovery p90
+            // RD-4 pushed the embargo past MIN_RELAY_TIME, and F-7 pushed it
+            // further, so the worst-case recovery p90
             // now *exceeds* MIN_RELAY_TIME rather than approaching it.
             assert!(
                 p90_s > 300.0,

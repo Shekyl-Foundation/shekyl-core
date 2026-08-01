@@ -152,10 +152,33 @@ impl DandelionParams {
             epoch_jitter_secs: 30,
             // CRYPTONOTE_DANDELIONPP_FLUFF_PROBABILITY = 20, out of 100.
             fluff_probability_pct: 20,
-            // Measured p90 first-passage for a memoryless fluff flood at 8
-            // peers (`simulate_fluff_return`). Under the *inherited* Poisson
-            // delay the same measurement gives ~13.75 s — see F-5.
-            fluff_return_ms: 2_250,
+            // **Provisioned at the worst zone, not at one measurement —
+            // F-7 (§26, §40, §44).** Measured p90 first-passage, memoryless
+            // fluff flood (`simulate_fluff_return`), by deployed fluff rule at
+            // Shekyl's `P2P_DEFAULT_CONNECTIONS_COUNT = 12`:
+            //
+            //   clearnet (EveryPeer, usable degree ~24)      ~1250 ms
+            //   Tor-C  (OutboundOnly, usable degree 12 exact) ~3250 ms  <- binding
+            //
+            // The old 2250 was an `EveryPeer` measurement at `peers = 8` fed
+            // to the derivation for EVERY transport, so the anonymity zone was
+            // provisioned from a fluff rule it does not use (~44 % low). The
+            // gap is a DEGREE effect, not a direction effect: at matched
+            // usable degree (EveryPeer@8 vs OutboundOnly@16) the two rules
+            // measure 2500 vs 2250 ms — the direction constraint costs
+            // nothing; halving the usable degree is what costs (§40.1).
+            //
+            // One process-wide value serves both zones because the embargo
+            // draw is a singleton, and it is set to the WORST zone's F. §44.3
+            // prices what that costs the over-provisioned zone: this constant's
+            // only production consumer is the embargo derivation, so
+            // over-estimating F *lengthens* the embargo — which *reduces* the
+            // §6.7 prefix-fire leak (measured) and pays only in black-hole
+            // recovery latency (p90 ~439 s vs ~331 s on clearnet). Privacy-safe
+            // on both axes; per-zone F would buy recovery latency, not privacy.
+            // Under the *inherited* Poisson delay the same instrument gives
+            // ~13.75 s — see F-5.
+            fluff_return_ms: 3_250,
             // CRYPTONOTE_DANDELIONPP_STEMS = 2.
             graph: StemGraph::QuasiFourRegular,
         }

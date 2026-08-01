@@ -159,7 +159,7 @@ fn passive_clearnet_leak_is_mean_dependent_and_zero_on_tor() {
     println!("{}", "-".repeat(50));
 
     let mut clearnet_rates = Vec::new();
-    for secs in [31_u32, 50, 144, 300, 500] {
+    for secs in [31_u32, 50, 144, 190, 300, 500] {
         let ticks = u32::try_from(u64::from(secs) * 1000 / DEFAULT_EMBARGO_TICK_MILLIS).unwrap();
         let e = EmbargoTimer::geometric_from_ticks(ticks, DEFAULT_EMBARGO_TICK_MILLIS);
 

@@ -63,7 +63,8 @@
 //!
 //! # This derivation is deliberately block-time-unaware — do not add a term
 //!
-//! The adopted embargo (144 s, RD-4) **exceeds one 120 s block interval**
+//! The adopted embargo (190 s after F-7; 144 s as first derived, RD-4)
+//! **exceeds one 120 s block interval**
 //! (`consensus_constants.json:daa_target_seconds`), and that is correct, not an
 //! oversight. In the reference frame (Dandelion++, Fanti et al.) the embargo
 //! lives on the *propagation* timescale — "slow enough to trigger only during a

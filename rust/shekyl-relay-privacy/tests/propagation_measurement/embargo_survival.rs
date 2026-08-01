@@ -131,15 +131,22 @@ fn inherited_versus_derived_versus_paper_faithful_embargo() {
 
     // Finding 2: correcting the constant changes nothing measurable, because
     // the distribution — not the mean — is what disabled the backstop.
+    // Threshold widened 0.001 → 0.002 when F-7 raised `fluff_return_ms` to
+    // 3250: the extra second of return time clips ~0.13 % off the 17 s
+    // Poisson's lower tail (measured 1.0000 vs 0.9987). The finding stands —
+    // the constant correction moves ~0.001 where the distribution correction
+    // moves ~0.1, two orders apart.
     assert!(
-        (inherited.full_travel_rate - derived.full_travel_rate).abs() < 0.001,
+        (inherited.full_travel_rate - derived.full_travel_rate).abs() < 0.002,
         "shipped {:.4} vs constant-fixed {:.4}: the 2.3x correction should be \
          invisible under Poisson",
         inherited.full_travel_rate,
         derived.full_travel_rate
     );
+    // Same F-7 widening as the invisibility bound above: the 17 s Poisson's
+    // lower tail now clips ~0.13 % against the longer return.
     assert!(
-        inherited.preemption_rate < 0.001 && derived.preemption_rate < 0.001,
+        inherited.preemption_rate < 0.002 && derived.preemption_rate < 0.002,
         "a Poisson embargo at these means should essentially never fire"
     );
 
@@ -423,8 +430,11 @@ fn fluff_probability_trade_curve() {
     // fires anywhere in the useful range of q.
     for (pct, p, _) in &rows {
         if *pct <= 20 {
+            // 0.001 → 0.002 with F-7's longer return (measured 0.0015 at
+            // q=20%): still "effectively never" against the ~10 % a working
+            // backstop needs, same two-orders separation as Finding 2.
             assert!(
-                p.preemption_rate < 0.001,
+                p.preemption_rate < 0.002,
                 "q={pct}%: Poisson embargo fired at {:.4} — expected effectively never",
                 p.preemption_rate
             );
@@ -449,8 +459,12 @@ fn fluff_probability_trade_curve() {
     // worth pinning; the magnitude is reported rather than bounded tightly.
     let spread = shortfalls.iter().copied().fold(f64::MIN, f64::max)
         - shortfalls.iter().copied().fold(f64::MAX, f64::min);
+    // Rail widened 0.60 → 0.75 at F-7: the fixed return term grew ~44 %, and
+    // per the note above a larger fixed term costs proportionally more at
+    // short stems — the spread GROWING with F is the RD-1 mechanism working,
+    // not the model degrading (measured 0.6306 at F′ = 3250).
     assert!(
-        spread < 0.60,
+        spread < 0.75,
         "shortfall spread {spread:.4} is implausibly wide — check the model"
     );
     println!("  (shortfall is now q-dependent, spread {spread:.4} — RD-1 effect)");
