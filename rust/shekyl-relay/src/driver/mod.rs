@@ -206,6 +206,11 @@ impl Driver {
         // cannot retroactively change who an in-flight observation was charged
         // to; and on this clock rather than a timer of its own, so the force
         // hooks exercise it for free.
+        // The count is discarded **intentionally, pending a consumer** — the
+        // selection tier that reads these tallies is §12.11 and is not built.
+        // Said here because a production call with a dropped return is
+        // otherwise indistinguishable from rot at the next census, which is
+        // the same note the covert machinery carries.
         let _resolved = self.zone.expire_stem_observations(now);
 
         for (peer, blobs) in self.zone.flush_fluff(now, false) {

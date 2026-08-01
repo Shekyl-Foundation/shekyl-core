@@ -7916,10 +7916,11 @@ would freeze it in the layer hardest to change:
   counts and lets a consumer window them.
 - **The `(n_min, cut)` pair** (§36.1) — a rate threshold is the wrong
   parameterisation at these counts, so **nothing here compares a ratio.**
-- **Reputation persistence** (§33.6) — `forget()` drops a departed peer's
-  tally rather than retaining it, because retention is a *requirement if
-  warm-up exceeds mean uptime* and a *forensic artifact either way*, and the
-  type must not decide that by default.
+- **Reputation persistence** (§33.6) — ~~`forget()` drops rather than
+  retaining, so the type does not decide it~~ **corrected at F-8 (§39):
+  dropping *is* the decision, with the opposite sign and no less quiet, and it
+  resets at *connection* granularity — a strictly stronger convergence
+  condition than §33.6 analysed.**
 
 **Two properties it does encode, each with its control run and observed to
 fail:**
@@ -7983,6 +7984,108 @@ implies. It does **not** close §33.2's finding — **the signal still does not
 exist in production**, and F-6/§12.11 remain blocked on it. The next step is
 named: `TxId` in at the stem plan and at arrival, `expire()` on the poll, and
 `forget()` on connection close.
+
+## 39. F-8 — `forget` resets at connection granularity, which is a stricter convergence condition than §33.6 analysed
+
+**2026-08-01, maintainer, verified at source.** `StemWatch::forget` does two
+things and the doc comment claimed only one of them was a decision. **It was
+wrong, and is corrected at the site.**
+
+### 39.1 The decision that was described as cleanup
+
+Dropping **in-flight** observations is uncontroversial — a peer that
+disconnected was not given its deadline, so charging it a silence charges it
+for our own disconnect.
+
+Dropping the **tally** (`stem_watch.rs`, `self.tallies.remove(peer)`) **is
+§33.6's persistence question, answered "no."** The earlier comment said the
+type *"does not quietly decide it by retaining"*; **it decided it by
+dropping**, which is the same decision with the opposite sign and no less
+quiet.
+
+### 39.2 The consequence is a different variable, and it is strictly stronger
+
+§33.6 compared warm-up (~25 h at `obs ≈ 0.07`/epoch) against **process
+uptime**. With `forget` on close, the reset happens at **connection**
+granularity:
+
+```text
+§33.6 (analysed):   warm-up ≪ mean process uptime
+F-8   (binding):    warm-up ≪ mean outbound connection lifetime
+```
+
+**Connection lifetime is bounded above by process uptime, so the second
+condition is strictly stronger — it subsumes the first.** It can fail where
+§33.6's holds, and never the reverse. On a churning p2p network connection
+lifetime is hours at best, and **on Tor it is worse.**
+
+**If mean outbound connection lifetime is below warm-up, no tally ever reaches
+`n_min` and the mechanism is *permanently inert* — not merely slow.** That is
+the same inert/degraded distinction §33.6 drew, now arriving on a tighter
+variable.
+
+**Checkable with no new instrument: mean outbound connection lifetime is
+measurable on the existing p2p stack.** It joins Q-10.2 on the
+must-measure-before-parameters list, and unlike Q-10.2 it needs **no economic
+envelope** — it is a plain measurement of the kind §34 established Q-10.2 is
+not.
+
+### 39.3 The adversary attribution, and it moves the whitewash picture
+
+**T** = a node holding an outbound stem slot of the target. **Capability:**
+close the connection. **Cost:** reconnection must win `O`'s selection again —
+C1, peerlist influence, **already priced**.
+
+**So the adversary no longer needs a fresh identity to clear its record — it
+reconnects.** §35.3's stockpiling analysis assumed **identity-minting** was the
+cost; it is not. And **§35.3's tenure repair resets along with everything else**
+— first-draw-by-explore is per-connection too — so it does not survive this
+either.
+
+**Sharpening (mine): the reset is total, not partial.** All three of §35.4's
+promotion conditions reset together on disconnect — observations, tenure, and
+distinct-sources. **So the reconnection cost is the *entire* defence**, which
+makes C1/peerlist influence load-bearing for a second mechanism it was not
+priced against. **And §33.6's anchor wrinkle arrives somewhere concrete:** if
+anchors give a standing re-dial claim, reconnection is nearly free and the
+defence is nearly nothing.
+
+### 39.4 Why `forget` is nonetheless not simply wrong
+
+**Retention is not a one-line alternative.** `ConnectionId` is
+**per-connection**, so retaining across a disconnect needs a **durable peer
+key** — an address, or an onion identity — which is a **p2p-owned fact this
+layer deliberately does not hold.**
+
+**So retention pulls against Q-10.1's own answer.** *"Rust owns the reputation
+state"* is answerable while the key is per-connection; the moment retention is
+required, the key must come from p2p, and the ownership question reopens on a
+different axis than it was closed on. **That is a seam question in its own
+right**, plus §33.6's forensic-artifact cost, and it is registered as such
+rather than treated as a missing line.
+
+### 39.5 Minor, recorded so a census can tell intent from rot
+
+`Driver::poll`'s `let _resolved = …` discards a **production** call's return.
+Correct today — §12.11's selection tier is the consumer and is not built — but
+a dropped return is otherwise indistinguishable from rot at the next census, so
+the site now says **intentional, pending a consumer**, the same note the covert
+machinery carries.
+
+### 39.6 A constraint on the plumbing commit, settled before it is written
+
+`send_txs` takes a **vector**, so carrying identity alongside it means a
+parallel `Vec<TxId>` whose correspondence to the blob vector is **positional** —
+**exactly the transposition hazard `flags: u32` was chosen to delete** (§20.2's
+named-bits decision). Two vectors that must agree by convention is the same
+failure with more elements.
+
+**Settled now rather than after: extend the element type, do not add a second
+array.** The FFI already passes `ShekylRelayBlob` spans; giving that struct the
+hash makes the correspondence **structural rather than positional**, costs no
+extra array, and cannot transpose. If a future caller genuinely needs them
+separate, it owes the argument at that point — but the default is one array of
+paired elements.
 
 ## 40. Closing F-7 is a bigger unit than two constants — the degree-matched result, and the cascade
 
