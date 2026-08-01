@@ -80,9 +80,18 @@ fn origin_exposure_meets_target_via_reshape_not_embargo() {
 
     // (3) The embargo-only path to the target is a liveness disaster — the
     // inefficient lever, for contrast.
+    //
+    // The thesis is that the target is NOT reachable at a liveness-plausible
+    // mean. Target unreachable anywhere on the ladder is the same thesis,
+    // stronger — the previous sentinel (`0` = never reached) FAILED the
+    // assert in exactly that case, so the test's strongest supporting
+    // evidence read as its failure. That is F-7's "0 s" artifact (§44): at
+    // F′ = 3250 no rung of the old [144..1050] ladder reached the target,
+    // the sentinel stayed 0, and "got 0s" was reported as if the solve had
+    // gone trivial when it had gone infeasible.
     println!("\nEmbargo-only path to the target (no reshape) — the INEFFICIENT lever");
-    let mut embargo_only_secs = 0_u32;
-    for secs in [144_u32, 300, 600, 1050] {
+    let mut embargo_only_secs: Option<u32> = None;
+    for secs in [144_u32, 300, 600, 1050, 1500, 2100] {
         let ticks = u32::try_from(u64::from(secs) * 1000 / DEFAULT_EMBARGO_TICK_MILLIS).unwrap();
         let e = EmbargoTimer::geometric_from_ticks(ticks, DEFAULT_EMBARGO_TICK_MILLIS);
         let x =
@@ -90,32 +99,32 @@ fn origin_exposure_meets_target_via_reshape_not_embargo() {
                 .exposure_rate;
         let p90_recovery = f64::from(ticks) * 2.302 * DEFAULT_EMBARGO_TICK_MILLIS as f64 / 1000.0;
         println!("  embargo={secs:>4}s: exposure {x:.5}, p90 origin recovery ~{p90_recovery:.0}s");
-        if x < TARGET && embargo_only_secs == 0 {
-            embargo_only_secs = secs;
+        if x < TARGET && embargo_only_secs.is_none() {
+            embargo_only_secs = Some(secs);
         }
     }
-    assert!(
-        embargo_only_secs >= 600,
-        "the embargo-only path to the target should require a liveness-breaking mean, got {embargo_only_secs}s"
-    );
+    if let Some(secs) = embargo_only_secs {
+        assert!(
+            secs >= 600,
+            "embargo-only reached the target at {secs}s — a liveness-plausible mean here \
+             would undermine the reshape adoption argument (§14)"
+        );
+    }
+    let embargo_only_label =
+        embargo_only_secs.map_or_else(|| "unreachable ≤2100".to_owned(), |secs| format!("{secs}"));
 
     println!(
         "\n  Answer: ≤0.3% worst-case exposure is reachable, and reshape (Q-8a)\n  \
          reaches it EFFICIENTLY — one retry takes {r0:.4} → {r1:.5} with NO\n  \
          embargo lengthening (cost is ~1 extra stem hop of latency). The\n  \
-         embargo-only path needs ~{embargo_only_secs}s (p90 recovery ~{:.0}s,\n  \
+         embargo-only path needs ~{embargo_only_label}s (p90 recovery ~{:.0}s,\n  \
          several× MIN_RELAY_TIME) and would break the P2P liveness the mechanism\n  \
          depends on. So the levers tune together as: keep the embargo at 144s\n  \
          (the black-hole backstop), F already handled by F-4, reshape carries\n  \
          the origin-exposure target. ε is a target on the COMPOSED leak with\n  \
          freedom in (embargo, F, reshape) — it must not over-constrain the\n  \
          embargo to carry the whole burden.",
-        f64::from(
-            u32::try_from(u64::from(embargo_only_secs) * 1000 / DEFAULT_EMBARGO_TICK_MILLIS)
-                .unwrap()
-        ) * 2.302
-            * DEFAULT_EMBARGO_TICK_MILLIS as f64
-            / 1000.0
+        f64::from(embargo_only_secs.unwrap_or(2_100)) * 2.302
     );
 }
 
@@ -136,17 +145,26 @@ fn precision_increment_reproduces_delta_table() {
     use shekyl_relay_privacy::conformance::simulate_precision_increment;
 
     let base = DandelionParams::inherited();
-    let e = EmbargoTimer::geometric_from_ticks(576, DEFAULT_EMBARGO_TICK_MILLIS);
+    // The ADOPTED configuration: F-7-corrected `fluff_return_ms` and its
+    // derived 190 s embargo. The review's table was measured at the F = 2250 /
+    // 144 s pair; re-measured here at the shipping pair the values are nearly
+    // unchanged (0.0010/0.0021/0.0048 vs 0.0010/0.0019/0.0045) because the
+    // derivation lengthens the embargo in step with F, holding the prefix-fire
+    // leak at its designed level (§44.3). Pinning the old pair instead would
+    // keep the review reproducible and stop measuring what ships.
+    let e = EmbargoTimer::geometric_from_ticks(758, DEFAULT_EMBARGO_TICK_MILLIS);
 
-    println!("\nδ increment re-run (independent-neighbour lower bound, 144s embargo)");
+    println!("\nδ increment re-run (independent-neighbour lower bound, 190s embargo)");
     println!(
         "{:>6} {:>12} {:>14} {:>12} {:>12}",
         "f", "Prec(C1)", "Prec(C1+C3)", "δ", "review"
     );
     println!("{}", "-".repeat(60));
 
-    // (f, review's δ) — the §13 table this re-run must reproduce.
-    let cases = [(0.05_f64, 0.0010), (0.10, 0.0019), (0.30, 0.0045)];
+    // (f, δ at the adopted F′/190 s pair). The review's §13 column
+    // (0.0010, 0.0019, 0.0045 at F=2250/144 s) is retained in the printout
+    // header comment above; the pinned values are the shipping pair's.
+    let cases = [(0.05_f64, 0.0010), (0.10, 0.0021), (0.30, 0.0048)];
     for (i, (f, review_delta)) in cases.iter().enumerate() {
         let mut rng = SplitMix64::new(0xD17A + i as u64);
         let p = simulate_precision_increment(&base, &e, *f, 0, 1_000_000, &mut rng);
@@ -164,7 +182,7 @@ fn precision_increment_reproduces_delta_table() {
         // δ reproduces the review's value (Monte-Carlo band).
         assert!(
             (p.delta - review_delta).abs() < 0.0005,
-            "δ at f={f} was {:.4}, review has {review_delta}",
+            "δ at f={f} was {:.4}, adopted-pair pin has {review_delta}",
             p.delta
         );
     }
