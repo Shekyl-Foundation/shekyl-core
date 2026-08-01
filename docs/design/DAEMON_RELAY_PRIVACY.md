@@ -6115,12 +6115,39 @@ verbatim: *"set from a high quantile rather than a mean because
 over-estimating lengthens the embargo (safe) while under-estimating shortens it
 (a privacy loss)."*
 
+**MAGNITUDE MEASURED 2026-08-01** — the directed variant is built
+([`FloodReach`](../../rust/shekyl-relay-privacy/src/conformance/flood.rs),
+both construction sites), and `f7_directed.rs` reports both reaches side by
+side. p90 first passage, memoryless family, 512 nodes:
+
+| `peers` | `EveryPeer` | `OutboundOnly` | effective degree |
+| --- | --- | --- | --- |
+| 8 (the shipped measurement's) | **2500 ms** | **5750 ms** | 16 → 8 |
+| 12 (Shekyl's `P2P_DEFAULT_CONNECTIONS_COUNT`) | 1250 ms | **3250 ms** | 24 → 12 |
+
+**The `EveryPeer` baseline reproduces the shipped input's order** (2500 against
+`fluff_return_ms = 2250`, different seed and trial count), which is the
+instrument validating rather than a new number.
+
+**The decision-relevant figure is `peers = 12`, `OutboundOnly` — 3250 ms
+against a shipped 2250 ms, so `F` is under-provisioned by ~44 % on
+configuration C.** At the instrument's own default degree the gap is 2.6×.
+
+**Reported with the conflation named, per §28.4**: changing only `reach` also
+changes the effective degree (each node initiates `peers` and receives
+~`peers`), so the 8→8 row moves *two* things at once. The 12-row is the one to
+act on because it is Shekyl's actual outbound count under the rule
+configuration C actually uses. **A degree-matched pair (`EveryPeer` at
+`peers = 8` versus `OutboundOnly` at `peers = 16`) would isolate the rule alone
+and is not yet run** — it is the next thing this instrument owes.
+
 **F-7: the 446-tick / 144 s embargo is under-provisioned on configuration C by
-an unmeasured amount, because the measurement producing its input models a
+~44 % in its `F` input, because the measurement producing its input models a
 fluff rule that configuration does not use.** Evidential status matches F-6's:
 the showing is decisive (symmetric adjacency; outbound-only fluff on
-anonymity-network zones), the direction is derivable by construction, and only
-the **magnitude** awaits the directed instrument. Configuration A is unaffected
+anonymity-network zones), the direction is derivable by construction, and the
+**magnitude is now measured** (above) rather than awaited. Configuration A is
+unaffected
 — there the instrument's rule and the deployed rule agree, and 2250 is right.
 
 ### 26.3 The coupling — three readouts off one input, not a coverage check

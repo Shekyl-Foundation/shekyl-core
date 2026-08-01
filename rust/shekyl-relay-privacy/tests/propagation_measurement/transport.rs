@@ -22,7 +22,9 @@ use shekyl_relay_privacy::{DelayFamily, EmbargoTimer, SplitMix64};
 /// I2P/Tor).
 #[test]
 fn tor_collapses_the_supernode_diffusion_observer() {
-    use shekyl_relay_privacy::conformance::{simulate_transport_observation, Transport};
+    use shekyl_relay_privacy::conformance::{
+        simulate_transport_observation, FloodReach, Transport,
+    };
 
     println!("\nSupernode diffusion observer: clearnet vs Tor (512 nodes, 8 peers)");
     println!(
@@ -38,6 +40,7 @@ fn tor_collapses_the_supernode_diffusion_observer() {
             FloodParams {
                 nodes: 512,
                 peers: 8,
+                reach: FloodReach::EveryPeer,
             },
             20,
             DelayFamily::Geometric,
@@ -51,6 +54,7 @@ fn tor_collapses_the_supernode_diffusion_observer() {
             FloodParams {
                 nodes: 512,
                 peers: 8,
+                reach: FloodReach::EveryPeer,
             },
             20,
             DelayFamily::Geometric,
@@ -91,6 +95,7 @@ fn tor_collapses_the_supernode_diffusion_observer() {
         FloodParams {
             nodes: 512,
             peers: 8,
+            reach: FloodReach::EveryPeer,
         },
         20,
         DelayFamily::Geometric,
@@ -103,6 +108,7 @@ fn tor_collapses_the_supernode_diffusion_observer() {
         FloodParams {
             nodes: 512,
             peers: 8,
+            reach: FloodReach::EveryPeer,
         },
         20,
         DelayFamily::Geometric,
