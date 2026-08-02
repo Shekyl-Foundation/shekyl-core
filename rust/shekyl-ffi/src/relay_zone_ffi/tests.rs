@@ -721,3 +721,76 @@ fn zone_flag_bits_do_not_transpose() {
         assert!(!shekyl_relay_zone_covert_enabled(std::ptr::null()));
     }
 }
+
+/// The FFI observation pair round-trips into the zone's `StemWatch`: a
+/// recorded stem resolves as *propagated* on arrival, and the deadline drawn
+/// at the FFI site is the adopted embargo's (so a poll far past it resolves
+/// the unresolved one as *silent*). This is the boundary witness — the
+/// per-crate tests already cover the arithmetic; what this asserts is that
+/// the packed-byte decoding (32-byte ids, 16-byte uuids, null source =
+/// local origin) reaches the right zone calls.
+#[test]
+fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
+    fn stem_map_id(byte: u8) -> shekyl_relay_privacy::stem_map::ConnectionId {
+        shekyl_relay_privacy::stem_map::ConnectionId::from_bytes(id(byte))
+    }
+    unsafe {
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        shekyl_relay_zone_on_handshake(h, id(9).as_ptr(), true);
+
+        let mut hashes = [0u8; 64]; // two packed 32-byte tx ids
+        hashes[0] = 0xA1;
+        hashes[32] = 0xB2;
+        shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 2, id(9).as_ptr(), std::ptr::null(), 0);
+        assert_eq!(
+            (*h).driver.zone().stem_observations_in_flight(),
+            2,
+            "both packed ids armed against the successor"
+        );
+
+        // First id returns: resolved as propagated.
+        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1);
+        let t = (*h)
+            .driver
+            .zone()
+            .stem_tally(&stem_map_id(9))
+            .expect("arrival resolved against the successor");
+        assert_eq!((t.propagated, t.silent), (1, 0));
+
+        // The second never returns. Its deadline was drawn from the adopted
+        // embargo at now=0, so a poll at 1h — far past any draw — resolves it
+        // as silent through the production poll path, not a test back door.
+        shekyl_relay_zone_poll(
+            h,
+            3_600_000,
+            std::ptr::null_mut(),
+            rec_gather,
+            rec_fluff,
+            rec_unbind,
+            rec_covert,
+        );
+        let t = (*h)
+            .driver
+            .zone()
+            .stem_tally(&stem_map_id(9))
+            .expect("tally survives");
+        assert_eq!(
+            (t.propagated, t.silent),
+            (1, 1),
+            "the unreturned id resolved as silent on the poll clock"
+        );
+
+        // Null handle and null hashes: no-ops, not crashes.
+        shekyl_relay_zone_record_stem(
+            std::ptr::null_mut(),
+            hashes.as_ptr(),
+            1,
+            id(9).as_ptr(),
+            std::ptr::null(),
+            0,
+        );
+        shekyl_relay_zone_record_arrival(h, std::ptr::null(), 1);
+
+        shekyl_relay_zone_free(h);
+    }
+}

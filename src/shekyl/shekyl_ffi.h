@@ -3114,6 +3114,21 @@ bool shekyl_relay_zone_covert_enabled(const RelayZoneHandle* handle);
 //! The outbound floor the embargo provisioning assumes (F-8b): counts below
 //! this put real fluff first-passage above the provisioned value.
 std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
+
+//! Record `n` transactions stemmed to `successor` (16-byte uuid); `hashes` is
+//! n packed 32-byte tx ids; `source` is the arriving peer's uuid or null for
+//! local origin. The observation deadline is drawn Rust-side from the adopted
+//! embargo at `now_ms`.
+void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
+    const std::uint8_t* hashes, std::size_t n,
+    const std::uint8_t* successor, const std::uint8_t* source,
+    std::uint64_t now_ms);
+
+//! Record `n` arrived transactions (any peer, any path). Unknown ids are
+//! ignored; call on EVERY zone's handle, since a stem placed on one zone can
+//! return through another.
+void shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
+    const std::uint8_t* hashes, std::size_t n);
 //! Free a zone. Null is a no-op; free exactly once.
 void shekyl_relay_zone_free(RelayZoneHandle* handle);
 //! A peer completed its handshake.

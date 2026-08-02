@@ -8618,3 +8618,67 @@ lifetime and the real degree distribution of deployed zones are both
 questions about actual connection topology, and **one measurement session
 answers both.** Then: tx-hash plumbing, reverse-parity readouts against `F′`,
 Unit 2.
+
+## 46. The tx-hash plumbing — FFI half landed; the C++ half is a traced checklist
+
+**2026-08-01.** §38.3 named the remaining step: transaction identity onto the
+paths that cross the FFI. **The chain is now fully traced, the Rust/FFI half
+is landed and witnessed, and the C++ half reduces to a checklist with one
+design fact discovered.**
+
+### 46.1 What landed
+
+Two exports, inside the signature gate (**18 exports checked**):
+
+- **`shekyl_relay_zone_record_stem(handle, hashes, n, successor, source,
+  now_ms)`** — packed 32-byte ids; null `source` = local origin
+  (`in_mapping_[nil]`). **The observation window is drawn at this site from
+  the adopted embargo distribution** — this is the "caller" §38.2 left the
+  window to, reusing the embargo draw because both ask the same question of
+  the same peer; if §12.11's window ever diverges, one line changes.
+- **`shekyl_relay_zone_record_arrival(handle, hashes, n)`** — any peer, any
+  path; unknown ids free. **Documented: call on *every* zone's handle**, since
+  a stem placed on one zone can return through another, and only the zone
+  holding the pending entry can resolve it.
+
+Boundary witness (`record_stem_and_arrival_cross_the_boundary_into_the_watch`):
+packed-byte decoding reaches the watch, arrival resolves as propagated, and
+the unreturned id resolves as **silent through the production poll path** at
+a `now` past any adopted draw — plus null-handle/null-hash no-op checks.
+
+### 46.2 The C++ half — traced at source, one discovery, five steps
+
+**The discovery: the hash exists at every origination site and is dropped at
+the boundary.** `relay_txpool_transactions` holds `(hash, blob, method)`
+tuples and pushes only `get<1>` into the wire request; the incoming path
+verifies through `handle_incoming_tx(blob, tvc, …)` whose
+`tx_verification_context` **carries no hash out** — core computes it
+(`add_new_tx(tx, tx_hash, …)`) and drops it on return. **So the C++ half's
+first step is `tvc.m_tx_hash`: fill it where core already computes the hash,
+and every downstream site inherits identity without recomputation** — the
+delete-the-duplicate direction; hashing again at the notify layer would be
+the two-copies defect.
+
+The checklist, in dependency order:
+
+1. **`tx_verification_context` gains `m_tx_hash`**, filled in core's incoming
+   path at the one site the hash is computed.
+2. **`relayed_tx { crypto::hash hash; blobdata blob; }`** — the §39.6
+   element-type pairing; `notify::send_txs`, `node_server::send_txs`, and
+   `relay_transactions` change element type (`NOTIFY_NEW_TRANSACTIONS` is
+   wire and does not change; the request is built at the levin layer, which
+   strips hashes into `record_*` calls and blobs into the payload).
+3. **Both callers of `relay_transactions`** supply the pair: the pool path
+   from its tuples' `get<0>`, the incoming path from the new `tvc.m_tx_hash`.
+4. **`node_server::send_txs` fans `record_arrival` to every network's
+   notifier before zone routing** (§46.1's every-zone rule); the levin stem
+   xmit calls `record_stem` with the plan's destination after a successful
+   stem send.
+5. **The levin gtests** (35) construct `send_txs` with blobs — mechanical
+   sweep to the paired type.
+
+**Deliberately not landed here**: the C++ half is one signature change through
+three layers plus a test sweep — a single self-contained commit, now with no
+design left in it. Landing the FFI half separately keeps the branch green and
+puts the contract (window choice, every-zone arrival, packed layout) under
+test before its first C++ caller exists.
