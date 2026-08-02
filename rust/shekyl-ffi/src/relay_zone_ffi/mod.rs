@@ -535,6 +535,59 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_arrival(
     }
 }
 
+/// Serialise this zone's stem-outcome tallies as a JSON array into `buf`
+/// (§55). Returns the number of bytes the payload needs — **which may exceed
+/// `cap`**, in which case nothing was written and the caller should retry
+/// with a larger buffer.
+///
+/// **This is transit through a layer scheduled for deletion, and is labelled
+/// so nobody reads it as intended structure.** The data is Rust's (the relay
+/// zone owns the tallies) and the consumer is Rust's (`shekyl-daemon-rpc`,
+/// axum) — the round trip out to C++ and back in exists *only* because C++
+/// `net_node` owns the zone handles' lifetime. **When p2p migrates, this
+/// export and its C++ passthrough both disappear and the RPC reads the zone
+/// directly.** Do not build structure on the round trip.
+///
+/// JSON rather than a struct array: the payload crosses two FFI boundaries to
+/// reach a JSON endpoint, so a typed struct would be marshalled twice and
+/// pin a layout in a header for a transitional path. Bytes in, bytes out.
+///
+/// Counts are raw — see [`shekyl_relay::StemWatch::snapshot`]; a readout that
+/// pre-computed a rate would decide the accumulator's memory policy for the
+/// tuner it exists to inform.
+///
+/// # Safety
+/// `handle` must be null (writes nothing, returns 0) or a live zone from
+/// [`shekyl_relay_zone_new`]. `buf` must be writable for `cap` bytes when
+/// `cap > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_stem_snapshot_json(
+    handle: *const RelayZoneHandle,
+    buf: *mut u8,
+    cap: usize,
+) -> usize {
+    let Some(h) = handle.as_ref() else { return 0 };
+    let mut out = String::from("[");
+    for (i, (peer, t)) in h.driver.zone().stem_snapshot().iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let hex: String = peer.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        out.push_str(&format!(
+            "{{\"peer\":\"{hex}\",\"propagated\":{},\"silent\":{},\"distinct_sources\":{}}}",
+            t.propagated,
+            t.silent,
+            t.distinct_sources()
+        ));
+    }
+    out.push(']');
+    let bytes = out.as_bytes();
+    if !buf.is_null() && bytes.len() <= cap {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+    }
+    bytes.len()
+}
+
 /// Stem observations still pending resolution — the liveness read a C++
 /// wiring witness needs (a recorded stem must be visible as in-flight and an
 /// arrival must clear it), and cheap enough to leave in production builds.
