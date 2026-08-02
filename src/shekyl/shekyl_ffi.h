@@ -3134,6 +3134,17 @@ void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
 void shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
     const std::uint8_t* hashes, std::size_t n, const std::uint8_t* from);
 
+//! Serialise this zone's stem-outcome tallies as a JSON array into `buf`.
+//! Returns the bytes NEEDED, which may exceed `cap` -- in that case nothing
+//! is written and the caller retries with a larger buffer.
+//!
+//! TRANSIT, NOT STRUCTURE: the data is Rust's and the consumer is Rust's
+//! (shekyl-daemon-rpc); this round trip exists only because C++ net_node owns
+//! the zone handles' lifetime. When p2p migrates, this and its C++
+//! passthrough both disappear. Do not build on it.
+std::size_t shekyl_relay_zone_stem_snapshot_json(const RelayZoneHandle* handle,
+    std::uint8_t* buf, std::size_t cap);
+
 //! Stem observations still pending resolution (0 for null handle) — the
 //! liveness read a wiring witness needs.
 std::size_t shekyl_relay_zone_stem_in_flight(const RelayZoneHandle* handle);

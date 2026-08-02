@@ -382,6 +382,13 @@ impl Zone {
         }
     }
 
+    /// Every successor with resolved observations — the §55 telemetry
+    /// readout. See [`StemWatch::snapshot`] for why the counts stay raw.
+    #[must_use]
+    pub fn stem_snapshot(&self) -> Vec<(ConnectionId, StemTally)> {
+        self.stem_watch.snapshot()
+    }
+
     /// Per-successor stem outcomes, for a future selection consumer.
     #[must_use]
     pub fn stem_tally(&self, successor: &ConnectionId) -> Option<&StemTally> {

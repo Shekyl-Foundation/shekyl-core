@@ -243,6 +243,34 @@ impl StemWatch {
         self.tallies.get(successor)
     }
 
+    /// Every successor with resolved observations, and its raw counts.
+    ///
+    /// **The telemetry readout (§55).** §12.11's remaining parameters are
+    /// locally adaptive — they may ship reasonable and be tuned on operating
+    /// data — but that argument is only honest if the data can be *read*,
+    /// which makes this a precondition of shipping with them deferred rather
+    /// than a follow-up to it.
+    ///
+    /// Raw counts, deliberately: §38.2's three open decisions (accumulator
+    /// memory, the `(n_min, cut)` pair, persistence) stay open here too. **A
+    /// snapshot that returned a *rate* would have chosen the memory policy on
+    /// the tuner's behalf** — the one thing a readout must not do is
+    /// pre-empt the decision it exists to inform.
+    ///
+    /// Only successors with at least one *resolved* observation appear.
+    /// Absent and all-zero are different facts: an unproven peer and a
+    /// perfect one must not read alike.
+    #[must_use]
+    pub fn snapshot(&self) -> Vec<(ConnectionId, StemTally)> {
+        let mut out: Vec<(ConnectionId, StemTally)> =
+            self.tallies.iter().map(|(k, v)| (*k, v.clone())).collect();
+        // Deterministic order: `HashMap` iteration is randomised per process,
+        // and an operator diffing two snapshots should see content changes,
+        // not ordering churn.
+        out.sort_unstable_by_key(|(k, _)| *k);
+        out
+    }
+
     /// Observations still in flight — for the liveness assertions a witness
     /// needs, and for bounding the pending map in review.
     #[must_use]
@@ -392,6 +420,27 @@ mod tests {
         w.stemmed(tx(2), peer(9), None, 1_000);
         w.seen(&tx(2), None);
         assert_eq!(w.tally(&peer(9)).expect("resolved").propagated, 2);
+    }
+
+    #[test]
+    fn the_snapshot_is_ordered_and_omits_peers_with_no_resolved_observations() {
+        let mut w = StemWatch::default();
+        // Inserted out of order; only peer 2 and peer 7 resolve anything.
+        w.stemmed(tx(1), peer(7), None, 1_000);
+        w.seen(&tx(1), Some(peer(3)));
+        w.stemmed(tx(2), peer(2), None, 1_000);
+        assert_eq!(w.expire(1_000), 1);
+        w.stemmed(tx(3), peer(5), None, 9_000); // still pending — no outcome
+
+        let snap = w.snapshot();
+        assert_eq!(
+            snap.iter().map(|(p, _)| *p).collect::<Vec<_>>(),
+            vec![peer(2), peer(7)],
+            "sorted, and peer 5 is ABSENT — pending is not an outcome, and an \
+             unproven peer must not read as a measured-at-zero one"
+        );
+        assert_eq!(snap[0].1.silent, 1);
+        assert_eq!(snap[1].1.propagated, 1);
     }
 
     #[test]

@@ -805,3 +805,50 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         shekyl_relay_zone_free(h);
     }
 }
+
+/// The §55 telemetry readout crosses the boundary intact, and its
+/// two-call sizing contract holds: a short buffer writes nothing and reports
+/// the needed length.
+#[test]
+fn stem_snapshot_json_reports_its_size_and_writes_only_when_it_fits() {
+    unsafe {
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        shekyl_relay_zone_on_handshake(h, id(9).as_ptr(), true);
+
+        // Empty zone: a valid empty array, not a null or an error.
+        let mut buf = [0u8; 512];
+        let n = shekyl_relay_zone_stem_snapshot_json(h, buf.as_mut_ptr(), buf.len());
+        assert_eq!(&buf[..n], b"[]", "no observations is an empty array");
+
+        let mut hashes = [0u8; 32];
+        hashes[0] = 0xA1;
+        shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 1, id(9).as_ptr(), std::ptr::null(), 0);
+        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(3).as_ptr());
+
+        let need = shekyl_relay_zone_stem_snapshot_json(h, std::ptr::null_mut(), 0);
+        assert!(need > 2, "a resolved observation must produce a payload");
+
+        // Short buffer: nothing written, size still reported. Sentinel proves
+        // "wrote nothing" rather than "wrote something that happens to match".
+        let mut small = [0xEEu8; 8];
+        assert!(need > small.len());
+        assert_eq!(
+            shekyl_relay_zone_stem_snapshot_json(h, small.as_mut_ptr(), small.len()),
+            need
+        );
+        assert!(
+            small.iter().all(|b| *b == 0xEE),
+            "an undersized buffer must be left untouched, not partly filled"
+        );
+
+        let n = shekyl_relay_zone_stem_snapshot_json(h, buf.as_mut_ptr(), buf.len());
+        let s = std::str::from_utf8(&buf[..n]).expect("utf-8");
+        assert!(s.contains("\"propagated\":1"), "got {s}");
+        assert!(s.contains("\"silent\":0"), "got {s}");
+        assert!(
+            s.contains("09000000000000000000000000000000"),
+            "peer id is hex-encoded: {s}"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}
