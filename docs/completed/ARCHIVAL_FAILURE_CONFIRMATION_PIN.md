@@ -106,7 +106,7 @@ that is **simultaneously**:
 |-----------|-------------|
 | **Tail-robust** | `m` above true p99 (or agreed quantile) single-outage baseline span |
 | **Bond-resolution acceptable** | Slash latency bounded for bond/holdings cleanup (and any metric not serve-credit-gated) |
-| **Crisis-tail robust (swan-2/W6)** | `m` above the outage **run-length** quantile measured under **induced correlated failure**, not just the normal-times marginal CDF |
+| ~~**Crisis-tail robust (swan-2/W6)**~~ | ~~`m` above the outage **run-length** quantile measured under **induced correlated failure**, not just the normal-times marginal CDF~~ **DROPPED 2026-08-01 — cadence artifact; see the dated amendment below** |
 | **Deterrence-credible (swan-3/W16)** | Expected slash cost under a realistic degrade play (drop bytes, keep bond, answer what can be re-fetched) **exceeds the storage-opex savings at crisis prices** — evaluated at the pinned crisis multiplier below. **The exit path rides this same envelope:** release anchors on last-*served* and the cooldown (2) is far below `m`, so a departing record escapes only the `m − 1` misses this degrade play already prices — no separate sub-criterion — §4.1.1 |
 
 **The W16 tension — crisis-tail `m` and slash deterrence pull in opposite directions.**
@@ -129,6 +129,38 @@ calculus tips and the slash must still bite. Evaluators do not choose their own 
 level; a row that passes at ×0.5 but fails at ×0.25 fails the criterion. Reopen the
 multiplier only if the L17 grid itself is re-anchored (reversion trigger (a)/(b) of
 that layer) — the pin tracks the fatal channel, not a preference.
+
+**AMENDED 2026-08-01 (maintainer ruling) — the crisis-tail row (swan-2/W6) is DROPPED
+as a cadence artifact, and `m`'s floor moves from stressnet to derivation.** Three
+parts, each checked at source:
+
+1. **The row's premise is impossible at epoch cadence.** Each `(P, shard)` window is
+   evaluated independently — the pin has no cross-`P` inference — so correlation was
+   only ever an arithmetic concern on the marginal distribution (fat-tailed outages
+   crossing `m`), amplified because simultaneous crossings compound exits (the
+   participation strike loop, `shekyl-staking-sim/src/participation.rs:160–167`). But
+   with one baseline per settlement epoch (~13.9 days), reaching `m = 11` requires
+   misses across 11 *observed epochs* — months. An infrastructure outage lasts hours
+   and cannot produce a miss on more than one epoch per `P`; a record dark for months
+   is not experiencing a transient — it is gone, and slashing it is correct. The row
+   was written under a sub-daily-baseline assumption that item 1 (whole-shard reads)
+   and the set-size direction have since moved. The stressnet campaign it gates on
+   measures the wrong thing at this cadence. The §3.2 escape clause's "all four"
+   accordingly reads "all three".
+
+2. **W16 (deterrence-credible) is KEPT.** "10-of-13 free" at the ×0.25 crisis
+   multiplier is a live deterrence question and does not depend on outage duration.
+
+3. **`m` is really sized against transport noise, not archiver availability.** The
+   measured witness-side cold-path failure rate (~30 % per attempt, 2026-07-30
+   measurement in `FOLLOWUPS.md` TJ-2 — tor's 120 s SOCKS timeout, independent per
+   attempt) dominates the observed miss distribution; genuine availability events are
+   the minority term. Consecutive-miss probability falls as `0.3^k` (11 consecutive
+   ≈ 2×10⁻⁶ before any retry depth), so the floor is **derivable — pick a false-slash
+   target at population scale, solve for `m` jointly with the per-observation retry
+   depth** — rather than a stressnet question. The `(m, n)` decision is now smaller:
+   a transport-derived floor, W16 as the ceiling, one objective each way, and a wide
+   band between them.
 
 If the tail is heavy enough that no `m` satisfies **all four**, the named escape — faster
 dead-`P` detection **decoupled from `m`** (a separate liveness signal) — **stops being a

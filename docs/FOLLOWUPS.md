@@ -459,9 +459,17 @@ sustainability is unaffected by the recalibration.
   already TJ-B's named question). Reopen criterion (rule-21 shape): the
   ideal becomes reachable only if the read leaves the critical path —
   sub-interval reads — which item 1's whole-shard ruling forecloses.
-  **Status: direction ruling + check; the TJ-B round designs the miss
-  channel, the freshness/countersignature binding, and the set-size pin
-  before anything else.**
+  **Status: direction ruling + check. TJ-B order finalized (2026-08-01,
+  maintainer): (1) countersignature binding — load-bearing, since without
+  it a mandatory attestation is satisfiable by a local disk read; (2) the
+  set-size pin; (3) the deletion surface + credit wire.** The `(m, n)`
+  decision is separate and now smaller (2026-08-01 amendment in
+  `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §3.2): the crisis-tail row is
+  dropped as a cadence artifact, W16 stays as the ceiling, and the floor
+  is transport-derived — one objective each way, wide band between.
+  Dependency note: the transport-floor derivation consumes the
+  observation/miss definition, which rides with the
+  countersignature-binding design (step 1).
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
