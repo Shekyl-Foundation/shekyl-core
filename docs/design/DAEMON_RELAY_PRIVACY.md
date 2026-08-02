@@ -9121,3 +9121,126 @@ whatever the anti-eclipse posture permits.
    anti-eclipse permits.
 3. **`F′` reverse-parity readouts** (§26.3) — unblocked since §44.
 4. **Q-11 Unit 2** — shape, on the (b) leg, with §42's proposal as input.
+
+## 52. §12.11's selection tier is D++ §4.5 version-checking — the mechanism has a theorem in its own lineage
+
+**2026-08-02, maintainer. Provenance split, and it matters for how this is
+used.**
+
+> **Paper-side facts (D++ §4.5, Theorem 3, the `C(1−β)` term, `β`'s
+> semantics) are maintainer-supplied and were NOT verifiable in this session
+> — no local copy of the paper exists in the tree.** They carry the same
+> verify-at-source obligation as the Sharma calibration inputs: **the shape
+> and the derivation path may be used; no number may gate a decision until
+> the paper leg is grounded.** Everything on *our* side below is verified
+> against this document's own record and is not subject to that caveat.
+
+### 52.1 The mapping
+
+D++ §4.5 weighs two ways to pick anonymity-graph edges: **version-checking**
+(draw only from `D_v`, neighbours known to support D++) against
+**no-version-checking** (uniform over all outgoing edges). The paper's own
+warning about the first is that *adversarial nodes can lie about their
+version and/or run nodes that do support D++*. Theorem 3 prices it, with `β`
+the fraction of **honest** nodes carrying the attribute:
+
+```text
+(p/f)(1−(1−f)^η) ≤ R_OPT ≲ (p/f)(1−(1−f)^η) + (1−f)^η + C(1−β)
+```
+
+**`C(1−β)` is the cost of conditioning**: spies always satisfy the attribute,
+honest nodes satisfy it with probability `β`, so the candidate pool is
+enriched in adversaries and recall degrades in proportion to how many honest
+nodes are excluded.
+
+| | D++ version-checking | §12.11 exploit tier |
+| --- | --- | --- |
+| attribute | supports D++ | proven by disarm rate |
+| adversary satisfies | **always** — it runs D++ | **always** — it forwards correctly, and per §34 farms observations faster |
+| honest satisfies | fraction `β` | fraction `β′` |
+| effect | pool enriched in spies, `C(1−β)` | same |
+
+**And `β′` is worse than their `β` on three counts this document already
+established** (all verified here, none paper-dependent): warm-up ≈ **25 h** at
+`obs ≈ 0.07`/epoch (§34.5); **F-8's `forget` resets it at every disconnect**
+(§39.2); and the **~12 % ambient failure rate false-cools honest peers** off
+the ladder's low rungs (§36.1, §37.1). **Their `β` only grows with deployment.
+Ours is depressed by the mechanism's own dynamics, permanently.**
+
+> **This is discipline #16 — ranking-preference recruits the best-provisioned
+> adversary — with a theorem behind it, in the lineage, on a structurally
+> identical mechanism. It was a project-local judgement; it does not have to
+> be.**
+
+### 52.2 `ε_explore` becomes derivable — and my scope statement was wrong for a specific reason
+
+§36.5 scoped `ε` as derivable against warm-up and cold-start but **not**
+against recruitment, because it *"moves warm-up symmetrically… changing WHEN
+the ranking settles and never WHO wins it."*
+
+**That is true of one of `ε`'s roles and I generalised it to the other.**
+`ε` has two:
+
+- **Effect on convergence *time*** — symmetric, since raising `ε` accelerates
+  the adversary's accumulation exactly as much as the honest peer's. **No
+  recruitment leverage. The scope statement was right here.**
+- **Effect on pool *composition*** — `ε` **is** the mixing parameter between
+  a conditioned pool and a uniform one. **Asymmetric**, because the adversary
+  always satisfies the attribute and honest nodes satisfy it with probability
+  `β′`. At `ε = 1` the pool is uniform and there is no conditioning cost; at
+  `ε = 0` it is fully conditioned.
+
+**So the conditioning cost scales as `(1−ε)·C(1−β′)` — `ε` *multiplies* it —
+which is exactly why `ε` is derivable against recruitment.** Choose `ε` such
+that `(1−ε)·C(1−β′)` stays under the recall budget §6 already sets: the same
+minimax shape as the rung. **My error was conflating a symmetric effect on
+time with a symmetric effect on composition; only the first is symmetric.**
+
+### 52.3 The secondary check lands on the retention decision, and inverts its frame
+
+The spec is explicit that each node picks two outbound edges **uniformly at
+random** and selects **fresh** relays each epoch. **Reputation-weighted
+selection is neither uniform nor fresh** — the same top-ranked peers persist
+across epochs. That is §12.11's measured ossification (2-of-12 at `ε = 0`),
+but the paper-level consequence is larger: **a graph that does not
+re-randomise is a static graph**, which is Sharma Appendix B's cheap-learning
+regime at roughly half the probe cost against our `q`.
+
+**And it composes with F-8 into a two-sided trade nobody had stated
+(mine).** F-8 says `forget`-on-close **resets reputation**, so the mechanism
+may never converge. This says that same reset is **what preserves per-epoch
+graph freshness**.
+
+> **So `forget`-on-close is simultaneously the convergence problem and the
+> freshness guarantee.** The retention decision is therefore **not** *"is
+> retention worth its forensic cost?"* but **"does the convergence retention
+> buys exceed the graph-freshness it spends?"* — both sides now named, and
+> the second is the first argument against retention that does not rest on
+> forensics.
+
+**This does not change §51.4's ordering but it changes its meaning.**
+Retention still comes first because it decouples §12.11 from p2p connection
+policy — but it is now a genuine **fork** with a priced cost on each branch,
+not a fix awaiting a forensic objection.
+
+### 52.4 Caveats, and the cheaper path to the number
+
+Theorem 3 bounds **recall, not precision**, on an approximately-`2η`-regular
+graph with **spies uniformly placed** — the placement assumption already
+flagged as optimistic. **`C` is unspecified in what was read**, so the mapping
+gives *the shape of the cost and the derivation path, not a number.*
+
+**A cheaper route to that number than reading the paper (mine):**
+[`epsilon_greedy_pure_preference_ossifies_to_two_peers`](../../rust/shekyl-relay-privacy/tests/propagation_measurement/selection.rs)
+already sweeps `ε → distinct peers exercised` at pool 12, `STEMS = 2`. **That
+is the conditioned pool collapsing — plausibly the empirical form of the very
+term Theorem 3 prices, measured on *our* parameters rather than the paper's.**
+If pool-collapse can be mapped to recall degradation, `C` may be pinnable
+from an instrument that already runs, which is materially cheaper than
+re-deriving it. **Worth checking first; the mapping from collapse to recall
+is the part that needs care and is not assumed here.**
+
+**Status: §12.11 should not be built without answering this.** The structural
+match is exact on every leg verifiable here; only the paper leg is
+ungrounded, and it is ungrounded in a direction that makes the mechanism
+*worse*, not better.
