@@ -235,12 +235,22 @@ fn fluff_delay_draws_match_their_claimed_means() {
 /// words, say — survives rejection and skews the residues. `BiasedRng` is
 /// the wrong control here; the landed pair are the wrong-band grade and the
 /// wrong-family grade.
+/// Shared setup for the three cadence-jitter grades: the inherited cadence,
+/// its deterministic offset (min delay, ms), the jitter band top (ms), and the
+/// seeded RNG every cadence grade draws from — one place, so the three tests
+/// cannot drift onto different bands or seeds.
+fn cadence_jitter_setup() -> (NoiseCadence, u64, u64, SplitMix64) {
+    (
+        NoiseCadence::inherited(),
+        u64::from(inherited::NOISE_MIN_DELAY_SECS) * 1_000,
+        u64::from(inherited::NOISE_DELAY_JITTER_SECS) * 1_000,
+        SplitMix64::new(0x0157),
+    )
+}
+
 #[test]
 fn noise_cadence_jitter_is_uniform() {
-    let c = NoiseCadence::inherited();
-    let min_ms = u64::from(inherited::NOISE_MIN_DELAY_SECS) * 1_000;
-    let max = u64::from(inherited::NOISE_DELAY_JITTER_SECS) * 1_000;
-    let mut rng = SplitMix64::new(0x0157);
+    let (c, min_ms, max, mut rng) = cadence_jitter_setup();
     // `next_send(from)` = from + min_delay + jitter; subtracting the
     // deterministic part leaves the jitter draw itself, on [0, max].
     let samples: Vec<u64> = (0..N).map(|_| c.next_send(0, &mut rng) - min_ms).collect();
@@ -267,11 +277,8 @@ fn noise_cadence_grade_rejects_a_wrong_band() {
     //
     // Band sensitivity is HALF the instrument's job; the wrong-family
     // control below is the other half.
-    let c = NoiseCadence::inherited();
-    let min_ms = u64::from(inherited::NOISE_MIN_DELAY_SECS) * 1_000;
-    let max = u64::from(inherited::NOISE_DELAY_JITTER_SECS) * 1_000;
+    let (c, min_ms, max, mut rng) = cadence_jitter_setup();
     let wrong = max + max / 5;
-    let mut rng = SplitMix64::new(0x0157);
     let samples: Vec<u64> = (0..N).map(|_| c.next_send(0, &mut rng) - min_ms).collect();
     let g = grade_uniform(&samples, wrong, 50);
     assert!(
@@ -295,10 +302,7 @@ fn noise_cadence_grade_rejects_right_support_wrong_family() {
     // every ingredient is a real `next_send` draw. The grade must see the
     // density skew, or the positive test above is a support pin wearing a
     // distribution oracle's name.
-    let c = NoiseCadence::inherited();
-    let min_ms = u64::from(inherited::NOISE_MIN_DELAY_SECS) * 1_000;
-    let max = u64::from(inherited::NOISE_DELAY_JITTER_SECS) * 1_000;
-    let mut rng = SplitMix64::new(0x0157);
+    let (c, min_ms, max, mut rng) = cadence_jitter_setup();
     let samples: Vec<u64> = (0..N)
         .map(|_| {
             let a = c.next_send(0, &mut rng);
@@ -309,7 +313,9 @@ fn noise_cadence_grade_rejects_right_support_wrong_family() {
     let g = grade_uniform(&samples, max, 50);
     assert!(
         !g.passed,
-        "min-of-two production draws (right support, wrong family — the CV-3          resampling shape) passed the uniform grade with statistic {:.2}          (critical {:.2}) — the instrument is band-only",
+        "min-of-two production draws (right support, wrong family — the CV-3 \
+         resampling shape) passed the uniform grade with statistic {:.2} \
+         (critical {:.2}) — the instrument is band-only",
         g.statistic, g.critical
     );
 }
