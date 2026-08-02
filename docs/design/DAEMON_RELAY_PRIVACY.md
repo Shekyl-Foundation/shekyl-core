@@ -8352,7 +8352,7 @@ re-baselined, and §14 restated. Configuration C's embargo is now provisioned
 from the fluff rule it actually uses.
 
 **Leaves, unchanged in order:** mean outbound connection lifetime (F-8's
-convergence check — independent, cheapest); the tx-hash plumbing (§39.6's
+convergence check — independent, cheapest); the tx-hash plumbing (F-8's
 element-type constraint); the reverse-parity readouts — **now unblocked**,
 since §26.3 required them to run against `F′` rather than the stale baseline;
 and Unit 2 with its substrate.
@@ -8380,7 +8380,9 @@ latency, not privacy — true *because 3250 bounded them*. A zone below the
 measured range is not bounded by it, so the reasoning does not extend.
 
 **No `T`.** A configuration-range gap, not an adversary — the same class as
-F-8's convergence condition.
+F-8's convergence condition. (F-8 is StemWatch's `forget`-granularity
+finding; it is cited here ahead of its section, which lands in the StemWatch
+PR stacked on this one.)
 
 ### 45.2 The fix — unrepresentable, with one owner
 
@@ -8461,7 +8463,7 @@ structural facts — `relay_category::legacy` excluding stem
 ([`blockchain_db.h:117`](../../src/blockchain_db/blockchain_db.h#L117)) and
 `add_tx` taking no peer
 ([`tx_pool.cpp:376`](../../src/cryptonote_core/tx_pool.cpp#L376)) — say the
-**incoming path drops identity, exactly as it dropped the hash (§48)**. Third
+**incoming path drops identity, exactly as it dropped the hash**. Third
 instance of one shape. So the peer discriminator needs a signature change
 *through the incoming path*, not a comparison at the decision site.
 
@@ -8615,7 +8617,8 @@ whatever the anti-eclipse posture permits.
 
 **No measurement session.** Four items, all ours to derive:
 
-1. **The retention / durable-peer-key seam decision** (§39.4) — first,
+1. **The retention / durable-peer-key seam decision** (F-8's seam
+   question) — first,
    because it determines whether (2) needs answering at all.
 2. **F-8's design form** — what lifetime §12.11 requires against what
    anti-eclipse permits.
@@ -8662,8 +8665,8 @@ nodes are excluded.
 
 **And `β′` is worse than their `β` on three counts this document already
 established** (all verified here, none paper-dependent): warm-up ≈ **25 h** at
-`obs ≈ 0.07`/epoch (§34.5); **F-8's `forget` resets it at every disconnect**
-(§39.2); and the **~12 % ambient failure rate false-cools honest peers** off
+`obs ≈ 0.07`/epoch (§34.5); **F-8's `forget` resets it at every
+disconnect**; and the **~12 % ambient failure rate false-cools honest peers** off
 the ladder's low rungs (§36.1, §37.1). **Their `β` only grows with deployment.
 Ours is depressed by the mechanism's own dynamics, permanently.**
 
