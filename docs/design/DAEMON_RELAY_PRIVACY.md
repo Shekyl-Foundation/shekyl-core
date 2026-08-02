@@ -2533,6 +2533,16 @@ observer buy lunch and carry freight.
 
 ### 12.11 The selection mechanism — epsilon-greedy over the embargo signal (exploit / explore / cool-down)
 
+> **⚠ SUPERSEDED IN PART, 2026-08-02 (§§52–54).** The **Exploit** tier is D++
+> §4.5 *version-checking*, which the paper tests and **rejects** (*"Lesson.
+> Use no-version-checking to construct the graph"*) — at low `β` it
+> *"actually increases the likelihood of getting deanonymized."* **Explore**
+> (uniform random) is the endorsed form and **Excluded** is eviction, not
+> selection preference, so both survive. **Read this section as specifying
+> uniform random draw over the non-cooled admissible set**: reputation gates
+> admission, never orders the draw. `ε` disappears; the ossification finding
+> below is moot rather than mitigated.
+
 §12.10 said "admit on demonstrated propagation, evict on demonstrated dropping."
 This section specifies *what the signal is* and *how selection reads it*, and every
 piece lands on a mechanism already built or fifty years old — no new oracle, no new
@@ -9350,3 +9360,101 @@ epoch length, which are frozen.**
 > it constrains a frozen parameter.** Worth applying as a sweep rather than
 > kept as a property of this one item — the freeze surface is larger than the
 > list of frozen constants.
+
+## 54. The lesson deletes one tier, not the mechanism — uniform draw over an admissible set
+
+**2026-08-02.** §53.3's lesson (*"use no-version-checking"*) reads as fatal to
+§12.11 only if the mechanism is one thing. **It is three, and the lesson cuts
+exactly one.** Checked against §12.11's *current* text, not a summary of it.
+
+### 54.1 The three tiers, verified, and where the lesson lands
+
+§12.11's table, as it stands:
+
+| tier | pool | rule | maps to |
+| --- | --- | --- | --- |
+| **Exploit** (majority of slots) | eligible peers | **prefer embargo-disarm rate** | **version-checking — REJECTED** (§53.3) |
+| **Explore** (`ε ≈ 0.05`) | eligible-but-non-top | **uniform random** | **no-version-checking — ENDORSED** |
+| **Excluded** | cooled-down | not eligible for either | **not selection preference at all — eviction** |
+
+**Exclusion is not a ranking.** It is what discipline #16 says reputation is
+for: **a floor, not a ceiling.** So the derivable design is:
+
+> **Uniform random selection over the non-cooled admissible set. Reputation
+> gates admission; it never orders the draw.**
+
+That satisfies §4.5's lesson, satisfies #16 in its stated form, and **keeps
+the entire black-hole defence** — a dropper is still cooled out, it just never
+gets *preferred in*.
+
+### 54.2 The disanalogy is real and does not rescue the exploit tier
+
+Version support is **self-declared and free**; reputation is **earned through
+observed relay work** — §12.10's conscription argument, and it means the
+adversary pays something to carry our attribute.
+
+**It does not rescue the design.** Per §34, the work is relay work the
+adversary **wants to do anyway**, since forwarding correctly is what buys slot
+occupancy: it pays in a currency it is spending regardless. **And the
+depressants are the decisive half — D++'s `β` is depressed by *adoption*,
+which resolves as the network matures; ours is depressed by *mechanism
+dynamics* (warm-up, disconnect reset, false cooling), which never resolve.**
+
+*(Conscription survives the cut, in the floor form: to stay in the pool a peer
+must forward correctly. Conscription by threat of exclusion rather than reward
+of preference — which is the same lever, correctly signed.)*
+
+### 54.3 What collapses
+
+- **`ε` disappears as a parameter.** No exploit/explore mixture to tune. **The
+  derivation §53.4 was about to demand is not needed** — better than having
+  one.
+- **Epoch freshness is restored**, so the Sharma-App-B static-graph concern
+  and §52.3's retention objection largely go with it. **Retention now affects
+  only who is *admissible*, never who is *preferred*** — a far smaller
+  footprint on the anonymity graph.
+- **§12.11's ossification finding (2-of-12) is moot rather than mitigated** —
+  there is no ranking to collapse.
+- **Remaining parameters are already on derivation paths**: the `(n_min, cut)`
+  rung by minimax against yield (§37.2), and cooldown by
+  `false_rate × (cooldown/interval)` under part C's eclipse bound (§35.2).
+
+### 54.4 Three consequences the cut produces that were not stated
+
+**(a) F-8 softens from *inert* to *degraded*.** Warm-up gated *two* consumers:
+preference and exclusion. Deleting preference leaves only exclusion — so a
+long warm-up no longer means *"no tally reaches `n_min`, the mechanism never
+engages"*; it means **droppers are cooled more slowly.** Graceful degradation
+against a real cost, not a cliff. **And the failure mode of the reputation
+layer is now uniform selection — which is what the paper recommends.**
+
+**(b) The explore slot was itself a side channel, and the cut deletes it.**
+§12.11 owes *"memoryless explore timing… otherwise the explore-slot is a
+timing fingerprint."* **Under a uniform draw there is no distinguished slot to
+fingerprint** — every draw is the same kind of draw. That is CV-4's
+payload-blindness lesson one level up: **a schedule that treats some draws
+differently is a discriminator**, and the safest version of that rule is not
+to have two kinds of draw.
+
+**(c) A third independent argument against raising `STEMS`.** With `d` pinned
+as *total* degree (§54.5), `STEMS = 2` is `d = 4`; raising it moves to `d = 6`
+or `8`, which per Figure 3 **helps only in the known-graph regime**. Uniform
+draw over a slowly-changing admissible set keeps us **nearer the
+unknown-graph regime, where higher `d` is *worse***. That converges with
+§32.3's corrected camouflage-thinning form by a second, independent route.
+
+### 54.5 Second symbol collision, pinned alongside the first
+
+Verified verbatim: *"line graphs (for `d = 2`) have the worst (highest)
+expected precision"*, and Theorem 1 is stated on a *"random 4-regular graph."*
+
+> **The paper's `d` is TOTAL degree, not out-degree.** D++'s choice is `d = 4`
+> with `η = 2` outbound — so **our `STEMS = 2` is `d = 4`**, and a `STEMS`
+> raise is a move to `d = 6`/`d = 8`. Pinned beside §53.2's `f` collision
+> (paper `f` = fraction supporting D++, ours = adversary reach).
+
+**Figure 3's two paragraphs are both correct and are different claims**: the
+known-vs-unknown *precision gain* comparison (0.12 on lines vs 0.06 on
+4-regular at `p = 0.15`), and immediately after, the *degree trend* — unknown
+graph, precision worsens as `d` rises; known graph, *"the performance trend
+reverses"* and precision decreases monotonically as `d` rises.
