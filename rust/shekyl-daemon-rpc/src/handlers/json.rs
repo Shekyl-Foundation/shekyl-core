@@ -203,6 +203,37 @@ json_handler!(pop_blocks, "/pop_blocks");
 /// the consumer of this endpoint is a human tuning `n_min`, `cut` and
 /// `cooldown`, and a rate would pick the accumulator's memory policy for
 /// them.
+///
+/// # The gate is positional and NOT asserted by any test
+///
+/// Registration inside `build_router`'s `if !restricted` block is the whole
+/// enforcement. **Stated here rather than filed away, because this endpoint
+/// is the one thing in its PR that touches live surface — an owed test that
+/// goes quiet is how the gate ends up unguarded.**
+///
+/// **The test must have both arms, and each is the other's control:**
+///
+/// - *restricted ⇒ 404* passes for a route that never existed, a typo, or a
+///   wrong method. Alone it asserts nothing.
+/// - *unrestricted ⇒ not-404* proves the path is spelled right and reachable,
+///   which is what makes the 404 mean **gated** rather than **absent**.
+///
+/// Only the pair is self-witnessing. A single negative arm is §50.3's failure
+/// mode: unchanged is the default state of everything that did not happen.
+///
+/// **Why not a unit test.** `AppState` needs a `CoreRpc`, whose `Drop`
+/// references `core_rpc_ffi_destroy`, and Cargo never links the C++ side —
+/// those symbols resolve when CMake links the Rust staticlib into `shekyld`.
+/// Stubbing them means ~18 `#[no_mangle]` definitions across two FFI families,
+/// each an **ABI assertion the compiler cannot check**: a wrong signature is
+/// silent UB. That trades a known gap for an unknown one, which is a bad
+/// trade at any price.
+///
+/// **The path that works.** `shekyl_daemon_rpc_start` takes `restricted`
+/// directly, so a C++ test can start the listener twice on ephemeral ports
+/// and probe each. It rejects a null `rpc_server_ptr`, so it needs a real
+/// `core_rpc_server*` — a fixture no current test builds, and the only reason
+/// this is owed rather than done.
 pub async fn get_stem_tallies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let core = state.core.clone();
     match tokio::task::spawn_blocking(move || core.stem_tallies())
