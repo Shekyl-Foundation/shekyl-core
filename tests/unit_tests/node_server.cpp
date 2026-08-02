@@ -1269,3 +1269,48 @@ TEST(node_server, race_condition)
 
 namespace nodetool { template class node_server<cryptonote::t_cryptonote_protocol_handler<test_core>>; }
 namespace cryptonote { template class t_cryptonote_protocol_handler<test_core>; }
+
+TEST(node_server, tx_proxy_outbound_floor_refuses_underprovisioned_counts)
+{
+  // F-8b: the relay embargo constant (`fluff_return_ms`) is derived from a
+  // fluff first-passage measured at outbound degree 12. A `--tx-proxy` count
+  // below that floor puts the zone's real first passage above the provisioned
+  // value — the embargo would be under-provisioned in the privacy-losing
+  // direction — so the parser must refuse it at startup, not warn and run.
+  const auto parse = [](const char* proxy_arg) {
+    boost::program_options::variables_map vm;
+    boost::program_options::store(
+      boost::program_options::command_line_parser({"--tx-proxy", proxy_arg})
+        .options([]{
+          boost::program_options::options_description options_description{};
+          Server::init_options(options_description);
+          return options_description;
+        }())
+        .run(),
+      vm
+    );
+    return nodetool::get_proxies(vm);
+  };
+
+  const std::int64_t floor_value = shekyl_relay_zone_min_provisioned_out_peers();
+  ASSERT_EQ(12, floor_value) << "the floor must match the degree fluff_return_ms was measured at";
+
+  // Below the floor: refused, and refused because of the floor (1..=11 all
+  // land in the guarded range; 4 is the motivating operator practice).
+  EXPECT_FALSE(parse("tor,127.0.0.1:9050,4").has_value())
+    << "an under-floor outbound count must refuse to parse";
+  EXPECT_FALSE(parse("tor,127.0.0.1:9050,11").has_value())
+    << "one below the floor must still refuse";
+
+  // At the floor and above: accepted, with the count preserved.
+  const auto at_floor = parse("tor,127.0.0.1:9050,12");
+  ASSERT_TRUE(at_floor.has_value()) << "the floor itself is a valid count";
+  ASSERT_EQ(1u, at_floor->size());
+  EXPECT_EQ(12, at_floor->front().max_connections);
+
+  // Omitted count: the default (-1 -> P2P_DEFAULT_CONNECTIONS_COUNT) is above
+  // the floor by construction and must keep parsing.
+  const auto omitted = parse("tor,127.0.0.1:9050");
+  ASSERT_TRUE(omitted.has_value());
+  EXPECT_EQ(-1, omitted->front().max_connections);
+}
