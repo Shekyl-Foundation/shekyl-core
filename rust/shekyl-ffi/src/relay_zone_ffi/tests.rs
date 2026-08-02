@@ -743,7 +743,11 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         hashes[32] = 0xB2;
         shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 2, id(9).as_ptr(), std::ptr::null(), 0);
         assert_eq!(
-            (*h).driver.zone().stem_observations_in_flight(),
+            h.as_ref()
+                .expect("live zone")
+                .driver
+                .zone()
+                .stem_observations_in_flight(),
             2,
             "both packed ids armed against the successor"
         );
@@ -756,7 +760,9 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
             "F-10: an echo from the charged successor resolves nothing"
         );
         shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(3).as_ptr());
-        let t = (*h)
+        let t = h
+            .as_ref()
+            .expect("live zone")
             .driver
             .zone()
             .stem_tally(&stem_map_id(9))
@@ -775,7 +781,9 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
             rec_unbind,
             rec_covert,
         );
-        let t = (*h)
+        let t = h
+            .as_ref()
+            .expect("live zone")
             .driver
             .zone()
             .stem_tally(&stem_map_id(9))
