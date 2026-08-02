@@ -69,17 +69,19 @@ namespace nodetool
 {
   struct proxy
   {
+    // There is deliberately no covert/"noise" flag here. The configuration-B
+    // deletion removed the channel from configuration entirely; the rationale
+    // lives at the `disable_noise` compatibility shim in net_node.cpp and in
+    // docs/design/DAEMON_RELAY_PRIVACY.md §§25, 29-31, 41.
     proxy()
       : max_connections(-1),
         address(),
-        zone(epee::net_utils::zone::invalid),
-        noise(true)
+        zone(epee::net_utils::zone::invalid)
     {}
 
     std::int64_t max_connections;
     net::socks::endpoint address;
     epee::net_utils::zone zone;
-    bool noise;
   };
 
   struct anonymous_inbound

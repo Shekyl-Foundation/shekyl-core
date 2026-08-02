@@ -1,9 +1,35 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
+**Goal statement (§31, 2026-07-31): NON-ENUMERABILITY.** Dandelion Theorem 2
+floors any policy at `D_OPT ≥ p²`, `R_OPT ≥ p`, so *invisibility against the
+peer adversary was never reachable* — the available residual is that **the
+adversary may hold observations it cannot turn into a list**. Criteria are
+written against §6.8's joint `L × labelable × linkable` over a stated horizon,
+not per-observation precision; the goal **borrows from FCMP++'s linkability
+gate**, which is therefore a reopening trigger for this document (§31.6).
+
 **Status:** ROUND 3 dispositioned — clean break; the RP-1…RP-3b port arc is
 **structurally complete** (§20.10), and the mechanism's definition of done is
-scored at **2/7 parameters derived** (§21 — the live ledger the remaining
-rounds tick). The measurement that motivates this document landed alongside it
+scored at **2/8 parameters derived** (§21 — the live ledger the remaining
+rounds tick; denominator widened by the Q-11 Unit 0 census, §22). Q-11 is in
+flight — Unit 0 (feasible-region census, §22) and Unit 1 (adversary and
+capability, §23) landed, with Unit 1's review producing **F-6: the covert
+path has no black-hole backstop** (§24.1 — the derived embargo arms only on
+`dandelionpp_stem`, which the noise zone's stem→local demotion clears, so the
+privacy-maximal path carries *weaker* censorship resistance than clearnet) and
+reframing Unit 2's target as an **active prober** (§24.2). **F-6 is CLOSED in
+its shipped form as of 2026-08-01 — configuration B is deleted (§41), covert
+channels default off, and no deployed configuration reaches the origin oracle.
+F-7 is now the top item, because C is the only anonymity configuration and its
+embargo is provisioned from the defective `F`.** Historical form: **Read F-6 at
+§25.1: `proxy.noise` defaults true, so the DEFAULT Tor
+deployment (configuration B) runs neither Dandelion++ nor the embargo** — the
+arc's entire output is bypassed on the deployment a privacy-motivated user
+selects, and two live §6 claims are false there. That outranks the cadence
+work — as does **F-7** (§26) — **CLOSED 2026-08-01, §44: `fluff_return_ms = 3250` landed with the re-derived 190 s embargo and the measured set re-recorded**; Corollary 5.1 puts configuration B's ranking on a literature footing (§28.5): `F = 2250` was an undirected/`EveryPeer`
+measurement fed to the embargo derivation for *every* transport, so
+configuration C's embargo is under-provisioned in the direction the policy
+itself calls a privacy loss. **Q-12 is registered and live** (§22.2). The measurement that motivates this document landed alongside it
 in the same PR (`rust/shekyl-relay-privacy`, 19 measurement tests + the
 suite), so every number below is reproducible rather than asserted. **Round 3 outcome:** reshape is adopted unconditionally as a strict
 priority-order improvement (§14); the embargo derivation is held block-time-*unaware*
@@ -12,11 +38,15 @@ by construction, with the block-time boundary reconciled at the integration laye
 *underspecified*, blocked on Q-10 — the outbound-selection eclipse bound `g_max`**,
 which is a **p2p-subsystem** grounding (anchors, white/gray discipline, IP-group
 diversity, churn resistance), not a relay-timing one (§7, §13.5). The seal is in the
-open where the p2p round owns it. **Scope boundary (§6.9, settled):** this mechanism
+open where the p2p round owns it. **Scope boundary (§6.9 — PENDING, not settled: §31.5 opened a counter-hypothesis that the concession may be about *identification* rather than *enumeration*, and §32.2 shows the check is blocked on Q-10):** this mechanism
 defends the *active* adversary (must misbehave or actively position); the *passive,
 correctly-behaving* observer is explicitly **not defended** — a known limitation
-shared with Dandelion++ and Tor, closable only by p2p redesign (mixnet / cover
-traffic / cryptographic sender-anonymity), deliberately out of scope. §6.10 records
+shared with Dandelion++ and Tor. **Closable only by p2p redesign (mixnet /
+cryptographic sender-anonymity) — NOT by cover traffic**, which an earlier
+version of this line listed: cover traffic denies the *wire* observer's count
+and does nothing against the *peer* first-successor, and treating it as a
+closer here is precisely the substitution §29 and §31 refuted. Deliberately out
+of scope. §6.10 records
 the one thing that reaches it: an *economic* deterrent (behaviour-floor + pinning
 taxes the observer into being infrastructure, un-budgetable for most covert
 institutional adversaries) — effective-population, not theoretical; economics, not
@@ -581,7 +611,7 @@ The relay-privacy adversary is a **P2P-network-layer observer of the origin
 daemon's peer traffic** — a peer, a set of sybil peers, or a passive network
 observer — reached only through the P2P interface, never the RPC one. Its
 visibility of a node's *fluff* is gated by transport, at
-[`levin_notify.cpp:448-449`](../../src/cryptonote_protocol/levin_notify.cpp#L448-L449):
+[`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/zone/mod.rs#L521-L526):
 
 ```text
 // When i2p/tor, only fluff to outbound connections
@@ -596,7 +626,7 @@ if (source != id && (zone->nzone == public_ || !context.m_is_income))
   `!context.m_is_income`: fluff goes to **outbound connections only**. A spy
   cannot receive a node's fluff by connecting *in*. Reinforced by the noise/Tor
   path, which *"only send[s] to outgoing connections"*
-  ([`levin_notify.cpp:831-832`](../../src/cryptonote_protocol/levin_notify.cpp#L831-L832)).
+  ([`levin_notify.cpp:1054-1058`](../../src/cryptonote_protocol/levin_notify.cpp#L1054-L1058)).
 
 **This makes an entire adversary class transport-conditional, not universal**
 (§10.8): the passive inbound-spy observable is real on clearnet and structurally
@@ -654,7 +684,7 @@ The delta is stark and structural: a clearnet supernode observes **every** fluff
 and attributes the source with the paper's first-spy precision (rising with its
 reach to ~0.45 at a 30 % attack); the same supernode over Tor observes
 **nothing**, because fluff never traverses its inbound edges
-([`levin_notify.cpp:448`](../../src/cryptonote_protocol/levin_notify.cpp#L448)).
+([`zone/mod.rs:521`](../../rust/shekyl-relay/src/zone/mod.rs#L521)).
 That collapse is the measured additional security of the Tor configuration.
 
 **Honest scope of the Tor benefit.** It collapses the *passive*
@@ -679,8 +709,13 @@ Measured (supernode reach φ = 0.10,
 
 | embargo mean | transport | leak rate | origin share of leaks |
 | --- | --- | --- | --- |
+> **Re-measured 2026-08-01 at the F-7-corrected pair (`F′ = 3250`, embargo
+> 190 s), §44:** the adopted row is now **190 s → 1.08 % / 0.20** (the 144 s
+> row at `F′` reads 1.49 %). The derivation's embargo lengthening holds this
+> channel at its designed level across the `F` correction.
+
 | 31 s (pre-correction) | clearnet | 0.0465 | 0.21 |
-| 144 s (adopted) | clearnet | 0.0114 | 0.20 |
+| 144 s (adopted **until F-7**; now 190 s, see banner) | clearnet | 0.0114 | 0.20 |
 | 300 s | clearnet | 0.0056 | 0.20 |
 | 500 s | clearnet | 0.0032 | 0.20 |
 | *any* | **Tor/I2P** | **0.0000** | — |
@@ -755,6 +790,12 @@ leak = P(preempt)  ×  neighbour(supernode reach)  ×  origin-attribution
 **Measured, worst case** (`origin_exposure_meets_target_via_reshape_not_embargo`,
 a *whole-prefix* supernode — the upper bound, not the independent-neighbour lower
 reading of §6.6):
+
+> **Re-measured 2026-08-01 at the F-7-corrected pair (§44):** adopted row is
+> now **190 s / `F′ = 3250` → 2.23 %** (compensation: the derived embargo
+> lengthening cancels the larger `F`); reshape 1 retry → **0.027 %**, still an
+> order under target; embargo-only path now needs **~1500 s** (p90 recovery
+> ~3450 s) — the inefficient lever got *worse*, strengthening the conclusion.
 
 | lever setting | worst-case origin exposure | note |
 | --- | --- | --- |
@@ -899,8 +940,15 @@ selection / anti-eclipse layer (Q-10, `g_max`), which is **bounded, specified p2
 work with a named deliverable — a design round, not a redesign**.
 
 **Out of scope — the passive, rule-following observer**, and everything downstream
-of trying to defeat it. Three independent arguments confirm no mechanism in this
-class reaches it:
+of trying to defeat it. *(Carve-out, 2026-07-31 — §22.3: "observer" here means
+the passive **peer** — a protocol-following participant, which is what every
+argument below is about. The passive **wire** observer — the ISP/on-path
+adversary who is not a peer at all — is a different channel with a different
+mechanism: the covert/noise channels exist for it, their charter is §20.9, and
+their constants are Q-11's subject. This section's boundary does not scope
+that mechanism out; reading the banner broadly would conclude the noise
+channels defend nothing, which is false.)* Three independent arguments confirm
+no mechanism in this class reaches the passive peer:
 
 - **Topological.** The origin's first stem successor, if it is an observer,
   attributes the origin with precision `≈ f` (`Precision(C1)`, §13) — set on the
@@ -1682,7 +1730,7 @@ structurally — not by simulation.** The candidate was a passive out-neighbour:
 spy that receives a prefix node's *forced fluff* by neighbouring it, whose leak
 (unlike the black-hole's) would *scale down* with the embargo mean and so reopen
 `ε` as a live lever. Whether that observable exists is decided entirely by who a
-fluff reaches, and [`levin_notify.cpp:448-449`](../../src/cryptonote_protocol/levin_notify.cpp#L448-L449)
+fluff reaches, and [`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/zone/mod.rs#L521-L526)
 settles it (§6.3): on the public zone fluff reaches inbound peers, so an
 inbound sybil *does* see it — the observable is **real on clearnet**; on I2P/Tor
 fluff is outbound-only, so an inbound sybil sees nothing — the observable is
@@ -1914,7 +1962,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 - **Coupling note — the outbound structure read on two channels (net, don't
   double-count).** Two *distinct* source facts both flow from the origin's use of
   outbound connections: fluff is outbound-only on Tor
-  ([levin_notify.cpp:448](../../src/cryptonote_protocol/levin_notify.cpp#L448)),
+  ([zone/mod.rs:521](../../rust/shekyl-relay/src/zone/mod.rs#L521)),
   which makes the inbound passive supernode structurally absent (§6.3, reshape's
   *friend*); and the stem pool is the outbound set
   (dandelionpp.cpp:103,
@@ -2077,13 +2125,24 @@ below carries a **verify-at-source obligation** (the paper itself, then this
 tree) before any number derived from it gates a decision. They are inputs to
 the Q-10 `g_max` calibration, not conclusions of this document:
 
-1. **The Sharma numbers are optimistic for Shekyl in three directions**, so
+1. **The Sharma numbers are optimistic for Shekyl in two directions**, so
    using them as a `g_max` floor without adjustment would over-credit the
    adversary's difficulty: they analyze the **spec, not an implementation**;
-   they model **no per-source pinning** (their Appendix A.1 states this
-   explicitly — verify); and their parameters differ where it matters —
-   `pf = 0.9` against Shekyl's 0.8, and **random rather than
-   occupancy-optimizing placement** for the adversary.
+   and their parameters differ where it matters — `pf = 0.9` against Shekyl's
+   0.8, and **random rather than occupancy-optimizing placement** for the
+   adversary.
+
+   **Corrected 2026-07-31 (§27.6) — the third direction was two claims with
+   OPPOSITE signs collapsed into one, and only the optimistic half was
+   recorded.** Split: (i) Sharma models forwarding as **i.i.d. among two
+   successors** rather than one-to-one, and by Dandelion++ Theorem 2 that is
+   the *worse* scheme — Θ(p) against pinning's Θ(p² log(1/p)) — so modelling
+   it makes Sharma **pessimistic** here; (ii) Sharma notes an adversary who
+   **knows** the mapping does better, which is adversary *knowledge* and makes
+   Sharma **optimistic**. *Protocol-pins-or-not* and
+   *adversary-knows-the-pin-map* are different variables pointing opposite
+   ways. **Net sign is unclear; do not cite this item again before the split
+   is priced.**
 2. **The paper's flat N-scaling line holds `C = 0.01·N`** — the adversary
    grows proportionally with the network — so the flat line measures
    *"anonymity does not grow against an adversary that grows with you"*, not
@@ -2239,7 +2298,7 @@ mechanism* of §12.9, under which the broadcast disappears as a consequence.
 *Reconciliation with §6.5/§6.6 (verified at source; those sections are already
 pushed):* they model the **fluff phase's** inbound observability — the
 *channel-observer* axis — transport-gated at
-[levin_notify.cpp:448](../../src/cryptonote_protocol/levin_notify.cpp#L448)
+[zone/mod.rs:521](../../rust/shekyl-relay/src/zone/mod.rs#L521)
 (`fluff_notify` runs per-zone; on Tor it fluffs outbound-only). That is a *different
 phase and a different axis* from stem occupancy, so §6.5's "Tor collapses the
 inbound supernode" is correct **for the channel-observer axis** and must not be read
@@ -2473,6 +2532,16 @@ Select toward demonstrated work; pin the workers; evict the droppers; let the
 observer buy lunch and carry freight.
 
 ### 12.11 The selection mechanism — epsilon-greedy over the embargo signal (exploit / explore / cool-down)
+
+> **⚠ SUPERSEDED IN PART, 2026-08-02 (§§52–54).** The **Exploit** tier is D++
+> §4.5 *version-checking*, which the paper tests and **rejects** (*"Lesson.
+> Use no-version-checking to construct the graph"*) — at low `β` it
+> *"actually increases the likelihood of getting deanonymized."* **Explore**
+> (uniform random) is the endorsed form and **Excluded** is eviction, not
+> selection preference, so both survive. **Read this section as specifying
+> uniform random draw over the non-cooled admissible set**: reputation gates
+> admission, never orders the draw. `ε` disappears; the ossification finding
+> below is moot rather than mitigated.
 
 §12.10 said "admit on demonstrated propagation, evict on demonstrated dropping."
 This section specifies *what the signal is* and *how selection reads it*, and every
@@ -2820,6 +2889,16 @@ both-slots-adversarial fallback where the fluff is genuine last-resort availabil
 ---
 
 ## 14. Reframe — fluff-on-expiry spends privacy for performance (Round 3)
+
+> **Restated 2026-08-01 under F-7 (§44) — conclusion unchanged and
+> STRENGTHENED.** The comparison's numbers move (adopted embargo 144 → 190 s;
+> worst-case p90 recovery 331 → ~437 s; embargo-only path to target 1050 →
+> **~1500 s**), and every move widens the gap the argument rests on: the
+> embargo-only lever is further from viable, reshape still meets the target
+> with an order of magnitude to spare (0.027 %), and its cost is unchanged.
+> The "0 s" that appeared during the F′ landing was a **test sentinel
+> artifact** — the ladder never reached the target and reported the
+> never-fired sentinel as a solution (§44.1).
 
 Stepping back from the `ρ` exercise (§13): the question "how much amplification
 do we tolerate" prices a mechanism as if it were load-bearing. It is not. When
@@ -3367,7 +3446,8 @@ the same `OsRng` the map FFI uses:
 `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE` constant are then **deleted**. The
 constant had **two** consumers at re-census: the daemon draw, and the wallet's
 `EMBARGO_AVERAGE * 3/2` failed-transfer wait (which un-spends reserved inputs
-on expiry). Leaving a stale 39 s next to a Rust-owned 144 s is exactly the ghost
+on expiry). Leaving a stale 39 s next to a Rust-owned 144 s (now 190 s after
+F-7, §44) is exactly the ghost
 this round exists to remove (rule 15: delete, don't deprecate).
 
 **Wallet wait is a quantile of the same table, not a multiple of the mean.** A
@@ -3377,14 +3457,16 @@ is a survival question on the embargo. The inherited `3/2 × mean` is only the
 fired so the blunt verdict was moot; once the backstop fires, a short deadline
 declares healthy transactions dead mid-recovery. The rate is policy:
 `PROPAGATION_FALSE_FAIL_ONE_IN = 100` (at most 1 in 100 embargoes still running).
-On the adopted table that is exactly **`ADOPTED_PROPAGATION_TIMEOUT_SECS = 664`**,
+On the adopted table that is exactly **`ADOPTED_PROPAGATION_TIMEOUT_SECS`**
+(**664** at RP-4's F = 2250; now **874** at the F-7-corrected F′ = 3250, §44),
 pinned by test at the crate and the FFI so the seconds cannot drift from the
 table (the F-1 class again if left as a loose bound).
 
 **This round has no unchanged-gtest oracle, and that is not an oversight.**
 RP-2a was a *faithful port*, so "the 6 gtests pass unchanged" was the correct
 proof. RP-4 is a deliberate **correction**: the behaviour changes on purpose
-(39 s Poisson → 144 s geometric), so an unchanged-behaviour oracle would be
+(39 s Poisson → 144 s geometric; 190 s after F-7, §44), so an
+unchanged-behaviour oracle would be
 proving the wrong thing. The proof burden moves to the crate — the derivation
 tests, the analytic-vs-simulator cross-check, and the golden vector already pin
 the new distribution — plus the C++-side obligation that nothing *else* regresses.
@@ -3394,7 +3476,8 @@ the new distribution — plus the C++-side obligation that nothing *else* regres
 STEMS=2 established the treatment: a load-bearing constant carries its derivation
 **at every site it is reasoned about**, including a guard comment where a
 well-meaning contributor would actually edit. The 39 s is the case that proved
-why — an unrecorded reason is how it survived. RP-4 records the 144 s at three
+why — an unrecorded reason is how it survived. RP-4 records the derived value
+(144 s then; 190 s after F-7, §44) at three
 sites, matching:
 
 1. **§17 / §5** — the full derivation (already in the doc: F-3's exact solve,
@@ -3415,7 +3498,8 @@ sites, matching:
    the §15.4 reconciliation cannot rot.
 3. **The wallet propagation timeout is pinned**:
    `judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN)` equals
-   `ADOPTED_PROPAGATION_TIMEOUT_SECS` (664) at the crate and the FFI export — not
+   `ADOPTED_PROPAGATION_TIMEOUT_SECS` (664 then; 874 after F-7, §44) at the
+   crate and the FFI export — not
    a loose bound that can drift when the table or rate changes.
 4. No C++ test depends on the old 39 s value or the Poisson shape — verified, not
    assumed, during implementation; any that does is re-pinned to the derived value
@@ -4371,7 +4455,14 @@ distribution says is a privacy defect, and it is one that:
   pointed elsewhere; they are not, and the correction strengthens the point
   rather than weakening it: the machinery is already aimed at this draw and
   **still** cannot see the defect, because it grades the draw and the defect is
-  in the selection among draws;
+  in the selection among draws; *(amended 2026-07-31, §22.1 Q11-C: "aimed" was
+  itself an overstatement — the doc-comment named the cadence, but the test
+  invoking the grader sampled the conformance helper and production
+  `next_send` was never in the loop. The structural argument here survives
+  doubly strengthened: the instrument was blind to selection-among-draws AND
+  not wired to production. The wiring half was fixed at Unit 0; the
+  structural half is permanent, which is why CV-3's witness is an identity
+  assertion, not a grade.)*;
 - looks like correct behaviour under casual inspection, because each individual
   draw *is* from the right distribution.
 
@@ -5052,6 +5143,18 @@ attribution: a port that also re-derives its constants cannot attribute a
 behavioural change to either half. That is the same separation RP-3a kept between
 the faithful port and the F-4/F-5 correction, and it held.
 
+**Amended 2026-07-31 (Q-11 Unit 0, §22): the ledger above was incomplete and
+the constants were not free.** `CRYPTONOTE_NOISE_BYTES` and
+`CRYPTONOTE_NOISE_CHANNELS` join the list — the aggregate rate is bytes per
+interval, and this section named only the interval axis (§22.1, Q11-D). The
+`FORWARD_DELAY_*` pair *derived from* these constants until Unit 0 decoupled
+them (Q11-A), so the derivation this section charters could not previously
+have moved its own subject without rewriting a second mechanism's mean. And
+the triple sits on a compile-time capacity boundary at exact equality (Q11-B),
+whose family-surviving restatement is a §22.1 obligation the shape question
+inherits. The dependency order below stands — with a step zero before it,
+now discharged.
+
 **But "not in this round" is not "low priority", and the record should not read
 as though it were.** Three facts stack, and none of them is speculative:
 
@@ -5125,10 +5228,21 @@ measured into existence:
 1. **The adversary and its capability.** Passive timing observation only, or
    active probing? The relevant literature is the traffic-analysis
    cover-traffic lineage (**Loopix** and descendants), *not* Dandelion++ —
-   a different body of work with a different threat model.
+   a different body of work with a different threat model. **ANSWERED at Unit 1
+   (§23), from the source text:** T is the GPA restricted to the node's
+   Tor/I2P link; the property is Loopix's *sender online unobservability*; the
+   capability is **passive-only**, with the active (n−1) detector Loopix builds
+   from loop cover named as absent-by-scope rather than owed. The lineage's own
+   boundary is the confirmation — Loopix excludes Sybil, Dandelion++ excludes
+   the GPA: complementary, not competing.
 2. **The emission shape that defeats it.** Independence across channels,
    cadence family (uniform vs memoryless — F-2's exact question, one subsystem
-   over), aggregate-rate target. What the shape argument already gives:
+   over), aggregate-rate target. **Unit 2's subject; §23.5 carries four
+   grounded inputs into it** (the lineage's exponential-emission family and its
+   superposition argument; the mixing half that does *not* transfer; Q11-B's
+   capacity constraint becoming probabilistic under an unbounded family; and
+   the traffic-adaptive rate knob that must be re-derived against CV-4 before
+   any import). What the shape argument already gives:
    per-channel independence is *required*, not incidental — the mechanism
    witness (`covert_channels_emit_one_per_advance_not_synchronized`) pins it as
    soundness, and it survives whatever family the derivation picks.
@@ -5237,6 +5351,14 @@ and grading a distribution requires the target Q-11 has not yet derived.
 `grade_uniform` exists and is aimed; it waits for a derivation to grade
 against, and closing that is Q-11's first measurable deliverable.
 
+**Amended 2026-07-31 (§22.1, Q11-C): "aimed" overstated the state.** The
+grader's doc named the cadence, but the test invoking it sampled the
+conformance crate's own helper — production `next_send` was never in the
+loop, so "waits for a derivation" implied a re-target when a rebuild was
+owed. The rebuild landed at Q-11 Unit 0: the test now drives production, its
+controls ran and failed, and the gap is genuinely target-only from that
+commit forward.
+
 **Carry-forwards, unchanged by the close-out:** Q-11 next (mechanism question
 with constants attached, wire-observer adversary, dependency order per §20.9);
 the `force_fluff` force-flag same-disease pass (fluff assertions that may
@@ -5269,18 +5391,59 @@ is this ledger. Scored honestly:
 | --- | --- | --- |
 | embargo mean (144 s) | ✅ | the exact survival solve, RD-1/RD-4 corrections, `derive.rs` bisection with Monte-Carlo cross-check (§10) |
 | fluff delay family (memoryless) | ✅ | the residual-phase argument — memoryless is the family whose residual equals its full distribution (RD-2, D-3) |
-| `q = 0.2` (stem-continue) | ❌ | inherited; deferred at Q-3 / D-6 as not-demonstrably-wrong, never derived |
-| `STEMS = 2` | ❌ | inherited; §12.7's expander-minimum argument is a rationale, not a derivation from an adversary bound — and its fan-out leg now carries two recorded ungrounded premises (§12.7, 2026-07-30 note) |
-| noise cadence constants | ❌ | Q-11 — the arc's last unexamined timing numbers; adversary→shape→constants order set (§20.9), instrument built and aimed |
+| `q = 0.2` (stem-continue) | ❌ | **not "underived" — derived against the wrong objective, on a topology we do not run** (corrected 2026-07-31, §27.3): D++ §5.3.1 chose `q = 0.1`/`0.2` from a **4.5 s latency goal** at 300 ms/hop measured on EC2 **Bitcoin** nodes with the INV/GETDATA/TX exchange. Same disease as `FORWARD_DELAY` and the `MAX_FRAGMENTS` equality. Q-3 reopens against *our* budget and *our* relay semantics |
+| `STEMS = 2` | ❌ **(not yet derivable — needs a regime determination first, see the ledger arithmetic below)** | inherited; §12.7's expander-minimum argument is a rationale, not a derivation. **Question reframed 2026-07-31 (§27.5): the degree effect *reverses* on adversary graph knowledge** (D++ Fig. 3) and D++'s Theorems 1–2 are scoped to `d = 4` — so the question is not "does higher degree help" but **"does our anonymity graph stay unknown?"**, which Sharma's Appendix B prices as *no* at our parameters |
+| noise covert constants — `NOISE_MIN_DELAY`, `_DELAY_RANGE`, `_MIN_EPOCH`, `_BYTES`, `_CHANNELS` | ❌ | Q-11 — **derivation target relocated at Unit 1 review to the active prober** (§24.2: the passive-wire argument does not carry — under CV-4 the emission series is payload-blind under *any* family, so randomness must be justified by the phase-tag channel, not by the lineage); the row widened at Unit 0 (§22.1, Q11-D: rate has a bytes axis this ledger had omitted); the inherited triple is a *capacity* solution at exact equality (Q11-B), the oracle is production-aimed since Unit 0 (Q11-C), and the §20.9 order runs from a now-known feasible region |
+| forward-delay mean (`FORWARD_DELAY_AVERAGE = 22 s`) | ❌ | **Q-12** (§22.2, live) — decoupled from the covert constants at Unit 0 (Q11-A); stated anonymity-set objective never derived; drawn Poisson (the F-2/F-4 family signature) at `tx_pool.cpp:311` |
 | cooldown / eviction threshold | ❌ | unbuilt — the §12.11 selection-mechanism tier, blocked with Q-10 |
 | `ε_explore` | ❌ | unbuilt — §12.11's anti-ossification term; ~0.05 from the RL lineage is a starting point, not a derivation |
 
-**Two of seven.** That is the honest measure of where the mechanism stands,
-and it makes the remaining work countable in a way a list of open Q-items does
-not. A round that derives one of the ❌ rows ticks it here, in the same commit
+**Two of eight** *(amended 2026-07-31 — Q-11 Unit 0's census added the
+forward-delay row the coupling had hidden and widened the covert row by the
+rate's bytes axis; the denominator grew because the census looked, which is
+the ledger working as intended. Amended again the same day: reading the
+Dandelion++ paper at source showed two ❌ rows were mis-**reasoned** rather
+than mis-scored — `q` and `STEMS` are not "inherited, never derived" but
+derived against a foreign objective and reframed by a regime question
+respectively (§27.3, §27.5). The score is unchanged; what changed is what
+each row tells the round that reopens it, which is the difference between a
+ledger and a tally)*. That is the honest measure of where the
+mechanism stands, and it makes the remaining work countable in a way a list
+of open Q-items does not. A round that derives one of the ❌ rows ticks it here, in the same commit
 — this table is a live scorecard, not a snapshot, and a stale row is the same
 defect class as a stale acceptance criterion (§20.10 measured that class at
 four-of-ten).
+
+**Ledger arithmetic — which of the six ❌ rows is *reachable* (added
+2026-07-31).** A count of undérived rows is not a work estimate unless it says
+which can be worked:
+
+| reachable now | blocked on Q-10 (`g_max` — **p2p, not relay**) |
+| --- | --- |
+| noise covert constants — **Q-11, in flight** | cooldown / eviction threshold |
+| forward-delay mean — **Q-12, live** (§22.2) | `ε_explore` |
+| `q = 0.2` — **Q-3, reopens against *our* budget** (§27.3) | — |
+
+**`STEMS = 2` sits in neither column**, and the row as written reads reachable
+when it is not: §27.5 reframed it as *"does our anonymity graph stay
+unknown?"*, which is answered by **PSG-learning economics**, not by a
+derivation — so it needs a **regime determination first**, and only then
+becomes a derivable parameter.
+
+**So Q-10 is the single largest blocker in this document**: it gates **two
+ledger rows**, **`ρ`**, **§12.11's selection tier**, and — since §32.2 — **the
+§6.9 check**. It is **not relay work**, which is the point: the arc's remaining
+critical path runs through a p2p subsystem round, and no amount of relay effort
+shortens it.
+
+**One framing correction (2026-07-31, §27.2).** *"The arc moved the
+implementation toward the specification; the specification's ceiling is where
+it was"* is right about the ceiling and wrong about the embargo: Dandelion++'s
+Proposition 3 carries **no return-propagation term**, so RD-1 corrected the
+**paper's arithmetic**, not only the inherited implementation. Our `F` is an
+addition to the spec. This does not put our anonymity above Sharma's curve —
+that curve measures spy precision, which the embargo does not move — but it
+changes what *"correctly-specified Dandelion++"* cites to.
 
 **What the arc bought, priced honestly.** Four measured deltas, one trade, one
 unmoved ceiling. Unconditional: the fluff delay is memoryless on every
@@ -5295,9 +5458,3504 @@ black-hole backstop now actually fires (F-2 — it was inert, full-travel
 any-prefix / 0.22 % origin-attribution per transaction on clearnet and
 structurally zero on Tor (§6.6, §6.8) — censorship resistance bought at a
 bounded, measured privacy cost, with reshape specced to drive the origin term
-toward zero (§14). **The ceiling:** correctly-specified Dandelion++ sits near
-~5 bits median entropy against a 20 % adversary (Sharma et al., §12.6
-calibration note — verify-at-source obligation attached), and the arc moved
-the implementation *toward* the specification, below that curve on three
-recorded counts. The specification's ceiling is where it was; raising it is a
+toward zero (§14). **The ceiling — corrected 2026-07-31, and the error was
+mine in two directions at once.** This paragraph read *"~5 bits median entropy
+against a 20 % adversary."* Sharma's prose gives **5 bits for Dandelion** and
+**7 bits for Dandelion++**, both at **`C = 1 %`** — so the line **quoted the
+weaker scheme's number for the stronger scheme**, at an adversary fraction
+**the text does not state**. Corrected: the citable figure is **~7 bits median
+entropy for Dandelion++ at `C = 1 %`**; the *"20 %"* is **withdrawn as
+unsourced** and needs a Fig. 7 pin before it is used again. *(Provenance
+unchanged: maintainer-read, §12.6's verify-at-source obligation still attached
+— which is the obligation working, since it is what made this checkable.)*
+**Both errors ran pessimistic** — a lower entropy for the scheme we ship and a
+20× larger adversary than the source states — which does not make them less
+wrong in the section written to be scored honestly, and does mean anyone who
+reasoned against the old line was reasoning against a ceiling stricter than the
+evidence supports. The arc still moved the implementation *toward* the
+specification, and remains below that curve on the recorded counts (two, after
+§27.6's split). The specification's ceiling is where it was; raising it is a
 different mechanism, not a better port.
+
+## 22. Q-11 round — Unit 0: the feasible-region census, and the decoupling it forced
+
+**Landed 2026-07-31, before the adversary question is opened, deliberately.**
+§20.9's dependency order (adversary → shape → constants) presumed the constants
+were free variables. The census below shows they were not: one of them defined
+a second mechanism's mean, the triple sits on a compile-time capacity boundary
+at exact equality, the sole distribution oracle on the cadence was vacuous, and
+the constant list omitted one of the two axes of the aggregate rate. A
+derivation that does not know its feasible region is not one, so census-shaped
+work gets its own unit and never rides as a coda. Unit 1 (adversary and
+capability, per §20.9) starts from the literature, untouched by any of this.
+
+### 22.1 The census, verified at source (maintainer census; re-anchored on live dev)
+
+- **G-0 (anchor correction).** The ISP/sybil split comment lives at
+  [`levin_notify.cpp:1053-1057`](../../src/cryptonote_protocol/levin_notify.cpp#L1053),
+  and its second half — *"Noise is currently only enabled over I2P/Tor — those
+  networks provide protection against sybil attacks (we only send to outgoing
+  connections)"* — is the half §20.9 needs: the wire-observer charter survives
+  verification. Wiring confirmed live: the public zone is constructed with
+  `nullptr` noise ([`net_node.inl:478`](../../src/p2p/net_node.inl#L478)); only
+  `--tx-proxy` zones get a payload, default-on, opt-out via `disable_noise`.
+- **Q11-A — one numeral, two adversaries.** `CRYPTONOTE_FORWARD_DELAY_BASE`
+  *derived from* `NOISE_MIN_DELAY + NOISE_DELAY_RANGE`, and `_AVERAGE` from it
+  — the i2p/tor→clearnet forwarding delay (peer/sybil adversary, stated
+  anonymity-set objective at
+  [`cryptonote_config.h:132-133`](../../src/cryptonote_config.h#L132))
+  inherited its mean from the covert cadence (wire adversary). Q-11 could not
+  re-derive one without silently rewriting the other. **Resolved in this
+  commit, value-neutrally**: `FORWARD_DELAY_BASE = 15`, `_AVERAGE = 22` as
+  free-standing literals with the provenance and the do-not-recouple rule at
+  the definition site. This fires Q-12's reopen criterion (a) by design — see
+  §22.2.
+- **Q11-B — the cadence triple is a capacity solution, not a privacy one.**
+  `send_noise`'s `static_assert(MAX_FRAGMENTS ≤ noise_min_epoch /
+  (noise_min_delay + noise_delay_range))` evaluates 300 s / 15 s = 20 against
+  `MAX_FRAGMENTS = 20`: **exact equality, zero slack** — and
+  `cryptonote_config.h:137`'s own comment states the capacity objective. The
+  inherited triple was *derived, from the wrong objective*: a maximum-size
+  fragmented transaction must clear one epoch under worst-case draws, and no
+  privacy term entered the selection. Consequences: any increase to
+  `MIN_DELAY`/`DELAY_RANGE` or decrease to `MIN_EPOCH` is a **build break**;
+  and the constraint's *form* assumes a bounded family (it divides by the
+  maximum interval), so it does not survive a memoryless candidate. **The
+  family-surviving restatement, which Unit 1's shape question inherits as an
+  obligation:** *a `MAX_FRAGMENTS`-send message must complete within one
+  covert epoch with probability ≥ 1 − δ, for a δ the derivation states* —
+  under the current bounded family this reduces to the worst-case count and
+  the existing `static_assert` is its exact (and exactly tight) compile-time
+  form; under an unbounded family the assert's form is invalid and the
+  constraint becomes a probabilistic pin the derivation must re-emit (a
+  derived table bound, not a division). The shape choice and this constraint
+  are not separable.
+- **Q11-C — the cadence's distribution oracle was vacuous; re-aimed in this
+  commit.** `noise_cadence_jitter_is_uniform` graded `sample_uniform` — the
+  conformance crate's own helper — against `grade_uniform`; production
+  `NoiseCadence::next_send` was never in the loop, in the one test whose name
+  claims the cadence, inside a file whose module doc demands production draws.
+  Now the test drives `next_send` directly; the landed negative control grades
+  the same production draws against a wrong band (a `BiasedRng` control cannot
+  work here — `bounded_uniform` is a rejection sampler and launders word-level
+  bias); and the injection control was run and observed to fail (jitter pinned
+  to a constant: chi-square 9.8 × 10⁶ against critical 111.6 — the same
+  injection left the old test green). The support-only band test
+  (`noise_cadence_spans_its_band`) stands as a complement; it is not a
+  distribution oracle and no longer has to pretend to be.
+- **Q11-D — the constant list gains the rate's second axis.**
+  `CRYPTONOTE_NOISE_BYTES = 3 KiB` (no Rust representation; C++-owned payload
+  size) and `CRYPTONOTE_NOISE_CHANNELS = 2` (Rust-mirrored and
+  construction-refusing at
+  [`zone/mod.rs:256`](../../rust/shekyl-relay/src/zone/mod.rs#L256)) join the
+  Q-11 ledger. The aggregate is ≈ 2 × 3072 B / 12.5 s ≈ **491 B/s per noise
+  zone**, and a rate target trades bytes against interval — a derivation
+  scoped to intervals alone can only see one axis, with the other bound by
+  Q11-B's capacity constraint.
+- **Q11-E — split ownership reconciled.** The cadence values are Rust-owned
+  (`params.rs`) with the C++ copies load-bearing only through Q11-A — the
+  decoupling above makes the C++ cadence constants single-purpose again. The
+  epoch pair was C++-owned with **dead Rust mirrors** (zero consumers,
+  verified by grep): mirrors deleted in this commit, with a comment at the
+  deletion site stating why the epoch pair is deliberately not mirrored.
+  Adjacent: `random_poisson_subseconds` has zero consumers;
+  `random_poisson_seconds` has exactly one (`tx_pool.cpp:311` — Q-12's
+  subject). The F-4 primitive is one call site from deletable.
+
+### 22.2 Q-12 — the forward-delay draw: registered, and live by its own criterion (a)
+
+[`tx_pool.cpp:311`](../../src/cryptonote_core/tx_pool.cpp#L311) draws the
+i2p/tor→clearnet forwarding delay as
+`crypto::random_poisson_seconds{22 s}` — Poisson, σ ≈ 4.7 s, **not
+memoryless**: the F-2/F-4 family signature, under a mean whose stated design
+objective is an anonymity-set claim (*"2+ incoming connections could have sent
+the tx"*) that no derivation has been shown to satisfy. It is **not** folded
+into Q-11, because that would grade one adversary's mechanism against the
+other's threat model — the forward delay defends the peer/sybil observer at
+the zone boundary; the covert cadence defends the wire observer. One numeral,
+two adversaries was the defect Q11-A removed; re-merging them analytically
+would reinstate it. Q-shaped, not F-numbered, by §20.9's own reasoning:
+F-shaped in provenance, and the instrument that measured F-4 (inversion
+0.4236 → 0.2165) applies directly, so promotion comes from measurement, not
+renumbering.
+
+**Reopen criteria, with (a) already fired**: (a) the Q11-A decoupling landing
+— *this commit* — since `FORWARD_DELAY_*` is now a free constant with no
+stated source and a defective family: **Q-12 is live, not deferred**; (b) any
+measurement of the forward path's inference precision, on either adversary;
+(c) `random_poisson_seconds` acquiring a second caller — the primitive's
+near-death is load-bearing for the claim that F-4's family error is contained.
+Deliverables when taken up: derive the mean from the stated anonymity-set
+objective; fix the family from measurement; retire the last
+`random_poisson_seconds` caller and the primitive with it.
+
+### 22.3 Prose corrected by the census (the stale-claim class, again)
+
+Two "aimed" claims and one banner, each amended in place with a dated note:
+§20.2a's *"already aimed here and still blind"* rested on `grade_uniform`'s
+doc-comment — doc-aimed, never production-aimed; the CV-3 structural argument
+survives **strengthened** (the instrument was doubly unable: blind to
+selection-among-draws *and* not wired to production). §20.10's *"exists and is
+aimed; it waits for a derivation"* implied re-targeting sufficed when a
+rebuild was owed — the rebuild landed in this commit, so the gap is now
+genuinely target-only. §6.9's banner (*"the passive, correctly-behaving
+observer — NOT DEFENDED"*) is universally phrased over a body whose three
+arguments are all **peer**-topological; the passive **wire** observer is the
+covert mechanism's charter (§20.9) and Q-11's subject — the carve-out sentence
+now says so, so a cold read of §6.9 no longer concludes the noise channels
+defend nothing.
+
+## 23. Q-11 Unit 1 — the adversary and its capability, from the Loopix lineage
+
+**Read at source, 2026-07-31** (Piotrowska, Hayes, Elahi, Meiser, Danezis,
+*The Loopix Anonymity System*, USENIX Security 2017; arXiv:1703.00536, §§2–5).
+§20.9 set the order — adversary → shape → constants — and this unit answers
+only the first. Quotations are from the paper; the mapping onto Shekyl's
+covert channel is ours and is marked as such.
+
+### 23.1 The adversary, named — and the lineage's boundary is the load-bearing part
+
+Loopix assumes **three distinct capabilities**, and stratifies them
+deliberately: *"An adversary is always assumed to have the GPA capability, but
+other capabilities depend on the adversary."*
+
+1. **The global passive adversary (GPA)** — *"able to observe all network
+   traffic between users and providers and between mix servers … launch network
+   attacks such as BGP re-routing or conduct indirect observations such as load
+   monitoring and off-path attacks. Thus, the GPA is an abstraction that
+   represents many different classes of adversaries able to observe some or all
+   information between network nodes."*
+2. **Corrupt mixes / providers** — internal state, and *"may inject, drop, or
+   delay messages"*.
+3. **Compromised users** (a *conversation insider*) — **and this is the
+   boundary that matters here**: *"We assume that the adversary can control a
+   limited number of such users — **excluding Sybil attacks** … since we assume
+   that honest providers are able to ensure that at least a large known
+   fraction of their users base are genuine."*
+
+**The finding, and it is a structural confirmation rather than a detail:
+Loopix's threat model explicitly excludes the Sybil adversary, and
+Dandelion++'s threat model *is* the Sybil/peer adversary.** The two lineages
+are **complementary, not competing** — each excludes precisely what the other
+defends. That is the source-grounded form of the charter §20.9 asserted and
+of the separation Q11-A enforced in code: nothing in the Loopix lineage will
+answer a peer-adversary question, and nothing in Dandelion++ will answer a
+wire-adversary one. A reviewer who reads a cadence result as a Sybil claim, or
+grades the covert channel by a peer metric, has crossed the lineages.
+
+**Shekyl's T, instantiated (ours).** The covert channel runs only on
+`--tx-proxy` zones (G-0), i.e. node ↔ Tor/I2P entry point. So **T is the GPA
+restricted to that link**: it observes encrypted-link byte timing and volume,
+and nothing else — not the peer (the transport encrypts it), not the payload,
+not the dummy-vs-real bit. Shekyl deliberately does not assume the full global
+GPA, because the property below is achievable per-link and the arc's standing
+scope rule (§6.9 as carved out in §22.3) puts network-global observation out
+of reach of any mechanism in this document.
+
+### 23.2 The property, named — Loopix's *sender online unobservability*
+
+The Loopix goal that matches the covert channel is not unlinkability but
+observability of the sender at all:
+
+> **Sender online unobservability** — *"the inability of an adversary to decide
+> whether a specific sender S is communicating with any receiver {S→} or not
+> {S↛}"*.
+
+That is exactly what the noise channels exist to provide (ours): T must not be
+able to decide **whether this node originated or relayed a transaction**. Not
+*to whom* — the transport already hides that — but *whether at all*.
+
+**Loopix's mechanism for it is, structurally, Shekyl's mechanism** — verified
+against both texts rather than assumed:
+
+> *"Each sender periodically checks, following the exponential distribution
+> with parameter 1/λ_P, whether there is any scheduled message to be sent in
+> their buffer. If there is a scheduled message, the sender pops this message
+> from the buffer queue and sends it, otherwise a **drop cover message** is
+> generated … Thus, **regardless of whether a user actually wants to send a
+> message or not**, there is always a stream of messages being sent according
+> to a Poisson process Pois(λ_P)."* (§3.2) — and the conclusion: *"from an
+> adversarial perspective, all traffic emitted modeled by Pois(λ_P) … Thus we
+> achieve **perfect sender unobservability**, since the adversary cannot tell
+> whether a genuine message or a drop cover message is sent."* (§4.1.2)
+
+`send_noise` is that loop: drain `active`, else pop `queue`, else emit the
+dummy — on a schedule that **cannot consult the queue**. So **CV-4
+(payload-blindness) is not a Shekyl idiosyncrasy: it is the structural
+precondition of the lineage's own unobservability argument**, arrived at
+independently in §20.2 from an ownership table. The arc built the right
+invariant for a reason the literature states outright, which is the strongest
+form of confirmation available short of a proof.
+
+### 23.3 Capability: passive-only, and the active gap is real and named
+
+§20.9 asked *"passive timing observation only, or active probing?"* The
+lineage's answer, and ours:
+
+- **Loopix defends active attacks with a mechanism Shekyl does not have.**
+  Client loops (λ_L) and mix loops (λ_M) are cover traffic that *returns to its
+  sender*, so a node that stops seeing its own loops knows it is being blocked
+  — the (n−1) detector (§4.2.1). Theorem 2 quantifies the resulting
+  obfuscation.
+- **Shekyl's covert channel implements only the λ_P analogue** —
+  payload-or-dummy emission. There is no loop cover, therefore **no
+  active-attack detector on the covert path**.
+- **Scope call (ours): passive wire observation is what the covert channel
+  defends, and that is stated rather than quietly assumed.** The active wire
+  adversary — a guard that drops or delays — is a *liveness* attack on this
+  path, not a deanonymization one: dropping covert sends does not reveal
+  whether they were real (CV-4 holds regardless), it stops traffic. The
+  deanonymizing active adversary in this system is the *peer* black-holer,
+  which is Dandelion++'s embargo/reshape lane (§14) and not this one. A loop-
+  cover analogue is therefore **not** owed by Q-11; if it is ever wanted, it is
+  a new mechanism with its own round, and §23.1's lineage rule says it would
+  be answering a question the covert channel was not built for.
+
+### 23.4 What the lineage does **not** give us — stated now, not discovered at the end
+
+**There is no closed-form derivation of the cover rate from an adversary bound
+in the lineage.** Loopix's own parameter results are *empirical*: Figure 4
+plots entropy against incoming rate for a range of delay parameters from
+simulation; §4.3.1's guidance is a threshold read off a curve (*"We consider
+values λ/μ ≥ 2 to be a good choice in terms of anonymity"*), and the
+implementation's rates (λ_P = λ_L = λ_D = 10–60 per minute) are chosen for the
+evaluation, not derived. The one closed-form results are Theorems 1–2, which
+bound an adversary's *linking* probability inside a mix pool — a structure
+Shekyl does not have (no pool, no per-hop delay: the covert channel is
+link-level cover, not a mix).
+
+**Consequence for the §21 ledger, recorded before the shape unit starts:** the
+covert-constants row will most plausibly terminate in *a stated adversary
+bound plus a measurement*, not a solved equation — the embargo's form (an
+exact survival solve) is not available here, because the quantity being
+defended (a decision problem over an emission stream) has no equivalent
+closed-form survival equation. That is a legitimate ✅ for the ledger provided
+the bound is stated a priori and the measurement is instrumented and
+controlled — the Q-9 discipline (§13), applied to a different question. What
+would **not** be legitimate is picking a rate off a curve and calling it
+derived, which is the shape of the 39 s defect one subsystem over.
+
+### 23.5 Carried into Unit 2 (shape) — inputs, not decisions
+
+Recorded because the read produced them and they constrain the shape question;
+**Unit 2 decides, this unit does not**:
+
+1. **The current cadence is not the lineage's family.** Shekyl emits
+   `10 s + U[0, 5 s]` — bounded, CV ≈ 0.115, near-deterministic. Loopix emits
+   on an **exponential inter-arrival** (Poisson process). The lineage's stated
+   reason is superposition: *"Aggregating Poisson processes results in a
+   Poisson process with the sum of their rates"*, so the aggregate an observer
+   sees is characterized by **one number** and inter-arrival timing carries no
+   further information. A near-deterministic cadence aggregated over
+   `NOISE_CHANNELS = 2` is instead a near-metronome, and a metronome's
+   *deviations* are informative.
+2. **But the mixing half of Loopix does not transfer.** Loopix has two
+   exponential parameters doing different jobs — λ_P (client emission) and μ
+   (per-hop mix delay, whose memorylessness is Lemma 2's subject). Shekyl has
+   **no mix**: no pool, no per-hop delay, nothing to be indistinguishable
+   *within*. Only the λ_P analogue is in scope, and importing μ-shaped
+   reasoning would be the phantom-channel error (§12.6's lesson, one lineage
+   over).
+3. **Q11-B's capacity constraint is the binding interaction.** An exponential
+   family has unbounded support, so the worst-case form
+   (`MAX_FRAGMENTS ≤ epoch / max_interval`) is not merely re-parameterized but
+   **invalid**, exactly as §22.1 anticipated. Under the lineage's family the
+   constraint must be re-emitted probabilistically — *a `MAX_FRAGMENTS`-send
+   message completes within one epoch with probability ≥ 1 − δ* — and δ becomes
+   a stated quantity Unit 2 owes.
+4. **Rate has two axes and the lineage uses both.** Loopix tunes cover *rate*
+   against real-traffic volume (§4.2: *"once the volume of real communication
+   traffic λ_P increases, users can tune down the rate of cover traffic"*);
+   Shekyl's aggregate is ≈ 491 B/s per zone from `NOISE_BYTES × NOISE_CHANNELS
+   / interval` (Q11-D). Whether Shekyl wants a traffic-adaptive rate is a
+   **CV-4 question**, not a bandwidth one: adapting the rate to real volume is
+   precisely letting the cadence react to having something to say. The lineage
+   does it at the *client* granularity where the sender is the only party
+   affected; Shekyl's channel carries relayed traffic too. Unit 2 must not
+   import this knob without re-deriving it against CV-4.
+
+## 24. F-6 and the Unit 1 reframing — the census that outranked its own round
+
+**2026-07-31, from the maintainer's Unit 1 review; every claim below re-verified
+at source before it was built on.** Two results: a defect that re-ranks the
+round, and a correction to §23 that relocates Q-11's adversary question from
+the passive wire observer to an active prober.
+
+### 24.1 F-6 — the covert path has no black-hole backstop *(scope corrected below: see §24.5, this is the symptom; the disease is configuration B)*
+
+Traced by call graph, and the trace is decisive rather than suggestive:
+
+1. [`levin_notify.cpp:1071-1074`](../../src/cryptonote_protocol/levin_notify.cpp#L1071)
+   — on a noise zone, `relay_method::stem` is demoted to `relay_method::local`
+   *before* `on_transactions_relayed`, under the comment *"do not put into
+   stempool embargo"*.
+2. [`blockchain_db.cpp`](../../src/blockchain_db/blockchain_db.cpp) — `local`
+   sets `is_local = 1`; `dandelionpp_stem` is a **different case arm** and
+   stays `0`.
+3. [`tx_pool.cpp:1054`](../../src/cryptonote_core/tx_pool.cpp#L1054) — the
+   derived embargo arms **only** under `if (meta.dandelionpp_stem)`.
+
+**So a transaction sent over the covert channel never arms the backstop this
+arc spent RP-4 deriving (144 s, memoryless, exact survival solve).** Its
+fallback is `get_relay_delay` — a blind retry at ≥ 300 s backing off toward
+4 h, which *retries* rather than *detects*, and retries to the same covert
+channels, i.e. through the same peer that may be dropping.
+
+**Why this is a defect and not a scope decision.** The demotion's stated reason
+is routing — Dandelion++ stem is genuinely not supported over noise zones, and
+the noise branch short-circuits before `dandelionpp_notify` ever runs. But the
+embargo is not routing; it is **detection**, and the black-hole threat is
+transport-independent (§6.5, measured: the active dropper is the one adversary
+Tor does *not* remove). The two meanings ride one flag: `dandelionpp_stem`
+answers both *"route this as a stem"* and *"arm the backstop"*, so switching
+off the first switches off the second silently. **That is Q11-A's defect one
+layer up — one symbol, two mechanisms — and it is why the fix shape is a
+split, not a re-flag:** the backstop's real predicate is *"this transaction
+went down a path whose progress I cannot observe"*, which is true of the covert
+path exactly as it is of a stem.
+
+**The priority-order inversion is the part that ranks it.** The covert path is
+the privacy-maximal path — selected precisely when the user most needs it — and
+it currently carries **strictly weaker censorship resistance than clearnet**.
+§14 established that spending privacy for recovery latency is backwards from
+the priority order; this is the same axis landing the same way, and not even as
+a trade: nothing was bought. A cadence that perfectly defeats a wire observer
+is worth little on a channel that cannot tell it is being swallowed.
+
+**Numbered F-6, deliberately, and §20.9's caution does not bar it.** That
+caution — *promote by measuring, not renumbering* — guards against promoting an
+**unmeasured** Q into the F-family. This is not that: the showing is complete,
+the same way F-1's was arithmetic (log10-for-ln) and F-3's was algebra rather
+than measurement. The F-family's bar is a *decisive showing*, not a
+*measurement specifically*, and a call graph proving a mechanism is structurally
+unreachable on a path clears it. What is owed at fix time is the measurement of
+the **remedy**, not of the defect.
+
+### 24.2 Unit 1 reframed — the passive-wire argument does not carry, and (b) does
+
+**The maintainer's burden-inversion, which I accept and which corrects §23.5.**
+If dummy and real are indistinguishable in length and content — the covert
+channel's entire premise, and CV-4's structural guarantee — then the emission
+time series carries **zero** payload information under *any* emission
+distribution. Randomizing cannot reduce leakage below zero; what it can do is
+put positive entropy into a timing channel, which is capacity a modulating
+sender can use. **On the pure passive single-link model, constant-rate strictly
+dominates** — which is why the constant-rate padding literature is
+deterministic on purpose.
+
+**§23.5 item 1 is corrected accordingly.** It carried Loopix's exponential
+family in on the superposition argument while §23.5 item 2 had already ruled
+that the mixing half does not transfer — but **superposition is itself a
+mix-structure argument**: it earns its keep where streams aggregate at a pool,
+not at the sender's wire. Importing it without a carrier is the phantom-channel
+error (§12.6) at one remove, caught here by asking *"what does randomness buy
+against T?"* rather than *"what does the lineage do?"*.
+
+**What survives — and it is stronger than what it replaces. (b), verified at
+source.**
+[`CovertSchedule::due_one`](../../rust/shekyl-relay/src/zone/mod.rs#L171)
+re-arms from **`now`**, not from the elapsed deadline. Its own comment states
+the trade — *"phase may lag; rate does not"* — and that decomposition is
+correct **against load**, which is the only case it was evaluated against.
+Against an adversary who *chooses* when to stall the link, phase-lag is an
+**adversary-chosen, durable, per-node mark**: tag at position A, recognize at
+position B, with no further interaction. Bounded-uniform jitter does not close
+it — phase still shifts and still persists.
+
+**And the dilemma is an artifact of the bounded family, which is the result
+that makes the shape question answerable.** Both re-arm choices are defective,
+dually:
+
+| Re-arm from | Failure under a stall | Character |
+| --- | --- | --- |
+| the elapsed deadline (RP-3b as landed) | catch-up **burst** on recovery | transient — but a burst is what constant-rate exists to deny |
+| `now` (live dev) | permanent **phase shift** | durable, adversary-chosen: the tag |
+
+Under a **memoryless** family the two collapse into the same non-event:
+`next_send(now)` and `next_send(deadline)` are *equal in distribution*, because
+`Pr[X > s + t | X > t] = Pr[X > s]` — there is no phase to shift and no backlog
+to burst, and the post-perturbation process is indistinguishable from the
+pre-perturbation one **by construction**. So the choice the code currently
+makes by picking a horn stops being a choice at all.
+
+**This is what relocates Q-11's adversary.** The target is an **active prober**
+— it must stall the link to plant the mark — which sits on the in-scope side of
+this document's own act-versus-watch line (§6.9 as carved out in §22.3), where
+the pure passive wire observer is charter but not a derivation target. It is
+decisive at **N = 1**, needs no literature, and is measurable with
+`inference_precision`, already built. Unit 2's shape question therefore has a
+target that is in scope by the project's existing dividing line, and the
+passive-observer framing demotes to a consistency check.
+
+### 24.3 The aggregation question (c) — the point exists; the isolation does not
+
+Superposition still matters if streams aggregate, so: **they do, by
+construction.** `CRYPTONOTE_NOISE_CHANNELS = 2` runs two covert streams per
+zone through **one** SOCKS endpoint —
+[`net_node.inl:621-622`](../../src/p2p/net_node.inl#L621), a single
+`m_proxy_address` per zone. Whether they share a *circuit* is the open part,
+and the tree answers it asymmetrically: `shekyl-p-transport` carries **explicit
+per-persona circuit isolation** (Tor's `IsolateSOCKSAuth`, a per-`P` SOCKS
+username — [`p-transport/src/lib.rs:10-11`](../../rust/shekyl-p-transport/src/lib.rs#L10)),
+while the daemon's `--tx-proxy` path carries **no isolation credential at
+all**. Two subsystems, two answers to the same question, and only one wrote
+down why. Unit 2 owes the circuit determination; if the streams share a
+circuit, (c) is live at N = 2 and argues alongside (b).
+
+### 24.4 Order, restated
+
+1. **F-6 disposition** (§24.1) — it may outrank the cadence work entirely, and
+   a fix is a mechanism change with its own round.
+2. ~~U0-b's family-sensitivity control~~ — **closed** at `bf0d2f52d`
+   (`noise_cadence_grade_rejects_right_support_wrong_family`: min-of-two
+   production draws, right support, non-uniform density; run and observed to
+   fail). The oracle can see families now.
+3. **Unit 2 (shape)** opens on **(b)** as the adversary-and-capability, with
+   **(c)**'s circuit question as the parallel factual thread, and the
+   passive-observer argument as the consistency check rather than the load
+   bearer.
+
+## 25. F-6 seen whole — configuration B, and what Loopix actually licenses
+
+**2026-07-31, maintainer review round two; every claim re-verified at source.**
+§24.1 numbered a symptom. Read whole, the defect is larger and it re-ranks the
+queue above the shape question.
+
+### 25.1 There are three configurations, and §6 models the one we do not ship
+
+> **Restated at §29 — this section is F-6's *omission* half only.** The same
+> configuration also *commits*: `net_node.inl:2208-2211` routes relayed
+> transactions to clearnet and originated ones to the anonymity zone, so the
+> covert channel is an **origin oracle** and attribution precision goes from
+> `≈ f` to `≈ 1` given slot occupancy. Read both halves or the conclusion is
+> "unprotected" when it should be "inverted."
+
+| | stem routing | embargo armed | fluff reach | covert |
+| --- | --- | --- | --- | --- |
+| **A. clearnet** | Dandelion++ | yes | every peer | no |
+| ~~**B. Tor, DEFAULT**~~ | ~~none~~ | ~~no~~ | ~~outbound only~~ | ~~2 channels~~ — **DELETED 2026-08-01, §41** |
+| **C. Tor + `disable_noise`** | Dandelion++ | yes | outbound only | no |
+
+`proxy.noise` defaults **true** ([`net_node.h:76`](../../src/p2p/net_node.h#L76)),
+so a plain `--tx-proxy tor,...` gets **B**. In B the stem→local demotion clears
+`dandelionpp_stem` (§24.1's chain), and with it both halves of the arc's
+output: **neither Dandelion++ nor the derived black-hole backstop runs on the
+default anonymity-network deployment.**
+
+**Two live claims in §6 are false on B**, and this is the stale-claim class
+landing in the section everything else cites:
+
+- **§6.5's honest-scope paragraph** says Tor collapses the passive supernode
+  but *"the black-hole channel is unchanged, and remains the reason the
+  mechanism itself must be correct regardless of transport."* On B the channel
+  is not unchanged — **the mechanism that answers it is absent.**
+- **§6.6's lever table** assigns the active channel to *"every origin"* with
+  Q-8a reshape as the lever. Reshape is a **re-stem**; there is no stem in B.
+
+**Ranking (accepted).** §24.1 traced one call chain and named the covert path's
+missing backstop. Configuration B is that defect seen whole: not a gap in one
+path but the arc's entire output bypassed on the deployment a
+privacy-motivated user actually selects, replaced by a covert channel whose
+substitution claim rests on the fallacy in §25.2. **This outranks the cadence
+work**, on §00's own ordering — a derived cadence on a channel that cannot
+detect being swallowed is the fix-one-ignore-the-other pattern §14 ruled
+against.
+
+**The fix shape, and the open design question inside it.** §24.1 identified
+one flag serving two meanings; the whole-form version is that **the embargo
+does two separable jobs** — stem-phase timeout *and* black-hole backstop — and
+`dandelionpp_stem` gates both, so demoting for routing reasons discards the
+half B still needs. **Unbundling is cheaper than a new mechanism and adds
+nothing that can rot** (discipline #17: the primitive is already owned —
+*emit something you expect to see again, treat absence as signal*). What
+unbundling does **not** answer, and a round must: **what the backstop does when
+it fires on B.** On clearnet it fluffs. On a noise zone there is no fluff path
+— everything leaves through the covert channels — so the remedy is a design
+choice (re-point to a different covert channel, i.e. reshape's analogue; or
+fluff to the zone's outbound set) and not a mechanical re-flag.
+
+### 25.2 The inbound rule protects unmintability, and the comment misattributes it
+
+Three statements of the same rule, in increasing strength:
+
+1. **Inherited C++** ([`levin_notify.cpp:1054-1058`](../../src/cryptonote_protocol/levin_notify.cpp#L1054-L1058))
+   — *anonymity networks provide sybil protection*.
+2. **Our Rust doc** ([`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/zone/mod.rs#L521-L526))
+   — selection-based: an inbound peer is a stranger who dialled us; only
+   outbound are ones we chose.
+3. **Correct, and it subsumes both** — on an anonymity network **inbound peer
+   identity is free to mint**: an onion address is a keypair. It is not that
+   you might have one inbound peer; it is that you can **never establish you
+   have more than one distinct one**. Effective inbound anonymity set ≈ 1
+   against anyone willing to generate keys.
+
+**The Tor-is-magic fallacy is present in the comment, not in the code.** The
+code does the right thing; the comment attributes to the *network* a property
+the *rule* supplies. And the misattribution is load-bearing, because
+`zone/mod.rs:113-114` leans on it — *"it is why noise-mode networks can
+substitute for Dandelion++'s sybil resistance at all"* — so the substitution
+claim inherits the fallacy.
+
+**Loopix settles it against the comment.** §2.2 excludes sybil attacks from its
+threat model *on the assumption that providers authenticate users and can cap
+the adversarial fraction*; §7 states that provider-mediated access is what
+brings sybil resistance. **The canonical cover-traffic system buys its sybil
+resistance with exactly the privileged class this project rejects, and says
+so.** So the governance rejection is stronger than stated: it does not merely
+decline Loopix's economics, it **removes the premise Loopix's parameters are
+calibrated against.** We cannot take their numbers. We can take mechanisms
+that do not route through provider identity.
+
+### 25.3 Loopix contains no argument for randomizing our cadence — a negative result, with a citation
+
+**Its own sender-unobservability argument does not use the distribution.**
+§4.1.2 reasons purely from payload-independence: the adversary *"cannot tell
+whether a genuine message or a drop cover message is sent"*, therefore
+unobservability. The word "Poisson" appears in the claim and does no work in
+it — **the identical argument goes through verbatim for a metronome.**
+
+Where the exponential *does* work is §3.3: aggregating Poisson processes yields
+a Poisson process, which licenses the M/M/∞ model, which yields Lemma 1,
+Lemma 2 (memorylessness) and Theorem 1. **The randomization is a
+mixing-composition requirement.** It buys nothing at the sender's link.
+
+**This is the most useful form of result available here**: it removes the
+"cover traffic wants randomness" default the inherited constants were
+presumably chosen under, *by citation rather than by assertion* — and it
+retires §23.5 item 1 entirely rather than merely correcting it (§24.2 corrected
+the superposition argument; this shows the lineage never made the sender-side
+argument at all).
+
+**The structural analogue is exact, which is what makes the negative result
+citable rather than analogical**: Loopix §3.2's sender checks a FIFO on a
+schedule, pops if queued, else emits drop cover; `send_noise`
+([`levin_notify.cpp:860-867`](../../src/cryptonote_protocol/levin_notify.cpp#L860-L867))
+takes `channel.active.take_slice(...)` if a fragment run is live, else clones
+`covert_payload`. Same primitive.
+
+### 25.4 (b)'s epistemic status — an extension, not a citation
+
+**Loopix does not make the phase-tagging argument and cannot**: its client
+stream is already exponential, so there is no phase to tag. What §24.2 does is
+**apply Lemma 2 to the emission process rather than to the pool.** That is a
+defensible extension and I believe it is correct — but it is an *extension*,
+and Unit 1 carries it as such rather than as a cited result. If the
+Dandelion++ paper calls out memorylessness in a related function, that is a
+better anchor; **neither of us has that paper in hand, and the section is to be
+pinned before either of us cites it.**
+
+**Version pin for every Loopix citation in this document:** read from
+**arXiv:1703.00536v1, 1 Mar 2017**. The citable artifact is USENIX Security '17
+pp. 1199–1216 and the two differ — v1's abstract claims *"upwards of 300
+messages per second"* while its own §5 reports throughput stabilizing near
+**225**. Any throughput claim must prefer the final version; the §§2–4 material
+cited here is structural and unaffected, but the version is named so a future
+reader can check rather than assume.
+
+### 25.5 Parity runs the other way too, and §6 never asks
+
+§6.5 measures the clearnet inbound supernode at π₀ = **0.1155 / 0.1967 /
+0.4463** at 5/10/30 % reach, and measures outbound-only fluff collapsing it to
+**0.0000**. That is a measured leak and its measured fix — **and we apply the
+fix only where the leak is structurally smaller.**
+
+The cost is fanout: `P2P_DEFAULT_CONNECTIONS_COUNT = 12`
+([`cryptonote_config.h:150`](../../src/cryptonote_config.h#L150)) outbound
+against up to ~64 inbound, so per-hop reach drops ~6×. **The relevant quantity
+is not per-hop reach but time-to-coverage under a flood on an expander**, which
+scales with the *log of the degree* — so the cost is a small multiple of hops,
+each costing one fluff delay, not a connectivity break. F-5's instrument
+(`simulate_transport_observation`, first-passage) measures it directly and the
+number should be produced before the argument is either adopted or dismissed.
+
+**What outbound-only clearnet actually does is convert the
+cheap-unlimited-inbound adversary into the occupancy adversary** — W3 /
+ProxyMark, already in scope, already receiving Q-10 / `g_max`. That is not a
+redesign; it is **moving a live unmitigated channel into a class we are already
+building a defense for, priced in latency.** §6 does not consider it. Recorded
+as an open question for the §6 round, not decided here.
+
+### 25.6 The zone field is a data-model gap, not a capability limit
+
+The inherited claim ([`levin_notify.cpp:1060-1062`](../../src/cryptonote_protocol/levin_notify.cpp#L1060-L1062))
+is that Dandelion++ over I2P/Tor needs *"the mempool/stempool to know the zone
+a tx originated from."* Checked: `txpool_tx_meta_t`
+([`blockchain_db.h:177-206`](../../src/blockchain_db/blockchain_db.h#L177-L206))
+has **no zone field**, so the claim is accurate *as a description*. It is
+**false as a statement of feasibility**: the struct carries `bf_padding : 2` —
+the bitfield's exact remainder, and a zone enum is two bits — plus
+`padding[44]`. It is a node-local LMDB record with no consensus role,
+pre-genesis. **The space is already reserved.** Somebody read an inherited
+struct, saw no field, and wrote *"needs to know"* as though the struct were
+immutable — the architectural-inheritance error rule 16 names, in one word.
+
+### 25.7 Order, restated again
+
+1. **Configuration B** (§25.1) — F-6 seen whole; outranks the shape work, and
+   the remedy's design question (what the backstop does when it fires on a
+   noise zone) is a round of its own.
+2. ~~U0-b family-sensitivity control~~ — **closed** at `bf0d2f52d`.
+3. **Unit 2 (shape)** on (b) as the extension it is (§25.4), with (c)'s circuit
+   question parallel.
+4. **Open for the §6 round**: outbound-only fluff on clearnet (§25.5), and the
+   §6 anchor sweep — six stale `:448` citations repointed to
+   `zone/mod.rs:521-526` in this commit, since RP-3a/3b moved the rule to Rust
+   and §6 is the section everything else cites.
+
+## 26. F-7 — `F` is a clearnet measurement applied to every transport, and the instrument cannot express the alternative
+
+**2026-07-31, maintainer review round three; verified at source.** §25.5 closed
+by proposing that F-5's instrument produce the reverse-parity number. **That
+proposal was itself the vacuity mechanism it should have caught**, and finding
+out why surfaced a defect that stands independently of whether reverse-parity
+is ever adopted.
+
+### 26.1 The instrument models `EveryPeer` by construction
+
+[`conformance/flood.rs:78-80`](../../rust/shekyl-relay-privacy/src/conformance/flood.rs#L78-L80):
+
+```rust
+initiated.push(other);
+adjacency[node].push(other);
+adjacency[other].push(node);   // <- the reciprocal edge
+```
+
+The adjacency is **symmetric**: every edge is inserted both ways, so the
+Dijkstra relaxation traverses an **undirected** graph. `simulate_fluff_return`
+therefore models `FluffReach::EveryPeer` *by construction* and has **no way to
+express `OutboundOnly`** — which is precisely *"traverse only the edges I
+initiated,"* a directed graph. The `initiated` vector is built and then
+discarded as a dedup scratchpad. **The same construction appears twice in the
+file** (`:78` and `:175`), so a fix has two sites.
+
+Running it unmodified would have returned a number that reads like an answer
+while re-measuring the topology we already have: **fixture-cannot-express-the-
+input**, §20.3a's first vacuity mechanism, in a proposal made by the party who
+wrote that list. Recorded rather than quietly corrected, because the lesson is
+that the mechanism does not stop applying to the person holding it.
+
+### 26.2 F-7 — the embargo is under-provisioned on configuration C
+
+`fluff_return_ms = 2_250` ([`params.rs:158`](../../rust/shekyl-relay-privacy/src/params.rs#L158))
+is documented *"Measured p90 first-passage for a memoryless fluff flood at 8
+peers (`simulate_fluff_return`)"* — so **F is a measurement taken on the
+undirected/`EveryPeer` graph**, and it is fed into the embargo derivation for
+**every** transport (`S(h) = Σ ceil((k·hop + F)/τ)`, `derive.rs`).
+
+On **configuration C** (Tor + `disable_noise`: Dandelion++ runs, embargo arms,
+fluff reach is `OutboundOnly`) the real fluff graph is **directed**. First
+passage on a directed out-degree-`d` graph is strictly slower than on the
+undirected graph the instrument builds — fewer usable edges per hop (out-degree
+`peers` versus effective ~`2·peers`) *and* direction-constrained paths, both
+pushing the same way. **So the true `F` on configuration C exceeds 2250.**
+
+**The direction is the unsafe one, and the policy already says so** —
+[`params.rs:128-130`](../../rust/shekyl-relay-privacy/src/params.rs#L128-L130),
+verbatim: *"set from a high quantile rather than a mean because
+over-estimating lengthens the embargo (safe) while under-estimating shortens it
+(a privacy loss)."*
+
+**MAGNITUDE MEASURED 2026-08-01** — the directed variant is built
+([`FloodReach`](../../rust/shekyl-relay-privacy/src/conformance/flood.rs),
+both construction sites), and `f7_directed.rs` reports both reaches side by
+side. p90 first passage, memoryless family, 512 nodes:
+
+| `peers` | `EveryPeer` | `OutboundOnly` | effective degree |
+| --- | --- | --- | --- |
+| 8 (the shipped measurement's) | **2500 ms** | **5750 ms** | 16 → 8 |
+| 12 (Shekyl's `P2P_DEFAULT_CONNECTIONS_COUNT`) | 1250 ms | **3250 ms** | 24 → 12 |
+
+**The `EveryPeer` baseline reproduces the shipped input's order** (2500 against
+`fluff_return_ms = 2250`, different seed and trial count), which is the
+instrument validating rather than a new number.
+
+**The decision-relevant figure is `peers = 12`, `OutboundOnly` — 3250 ms
+against a shipped 2250 ms, so `F` is under-provisioned by ~44 % on
+configuration C.** At the instrument's own default degree the gap is 2.6×.
+
+**Reported with the conflation named, per §28.4**: changing only `reach` also
+changes the effective degree (each node initiates `peers` and receives
+~`peers`), so the 8→8 row moves *two* things at once. The 12-row is the one to
+act on because it is Shekyl's actual outbound count under the rule
+configuration C actually uses. **A degree-matched pair (`EveryPeer` at
+`peers = 8` versus `OutboundOnly` at `peers = 16`) would isolate the rule alone
+and is not yet run** — it is the next thing this instrument owes.
+
+**F-7: the 446-tick / 144 s embargo is under-provisioned on configuration C by
+~44 % in its `F` input, because the measurement producing its input models a
+fluff rule that configuration does not use.** Evidential status matches F-6's:
+the showing is decisive (symmetric adjacency; outbound-only fluff on
+anonymity-network zones), the direction is derivable by construction, and the
+**magnitude is now measured** (above) rather than awaited. Configuration A is
+unaffected
+— there the instrument's rule and the deployed rule agree, and 2250 is right.
+
+### 26.3 The coupling — three readouts off one input, not a coverage check
+
+§25.5 framed reverse-parity's cost as time-to-coverage. **That is the wrong
+axis, and the correction is accepted**: connectivity is not where the
+consequence lives. `F` is, and it feeds two derivations that move in **opposite
+directions**:
+
+- **Into the embargo.** `F` rises ⇒ `S(h)` rises ⇒ the embargo must lengthen to
+  hold the same survival posture. §6.7 prices lengthening: the embargo-only
+  path to the exposure target needs ~1050 s with ~2400 s p90 recovery.
+- **Into §6.7's leak decomposition, adversely** — *"a larger `F` gives every
+  prefix embargo longer to fire, so it pushes the leak opposite to the embargo
+  mean."* `F` rises ⇒ the §6.6 embargo-phase clearnet leak (0.0114 at 144 s)
+  rises.
+
+So reverse-parity zeroes §6.5's inbound-supernode channel (π₀ up to **0.4463**
+at 30 % reach) while **worsening** §6.6's channel through `F`, and forces an
+embargo re-derivation. **That is exactly the signature §6.6 says it hunts —
+"a fix that helps one channel and quietly worsens another"** — and adopting or
+dismissing it on a coverage number would be asserting on the wrong axis. The
+expectation is still strongly net-positive (0.4463 dwarfs 0.0114), but *getting
+it right* means producing `F′` from a directed instrument and feeding it through
+`derive` **and** through `simulate_passive_neighbor_leak`, at the high quantile
+the existing policy mandates.
+
+**Pin the parameter's meaning before the comparison.** `FloodParams::peers`
+defaults to **8** ([`flood.rs:32`](../../rust/shekyl-relay-privacy/src/conformance/flood.rs#L32))
+while `P2P_DEFAULT_CONNECTIONS_COUNT = 12`, and under the symmetric
+construction each node's effective fluff degree is ~**16**. Nothing states
+whether `peers` means outbound count, total, or a deliberate under-degree.
+Building the directed variant without settling that would compare
+directed-degree-`d` against undirected-degree-`2d` — **conflating the rule
+change with a degree change**, so the before/after would measure two things at
+once and attribute the result to one.
+
+### 26.4 Third instance of one disease — and the structural fix it argues for
+
+| | one thing | silently serving two |
+| --- | --- | --- |
+| **Q11-A** | one numeral (15 / 22) | two adversaries |
+| **Configuration B** | one design document | two deployment configurations |
+| **F = 2250** | one topology measurement | two fluff rules |
+
+Each was invisible because **the shared object was correct for the case it was
+built for**: `simulate_fluff_return`'s symmetric adjacency is right for RD-1 and
+clearnet — it was never *wrong*, only **over-applied**, exactly as
+`FORWARD_DELAY_BASE` was a perfectly good expansion of the wrong two constants.
+The pattern is now the finding rather than any of its members.
+
+**The census it generates:** *what else in `params.rs` is a measured input whose
+measurement encodes a configuration?* `time_between_hop_ms = 175` is the next to
+check — it is marked as coming from a C++ comment's arithmetic rather than a
+measurement at all, which the doc itself calls *"part of the problem."*
+
+**And the structural fix, which is worth more than the audit:** a measured input
+should carry **the configuration it was measured under** at its definition site,
+the way §22's constants now carry their provenance. A one-time census finds
+today's over-applications; recording the configuration makes the *next* one
+visible where the value is read. Same lesson as the gates — an audit closes a
+census, a record keeps it closed.
+
+### 26.5 Queue
+
+The **directed-flood variant** is a small change with **two consumers now** —
+configuration C's under-provisioned embargo (**a defect**, F-7) and
+reverse-parity (**a question**, §25.5) — which makes it **its own unit**, not a
+coda to either. Order: F-6/configuration B (§25.1) → the directed-flood unit
+(F-7 magnitude, then reverse-parity's three readouts) → Unit 2 (shape) on (b).
+
+## 27. The Dandelion++ paper read at source — (b) pinned, and four corrections it forces
+
+**2026-07-31, maintainer, from Dandelion++ (Fanti et al.) §4.4, §5.3.1,
+Proposition 3, Theorems 1–2, Fig. 3.** The paper §20.9 said we should *not*
+reach for on the cadence question turns out to settle the cadence question's
+anchor, and to correct three things this document had recorded.
+
+### 27.1 (b) is pinned — and the anchor is our own embargo
+
+D++ §4.4, Eq. (7): `T_out(v) ~ current_time + exp(1/T_base)`, i.i.d. across
+relays, and the argument that follows it:
+
+> *"the protocol also ensures that the first relay node to broadcast is
+> approximately uniformly selected among all relays that have received the
+> message. This is due to the **memorylessness of the exponential clocks**:
+> conditioned on a given node blocking the message, each of the remaining
+> clocks **can be reset**, assuming propagation latency in the stem is
+> negligible."*
+
+**That is (b)'s argument, in the lineage, about a mechanism we already
+implement.** An adversary who *acts* — blocks — learns nothing positional from
+the subsequent timing, because conditioned on the block every surviving clock
+is fresh. (b) says an adversary who delays or drops a covert emission cannot
+tag the stream, because with exponential inter-arrival the post-perturbation
+process is indistinguishable from a fresh one.
+
+**The gap stays visible, because the observables differ**: Fanti's is *which
+node fires first among `k` clocks* — identity and order; (b)'s is *when a
+single stream's next emission lands* — phase on one link. So §25.4's status
+upgrades from *"my extension of Loopix Lemma 2"* to **"the property the lineage
+already invokes for our own embargo, applied to a different observable."** Not
+a citation *of* (b), but a far better anchor than Loopix — because **the arc
+has already adopted this conclusion once, for F-4.**
+
+### 27.2 RD-1 corrected the paper, not only the implementation
+
+Proposition 3 derives `T_base ≥ −k(k−1)·δ_hop / (2 log(1−ε))` from
+`Δ₁ = k·δ_hop` — **forward travel only.** There is no return-propagation term
+anywhere in it, and the uniform-selection argument above is explicitly
+conditioned on *"assuming propagation latency in the stem is negligible."*
+
+**So RD-1 — disarm happens when the fluff *reaches* the relay, hence every stem
+node's window carries a diffusion-return term — is a correction to Dandelion++'s
+model, not only to the inherited implementation.** Our `F` is an *addition to
+the spec's arithmetic*.
+
+**This revises a standing framing of §21.** *"The arc moved the implementation
+toward the specification; the specification's ceiling is where it was"* is
+right about the ceiling and **wrong here**: on the embargo derivation the arc
+moved **past** the spec. Stated precisely, because the two must not blur: the
+spec's *arithmetic* was incomplete for its own stated goal, and we corrected it
+— which does **not** mean our anonymity sits above Sharma's curve (**~7 bits for
+Dandelion++ at `C = 1 %`**; see §21's corrected ceiling — an earlier draft here
+carried the same 5-bit misquote), since that curve measures deanonymization
+precision against a spy, an axis the embargo does not move (§6.6/§14: it moves C3 adversely). What changes is **what
+"correctly-specified Dandelion++" cites to** when we compare our numbers
+against that ceiling.
+
+### 27.3 `q = 0.2` is derived — from a latency budget, on Bitcoin
+
+D++ §5.3.1, which had not been in this arc's frame:
+
+> *"we estimated that each additional hop adds an expected **300 milliseconds**
+> to the propagation latency. There is also a constant 2.5 second delay added
+> to each transaction due to the exponential process of propagation when it
+> first enters the fluff phase. Taking a propagation delay of **4.5 seconds as
+> our goal**, we chose q = 0.1 or q = 0.2 as our parameter."*
+
+**§21's ledger entry was wrong in a way that matters, and is corrected in
+place.** `q = 0.2` is not underived — it is **derived from a 4.5-second latency
+goal, against 300 ms/hop measured on EC2 Bitcoin nodes with the INV/GETDATA/TX
+exchange.** That is the same disease as `FORWARD_DELAY` and the
+`MAX_FRAGMENTS` equality: **a real derivation against a non-privacy objective,
+on a foreign network.** *"Underived"* invites a fresh derivation; *"derived
+from a latency budget we didn't set, on a topology we don't run"* tells Q-3
+exactly **what to reopen and against what**.
+
+### 27.4 `time_between_hop_ms = 175` sits against a published 300 ms — F-7 has a sibling
+
+Same passage: D++ measured **300 ms/hop** over 20 trials at stem lengths up to
+12. [`params.rs:148`](../../rust/shekyl-relay-privacy/src/params.rs#L148)
+carries **175**, with the doc's own concession that it comes from a C++
+comment's arithmetic rather than a measurement.
+
+Monero's relay semantics differ from Bitcoin's three-message exchange, so 300
+does not transplant. But **175 has no measurement behind it and the nearest
+published figure for the nearest protocol is 1.7× higher.** Both `δ_hop` and
+`F` feed `S(h) = Σ ceil((k·hop + F)/τ)`, and **both are plausibly
+under-estimated in the same, privacy-losing direction.** F-7 has a sibling, and
+**the directed-flood unit (§26.5) should measure hop latency while it is in
+there** — same instrument family, same derivation consumer, and measuring one
+without the other leaves `S(h)` half-corrected.
+
+### 27.5 STEMS — the raise leaves proven territory three ways, and its sign flips
+
+Figure 3's trend, stated in the text:
+
+> *"If the adversary has **not** learned the topology, then line graphs have the
+> lowest expected precision and hence offer the best anonymity. As the degree
+> `d` increases, the expected precision progressively worsens until `d = n`…
+> On the other hand, **if the topologies are known to the adversary, then the
+> performance trend reverses.**"*
+
+**The degree effect reverses on adversary graph knowledge.** Raising STEMS
+helps only in the **known**-graph regime; in the unknown-graph regime it hurts.
+And two theorems are scoped to `d = 4` specifically — Theorem 1 (first-spy
+within a constant factor of optimal, `D_OPT ≤ 8·D_FS + 6p² + O(p³)`) and
+Theorem 2's branching-process analysis, which *"exploits the tree-like
+neighborhoods of random 4-regular graphs."* **Raising STEMS exits both.**
+
+**So the raise's real question is not §12.7's premise (a) as written. It is:
+do we believe our anonymity graph stays unknown?** And Sharma's Appendix B
+answers it — **> 90 % PSG recovery at 50 tx/node, ~98.5 % at 100**, at roughly
+half that cost against our `q`. If the graph is cheaply learnable we are in the
+**known** regime, where higher degree helps, and D++'s reason for choosing
+4-regular (a hedge across *both* regimes) does not bind us the way it bound
+them. **That is a cleaner and more defensible basis for the raise than the
+entropy argument — and it says that *not* raising is a bet on the graph staying
+unknown, which Sharma prices as a bad bet at our parameters.**
+
+**Consequence beyond STEMS (ours):** if the graph is learnable, that also bears
+on **Q-10's `g_max`** — a known graph makes *targeted* occupancy materially
+easier than the random-placement model Sharma uses, which is one of the two
+optimism directions §12.6 still records. The graph-knowledge question is
+therefore an input to two open items, not one, and it should be settled once
+rather than assumed separately in each.
+
+### 27.6 Correction — our Sharma pinning item had the sign wrong
+
+Theorem 2, graph unknown, arbitrary transactions per node, adversary can link
+same-user transactions:
+
+| forwarding | expected optimal precision |
+| --- | --- |
+| one-to-one (**pinned**) | Θ(p² log(1/p)) |
+| all-to-one | Θ(p) |
+| per-incoming-edge | Ω(p) |
+
+with `p²` the fundamental lower bound. Plus the volume property: *"if nodes were
+to generate arbitrarily many transactions, the pseudorandom lines would stay
+the same, whereas… the per-transaction curve could increase arbitrarily close
+to 1."*
+
+**Pinning's value is invariance to transaction volume** — without it, precision
+→ 1 as an origin transacts more. That is a strong endorsement of `in_mapping_`
+and it **independently corroborates §6.8's velocity analysis.**
+
+But it means §12.6's standing item — *"no per-source pinning, filed under three
+ways Sharma is optimistic"* — **collapsed two claims with opposite signs, and
+recorded only one.** Split (and corrected at the site): Sharma modelling
+i.i.d.-among-two-successors rather than one-to-one makes them **pessimistic**
+here (Theorem 2 says that is the worse scheme); Sharma noting that an adversary
+who *knows* the mapping does better makes them **optimistic**.
+*Protocol-pins-or-not* and *adversary-knows-the-pin-map* are different
+variables pointing opposite ways. **Net sign unclear; the item is not to be
+cited again before the split is priced.**
+
+### 27.7 What is still unread — **closed 2026-07-31, see §28**
+
+The Bitcoin-diffusion negative result — D++ §1's [50], Sharma's [19]/[20], the
+Fanti–Viswanath work — was the one paper of the four not in hand, and Unit 2's
+(b) had to answer it. **Read: the objection dissolves, and was retracted on the
+merits (§28).** The attack that beats diffusion is *reporting centrality*,
+which the paper states twice is **timestamp-blind and θ-independent** — so the
+negative result shows a timing defense is worthless where timing is not the
+binding channel, not that memorylessness fails against a timing adversary. It
+converts into a **scope rule** (§28.2) that retroactively licenses (b),
+explains F-4, and **externally corroborates §6.9**.
+
+## 28. The diffusion negative result — retracted as a threat, kept as a scope rule
+
+**2026-07-31, maintainer, from Fanti–Viswanath (the Bitcoin-diffusion analysis;
+§27.7's outstanding paper).** Raised as the objection Unit 2's (b) would have to
+answer. **Read, it dissolves — and the reason it dissolves is worth more than
+the objection was.**
+
+### 28.1 The retraction, and why it is on the merits
+
+The headline holds: trickle and diffusion have order-equal detection
+probabilities (first-timestamp at θ = 1 is `log(d)/(d log 2)` for trickle,
+`log(d−1)/(d−2)` for diffusion; ML is Θ(1) for both, approaching ½ and ≈ 0.307).
+**Switching Bitcoin to memoryless delays bought essentially nothing.**
+
+**But the attack that wins against diffusion is not a timing attack.** Their
+Theorem 4.2 estimator — *reporting centrality* — counts reporting nodes per
+adjacent subtree, and the paper is explicit twice over:
+
+> *"Notice that reporting centrality does not use the adversary's observed
+> timestamps—it only counts the number of reporting nodes in each of a node's
+> adjacent subtrees."*
+
+> *"the constant `C_d` in Theorem 4.2 does not depend on θ—this is because the
+> reporting centrality estimator makes no use of timestamp information, so the
+> noisy delays in the observed timestamps do not affect the estimator's
+> asymptotic behavior."*
+
+And their own conclusion names the cause as **symmetry**, not distribution:
+*"diffusion and trickle both propagate content over the underlying graph in all
+directions at roughly the same rate. This symmetry enables powerful
+centrality-based attacks. Thus, a natural solution is to break the symmetry."*
+— which is the seed of Dandelion; the stem **is** the asymmetry.
+
+**So the finding is: timing randomization failed there because the adversary had
+a topological observable that bypasses timing entirely. That is not evidence
+that memorylessness fails against a timing adversary; it is evidence that a
+timing defense is worthless when timing is not the binding channel.**
+
+### 28.2 The scope rule, and it retroactively explains three things we believe
+
+> **Timing randomization is a defense only where timing is the adversary's sole
+> observable.**
+
+- **(b) qualifies.** A single covert link, constant-rate, payload-independent:
+  no infected subgraph, no adjacent subtrees, no centrality — **there is
+  nothing for a topological estimator to count.** The covert channel is
+  *topologically trivial by construction* (one link, N streams, encrypted), and
+  that is precisely why timing is the sole channel and therefore why a timing
+  derivation is worth doing at all. **This is the licence Unit 2 needed**, and
+  the rule should be applied as a **predicate before spending derivation
+  effort**, not discovered after.
+- **F-4 qualified.** The embargo / black-hole channel is timing-only, which is
+  why fixing the family moved a real number.
+- **§6.9's out-of-scope verdict is now *sourced*, not asserted.** *"The floor
+  `C1 ≈ f` is untouchable by stem-and-fluff"* is the same claim as reporting
+  centrality being **θ-independent and timestamp-blind**. Fanti–Viswanath
+  proved a topological estimator is insensitive to the timing defense; §6.9
+  says timing mechanisms cannot reach the passive first-successor. **Same
+  fact, arrived at independently** — external corroboration of a scope
+  decision that had been a project-local judgement call.
+
+### 28.3 θ is an axis our supernode instrument does not have
+
+Theorem 4.1 gives first-timestamp detection in closed form as
+`(θ/(d−2))·log((d+θ−2)/θ)`, where **θ is adversary connections *per honest
+node***. Two properties the paper draws out: **diminishing returns in θ** —
+*"the adversary reaps the largest gains from the first few connections it
+establishes per node"* — and **θ → ∞ ⇒ detection → 1 regardless of protocol.**
+In the practical attacks, *"the eavesdropper was able to establish as many as
+50 connections to some nodes."*
+
+**Verified in the tree:**
+[`simulate_transport_observation`](../../rust/shekyl-relay-privacy/src/conformance/transport.rs#L69)
+takes `dial_fraction` — *what fraction of nodes the supernode dials*, i.e.
+**breadth** — and has **no θ parameter**. §6.5's 5/10/30 % sweep therefore
+measures breadth **while the demonstrated attack maxed depth**, and per
+Theorem 4.1 the two are not interchangeable.
+
+**And this prices reverse-parity better than §25.5 did.** Outbound-only fluff
+does not *reduce* θ for an inbound-connecting adversary — **it sets it to
+zero.** Per Theorem 4.1's diminishing-returns shape the first connection is the
+highest-value one, so removing the inbound vantage removes **the steepest
+increment, not a tail margin.** That is the mechanism behind §6.5's measured
+`0.0000`, now with a closed form behind it.
+
+### 28.4 `peers = 8` — provenance corrected, and the pin is a modelling decision
+
+§26.3 guessed at `peers`' meaning. Better-supported now: Fanti–Viswanath model
+8 outbound / 125 total, and state that *"the resulting sparse random graph
+between servers can be modeled approximately as a 16-regular graph; in
+practice, the average degree is closer to 8 due to nonhomogeneities"* — citing
+Miller et al.'s 2015 topology measurement. **So `FloodParams::peers = 8` is
+very likely the measured mean degree of the real 2015 Bitcoin *server* graph —
+not Bitcoin's outbound default, and not a Shekyl quantity.** Its doc says only
+*"Fluff peers each node relays to"*, recording neither.
+
+**This also corrects the §25.5 fanout estimate downward**: "~6× reach
+reduction (12 outbound vs ~64 inbound)" overstates it, because the *relaying*
+graph is far sparser than the connection count.
+
+**Caveat that blocks a straight lift:** they exclude clients — NAT'd nodes
+accepting no inbound — on the grounds that *"clients do not relay
+transactions."* **That is a Bitcoin fact.** In our tree a NAT'd node makes its
+12 outbound and relays normally, so the client/server split does not map and
+their degree figures must not be transplanted wholesale. **The pin is therefore
+a modelling decision for the directed-flood unit, not a number to adopt.**
+
+### 28.5 Corollary 5.1 — configuration B, from the literature
+
+Corollary 5.1 extends reporting centrality to the **spy-based** adversary and
+shows `C_d > 0` **independent of `p`** as `t → ∞` — strictly stronger than the
+previously-known bound of `p`. Applied here: **the fluff phase is
+asymptotically deanonymizable to its initiator by a topological estimator no
+matter how small the adversary.** The initiator is the **stem terminus**, not
+the origin, so this does *not* contradict `C1 ≈ f` for the origin. What it says
+is that **the entire anonymity budget sits in the stem, and any configuration
+without one has no budget at all.**
+
+**That is configuration B (§25.1), stated from the literature rather than from
+our call graph** — and it is the F-6 ranking argument in its strongest form.
+Precisely: config B is not *"no anonymity"* — it has the covert channel, which
+defends the **wire** observer. It is **wire-unobservability with no
+peer-anonymity budget**, while config A is the reverse. **Two adversaries, two
+mechanisms, and each shipped configuration has exactly one of them.** The
+covert channel does not substitute for the stem against a topological
+adversary, which is the substitution claim §25.2 already found resting on a
+fallacy — now refuted from the other direction too.
+
+### 28.6 The disease table gains a fourth row
+
+§26.4's pattern — *correct for the case it was built for, then over-applied* —
+now has an instrument-side sibling:
+
+| | one thing | silently serving two |
+| --- | --- | --- |
+| Q11-A | one numeral (15 / 22) | two adversaries |
+| Configuration B | one design document | two deployment configurations |
+| `F = 2250` | one topology measurement | two fluff rules |
+| **§6.5's sweep** | **one attack axis (breadth, `dial_fraction`)** | **read as the supernode attack, which also has depth (θ)** |
+
+Two of the four are instrument gaps found in one session, both by asking *"can
+this fixture express the input?"* — which is now the cheapest question in the
+review kit and should be asked of an instrument **before** its number is cited,
+not when a new consumer appears.
+
+## 29. F-6 restated — configuration B does not merely omit the stem, it builds an origin oracle
+
+**2026-07-31, verified at source.** **The inherited Tor configuration being
+wrong is long-standing maintainer knowledge, not a discovery of this round** —
+it is recorded here because §6 never wrote it down, so every citation of
+§6.9's `≈ f` floor has been silently inapplicable to configuration B. What is
+*new* in this section is not the oracle but its **pricing**: the magnitude
+(§29.2), and the three downstream consequences (§29.3–29.5) that follow from
+it and that the open items had not accounted for. §25.1 recorded the omission
+half; the commission half is what makes the finding an inversion rather than a
+gap.
+
+### 29.1 The rule, and it names itself
+
+[`net_node.inl:2208-2211`](../../src/p2p/net_node.inl#L2208-L2211):
+
+```cpp
+if (origin != enet::zone::invalid)
+  return send(*m_network_zones.begin());   // send all txs received via p2p over public network
+if (m_network_zones.size() <= 2)
+  return send(*m_network_zones.rbegin());  // sends over anonymity network iff enabled
+```
+
+`origin == invalid` means **no inbound peer** — a locally-submitted
+transaction. Zones sort `public_ = 1 < i2p = 2 < tor = 3` (pinned by
+`static_assert`s whose own comment reads *"order from here changes priority of
+selection for origin TXes"*), so `begin()` is **clearnet** and `rbegin()` is the
+**anonymity network**. **Relayed transactions go to clearnet; originated
+transactions go to the hidden-service peers.** ProxyMark states the consequence
+exactly: a transaction arriving over that connection *"is generated by the peer
+on the other side."*
+
+### 29.2 The precise statement — two mechanisms, two adversaries, and a substitution that inverts
+
+- **Cover traffic** buys **unobservability against the wire observer** —
+  *whether* you transacted.
+- **The stem** buys **source-ambiguity against the peer observer** — *which of
+  you* originated.
+
+**Monero substituted the first for the second, and in doing so did not merely
+omit the stem: it built an origin oracle.**
+
+**The magnitude is the part to carry.** §6.9's floor is `Precision(C1) ≈ f` —
+the first stem successor attributes the origin only with its share, *because it
+cannot tell "you made this" from "you relayed this."* In configuration B the
+first covert successor attributes with **precision ≈ 1**, because the routing
+rule tells it. **Relayed transactions never arrive on that channel, so the
+covert channel's real traffic is by construction 100 % this node's own.**
+
+**And this locates CV-4's guarantee exactly, which is worth stating because the
+invariant is otherwise easy to over-read.** CV-4 makes dummy and real
+indistinguishable *on the wire* — same size, encrypted. **It does nothing
+against the peer, who decrypts.** So **the cover is perfect against the ISP and
+worthless against the two peers holding the slots.** CV-4 is sound; its
+beneficiary is named, and the peer is not it.
+
+**It also lands precisely on Fanti–Viswanath's prescription, with the sign
+flipped.** Their conclusion was *break the symmetry*, because symmetric
+spreading enables centrality attacks (§28.1). **Monero-over-Tor broke the
+symmetry in the wrong direction:** the stem's asymmetry makes origin and relay
+traffic **indistinguishable**; this asymmetry makes them **distinguishable by
+destination class**. Same word, opposite sign.
+
+**Corrected further at §31.3: the binding quantity is the JOINT product, and
+configuration B fails both terms — precision ≈ 1 *and* recall ≈ 1, because the
+broadcast means the slot holder receives the origin's whole stream rather than
+sampling it. Precision 1 with recall 1 over an epoch window is a *list*: the
+complete enumeration failure, not a degraded floor.**
+
+**F-6 is restated to carry both halves** — omission (§25.1: neither Dandelion++
+nor the embargo) and **commission** (this section: a positive source oracle,
+precision ≈ f → ≈ 1 conditional on slot occupancy). Without the second half a
+reader concludes configuration B is *merely unprotected*, when it is **actively
+worse than the clearnet floor it is meant to improve on.** That is not a
+degraded mechanism; it is an inverted one.
+
+### 29.3 Consequence — Q-10's burden on this path is total, not partial
+
+§6.9 files ProxyMark under active-occupancy with the defence at the selection
+layer, which is right about **access**. But **if precision given occupancy is
+≈ 1, there is no residual mechanism behind `g_max`** — no stem ambiguity, no
+embargo (F-6's omission half), no reshape (there is no stem to re-stem).
+
+**On clearnet, occupying a stem slot buys an *ambiguous* observation; here it
+buys *certainty*.** §12/§14's W3 treatment prices the attack against a
+stem-like residual, and **that price is wrong for the covert zone** — the
+measured `W3(g)` occupancy probability is unchanged, but the *consequence* of
+occupancy is not. Checking whether any downstream number inherits the
+stem-residual assumption is owed before `g_max` is cited against this
+configuration.
+
+### 29.4 Consequence — `NOISE_CHANNELS` is a security parameter with the opposite sign to `STEMS`
+
+> **Corrected at §30.4: the inverse sign is *conditional on F-6's omission
+> half*, not an independent property.** The broadcast is functionally the
+> backstop — with no embargo on this path, redundancy across `S` channels is
+> the only thing catching a black-holing proxy. Restore the backstop and
+> unicast-to-one-pinned-channel becomes safe, giving `P(capture) = f`
+> independent of `S`. The sign is a symptom, and it is fixed by the same
+> remedy.
+
+`send_txs` clones the covert message to **every** channel
+([`levin_notify.cpp:1082-1088`](../../src/cryptonote_protocol/levin_notify.cpp#L1082-L1088)),
+so **capturing one covert slot yields the origin's entire originated stream.**
+With `S` slots re-drawn each epoch and an adversary holding fraction `f` of the
+target's hidden-service peer set:
+
+```text
+P(capture ≥ 1 slot) = 1 − (1 − f)^S      — monotonically increasing in S
+```
+
+**More channels is monotonically worse for origin capture** — the exact inverse
+of the degree argument for the stem graph, where D++ Figure 3's known-graph
+regime says higher degree *helps* (§27.5). **Q11-D admitted `NOISE_CHANNELS` to
+the ledger as a *rate* term only** (§22.1); it is also a security parameter, and
+it points the other way.
+
+**Two parameters that both read as "how many outbound paths," moving in
+opposite directions.** If Unit 2 tunes either, **the asymmetry must be stated at
+both definition sites**, or someone will move them together — which is the
+`FORWARD_DELAY` coupling's failure mode with a worse blast radius.
+
+### 29.5 `MIN_EPOCH` is the attacker's re-roll clock, externally confirmed
+
+ProxyMark reports proxy re-selection *"after a random interval (one epoch, from
+5 to 5.5 minutes)"* — which is `CRYPTONOTE_NOISE_MIN_EPOCH = 300 s` plus
+`_EPOCH_RANGE = 30 s` **exactly, measured from outside, on mainnet.**
+
+So the epoch pair whose dead Rust mirrors Unit 0 deleted (§22.1, Q11-E) has an
+**externally-observed consumer**: it sets **the rotation rate of the choke
+point** in §29.4's capture equation — each epoch is another independent draw at
+the origin's covert slots. §20.9 lists `MIN_EPOCH` as a *cadence* constant; **it
+is also the attacker's re-roll clock, and that is the axis on which its value
+actually bites.** A shape derivation that moved it as a cadence term would have
+moved a security parameter without knowing.
+
+**Disease table, fifth row** (§26.4, §28.6):
+
+| | one thing | silently serving two |
+| --- | --- | --- |
+| **`MIN_EPOCH`** | **one epoch constant** | **covert cadence *and* the adversary's slot re-roll clock** |
+
+## 30. The configuration-B remedy — ratified constraint set, before any implementation
+
+**2026-07-31.** Maintainer-proposed constraints, ratified with amendments. **No
+code is attached to any of this deliberately**: R-1 and the capacity collision
+are design questions that gate everything downstream, so configuration B's unit
+opens as a **design round on eligibility-and-capacity** with §25.1's backstop
+question inside it, and an implementation plan is drawn only after.
+
+### 30.1 R-1 (ratified) — the oracle must close before a stem is worth building
+
+**The tempting sequence is a no-op.** Add the zone field, implement Dandelion++
+over Tor, done — fixes nothing on its own. If origin transactions stem over the
+anonymity zone while relayed transactions still route to clearnet
+(`net_node.inl:2211`), a peer receiving anything over its Tor connection
+**still knows the sender originated it**. That is a stem whose first edge has
+precision ≈ 1, and the stem's entire value is that the first successor cannot
+separate *"you made this"* from *"you relayed this"* — **a separation supplied
+by the zone rule, not by the presence of a stem.**
+
+**So the load-bearing change is `net_node.inl:2211-2215`: relayed transactions
+must become eligible for the anonymity zone.** Everything else is downstream.
+This also re-justifies the `txpool_tx_meta_t` zone field better than the
+inherited claim did (§25.6): it is not needed *"for the stempool to work"* — it
+is needed **to make the eligibility set mixed.**
+
+> **Acceptance criterion.** The remedy is complete when **a peer holding a
+> covert slot cannot infer origin from which channel a transaction arrived
+> on.** Anything that leaves the two classes routed by destination class has
+> not fixed configuration B, however much stem machinery sits on top.
+
+**Amendment (mine): capacity forces that criterion to be *quantitative*, not
+binary.** §30.2 shows full mixed eligibility is impossible, so the achievable
+state is a **mix ratio**, and a peer seeing a transaction on the covert channel
+updates toward "originated" by a **likelihood ratio set by that ratio**.
+Precision lands somewhere in `[f, 1]` — so **the eligibility rule *is* the
+anonymity parameter**, and the design round's output is a **precision target
+with the capacity bound as its constraint**, not a yes/no.
+
+### 30.2 R-1 collides with Q11-B at zero slack
+
+Mixed eligibility means the carrier transports relayed traffic as well as
+originated. The carrier is **2 channels × 3 KiB per 10 + U[0,5] s ≈ 491 B/s per
+zone**, and per-epoch capacity is bounded by the `static_assert` Q11-B showed
+holds at **exact equality** (§22.1).
+
+**Made vivid:** one epoch is ~300 s at ~12.5 s mean spacing ⇒ **~24 sends per
+channel per epoch**, and a maximum-size message is `MAX_FRAGMENTS = 20`
+fragments — so **a single max-size transaction consumes ~83 % of one channel's
+entire epoch.** At Shekyl transaction sizes (FCMP++ proofs plus hybrid PQ
+signatures; `shekyl-tx-weight` holds the real model) **the carrier cannot
+absorb network relay rate.**
+
+So R-1 **cannot** mean "all relayed traffic over Tor." It must mean something
+weaker that still produces ambiguity. The design space, with the fourth option
+added:
+
+1. a **sampled fraction** of relayed traffic;
+2. eligibility restricted to **stem-phase forwards**;
+3. a **per-epoch budget**;
+4. **(mine) the constants move** — `NOISE_BYTES` and the cadence are both in the
+   Q-11 ledger and are not fixed by nature. This must be *priced*, not assumed
+   away: loosening the cadence is a **build break** (Q11-B), and it is
+   **Q11-A's decoupling that now stops it silently rewriting the forward
+   delay**. The unit that decoupled them is what makes this option safe to
+   consider at all.
+
+Each carries a different anonymity argument, and **this is the second consumer
+of §22.1's family-surviving `MAX_FRAGMENTS` restatement** — landed for the
+shape question, and now gating the remedy.
+
+### 30.3 R-2 (ratified) — payload-independence survives, and is already structurally guarded
+
+Adding relayed traffic to the carrier **does not** make emission
+data-dependent: `CovertSchedule` arms deadlines independently of queue contents
+and sends real-if-queued-else-dummy. Higher occupancy changes the **dummy/real
+ratio** — unobservable by construction — not the **cadence**, which is what the
+wire observer sees. Loopix §4.1.2 covers exactly this case (§23.2).
+
+**Amendment (mine): R-2 is not merely satisfied, it is *enforced*.** CV-4's
+structural guarantee — no payload discriminant in the callback signature
+(§20.2) — means the scheduler **cannot** consult the queue even to try. The
+thing to guard is therefore narrow and nameable: **no part of the remedy may
+introduce a timer keyed on queue depth**, which would be a *new* path around an
+invariant the existing signature already closes.
+
+### 30.4 The broadcast is functionally the backstop — which **corrects §29.4**
+
+`levin_notify.cpp:1090-1096` clones to every channel with no selection, priced
+in §29.4 as `1 − (1−f)^S`. **The design consequence changes that finding's
+character:** the reason a covert send *can* be a broadcast is that **nothing
+else catches a black-holing proxy.** With no embargo on this path, redundancy
+across `S` channels is the only thing between a swallowed transaction and
+silent loss — remove it today and one adversarial proxy black-holes the
+origin's traffic undetected.
+
+**So `NOISE_CHANNELS`' inverse sign is *conditional on F-6's omission half*, not
+an independent property.** §29.4 recorded it as static; it is a **symptom**. The
+chain:
+
+```text
+§25.1 (what the backstop does on a noise zone) → embargo restored on the covert
+path → unicast-to-one-pinned-channel becomes safe → P(capture) = f, independent
+of S → NOISE_CHANNELS stops being inverse-signed
+```
+
+**Unicast costs nothing in cover** — the unselected channels keep emitting
+dummy, so the wire observer sees an unchanged carrier. And it is the same
+one-to-one pinning D++ Theorem 2 prices at **Θ(p² log(1/p))** against **Θ(p)**
+for the alternatives (§27.6); the mechanism already exists as `in_mapping_` on
+the clearnet side.
+
+### 30.5 One implementation of §25.1 is forbidden, and it is the obvious one
+
+> **The backstop must never fall out to the public zone.** On a dual-stack node
+> that publishes the transaction to clearnet **from the origin's own IP** — the
+> exact first-spy scenario this entire arc exists to prevent, triggered by the
+> mechanism meant to protect it.
+
+**Admissible answers are in-zone**: re-point to another covert channel
+(reshape's analogue, which §6.7 already prices at **0.026 %** worst-case origin
+exposure at R = 1), or in-zone fluff to the zone's outbound set. **Named at the
+definition site rather than caught in review**, because the forbidden path is
+the one a reasonable implementer reaches for first.
+
+### 30.6 The interim trade — recorded as a decision, with a recommendation
+
+If configuration B is removed before the composition lands, the fallback is
+**configuration C** (Tor + `disable_noise`): stem and embargo present, the
+constant-rate carrier gone, so a wire observer at the guard regains emission
+timing. **That is a real loss on the axis §20.9 was chartered to defend.**
+
+**C strictly dominates B on the peer axis** (B is not merely absent there — it
+is *inverted* to ≈ 1) and **loses to B on the wire axis.**
+
+**Recommendation: remove B in the interim, and record the trade.** Three
+reasons, the third being the one I weight most:
+
+1. **B's failure is near-certain in occurrence and unbounded in consequence.**
+   Slots re-roll every epoch (§29.5), so `P(capture at least once over k
+   epochs) → 1` for any persistent adversary with `f > 0`; once captured,
+   precision ≈ 1 on *all* originated traffic.
+2. **C's failure is bounded and positionally expensive.** The guard learns
+   *that* the node transacted and *when* — not what, not to whom, and not
+   linked on-chain without further correlation — and it must be the guard.
+3. **An inverted mechanism is worse than an absent one, because of what the
+   user believes they bought.** Selecting Tor is an affirmative act to improve
+   privacy; in B it makes the peer axis *strictly worse than clearnet*. That is
+   rule 82's worst class — a failure mode that presents as a protection — and
+   it is not a magnitude judgement, which is why it carries the most weight
+   here.
+
+**What must not happen is shipping the interim silently.** This arc's idiom is
+that a trade is recorded as a trade; the alternative is a future reader finding
+cover traffic deleted with no note that anything was given up. If B is removed,
+the removal commit states what was lost, to whom, and what restores it.
+
+## 31. The goal statement — non-enumerability, and what it settles
+
+**2026-07-31, maintainer.** The arc has been operating without an explicit
+objective function, and several open questions were open *because* of that.
+This section states it, and records what it settles, what it costs, and what it
+corrects.
+
+### 31.1 Invisibility was provably never available
+
+Dandelion (1701.04439) Theorem 2 bounds **any** networking policy on a network
+with adversary fraction `p`:
+
+```text
+D_OPT ≥ p²        R_OPT ≥ p
+```
+
+Both floors are **irreducible** — no spreading strategy, no topology, no
+timing. **So "make the origin invisible" was never a reachable target against
+the peer adversary**, and stating it as the goal would have made every
+mechanism a partial failure *by construction*.
+
+That is this project's own **greenable-gate rule at the design level**: an
+acceptance criterion the correct fix cannot meet is a broken gate, not
+demanding work. **Non-enumerability is the greenable form** — and it is a claim
+about **assembly** rather than observation:
+
+> **The adversary may hold observations it cannot turn into a list.**
+
+### 31.2 §6.8 is already this analysis, and the composition argument gets stronger
+
+§6.8's `detection = L × labelable × linkable`, with FCMP++ shutting the linker
+and the intersection attack needing **≥ 2 leaks in distinct epochs**, is
+**a non-enumerability analysis wearing a detection-probability label.** It had
+the right shape and had not been told it was the objective.
+
+**And the two adversaries have different floors, which is a better argument for
+the composition than "they defend different adversaries":**
+
+| adversary | floor | consequence |
+| --- | --- | --- |
+| peer / topological | `R_OPT ≥ p` — **irreducible** (Thm 2) | cannot be driven to zero; the best available is to **sit near the floor and deny assembly** |
+| wire observer | **none** — it is not in Dandelion's model at all | constant-rate payload-independent cover drives its recall to **zero**: it cannot even *count* your transactions, let alone list them |
+
+**So C + noise is not "two mechanisms for completeness." It is taking the free
+win on the one axis where zero is actually achievable, and staying near an
+irreducible floor on the other.**
+
+### 31.3 Configuration B fails **both** terms — correcting §29's pricing
+
+§29 priced configuration B at **precision ≈ 1**. Under the goal the binding
+quantity is **joint**, and B fails both:
+
+- **Precision ≈ 1** — the zone rule labels origin
+  ([`net_node.inl:2211`](../../src/p2p/net_node.inl#L2211)).
+- **Recall ≈ 1** — `send_txs` clones to **every** channel
+  ([`levin_notify.cpp:1090-1096`](../../src/cryptonote_protocol/levin_notify.cpp#L1090-L1096))
+  and **all** originated transactions route to that zone. **The slot holder
+  does not sample the origin's stream; it receives the whole of it.**
+
+**Precision 1 with recall 1 over an epoch window is a list.** Not a floor
+violation — **the complete enumeration failure**, which is the one thing the
+goal names as unacceptable. And `1 − (1−f)^S` is therefore **the probability of
+getting the list**, not of getting an observation. §29.4's framing understated
+this by pricing capture as access rather than as completion.
+
+### 31.4 Acceptance criteria move to the joint product
+
+**"Per-observation precision ≤ X" is the wrong gate.** An adversary with
+precision 1 on 0.02 % of transactions cannot enumerate; one with precision 0.3
+on all of them can. The remedy's gate is written against **§6.8's three-gate
+product with a stated time horizon.**
+
+**So R-1's success condition (§30.1) sharpens further** — beyond the
+quantitative amendment already recorded:
+
+> not *"cannot infer origin from which channel"*, and not merely *"precision ≤
+> some bound"*, but **"cannot assemble a per-node transaction list over N
+> epochs."**
+
+### 31.5 §6.9 may concede more than the goal requires — a **check**, not a conclusion
+
+§6.9 concedes the passive first-successor at `C1 ≈ f` as a structural loss.
+**Under non-enumerability that concession is about *identification*, and it is
+not obviously an *enumeration* loss:** the spy accumulates `(tx, node)` tuples
+of which fraction ~`f` are that node's own, **cannot separate origin from
+relay**, and — with FCMP++ shutting transaction-to-transaction linkage —
+**cannot group them.** Ungrouped tuples do not assemble.
+
+**Recorded as a check to run, with its own counter-hypothesis, because §6.9 is
+the section every scope argument cites and an over-eager reading would be worse
+than the current one.** The counter to test: §6.8's own intersection dynamics
+supply a candidate separator — a persistently-held slot sees the node's own
+traffic in *every* epoch while relayed traffic varies with the node's rotating
+predecessors, so *steady* origins may be separable where bursty ones are not
+(which is §6.8's recorded double-edge). **Checkable with instruments already
+built — but NOT independently schedulable: see §32.2.** The separator's
+strength is set by *persistence* and *isolation*, which are occupancy
+quantities (`W3(g)`, `g_max`, cooldown), so this check is **downstream of
+Q-10** and must not be queued as self-contained. If the check holds, §6.9's
+floor is a **bounded identification concession** rather than the
+redesign-territory loss it currently reads as.
+
+### 31.6 The cost of the reframe, in the goal rather than a clause
+
+**Non-enumerability borrows from FCMP++.** Invisibility would have been a
+relay-layer property; **non-enumerability depends on the linkability gate
+holding**, so an external side-channel — exchange KYC, wallet fingerprinting,
+an application-layer timing leak — **converts per-observation precision back
+into enumeration.** §6.8 already says *"absent an external side-channel"*
+parenthetically; **under the goal statement that parenthetical is load-bearing
+and belongs in the goal.**
+
+**Two consequences (mine).** It makes the goal **falsifiable in a named way** —
+anything that links transactions to a persona outside the chain breaks it,
+which is a testable class rather than a caveat. And it registers a **cross-layer
+dependency with a reopening trigger**: if FCMP++'s linkability gate ever
+weakens, **the relay layer's goal degrades with no relay change**, so that
+weakening is a reopen condition for this document and not only for the crypto
+one.
+
+### 31.7 Unit 1's answer falls out — and the shape question is a **linkability** question
+
+§20.9's order was adversary → shape → constants, and adversary-and-capability
+was the open item. **The goal supplies it:**
+
+> **The carrier's job is recall denial against the wire observer. Deny the
+> count.**
+
+That is the objective function §20.9 lacked, and it sorts the shape candidates
+immediately:
+
+- **Payload-independence does all the count-denial work, and a deterministic
+  metronome does it perfectly.** This is exactly Loopix §4.1.2's negative
+  result (§25.3) — **now with a reason rather than an absence of one.**
+- **So the only remaining reason to randomize is (b) — and under this goal (b)
+  is not a side argument, it is the main one.** Tagging is precisely how a wire
+  observer converts two separate observations into *"same node"*, which **is
+  the assembly step. A phase-shifted stream is a linkable stream.**
+
+**So the carrier's shape question is a linkability question, not an
+unobservability question, and Unit 2 is graded on whether an active prober can
+link two observations of the same carrier — not on inference precision about
+emission times.**
+
+**The synthesis this yields (mine), which is the strongest form of the
+carrier-level argument:**
+
+| property | job | denies |
+| --- | --- | --- |
+| **payload-independence** (CV-4) | the count | **recall** — the observer cannot tell whether anything was sent |
+| **memorylessness** (b) | the link | **assembly** — the observer cannot join two observations of one carrier across a perturbation |
+
+**Two properties, two jobs, neither substituting for the other**, and both
+needed only because the goal is a *joint* quantity. That is why the metronome
+argument (§25.3) and the tagging argument (§24.2) both survive without
+contradicting each other — they were answering different terms.
+
+**And it names the instrument, which `inference_precision` is not.** The
+measurement is a **linkage test across a perturbation**: two observation
+windows separated by an adversary-induced stall, asking whether post-stall
+phase is predictable from pre-stall phase. **Under a bounded family it is
+(phase persists — that is (b)); under an exponential it is not (there is no
+phase).** That fixture *can* express the input, which
+`inference_precision` — built to grade per-observation inference — cannot.
+**Per §26.4's pattern, that question gets asked of the fixture before any
+number it produces is cited.**
+
+## 32. The §6.9 check's dependencies, the linkage fixture's shape, and the grid
+
+**2026-07-31, maintainer, with amendments.** §31.5 recorded the §6.9
+counter-hypothesis as a check to run. Working the mechanism through settles
+where it can be scheduled, hands `STEMS` a third argument, and forecloses one
+obvious response.
+
+### 32.1 The separator is a cross-epoch mixture-separation problem
+
+The adversary holds outbound stem slots of the origin and **cannot see the
+origin's inbound peers**, so every transaction it receives looks alike at the
+edge. Within an epoch, `in_mapping_[nil]` sends **all** of the origin's own
+transactions to one slot, while relayed transactions land on slots keyed by
+predecessor. So the separator is: **isolate the component whose rate is
+invariant under the origin's peer churn from components that rotate with the
+predecessor mapping.**
+
+Well-formed, and its strength is set by three quantities:
+
+- **Persistence** — epochs the adversary holds position; one epoch gives no
+  contrast.
+- **Isolation** — fraction of the `STEMS` slot set held. With one slot it does
+  not know whether it holds the nil-mapped one; with the **full set** the
+  invariant component is at least *present* in what it sees every epoch.
+- **Rate contrast** — the origin's own rate against its aggregate relay rate,
+  which is **§6.8's velocity double-edge stated in a different variable**.
+
+### 32.2 The check cannot resolve before Q-10 — a scheduling constraint, stated in the check itself
+
+**Persistence and isolation are occupancy quantities** — `W3(g)`, `g_max`,
+cooldown length. So *"is §6.9's floor an enumeration concession?"* is **not
+independently answerable**; it is **downstream of the selection round.**
+
+**Recorded here and in the check's own text**, because otherwise it gets
+scheduled as self-contained and stalls — the failure mode being that a
+"cheap check with instruments already built" is queued early, blocks on a
+number it does not own, and its blockage is discovered rather than predicted.
+
+### 32.3 `STEMS` gains a third argument, and this one is unambiguously signed
+
+**Holding the full slot set is what makes the invariant isolable, and full-set
+occupancy gets harder in `STEMS`.** So the list is now:
+
+| argument | direction | ambiguity |
+| --- | --- | --- |
+| (a) degree / entropy | — | **sign flips** on adversary graph knowledge (D++ Fig. 3, §27.5) |
+| (b) PSG-learning cost (Sharma App. B) | toward **raising** | unambiguous |
+| ~~(c) invariant-isolation resistance (this section)~~ | ~~toward raising~~ | **WITHDRAWN 2026-07-31 (§33.1) — no mechanism: per-source pinning sends the own-stream to ONE slot regardless of `S`, so full-set occupancy was never required. Its corrected form (camouflage-thinning) points *against* raising.** |
+
+~~**Only (a) is ambiguous**~~ — **superseded at §33.1**: (c) is withdrawn and replaced by an argument pointing the other way, so the raise's position is *not* improved by this line of reasoning. §32.3's unification (one-slot versus all-slots) survives the retraction and is what explains why: the own-stream attack needs **one** slot, so `S` does not defend it.
+
+**Amendment (mine) — the unification, which is worth more than the third
+argument.** §29.4/§30.4 found `NOISE_CHANNELS` raising makes capture *easier*
+(`1 − (1−f)^S`, increasing); this section finds `STEMS` raising makes the
+separator *harder* (full-set occupancy, decreasing in `S`). Both follow from
+one question:
+
+> **The sign of a slot-count parameter is set by whether the attack needs ONE
+> slot or ALL slots.**
+
+`NOISE_CHANNELS` today: **one suffices**, because the covert send is a
+broadcast ⇒ more channels is worse. `STEMS`: **invariant-isolation needs the
+full set** ⇒ more slots is better. And this is exactly why §30.4's remedy flips
+the covert sign back — restoring the backstop makes **unicast** safe, which
+converts `NOISE_CHANNELS` from *one-suffices* to *one-of-S*. **A rule for
+reading these parameters, rather than a table to memorize.**
+
+### 32.4 Loopix's answer does not transfer here — a clean negative that forecloses the obvious response
+
+The separator is **the Loopix superposition problem viewed from the
+adversary's side**: decompose a mixture into components. Loopix's answer is
+that **memoryless components resist decomposition**.
+
+**It does not transfer.** Stem forwards fire **on transaction arrival**, not on
+a timer, so **there is no component-level memorylessness to invoke.** Recorded
+as a clean negative because it **forecloses "just randomize the forwarding"**
+before someone proposes it — the same service §25.3's negative result performed
+for the cadence.
+
+### 32.5 The linkage fixture — four constraints, before it is built
+
+**1. A matching test, not a prediction test.** *"Is post-stall phase
+predictable from pre-stall?"* yields a scalar error **with no natural
+threshold**, and threshold prose written ahead of measurement is what this arc
+is 0-for-N on. The adversary's actual question is **"are these two windows the
+same node?"** — so the fixture generates **M streams**, perturbs one, and asks
+whether an estimator matches the post-stall window to the correct pre-stall
+stream. **The quantity is advantage over `1/M`** — a number with a meaning
+rather than a number needing a threshold.
+
+**2. The negative control is the metronome, and it is *also* the decision's
+comparison arm.** The instrument is not complete until a control has been run
+and observed to fail — here, a family where linkage *should* succeed: a
+**deterministic metronome with a random per-node phase**. But it is not only a
+control: **its advantage figure *is* the answer to whether phase-randomized-once
+suffices or per-interval memorylessness is required.** One fixture, one run,
+control and result. *(Worth naming as a pattern: when the control's failure
+mode is itself a candidate design, the control does double duty — rare, and to
+be taken when it appears.)*
+
+**3. The perturbation drives production, with zero test-only code.**
+[`Zone::covert_deadline()`](../../rust/shekyl-relay/src/zone/mod.rs#L284) and
+[`Zone::due_covert_channel(now, rng)`](../../rust/shekyl-relay/src/zone/mod.rs#L292)
+both take `now` as a **parameter** (verified). **A stall is simply not calling
+`due_covert_channel` across a range of `now` and then resuming** — which
+reproduces the re-arm-from-`now` semantics **because it is that code path.**
+That is the *"the entire difference is the value of `now`"* form this round
+named as best achieved (§20.7 item 1), available here **without a force flag or
+a shim.**
+
+**4. State the adversary's capability before the sweep.** A stall inducible
+**once** is a different threat from one inducible **repeatedly and cheaply**:
+repeated perturbation lets the adversary **re-tag after every rotation**, which
+changes what *"linkable"* means over the epoch horizon §6.8's product is
+measured against. **The capability statement determines the perturbation
+schedule, so it comes first** — name `T` and its channel before the sweep, not
+after.
+
+### 32.6 The portable form of §31.7 — and the empty cell is the argument
+
+|  | **recall denial** (deny the count) | **assembly denial** (deny the link) |
+| --- | --- | --- |
+| **wire observer** | payload-independence → **0** | memorylessness — **(b)** |
+| **peer adversary** | **floored at `p` — unreachable** | stem asymmetry + FCMP++ |
+
+**Both wire-observer cells are achievable outright**, because that adversary
+appears in **no floor theorem**. The peer adversary's recall cell is **the one
+place where the honest answer is "you cannot"** — which is precisely why the
+goal had to become non-enumerability (§31.1), and why **the remaining work
+concentrates in the other three cells.**
+
+**Configuration B reads off it immediately: it fills the top-left and *inverts*
+the bottom-right.** The grid is the compact form of every scope argument in
+this document, and it is the form to carry.
+
+## 33. STEMS argument (c) retracted and inverted; Q-10 in operational terms
+
+**2026-07-31, maintainer, verified at source.** Two items: a retraction that
+strengthens §12.7 rather than weakening it, and a decomposition of Q-10 that
+finds the mechanism reading a signal production does not record.
+
+### 33.1 Argument (c) is withdrawn — and its corrected form points the other way
+
+§32.3 offered **invariant-isolation resistance** as a third argument for
+*raising* `STEMS`. **Withdrawn: it had no mechanism under it.** §12.7's recorded
+note supplies the reason — **per-source pinning means one successor per source
+regardless of out-degree**, so the origin's own transactions all resolve through
+`in_mapping_[nil]` to **exactly one slot whatever `STEMS` is.** The adversary
+never needed full-set occupancy to see the own-stream; it needs **that one
+slot, at probability ≈ `f`, independent of `S`.**
+
+**The corrected version inverts the sign, and it is stronger than the argument
+it replaces.** On the pinned slot, **relayed traffic is the cover for own
+traffic**:
+
+| `STEMS` | what the nil-mapped slot carries | own : relayed contrast |
+| --- | --- | --- |
+| 2 | own-stream + ~½ of the node's relayed stem traffic | lower |
+| 8 | own-stream + ~⅛ of it | **higher** |
+
+**So raising `STEMS` thins the camouflage on exactly the slot that matters** —
+a **fourth argument against raising**, on the non-enumerability axis, which
+§12.7 does not currently carry.
+
+**And it matters structurally beyond scorekeeping.** §12.7's own note concedes
+the pinning retraction **may undercut its fan-out leg**. This argument
+**depends on pinning being true** rather than being defeated by it — so if the
+fan-out leg falls, **§12.7 is not left standing on the expander-minimum
+alone.**
+
+**Revised argument list:**
+
+| argument | direction | status |
+| --- | --- | --- |
+| (a) degree / entropy | — | **sign flips** on adversary graph knowledge (D++ Fig. 3) |
+| (b) PSG-learning cost (Sharma App. B) | toward **raising** | unambiguous |
+| ~~(c) invariant-isolation resistance~~ | ~~raising~~ | **withdrawn 2026-07-31 — no mechanism** |
+| (d) **camouflage-thinning on the pinned slot** | **against raising** | unambiguous; survives the pinning retraction *because* it assumes pinning |
+
+### 33.2 §12.11 reads an oracle that production does not wire
+
+**Verified at source today:** `PeerFluff`
+([`zone/mod.rs:41-53`](../../rust/shekyl-relay/src/zone/mod.rs#L41-L53))
+carries **`queued` and `direction` — nothing else.** A grep for `disarm` across
+`rust/` and `src/` returns only *derivation* (`derive.rs`), *doc comments*
+(`params.rs`) and *simulation* (`conformance/stem.rs`) — **no production code
+records, per successor, whether an embargo disarmed or fired.**
+
+**§12.11 is not short a design. It is short a signal that exists in
+production.** That reorders its open questions:
+
+### 33.3 Q-10.1 — which side of the seam owns the reputation state
+
+The signal is **relay-owned, Rust-side**; the consumer — outbound selection,
+anchors, connection lifecycle — is **p2p-owned, C++-side** in `net_node.inl`. A
+per-peer disarm-rate accumulator lives on one side and crosses. **That decision
+determines whether Q-10 is a relay round with a p2p consumer or the reverse**,
+and it carries the standing duplicate-fact hazard: **the peer table and the
+reputation store must not become two owners of "who is eligible."**
+
+### 33.4 Q-10.2 — the denominator, and it is the blocker
+
+§12.11 owes the **ambient background failure rate** (the threshold's
+*numerator* input). **It does not owe the observation count**, and a rate
+threshold separating ~12 % from ~100 % is only estimable if a node accumulates
+enough stem outcomes per successor per decision window:
+
+```text
+obs(peer, epoch) ≈ tx_rate × mean_stem_length / node_count × epoch
+                   × (sources mapped to that peer / total)
+```
+
+**Illustratively** at Monero-like figures — 20 k tx/day, mean stem `1/q = 5`,
+5 000 nodes, 10-minute epoch, two successors — **≈ 0.07 observations per
+(peer, epoch)**: order one observation per successor every couple of hours, and
+**order a day to separate 12 % from 100 % with any confidence**, against a peer
+set that churns on a shorter timescale than that.
+
+**Sharpening (mine), and it makes the denominator worse:** reputation
+accumulates *per peer* across epochs, but **a peer is only a successor in some
+fraction of epochs** — the map re-draws at every rollover. So the effective
+observation rate per peer per unit wall-clock is **lower than
+`obs(peer, epoch) × epochs`** by that occupancy fraction, and the "order a day"
+figure is optimistic.
+
+**Inputs are illustrative on a pre-genesis chain and the real numbers need the
+measurement — but the shape is robust to them, and if it holds it dominates
+every parameter question in §12.11**: cooldown length, rate-decay threshold and
+`ε_explore` are **all unanswerable** if the signal arrives at 0.07 per window.
+The mechanism would need **cross-epoch retained history not as a refinement but
+as its only mode**, which changes the whitewash analysis, the memoryless-explore
+edge and cold-start behaviour **together**.
+
+~~**This is a plain measurement in the same class as `F` and hop latency**~~ —
+**corrected at §34: it is not.** `F` needs no economic input; this needs a
+transaction rate, which pre-genesis does not exist. **Q-10.2 is a parametric
+study over an envelope**, which changes who can produce it and when — though
+§34.5 shows the envelope collapses to **one axis** (`r = tx_rate/node_count`)
+with a closed form, so it is cheaper than "study" implies. It still gates the
+other three, and now the whitewash cost as well.
+
+### 33.5 Q-10.3 — re-entry cost, and it cannot be computed before Q-10.2
+
+§12.10's answer is that the toll is paid in **work, not identity**, so a fresh
+onion address starts unproven and must earn through the explore tier.
+Operationally the whitewash cost is **expected wait to be drawn by explore +
+observations needed to reach threshold** — both functions of `ε` and of
+Q-10.2. **On an anonymity network key-minting is free, so that wait is the
+entire cost**, and it must be *computed* rather than assumed positive. **The
+trade is single-knobbed and adverse:** a small denominator makes proving slow,
+which raises whitewash cost (good) and lengthens honest bootstrap (bad).
+
+### 33.6 Q-10.4 — persistence, re-scoped from defence to **requirement**
+
+**The framing this replaces was wrong, and the maintainer withdrew it before I
+could build on it**: an *induced*-restart capability fails part D's own rule —
+remote crash is a bug to fix rather than a threat-model input, resource
+exhaustion has no found vector against existing connection caps, and presence
+at the moment of restart is **already priced** as §12.10 regime 3's occupancy
+budget, so naming induction separately **double-counts it**.
+
+**The concern survives in a better form and needs no adversary at all.
+Restarts are ambient** — upgrades, host reboots, power, container churn,
+operator action. The question is whether the mechanism **converges**:
+
+```text
+warm-up  ≪  mean uptime
+```
+
+Warm-up is a direct function of Q-10.2's denominator. If ~0.07 per peer-epoch
+is even roughly right, **warm-up is order days**, against mean uptime of order
+weeks for a server and **far less for a laptop or a container.**
+
+- **Convergent regime:** a slice of node-time is lost to warm-up.
+- **Non-convergent regime:** the mechanism is **not degraded — it is inert.**
+  Every node sits permanently in explore-only, which is uniform random
+  selection, which is **today's behaviour plus machinery.**
+
+**And §12.11 would grade green in simulation either way, because a simulation
+runs a node continuously.** That is **§20.3a's first vacuity mechanism —
+fixture cannot express the input — applied to a design validation rather than a
+test**, and it is the third instance of that check paying this session
+(`flood.rs`'s symmetric adjacency, the missing θ, and now a simulation that
+cannot express a restart).
+
+**Two consequences.** **Q-10.2 gains a second consumer and moves up**: it was
+gating the parameters; it now gates **whether the round is about parameters at
+all.** And **persistence is re-scoped** — not *"persist and accept a forensic
+artifact"* but **"persist, or the mechanism may not function"**, because
+persistence is what makes warm-up a once-per-node-lifetime cost instead of
+once-per-restart.
+
+**The forensic cost is also smaller than it was priced.** Verified:
+`store_config()` already writes the peer list to `P2P_NET_DATA_FILENAME`
+([`net_node.inl:1013`](../../src/p2p/net_node.inl#L1013)), and **anchors
+already persist and reconnect on restart**
+([`:1347`](../../src/p2p/net_node.inl#L1347),
+[`:1419`](../../src/p2p/net_node.inl#L1419)) **specifically as the anti-eclipse
+mechanism.** The node already keeps an on-disk record of who it connects to and
+that cost was accepted; reputation **deepens the artifact from address history
+to behavioural history**, which is not a new category. The marginal question —
+*how much more does per-peer disarm-rate reveal than the anchor list already
+does* — is narrower and more answerable than the one first posed.
+
+**Amendment (mine): if persistence is a requirement rather than a hardening,
+its bounding is part of the specification, not a nice-to-have.** Bucketed
+counts rather than event logs, bounded retention, no peer identifiers at rest —
+these must be specified **at the same time** as the requirement, because a
+mechanism that cannot function without persistence will get persistence in
+whatever form is convenient if the bound is left to implementation.
+
+### 33.7 The same test run on (b) — and the test discriminates
+
+The capability check that killed the induced-restart framing was **run on (b)
+as well, before Unit 2 spends derivation effort on it.** **It passes:** the
+perturbation capability is **delay-or-drop on the link**, which is **Loopix's
+active adversary** (§4.2.1's blocking analysis) and **D++'s §4.4 blocker** —
+**named in the sources rather than assumed.**
+
+**Worth recording that the test *discriminated*** — it rejected induced-restart
+and accepted delay-or-drop. A check that passes everything is decoration; this
+one has now produced both answers on the same day, which is the evidence that
+it is doing work.
+
+### 33.8 Standing obligation before anything is built on §12.11
+
+Per §12.11's own first-move instruction, **its anchors are three weeks old.**
+`PeerFluff` and the absence of production disarm state were **verified today**;
+**`get_stem` / `out_mapping_` / the embargo-disarm path were not**, and must be
+re-verified before anything is built on them.
+
+## 34. Q-10.2 is a parametric study, not a measurement — and both denominators fail
+
+**2026-07-31, maintainer, correcting §33.4's own framing.** §33.4 called
+Q-10.2 *"a plain measurement, same class as `F` and hop latency."* **It is
+not.** `F` is measurable on a synthetic topology with **no economic input**;
+the denominator needs a **transaction rate**, and pre-genesis there is not one.
+**Q-10.2 is a parametric study across an envelope**, which changes who can
+produce it and when.
+
+### 34.1 The parameters cannot be constants in time
+
+If observations arrive at a rate set by chain activity, then cooldown length,
+promotion threshold and warm-up **expressed in epochs or seconds** carry a
+statistical meaning that **drifts with volume**: same numeral, different
+confidence, different false-eviction rate at every point on the adoption curve.
+
+**That is derive-don't-hardcode with a moving target — worse than the 39 s,
+because the 39 s was at least wrong at a fixed point.**
+
+### 34.2 The obvious repair fails the other way — the adversary supplies its own denominator
+
+Denominate in **observations** rather than time, and whoever produces
+observations fastest reaches every threshold first. A peer holding an outbound
+slot at `O` accumulates observations from `O`'s sources mapped to it — **and an
+adversary that also holds an *inbound* connection to `O` is one of those
+sources.** It can pump transactions into `O`, have them routed back to itself
+with probability ~`1/STEMS`, forward them correctly, and **mint its own disarm
+events.** It need not even originate them: relaying anything `O` has not yet
+seen works, so a well-connected adversary that wins the race to deliver
+**converts bandwidth into observations at no fee cost.**
+
+> **Correction carried before it propagates (maintainer's own): this does NOT
+> inflate the score.** The signal is a **rate**, so supplying volume does not
+> raise disarms/observations — it **converges you to your true rate faster.**
+> **Farming buys speed, not standing.**
+
+**And speed is exactly what Q-10.3 was pricing.** Whitewash cost was *expected
+explore-wait + observations-to-threshold*; under observation-denominated
+windows **the second term collapses for a well-provisioned adversary and does
+not for an honest low-volume peer.** So **re-entry cost becomes
+adversary-specific, and it is cheapest for precisely the adversary the
+mechanism exists to tax.**
+
+### 34.3 This is the live half of the ranking-preference clause, and ε does not reach it
+
+The standing clause is *"reputation as eviction of droppers, never preferential
+selection of good actors — ranking-preference recruits the best-provisioned
+adversary."* **§12.11's exploit tier *is* ranking-preference.** The measured
+ossification (2 of 12) is the clause's **first** half and `ε = 0.05` fixes it.
+**The second half — recruitment of the best-provisioned — is untouched by ε**,
+because exploration restores *diversity* without changing **who wins the
+ranking or how fast.**
+
+§12.10 answers the objection at the level of **work demonstrated**, but **work
+demonstrated on traffic the adversary supplied to itself is counterfeit coin.**
+
+**Refinement this forces on a principle already recorded (mine).** The
+recruiting frame — *an adversary that must sustain work to hold position is
+conscripted into maintaining the network* — carries an **unstated
+precondition**: **conscription requires the work to be useful to someone other
+than the worker.** Relaying your own traffic back to yourself is *work* but it
+is not *carriage*. The precondition belongs in the frame, because without it
+the frame licenses exactly the farm described above.
+
+### 34.4 The shape the answer probably has — scope, not decision
+
+**Neither pure-time nor pure-observation gating survives alone.**
+Time-denominated is volume-sensitive (§33.6's convergence problem);
+observation-denominated is adversary-accelerable (§34.2). **Gate promotion on
+both** — minimum observations **and** minimum wall-clock tenure — so each party
+pays **the slower of the two**, which is the honest peer's real constraint and
+the adversary's binding one.
+
+*Addition (mine): that reduces the design's security question to **"can the
+adversary wait?"** rather than **"can the adversary farm?"** — and wall-clock
+is the one input bandwidth cannot buy. It is the same shape as this document's
+take-the-max-of-two-constraints idiom elsewhere.*
+
+**A structural candidate worth testing before any threshold work: count
+*distinct source-mappings* contributing to a successor's observations, not raw
+observations.** Farmed events all arrive under **one** `in_mapping_` key — the
+adversary's own — while honest traffic arrives under many. **`in_mapping_`
+already holds exactly this information, so it costs no new state.** The
+adversary's counter-move is to open many inbound connections under distinct
+identities, free on Tor but **capped by `set_max_in_peers`** — so **the farm's
+cost collapses into the inbound-occupancy budget §12.10 regime 3 already
+prices.** Per part D's rule that is the right outcome: **pay for the capability
+once, in the subsystem that already owns it.** And it is **a metric farming
+cannot move rather than a detector for farming**, which is the preferred shape.
+
+**One check on the candidate before it is adopted (mine).** The metric's floor
+is set by the **observing** node's inbound diversity, not the observed peer's
+honesty: a poorly-connected honest node has few source-mappings and therefore
+**cannot accumulate distinct-source evidence about anyone.** That conflates
+*few sources* with *farmed* — possibly acceptable, since both mean
+low-confidence signal — but it **interacts with §33.6's cold-start problem and
+may compound it**, so the two must be evaluated together rather than in
+sequence.
+
+### 34.5 What the deliverable becomes — and it is smaller than "parametric study" suggests
+
+Not *"the denominator"* but **`obs(peer, epoch)` over the plausible envelope**,
+parameterised on the **ratio `tx_rate / node_count`** rather than each term
+separately — the two plausibly grow together, and the ratio is likely closer to
+scale-invariant.
+
+**Sharpening (mine): the envelope collapses to one axis, with a closed form.**
+Substituting `sources-mapped/total ≈ 1/STEMS` under even mapping:
+
+```text
+obs(peer, epoch) ≈ (tx_rate / node_count) × (1/q) × epoch / STEMS
+```
+
+`q`, `epoch` and `STEMS` are known constants, so **`r = tx_rate / node_count`
+is the only free variable** — this is **a formula with one axis, not a
+multi-dimensional sweep**, and the "study" is choosing the envelope of `r` and
+reading off. At `q = 0.2`, a 600 s epoch and `STEMS = 2` that is
+`obs ≈ 1500 · r`, which reproduces §33.4's illustrative 0.07 at Monero-like
+figures — an internal consistency check on both.
+
+**And the launch corner may run the *other* way from the intuition, which is
+why it must be checked rather than assumed.** Since `obs` scales with
+`tx_rate / node_count`, a young chain is only worse if **node count shrinks
+more slowly than volume**:
+
+| envelope point (illustrative) | `r` (tx/s/node) | `obs`/(peer, epoch) |
+| --- | --- | --- |
+| Monero-like — 20 k tx/day, 5 000 nodes | 4.6 × 10⁻⁵ | **0.069** |
+| young — 1 k tx/day, **100** nodes | 1.2 × 10⁻⁴ | **0.174** |
+| young — 1 k tx/day, **500** nodes | 2.3 × 10⁻⁵ | **0.035** |
+| tiny — 200 tx/day, 50 nodes | 4.6 × 10⁻⁵ | 0.069 |
+
+**A small chain with proportionally few nodes is *better* for the signal, not
+worse.** The dangerous corner is **many nodes on low volume** — an
+enthusiastically-run young network — which is the opposite of the naive
+"launch is worst" reading. Illustrative inputs on a pre-genesis chain; the real
+envelope is what Q-10.2 produces, and the point is that **the corner to check
+hardest is not the one intuition names.**
+
+**Necessary but not sufficient — see §35:** `obs(r)` is a **mean**, and the
+threshold decision consumes a **count**, so the binding constraint is the
+binomial tail. The full deliverable is `obs(r)` **then** `n_min` from an
+eclipse-bounded false-cooldown rate **then** `warm-up = n_min / obs`.
+
+**Q-10.2 remains first to produce and still gates the parameters, the
+convergence condition, and now the whitewash cost — but it is a different kind
+of artifact than §33.4 said, and a cheaper one than "parametric study"
+implies.**
+
+## 35. The closed form is a mean — the binding constraint is in the tail
+
+**2026-08-01, maintainer, with one arithmetic correction and three amendments.**
+§34.5's `obs(r)` is necessary and **not sufficient**: the threshold decision
+does not consume a rate, it consumes a **count**, and at these counts the
+decision is dominated by **binomial variance**.
+
+**Precision note carried rather than assumed:** the epoch is
+`MIN_EPOCH + U[0, 30 s]`, mean **615 s**, so §34.5's closed form runs **~2.5 %
+low**. Below transport noise on this quantity, recorded because it was checked.
+
+### 35.1 Black-hole separation was never the constraint; the honest tail is
+
+Threshold 50 %, honest peer at the ~12 % ambient floor
+(**recomputed independently**):
+
+| `n` | P(false cooldown) | × 12 peers | P(black hole caught) |
+| --- | --- | --- | --- |
+| 3 | **3.97 %** | **0.48** | 1.000 |
+| 5 | 1.43 % | 0.17 | 1.000 |
+| 10 | **0.37 %** | 0.045 | 1.000 |
+| 15 | 0.013 % | 0.002 | 1.000 |
+| 20 | 0.004 % | 0.000 | 1.000 |
+
+**Black-hole detection is trivial at every `n`.** §12.11's clean-separation
+claim is right **and was never the constraint.** The constraint is the honest
+tail: at `n = 3`, ~4 % per peer across 12 peers is **roughly half a false
+cooldown per decision window.**
+
+**So the axis where the defect lives is the variance, not the mean — the same
+shape as F-4**, which was mean-correct and wrong in the second moment. **A
+mean-only deliverable would grade this mechanism as fine.**
+
+**Correction (mine): the `n = 10` figure is `0.37 %`, not `0.06 %`** — ~6×
+higher. It does not touch the finding's structure (the tail is still the
+constraint, and detection is still trivial), but it **moves `n_min`**, and
+`n_min` drives warm-up, so it propagates into every downstream number. At
+`n = 10` roughly **1 decision window in 22** sees a false cooldown somewhere in
+the pool; whether that is acceptable is what §35.2 decides.
+
+### 35.2 The false-positive rate has a derivation source, not a taste setting
+
+False cooldown **shrinks the eligible pool** — the same currency §12.11 part C
+already measured for `ε = 0`, where **collapse to 2 of 12 is a self-inflicted
+eclipse.** So the acceptable false-cooldown rate is **bounded by the
+eclipse-resistance requirement**, and **part C's measured result is the
+anchor** rather than a chosen number.
+
+**And that gives cooldown its derivation.** Because §12.11 chose
+**cooldown-not-eviction**, a false positive is temporary and the steady-state
+damage is:
+
+```text
+fraction of pool falsely cooled ≈ false_rate × (cooldown / decision_interval)
+```
+
+Bound that fraction by what part C's diversity requirement admits, and
+**cooldown falls out of `false_rate` and `obs`.** **Two of §12.11's three owed
+parameters then derive from one measurement plus one already-measured result** —
+a materially better position than "derive them against a three-way trade-off."
+
+**The third parameter, and it now has a visible coupling (mine).**
+`ε_explore` sets how fast unproven peers accumulate observations at all, so it
+is the knob on warm-up — **and it moves warm-up for *everyone symmetrically*.**
+That is the **quantitative form of §34.3's claim** that ε cannot reach the
+recruitment half: raising ε accelerates the adversary's convergence exactly as
+much as the honest peer's, so it changes **when** the ranking settles and never
+**who wins it.** ε is therefore derivable against warm-up and cold-start, but
+**not** against recruitment — which is a scope statement for it, not a gap.
+
+### 35.3 Wall-clock is non-compressible but **not scarce** — correcting my §34.4 addition
+
+I wrote that gating on wall-clock reduces the question to *"can the adversary
+wait?"* because wall-clock is what bandwidth cannot buy. **The correction:
+holding a connection open costs almost nothing, so an adversary can pre-warm
+identities in parallel and the aged-identity pool grows linearly at negligible
+cost.** So the gate **defeats reactive whitewash** (drop, cool down, return
+immediately) and **does nothing against stockpiled identities prepared in
+advance.**
+
+> **It buys latency, not cost.** Stated that way at the definition site, or
+> someone later prices it as a cost and over-credits it.
+
+**The repair, and it is the same move that saved the distinct-source candidate
+(mine): denominate tenure in something that requires occupancy.** Count tenure
+from **first draw by explore**, not from first connect — a stockpiled identity
+then has to have been *in the pool and selected*, which costs an inbound slot,
+which **collapses the stockpile's cost into the inbound-occupancy budget
+§12.10 regime 3 already prices.** Same shape, same subsystem, and per part D's
+rule the capability is paid for once.
+
+### 35.4 The distinct-source metric probably lacks the resolution to be a score
+
+Sources mapped to one successor ≈ `inbound_count / STEMS`, so with ~12 inbound
+that is a range of roughly **0–6** — too coarse for a threshold input, and it
+**compounds** §34.4's cold-start concern rather than sitting beside it.
+
+**But it survives as a binary admissibility gate:** *"at least 2 distinct
+source-mappings before any promotion."* Farming still cannot satisfy that
+cheaply, and it **degrades to "cannot promote" rather than "promotes wrongly"**
+for a poorly-connected node — failing **closed**. Worth testing in that form
+before discarding.
+
+**Upgraded at §36.3: the minimum-observations gate is not one of three
+conditions but a *well-posedness precondition* — heterogeneous `n` puts peers
+on different rungs of the ladder, so judging below `n_min` penalizes the peers
+the mechanism knows least about.**
+
+**Composition note (mine): as a gate it fits the other two rather than
+competing with them.** Promotion then requires **three independent conditions**
+— minimum observations, minimum occupancy-denominated tenure (§35.3), minimum
+distinct sources — of which **the adversary must satisfy all three** while an
+honest node fails at most the third, and fails safe.
+
+### 35.5 One positive falls out of pinning, correctly signed
+
+The origin's own transactions all resolve through `in_mapping_[nil]` to a
+**single** successor, so **that slot accumulates observations faster than the
+others.** The node therefore **builds evidence quickest about the one peer with
+precision-1 visibility into its own stream.** Modest in volume, and correctly
+signed.
+
+*Sharpening (mine): it is also self-reinforcing in the right direction* — the
+slot the node learns about fastest is exactly the slot where a dropper costs it
+most, so if that peer is malicious it is **evicted soonest.** The mechanism
+converges quickest precisely where its failure would be most expensive.
+
+## 36. The threshold is a discrete ladder, not a rate — and the rung is only gradeable against an adversary nobody has written down
+
+**2026-08-01, maintainer, with the `n = 10` figure retracted and reproduced
+(0.37 %, not 0.06 %).** The correction exposes something structural.
+
+### 36.1 At these counts the sensitivity is in the integer cut, not in `n`
+
+Recomputed independently (honest floor `p = 0.12`):
+
+| `n` | cut | P(false cooldown) |
+| --- | --- | --- |
+| 10 | ≥ 5 | **0.372 %** |
+| 10 | ≥ 6 | **0.041 %** |
+| 12 | ≥ 7 | 0.016 % |
+| 15 | ≥ 8 | 0.013 % |
+
+**Two adjacent integers at `n = 10` differ by 9×, which is larger than the
+effect of adding five observations.** So *"a 50 % rate threshold"* **is not a
+specification at these counts** — `5/10` and `6/10` are both defensible
+readings of it and they are an order of magnitude apart.
+
+**That propagates into §35.2's derivation chain.** `cooldown ≈ eclipse_bound ×
+interval / false_rate` treated `false_rate` as a **continuous dial**. It is
+not: it takes only the values the ladder offers at the achievable `n`. **So the
+chain runs the other way — pick the rung, then read off cooldown — and the
+deliverable owes the ladder, not a rate.**
+
+> **A rate threshold is the wrong parameterization to write down at all. The
+> honest form is `(n_min, cut)` — an integer pair.**
+
+### 36.2 The rung's cost is invisible against the adversary §12.11 models
+
+**Computed, and this is what makes the rung choice undecidable as posed:**
+
+**⚠ Axis mislabelled — corrected at §37.1: these are FIRE rates, not drop rates (`p = 0.12 + 0.88·d`), so the "40 %" column is a 32 % dropper. The corrected table is in §37.1, and the relabelling exposes a structural floor: a sub-ambient dropper is invisible at every rung.**
+
+| `n = 10`, fire rate → | 40 % | 60 % | 80 % | 100 % |
+| --- | --- | --- | --- | --- |
+| cut ≥ 5 | 0.367 | 0.834 | 0.994 | **1.000** |
+| cut ≥ 6 | 0.166 | 0.633 | 0.967 | **1.000** |
+
+**Against a *total* black hole the two rungs are indistinguishable — both catch
+it with probability 1.** The cost of the safer rung appears **only against a
+partial dropper**: at 40 % drop, moving from `≥5` to `≥6` cuts detection from
+0.37 to 0.17, **less than half**.
+
+**So the rung trades false-cooldown rate against *partial*-drop detection, and
+§12.11's clean-separation framing (12 % versus 100 %) is precisely the case
+where the trade is invisible.** The specification therefore owes a
+**partial-drop adversary model** — what drop rate an adversary would actually
+choose, given that dropping less is stealthier and drops less — and **no such
+model exists in this document.** Without it the ladder can be enumerated but
+the rung cannot be chosen: enumerating is Q-10.2's job, choosing needs a
+threat statement.
+
+### 36.3 Heterogeneous `n` makes the count gate a well-posedness precondition, not a condition
+
+Observations accumulate **at different rates per successor** — the sources
+mapped to each differ, and the nil-mapped slot runs ahead (§35.5). So a fixed
+rate threshold evaluated *whenever a decision falls due* is evaluated **at
+different `n` per peer**, hence at **different rungs of the ladder**, hence a
+sparsely-mapped peer faces a **materially higher false-cooldown probability
+than a well-mapped one for identical honest behaviour.**
+
+**That is not a tuning wrinkle — it is the mechanism systematically penalizing
+the peers it knows least about.**
+
+**So the minimum-observations gate is upgraded**: §35.4 listed it as one of
+three composable conditions; it is **a precondition for the decision to be
+well-posed at all.** No peer is judged below `n_min`; below it a peer is
+**unproven, not suspect.** Fails closed, which is the right direction.
+
+*Consequence (mine): the decision schedule then interacts.* If decisions fall
+due on a **fixed clock**, sparse peers accumulate less between them and the
+heterogeneity persists inside every window. If decisions fall due on
+**reaching `n_min`**, the schedule becomes peer-specific — arguably more
+correct, but `decision_interval` is then **no longer constant across peers**,
+which changes §35.2's cooldown arithmetic. The two must be chosen together.
+
+### 36.4 The tenure repair holds, and the reason it holds is a constraint on the explore tier
+
+Denominating tenure from **first draw by explore** works **because the explore
+tier draws from current *outbound connections*** — you can only stem to a peer
+you are connected to. So the clock starts when `O` **dials** the adversary,
+which is **`O`'s decision, not the adversary's**. Getting dialed means being in
+`O`'s peerlist and winning a selection — **peerlist influence — which is the
+anti-eclipse posture, regime 3**, and the stockpile collapses into a budget
+already priced.
+
+> **Named invariant, because the alternative reads naturally: the explore tier
+> must draw from live outbound connections, never from the peerlist.**
+> Announcing yourself into peerlists is cheap; if explore ever drew from there,
+> **the repair evaporates** and stockpiling costs nothing again.
+
+**One wrinkle to check, p2p-side and unverified here.** Anchors **persist and
+are preferentially re-dialed on restart**
+([`net_node.inl:1347`](../../src/p2p/net_node.inl#L1347),
+[`:1419`](../../src/p2p/net_node.inl#L1419)). An adversary that once held an
+anchor slot therefore has a **standing claim on being re-dialed** — so **anchor
+status is a durable head start on the tenure clock that survives the restart
+which otherwise resets everything.** Whether that is acceptable depends on
+**how anchors are earned**, which is p2p-side and outside what has been
+verified in this document.
+
+### 36.5 `ε_explore` gains a third consumer, adversely signed
+
+§35.2 gave ε two: it moves warm-up **symmetrically**, so it is derivable
+against warm-up and cold-start but never against recruitment.
+
+**Under §35.3's tenure repair it acquires a third, and the pairing is not
+visible from either of the first two: ε is also the rate at which *stockpiled*
+identities get their clocks started.** Raising ε shortens honest warm-up **and
+simultaneously accelerates stockpile activation.**
+
+**So ε trades cold-start against whitewash latency**, and that trade must be on
+the list **before ε is derived against warm-up alone** — otherwise the
+derivation optimizes one consumer and silently pays the third. *(Which is this
+document's recurring shape: a parameter with an unlisted consumer, found by
+asking what else reads it — Q11-A, `MIN_EPOCH`, and now ε.)*
+
+## 37. The ambient floor is adversarial cover — and the accumulator's memory decides everything upstream of the rung
+
+**2026-08-01, maintainer, with one correction to §36.2's own table.**
+
+### 37.1 Correction — §36.2 mislabelled its axis, and the fix is a structural floor
+
+§36.2's table passed the **drop rate directly** as the binomial parameter. A
+peer's observed **fire** rate is `p = 0.12 + 0.88·d`, so the column marked
+*"40 % drop"* was really a **32 % dropper**. **The ambient failure rate is a
+free grant of dropping to the adversary.** Corrected:
+
+| `n = 10`, **drop** `d` → | 10 % | 20 % | 32 % | 50 % | 80 % | 100 % |
+| --- | --- | --- | --- | --- | --- | --- |
+| cut ≥ 5 | 0.038 | 0.143 | 0.371 | 0.759 | 0.997 | 1.000 |
+| cut ≥ 6 | 0.008 | 0.044 | 0.169 | 0.530 | 0.981 | 1.000 |
+
+**And the consequence is stronger than the relabelling. An adversary dropping
+at or below the ambient rate (~12 %) is invisible at every `n` and every rung,
+because its distribution *is* the honest distribution. No threshold reaches
+it.**
+
+> **This is a structural floor on the mechanism, of the same character as
+> `C1 ≈ f`** — stated as one here rather than discovered during tuning.
+
+**And it is the first argument for measuring the ambient rate as a *security
+input* rather than as threshold calibration** — §12.11 owes it as a numerator;
+this makes it also the **width of the adversary's free cover.**
+
+**Addition (mine): the floor's cost is computable in a currency this document
+already prices.** An invisible dropper is not merely degrading liveness — each
+drop it induces **fires an embargo, which produces an origin-attributed
+fluff**, which is **C3**, measured at §6.6 (1.14 % any-prefix / 0.22 %
+origin-attribution per transaction on clearnet). So a sub-ambient dropper
+**harvests C3 at a rate the reputation mechanism structurally cannot punish**,
+and the floor's price is `≈ ambient_rate × C3-per-fire` rather than an unpriced
+"some residual." That makes the floor's acceptability **derivable** instead of
+a judgement call.
+
+### 37.2 The missing threat statement, inverted into a computable form
+
+*"What drop rate would an adversary choose?"* is a preference question and
+probably unanswerable. **Invert it: what sustainable drop rate does each rung
+*permit*?** That is a **mechanism property**, computable from the ladder.
+
+**Verified** — an adversary holding per-decision cooldown risk ≤ 5 % can sit
+at:
+
+| rung (`n = 10`) | tolerated fire rate | **implied sustainable drop** |
+| --- | --- | --- |
+| cut ≥ 5 | 0.222 | **11.6 %** |
+| cut ≥ 6 | 0.304 | **20.9 %** |
+
+**So the safer rung's real cost is not "misses a 32 % dropper" — it is that it
+licenses roughly double the drop rate a patient adversary can sustain
+indefinitely.** And sustainable drop converts **directly into origin-exposure
+through §6.7's arithmetic**, a currency already priced.
+
+> **That makes the rung derivable without any adversary-preference guess:
+> choose the rung whose licensed drop rate keeps exposure under what §6.7
+> admits, subject to false-cooldown under part C's eclipse bound. Two
+> constraints, one integer pair.**
+
+### 37.3 The accumulator's memory is upstream of the rung, and §12.11 never specifies it
+
+Everything above assumes the adversary is judged **on a fresh count each
+decision**. Whether it is depends on the accumulator's **memory**, which
+§12.11 does not specify:
+
+| memory | consequence |
+| --- | --- |
+| **windowed / reset each decision** | **memoryless.** A patient adversary at ~11 % survives **forever**: each window is an independent 5 % roll, re-rolled after cooldown expires. **Sustained low-rate dropping is fully viable.** |
+| **cumulative / EMA** | **evidence compounds.** At 11 % sustained the count drifts above the honest distribution and detection becomes **a matter of time rather than luck**. Sustained dropping stops being viable; the adversary is **forced to burst**, which is the visible mode. |
+
+**This is a bigger determinant of the mechanism's value than the rung is, and
+it is upstream of it — the ladder means something different under each.** It is
+also the parameter that **most affects false cooldown**, because compounding
+memory raises the false-positive rate on honest peers **by the same mechanism
+that raises true detection.** **It goes ahead of the rung in the round's
+ordering.**
+
+**Interaction (mine), and it bounds §36.1's own finding:** under **cumulative**
+memory `n` grows without bound, so the achievable false-positive rates form an
+ever-finer grid and **the discreteness washes out — the ladder is specifically
+a property of *windowed* accumulation.** So the memory choice determines
+**whether §36.1's finding even applies**, which is a second reason it is
+upstream.
+
+> **Transfer note, stated explicitly so it is not imported by analogy: the
+> economics work ruled out EMA and rate-limiter terms on wide-guardrails
+> grounds. Different subsystem, opposite requirement — here memory is precisely
+> what denies a patient adversary.** The earlier decision does not carry.
+
+### 37.4 The schedule choice also decides whether the adversary controls *when* it is judged
+
+§36.3 compared the two schedules on heterogeneity and on whether
+`decision_interval` stays constant. **There is a third axis, and it is a gaming
+vector.**
+
+Deciding **on reaching `n_min`** makes the schedule peer-specific — and
+**observation arrival is partly adversary-controllable** (§34.2's farming). So
+an adversary can **drop during a lull, then farm observations to pull its
+decision forward while its recent record is clean**, or **go quiet to push the
+decision back.** Under a **fixed clock it cannot move the decision boundary at
+all.**
+
+**That does not settle it** — the fixed clock carries the heterogeneity problem
+§36.3 named, which is why the count gate became a well-posedness precondition.
+**But the two schedules now differ in *three* ways, not two: heterogeneity,
+whether `decision_interval` is constant, and whether the adversary controls the
+timing of its own judgement.** All three belong in the comparison.
+
+## 40. Closing F-7 is a bigger unit than two constants — the degree-matched result, and the cascade
+
+**2026-08-01.** The ordered plan puts *"close F-7: re-derive the embargo at
+`F′ = 3250` and land both together"* first, gating the configuration-B
+deletion. **Both halves were attempted; the first produced a cleaner result
+than expected and the second produced a scope discovery that stops it being a
+two-constant change.**
+
+### 40.1 The degree-matched pair — F-7's gap is a *degree* effect, not a direction effect
+
+The commit that built the directed variant named this as owed. Run:
+
+| | usable out-degree | p90 |
+| --- | --- | --- |
+| `EveryPeer` @ `peers = 8` | ~16 (8 initiated + ~8 received) | 2500 ms |
+| `OutboundOnly` @ `peers = 16` | 16 (exact) | **2250 ms** |
+
+**At matched usable degree the direction constraint costs nothing** — the
+directed run is marginally *faster*, consistent with its degree being exact
+rather than Poisson-spread around the mean.
+
+**So §26.2's stated mechanism was half right and the half that mattered is the
+other one.** It said directed first passage is slower *"fewer usable edges per
+hop **and** direction-constrained paths, both pushing the same way."* Measured:
+**the second term is negligible.** The correct statement is that **an
+outbound-only node has half the usable fluff degree of a clearnet node at the
+same peer count**, and `F` scales with that.
+
+**That changes the new constant's provenance**, which is why the pair was worth
+running before writing it: `F` is not "the price of the anonymity-network fluff
+rule," it is **the price of running at half the effective degree**.
+
+### 40.2 The re-derivation reproduces, and gives `F′ → 190 s`
+
+Using the shipped tick and target (`DEFAULT_EMBARGO_TICK_MILLIS`,
+`EMBARGO_FULL_TRAVEL_PROBABILITY = 0.90`):
+
+| `fluff_return_ms` | derived embargo |
+| --- | --- |
+| 1250 (configuration A at Shekyl's real degree 12) | 98 s |
+| **2250 (shipped)** | **144 s** ← reproduces the adopted value |
+| **3250 (configuration C at degree 12)** | **190 s** |
+
+**The 144 s reproduction is the instrument validating**: the derivation path is
+the one that produced the shipped constant, so the 190 s is comparable rather
+than a different calculation.
+
+**And one value must serve both configurations**, because the embargo draw is a
+process-wide singleton with no zone parameter. Per `params.rs`'s own policy —
+*over-estimating lengthens the embargo (safe), under-estimating shortens it (a
+privacy loss)* — that value is **the worst configuration's, 3250 ms → 190 s.**
+Clearnet is then over-provisioned relative to its own `F` (1250 → 98 s), which
+is the safe direction and is *already* the status quo's posture: the shipped
+2250 over-provisions clearnet at Shekyl's real degree too.
+
+> **Two amendments at §43, both from the configuration-B deletion, and both
+> must be applied before this paragraph is used as the F-7 unit's premise.**
+> **(a)** The two configurations are now **clearnet and Tor-C**, not B and C —
+> the conclusion holds verbatim but the reason named a configuration that no
+> longer exists (§43.1). **(b)** `params.rs`'s policy is **incomplete**:
+> over-estimating `F` is safe on the *disarm* axis and **adverse on the leak
+> axis** (§6.7), so *"set it to the worst"* is defensible but not
+> obviously-safe, **per-zone `F` becomes a real option** now that the zones
+> differ by a measured amount, and the policy is **re-examined at the top of
+> the unit rather than inherited through it** (§43.2).
+
+### 40.3 The cascade — `F` is an input to the arc's whole measured set
+
+**Landing `fluff_return_ms = 3250` was attempted and reverted, because it does
+not stop at the embargo.** Five recorded measurement pins fail, and **none of
+them is a test bug** — each was correct at `F = 2250` and is simply measured
+against the wrong `F` now:
+
+| test | what moves |
+| --- | --- |
+| `black_hole_recovery_scales_with_holder_count` | origin-alone p90 recovery (§10.6) |
+| `origin_exposure_meets_target_via_reshape_not_embargo` | §6.7's exposure arithmetic — ~~and **qualitatively**: the embargo-only path to target now solves at 0 s rather than ~1050 s~~ **corrected §44.1: the "0 s" was the test's never-fired sentinel — the target had become *unreachable* on the ladder (first rung is now 1500 s), which *strengthens* §14 rather than reversing it** |
+| `precision_increment_reproduces_delta_table` | §13's δ table (0.0027 against the recorded 0.0019 at `f = 0.1`) |
+| `inherited_versus_derived_versus_paper_faithful_embargo` | the shipped-vs-corrected separation (§10) |
+| `fluff_probability_trade_curve` | the Poisson-fires-effectively-never claim at `q = 20 %` |
+
+**So closing F-7 means re-running and re-recording the arc's measured numbers,
+not editing two constants.** The doc records those figures in §6.7, §10, §13
+and §14, and §14's *conclusion* rests on one of them — the embargo-only path
+being liveness-breaking is the argument that adopted reshape unconditionally.
+**If that path now solves at 0 s, §14's comparison needs restating even though
+its conclusion probably survives** (reshape still buys the same censorship
+resistance without C3).
+
+**Not attempted at this depth, deliberately.** Mass-re-baselining five measured
+quantities and their four doc sections is exactly the work this arc has
+repeatedly caught errors in — and the errors it caught were *pessimistic
+mis-citations of numbers nobody re-ran*. Doing it carelessly would manufacture
+the class the session has been closing.
+
+### 40.4 What this means for the ordering
+
+The plan's item 1 gates item 2 (deleting configuration B) for a good reason:
+**promoting C to default while its embargo is provisioned from a defective `F`
+lands a known defect on every Tor user at genesis.** That reasoning is
+unchanged and the gate holds.
+
+**What changes is item 1's size.** It is not *"two constants"* but:
+
+1. set `fluff_return_ms = 3250` with the §40.1 provenance (degree, not
+   direction);
+2. re-run the five measurement pins and record their new values;
+3. restate §14's embargo-versus-reshape comparison against the new baseline,
+   checking whether its conclusion survives its numbers;
+4. re-check §15's block-time reconciliation — 190 s still crosses exactly one
+   120 s interval, so the qualitative finding holds, but the paragraph names
+   144 s;
+5. **then** the reverse-parity readouts, which §26.3 already said must run
+   against `F′` rather than the stale baseline.
+
+**Item 3 of the plan (mean outbound connection lifetime) is genuinely
+independent and remains the cheapest thing on the list** — it needs no
+envelope, no re-baselining, and it decides whether F-8 makes §12.11 inert at
+all.
+
+## 41. Configuration B deleted — and why it did not wait for F-7
+
+**2026-08-01.** `proxy::noise` now defaults **false**
+([`net_node.h`](../../src/p2p/net_node.h)), and `disable_noise` is retired —
+accepted with a warning so existing command lines still start, but with no
+effect and **deliberately no flag to turn covert channels on.**
+
+### 41.1 The gate was inverted
+
+The ordered plan gated this on closing F-7, reasoning that promoting C to
+default with an under-provisioned embargo *"lands a known defect on every Tor
+user at genesis."* **The reasoning is sound and the ordering it produced was
+backwards**, because it compares the wrong two things:
+
+| | what a Tor user gets |
+| --- | --- |
+| **B (shipped until today)** | **no Dandelion++, no embargo at all**, plus an **origin oracle**: precision ≈ 1 *and* recall ≈ 1 given slot occupancy — which §31.3 established is **a list**, the complete enumeration failure |
+| **C with the uncorrected embargo** | both mechanisms running; embargo 144 s where 190 s is derived — **short by 24 %** |
+
+**Holding B to avoid shipping a 24 % under-provisioning kept the enumeration
+oracle in place to prevent the lesser defect.** And the gate's own stated
+reason is satisfied by *both landing before genesis*, not by B waiting on F-7 —
+which is a scheduling claim, and F-7 turned out to be a re-baselining unit
+(§40.3), so the wait was open-ended.
+
+**Standing cost, visible all session:** with three configurations in the tree
+and §6 modelling the one we did not ship, *"which configuration?"* was a
+variable in every analysis, and it generated §25.1, §29 and §31.3
+independently. **Deleting B collapses three to two and removes that axis from
+every subsequent round.**
+
+### 41.2 The trade, recorded as §30.6 required
+
+**What is lost:** constant-rate cover on anonymity zones. A wire observer at
+the guard regains **emission timing** — it can see *that* this node
+transmitted and *when*. That is a real loss on the axis §20.9 charters, and it
+is the **only** cell of §32.6's grid where the answer was previously *zero*.
+
+**To whom:** operators running `--tx-proxy`. Nobody else — the public zone never
+had covert channels.
+
+**What restores it:** the §30 composition, in this order — **R-1** (relayed
+traffic made eligible for the anonymity zone, so the channel stops being an
+origin oracle), the **restored backstop** (§25.1's design question: what the
+embargo does when it fires on a noise zone, with the public-zone fallback
+forbidden per §30.5), and then covert re-enabled. **The machinery is retained,
+not deleted** — it is Q-11 Unit 2's substrate — but it is **unreachable from
+configuration**, deliberately: an opt-in flag would be an opt-in to the oracle.
+
+**What is gained:** Tor users get Dandelion++ and the black-hole embargo, which
+they have never had, and lose an attribution channel that was **strictly worse
+than clearnet's floor**.
+
+### 41.3 The configuration table, now two rows
+
+| | stem routing | embargo armed | fluff reach | covert |
+| --- | --- | --- | --- | --- |
+| **A. clearnet** | Dandelion++ | yes | every peer | no |
+| **C. Tor / I2P (now the only anonymity configuration)** | Dandelion++ | yes | outbound only | no |
+| ~~B. Tor + noise~~ | ~~none~~ | ~~no~~ | ~~outbound only~~ | ~~2 channels~~ — **deleted 2026-08-01** |
+
+**§6 now models what we ship**, which it did not before.
+
+### 41.4 What this does and does not close
+
+**Closes:** F-6 in its shipped form — both the omission half (§25.1) and the
+commission half (§29). No deployed configuration reaches the origin-routing
+oracle, because no deployed configuration enables covert channels.
+
+**Does not close, and each is now *more* urgent rather than less:**
+
+- **F-7** — configuration C is now the **only** anonymity configuration and its
+  embargo is provisioned from the defective `F`. The gate is gone but the
+  defect is not, and it now affects every Tor user rather than none of them
+  (they previously had no embargo at all, which is worse, but the comparison
+  no longer excuses it). **This is the top item.**
+- **§25.1's backstop design question** — still required before covert returns.
+- **Q-11 Unit 2** — unaffected: the substrate is retained and the shape
+  question is unchanged by the default.
+- **F-8, Q-10** — unaffected; they concern the peer axis, which configuration C
+  exercises fully for the first time.
+
+**The historical analysis of B (§§25, 29, 31.3) is kept rather than pruned.**
+It records why the composition has the shape §30 gives it, and a reader who
+finds covert channels re-enabled later needs to know what made them unsafe the
+first time.
+
+## 42. Cover traffic over configuration C — the capacity collision is a *fluff* problem, and RD-4 already separates the classes
+
+**2026-08-01. Candidate output of the §30 design round, not an implementation.**
+§30.2 said R-1 collides with capacity at zero slack and left three options plus
+one. **Measuring where the traffic actually is collapses the option set.**
+
+### 42.1 The collision is entirely fluff; stem is 0.5 % of the carrier
+
+Carrier: `300 s / 12.5 s × 2 channels = 48 sends/epoch/zone` = 144 KiB = 492 B/s.
+Traffic classes at Monero-like figures (20 k tx/day, 5 000 nodes, `q = 0.2`):
+
+| class | per epoch | against carrier (at ~8 KiB/tx) |
+| --- | --- | --- |
+| **fluff** — a node relays everything it sees | **69.4 tx** | **4.3× over capacity** |
+| **stem forwards** — `tx_rate × (1/q) / node_count` | 0.069 tx | — |
+| **own originations** — ~1/day | 0.0035 tx | — |
+| **stem + own together** | **0.073 tx** | **0.005× — 0.5 % utilisation** |
+
+**So "the carrier cannot absorb network relay rate" is true of *fluff* and
+false of *stem* by three orders of magnitude.** §30.2's framing treated the
+carrier as uniformly over-subscribed; it is over-subscribed by one class and
+almost entirely idle for the other.
+
+### 42.2 RD-4 already puts every origination in the cheap class
+
+**The origin always stems — even during a fluff epoch** (`!fluffing ||
+local_origin`, §10.5's RD-4). So:
+
+- **every origination is in the stem class**, which costs 0.5 % of the carrier;
+- **fluff carries relayed traffic only** — a transaction this node did not
+  originate, by construction.
+
+**That is the separation R-1 needs, and it already exists as an invariant
+rather than needing to be built.**
+
+### 42.3 The proposal — covert carries the stem phase; fluff takes the ordinary connection
+
+**Covert channels carry the stem phase**: all originations (RD-4) *plus* stem
+forwards. **Fluff goes over the zone's ordinary Tor connection.**
+
+**This satisfies R-1 with capacity to spare.** The covert channel now carries
+both originations and relayed stem forwards, so a peer holding a covert slot
+**cannot separate them** — the oracle closes. Measured mix:
+
+```text
+own / (own + stem-forwarded) = 0.0035 / 0.073 ≈ 0.048
+```
+
+**~5 % origination share against the previous 100 %.** §30.1's amendment said
+the eligibility rule *is* the anonymity parameter and precision lands in
+`[f, 1]`; this lands it at the **bottom** of that interval — at or below C1's
+own floor, because a node forwards roughly twenty times what it originates.
+
+**And the carrier stays ~99.5 % dummy**, which is what cover is. Capacity
+utilisation goes from *impossible* to *negligible*.
+
+### 42.4 What the carrier's job narrows to, stated because it is a real narrowing
+
+§31.7 gave the carrier **recall denial — deny the count.** Under this proposal
+that becomes: **deny the count of *originations*, not of all traffic.** A wire
+observer sees the node's fluff volume and learns *"this node relays
+transactions"* — **true of every node, and carrying no origination signal,
+precisely because RD-4 keeps originations out of the fluff class.**
+
+**This is a narrowing and it must not be read as free.** The observer regains
+one thing: **whether this node is *online and relaying*** — a liveness/activity
+signal it previously did not have on a noise zone. Against §32.6's grid, the
+wire-observer recall cell goes from *zero* to *zero for originations, one for
+activity*. Whether that is acceptable is a scope call this round owes, and the
+honest framing is that **the alternative on offer is not "cover everything" —
+that option is 4.3× over capacity and was never available.**
+
+### 42.5 What remains open
+
+1. **The ordering problem, and it is the implementation question.**
+   `net_node.inl:2211` picks the **zone** by origin *before* the zone's
+   notifier picks **stem or fluff**. Routing "stem-phase traffic to the
+   anonymity zone" therefore needs the phase before the zone — a cross-layer
+   query, or a restructure so the zone decision follows the phase decision.
+   **This is where the change is non-mechanical**, and it is the first thing
+   the implementing round must settle.
+2. **The backstop** (§25.1) — still required before covert returns, still with
+   the public-zone fallback forbidden (§30.5).
+3. **The mix ratio is an *estimate from Monero-like figures*, and §34
+   established that class of input is an envelope rather than a measurement.**
+   `own / (own + forwarded)` moves with `tx_rate/node_count` exactly as
+   `obs(peer, epoch)` does — and the dangerous corner is the same one:
+   **a node that originates much and forwards little** sees its mix approach 1
+   and the oracle partially reopen. A high-volume merchant on a small network
+   is that node. **The eligibility rule may therefore need a floor on
+   forwarded-traffic share rather than resting on the ambient ratio**, which is
+   a design question this proposal does not settle.
+4. **CV-4 is unaffected** — the schedule still cannot consult the queue, and
+   restricting *which* class enters the queue is not the schedule reacting to
+   its contents.
+
+## 43. Three corrections the configuration-B deletion forces on the F-7 unit
+
+**2026-08-01, maintainer review of the deletion.**
+
+### 43.1 The singleton's constituents changed — restate the reason before it goes stale
+
+§40.2 argued *"one value must serve both configurations, set to the worst"*
+when the pair was **B and C**. **The pair is now clearnet and Tor-C:**
+
+| | fluff rule | usable degree |
+| --- | --- | --- |
+| clearnet | `EveryPeer`, 12 outbound + inbound | ~24 |
+| **Tor-C** | `OutboundOnly`, 12 outbound | **12 exact** |
+
+**Still two, still one process-wide value, still set to the worst — Tor-C's
+3250.** The conclusion holds **verbatim**; the *stated reason* names a
+configuration that no longer exists. **Restated here before it becomes the next
+stale citation**, which is the class §21's ceiling and §6.9's banner both
+belonged to.
+
+### 43.2 `params.rs`'s safety policy is incomplete, and the re-baselining rests on it
+
+The policy: *over-estimating `F` lengthens the embargo (safe); under-estimating
+shortens it (a privacy loss).* **But §6.7's own note says a larger `F` gives
+every prefix embargo longer to fire, pushing the leak *opposite* to the embargo
+mean.**
+
+> **So over-estimating `F` is safe on the disarm axis and adverse on the leak
+> axis. The policy names one consumer, and was written when only one existed.**
+
+**This is the one-fact-two-consumers shape again — the third instance after
+`FORWARD_DELAY` (§22) and `F` itself (§26.4)** — and it matters concretely:
+**a dual-stack node now runs 3250 on *both* zones**, over-provisioning clearnet
+by the full degree ratio and **paying §6.6 leak for it.**
+
+*"Set it to the worst"* remains defensible **but is no longer the
+obviously-safe answer**, and **the entire re-baselining derives from that
+policy — so the policy is re-examined at the *top* of the F-7 unit rather than
+inherited through it.** Inheriting it would be deriving five measured
+quantities from a rule whose second consumer nobody priced.
+
+**Per-zone `F` is now a real option**, because the zones differ by a **measured**
+amount rather than a suspected one. Not free — a second constant, and a seam
+question about who owns it — but **"one process-wide value" was a convenience,
+not a derivation**, and it should be defended or dropped on that basis.
+
+### 43.3 The substrate jig already exists; what is missing is a *deletion* guard
+
+**Correction to the review's premise.** The covert machinery is **not**
+unobserved. Three `levin_notify` gtests — `noise`, `noise_stem`,
+`noise_repoint_discards_in_flight_remainder` — construct notifiers via
+`make_notifier(2048, …)`, **passing the payload explicitly and bypassing
+`proxy::noise` entirely**, so `send_noise`, `clear_channel`,
+`queue_covert_notify`, the FFI covert dispatch and the covert scheduler are all
+still driven. **Verified after the flip: 3/3 pass.** The Rust side is covered
+independently (`covert_channels_emit_one_per_advance_not_synchronized`, the
+CV-2 pair, the unbind pair).
+
+**So no new substrate jig is owed.** What *is* now unguarded is the **other
+direction**: nothing asserts that the **configuration path** produces a
+covert-disabled zone. The deletion is held by a default and a retired flag,
+with **no automation that fails if either is reverted** — which is the
+deletion-stays-deleted guard, not the substrate guard, and it is one small
+test (parse a `--tx-proxy tor,…` argument, assert `noise == false`).
+
+**Folded into the next unit touching that code, per the review's own
+instruction** — recorded here so the distinction between *the substrate is
+exercised* and *the deletion is guarded* does not blur, since only the second
+is missing.
+
+### 43.4 Unchanged
+
+- **The 0 s diagnosis is the first step inside F-7** — it decides whether
+  §14's restatement is a *strengthening* or a *reversal*, and it is small and
+  isolated.
+- **Mean outbound connection lifetime** remains independent and cheapest.
+
+## 44. F-7 closed — the 0 s diagnosis, the compensation result, and the policy re-exam
+
+**2026-08-01. `fluff_return_ms = 3250` is landed with the re-derived 190 s
+embargo; the five measurement pins are re-recorded; §14 is restated
+(strengthened).** This section is the record §40.4's plan required, in its
+order: the policy re-exam at the top, then the constant, then the pins.
+
+### 44.1 The 0 s diagnosis — a sentinel artifact, and the sign was backwards
+
+§40.3 recorded the reshape comparison failing with *"the embargo-only path now
+solves at 0 s"* and flagged §14 as possibly reversed. **Diagnosed at source:
+`embargo_only_secs` initialised to `0` and was set at the first ladder rung
+whose exposure dropped under target — `0` in the failure message meant "no
+rung ever fired", not "solved at zero".** At `F′` the target had become
+**unreachable** on the old `[144..1050]` ladder:
+
+| embargo | exposure at `F′ = 3250` | |
+| --- | --- | --- |
+| 144 s | 2.92 % | |
+| 300 s | 1.40 % | |
+| 600 s | 0.73 % | |
+| 1050 s | 0.39 % | *(old first-reach: 1050 s at `F = 2250`)* |
+| **1500 s** | **0.28 %** | **new first-reach** |
+| 2100 s | 0.20 % | |
+
+**So §14 is strengthened, not reversed**: the inefficient lever moved from
+"needs ~1050 s" to "needs ~1500 s" (p90 recovery ~3450 s), while reshape still
+meets the target at **0.027 %** — an order of magnitude under — with unchanged
+cost. **The test defect is the finding's mirror:** its strongest possible
+supporting evidence (target unreachable at any tested mean) *failed* it. Fixed:
+the sentinel is an `Option`, the ladder extends to 2100 s, and the assert now
+guards the axis that matters — the target must not be reachable *below* 600 s.
+Negative control run and observed to fail (target loosened to 0.012 → reached
+at 300 s → named assertion fires).
+
+### 44.2 The compensation result — the derivation holds every leak at its designed level
+
+The same comparison, across three independent instruments, at each era's
+**adopted pair** (`F`, derived embargo):
+
+| instrument | old pair (2250, 144 s) | new pair (3250, 190 s) |
+| --- | --- | --- |
+| worst-case origin exposure (cap 0) | 2.24 % | **2.23 %** |
+| §13 δ table (f = 0.05/0.10/0.30) | 0.0010 / 0.0019 / 0.0045 | **0.0010 / 0.0021 / 0.0048** |
+| §6.6 C3 any-prefix | 1.14 % | **1.08 %** |
+
+**Lengthening the embargo in step with `F` is precisely what the derivation is
+for, and these are three measurements of it doing its job**: at fixed embargo
+the larger `F` raises each leak (§6.7's sign, measured — 2.24 → 2.91 % at
+e144), and the derived 190 s pulls each back to its designed level. The δ pin
+was re-pinned at the shipping pair rather than frozen at the review's
+(freezing inputs to keep a reproduction green is the shim-oracle trap); the
+review's column is retained as provenance.
+
+### 44.3 The policy re-exam (§43.2's gate) — the sign resolves, and worst-of is privacy-safe
+
+§43.2 held that over-estimating `F` is *"adverse on the leak axis"*, citing
+§6.7. **Resolved by separating two referents that share the name `F`:**
+
+- **§6.7's `F` is the *wire* quantity** — the real first-passage time of the
+  return flood. Disarm is the physical arrival of that flood
+  (`upgrade_relay_method` on re-arrival), not a constant timeout. A larger
+  *real* `F` does raise the leak — measured above.
+- **`fluff_return_ms` is a *derivation input*** whose only production consumer
+  is the embargo solve. Over-estimating **it** does not change the wire; it
+  **lengthens the derived embargo**, which *reduces* the prefix-fire leak
+  (measured: 2.91 → 2.23 % at `F′` real).
+
+**So on the over-provisioned zone (clearnet, real `F ≈ 1250`, embargo 190 s),
+both privacy axes improve; the cost is black-hole recovery latency** — p90
+~437 s against ~331 s at 144 s, or ~225 s at clearnet's own 98 s derivation.
+**"Set to the worst zone" is therefore privacy-safe by construction, and
+per-zone `F` would buy recovery latency, not privacy** — which reframes it
+from a privacy option to a liveness optimisation, and it is left unbuilt on
+that basis. *(The one-fact-two-consumers instinct was right; pricing the
+second consumer showed it carries the opposite sign from the first.)*
+
+### 44.4 The pins, each with its reason
+
+| pin | change | why |
+| --- | --- | --- |
+| `ADOPTED_PROPAGATION_TIMEOUT_SECS` | 664 → **874** | rides the embargo term |
+| FFI `mean_secs()` | 144 → **190** | the exact solve at `F′` |
+| FFI draw band | 115..175 → **152..231** | re-centred, same relative slack |
+| recovery p90 band | 315..350 → **415..460** | mean × ln 10 at 190 s |
+| Poisson "never fires" guards (×3) | 0.001 → **0.002** | the 17 s Poisson's lower tail clips ~0.13 % against the longer return; still two orders under a working backstop |
+| shortfall-spread rail | 0.60 → **0.75** | the fixed return term grew 44 %, and the spread *growing* with `F` is the RD-1 mechanism working |
+| δ table | re-pinned at the shipping pair | §44.2 |
+| §6.6 sweep | 190 s row added | the adopted mean measured, not interpolated |
+
+§15's finding is re-checked, not just renamed: **190 s still crosses exactly
+one 120 s block interval** (120 < 190 < 240), so the reconciliation holds with
+more margin than at 144 s.
+
+### 44.5 What this closes and what it leaves
+
+**Closes F-7** — measured (§40.1: a degree effect), derived (§40.2), landed,
+re-baselined, and §14 restated. Configuration C's embargo is now provisioned
+from the fluff rule it actually uses.
+
+**Leaves, unchanged in order:** mean outbound connection lifetime (F-8's
+convergence check — independent, cheapest); the tx-hash plumbing (F-8's
+element-type constraint); the reverse-parity readouts — **now unblocked**,
+since §26.3 required them to run against `F′` rather than the stale baseline;
+and Unit 2 with its substrate.
+
+## 45. F-8b — the provisioning is safe only across the degree range it was measured over
+
+**2026-08-01, maintainer finding, fix landed same day.**
+
+### 45.1 The finding
+
+§44.3's worst-zone argument holds because 3250 ms is the worst case — **at
+usable degree ≥ 12.** Verified at source: a default zone gets
+`P2P_DEFAULT_CONNECTIONS_COUNT = 12` outbound (`set_max_out_peers` with
+`max == -1`, `net_node.inl:2683`), so the pin is correct **for the default
+deployment**. But `--tx-proxy <zone>,<addr>,N` sets the count directly with no
+floor, and limiting Tor outbound is common operator practice for bandwidth and
+circuit load. **Below degree 12 the real first passage exceeds the provisioned
+value** — the instrument's own slope: degree 16 → 2250 ms, degree 12 →
+3250 ms, and downward from there — **and the embargo is under-provisioned in
+the direction `params.rs` names as a privacy loss.**
+
+**This is not the case the per-zone-`F` rejection covered.** That argument
+compared zones at their real degrees and found the spread costs recovery
+latency, not privacy — true *because 3250 bounded them*. A zone below the
+measured range is not bounded by it, so the reasoning does not extend.
+
+**No `T`.** A configuration-range gap, not an adversary — the same class as
+F-8's convergence condition. (F-8 is StemWatch's `forget`-granularity
+finding; it is cited here ahead of its section, which lands in the StemWatch
+PR stacked on this one.)
+
+### 45.2 The fix — unrepresentable, with one owner
+
+The preferred shape from the finding (floor-and-refuse) is landed:
+
+- **`MIN_PROVISIONED_OUT_PEERS: u32 = 12`** lives in `params.rs` **next to the
+  constant whose validity domain it states** — the §22 move. If a future
+  re-measure extends the instrument below degree 12, the floor moves with
+  `fluff_return_ms`, not independently of it.
+- **`shekyl_relay_zone_min_provisioned_out_peers()`** exports it through the
+  relay FFI — inside the signature gate's prefix (16 exports checked) — so C++
+  consumes the fact rather than mirroring it. One owner, no desync class.
+- **`get_proxies` refuses** any explicit count in `(0, 12)` at startup with a
+  message naming the derivation, rather than warning and running
+  under-provisioned. Omitted count (default −1 → 12) parses unchanged.
+- **Witness** (`node_server.tx_proxy_outbound_floor_refuses_underprovisioned_counts`):
+  refuses at 4 and at 11, accepts at 12 and at omitted, and pins the FFI floor
+  to the degree the measurement was taken at. **Negative control run and
+  observed to fail** (guard disabled → the refuse assertions fire).
+
+Warn-only was rejected as the weakest shape per the finding, and per the
+standing silent-compliance lens: a warning at startup is a mechanism that
+needs sustained correct operator behaviour.
+
+### 45.3 Queue
+
+F-8b's *measurement* half slots beside F-8's: mean outbound connection
+lifetime and the real degree distribution of deployed zones are both
+questions about actual connection topology, and **one measurement session
+answers both.** Then: tx-hash plumbing, reverse-parity readouts against `F′`,
+Unit 2.
+
+## 50. F-11 retracted to an increment — and the probe harness was vacuous twice
+
+**2026-08-01.** A stem-membership oracle was proposed from `tx_pool.cpp`'s
+loop detection, then **retracted by its author on the position it requires**,
+with one check owed before filing. Both halves are recorded: the retraction
+is the finding, and the harness failure is a process finding.
+
+### 50.1 The retraction — "fire probes at many nodes" smuggles in a supernode
+
+A probe is a `NOTIFY_NEW_TRANSACTIONS`, which requires a **connection**. `T`
+can only probe nodes it is connected to, so it recovers
+`(T's peers) ∩ (stem path)`, not the upstream set:
+
+```text
+E[nodes learned] ≈ (1/q) × f
+```
+
+At `q = 0.2` (stem ≈ 5 nodes) a well-connected node at `f ≈ 0.015` yields
+**≈ 0.08 nodes per transaction — effectively nothing.** A meaningful prefix
+needs `f` large enough to be a supernode, whose budget `W3(g)`, §6.5's reach
+sweep and Q-10 **already price**.
+
+### 50.2 The owed check, run before filing rather than after
+
+The finding asked for the increment at §6.5's measured reach values —
+computable from the formula, no new instrumentation:
+
+| `f` | E[nodes/tx] | P(≥1) | P(origin in set) | passive P(origin) | ratio |
+| --- | --- | --- | --- | --- | --- |
+| 0.05 | 0.25 | 22.6 % | 5.0 % | 0.42 % | **12×** |
+| 0.10 | 0.50 | 41.0 % | 10.0 % | 0.83 % | **12×** |
+| 0.30 | 1.50 | 83.2 % | 30.0 % | 2.50 % | **12×** |
+
+*(Passive baseline: `T` must **be** the origin's nil-mapped successor —
+`f`/out-degree at 12 outbound.)*
+
+**The ratio is flat at ~12× = the out-degree**, which is the structural
+reading: the probe converts *"am I the one slot the origin chose?"* into
+*"am I connected to the origin at all?"*, and that is exactly a factor of
+out-degree. **It is a recall increment and only a recall increment** —
+precision falls to `1/|set|`, and one snapshot per transaction, since the
+first successful probe fluffs it and closes the window for everyone.
+
+**The discriminator's fix cost went up, and a cheaper fix appeared.** Both
+structural facts — `relay_category::legacy` excluding stem
+([`blockchain_db.h:117`](../../src/blockchain_db/blockchain_db.h#L117)) and
+`add_tx` taking no peer
+([`tx_pool.cpp:376`](../../src/cryptonote_core/tx_pool.cpp#L376)) — say the
+**incoming path drops identity, exactly as it dropped the hash**. Third
+instance of one shape. So the peer discriminator needs a signature change
+*through the incoming path*, not a comparison at the decision site.
+
+> **Cheaper candidate, needing no identity at all: don't upgrade on loop
+> detection — ignore the duplicate and let each node's own embargo terminate
+> the circulation.** A re-received stem tx already fails
+> `upgrade_relay_method(stem)` and is simply not re-relayed, so the loop
+> **already** stops at the repeat holder; deleting the fluff conversion leaves
+> termination to that node's embargo. Loops still terminate, within one
+> embargo per node, **and there is nothing to plumb.** Same latency trade, no
+> signature change. Needs the same red tests before it is more than a
+> candidate — **but it is the version to test first.**
+
+**Filed as an increment on a priced capability, not a new threat.** At
+`f = 0.30` a 12× recall gain is not nothing — but a supernode at 30 % reach
+already dominates via channels §6.5 measures directly, and the increment
+scales *linearly* with the quantity that budget bounds. **The peer-identity
+discriminator is noted as the available fix if the ranking ever changes.**
+Behind the topology measurement, `F′` reverse-parity, and Unit 2.
+
+### 50.3 The harness was vacuous twice, and the second catch is the lesson
+
+**Attempt 1** (`txpool_relay_timers` fixture): a zero-fee minimal blob was
+rejected on **fee** grounds long before the branch. Three cases, all vacuous
+— *including the one that appeared to pass.*
+
+**Attempt 2** (`daemon_submit_shims`, fee-valid FCMP-shape txs): the re-send
+was rejected at the **key-image** gate, because the fixture `commit`s the tx
+first. Vacuous again — and this time the run reported *"held in stem,
+unchanged"*, which reads as a **substantive negative result**, and the
+peer-blindness test **PASSED**. Both meant nothing.
+
+> **What caught it was one added line: assert `add_tx` returned true.** The
+> branch under test sits in the `else` of `if (!ch_inp_res)`, so any rejection
+> path skips it silently. **A reachability assertion is the cheapest possible
+> guard against vacuity-by-input, and it belongs in the first draft, not the
+> third.**
+
+**And the generalisation is sharper than "a test can lack execution":
+negative-result arms hide missing execution *by construction*.** An arm whose
+expectation is *"X is unchanged"* cannot distinguish *"the transform ran and
+correctly changed nothing"* from *"the transform never ran"* — **unchanged is
+the default state of everything that did not happen.** For a *positive* arm
+the vacuous state and the expected state differ, so it fails loudly; for a
+negative arm they coincide. **Attempt 2's failure output was more dangerous
+than a false green would have been**, because a green invites nothing and a
+finding invites a design round.
+
+> **Consequence for this harness: both arms carry the liveness assertion —
+> especially the arm expected to show no change.** The
+> probe-from-a-non-predecessor arm is exactly that shape, and it is the arm
+> the whole finding turns on.
+
+The probes were kept as `DISABLED_` with the blocker recorded at the site
+through this round, then **deleted in the Q-11 census corrections (#384)**: a
+permanently-disabled probe compiled into the suite reads as coverage while
+gating nothing, and what the future harness needs is the spec below, not the
+twice-vacuous code. **What a valid harness needs**: deliver the tx to a
+pool holding it in stem state *without* having inserted its key images from a
+local commit — seed at the DB level as `txpool_relay_timers` does, while
+supplying a tx that passes `check_tx_inputs`. Neither existing fixture does
+both.
+
+**One structural fact is not in question and stands independent of the
+harness**: `tx_memory_pool::add_tx` takes **no peer identity**, and
+`add_new_tx`'s short-circuit uses `relay_category::legacy`
+(= `broadcasted` + `none`), which **excludes stem** — so a re-sent stem-held
+tx *does* reach `add_tx` in production, and no identity-based discriminator
+can exist at the decision site because the information is not a parameter
+there. What remains unexecuted is only whether it clears the key-image and
+input gates to reach the promotion.
+
+### 50.4 The pattern, recorded because it is the session's most reusable output
+
+Four findings this session named a capability without pricing the **position**
+it requires: restart induction, selective non-propagation, the forensic
+reader, and this. **Each survived contact with *"who is this, and what did
+they have to pay?"* only in a much smaller form.**
+
+> **The check that would have caught all four: before describing what `T`
+> does, state what `T` had to buy to be in a position to do it.** Run *before*
+> building the argument, it is scoping; run after, it arrives as a retraction.
+
+**This generalises the existing rule.** `name-t-and-its-channel` requires
+naming *who* `T` is and *how* it obtains each observable. **It does not
+require pricing `T`'s position** — and position is where all four failed. The
+sharpened form: **name `T`, name the channel, and name the position — the
+position first, because it is the one that voids the other two.**
+
+## 51. The measurement queue is empty, and that is the correct state
+
+**2026-08-02, maintainer correction.** A "topology measurement session" was
+queued to answer F-8 and F-8b's empirical halves. **It is dissolved — neither
+was ever going to be answered by measurement, and the proposal to measure
+reached for the wrong population.**
+
+### 51.1 F-8 is a design question, not a measurement
+
+**Verified at source:** `P2P_IDLE_CONNECTION_KILL_INTERVAL` has **only its
+definition** in `cryptonote_config.h` and **zero consumers**; there is no
+rotation, recycle, or connection-age schedule anywhere in `net_node.inl`.
+Outbound connections drop on error or misbehaviour, not on a clock.
+
+**So connection lifetime is not code-driven — but it is also not a fact to
+discover, because the p2p layer is ours and pre-genesis.** The question is
+not *"how long do connections last?"* but **"what lifetime does §12.11
+require, and does the anti-eclipse posture permit it?"** That is a design
+question, and it goes to design.
+
+**F-8b's empirical half was already unmeasurable pre-genesis** — there is no
+population to measure a degree distribution over. **The §45 floor is the
+answer until there is one.**
+
+### 51.2 The proposal to measure another network was the `peers = 8` error, a third time
+
+The queued session would have measured a *different network's* connection
+lifetimes as a proxy. **That is the same defect as `peers = 8` (§40.1's
+provenance note) and `time_between_hop_ms = 175` (§21): a number with a
+provenance instead of a derivation** — and this session had already caught
+both.
+
+> **The shape: a formula with an empty variable invites reaching for the
+> nearest population to fill it.** The reach feels like rigour because the
+> number arrives with a citation. **Check which one you are producing before
+> going to find the number, not after.**
+
+### 51.3 `obs ≈ 1500·r` has no unknown — it has a *free parameter*
+
+**This is the reframing that dissolves the queue.** The formula's inputs are
+set **by us, at genesis**: block time, `q`, `STEMS`, epoch length, and the
+connection-management policy that determines how long a peer relationship
+lasts.
+
+> **§12.11's viability is not a fact about the world waiting to be
+> discovered. It is a constraint on our own parameter choices:** pick them so
+> warm-up lands inside the connection lifetime our p2p policy produces — or
+> make **retention** remove the dependency.
+
+**Consequence (mine): that makes §12.11's viability freeze-sensitive, and it
+was not listed as such.** The parameters it constrains — block time, `q`,
+`STEMS`, epoch length — are genesis-frozen, so *"can §12.11 converge?"* must
+be answered **before** genesis or it becomes a coordinated upgrade. It joins
+staking default-on in that bucket.
+
+**Second consequence (mine): this reorders the remaining three.** Retention
+does not merely *substitute* for a short connection lifetime — it
+**decouples §12.11 from p2p connection policy entirely**, since a tally that
+survives disconnect stops caring how long connections last. **So the
+retention/seam decision comes first: if retention lands, F-8's design form is
+moot.** If it does not, F-8's design form inherits a hard constraint from
+whatever the anti-eclipse posture permits.
+
+### 51.4 The queue
+
+**No measurement session.** Four items, all ours to derive:
+
+1. **The retention / durable-peer-key seam decision** (F-8's seam
+   question) — first,
+   because it determines whether (2) needs answering at all.
+2. **F-8's design form** — what lifetime §12.11 requires against what
+   anti-eclipse permits.
+3. **`F′` reverse-parity readouts** (§26.3) — unblocked since §44.
+4. **Q-11 Unit 2** — shape, on the (b) leg, with §42's proposal as input.
+
+## 52. §12.11's selection tier is D++ §4.5 version-checking — the mechanism has a theorem in its own lineage
+
+**2026-08-02, maintainer. Provenance split, and it matters for how this is
+used.**
+
+> **~~Paper-side facts are maintainer-supplied and NOT verifiable in this
+> session — no local copy exists in the tree.~~ WITHDRAWN, and the withdrawal
+> is the point: the paper is on arXiv (1805.11060) and I treated it as
+> unavailable without trying to fetch it.** All paper-side facts are now
+> **verified verbatim at §53**, which also **corrects two of them and upgrades
+> the finding**: `C` is *not* unspecified, and the paper does not merely price
+> version-checking — **it rejects it.**
+
+### 52.1 The mapping
+
+D++ §4.5 weighs two ways to pick anonymity-graph edges: **version-checking**
+(draw only from `D_v`, neighbours known to support D++) against
+**no-version-checking** (uniform over all outgoing edges). The paper's own
+warning about the first is that *adversarial nodes can lie about their
+version and/or run nodes that do support D++*. Theorem 3 prices it, with `β`
+the fraction of **honest** nodes carrying the attribute:
+
+```text
+(p/f)(1−(1−f)^η) ≤ R_OPT ≲ (p/f)(1−(1−f)^η) + (1−f)^η + C(1−β)
+```
+
+**`C(1−β)` is the cost of conditioning**: spies always satisfy the attribute,
+honest nodes satisfy it with probability `β`, so the candidate pool is
+enriched in adversaries and recall degrades in proportion to how many honest
+nodes are excluded.
+
+| | D++ version-checking | §12.11 exploit tier |
+| --- | --- | --- |
+| attribute | supports D++ | proven by disarm rate |
+| adversary satisfies | **always** — it runs D++ | **always** — it forwards correctly, and per §34 farms observations faster |
+| honest satisfies | fraction `β` | fraction `β′` |
+| effect | pool enriched in spies, `C(1−β)` | same |
+
+**And `β′` is worse than their `β` on three counts this document already
+established** (all verified here, none paper-dependent): warm-up ≈ **25 h** at
+`obs ≈ 0.07`/epoch (§34.5); **F-8's `forget` resets it at every
+disconnect**; and the **~12 % ambient failure rate false-cools honest peers** off
+the ladder's low rungs (§36.1, §37.1). **Their `β` only grows with deployment.
+Ours is depressed by the mechanism's own dynamics, permanently.**
+
+> **This is discipline #16 — ranking-preference recruits the best-provisioned
+> adversary — with a theorem behind it, in the lineage, on a structurally
+> identical mechanism. It was a project-local judgement; it does not have to
+> be.**
+
+### 52.2 `ε_explore` becomes derivable — and my scope statement was wrong for a specific reason
+
+§36.5 scoped `ε` as derivable against warm-up and cold-start but **not**
+against recruitment, because it *"moves warm-up symmetrically… changing WHEN
+the ranking settles and never WHO wins it."*
+
+**That is true of one of `ε`'s roles and I generalised it to the other.**
+`ε` has two:
+
+- **Effect on convergence *time*** — symmetric, since raising `ε` accelerates
+  the adversary's accumulation exactly as much as the honest peer's. **No
+  recruitment leverage. The scope statement was right here.**
+- **Effect on pool *composition*** — `ε` **is** the mixing parameter between
+  a conditioned pool and a uniform one. **Asymmetric**, because the adversary
+  always satisfies the attribute and honest nodes satisfy it with probability
+  `β′`. At `ε = 1` the pool is uniform and there is no conditioning cost; at
+  `ε = 0` it is fully conditioned.
+
+**So the conditioning cost scales as `(1−ε)·C(1−β′)` — `ε` *multiplies* it —
+which is exactly why `ε` is derivable against recruitment.** Choose `ε` such
+that `(1−ε)·C(1−β′)` stays under the recall budget §6 already sets: the same
+minimax shape as the rung. **My error was conflating a symmetric effect on
+time with a symmetric effect on composition; only the first is symmetric.**
+
+### 52.3 The secondary check lands on the retention decision, and inverts its frame
+
+The spec is explicit that each node picks two outbound edges **uniformly at
+random** and selects **fresh** relays each epoch. **Reputation-weighted
+selection is neither uniform nor fresh** — the same top-ranked peers persist
+across epochs. That is §12.11's measured ossification (2 of 12 at `ε = 0`),
+but the paper-level consequence is larger: **a graph that does not
+re-randomise is a static graph**, which is Sharma Appendix B's cheap-learning
+regime at roughly half the probe cost against our `q`.
+
+**And it composes with F-8 into a two-sided trade nobody had stated
+(mine).** F-8 says `forget`-on-close **resets reputation**, so the mechanism
+may never converge. This says that same reset is **what preserves per-epoch
+graph freshness**.
+
+> **So `forget`-on-close is simultaneously the convergence problem and the
+> freshness guarantee.** The retention decision is therefore **not** *"is
+> retention worth its forensic cost?"* but **"does the convergence retention
+> buys exceed the graph-freshness it spends?"* — both sides now named, and
+> the second is the first argument against retention that does not rest on
+> forensics.
+
+**This does not change §51.4's ordering but it changes its meaning.**
+Retention still comes first because it decouples §12.11 from p2p connection
+policy — but it is now a genuine **fork** with a priced cost on each branch,
+not a fix awaiting a forensic objection.
+
+### 52.4 Caveats, and the cheaper path to the number
+
+Theorem 3 bounds **recall, not precision**, on an approximately-`2η`-regular
+graph with **spies uniformly placed** — the placement assumption already
+flagged as optimistic. **`C` is unspecified in what was read**, so the mapping
+gives *the shape of the cost and the derivation path, not a number.*
+
+**A cheaper route to that number than reading the paper (mine):**
+[`epsilon_greedy_pure_preference_ossifies_to_two_peers`](../../rust/shekyl-relay-privacy/tests/propagation_measurement/selection.rs)
+already sweeps `ε → distinct peers exercised` at pool 12, `STEMS = 2`. **That
+is the conditioned pool collapsing — plausibly the empirical form of the very
+term Theorem 3 prices, measured on *our* parameters rather than the paper's.**
+If pool-collapse can be mapped to recall degradation, `C` may be pinnable
+from an instrument that already runs, which is materially cheaper than
+re-deriving it. **Worth checking first; the mapping from collapse to recall
+is the part that needs care and is not assumed here.**
+
+**Status: §12.11 should not be built without answering this.** The structural
+match is exact on every leg verifiable here; only the paper leg is
+ungrounded, and it is ungrounded in a direction that makes the mechanism
+*worse*, not better.
+
+## 53. §52 verified at source — and the paper's lesson is *don't build this*
+
+**2026-08-02.** §52's paper leg is now grounded against
+[arXiv:1805.11060](https://arxiv.org/abs/1805.11060) (Fanti et al.,
+*Dandelion++*, PACMPACS 2(2):29). **I had recorded it as unverifiable; it was
+one fetch away.** Three verifications, two corrections, and the finding gets
+materially stronger.
+
+### 53.1 Verified verbatim
+
+- **The warning** — *"While version checking is a natural strategy, adversarial
+  nodes can lie about their version number and/or run nodes that support
+  Dandelion++."*
+- **`β`'s semantics** — *"we assume that all spy nodes run Dandelion++, and a
+  fraction `β` of the remaining honest nodes are using Dandelion++."*
+  **Adversary always carries the attribute; honest carry it with probability
+  `β`.** Exactly as mapped.
+- **Theorem 3's bound**, and the epoch spec (*"each time a node changes epoch,
+  it selects fresh Dandelion++ relays"*) — both as stated.
+
+### 53.2 Correction 1 — `C` is given explicitly, so the number was never blocked
+
+§52.4 recorded `C` as unspecified and proposed pinning it from our ossification
+instrument. **Unnecessary — the paper defines it:**
+
+```text
+C = [1 − (p/f)(1−(1−f)^η)] · (1−(1−φ)^ñ)/(ñφ),   φ = 1−(1−1/(n−η))^η,  ñ = (1−p)n
+```
+
+Evaluated at `η = STEMS = 2`, `n = 5000`:
+
+| `p` | `β′` | `R` lower | **`R` upper** |
+| --- | --- | --- | --- |
+| 0.05 | 0.05 | 0.095 | **1.000** |
+| 0.05 | 0.20 | 0.088 | **0.992** |
+| 0.05 | 0.50 | 0.074 | 0.507 |
+| 0.10 | 0.20 | 0.172 | **0.998** |
+| 0.20 | 0.20 | 0.328 | **1.000** |
+
+**At low `β′` the recall bound is ≈ 1 even at 5 % spies.** The instrument
+proposal stands as an independent cross-check, not as the only route.
+
+> **⚠ Symbol collision, flagged before anyone substitutes:** the paper's `f`
+> is *"the fraction of all nodes that support Dandelion++"* (`= p + (1−p)β`),
+> **not** this document's `f` (the adversary's network share/reach, §6.5,
+> §50.2). Different quantities, same letter.
+
+### 53.3 Correction 2 — the paper does not price version-checking, it **rejects** it
+
+§52 read Theorem 3 as *"prices it with a `C(1−β)` cost term."* **The paper's
+own conclusion is a one-line lesson:**
+
+> **"Lesson. Use no-version-checking to construct the graph."**
+
+with the reasoning stated directly: *"when adoption is low (low `β`), any
+Dandelion++ peers are likely to be spies. Therefore, **version-checking
+actually increases the likelihood of getting deanonymized.**"* In that regime
+version-checking is **worse than plain diffusion**.
+
+**So the finding upgrades.** §12.11's exploit tier is not *"a design with a
+cost term to price."* It is **the design this protocol's own authors tested
+and rejected** — and §52.1's three depressants (25 h warm-up, `forget`-on-
+disconnect, ~12 % ambient false-cooling) mean our `β′` does not merely start
+low, it **stays** low. **We would sit permanently in the exact regime the
+paper measures recall ≈ 1.**
+
+### 53.4 What that does to `ε_explore` — the endpoints are named, and one is the paper's default
+
+**The paper's two options are our `ε` endpoints.** No-version-checking —
+*"each node `v` instead selects 2 outgoing edges uniformly from the set of all
+outgoing edges"* — **is `ε = 1`.** Version-checking is `ε = 0`. §12.11 as
+specified sits near the rejected end.
+
+> **So `ε` does not merely become derivable — it acquires a paper-endorsed
+> default of `ε = 1`, and any `ε < 1` now carries the burden of justifying
+> itself against an explicit published lesson.** That is a stronger position
+> than a minimax against a budget: the budget says *how much*; the lesson says
+> *which direction the default points*.
+
+The one thing our design has that the paper's version-checking does not is
+**exploration itself** — `ε` makes ours a convex combination of the two
+options rather than the pure rejected one. **That is the whole of our defence,
+and it is why `ε`'s derivation is now load-bearing rather than tidy.**
+
+### 53.5 Two smaller notes
+
+**Figure attribution:** the version-checking result is **Figure 10** (`p = 0.2`,
+`q = 0.2`, ~16-regular P2P graph). **Figure 3** is the separate known-graph
+precision comparison — 4-regular vs line, where *"if a 4-regular graph is
+unknown to the adversary, it has a precision very close to that of line
+graphs"* but a known graph gains only half as much. That supports the
+learnable-graph concern in §52.3, though it is a *precision-vs-known-graph*
+result rather than a degree trend; **the "degree trend reverses" phrasing is
+not what I read there and is flagged for the finding's author rather than
+asserted either way.**
+
+**The freeze rule generalises, and the general form is the useful one.**
+Retention is node-local policy and so is not itself genesis-frozen — **but it
+changes what convergence requires, and convergence is set by `q`, `STEMS` and
+epoch length, which are frozen.**
+
+> **General rule: a non-frozen mechanism carries a genesis deadline whenever
+> it constrains a frozen parameter.** Worth applying as a sweep rather than
+> kept as a property of this one item — the freeze surface is larger than the
+> list of frozen constants.
+
+## 54. The lesson deletes one tier, not the mechanism — uniform draw over an admissible set
+
+**2026-08-02.** §53.3's lesson (*"use no-version-checking"*) reads as fatal to
+§12.11 only if the mechanism is one thing. **It is three, and the lesson cuts
+exactly one.** Checked against §12.11's *current* text, not a summary of it.
+
+### 54.1 The three tiers, verified, and where the lesson lands
+
+§12.11's table, as it stands:
+
+| tier | pool | rule | maps to |
+| --- | --- | --- | --- |
+| **Exploit** (majority of slots) | eligible peers | **prefer embargo-disarm rate** | **version-checking — REJECTED** (§53.3) |
+| **Explore** (`ε ≈ 0.05`) | eligible-but-non-top | **uniform random** | **no-version-checking — ENDORSED** |
+| **Excluded** | cooled-down | not eligible for either | **not selection preference at all — eviction** |
+
+**Exclusion is not a ranking.** It is what discipline #16 says reputation is
+for: **a floor, not a ceiling.** So the derivable design is:
+
+> **Uniform random selection over the non-cooled admissible set. Reputation
+> gates admission; it never orders the draw.**
+
+That satisfies §4.5's lesson, satisfies #16 in its stated form, and **keeps
+the entire black-hole defence** — a dropper is still cooled out, it just never
+gets *preferred in*.
+
+### 54.2 The disanalogy is real and does not rescue the exploit tier
+
+Version support is **self-declared and free**; reputation is **earned through
+observed relay work** — §12.10's conscription argument, and it means the
+adversary pays something to carry our attribute.
+
+**It does not rescue the design.** Per §34, the work is relay work the
+adversary **wants to do anyway**, since forwarding correctly is what buys slot
+occupancy: it pays in a currency it is spending regardless. **And the
+depressants are the decisive half — D++'s `β` is depressed by *adoption*,
+which resolves as the network matures; ours is depressed by *mechanism
+dynamics* (warm-up, disconnect reset, false cooling), which never resolve.**
+
+*(Conscription survives the cut, in the floor form: to stay in the pool a peer
+must forward correctly. Conscription by threat of exclusion rather than reward
+of preference — which is the same lever, correctly signed.)*
+
+### 54.3 What collapses
+
+- **`ε` disappears as a parameter.** No exploit/explore mixture to tune. **The
+  derivation §53.4 was about to demand is not needed** — better than having
+  one.
+- **Epoch freshness is restored**, so the Sharma-App-B static-graph concern
+  and §52.3's retention objection largely go with it. **Retention now affects
+  only who is *admissible*, never who is *preferred*** — a far smaller
+  footprint on the anonymity graph.
+- **§12.11's ossification finding (2 of 12) is moot rather than mitigated** —
+  there is no ranking to collapse.
+- **Remaining parameters are already on derivation paths**: the `(n_min, cut)`
+  rung by minimax against yield (§37.2), and cooldown by
+  `false_rate × (cooldown/interval)` under part C's eclipse bound (§35.2).
+
+### 54.4 Three consequences the cut produces that were not stated
+
+**(a) F-8 softens from *inert* to *degraded*.** Warm-up gated *two* consumers:
+preference and exclusion. Deleting preference leaves only exclusion — so a
+long warm-up no longer means *"no tally reaches `n_min`, the mechanism never
+engages"*; it means **droppers are cooled more slowly.** Graceful degradation
+against a real cost, not a cliff. **And the failure mode of the reputation
+layer is now uniform selection — which is what the paper recommends.**
+
+**(b) The explore slot was itself a side channel, and the cut deletes it.**
+§12.11 owes *"memoryless explore timing… otherwise the explore-slot is a
+timing fingerprint."* **Under a uniform draw there is no distinguished slot to
+fingerprint** — every draw is the same kind of draw. That is CV-4's
+payload-blindness lesson one level up: **a schedule that treats some draws
+differently is a discriminator**, and the safest version of that rule is not
+to have two kinds of draw.
+
+**(c) A third independent argument against raising `STEMS`.** With `d` pinned
+as *total* degree (§54.5), `STEMS = 2` is `d = 4`; raising it moves to `d = 6`
+or `8`, which per Figure 3 **helps only in the known-graph regime**. Uniform
+draw over a slowly-changing admissible set keeps us **nearer the
+unknown-graph regime, where higher `d` is *worse***. That converges with
+§32.3's corrected camouflage-thinning form by a second, independent route.
+
+### 54.5 Second symbol collision, pinned alongside the first
+
+Verified verbatim: *"line graphs (for `d = 2`) have the worst (highest)
+expected precision"*, and Theorem 1 is stated on a *"random 4-regular graph."*
+
+> **The paper's `d` is TOTAL degree, not out-degree.** D++'s choice is `d = 4`
+> with `η = 2` outbound — so **our `STEMS = 2` is `d = 4`**, and a `STEMS`
+> raise is a move to `d = 6`/`d = 8`. Pinned beside §53.2's `f` collision
+> (paper `f` = fraction supporting D++, ours = adversary reach).
+
+**Figure 3's two paragraphs are both correct and are different claims**: the
+known-vs-unknown *precision gain* comparison (0.12 on lines vs 0.06 on
+4-regular at `p = 0.15`), and immediately after, the *degree trend* — unknown
+graph, precision worsens as `d` rises; known graph, *"the performance trend
+reverses"* and precision decreases monotonically as `d` rises.

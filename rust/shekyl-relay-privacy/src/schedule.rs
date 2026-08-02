@@ -397,7 +397,7 @@ pub type EmbargoDistribution = DelayFamily;
 ///
 /// # The shipped value, and why it is not 39 s
 ///
-/// The daemon draws from [`Self::adopted`] — **mean 144 s, memoryless** — and
+/// The daemon draws from [`Self::adopted`] — **mean 190 s, memoryless** — and
 /// carries no embargo constant of its own (`DAEMON_RELAY_PRIVACY.md` §17). It
 /// replaced an inherited `39 s` that was wrong three ways, each of which this
 /// type is shaped to prevent recurring:
@@ -409,7 +409,8 @@ pub type EmbargoDistribution = DelayFamily;
 ///   survival, so the backstop measurably never fired. **F-2.**
 /// - The closed form substituted `E[K]` into an expression in `K(K-1)`; stem
 ///   length is geometric, so `E[K(K-1)] = 2·E[K](E[K]-1)` and the value
-///   under-provisioned at every `q`. The exact solve gives 144 s. **F-3.**
+///   under-provisioned at every `q`. The exact solve gives 190 s at the
+///   F-7-corrected `fluff_return_ms` (144 s at the old, defective input). **F-3.**
 ///
 /// The lesson the type encodes: a timing constant and its derivation must live
 /// in the same place. Anything that needs a number from this distribution
@@ -446,7 +447,8 @@ pub const DEFAULT_EMBARGO_TICK_MILLIS: u64 = 250;
 /// stops being a coin-flip against the backstop it is waiting for.
 ///
 /// On the adopted embargo that rate is exactly
-/// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`] (664 s). Pin the seconds, not only the
+/// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`] (874 s — was 664 s before F-7 corrected
+/// `fluff_return_ms`; §44). Pin the seconds, not only the
 /// rate: the same F-1 class of defect reappears if the wait is left as a loose
 /// bound that can drift when the table, tick, or rounding changes.
 pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
@@ -460,7 +462,7 @@ pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
 /// free-standing timeout and must not be retuned here — change the rate or the
 /// embargo derivation, then update this pin when the test says the seconds
 /// moved. See `DAEMON_RELAY_PRIVACY.md` §17.
-pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 664;
+pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 874;
 
 impl EmbargoTimer {
     /// The configuration this crate recommends shipping: exact discrete survival

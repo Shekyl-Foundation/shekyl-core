@@ -189,11 +189,15 @@ fn black_hole_recovery_scales_with_holder_count() {
             let p90_ticks = p90_samples[n * 90 / 100];
             let p90_s = p90_ticks as f64 * tick_ms as f64 / 1000.0;
             println!("  origin-alone (j=0) recovery p90 = {p90_s:.1}s (MIN_RELAY_TIME = 300s)");
+            // Band tracks the adopted mean × ln(10): 144 s → ~331 s under
+            // RD-4, re-centred to 190 s → ~437 s when F-7 corrected the
+            // `fluff_return_ms` input (§44). Same ±5 % slack.
             assert!(
-                (315.0..350.0).contains(&p90_s),
+                (415.0..460.0).contains(&p90_s),
                 "origin-alone p90 {p90_s:.1}s outside the reproduced band"
             );
-            // RD-4 pushed the embargo to 144 s, so the worst-case recovery p90
+            // RD-4 pushed the embargo past MIN_RELAY_TIME, and F-7 pushed it
+            // further, so the worst-case recovery p90
             // now *exceeds* MIN_RELAY_TIME rather than approaching it.
             assert!(
                 p90_s > 300.0,
@@ -308,7 +312,9 @@ fn black_hole_attack_leak_is_mean_invariant() {
 /// defend against, and the baseline the ε argument's leakage weights reference.
 #[test]
 fn first_spy_precision_rises_with_spy_fraction() {
-    use shekyl_relay_privacy::conformance::{simulate_diffusion_first_spy, FloodParams};
+    use shekyl_relay_privacy::conformance::{
+        simulate_diffusion_first_spy, FloodParams, FloodReach,
+    };
 
     println!("\nπ₀: first-spy source-attribution precision (memoryless flood, 512 nodes, 8 peers)");
     println!("{:>6} {:>12} {:>18}", "f", "precision", "mean hops to spy");
@@ -321,6 +327,7 @@ fn first_spy_precision_rises_with_spy_fraction() {
             FloodParams {
                 nodes: 512,
                 peers: 8,
+                reach: FloodReach::EveryPeer,
             },
             20,
             DelayFamily::Geometric,

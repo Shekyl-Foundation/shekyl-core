@@ -54,6 +54,21 @@
 /// the design round can move it and watch the embargo follow.
 pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 
+/// The per-zone outbound-connection floor the F-7 embargo provisioning
+/// assumes (F-8b, §45).
+///
+/// `fluff_return_ms = 3250` is the measured p90 first passage at usable
+/// degree **12** (§44). The worst-zone argument is bounded by that measured
+/// range: below degree 12 the real first passage *exceeds* the provisioned
+/// value and the embargo is under-provisioned in the direction the
+/// `fluff_return_ms` note names as a privacy loss. An operator can reach that
+/// region with `--tx-proxy <zone>,<addr>,N` for `N < 12`, so the C++ argument
+/// parser refuses such counts, consuming this constant through
+/// `shekyl_relay_zone_min_provisioned_out_peers` — one owner, no C++ mirror.
+/// If a future re-measure extends the instrument below degree 12, this floor
+/// moves with `fluff_return_ms`, not independently of it.
+pub const MIN_PROVISIONED_OUT_PEERS: u32 = 12;
+
 /// The stem-graph shape, which fixes how many outbound peers carry stem
 /// traffic in an epoch — i.e. the stem graph's out-degree.
 ///
@@ -152,10 +167,33 @@ impl DandelionParams {
             epoch_jitter_secs: 30,
             // CRYPTONOTE_DANDELIONPP_FLUFF_PROBABILITY = 20, out of 100.
             fluff_probability_pct: 20,
-            // Measured p90 first-passage for a memoryless fluff flood at 8
-            // peers (`simulate_fluff_return`). Under the *inherited* Poisson
-            // delay the same measurement gives ~13.75 s — see F-5.
-            fluff_return_ms: 2_250,
+            // **Provisioned at the worst zone, not at one measurement —
+            // F-7 (§26, §40, §44).** Measured p90 first-passage, memoryless
+            // fluff flood (`simulate_fluff_return`), by deployed fluff rule at
+            // Shekyl's `P2P_DEFAULT_CONNECTIONS_COUNT = 12`:
+            //
+            //   clearnet (EveryPeer, usable degree ~24)      ~1250 ms
+            //   Tor-C  (OutboundOnly, usable degree 12 exact) ~3250 ms  <- binding
+            //
+            // The old 2250 was an `EveryPeer` measurement at `peers = 8` fed
+            // to the derivation for EVERY transport, so the anonymity zone was
+            // provisioned from a fluff rule it does not use (~44 % low). The
+            // gap is a DEGREE effect, not a direction effect: at matched
+            // usable degree (EveryPeer@8 vs OutboundOnly@16) the two rules
+            // measure 2500 vs 2250 ms — the direction constraint costs
+            // nothing; halving the usable degree is what costs (§40.1).
+            //
+            // One process-wide value serves both zones because the embargo
+            // draw is a singleton, and it is set to the WORST zone's F. §44.3
+            // prices what that costs the over-provisioned zone: this constant's
+            // only production consumer is the embargo derivation, so
+            // over-estimating F *lengthens* the embargo — which *reduces* the
+            // §6.7 prefix-fire leak (measured) and pays only in black-hole
+            // recovery latency (p90 ~439 s vs ~331 s on clearnet). Privacy-safe
+            // on both axes; per-zone F would buy recovery latency, not privacy.
+            // Under the *inherited* Poisson delay the same instrument gives
+            // ~13.75 s — see F-5.
+            fluff_return_ms: 3_250,
             // CRYPTONOTE_DANDELIONPP_STEMS = 2.
             graph: StemGraph::QuasiFourRegular,
         }
@@ -287,11 +325,14 @@ pub mod inherited {
     /// λ for the inbound fluff draw, in quarter-seconds.
     pub const FLUFF_AVERAGE_IN_QUARTER_SECS: u32 = 20;
 
-    /// `CRYPTONOTE_NOISE_MIN_EPOCH` — 5 minutes, in seconds.
-    pub const NOISE_MIN_EPOCH_SECS: u32 = 300;
-    /// `CRYPTONOTE_NOISE_EPOCH_RANGE`, in seconds.
-    pub const NOISE_EPOCH_JITTER_SECS: u32 = 30;
     /// `CRYPTONOTE_NOISE_MIN_DELAY`, in seconds.
+    ///
+    /// The epoch pair (`CRYPTONOTE_NOISE_MIN_EPOCH` / `_EPOCH_RANGE`) is
+    /// deliberately NOT mirrored here: those values are C++-owned and cross
+    /// the FFI as `shekyl_relay_zone_new` arguments. Rust mirrors of them
+    /// existed briefly with zero consumers and were deleted (Q-11 Unit 0) —
+    /// a dead duplicate of a C++-owned fact is the delete-don't-synchronize
+    /// class, not documentation.
     pub const NOISE_MIN_DELAY_SECS: u32 = 10;
     /// `CRYPTONOTE_NOISE_DELAY_RANGE`, in seconds.
     pub const NOISE_DELAY_JITTER_SECS: u32 = 5;

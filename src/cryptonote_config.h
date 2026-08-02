@@ -115,7 +115,7 @@
 // follow from the derivation printed beside it (the formula it cited gives
 // 16.61 s; 39 s reproduces only if you read log10 for ln), and it was drawn
 // from a Poisson under a derivation assuming exponential survival, so the
-// backstop it exists to provide never fired. Both the value (now 144 s) and the
+// backstop it exists to provide never fired. Both the value (now 190 s) and the
 // distribution come from shekyl-relay-privacy's `EmbargoTimer` via
 // src/shekyl/shekyl_ffi.h, where the number and its
 // derivation live in the same place and are pinned by tests.
@@ -130,9 +130,26 @@
 #define CRYPTONOTE_NOISE_CHANNELS                       2      // Max outgoing connections per zone used for noise/covert sending
 
 // Both below are in seconds. The idea is to delay forwarding from i2p/tor
-// to ipv4/6, such that 2+ incoming connections _could_ have sent the tx
-#define CRYPTONOTE_FORWARD_DELAY_BASE (CRYPTONOTE_NOISE_MIN_DELAY + CRYPTONOTE_NOISE_DELAY_RANGE)
-#define CRYPTONOTE_FORWARD_DELAY_AVERAGE (CRYPTONOTE_FORWARD_DELAY_BASE + (CRYPTONOTE_FORWARD_DELAY_BASE / 2))
+// to ipv4/6, such that 2+ incoming connections _could_ have sent the tx.
+//
+// DECOUPLED from CRYPTONOTE_NOISE_* (Q-11 Unit 0, 2026-07-31), value-neutrally:
+// the inherited definitions derived these from the covert-cadence constants
+// (BASE = NOISE_MIN_DELAY + NOISE_DELAY_RANGE; AVERAGE = BASE + BASE/2), which
+// welded two mechanisms with two different adversaries to one numeral — the
+// forward delay defends the peer/sybil observer at the tor->clearnet boundary,
+// the covert cadence defends the wire observer — so re-deriving either would
+// have silently rewritten the other. DO NOT re-couple these to NOISE_*.
+//
+// The values are inherited, not derived: the stated objective above is an
+// anonymity-set claim ("2+ incoming connections could have sent it") that no
+// derivation has ever been shown to satisfy, and the draw that consumes
+// AVERAGE (tx_pool.cpp, crypto::random_poisson_seconds) carries the F-2/F-4
+// family defect (Poisson, not memoryless). Both are Q-12
+// (docs/design/DAEMON_RELAY_PRIVACY.md §22.2) — derive from the stated
+// anonymity-set objective, fix the family from measurement. Do not change
+// these numerals except through that derivation.
+#define CRYPTONOTE_FORWARD_DELAY_BASE    15
+#define CRYPTONOTE_FORWARD_DELAY_AVERAGE 22
 
 #define CRYPTONOTE_MAX_FRAGMENTS                        20 // ~20 * NOISE_BYTES max payload size for covert/noise send
 

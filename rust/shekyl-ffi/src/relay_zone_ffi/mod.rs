@@ -431,6 +431,18 @@ pub unsafe extern "C" fn shekyl_relay_zone_covert_enabled(handle: *const RelayZo
     }
 }
 
+/// The outbound-connection floor the embargo provisioning assumes (F-8b, §45).
+///
+/// `fluff_return_ms` is measured at usable degree 12; a zone configured below
+/// that has a real fluff first-passage the embargo was not derived for, in the
+/// privacy-losing direction. The `--tx-proxy` parser refuses counts below this
+/// value. Handle-free: the floor is a property of the derivation, not of any
+/// zone instance.
+#[no_mangle]
+pub extern "C" fn shekyl_relay_zone_min_provisioned_out_peers() -> u32 {
+    shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_next_wake(handle: *const RelayZoneHandle) -> u64 {
     if handle.is_null() {

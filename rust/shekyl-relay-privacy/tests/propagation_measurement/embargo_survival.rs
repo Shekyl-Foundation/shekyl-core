@@ -130,15 +130,25 @@ fn inherited_versus_derived_versus_paper_faithful_embargo() {
 
     // Finding 2: correcting the constant changes nothing measurable, because
     // the distribution — not the mean — is what disabled the backstop.
+    // Re-pinned when F-7 raised `fluff_return_ms` to 3250: the extra second of
+    // return time clips ~0.13 % off the 17 s Poisson's lower tail (measured
+    // 1.0000 vs 0.9987, gap 0.0013). The rail sits snug against that
+    // measurement (0.0015, ~15 % headroom on a seeded, deterministic run) so a
+    // model drift the size the pre-F-7 rail caught still goes red. The finding
+    // stands — the constant correction moves ~0.001 where the distribution
+    // correction moves ~0.1, two orders apart.
     assert!(
-        (inherited.full_travel_rate - derived.full_travel_rate).abs() < 0.001,
+        (inherited.full_travel_rate - derived.full_travel_rate).abs() < 0.0015,
         "shipped {:.4} vs constant-fixed {:.4}: the 2.3x correction should be \
          invisible under Poisson",
         inherited.full_travel_rate,
         derived.full_travel_rate
     );
+    // Same F-7 re-pin as the invisibility bound above: the 17 s Poisson's
+    // lower tail now clips ~0.13 % against the longer return (rail snug at
+    // 0.0015).
     assert!(
-        inherited.preemption_rate < 0.001 && derived.preemption_rate < 0.001,
+        inherited.preemption_rate < 0.0015 && derived.preemption_rate < 0.0015,
         "a Poisson embargo at these means should essentially never fire"
     );
 
@@ -422,8 +432,12 @@ fn fluff_probability_trade_curve() {
     // fires anywhere in the useful range of q.
     for (pct, p, _) in &rows {
         if *pct <= 20 {
+            // Re-pinned at F-7's longer return (measured 0.0015 at q=20%; the
+            // rail sits snug at 0.0018, ~20 % headroom on a seeded run): still
+            // "effectively never" against the ~10 % a working backstop needs,
+            // same two-orders separation as Finding 2.
             assert!(
-                p.preemption_rate < 0.001,
+                p.preemption_rate < 0.0018,
                 "q={pct}%: Poisson embargo fired at {:.4} — expected effectively never",
                 p.preemption_rate
             );
@@ -448,8 +462,14 @@ fn fluff_probability_trade_curve() {
     // worth pinning; the magnitude is reported rather than bounded tightly.
     let spread = shortfalls.iter().copied().fold(f64::MIN, f64::max)
         - shortfalls.iter().copied().fold(f64::MAX, f64::min);
+    // Rail re-pinned at F-7: the fixed return term grew ~44 %, and per the
+    // note above a larger fixed term costs proportionally more at short stems
+    // — the spread GROWING with F is the RD-1 mechanism working, not the model
+    // degrading. Measured 0.6306 at F′ = 3250 on a seeded, deterministic run;
+    // the rail sits snug at 0.66 (~5 % headroom) so drift the size the
+    // pre-F-7 0.60 rail caught still goes red.
     assert!(
-        spread < 0.60,
+        spread < 0.66,
         "shortfall spread {spread:.4} is implausibly wide — check the model"
     );
     println!("  (shortfall is now q-dependent, spread {spread:.4} — RD-1 effect)");
@@ -537,8 +557,22 @@ fn fluff_return_dominates_the_embargo_derivation() {
     ] {
         for peers in [4_usize, 8] {
             let mut rng = SplitMix64::new(0xF100_D000 + peers as u64);
-            let s =
-                simulate_fluff_return(FloodParams { nodes: 512, peers }, 20, dist, 24, &mut rng);
+            let s = simulate_fluff_return(
+                FloodParams {
+                    peers,
+                    ..FloodParams::default()
+                },
+                20,
+                dist,
+                24,
+                &mut rng,
+            );
+            assert_eq!(
+                s.unreached, 0,
+                "undirected flood stranded {} of {} first passages — the p90 fed \
+                 onward would be measured on collapsed coverage",
+                s.unreached, s.samples
+            );
             println!(
                 "{label:<34} {peers:>8} {:>9.0}ms {:>9}ms",
                 s.mean_ms, s.p90_ms
@@ -590,7 +624,7 @@ fn fluff_return_dominates_the_embargo_derivation() {
     );
 
     let mut corrected = None;
-    for f in [500_u32, 1_500, 2_250, 4_250, 13_750] {
+    for f in [500_u32, 1_500, 2_250, 3_250, 4_250, 13_750] {
         let p = DandelionParams {
             fluff_return_ms: f,
             ..DandelionParams::inherited()
@@ -608,15 +642,19 @@ fn fluff_return_dominates_the_embargo_derivation() {
             d.mean_secs(),
             at_old
         );
-        if f == 2_250 {
+        // 3250 is the shipped, F-7-corrected p90 return (OutboundOnly at
+        // degree 12, §40.1); 2250 stays on the ladder as the pre-F-7
+        // EveryPeer figure the original finding was written against.
+        if f == 3_250 {
             corrected = Some((d, at_old));
         }
     }
-    let (adopted, old_achieves) = corrected.expect("2250ms row was measured");
+    let (adopted, old_achieves) = corrected.expect("3250ms row was measured");
 
     println!(
-        "\n  At the measured p90 return of 2250ms the requirement moves {}s -> {}s,\n  \
-         and the previously-derived {}s delivers only {old_achieves:.4} rather than\n  \
+        "\n  At the measured p90 return of 3250ms (F-7's directed re-measure; the\n  \
+         2250ms row above is the pre-F-7 EveryPeer figure) the requirement moves\n  \
+         {}s -> {}s, and the previously-derived {}s delivers only {old_achieves:.4} rather than\n  \
          0.9002. The old figure was a lower bound, and a loose one.\n\n  \
          This is a large liveness cost -- a black-holed transaction now sits\n  \
          undiffused for ~{}s -- which makes the 0.90-on-ANY-preemption target\n  \

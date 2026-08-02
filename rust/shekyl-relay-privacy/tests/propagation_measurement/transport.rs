@@ -35,10 +35,7 @@ fn tor_collapses_the_supernode_diffusion_observer() {
         let phi = phi_pct as f64 / 100.0;
         let mut clear = SplitMix64::new(0x707 + phi_pct);
         let c = simulate_transport_observation(
-            FloodParams {
-                nodes: 512,
-                peers: 8,
-            },
+            FloodParams::default(),
             20,
             DelayFamily::Geometric,
             phi,
@@ -48,10 +45,7 @@ fn tor_collapses_the_supernode_diffusion_observer() {
         );
         let mut tor = SplitMix64::new(0x707 + phi_pct + 9973);
         let t = simulate_transport_observation(
-            FloodParams {
-                nodes: 512,
-                peers: 8,
-            },
+            FloodParams::default(),
             20,
             DelayFamily::Geometric,
             phi,
@@ -88,10 +82,7 @@ fn tor_collapses_the_supernode_diffusion_observer() {
     let mut a = SplitMix64::new(1);
     let mut b = SplitMix64::new(2);
     let lo = simulate_transport_observation(
-        FloodParams {
-            nodes: 512,
-            peers: 8,
-        },
+        FloodParams::default(),
         20,
         DelayFamily::Geometric,
         0.05,
@@ -100,10 +91,7 @@ fn tor_collapses_the_supernode_diffusion_observer() {
         &mut a,
     );
     let hi = simulate_transport_observation(
-        FloodParams {
-            nodes: 512,
-            peers: 8,
-        },
+        FloodParams::default(),
         20,
         DelayFamily::Geometric,
         0.30,
@@ -153,7 +141,7 @@ fn passive_clearnet_leak_is_mean_dependent_and_zero_on_tor() {
     println!("{}", "-".repeat(50));
 
     let mut clearnet_rates = Vec::new();
-    for secs in [31_u32, 50, 144, 300, 500] {
+    for secs in [31_u32, 50, 144, 190, 300, 500] {
         let ticks = u32::try_from(u64::from(secs) * 1000 / DEFAULT_EMBARGO_TICK_MILLIS).unwrap();
         let e = EmbargoTimer::geometric_from_ticks(ticks, DEFAULT_EMBARGO_TICK_MILLIS);
 
@@ -205,20 +193,22 @@ fn passive_clearnet_leak_is_mean_dependent_and_zero_on_tor() {
             w[1].1
         );
     }
-    // Non-negligible at the adopted 144 s embargo — a real channel, not noise.
-    let at_144 = clearnet_rates.iter().find(|(s, _)| *s == 144).unwrap().1;
+    // Non-negligible at the adopted 190 s embargo (the F-7-derived pair that
+    // ships; 144 s stays on the printed ladder as the pre-F-7 point) — a real
+    // channel, not noise.
+    let at_190 = clearnet_rates.iter().find(|(s, _)| *s == 190).unwrap().1;
     assert!(
-        at_144 > 0.005,
+        at_190 > 0.005,
         "the clearnet passive channel should be non-negligible at the adopted \
-         embargo, got {at_144:.5}"
+         embargo, got {at_190:.5}"
     );
     // The RD-1/RD-4 corrections already helped here: the 31 s (pre-correction)
-    // rate is several times the 144 s (adopted) rate.
+    // rate is several times the adopted 190 s rate.
     let at_31 = clearnet_rates.iter().find(|(s, _)| *s == 31).unwrap().1;
     assert!(
-        at_31 > at_144 * 3.0,
+        at_31 > at_190 * 3.0,
         "correct provisioning should have cut the passive leak severalfold: \
-         31s={at_31:.5} vs 144s={at_144:.5}"
+         31s={at_31:.5} vs 190s={at_190:.5}"
     );
 
     println!(

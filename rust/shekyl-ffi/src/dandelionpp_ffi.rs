@@ -64,7 +64,8 @@ fn embargo_timer() -> &'static EmbargoTimer {
 /// Poisson was drawn under a derivation assuming exponential survival, so the
 /// backstop never fired (F-2), and the closed form substituted `E[K]` into an
 /// expression in `K(K-1)` (F-3). The adopted timer is the exact discrete
-/// survival solve — **144 s**, memoryless — and its table, not a
+/// survival solve — **190 s**, memoryless (144 s before F-7 corrected the
+/// `fluff_return_ms` input; §44) — and its table, not a
 /// platform-defined `std::poisson_distribution`, *is* the distribution.
 ///
 /// Seconds because the caller stores a whole-second `time_t` deadline. The
@@ -73,7 +74,7 @@ fn embargo_timer() -> &'static EmbargoTimer {
 /// that shaved up to 999 ms off every draw would err the wrong way.
 ///
 /// **A 0 s draw is legitimate and intended.** A memoryless geometric has support
-/// `{0, 1, 2, ...}`, so ~`1/(mean_ticks+1)` ≈ 0.17 % of draws are zero — the
+/// `{0, 1, 2, ...}`, so ~`1/(mean_ticks+1)` ≈ 0.13 % of draws are zero — the
 /// distribution's minimum, honoured rather than clamped. That is a real change
 /// from the inherited `Poisson(39 s)`, which produced 0 with probability
 /// `e^-39` — effectively never — and it is *not* patched here: the table is the
@@ -110,7 +111,7 @@ pub extern "C" fn shekyl_dandelionpp_embargo_draw_seconds() -> u64 {
 /// black-holed transactions were judged failed while their backstop was still
 /// running — and a false verdict is not cosmetic, because the sender releases
 /// the inputs it had reserved and may re-spend them. Carrying the `3/2` onto the
-/// corrected 144 s mean would have preserved that defect exactly.
+/// corrected mean would have preserved that defect exactly.
 /// Derived once per process and cached: the quantile is a pure function of the
 /// frozen parameter set, so re-walking the table per call would recompute an
 /// answer that cannot change. Note what is *not* done — returning the
@@ -138,7 +139,12 @@ mod tests {
         // (the 39 s ghost) instead of `adopted()` would compile, draw plausible
         // numbers, and silently reinstate F-1/F-2/F-3.
         let t = embargo_timer();
-        assert_eq!(t.mean_secs(), 144, "the adopted exact-solve embargo");
+        assert_eq!(
+            t.mean_secs(),
+            190,
+            "the adopted exact-solve embargo at the F-7-corrected fluff_return_ms \
+             (was 144 s when F was measured under the wrong fluff rule)"
+        );
         assert_ne!(
             t.mean_secs(),
             EmbargoTimer::inherited().mean_secs(),
@@ -155,7 +161,7 @@ mod tests {
     fn embargo_draws_match_the_adopted_distribution() {
         // What the boundary must preserve is the *distribution*, not a floor.
         // A memoryless geometric has support {0, 1, 2, ...}, so a 0 s draw is
-        // legitimate and occurs at ~1/(mean_ticks+1) ≈ 0.17% — rare, and part
+        // legitimate and occurs at ~1/(mean_ticks+1) ≈ 0.13% — rare, and part
         // of the derived survival solve. Clamping it here would make shipped
         // behaviour diverge from the golden-vector-pinned table, which is the
         // exact class of defect §17 exists to remove; if a 0 draw were wrong it
@@ -170,10 +176,13 @@ mod tests {
         }
         let mean = total / N;
         // ~13 sigma of slack at this sample size: catches a wrong timer or a
-        // collapsed RNG, never flakes on an honest one.
+        // collapsed RNG, never flakes on an honest one. Band re-centred on the
+        // F-7-corrected mean of 190 s (was 144 s), same relative slack — the
+        // band is a wrong-timer detector, not a second pin on the value, which
+        // `mean_secs()` above already holds exactly.
         assert!(
-            (115..=175).contains(&mean),
-            "draw mean {mean}s is not the adopted 144s distribution"
+            (152..=231).contains(&mean),
+            "draw mean {mean}s is not the adopted distribution"
         );
         assert!(seen.len() > 1, "draws did not vary: {seen:?}");
     }

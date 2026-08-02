@@ -24,8 +24,8 @@ use shekyl_relay_privacy::conformance::{
 };
 use shekyl_relay_privacy::params::inherited;
 use shekyl_relay_privacy::{
-    bernoulli, ConnectionId, DandelionParams, EpochScheduler, PoissonTable, RelayRng, SplitMix64,
-    StemMap,
+    bernoulli, ConnectionId, DandelionParams, EpochScheduler, NoiseCadence, PoissonTable, RelayRng,
+    SplitMix64, StemMap,
 };
 
 const N: usize = 200_000;
@@ -212,15 +212,110 @@ fn fluff_delay_draws_match_their_claimed_means() {
     }
 }
 
+/// The covert cadence's jitter, graded **through production** — every sample
+/// below is a real [`NoiseCadence::next_send`] draw, not a conformance-helper
+/// draw.
+///
+/// **Re-aimed at Q-11 Unit 0, and the history is the warning.** This test's
+/// first version called `sample_uniform` — the conformance crate's own
+/// helper — so it graded the grader's sampler against the grader while
+/// production was never in the loop: deleting `next_send`'s randomness
+/// entirely left it green, in the one test whose name claims to grade the
+/// cadence, in a file whose own module doc demands production draws.
+/// Vacuous by missing input, and invisible until the reference census walked
+/// every `NoiseCadence` consumer in the tree and found none that graded it.
+///
+/// Verified at re-aim (run and observed to fail): pinning `next_send`'s
+/// jitter to a constant fails this grade. Note what the landed controls below
+/// are NOT: `BiasedRng` through `next_send` — `bounded_uniform` is a
+/// rejection sampler, and rejection launders **modulo bias specifically**
+/// (the truncation-residue class `BiasedRng` manufactures), so that control
+/// would pass. This is not a claim that no RNG-level control can bite the
+/// production path: a generator with structured word output — even-only
+/// words, say — survives rejection and skews the residues. `BiasedRng` is
+/// the wrong control here; the landed pair are the wrong-band grade and the
+/// wrong-family grade.
+/// Shared setup for the three cadence-jitter grades: the inherited cadence,
+/// its deterministic offset (min delay, ms), the jitter band top (ms), and the
+/// seeded RNG every cadence grade draws from — one place, so the three tests
+/// cannot drift onto different bands or seeds.
+fn cadence_jitter_setup() -> (NoiseCadence, u64, u64, SplitMix64) {
+    (
+        NoiseCadence::inherited(),
+        u64::from(inherited::NOISE_MIN_DELAY_SECS) * 1_000,
+        u64::from(inherited::NOISE_DELAY_JITTER_SECS) * 1_000,
+        SplitMix64::new(0x0157),
+    )
+}
+
 #[test]
 fn noise_cadence_jitter_is_uniform() {
-    let max = u64::from(inherited::NOISE_DELAY_JITTER_SECS) * 1_000;
-    let mut rng = SplitMix64::new(0x0157);
-    let samples = sample_uniform(max, N, &mut rng);
+    let (c, min_ms, max, mut rng) = cadence_jitter_setup();
+    // `next_send(from)` = from + min_delay + jitter; subtracting the
+    // deterministic part leaves the jitter draw itself, on [0, max].
+    let samples: Vec<u64> = (0..N).map(|_| c.next_send(0, &mut rng) - min_ms).collect();
     let g = grade_uniform(&samples, max, 50);
     assert!(
         g.passed,
         "noise cadence jitter failed uniformity: {:.2} > {:.2}",
+        g.statistic, g.critical
+    );
+}
+
+#[test]
+fn noise_cadence_grade_rejects_a_wrong_band() {
+    // Negative control through the SAME production path as the positive
+    // half: identical `next_send` draws, graded against a band 20 % wider
+    // than the one the cadence actually spans. The top bins are then
+    // structurally empty and the chi-square must explode — proving the
+    // positive test's pass is a property of the draws matching THEIR band,
+    // not of the grade passing anything it is handed. (A `BiasedRng` control
+    // cannot do this job here: rejection sampling launders modulo bias
+    // specifically, so `BiasedRng`'s truncation-residue skew never reaches
+    // the draw — the file's existing modulo-bias control bypasses the
+    // sampler for exactly that reason.)
+    //
+    // Band sensitivity is HALF the instrument's job; the wrong-family
+    // control below is the other half.
+    let (c, min_ms, max, mut rng) = cadence_jitter_setup();
+    let wrong = max + max / 5;
+    let samples: Vec<u64> = (0..N).map(|_| c.next_send(0, &mut rng) - min_ms).collect();
+    let g = grade_uniform(&samples, wrong, 50);
+    assert!(
+        !g.passed,
+        "production draws spanning [0, {max}] passed a grade against \
+         [0, {wrong}] with statistic {:.2} (critical {:.2}) — the grade is \
+         not band-sensitive",
+        g.statistic, g.critical
+    );
+}
+
+#[test]
+fn noise_cadence_grade_rejects_right_support_wrong_family() {
+    // The durable form of the injection control run at the re-aim (jitter
+    // pinned to a constant — observed to fail at chi-square 9.8e6, then
+    // reverted): the wrong-band control above proves BAND sensitivity only,
+    // and the defect §20.9 names as the live threat is right-support,
+    // wrong-FAMILY. Min-of-two production draws is that defect in the shape
+    // this arc has already named — CV-3's resampling fold keeps the minimum
+    // — so its support is exactly [0, max], its density is not uniform, and
+    // every ingredient is a real `next_send` draw. The grade must see the
+    // density skew, or the positive test above is a support pin wearing a
+    // distribution oracle's name.
+    let (c, min_ms, max, mut rng) = cadence_jitter_setup();
+    let samples: Vec<u64> = (0..N)
+        .map(|_| {
+            let a = c.next_send(0, &mut rng);
+            let b = c.next_send(0, &mut rng);
+            a.min(b) - min_ms
+        })
+        .collect();
+    let g = grade_uniform(&samples, max, 50);
+    assert!(
+        !g.passed,
+        "min-of-two production draws (right support, wrong family — the CV-3 \
+         resampling shape) passed the uniform grade with statistic {:.2} \
+         (critical {:.2}) — the instrument is band-only",
         g.statistic, g.critical
     );
 }

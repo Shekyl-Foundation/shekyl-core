@@ -71,9 +71,10 @@ namespace cryptonote
        (-k*(k-1)*hop)/(2*log(1-ep)) that, over its own stated k=5, ep=0.10 and
        hop=175ms, yields 16.61s rather than the 39s it claimed, and the draw
        beside it was a Poisson under a derivation assuming exponential survival,
-       so the backstop never fired. The corrected mean is 144s, memoryless,
-       solved exactly against the survival target rather than through a closed
-       form that substituted E[K] into an expression in K(K-1).
+       so the backstop never fired. The corrected mean is 190s (144s until F-7
+       re-measured `fluff_return_ms`; sec 44), memoryless, solved exactly
+       against the survival target rather than through a closed form that
+       substituted E[K] into an expression in K(K-1).
        See docs/design/DAEMON_RELAY_PRIVACY.md sec 17 (and sec 5 for the solve). */
 
     //TODO: constants such as these should at least be in the header,
