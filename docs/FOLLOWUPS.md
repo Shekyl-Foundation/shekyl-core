@@ -794,6 +794,97 @@ sustainability is unaffected by the recalibration.
   pay with a contradiction penalty threads between them — i.e. (c), with
   (c)'s defects. **Ruling needed: does mandatory-`k` survive its own
   laziness analysis?**
+  **RULED (2026-08-02, maintainer): mandatory-`k` survives in a specific
+  form — THE MANDATE IS ON THE CHALLENGE, NEVER ON THE VERDICT.** The
+  block must commit `k` block-bound nonces (compellable, verifiable,
+  verdict-independent — committing a nonce says nothing about what came
+  back); filing a record per committed nonce must NOT be mandatory. A
+  committed-but-unfiled nonce is a non-observation the three-valued
+  settlement already absorbs. That draws the line exactly where the
+  laziness analysis put the defect: compulsion to CHALLENGE manufactures
+  no adversary; compulsion to RECORD manufactures the padder, because
+  the only free outcome is a miss. Checked against the box: the miss
+  fact is preserved (misses still exist, still free, still "prove it
+  tried"); verdict-independence intact (mandating a nonce commitment
+  touches neither pass nor miss income, so §8.2's indifference proof
+  holds); and no validity-on-availability coupling (`k` nonces are
+  always committable, so a dark `P` can never invalidate a block — the
+  trilemma's chain-halt hazard never arises). **Consequences for the
+  pin, from the knob geometry:** the two false-slash terms do NOT share
+  a budget — fabrication falls as `e^−λ` in READS, transport as `p^r` in
+  RETRY DEPTH (which costs `W`-blocks, not bandwidth) — so they are
+  allocated independently. **Pin output: `(λ_target, k_cap, r)` with `k`
+  derived per-epoch from measured chain data.**
+  **LOOP CHECK (2026-08-02, as flagged — the control input is
+  adversary-influenced). Two findings, one confirming and one
+  contradicting the "self-limiting" read:**
+  **(i) One symbol, two parameters — the derivation formula needs
+  correcting.** `β̂` from the conflict rate measures **fabrication**
+  (a filed miss contradicted by a pass). But under THIS ruling a lazy
+  miner files **nothing**, so laziness produces no conflict and is
+  invisible to that estimator — while `λ_eff = λ_nom · (1 − β_lazy)`
+  needs *diligence*. Using the fabrication estimate as a diligence
+  divisor would size `k` off the wrong quantity. **Fix, and it is
+  simpler than the formula it replaces: measure `λ_eff` DIRECTLY** as
+  records-per-pair-per-epoch (a diligent read files a record; a lazy
+  commit files none), corrected DOWN by the conflict-estimated
+  fabrication. So `β̂` enters as a *correction term on a measured
+  coverage*, never as a divisor, and no diligence parameter is needed at
+  all. **The control statistic must be ROBUST — median or low quantile
+  over pairs, not a mean** — since an adversary holding many pairs can
+  self-credit its own and skew a mean.
+  **(ii) Drive-down is expensive (good); drive-up is CHEAP, and NOT
+  self-limiting (the flagged worry, confirmed in the opposite
+  direction).** *Down* (open gaps): requires inflating apparent
+  coverage, i.e. fabricated passes — impossible without `P`'s
+  countersignature — so it costs colluding `P`s plus won blocks, bounded
+  by `f`. The dangerous direction is the expensive one; correct shape.
+  *Up* (grief honest bandwidth): an adversary simply files no records.
+  Under this ruling committing is free and reading is optional, so
+  suppression **costs it nothing** — and its own inflated `k` costs it
+  nothing either, since it never reads. `k` inflates by `1/(1 − f)`:
+  ×1.11 at `f = 0.1`, ×1.43 at 0.3, ×2.00 at 0.5, borne entirely by
+  diligent miners. **So `k_cap` is load-bearing, not a safety rail** —
+  it is the only bound on this. Silver lining: driving `k` up SHRINKS
+  the gap, hurting the adversary's own fabrication, so it is griefing
+  with no strategic gain. Also required: the loop must be damped
+  (EMA or max-step per epoch) and computed at a fixed settlement lag so
+  every node derives the same `k`.
+  **(iii) THE HOLE THE RULING LEAVES — and a disagreement to
+  adjudicate.** With recording optional and unpaid, and reading costly
+  (3.33 MB over Tor at 30 % failure), a *rational* miner commits `k`
+  nonces and reads none: `β_lazy → 1`, `λ_eff → 0`, and the mandate
+  becomes theatre — nonces nobody answers, no passes, so no serve credit
+  for anyone and the archival reward system stops. The incentive
+  inversion is not resolved by the ruling; it is RELOCATED from
+  "laziness poisons" to "laziness empties" (silent-compliance lens:
+  sustained voluntary diligence is already failing). **Disagreement,
+  surfaced rather than absorbed:** the ruling states verdict-
+  independence "rules out every pay-carried variant." Pay that DIFFERS
+  by verdict, yes — but **pay-per-record-EQUAL is verdict-independent by
+  construction** (a miner's income depends on how many records it files,
+  never on whether `P` passed), so §8.2's proof survives it.
+  **Candidate that follows, and it dissolves corner (c)'s vehicle
+  problem:** pay per filed record, equal for pass and miss, **withheld
+  for a miss contradicted by a pass in the same epoch**. Pay disburses
+  at SETTLEMENT — after contradictions are known — so withholding needs
+  no clawback, which is exactly what the coinbase-burn version could not
+  do. Properties: reading becomes rational (inversion fixed); a
+  truthful miss on a genuinely dark `P` is never contradicted and pays
+  in full (durably-absent detection preserved — corner 3's fatal flaw
+  avoided); padding is unprofitable because a padder cannot cherry-pick
+  gaps under secret sets, so its paid yield is the gap itself —
+  **4.98 % at `λ_eff = 3` (20:1 against it), 0.25 % at `λ_eff = 6`
+  (403:1)** — i.e. adequate `λ` prices padding out economically rather
+  than by rule. Residual costs, named: an honest miner loses pay on
+  weather-misses that others' passes contradict (~24 % of its misses at
+  `λ_eff = 3`, ~30 % at 6 — a pay reduction, not a burn); a mild
+  selection preference toward live `P`s remains, far weaker than
+  pay-per-pass since dark-`P` misses pay fully; and **funding source is
+  open** — from the archival budget means archivers dilute their own
+  rewards to pay their auditors, from emission touches a genesis-frozen
+  schedule. **Needs a ruling: is pay-per-record-equal admissible under
+  §8.2, and if so, what funds it?**
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
