@@ -90,6 +90,17 @@ const MN_FREE_RIDE_BOUND: f64 = 0.80;
 /// where the knee actually falls.
 const MN_K_CAP: f64 = 6.0;
 
+/// Pair-count projection the OPERATIVE `(m, n)` region is evaluated at.
+///
+/// **Projection input, not a measurement** — same status as
+/// [`MN_FALSE_SLASH_TARGET`]: a maintainer choice stated so the region is
+/// reviewable. The `k_cap` knee sits at `k_cap·SEB/λ_target` = 20 k pairs;
+/// twice the knee evaluates the region where the cap bind is material
+/// (delivered coverage = half the target) rather than marginal. The report's
+/// cap-delivered table spans 5 k–100 k pairs, so the verdict at any other
+/// projection reads off the same output.
+const MN_PROJECTED_PAIRS: f64 = 40_000.0;
+
 /// One sampled year of a scenario's burden trajectory. Storage cost is reported
 /// across the full DQ-2B Kryder band at the base price; the `SKL/fiat`
 /// conversion is an arm concern (the burden is fiat-denominated here).
@@ -1417,7 +1428,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     // replaces the stand-in `p`.
     crate::mn_feasibility::mn_feasibility_report(
         out,
-        &crate::mn_feasibility::default_model(),
+        &crate::mn_feasibility::default_sources(),
         crate::mn_feasibility::BOND_LIFE_EPOCHS,
         &crate::mn_feasibility::FeasibilityTargets {
             lambda_target: MN_LAMBDA_TARGET,
@@ -1425,6 +1436,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
             free_ride_bound: MN_FREE_RIDE_BOUND,
             k_cap: MN_K_CAP,
             seb: shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS as f64,
+            projected_pairs: MN_PROJECTED_PAIRS,
         },
     )?;
 

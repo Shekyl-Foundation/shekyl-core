@@ -176,8 +176,12 @@ const PRIOR_WIDTH: usize = FAILURE_WINDOW_N as usize - 1;
 const PRIOR_STATES: usize = 1 << PRIOR_WIDTH;
 
 /// Negligible state mass; skipping it keeps the DP sweep cheap without changing
-/// verdicts at the precision the arms quote.
-const DP_MASS_EPS: f64 = 1e-18;
+/// verdicts at the precision the arms quote. Set at the underflow floor rather
+/// than a "small enough" guess because [`first_slash_probability`] validates
+/// tail probabilities down to ~1e-43 (the `(m, n)` union-bound license): a
+/// perf-motivated 1e-18 here silently zeroed exactly the mass that validation
+/// exists to measure.
+const DP_MASS_EPS: f64 = 1e-300;
 
 /// Minimum absorbed probability mass required before a first-slash *mean* is
 /// treated as a property of `q` rather than a horizon truncation artifact.
@@ -256,6 +260,26 @@ fn fold_first_slash_mass(q: f64, horizon_epochs: u64, mut on_absorb: impl FnMut(
         std::mem::swap(&mut dist, &mut next);
     }
     absorbed
+}
+
+/// Total first-slash probability within `draws` window observations at
+/// per-observation miss `q` — [`fold_first_slash_mass`]'s total absorbed mass.
+///
+/// The chain is frame-agnostic: a step is one draw against the trailing
+/// window (this file's consumers draw once per epoch; the `(m, n)` arm draws
+/// once per settled observation, and the ratified miss fact caps those at one
+/// per epoch). Exposed so sibling arms validate against the SAME
+/// production-predicate-backed kernel instead of re-implementing the DP —
+/// the `(m, n)` union-bound license test is the consumer (review,
+/// 2026-08-02: that arm previously carried a duplicate of this chain plus a
+/// rule-re-deriving twin table).
+#[must_use]
+// Binary package: unit tests compile in-crate under `cfg(test)`, so a
+// validation-only entry trips `-D dead-code` on the non-test bin (the
+// `cartel.rs` precedent).
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn first_slash_probability(q: f64, draws: u64) -> f64 {
+    fold_first_slash_mass(q, draws, |_, _| {})
 }
 
 /// Expected epochs until first slash under per-epoch miss rate `q`, conditioned
