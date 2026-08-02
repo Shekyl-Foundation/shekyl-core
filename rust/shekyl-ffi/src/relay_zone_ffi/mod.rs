@@ -55,10 +55,11 @@ use std::slice;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use shekyl_relay::{Driver, Effect, FluffReach, RelayPlan, TxBlob, Zone};
+use shekyl_relay::{Driver, Effect, FluffReach, RelayPlan, TxBlob, TxId, Zone};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
 use shekyl_relay_privacy::stem_map::ConnectionId;
+use shekyl_relay_privacy::EmbargoTimer;
 
 use crate::secure_relay_rng::SecureRelayRng;
 
@@ -428,6 +429,89 @@ pub unsafe extern "C" fn shekyl_relay_zone_covert_enabled(handle: *const RelayZo
     match handle.as_ref() {
         Some(h) => h.driver.zone().covert_enabled(),
         None => false,
+    }
+}
+
+/// Record that `n` transactions were stemmed to `successor` — the observation
+/// half of §12.11's per-successor signal (§38, §46).
+///
+/// `hashes` is `n` packed 32-byte transaction ids; `successor` is the peer's
+/// 16-byte connection uuid; `source` is the arriving peer's uuid or null for
+/// locally-originated (`in_mapping_[nil]`). **The observation window is drawn
+/// here, from the adopted embargo distribution at `now_ms`** — this call site
+/// is the "caller" §38.2 left the window to, and it deliberately reuses the
+/// embargo draw because both ask the same question of the same peer; if
+/// §12.11's decision window ever diverges from the embargo, this is the one
+/// line that changes.
+///
+/// # Safety
+/// `handle` must be null (no-op) or a live zone from
+/// [`shekyl_relay_zone_new`]. `hashes` must point at `32 * n` readable bytes,
+/// `successor` at 16, and `source` at 16 when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_record_stem(
+    handle: *mut RelayZoneHandle,
+    hashes: *const u8,
+    n: usize,
+    successor: *const u8,
+    source: *const u8,
+    now_ms: u64,
+) {
+    let Some(h) = handle.as_mut() else { return };
+    if hashes.is_null() || successor.is_null() || n == 0 {
+        return;
+    }
+    let succ = ConnectionId::from_bytes(
+        std::slice::from_raw_parts(successor, 16)
+            .try_into()
+            .unwrap(),
+    );
+    let src = source
+        .as_ref()
+        .map(|p| ConnectionId::from_bytes(std::slice::from_raw_parts(p, 16).try_into().unwrap()));
+    let params = DandelionParams::inherited();
+    let deadline = now_ms + EmbargoTimer::adopted(&params).deadline(0, &mut h.rng);
+    let ids: Vec<TxId> = (0..n)
+        .map(|i| {
+            TxId::from_bytes(
+                std::slice::from_raw_parts(hashes.add(i * 32), 32)
+                    .try_into()
+                    .unwrap(),
+            )
+        })
+        .collect();
+    h.driver.zone_mut().record_stem(&ids, succ, src, deadline);
+}
+
+/// Record that `n` transactions arrived — from any peer, by any path (§38.1's
+/// "data, not a decision"). Resolves matching pending stem observations as
+/// propagated; unknown ids are ignored, so calling with never-stemmed
+/// transactions is free. Call on **every** zone's handle, not only the
+/// receiving zone's: a stem placed on one zone can return through another,
+/// and only the zone holding the pending entry can resolve it.
+///
+/// # Safety
+/// `handle` must be null (no-op) or a live zone from
+/// [`shekyl_relay_zone_new`]. `hashes` must point at `32 * n` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_record_arrival(
+    handle: *mut RelayZoneHandle,
+    hashes: *const u8,
+    n: usize,
+) {
+    let Some(h) = handle.as_mut() else { return };
+    if hashes.is_null() {
+        return;
+    }
+    for i in 0..n {
+        let id = TxId::from_bytes(
+            std::slice::from_raw_parts(hashes.add(i * 32), 32)
+                .try_into()
+                .unwrap(),
+        );
+        h.driver
+            .zone_mut()
+            .record_arrival(std::slice::from_ref(&id));
     }
 }
 
