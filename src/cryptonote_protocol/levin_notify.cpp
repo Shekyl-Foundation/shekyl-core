@@ -122,6 +122,12 @@ namespace levin
 
     /*! \brief Canonical tx hashes for the observation watch (§46/§48).
 
+        Parsed here rather than blob-hashed, because blob bytes are not a
+        stable identity across relay hops (F-9): the canonical hash is
+        computed from the *parsed* transaction and is the one identity every
+        hop preserves. A blob that does not parse has no canonical identity
+        and is skipped — it cannot be a transaction this node stemmed.
+
         \note **Recorded as a trade, not a free win (§49.4).** These blobs are
         parsed again by `handle_incoming_tx` moments later, so §47's
         "zero signature changes" was bought with a duplicate parse on the hot
@@ -131,12 +137,6 @@ namespace levin
         rather than opening a threat; accepted on that basis. If it ever
         shows up in profiles, the fix is to carry the hash out of
         verification rather than to re-derive it here. */
-    //! Parsed here
-    //! rather than blob-hashed, because blob bytes are not a stable identity
-    //! across relay hops (F-9) — the canonical hash is computed from the
-    //! parsed transaction and is the one identity every hop preserves. A blob
-    //! that does not parse has no canonical identity and is skipped: it
-    //! cannot be a transaction this node stemmed.
     std::vector<crypto::hash> canonical_tx_hashes(const std::vector<cryptonote::blobdata>& txs)
     {
       std::vector<crypto::hash> hashes{};
