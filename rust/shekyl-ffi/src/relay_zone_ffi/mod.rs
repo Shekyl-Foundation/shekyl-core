@@ -435,7 +435,10 @@ pub unsafe extern "C" fn shekyl_relay_zone_covert_enabled(handle: *const RelayZo
 /// Record that `n` transactions were stemmed to `successor` — the observation
 /// half of §12.11's per-successor signal (§38, §46).
 ///
-/// `hashes` is `n` packed 32-byte transaction ids; `successor` is the peer's
+/// `blobs` is `n` transaction blobs; the join key is derived Rust-side
+/// ([`TxId::from_blob`]) so C++ hands over **what it already holds at the
+/// call site** rather than threading a core-computed hash through three relay
+/// layers (rule 20 — the key is this layer's fact). `successor` is the peer's
 /// 16-byte connection uuid; `source` is the arriving peer's uuid or null for
 /// locally-originated (`in_mapping_[nil]`). **The observation window is drawn
 /// here, from the adopted embargo distribution at `now_ms`** — this call site
@@ -446,19 +449,20 @@ pub unsafe extern "C" fn shekyl_relay_zone_covert_enabled(handle: *const RelayZo
 ///
 /// # Safety
 /// `handle` must be null (no-op) or a live zone from
-/// [`shekyl_relay_zone_new`]. `hashes` must point at `32 * n` readable bytes,
-/// `successor` at 16, and `source` at 16 when non-null.
+/// [`shekyl_relay_zone_new`]. `blobs` must point at `n` valid spans, each
+/// readable for the duration of the call; `successor` must point at 16
+/// readable bytes, and `source` at 16 when non-null.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_record_stem(
     handle: *mut RelayZoneHandle,
-    hashes: *const u8,
+    blobs: *const ShekylRelayBlob,
     n: usize,
     successor: *const u8,
     source: *const u8,
     now_ms: u64,
 ) {
     let Some(h) = handle.as_mut() else { return };
-    if hashes.is_null() || successor.is_null() || n == 0 {
+    if blobs.is_null() || successor.is_null() || n == 0 {
         return;
     }
     let succ = ConnectionId::from_bytes(
@@ -471,47 +475,54 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_stem(
         .map(|p| ConnectionId::from_bytes(std::slice::from_raw_parts(p, 16).try_into().unwrap()));
     let params = DandelionParams::inherited();
     let deadline = now_ms + EmbargoTimer::adopted(&params).deadline(0, &mut h.rng);
-    let ids: Vec<TxId> = (0..n)
-        .map(|i| {
-            TxId::from_bytes(
-                std::slice::from_raw_parts(hashes.add(i * 32), 32)
-                    .try_into()
-                    .unwrap(),
-            )
-        })
+    let ids: Vec<TxId> = std::slice::from_raw_parts(blobs, n)
+        .iter()
+        .map(|b| TxId::from_blob(std::slice::from_raw_parts(b.ptr, b.len)))
         .collect();
     h.driver.zone_mut().record_stem(&ids, succ, src, deadline);
 }
 
 /// Record that `n` transactions arrived — from any peer, by any path (§38.1's
 /// "data, not a decision"). Resolves matching pending stem observations as
-/// propagated; unknown ids are ignored, so calling with never-stemmed
+/// propagated; unknown blobs are ignored, so calling with never-stemmed
 /// transactions is free. Call on **every** zone's handle, not only the
 /// receiving zone's: a stem placed on one zone can return through another,
 /// and only the zone holding the pending entry can resolve it.
 ///
 /// # Safety
 /// `handle` must be null (no-op) or a live zone from
-/// [`shekyl_relay_zone_new`]. `hashes` must point at `32 * n` readable bytes.
+/// [`shekyl_relay_zone_new`]. `blobs` must point at `n` valid spans, each
+/// readable for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_record_arrival(
     handle: *mut RelayZoneHandle,
-    hashes: *const u8,
+    blobs: *const ShekylRelayBlob,
     n: usize,
 ) {
     let Some(h) = handle.as_mut() else { return };
-    if hashes.is_null() {
+    if blobs.is_null() {
         return;
     }
-    for i in 0..n {
-        let id = TxId::from_bytes(
-            std::slice::from_raw_parts(hashes.add(i * 32), 32)
-                .try_into()
-                .unwrap(),
-        );
+    for b in std::slice::from_raw_parts(blobs, n) {
+        let id = TxId::from_blob(std::slice::from_raw_parts(b.ptr, b.len));
         h.driver
             .zone_mut()
             .record_arrival(std::slice::from_ref(&id));
+    }
+}
+
+/// Stem observations still pending resolution — the liveness read a C++
+/// wiring witness needs (a recorded stem must be visible as in-flight and an
+/// arrival must clear it), and cheap enough to leave in production builds.
+///
+/// # Safety
+/// `handle` must be null (returns 0) or a live zone from
+/// [`shekyl_relay_zone_new`].
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_stem_in_flight(handle: *const RelayZoneHandle) -> usize {
+    match handle.as_ref() {
+        Some(h) => h.driver.zone().stem_observations_in_flight(),
+        None => 0,
     }
 }
 

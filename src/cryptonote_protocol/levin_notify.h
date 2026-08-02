@@ -140,6 +140,16 @@ namespace levin
 
       \return True iff the notification is queued for sending. */
     bool send_txs(std::vector<blobdata> txs, const boost::uuids::uuid& source, relay_method tx_relay);
+
+    //! §46: resolve pending stem observations for arrived blobs (any peer,
+    //! any path — called on every zone, before pool admission). Shared,
+    //! not copied per zone; unknown blobs are ignored Rust-side.
+    void record_arrival(std::shared_ptr<const std::vector<blobdata>> txs);
+
+    //! §46: stem observations pending resolution. Test-facing liveness read;
+    //! call only when the zone strand is quiescent (the gtest harness drives
+    //! executors to completion before reading).
+    std::size_t stem_in_flight() const;
   };
 } // levin
 } // net
