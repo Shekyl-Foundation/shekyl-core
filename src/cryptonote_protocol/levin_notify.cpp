@@ -118,8 +118,8 @@ namespace levin
     }
 
     static_assert(sizeof(boost::uuids::uuid) == 16, "connection ids cross the relay FFI as 16 raw bytes");
+    static_assert(sizeof(crypto::hash) == 32, "tx hashes cross the relay FFI as packed 32-byte ids");
 
-    //! \return `id` as the 16 raw bytes the relay FFI reads.
     /*! \brief Canonical tx hashes for the observation watch (§46/§48).
 
         \note **Recorded as a trade, not a free win (§49.4).** These blobs are
@@ -172,6 +172,7 @@ namespace levin
       );
     }
 
+    //! \return `id` as the 16 raw bytes the relay FFI reads.
     const std::uint8_t* uuid_bytes(const boost::uuids::uuid& id) noexcept
     {
       return reinterpret_cast<const std::uint8_t*>(std::addressof(id));

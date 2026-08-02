@@ -8638,7 +8638,9 @@ design fact discovered.**
 
 ### 46.1 What landed
 
-Two exports, inside the signature gate (**18 exports checked**):
+Two exports, inside the signature gate (**18 exports checked** at this point
+in the series; §47's wiring witness adds `stem_in_flight` and lands the gate
+at 19):
 
 - **`shekyl_relay_zone_record_stem(handle, hashes, n, successor, source,
   now_ms)`** — packed 32-byte ids; null `source` = local origin
@@ -8646,8 +8648,10 @@ Two exports, inside the signature gate (**18 exports checked**):
   the adopted embargo distribution** — this is the "caller" §38.2 left the
   window to, reusing the embargo draw because both ask the same question of
   the same peer; if §12.11's window ever diverges, one line changes.
-- **`shekyl_relay_zone_record_arrival(handle, hashes, n)`** — any peer, any
-  path; unknown ids free. **Documented: call on *every* zone's handle**, since
+- **`shekyl_relay_zone_record_arrival(handle, hashes, n, from)`** — any peer,
+  any path; unknown ids free. `from` is the arriving peer, added by §49's
+  F-10 correction: an arrival from the successor the observation is charged
+  to resolves nothing. **Documented: call on *every* zone's handle**, since
   a stem placed on one zone can return through another, and only the zone
   holding the pending entry can resolve it.
 
