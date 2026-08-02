@@ -605,6 +605,51 @@ sustainability is unaffected by the recalibration.
   binding inherits unchanged. Check before ratification: nothing else in
   coinbase validity may constrain the output key in a way that gives a
   copier a third option.
+  **CHECK RUN (2026-08-02) — the third-option question resolves in the
+  candidate's favour; a DIFFERENT leg fails.** *No third option exists,
+  on three verified constraints:* (i) **exactly one coinbase output** in
+  mined blocks — `blockchain.cpp:1628`, "F-H output-count cap" — so the
+  decoy escape (victim's key on a dust output, own key on the reward
+  output) is structurally unavailable; (ii) the **full miner reward sits
+  on that one output** (`validate_miner_transaction` sums `vout` amounts
+  against the computed `base_reward`/emission split), so copying costs
+  the WHOLE reward, not a slice; (iii) output keys must be canonical,
+  prime-order, non-identity (`check_outs_valid` →
+  `shekyl_check_output_keys`), and — decisively — a copier cannot
+  substitute a burn key or any other key, because the attestations were
+  countersigned over a nonce derived from the VICTIM's key: any
+  substitution breaks the recomputation. The copier's options are
+  exactly two, both losing. **Cross-coupling to record at both sites:**
+  that single-output cap carries a rule-21 reopen trigger naming "a
+  consensus consumer that structurally requires a multi-output coinbase
+  in MINED blocks"; the attestation binding becomes a consumer requiring
+  the OPPOSITE — the cap's continued existence — since multi-output
+  coinbases would restore the decoy escape. Any future multi-output
+  proposal must re-open this binding too.
+  **THE LEG THAT FAILS — nothing enforces coinbase-output-key freshness,
+  so the "re-read per win" cost model does not hold as stated.** There is
+  no output-key uniqueness rule: no consensus check, and the LMDB
+  `output_amounts` table is keyed by amount + output index (DUPSORT),
+  never by the key itself. A miner may therefore reuse ONE coinbase
+  output key across every block it wins and reuse the same attestations
+  for the whole epoch — mandatory-`k` satisfied with `k` reads per EPOCH
+  instead of per win. This is copy-freeriding achieved by the original
+  miner rather than a copier, and it hollows the same term: distinct
+  coverage falls from ~`blocks × k / pairs` to ~`miners × k / pairs` —
+  at `SEB = 10_000` blocks/epoch against a realistic miner count that is
+  two-to-three orders of magnitude of `λ`, precisely the quantity the
+  `e^−λ` fabrication bound and the miss-channel ruling rest on.
+  **Repair (one rule, plausibly wanted anyway): require the coinbase
+  output key to be UNIQUE — never previously seen on-chain.** A win then
+  consumes the key, the next template needs a fresh one, and re-reads
+  land per win (cost proportional to hashrate — the claimed model,
+  restored); losing templates keep their key unpublished, so the
+  read-once-per-template property survives. Independent motivation:
+  duplicate one-time output keys are undesirable regardless (spend
+  ambiguity; duplicate curve-tree leaves), and FCMP++ already indexes
+  every output as a leaf, so the membership test may be cheap or
+  already available — **the implementability of that test is the one
+  open item before the candidate can be ratified.**
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
