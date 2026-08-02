@@ -31,7 +31,7 @@
 //! observation, not `λ_eff` of them. Observations therefore still arrive at
 //! **≤ 1 per epoch** — slightly under 1, because a gap epoch (no read at all)
 //! is a *non-observation* the window never sees. A 13-observation window
-//! consequently spans **~13.7 epochs**, not `13/λ_eff` ≈ 4.3, so detection
+//! consequently spans **~13 epochs**, not `13/λ_eff` ≈ 4.3, so detection
 //! latency does not collapse and the within-epoch independence worry does not
 //! arise (the draws remain one-per-epoch and weeks apart).
 //!
@@ -72,8 +72,10 @@ pub struct MissModel {
     /// `W`-blocks, not bandwidth.
     pub retries: u32,
     /// Probability a fabricator files a miss against this pair in a given
-    /// epoch. `1.0` is the worst case the round's `e^−λ` bound assumes: every
-    /// gap epoch poisoned.
+    /// epoch. Under F-1 the operative value is the **targeted** one
+    /// ([`targeted_fabrication_intensity`]), which is ≈ 1 at any measurable
+    /// hashrate — so `1.0` is the realistic setting for an attacked pair, not
+    /// a far corner. [`ambient_fabrication_intensity`] is the no-victim term.
     pub fabrication_intensity: f64,
 }
 
@@ -134,23 +136,52 @@ impl MissModel {
     }
 }
 
-/// Fabrication intensity is **not a free parameter — it is hashrate-bounded**,
-/// by the same argument that prices the `f`-lie.
+/// **Ambient** fabrication intensity — a *spraying* adversary with no victim.
 ///
-/// A fabricator files misses only in blocks it **wins**: at hashrate `f` it
-/// takes `f·SEB` blocks per epoch carrying `k` records each, i.e. `f·SEB·k`
-/// fabricated misses spread over `pairs` pairs — exactly `f·λ_target` per pair
-/// per epoch, since `λ_target = k·SEB/pairs`. Poisson-targeted, the chance a
-/// given pair draws at least one in a given epoch is `1 − e^(−f·λ)`.
+/// At hashrate `f` a fabricator wins `f·SEB` blocks per epoch carrying `k`
+/// records each; spread uniformly over `pairs` pairs that is `f·λ_target` per
+/// pair per epoch, so a given pair draws at least one with probability
+/// `1 − e^(−f·λ)`. This is the right model **only** for the no-victim case:
+/// background noise across the whole population.
 ///
-/// So `φ = 1` (the round's stated worst case, every gap epoch poisoned) is the
-/// `f → 1` corner — a fabricator holding essentially all hashrate. Reporting
-/// against `f` instead of `φ` keeps the sensitivity anchored to a quantity the
-/// threat model already bounds.
+/// It is **not** the model for an attack, and using it as one was F-1 (see
+/// [`targeted_fabrication_intensity`]).
 #[must_use]
-pub fn fabrication_intensity_from_hashrate(f: f64, lambda_target: f64) -> f64 {
+pub fn ambient_fabrication_intensity(f: f64, lambda_target: f64) -> f64 {
     let f = f.clamp(0.0, 1.0);
     1.0 - (-f * lambda_target.max(0.0)).exp()
+}
+
+/// **Targeted** fabrication intensity — the operative threat, and it does not
+/// scale with hashrate the way the ambient term does.
+///
+/// **F-1 (2026-08-02):** the ambient model divides the attack by `pairs`, which
+/// silently assumes the adversary does not concentrate. Sets are **miner-chosen**
+/// — that is this round's own ruling — so a fabricator attacking one victim does
+/// not spray: it places the victim's pair in its `k` slots in **every block it
+/// wins**. Poisoning an epoch needs exactly **one** won block, so
+///
+/// ```text
+/// φ_targeted = 1 − (1 − f)^SEB
+/// ```
+///
+/// which saturates almost immediately: `f = 10⁻⁴` already gives ≈ 0.63 and
+/// `f = 10⁻³` gives ≈ 1. **For a targeted adversary `φ ≈ 1` at any measurable
+/// hashrate**, so the floor must be evaluated there and the fabrication term is
+/// *not* an adversary courtesy the region may lean on.
+///
+/// This is the same defect shape the round has rejected before — bounding an
+/// adversary by assuming it does not optimize — arriving through a uniformity
+/// assumption rather than an explicit one.
+#[must_use]
+pub fn targeted_fabrication_intensity(f: f64, seb: f64) -> f64 {
+    let f = f.clamp(0.0, 1.0);
+    if f <= 0.0 || seb <= 0.0 {
+        return 0.0;
+    }
+    // 1 − (1−f)^SEB via ln1p/expm1 so it stays exact at the tiny `f` where the
+    // saturation point actually sits.
+    -((seb * (-f).ln_1p()).exp_m1())
 }
 
 /// Delivered coverage under the `k_cap` bind: `λ_eff = min(k_cap, k)·SEB/pairs`
@@ -407,12 +438,17 @@ pub fn mn_feasibility_report(
     // arithmetic, and they support opposite readings of the same margin.
     writeln!(
         out,
-        "  EXPOSURE FRAMING (the target's denominator is a maintainer choice):\n\
-         at the shipped pin, P(any of {MH} pairs slashed over a bond life) =\n\
-         {FH:.3e}, while EXPECTED pairs slashed = {EP:.3e} — i.e. ~{SKL:.4} SKL of\n\
-         {TOT:.0} SKL posted. A target on P(any) is far stricter than one on\n\
-         expected loss, and which is right is the operator-risk question, not\n\
-         an arithmetic one.",
+        "  EXPOSURE FRAMING — RULED: P(any pair slashed) is the operative frame,\n\
+         and the reason is mechanical rather than a risk preference. A slash\n\
+         opens a bad interval on the RECORD (bad_intervals are record-scoped, not\n\
+         per-shard), which excludes the whole record from r_market via\n\
+         good_through and blocks HoldingsUpdate until Rebond. One pair slashed is\n\
+         therefore a whole-portfolio disruption plus a burn -- the harm is\n\
+         record-scoped, so the probability must be too. At the shipped pin,\n\
+         P(any of {MH} pairs) = {FH:.3e}; EXPECTED pairs lost = {EP:.3e} (~{SKL:.4}\n\
+         SKL of {TOT:.0} posted) is recorded only to show the ~{MH}x framing gap the\n\
+         ruling closes -- it prices the burn while ignoring the exclusion, which\n\
+         is the larger harm.",
         MH = MAX_HOLDINGS_SHARDS,
         FH = shipped_holder,
         EP = MAX_HOLDINGS_SHARDS as f64 * shipped_fs,
@@ -425,22 +461,26 @@ pub fn mn_feasibility_report(
     // as a property of (m, n) when it is mostly a property of those two.
     writeln!(
         out,
-        "  SENSITIVITY — does the shipped ({SM},{SN}) clear the floor? Reported\n\
-         against ADVERSARY HASHRATE, since fabrication intensity is\n\
-         hashrate-bounded (phi = 1 - e^-(f*lambda)): a fabricator files only in\n\
-         blocks it wins, so phi = 1 is the f -> 1 corner, not a free worst case.\n\
-         r stays unpinned pending the PoW-enabled rig re-run.",
+        "  SENSITIVITY — does the shipped ({SM},{SN}) clear the floor? Evaluated at\n\
+         the TARGETED fabrication intensity (F-1): sets are miner-chosen, so an\n\
+         adversary attacking one victim does NOT spray -- it puts the victim in\n\
+         its k slots in every block it wins, and poisoning an epoch needs ONE won\n\
+         block, so phi = 1-(1-f)^SEB saturates at ~1 by f = 1e-3. The ambient\n\
+         (no-victim) column 1-e^-(f*lambda) is shown only as the contrast; the\n\
+         floor must be read against the targeted one. r stays unpinned pending\n\
+         the PoW-enabled rig re-run.",
         SM = FAILURE_WINDOW_M,
         SN = FAILURE_WINDOW_N,
     )?;
     writeln!(
         out,
-        "{:<6} {:>8} {:>8} {:>12} {:>14} {:>10}",
-        "r", "f", "phi", "q/obs", "P(any) @4096", "verdict"
+        "{:<6} {:>9} {:>10} {:>10} {:>12} {:>14} {:>10}",
+        "r", "f", "phi_tgt", "phi_amb", "q/obs", "P(any) @4096", "verdict"
     )?;
     for &r in &[1u32, 2, 3] {
-        for &f in &[1.00_f64, 0.30, 0.10] {
-            let phi = fabrication_intensity_from_hashrate(f, model.lambda_eff);
+        for &f in &[1.00_f64, 0.10, 0.001] {
+            let phi = targeted_fabrication_intensity(f, seb);
+            let phi_amb = ambient_fabrication_intensity(f, model.lambda_eff);
             let probe = MissModel {
                 retries: r,
                 fabrication_intensity: phi,
@@ -452,10 +492,11 @@ pub fn mn_feasibility_report(
             let holder = -((MAX_HOLDINGS_SHARDS as f64) * (-pair).ln_1p()).exp_m1();
             writeln!(
                 out,
-                "{:<6} {:>8.2} {:>8.3} {:>12.5} {:>14.2e} {:>10}",
+                "{:<6} {:>9.3} {:>10.4} {:>10.4} {:>12.5} {:>14.2e} {:>10}",
                 r,
                 f,
                 phi,
+                phi_amb,
                 q_probe,
                 holder,
                 if holder <= false_slash_target {
@@ -707,19 +748,59 @@ mod tests {
     }
 
     #[test]
-    fn fabrication_intensity_is_hashrate_bounded() {
-        // phi is not a free worst case: a fabricator files only in blocks it
-        // wins, so phi = 1 is the f -> 1 corner. This is what stops the
-        // sensitivity from stacking an unbounded adversary onto the minimum
-        // retry depth and reading the result as a property of (m, n).
-        let lam = 3.0;
-        assert!(fabrication_intensity_from_hashrate(0.0, lam).abs() < 1e-12);
-        let f10 = fabrication_intensity_from_hashrate(0.10, lam);
-        let f30 = fabrication_intensity_from_hashrate(0.30, lam);
-        assert!(f10 < f30 && f30 < 1.0);
-        // A tenth of the hashrate must not buy anywhere near the corner.
-        assert!(f10 < 0.30, "f=0.1 gave phi={f10}");
-        assert!(fabrication_intensity_from_hashrate(1.0, lam) > 0.94);
+    fn targeted_fabrication_saturates_where_ambient_does_not() {
+        // F-1, as a test. The ambient (spraying) model divides the attack by
+        // `pairs` and so reads as hashrate-bounded; the targeted model does
+        // not, because miner-chosen sets let an adversary concentrate for
+        // free. An earlier draft of this arm shipped the ambient model as THE
+        // model and drew a region that leaned on the difference.
+        let (lam, seb) = (3.0, 10_000.0);
+        assert!(targeted_fabrication_intensity(0.0, seb).abs() < 1e-12);
+
+        // One block per epoch is all a targeted fabricator needs, so phi
+        // saturates far below any hashrate a real miner would hold.
+        assert!(targeted_fabrication_intensity(1e-3, seb) > 0.99);
+        assert!(targeted_fabrication_intensity(1e-4, seb) > 0.60);
+
+        // And it must DOMINATE the ambient term everywhere it matters -- that
+        // gap is exactly what the earlier region was silently claiming as
+        // deterrence.
+        for &f in &[1e-3_f64, 1e-2, 0.10, 0.30] {
+            let tgt = targeted_fabrication_intensity(f, seb);
+            let amb = ambient_fabrication_intensity(f, lam);
+            assert!(
+                tgt > amb,
+                "targeted must exceed ambient at f={f}: {tgt} vs {amb}"
+            );
+        }
+        // Ambient stays the weaker, hashrate-scaled term it always was.
+        assert!(ambient_fabrication_intensity(0.10, lam) < 0.30);
+    }
+
+    #[test]
+    fn retry_depth_not_hashrate_is_what_carries_the_floor() {
+        // The consequence of F-1 worth pinning: at the targeted intensity the
+        // fabrication term is fixed at the gap regardless of `f`, so the only
+        // lever left on the floor is `r`. If a future edit re-introduces a
+        // hashrate-scaled fabrication term as the headline model, the second
+        // assertion here is what should fail.
+        let seb = 10_000.0;
+        let base = MissModel {
+            fabrication_intensity: targeted_fabrication_intensity(1e-3, seb),
+            ..default_model()
+        };
+        let tiny_f = MissModel {
+            fabrication_intensity: targeted_fabrication_intensity(1e-2, seb),
+            ..base
+        };
+        // A 10x hashrate difference must buy the defender essentially nothing.
+        assert!(
+            (base.miss_given_observation() - tiny_f.miss_given_observation()).abs() < 1e-3,
+            "targeted fabrication must not scale with hashrate"
+        );
+        // Retry depth, by contrast, must move it materially.
+        let deeper = MissModel { retries: 2, ..base };
+        assert!(deeper.miss_given_observation() < 0.6 * base.miss_given_observation());
     }
 
     #[test]
