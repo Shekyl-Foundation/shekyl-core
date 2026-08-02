@@ -470,6 +470,48 @@ sustainability is unaffected by the recalibration.
   Dependency note: the transport-floor derivation consumes the
   observation/miss definition, which rides with the
   countersignature-binding design (step 1).
+  **STEP-1 RULING (2026-08-01, maintainer): the Ed25519 half of `P`'s
+  hybrid identity key IS the v3 onion identity key — the `.onion` address
+  derives from the pubkey the identity already commits to.** No new
+  consensus field, no separate address publication, and the
+  countersignature stays fully hybrid. This makes §9.4's topology binding
+  (`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md:1088–1094`) **structural
+  rather than economic**: sharing the onion key WAS the outsourcing
+  bucket's escape hatch; now sharing it is sharing half of `P`'s
+  identity — a fact about the keys, not an incentive argument.
+  **Objection formed and withdrawn on the record (blast radius):**
+  `ADD_ONION` puts the Ed25519 secret in the tor process, so a tor
+  compromise hands it over — but the hybrid CONTAINS it: without
+  ML-DSA-65 (which never leaves the Rust boundary) the attacker cannot
+  countersign, claim, or unbond; it can only squat/deny at an address it
+  could DoS anyway (served-wrong-bytes fails the shard commitment and the
+  reader swaps — economically identical to DoS). Stated as secret
+  locality: the Ed25519 half gains a second custodian BY DESIGN and the
+  hybrid split is the compensating control.
+  **Rotation cost examined and RETRACTED after disentangling three
+  concepts** (key rotation / address change / serve-elsewhere-keeping-
+  standing): the witness must reach `P` from chain data alone, so any
+  serving address is publicly discoverable the block it lands — mobility
+  buys the attacker-parse interval, i.e. zero. The bond-record
+  address-field variant costs a consensus field and buys nothing. **The
+  coupling is free; the construction stands.** Flood defence RELOCATES to
+  the Tor layer: the pinned `0.4.9.11` carries onion-service PoW
+  (`HiddenServicePoW*`) and intro-point rate limiting — an SP-T3
+  configuration to pin DELIBERATELY, not inherit as defaults, since a
+  bonded archiver under flood has money on the line. Risk acceptance
+  noted: Ed25519 extraction from the Expert Bundle itself would be a
+  Tor-project-wide failure (every hidden service), upstream-fixed on
+  that urgency. Mechanical notes from the check: the address derives from
+  the Ed25519 PUBKEY revealed in the JoinMarket post (1996-byte
+  `HybridPublicKey`), not from the 32-byte `P_canonical_id` alone —
+  discovery reads the join tx, so nodes/wallets want an id→pubkey index;
+  tor's `ADD_ONION ED25519-V3` takes the expanded secret form, standard
+  Ed25519 imports cleanly. **Step-1 remainder, still open: the
+  transferability fork (bind receipts to a miner commitment with on-chain
+  dedup, or accept a receipt market and restate the f-model) and the miss
+  fact (what a coinbase says about a chosen-but-unread pair) — plus the
+  freshness pin F (natural resolution F = one epoch, which dissolves the
+  regressive small-miner pre-read cost and re-derives the old cadence).**
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
