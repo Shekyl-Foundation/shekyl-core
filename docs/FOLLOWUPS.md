@@ -650,6 +650,60 @@ sustainability is unaffected by the recalibration.
   every output as a leaf, so the membership test may be cheap or
   already available — **the implementability of that test is the one
   open item before the candidate can be ratified.**
+  **OPEN ITEM RESOLVED (2026-08-02, maintainer + verification) — the
+  FCMP++ hope above is REFUTED, and the scope was doing the damage.**
+  *Refuted at source:* `m_output_to_leaf`, `m_leaf_to_output`,
+  `m_curve_tree_leaves` are all `MDB_INTEGERKEY`
+  (`db_lmdb.cpp:1687–1690`, comment: "single native-endian uint64
+  keys") — they map `output_id ↔ leaf index ↔ leaf`. A sweep of every
+  `lmdb_db_open` shows **no table anywhere keyed by an output public
+  key**. The leaf index proves an output exists at a position; the
+  membership test needs the inverse, which nothing provides. So the
+  optimistic branch fails: the test is neither present nor free **at the
+  scope the paragraph above states**.
+  *But that scope is over-wide.* "Never previously seen on-chain" is
+  global across all outputs — a new 32-byte-keyed index over every
+  output ever created, growing with output count, probed once per output
+  per transaction. The binding needs none of it: the freeriding move is
+  a miner reusing **its own prior coinbase key** to keep the nonce and
+  its attestation set alive across wins, and every such reuse is a
+  repeat **coinbase** key. With the F-H cap guaranteeing exactly one
+  coinbase output per mined block, a coinbase-scoped index is **one
+  entry per block** — 32 bytes × height, one lookup per block
+  validation, growth linear in height rather than in output count (~4
+  orders cheaper).
+  *Second narrowing, from the nonce's own arithmetic:* the nonce carries
+  `E` (`H(r ‖ cb_out_key ‖ P ‖ s ‖ E)`) and `F` = one epoch is already a
+  consequence, so **cross-epoch key reuse buys nothing** — the nonce
+  changes with `E`, forcing a re-read regardless. The attack needs the
+  same `cb_out_key` twice **within one epoch**, so uniqueness only needs
+  an **epoch window**: ≤ `SEB` entries (~320 KB), bounded and prunable
+  rather than height-linear. Retention detail: keep the current plus the
+  previous epoch (reorg depth 720 ≪ `SEB` = 10 000), so a reorg crossing
+  a boundary still finds its entries; per-block entries revert on
+  `pop_block` the same way every other per-block index does.
+  *The flagged sidestep resolves:* a miner using a key that already
+  exists as a regular output passes the narrow index on first coinbase
+  use (it indexes coinbase keys only) — but it still must reuse that key
+  across wins to save the reads, and the second use is a repeat coinbase
+  key, caught. Confirmed against the derivation: `cb_out_key` is inside
+  the nonce, so ANY change of it forces a fresh nonce and a fresh read —
+  coinbase-key uniqueness within the epoch is exactly the needed
+  property, and pre-minting spare keys buys nothing (each fresh key
+  forces its own read).
+  **BUNDLING HAZARD (adopted as the ruling's shape): two rules, two
+  derivations.** The independent motivations cited above — spend
+  ambiguity, duplicate curve-tree leaves — argue for the GLOBAL rule and
+  are why the global scope got written; bundling makes the binding pay
+  for an index it does not use to buy a property it does not need.
+  Therefore: **(1) coinbase-scoped, epoch-windowed uniqueness = the
+  binding's prerequisite, derived from the binding alone; (2) global
+  output-key uniqueness = stands or falls on its own merits, and
+  subsumes/retires (1) if it ever lands.** Same one-instrument-two-
+  consumers shape as `FORWARD_DELAY`/`F`, running in the direction where
+  the cheap consumer inherits the expensive one's cost.
+  *Standing caveat carried:* the `λ` arithmetic, `SEB`, mandatory-`k`,
+  and the miss-channel ruling remain unreviewed by the maintainer.
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
