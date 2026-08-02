@@ -738,10 +738,19 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(9).as_ptr(), true);
 
-        let mut hashes = [0u8; 64]; // two packed 32-byte tx ids
-        hashes[0] = 0xA1;
-        hashes[32] = 0xB2;
-        shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 2, id(9).as_ptr(), std::ptr::null(), 0);
+        let blob_a = [0xA1u8, 0x01, 0x02];
+        let blob_b = [0xB2u8, 0x03];
+        let spans = [
+            ShekylRelayBlob {
+                ptr: blob_a.as_ptr(),
+                len: blob_a.len(),
+            },
+            ShekylRelayBlob {
+                ptr: blob_b.as_ptr(),
+                len: blob_b.len(),
+            },
+        ];
+        shekyl_relay_zone_record_stem(h, spans.as_ptr(), 2, id(9).as_ptr(), std::ptr::null(), 0);
         assert_eq!(
             (*h).driver.zone().stem_observations_in_flight(),
             2,
@@ -749,7 +758,7 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         );
 
         // First id returns: resolved as propagated.
-        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1);
+        shekyl_relay_zone_record_arrival(h, spans.as_ptr(), 1);
         let t = (*h)
             .driver
             .zone()
@@ -783,13 +792,18 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         // Null handle and null hashes: no-ops, not crashes.
         shekyl_relay_zone_record_stem(
             std::ptr::null_mut(),
-            hashes.as_ptr(),
+            spans.as_ptr(),
             1,
             id(9).as_ptr(),
             std::ptr::null(),
             0,
         );
         shekyl_relay_zone_record_arrival(h, std::ptr::null(), 1);
+        assert_eq!(
+            shekyl_relay_zone_stem_in_flight(h),
+            0,
+            "both resolved — the in-flight accessor reads the same fact"
+        );
 
         shekyl_relay_zone_free(h);
     }

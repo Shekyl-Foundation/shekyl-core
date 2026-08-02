@@ -2613,3 +2613,67 @@ TEST_F(levin_notify, command_max_bytes)
     EXPECT_EQ(1u, contexts_.front().process_send_queue(false));
     EXPECT_EQ(0u, receiver_.notified_size());
 }
+
+TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
+{
+    // §46 wiring witness: a successful Dandelion++ stem send must arm one
+    // observation per tx in the zone's stem watch (record_stem at the xmit
+    // site), and record_arrival with the same blobs must resolve them. The
+    // arithmetic is covered Rust-side; what this asserts is that the TWO C++
+    // call sites are actually wired — negative controls: removing the
+    // record_stem call leaves in-flight at 0 (first assert fails); removing
+    // the record_arrival dispatch leaves it at 2 (second assert fails).
+    static constexpr const unsigned test_connections_count = (CRYPTONOTE_DANDELIONPP_STEMS + 1) * 2;
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < test_connections_count; ++count)
+        add_connection(count % 2 == 0);
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    std::vector<cryptonote::blobdata> txs(2);
+    txs[0].resize(100, 'e');
+    txs[1].resize(200, 'f');
+
+    ASSERT_EQ(0u, notifier.stem_in_flight());
+
+    // Drive until a stem epoch actually sends (fluff epochs re-roll).
+    for (;;)
+    {
+        auto context = contexts_.begin();
+        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
+        io_service_.restart();
+        ASSERT_LT(0u, io_service_.poll());
+        if (events_.has_stem_txes())
+            break;
+        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
+        notifier.run_fluff();
+        io_service_.restart();
+        io_service_.poll();
+        for (auto &ctx : contexts_)
+            ctx.process_send_queue();
+        while (receiver_.notified_size())
+            receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+        notifier.run_epoch();
+        io_service_.restart();
+        io_service_.poll();
+    }
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::stem));
+    for (auto &ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+
+    EXPECT_EQ(2u, notifier.stem_in_flight())
+        << "a successful stem send must arm one observation per tx";
+
+    notifier.record_arrival(
+        std::make_shared<const std::vector<cryptonote::blobdata>>(txs));
+    io_service_.restart();
+    io_service_.poll();
+
+    EXPECT_EQ(0u, notifier.stem_in_flight())
+        << "the same blobs arriving must resolve the observations";
+}

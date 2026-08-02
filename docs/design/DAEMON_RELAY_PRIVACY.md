@@ -8658,7 +8658,16 @@ packed-byte decoding reaches the watch, arrival resolves as propagated, and
 the unreturned id resolves as **silent through the production poll path** at
 a `now` past any adopted draw — plus null-handle/null-hash no-op checks.
 
-### 46.2 The C++ half — traced at source, one discovery, five steps
+> **SUPERSEDED SAME DAY BY §47 — rule 20 applied to the checklist below
+> deleted it.** The join key is *this layer's* fact (`TxId` is documented as
+> opaque join bytes), so Rust derives it **from the blob** and C++ hands over
+> only what it already holds at each call site. `tvc.m_tx_hash`, the
+> `relayed_tx` element type, the three-layer signature change and the 35-test
+> sweep were all scaffolding for moving a *C++-computed* hash — none of it is
+> needed when the key is Rust-computed. Kept for the record: the tracing below
+> is what made the collapse visible.
+
+### 46.2 The C++ half — traced at source, one discovery, five steps *(superseded)*
 
 **The discovery: the hash exists at every origination site and is dropped at
 the boundary.** `relay_txpool_transactions` holds `(hash, blob, method)`
@@ -8694,6 +8703,65 @@ three layers plus a test sweep — a single self-contained commit, now with no
 design left in it. Landing the FFI half separately keeps the branch green and
 puts the contract (window choice, every-zone arrival, packed layout) under
 test before its first C++ caller exists.
+
+## 47. §12.11's signal exists in production — the plumbing landed as a rule-20 collapse
+
+**2026-08-01.** The maintainer's reminder — *rule 20 as you proceed* — applied
+to §46.2's checklist deleted most of it. **The C++ half landed as ~40 lines
+with no signature changes, and §33.2's finding is closed: the per-successor
+disarm signal production never recorded now exists.**
+
+### 47.1 The collapse
+
+§46.2 planned to move a **C++-computed** hash through three relay layers
+(`tvc.m_tx_hash` → `relayed_tx` element type → 35-test sweep). **The join key
+is this layer's fact** — `TxId` joins `stemmed` against `seen` and is never
+compared with anything external — so the sole requirement is *same bytes →
+same key on both paths*, and **Rust derives it from the blob**
+(`TxId::from_blob`: domain-separated Blake2b, `SHEKYL_RELAY_STEM_WATCH_TXID_V1`).
+C++ then hands over only blobs it already holds at each call site.
+
+**Soundness of blob-identity join for this signal**: an honest successor
+relays bytes unchanged, so the return matches. A successor that re-serialises
+produces a non-matching return and is charged a **silence** — the incentive
+runs the right way, since a dropper's goal is to avoid the silence and
+mangling buys it one.
+
+### 47.2 What landed, and where the two definitions bind
+
+- **FFI** (19 exports checked): `record_stem` / `record_arrival` take
+  `ShekylRelayBlob` spans — the existing struct, unchanged; `stem_in_flight`
+  added as the liveness read a wiring witness needs.
+- **Stem site**: both success branches of the levin stem xmit call
+  `record_stem_observation(...)` with the blobs, destination, and source
+  (nil → null → `in_mapping_[nil]`).
+- **Arrival site — before pool admission, per §38's definition**:
+  `handle_notify_new_transactions` calls the new
+  `i_p2p_endpoint::record_tx_arrivals`, which fans **one shared copy** to
+  **every** zone's notifier (a stem placed on one zone can return through
+  another); each notifier posts through its zone strand — the handle's
+  serializer — so the watch is never raced.
+- **Witness** (`levin_notify.stem_watch_records_and_arrival_resolves`): a real
+  stem send through the production notifier arms one observation per tx;
+  `record_arrival` with the same blobs resolves them. **Both negative controls
+  run and observed to fail** — removing the stem-site call leaves in-flight at
+  0; removing the arrival dispatch leaves it at 2.
+
+### 47.3 What this closes and what it opens
+
+**Closes §33.2**: the specified mechanism read an oracle wired to nothing;
+the oracle now has a producer, driven by the same poll clock as every other
+relay decision, with the three §12.11 parameters (memory, `(n_min, cut)`,
+persistence) still deliberately open in the type.
+
+**Opens the consumer question on a measured footing**: the watch accumulates
+from genesis, so the Q-10.2 envelope (`obs ≈ 1500·r`) and the §36/§37 ladder
+analysis now have a production data source to check themselves against —
+the first mechanism in this arc whose parameters can be derived from its own
+telemetry rather than from Monero-analogue envelopes.
+
+**Remaining queue, unchanged**: the topology measurement session (F-8's
+lifetime + F-8b's degree distribution), reverse-parity against `F′`, Unit 2.
 
 ## 50. F-11 retracted to an increment — and the probe harness was vacuous twice
 

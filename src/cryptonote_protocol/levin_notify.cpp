@@ -119,6 +119,28 @@ namespace levin
     static_assert(sizeof(boost::uuids::uuid) == 16, "connection ids cross the relay FFI as 16 raw bytes");
 
     //! \return `id` as the 16 raw bytes the relay FFI reads.
+    //! §46: hand the stemmed blobs to the zone's observation watch. The join
+    //! key and the deadline are both derived Rust-side; `source` is null for
+    //! locally-originated (nil uuid), matching `in_mapping_[nil]`.
+    void record_stem_observation(
+      RelayZoneHandle* const relay,
+      const std::vector<cryptonote::blobdata>& txs,
+      const boost::uuids::uuid& destination,
+      const boost::uuids::uuid& source) noexcept
+    {
+      std::vector<ShekylRelayBlob> spans{};
+      spans.reserve(txs.size());
+      for (const auto& tx : txs)
+        spans.push_back(ShekylRelayBlob{reinterpret_cast<const std::uint8_t*>(tx.data()), tx.size()});
+      const bool local = source.is_nil();
+      shekyl_relay_zone_record_stem(
+        relay, spans.data(), spans.size(),
+        reinterpret_cast<const std::uint8_t*>(std::addressof(destination)),
+        local ? nullptr : reinterpret_cast<const std::uint8_t*>(std::addressof(source)),
+        now_ms()
+      );
+    }
+
     const std::uint8_t* uuid_bytes(const boost::uuids::uuid& id) noexcept
     {
       return reinterpret_cast<const std::uint8_t*>(std::addressof(id));
@@ -783,6 +805,7 @@ namespace levin
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
               make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
           {
+            record_stem_observation(zone_->relay.get(), txs_, destination, source_);
             /* Source is intentionally omitted in debug log for privacy - a
                nil uuid indicates source is that node. */
             MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
@@ -802,6 +825,7 @@ namespace levin
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
               make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
           {
+            record_stem_observation(zone_->relay.get(), txs_, destination, source_);
             MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
             return;
           }
@@ -1040,6 +1064,29 @@ namespace levin
       );
       relay_wake::arm(z, core);
     });
+  }
+
+  void notify::record_arrival(std::shared_ptr<const std::vector<blobdata>> txs)
+  {
+    if (!zone_ || !txs || txs->empty())
+      return;
+
+    /* The strand serializes all access to the relay handle; this is a
+       read-modify of the zone's stem watch, so it takes the same path as
+       every other handle call rather than racing them. */
+    boost::asio::dispatch(zone_->strand, [zone = zone_, txs = std::move(txs)] ()
+    {
+      std::vector<ShekylRelayBlob> spans{};
+      spans.reserve(txs->size());
+      for (const auto& tx : *txs)
+        spans.push_back(ShekylRelayBlob{reinterpret_cast<const std::uint8_t*>(tx.data()), tx.size()});
+      shekyl_relay_zone_record_arrival(zone->relay.get(), spans.data(), spans.size());
+    });
+  }
+
+  std::size_t notify::stem_in_flight() const
+  {
+    return zone_ ? shekyl_relay_zone_stem_in_flight(zone_->relay.get()) : 0;
   }
 
   bool notify::send_txs(std::vector<blobdata> txs, const boost::uuids::uuid& source, relay_method tx_relay)
