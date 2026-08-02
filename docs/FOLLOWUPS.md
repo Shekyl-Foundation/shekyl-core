@@ -506,12 +506,46 @@ sustainability is unaffected by the recalibration.
   `HybridPublicKey`), not from the 32-byte `P_canonical_id` alone —
   discovery reads the join tx, so nodes/wallets want an id→pubkey index;
   tor's `ADD_ONION ED25519-V3` takes the expanded secret form, standard
-  Ed25519 imports cleanly. **Step-1 remainder, still open: the
-  transferability fork (bind receipts to a miner commitment with on-chain
-  dedup, or accept a receipt market and restate the f-model) and the miss
-  fact (what a coinbase says about a chosen-but-unread pair) — plus the
-  freshness pin F (natural resolution F = one epoch, which dissolves the
-  regressive small-miner pre-read cost and re-derives the old cadence).**
+  Ed25519 imports cleanly.
+  **THE MISS FACT — RATIFIED (2026-08-01, maintainer). Epoch settlement
+  for `(P, s, E)`: three-valued at the ledger, two-valued at the
+  window:**
+  1. Any authenticated pass (countersigned attestation) in `E` ⇒
+     `serve_credit_bit = 1`. Observation, served.
+  2. No pass, at least one miss record (attempt-attestation with an
+     EMPTY countersignature field) ⇒ observation, missed.
+  3. Neither ⇒ non-observation — the window never sees the epoch.
+  Pass-dominates-miss per epoch is what neutralizes fabrication
+  concentration: a fabricated miss lands only where honest coverage
+  already gapped (≤ `e^−λ` of an honestly-serving pair's epochs), while
+  a dead `P` has no one left to countersign and accumulates real misses
+  — the window's job stays exactly its pinned not-durably-absent
+  property. **The shape fits the machinery as built:**
+  `BaselineObservation` (`failure_window.rs:186–197`) is untouched —
+  `served` stays an affirmative pass per gate-2 §0.1, one observation
+  per epoch, strictly-descending walk unchanged (verified at source);
+  only the upstream settlement scan changes (derive "observed" from
+  EITHER record kind instead of assuming a beacon fired) plus the miss
+  record as new wire. **Three additions to the stack, in dependency
+  order:** (a) *the miss record's binding* — it must commit to the same
+  nonce the challenge used, else a fabricator needn't construct a
+  plausible attempt and `P` cannot dispute even in principle; rides with
+  the countersignature design (same wire object, field empty); (b) *`λ`
+  enters the `(m, n)` derivation as a formal input* — the false-slash
+  budget has two terms, transport weather (`p^r` per observation) and
+  fabrication (≤ `e^−λ` of observations poisoned), each a function of a
+  parameter pinned elsewhere (retry budget in `W`; coverage `λ` in the
+  set-size pin), confirming the sequencing step 1 → set-size → `(m, n)`;
+  (c) *the pruning assert inherits a new reading* — the const-assert at
+  `failure_window.rs:178–184` guards "a pruned bit reads as a MISS"
+  (message verified verbatim); under three-valued settlement a pruned
+  epoch has a correct value to decay to — NON-observation — so the
+  credit-wire design carries one line making the prune path land there
+  rather than inheriting the miss-reading hazard. **Board after
+  ratification: step 1 = countersignature binding + miss-record binding
+  + transferability fork (+ freshness pin `F`, natural at one epoch);
+  set-size pin = `λ` with double duty (coverage AND fabrication bound);
+  `(m, n)` waits on both — floor from transport, ceiling from W16.**
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
