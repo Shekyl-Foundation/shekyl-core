@@ -8446,6 +8446,25 @@ out-degree. **It is a recall increment and only a recall increment** —
 precision falls to `1/|set|`, and one snapshot per transaction, since the
 first successful probe fluffs it and closes the window for everyone.
 
+**The discriminator's fix cost went up, and a cheaper fix appeared.** Both
+structural facts — `relay_category::legacy` excluding stem
+([`blockchain_db.h:117`](../../src/blockchain_db/blockchain_db.h#L117)) and
+`add_tx` taking no peer
+([`tx_pool.cpp:376`](../../src/cryptonote_core/tx_pool.cpp#L376)) — say the
+**incoming path drops identity, exactly as it dropped the hash (§48)**. Third
+instance of one shape. So the peer discriminator needs a signature change
+*through the incoming path*, not a comparison at the decision site.
+
+> **Cheaper candidate, needing no identity at all: don't upgrade on loop
+> detection — ignore the duplicate and let each node's own embargo terminate
+> the circulation.** A re-received stem tx already fails
+> `upgrade_relay_method(stem)` and is simply not re-relayed, so the loop
+> **already** stops at the repeat holder; deleting the fluff conversion leaves
+> termination to that node's embargo. Loops still terminate, within one
+> embargo per node, **and there is nothing to plumb.** Same latency trade, no
+> signature change. Needs the same red tests before it is more than a
+> candidate — **but it is the version to test first.**
+
 **Filed as an increment on a priced capability, not a new threat.** At
 `f = 0.30` a 12× recall gain is not nothing — but a supernode at 30 % reach
 already dominates via channels §6.5 measures directly, and the increment
@@ -8470,6 +8489,21 @@ peer-blindness test **PASSED**. Both meant nothing.
 > path skips it silently. **A reachability assertion is the cheapest possible
 > guard against vacuity-by-input, and it belongs in the first draft, not the
 > third.**
+
+**And the generalisation is sharper than "a test can lack execution":
+negative-result arms hide missing execution *by construction*.** An arm whose
+expectation is *"X is unchanged"* cannot distinguish *"the transform ran and
+correctly changed nothing"* from *"the transform never ran"* — **unchanged is
+the default state of everything that did not happen.** For a *positive* arm
+the vacuous state and the expected state differ, so it fails loudly; for a
+negative arm they coincide. **Attempt 2's failure output was more dangerous
+than a false green would have been**, because a green invites nothing and a
+finding invites a design round.
+
+> **Consequence for this harness: both arms carry the liveness assertion —
+> especially the arm expected to show no change.** The
+> probe-from-a-non-predecessor arm is exactly that shape, and it is the arm
+> the whole finding turns on.
 
 Tests kept as `DISABLED_` with the blocker recorded at the site rather than
 deleted or left green. **What a valid harness needs**: deliver the tx to a

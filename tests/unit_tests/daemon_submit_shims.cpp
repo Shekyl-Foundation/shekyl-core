@@ -1224,8 +1224,20 @@ TEST(txpool_stem_probe, DISABLED_a_fluff_held_tx_does_not_react_to_a_stem_resend
   }
   cryptonote::transaction tx = s.tx;
   tx_verification_context tvc{};
-  fx.bap.txpool.add_tx(tx, s.txid, s.blob, s.weight, tvc, relay_method::stem,
-    true, 1, 1);
+  const bool accepted = fx.bap.txpool.add_tx(tx, s.txid, s.blob, s.weight, tvc,
+    relay_method::stem, true, 1, 1);
+
+  // LIVENESS FIRST, and this arm needs it MOST. Its expectation is "fluff,
+  // unchanged" — and unchanged is the default state of everything that never
+  // happened, so without this assertion the arm cannot distinguish "the
+  // promotion correctly declined to fire" from "add_tx bailed before the
+  // branch." A negative-result arm hides missing execution BY CONSTRUCTION:
+  // for a positive arm the vacuous state and the expected state differ, so it
+  // fails loudly; here they coincide.
+  EXPECT_TRUE(accepted) << "add_tx rejected the re-send — 'unchanged' below "
+                           "would be the vacuous default, not a result";
+  EXPECT_FALSE(tvc.m_verifivation_failed);
+
   txpool_tx_meta_t after{};
   ASSERT_TRUE(fx.db->get_txpool_tx_meta(s.txid, after));
   EXPECT_EQ(relay_method::fluff, after.get_relay_method())
