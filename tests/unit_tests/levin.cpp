@@ -2677,11 +2677,18 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
     EXPECT_EQ(2u, notifier.stem_in_flight())
         << "a successful stem send must arm one observation per tx";
 
+    /* F-10: an arrival from the charged successor resolves nothing. The
+       stem destination is always an OUTGOING connection, so the first
+       context (created incoming) is provably not it — using it proves the
+       exclusion is peer-scoped rather than blanket. The exclusion's own
+       semantics are witnessed Rust-side; this asserts the uuid reaches it. */
+    auto incoming = contexts_.begin();
+    ASSERT_TRUE(incoming->is_incoming());
     notifier.record_arrival(
-        std::make_shared<const std::vector<cryptonote::blobdata>>(txs));
+        std::make_shared<const std::vector<cryptonote::blobdata>>(txs), incoming->get_id());
     io_service_.restart();
     io_service_.poll();
 
     EXPECT_EQ(0u, notifier.stem_in_flight())
-        << "the same blobs arriving must resolve the observations";
+        << "the same blobs arriving from another peer must resolve the observations";
 }

@@ -144,7 +144,7 @@ namespace levin
     //! §46: resolve pending stem observations for arrived blobs (any peer,
     //! any path — called on every zone, before pool admission). Shared,
     //! not copied per zone; unknown blobs are ignored Rust-side.
-    void record_arrival(std::shared_ptr<const std::vector<blobdata>> txs);
+    void record_arrival(std::shared_ptr<const std::vector<blobdata>> txs, const boost::uuids::uuid& from);
 
     //! §46: stem observations pending resolution. Test-facing liveness read;
     //! call only when the zone strand is quiescent (the gtest harness drives

@@ -173,15 +173,38 @@ impl StemWatch {
         );
     }
 
-    /// Record that `tx` was seen again — from any peer, by any path.
+    /// Record that `tx` was seen again, arriving `from` a peer (`None` when
+    /// the arrival has no peer — a local re-relay or a synthetic call).
     ///
-    /// Resolves a pending observation as [`StemOutcome::Propagated`].
+    /// Resolves a pending observation as [`StemOutcome::Propagated`] — unless
+    /// the arrival came **from the successor the observation is charged to**,
+    /// which resolves nothing (F-10, §49).
+    ///
+    /// **The exclusion is the whole signal.** Without it the successor
+    /// holding `O`'s stem slot drops the transaction, echoes the same bytes
+    /// back, and resolves its own observation for the cost of one message —
+    /// a total defeat available to precisely the adversary this mechanism
+    /// exists to detect. *Any peer* and *any zone* are different relaxations:
+    /// the zone must be unconstrained (a stem placed on one zone can return
+    /// through another), the peer must not be.
+    ///
+    /// The narrowest form that works: *"someone else has it"* is propagation;
+    /// *"the peer I gave it to gave it back"* is nothing. An arrival with no
+    /// peer (`None`) can never equal a successor, which is always a real
+    /// connection — including for a locally-originated stem, whose `source`
+    /// is `None` but whose `successor` is not — so no special case is needed.
+    ///
     /// Unknown transactions are ignored: this node either never stemmed it or
     /// already resolved it, and neither is an error.
-    pub fn seen(&mut self, tx: &TxId) {
-        if let Some(p) = self.pending.remove(tx) {
-            self.resolve(p, StemOutcome::Propagated);
+    pub fn seen(&mut self, tx: &TxId, from: Option<ConnectionId>) {
+        let Some(p) = self.pending.get(tx) else {
+            return;
+        };
+        if from.is_some_and(|f| f == p.successor) {
+            return;
         }
+        let p = self.pending.remove(tx).expect("checked present above");
+        self.resolve(p, StemOutcome::Propagated);
     }
 
     /// Resolve every observation whose deadline has passed as
@@ -276,7 +299,7 @@ mod tests {
         let mut w = StemWatch::default();
         w.stemmed(tx(1), peer(9), None, 1_000);
         assert_eq!(w.in_flight(), 1, "fixture: the observation is armed");
-        w.seen(&tx(1));
+        w.seen(&tx(1), Some(peer(3)));
         assert_eq!(w.in_flight(), 0, "resolution clears the pending entry");
         let t = w.tally(&peer(9)).expect("resolved against its successor");
         assert_eq!((t.propagated, t.silent), (1, 0));
@@ -321,7 +344,7 @@ mod tests {
         let mut w = StemWatch::default();
         for i in 0..100u8 {
             w.stemmed(tx(i), peer(9), Some(peer(42)), 1_000);
-            w.seen(&tx(i));
+            w.seen(&tx(i), Some(peer(42)));
         }
         let t = w.tally(&peer(9)).expect("resolved");
         assert_eq!(t.observations(), 100, "volume is counted");
@@ -333,7 +356,7 @@ mod tests {
         );
 
         w.stemmed(tx(200), peer(9), None, 1_000);
-        w.seen(&tx(200));
+        w.seen(&tx(200), Some(peer(7)));
         assert_eq!(
             w.tally(&peer(9)).expect("resolved").distinct_sources(),
             2,
@@ -342,10 +365,40 @@ mod tests {
     }
 
     #[test]
+    fn a_successor_cannot_resolve_its_own_observation_by_echoing() {
+        // F-10: the dropper's cheapest attack. It receives the stem, drops
+        // it, and echoes the same bytes back — same canonical hash, so F-9's
+        // fix does not help. If the echo resolves, the signal is defeated by
+        // one message, by exactly the adversary it exists to detect.
+        let mut w = StemWatch::default();
+        w.stemmed(tx(1), peer(9), None, 1_000);
+
+        w.seen(&tx(1), Some(peer(9)));
+        assert_eq!(
+            w.in_flight(),
+            1,
+            "an echo from the charged successor must resolve NOTHING — if this \
+             is 0, a black hole clears its own record for the cost of one message"
+        );
+        assert!(w.tally(&peer(9)).is_none(), "and records no outcome");
+
+        // Any other peer having it IS propagation — the exclusion must be
+        // exactly one peer wide, or a real relay stops counting.
+        w.seen(&tx(1), Some(peer(4)));
+        assert_eq!(w.tally(&peer(9)).expect("resolved").propagated, 1);
+
+        // And an arrival with no peer resolves: it cannot be the successor,
+        // which is always a real connection.
+        w.stemmed(tx(2), peer(9), None, 1_000);
+        w.seen(&tx(2), None);
+        assert_eq!(w.tally(&peer(9)).expect("resolved").propagated, 2);
+    }
+
+    #[test]
     fn forgetting_a_peer_drops_its_tally_and_its_in_flight_observations() {
         let mut w = StemWatch::default();
         w.stemmed(tx(1), peer(9), None, 1_000);
-        w.seen(&tx(1));
+        w.seen(&tx(1), Some(peer(3)));
         w.stemmed(tx(2), peer(9), None, 5_000);
         assert!(w.tally(&peer(9)).is_some());
         w.forget(&peer(9));

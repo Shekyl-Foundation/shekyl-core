@@ -369,14 +369,16 @@ impl Zone {
         self.stem_watch.expire(now)
     }
 
-    /// Record that `txs` arrived — from any peer, by any path.
+    /// Record that `txs` arrived `from` a peer (`None` when the arrival has
+    /// no peer). Any zone, any path — but **not** any peer: an arrival from
+    /// the successor an observation is charged to resolves nothing (F-10,
+    /// §49).
     ///
-    /// Resolves any pending observation as propagated. This is the *only*
-    /// input the outcome needs from outside, and it is **data, not a
-    /// decision** (§38.1).
-    pub fn record_arrival(&mut self, txs: &[TxId]) {
+    /// This is the *only* input the outcome needs from outside, and it is
+    /// **data, not a decision** (§38.1).
+    pub fn record_arrival(&mut self, txs: &[TxId], from: Option<ConnectionId>) {
         for tx in txs {
-            self.stem_watch.seen(tx);
+            self.stem_watch.seen(tx, from);
         }
     }
 

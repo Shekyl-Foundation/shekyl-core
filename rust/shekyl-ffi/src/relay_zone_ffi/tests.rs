@@ -749,7 +749,13 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         );
 
         // First id returns: resolved as propagated.
-        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1);
+        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(9).as_ptr());
+        assert_eq!(
+            shekyl_relay_zone_stem_in_flight(h),
+            2,
+            "F-10: an echo from the charged successor resolves nothing"
+        );
+        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(3).as_ptr());
         let t = (*h)
             .driver
             .zone()
@@ -789,7 +795,7 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
             std::ptr::null(),
             0,
         );
-        shekyl_relay_zone_record_arrival(h, std::ptr::null(), 1);
+        shekyl_relay_zone_record_arrival(h, std::ptr::null(), 1, std::ptr::null());
         assert_eq!(
             shekyl_relay_zone_stem_in_flight(h),
             0,
