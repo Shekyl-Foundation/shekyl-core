@@ -2987,7 +2987,7 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 // reason cannot drift apart again.
 
 /// One embargo duration in seconds, drawn from the adopted memoryless
-/// distribution (mean 144 s). A 0 s draw is legitimate and rare (~0.17 %): the
+/// distribution (mean 190 s). A 0 s draw is legitimate and rare (~0.13 %): the
 /// geometric support includes 0 and the table is not clamped at the boundary,
 /// so what ships is what was derived and tested. A zero draw does not mean "fire
 /// this instant" — deadlines are whole seconds, so it resolves to the earliest
@@ -3000,7 +3000,7 @@ uint64_t shekyl_dandelionpp_embargo_draw_seconds(void);
 /// How long to wait before judging a still-unseen transaction failed, in
 /// seconds — a quantile of the embargo distribution (at most 1 in 100 embargoes
 /// still running), not a multiple of its mean. On the adopted table that is
-/// exactly 664 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
+/// exactly 874 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
 /// pinned so the wait cannot drift from the distribution. A stem transaction is
 /// invisible to its sender until it fluffs, so a shorter deadline declares
 /// healthy transactions dead while their backstop is still running, and the
