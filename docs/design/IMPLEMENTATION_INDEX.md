@@ -314,3 +314,23 @@ mistake for current SoT under basename grep (first instance:
 leave a short redirect stub at the old `docs/design/` path naming the living
 authoritative docs. Link-rot cost alone is not a reason to keep obsolete
 bodies in `design/`.
+
+## Relay layer → C++ dependency inventory (p2p migration cost)
+
+**Measured 2026-08-02 from the §55 work, recorded here rather than in the
+relay doc because this is where someone costing the p2p migration would
+look.** The relay layer is Rust-owned except for exactly two dependencies,
+and **both are containment, not entanglement** — which is what makes the
+migration schedulable rather than something to negotiate mid-flight.
+
+| # | dependency | where |
+| --- | --- | --- |
+| 1 | **Zone handle lifetime** — `RelayZoneHandle` is created and owned per network zone by C++ | [`levin_notify.cpp`](../../src/cryptonote_protocol/levin_notify.cpp) `make_relay_zone`, held in `detail::zone::relay` |
+| 2 | **Connection table** — the `ConnectionId` → peer/address join, and zone membership | [`net_node.inl`](../../src/p2p/net_node.inl) `m_network_zones`, `for_each_connection` |
+
+**Decay warning: this is a claim about code state and it ages at the code's
+rate, not the estimate's.** The visible symptom is `/get_stem_tallies`'
+round trip — Rust relay → FFI → C++ → FFI → Rust RPC — which exists only to
+cross (1), and which will recur for every relay-facing readout added before
+the migration. If a third dependency appears, add it here; if the list is
+still two when p2p is scheduled, the estimate still holds.
