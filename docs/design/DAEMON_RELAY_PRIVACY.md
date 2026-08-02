@@ -9211,7 +9211,7 @@ time with a symmetric effect on composition; only the first is symmetric.**
 The spec is explicit that each node picks two outbound edges **uniformly at
 random** and selects **fresh** relays each epoch. **Reputation-weighted
 selection is neither uniform nor fresh** — the same top-ranked peers persist
-across epochs. That is §12.11's measured ossification (2-of-12 at `ε = 0`),
+across epochs. That is §12.11's measured ossification (2 of 12 at `ε = 0`),
 but the paper-level consequence is larger: **a graph that does not
 re-randomise is a static graph**, which is Sharma Appendix B's cheap-learning
 regime at roughly half the probe cost against our `q`.
@@ -9413,7 +9413,7 @@ of preference — which is the same lever, correctly signed.)*
   and §52.3's retention objection largely go with it. **Retention now affects
   only who is *admissible*, never who is *preferred*** — a far smaller
   footprint on the anonymity graph.
-- **§12.11's ossification finding (2-of-12) is moot rather than mitigated** —
+- **§12.11's ossification finding (2 of 12) is moot rather than mitigated** —
   there is no ranking to collapse.
 - **Remaining parameters are already on derivation paths**: the `(n_min, cut)`
   rung by minimax against yield (§37.2), and cooldown by
