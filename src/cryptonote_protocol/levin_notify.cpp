@@ -1119,6 +1119,17 @@ namespace levin
     });
   }
 
+  std::size_t notify::stem_snapshot_json(std::uint8_t* buf, std::size_t cap) const
+  {
+    /* §55 TRANSIT, NOT STRUCTURE. This forwards a Rust-owned value to a
+       Rust consumer (shekyl-daemon-rpc); the hop through C++ exists only
+       because net_node owns the relay zone handles' lifetime. It disappears
+       with the p2p migration -- do not build on it. */
+    if (!zone_)
+      return 0;
+    return shekyl_relay_zone_stem_snapshot_json(zone_->relay.get(), buf, cap);
+  }
+
   std::size_t notify::stem_in_flight() const
   {
     return zone_ ? shekyl_relay_zone_stem_in_flight(zone_->relay.get()) : 0;

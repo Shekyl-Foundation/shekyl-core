@@ -146,6 +146,11 @@ namespace levin
     //! not copied per zone; unknown blobs are ignored Rust-side.
     void record_arrival(std::shared_ptr<const std::vector<blobdata>> txs, const boost::uuids::uuid& from);
 
+    //! §55: this zone's stem-outcome tallies as a JSON array. Two-call
+    //! sizing: returns bytes NEEDED, writes nothing if that exceeds `cap`.
+    //! Transit for a Rust->Rust readout; see the .cpp note.
+    std::size_t stem_snapshot_json(std::uint8_t* buf, std::size_t cap) const;
+
     //! §46: stem observations pending resolution. Test-facing liveness read;
     //! call only when the zone strand is quiescent (the gtest harness drives
     //! executors to completion before reading).

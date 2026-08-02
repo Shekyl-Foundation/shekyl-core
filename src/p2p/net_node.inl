@@ -2191,6 +2191,34 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
+  std::string node_server<t_payload_net_handler>::stem_tallies_json() const
+  {
+    /* §55 TRANSIT, NOT STRUCTURE. This forwards a Rust-owned value to a
+       Rust consumer (shekyl-daemon-rpc); the hop through C++ exists only
+       because net_node owns the relay zone handles' lifetime. It disappears
+       with the p2p migration -- do not build on it. */
+    /* Every zone, because a peer belongs to exactly one and the caller does
+       not know which; zones do not share connection ids, so concatenating
+       their arrays cannot duplicate a peer. */
+    std::string out = "[";
+    for (const auto& zone : m_network_zones)
+    {
+      const std::size_t need = zone.second.m_notifier.stem_snapshot_json(nullptr, 0);
+      if (need <= 2) // "[]" -- nothing resolved in this zone
+        continue;
+      std::vector<std::uint8_t> buf(need);
+      if (zone.second.m_notifier.stem_snapshot_json(buf.data(), buf.size()) != need)
+        continue;
+      // Splice the inner array's contents, dropping its own brackets.
+      if (out.size() > 1)
+        out += ',';
+      out.append(reinterpret_cast<const char*>(buf.data()) + 1, need - 2);
+    }
+    out += ']';
+    return out;
+  }
+
+  template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::record_tx_arrivals(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& from)
   {
     /* §46: every zone's watch, not the receiving zone's alone — a stem placed
