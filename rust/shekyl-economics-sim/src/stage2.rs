@@ -60,6 +60,12 @@ const A1_RAMP_YEARS: u64 = 2;
 /// spanning the [`crate::escalation::KNEE_BAND`].
 const ESCALATION_PREVIEW_N: [u64; 5] = [0, 5_000, 25_000, 100_000, 250_000];
 
+/// Coverage the step-2 pin asks for — `λ_target = 3`, pinned 2026-08-02.
+/// Sizes `k` (`k = λ_target·pairs/SEB`) and is the spread the *ambient*
+/// fabrication term divides across; the *delivered* coverage a pair receives
+/// is [`crate::mn_feasibility::delivered_lambda`] of it once `k_cap` binds.
+const MN_LAMBDA_TARGET: f64 = 3.0;
+
 /// False-slash budget the `(m, n)` region is drawn against, per ARCHIVER (not
 /// per pair) over a bond life — the axis an operator experiences, since every
 /// held pair is independently exposed.
@@ -1413,10 +1419,13 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
         out,
         &crate::mn_feasibility::default_model(),
         crate::mn_feasibility::BOND_LIFE_EPOCHS,
-        MN_FALSE_SLASH_TARGET,
-        MN_FREE_RIDE_BOUND,
-        MN_K_CAP,
-        shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS as f64,
+        &crate::mn_feasibility::FeasibilityTargets {
+            lambda_target: MN_LAMBDA_TARGET,
+            false_slash_target: MN_FALSE_SLASH_TARGET,
+            free_ride_bound: MN_FREE_RIDE_BOUND,
+            k_cap: MN_K_CAP,
+            seb: shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS as f64,
+        },
     )?;
 
     let report = Stage2Report {

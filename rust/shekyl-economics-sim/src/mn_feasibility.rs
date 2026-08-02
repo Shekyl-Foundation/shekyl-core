@@ -59,9 +59,15 @@ pub const N_HARD_BOUND: u32 = 25;
 /// number is waiting on.
 #[derive(Debug, Clone, Copy)]
 pub struct MissModel {
-    /// Diligent reads per pair per epoch (`λ_target = 3` pinned; the *measured*
-    /// `λ_eff` is what the derivation must actually evaluate at — see
-    /// [`Self::miss_given_observation`]'s note on cap-delivered coverage).
+    /// **Delivered** diligent reads per pair per epoch — never the policy
+    /// target.
+    ///
+    /// The two coincide only while `k_cap` is slack; past the knee delivered
+    /// coverage decays as `k_cap·SEB/pairs` ([`delivered_lambda`]). Keeping
+    /// this field single-meaning is deliberate: the target lives in
+    /// [`FeasibilityTargets::lambda_target`], so a call site cannot quietly
+    /// pass one where the other belongs and skew the region (review finding,
+    /// 2026-08-02).
     pub lambda_eff: f64,
     /// Per-attempt transport failure probability. **Stand-in: 0.30**, the
     /// 2026-07-30 cold-path onion measurement taken with **no PoW and no
@@ -229,17 +235,28 @@ pub fn window_exceedance(m: u32, n: u32, q: f64) -> f64 {
     tail.clamp(0.0, 1.0)
 }
 
-/// Union-bound **upper** bound on false-slash over `observations` draws.
+/// Union-bound **upper** bound on false-slash over at most `max_observations`
+/// draws.
 ///
 /// Rigorous (a union over the sliding windows) and tight exactly where the
 /// answer matters — the small-probability regime a false-slash target lives
 /// in. [`false_slash_exact`] measures the slack at the shipped pin.
+///
+/// **`max_observations` must be a DETERMINISTIC ceiling, never an
+/// expectation.** The observation count over a bond life is random, and a
+/// realization above its mean would carry more sliding windows than the bound
+/// priced — which would silently void the "upper bound" claim in exactly the
+/// tail the floor target cares about. The ratified miss fact supplies the
+/// ceiling for free: an epoch settles to at most ONE observation, so
+/// `bond_life_epochs` *is* the hard cap and no distribution over counts is
+/// needed. (Found by review, 2026-08-02; the arm previously passed
+/// `bond_life · observation_rate`.)
 #[must_use]
-pub fn false_slash_bound(m: u32, n: u32, q: f64, observations: f64) -> f64 {
-    if observations <= 0.0 || n == 0 {
+pub fn false_slash_bound(m: u32, n: u32, q: f64, max_observations: f64) -> f64 {
+    if max_observations <= 0.0 || n == 0 {
         return 0.0;
     }
-    let windows = (observations - f64::from(n) + 1.0).max(0.0);
+    let windows = (max_observations - f64::from(n) + 1.0).max(0.0);
     (windows * window_exceedance(m, n, q)).clamp(0.0, 1.0)
 }
 
@@ -324,15 +341,17 @@ pub struct Cell {
     pub free_ride: f64,
 }
 
-/// Sweep the admissible box and report the feasible region.
+/// Sweep the admissible box, returning the **raw** cell for every `(m, n)`.
 ///
-/// `false_slash_target` bounds the floor side; `free_ride_bound` bounds the
-/// ceiling side (W16's economics set its value — it is an input here, not a
-/// number this arm invents).
+/// No filtering happens here: the floor and ceiling targets are policy inputs
+/// and are applied by [`mn_feasibility_report`], so a caller wanting a
+/// different target reads the same cells against it rather than re-running the
+/// sweep.
 #[must_use]
 pub fn sweep(model: &MissModel, bond_life_epochs: f64, n_max: u32) -> Vec<Cell> {
     let q = model.miss_given_observation();
-    let observations = bond_life_epochs * model.observation_rate();
+    // Deterministic ceiling, not the expected count — see `false_slash_bound`.
+    let observations = bond_life_epochs;
     let mut cells = Vec::new();
     for n in 2..=n_max.min(N_HARD_BOUND) {
         for m in 2..=n {
@@ -352,20 +371,47 @@ pub fn sweep(model: &MissModel, bond_life_epochs: f64, n_max: u32) -> Vec<Cell> 
     cells
 }
 
+/// Policy inputs to the feasibility report — every one a maintainer choice or
+/// a pinned constant, none of them derived by this arm.
+///
+/// Bundled so the **target vs delivered** split is visible in the type rather
+/// than in a comment: `lambda_target` is what `k` is sized from, while a
+/// [`MissModel`]'s `lambda_eff` is what a pair actually receives.
+#[derive(Debug, Clone, Copy)]
+pub struct FeasibilityTargets {
+    /// Coverage the pin asks for (`λ_target = 3`). Sizes `k`, and is the
+    /// spread the *ambient* fabrication term divides across.
+    pub lambda_target: f64,
+    /// Floor budget: `P(any pair slashed)` over a bond life, per ARCHIVER.
+    pub false_slash_target: f64,
+    /// Ceiling: the fraction of observations a placing degrader may ride free.
+    /// W16's crisis-price economics owns the real value.
+    pub free_ride_bound: f64,
+    /// Step-2 cap on challenges per block.
+    pub k_cap: f64,
+    /// Settlement-epoch length in blocks.
+    pub seb: f64,
+}
+
 /// `(m, n)` feasibility report.
-#[allow(clippy::too_many_arguments)]
 pub fn mn_feasibility_report(
     out: &mut impl fmt::Write,
     model: &MissModel,
     bond_life_epochs: f64,
-    false_slash_target: f64,
-    free_ride_bound: f64,
-    k_cap: f64,
-    seb: f64,
+    targets: &FeasibilityTargets,
 ) -> fmt::Result {
+    let FeasibilityTargets {
+        lambda_target,
+        false_slash_target,
+        free_ride_bound,
+        k_cap,
+        seb,
+    } = *targets;
     let q = model.miss_given_observation();
     let obs_rate = model.observation_rate();
-    let observations = bond_life_epochs * obs_rate;
+    // Deterministic ceiling (<= 1 observation per epoch), not the expected
+    // count — the union bound's guarantee depends on it.
+    let observations = bond_life_epochs;
     writeln!(
         out,
         "\n(m,n) FEASIBILITY — region, not optimum (wide-guardrails: a shipped\n\
@@ -480,7 +526,7 @@ pub fn mn_feasibility_report(
     for &r in &[1u32, 2, 3] {
         for &f in &[1.00_f64, 0.10, 0.001] {
             let phi = targeted_fabrication_intensity(f, seb);
-            let phi_amb = ambient_fabrication_intensity(f, model.lambda_eff);
+            let phi_amb = ambient_fabrication_intensity(f, lambda_target);
             let probe = MissModel {
                 retries: r,
                 fabrication_intensity: phi,
@@ -526,7 +572,7 @@ pub fn mn_feasibility_report(
         "pairs", "k wanted", "lambda_eff", "gap (poison)"
     )?;
     for &pairs in &[5_000.0_f64, 10_000.0, 20_000.0, 40_000.0, 100_000.0] {
-        let lam = delivered_lambda(model.lambda_eff, pairs, seb, k_cap);
+        let lam = delivered_lambda(lambda_target, pairs, seb, k_cap);
         let probe = MissModel {
             lambda_eff: lam,
             ..*model
@@ -535,7 +581,7 @@ pub fn mn_feasibility_report(
             out,
             "{:<12.0} {:>10.2} {:>12.3} {:>14.4}",
             pairs,
-            model.lambda_eff * pairs / seb,
+            lambda_target * pairs / seb,
             lam,
             probe.gap()
         )?;
@@ -745,6 +791,35 @@ mod tests {
         assert!((below - target).abs() < 1e-12, "cap slack below the knee");
         assert!(above < target, "cap must bind past the knee: {above}");
         assert!(above > 0.0);
+    }
+
+    #[test]
+    fn the_bound_holds_against_the_worst_realized_observation_count() {
+        // Review finding, 2026-08-02: the arm passed `bond_life * obs_rate` --
+        // an EXPECTATION -- where the union bound needs a deterministic
+        // ceiling. A bond life that happens to yield more observations than
+        // its mean carries more sliding windows than an expectation-priced
+        // bound accounted for, which voids the "upper bound" claim in exactly
+        // the tail the floor target cares about.
+        //
+        // The ratified miss fact supplies the ceiling: at most ONE observation
+        // per epoch. So the bound taken at `bond_life` must dominate the exact
+        // probability at EVERY realizable count, including the maximum.
+        let (m, n, q) = (11u32, 13u32, 1e-2_f64);
+        let bond_life = 131.0_f64;
+        let bound = false_slash_bound(m, n, q, bond_life);
+        for realized in [60u64, 100, 131] {
+            let exact = false_slash_exact(m, n, q, realized).expect("n <= 20");
+            assert!(
+                bound + 1e-18 >= exact,
+                "bound {bound:.3e} below exact {exact:.3e} at {realized} observations"
+            );
+        }
+        // And the defect is reachable, not theoretical: pricing at the
+        // expectation (obs_rate < 1) yields a strictly smaller bound, so the
+        // old form really was claiming less than it covered.
+        let expectation_priced = false_slash_bound(m, n, q, bond_life * 0.95);
+        assert!(expectation_priced < bound);
     }
 
     #[test]
