@@ -8732,7 +8732,9 @@ The join key is now the canonical transaction hash.**
   `i_p2p_endpoint::record_tx_arrivals`, which fans **one shared copy** to
   **every** zone's notifier (a stem placed on one zone can return through
   another); each notifier posts through its zone strand — the handle's
-  serializer — so the watch is never raced.
+  serializer — so the watch is never raced. **Amended at F-10 (§49): the fan
+  also carries the arriving peer's uuid. *Any zone* and *any peer* are
+  different relaxations, and this text collapsed them.**
 - **Witness** (`levin_notify.stem_watch_records_and_arrival_resolves`): a real
   stem send through the production notifier arms one observation per tx;
   `record_arrival` with the same blobs resolves them. **Both negative controls
@@ -8830,3 +8832,83 @@ network returned. **The canonical tx hash exists precisely because blob bytes
 are not a stable identity — deriving locally re-introduced the dependency the
 canonical hash was designed to remove.** A locally-derived key is only as
 local as its inputs.
+
+## 49. F-10 — the dropper resolved its own observation by echoing; the signal was defeated by one message
+
+**2026-08-01, maintainer finding on §47/§48, fix landed same day.** F-9 closed
+the identity question at the root; verifying it surfaced a worse defect in the
+same path.
+
+### 49.1 The finding
+
+`record_arrival` took `(handle, hashes, n)` — **no peer identity** — and
+`StemWatch::seen` resolved `Propagated` regardless of provenance. The doc
+comment stated it as intent: *"from any peer, by any path."*
+
+**T = the successor holding `O`'s stem slot.** Capability: receive the stem,
+drop it, **echo it back**. Cost: **one message**, no propagation, no other
+position. Same canonical hash, so F-9's fix does not help. And because the
+arrival hook fires **before pool admission** — deliberately, per §38's
+propagation-not-admission definition — `O`'s duplicate check has not run when
+the observation resolves.
+
+**This is not a degradation, it is a total defeat**, available to precisely
+the adversary the mechanism exists to detect, at a cost below the attack
+itself. **Every downstream artifact — the §36 ladder, the §37 yield curve, the
+rung minimax, Q-10.2's envelope — is computed over a signal this `T` can
+zero.**
+
+### 49.2 What hid it: two relaxations collapsed into one
+
+*"A stem placed on one zone can return through another, so fan to every zone"*
+is correct, and it is what motivated dropping peer attribution. **But *any
+zone* and *any peer* are different relaxations: the zone must be
+unconstrained, the peer must not be.** §47.2's text is amended in place.
+
+### 49.3 The fix — one exclusion, exactly one peer wide
+
+`record_arrival` carries the arriving peer's uuid; `seen` refuses to resolve a
+pending entry whose `successor` equals it. **That single exclusion is the whole
+difference between *"someone else has it"* — propagation — and *"the peer I
+gave it to gave it back"* — nothing.**
+
+Both checks the finding asked for, confirmed rather than assumed:
+
+- **The nil/local case needs no special handling.** A locally-originated stem
+  has `source = None`, but `successor` is always a real connection, so the
+  comparison is well-defined; and an arrival with **no** peer (`None`) can
+  never equal a successor, so it resolves normally. Asserted in the witness.
+- **The exclusion is exactly one peer wide** — asserted directly, because an
+  over-broad exclusion would silently stop counting real relays. A different
+  peer having the transaction still resolves.
+
+Witnessed at three layers, each with its **negative control run and observed
+to fail**: `StemWatch` (echo resolves nothing, other peer does, `None` does),
+the zone/driver seam, and the FFI boundary. The C++ witness uses the harness's
+first context, which is created **incoming** — and a stem destination is
+always an *outgoing* connection, so it is provably not the successor, which
+makes the assertion prove peer-scoping rather than blanket resolution.
+
+**The echo as a positive signal is deliberately not built.** A successor
+returning a transaction it was stemmed and did not propagate exhibits
+behaviour no honest node has reason to exhibit — but that is a detector for
+one strategy rather than a metric farming cannot move, and §35's stated
+preference is the latter. Left alone.
+
+### 49.4 The duplicate parse, recorded as a trade
+
+`canonical_tx_hashes` parses every arriving blob, and `handle_incoming_tx`
+parses the same blobs moments later. **§47's "zero signature changes" was
+bought with a duplicate parse on the hot path** — one fact computed twice,
+which is the delete-the-duplicate shape in *compute* rather than state.
+
+`T` = any peer; capability = send a batch of blobs; cost = bandwidth —
+**already priced by existing size and rate limits**, so what changes is a
+constant factor on servicing it, ahead of admission checks. Not a new threat,
+and the trade is accepted — but **recorded at the site**, because "zero
+signature changes" reads as free and this one has a bill. If it appears in
+profiles, the fix is to carry the hash out of verification rather than
+re-derive it here.
+
+**Skip-on-unparseable stands**: no canonical identity means nothing this node
+could have stemmed.

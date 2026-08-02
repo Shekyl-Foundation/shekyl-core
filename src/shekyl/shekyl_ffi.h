@@ -3125,11 +3125,14 @@ void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
     const std::uint8_t* successor, const std::uint8_t* source,
     std::uint64_t now_ms);
 
-//! Record `n` arrived canonical tx hashes (any peer, any path). Unknown
+//! Record `n` arrived canonical tx hashes, `from` a peer (16-byte uuid, or
+//! null when the arrival has no peer). Any zone, any path -- but NOT any
+//! peer: an arrival from the successor an observation is charged to resolves
+//! nothing, or a dropper clears its own record by echoing (F-10). Unknown
 //! hashes are ignored; call on EVERY zone's handle, since a stem placed on
 //! one zone can return through another.
 void shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
-    const std::uint8_t* hashes, std::size_t n);
+    const std::uint8_t* hashes, std::size_t n, const std::uint8_t* from);
 
 //! Stem observations still pending resolution (0 for null handle) — the
 //! liveness read a wiring witness needs.

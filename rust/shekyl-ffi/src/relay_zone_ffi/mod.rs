@@ -490,26 +490,39 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_stem(
     h.driver.zone_mut().record_stem(&ids, succ, src, deadline);
 }
 
-/// Record that `n` transactions arrived — from any peer, by any path (§38.1's
-/// "data, not a decision"). Resolves matching pending stem observations as
-/// propagated; unknown hashes are ignored, so calling with never-stemmed
-/// transactions is free. Call on **every** zone's handle, not only the
-/// receiving zone's: a stem placed on one zone can return through another,
-/// and only the zone holding the pending entry can resolve it.
+/// Record that `n` transactions arrived `from` a peer — any zone, any path,
+/// but **not any peer** (§38.1's "data, not a decision"; F-10, §49).
+///
+/// Resolves matching pending stem observations as propagated **except** where
+/// the arrival came from the successor the observation is charged to: a
+/// dropper that echoes back what it was stemmed would otherwise resolve its
+/// own record for one message. `from` may be null when the arrival has no
+/// peer; null can never equal a successor, which is always a real connection.
+///
+/// Unknown hashes are ignored, so calling with never-stemmed transactions is
+/// free. Call on **every** zone's handle, not only the receiving zone's: a
+/// stem placed on one zone can return through another, and only the zone
+/// holding the pending entry can resolve it — *the zone is unconstrained, the
+/// peer is not.*
 ///
 /// # Safety
 /// `handle` must be null (no-op) or a live zone from
-/// [`shekyl_relay_zone_new`]. `hashes` must point at `32 * n` readable bytes.
+/// [`shekyl_relay_zone_new`]. `hashes` must point at `32 * n` readable
+/// bytes, and `from` at 16 when non-null.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_record_arrival(
     handle: *mut RelayZoneHandle,
     hashes: *const u8,
     n: usize,
+    from: *const u8,
 ) {
     let Some(h) = handle.as_mut() else { return };
     if hashes.is_null() {
         return;
     }
+    let peer = from
+        .as_ref()
+        .map(|p| ConnectionId::from_bytes(std::slice::from_raw_parts(p, 16).try_into().unwrap()));
     for i in 0..n {
         let id = TxId::from_bytes(
             std::slice::from_raw_parts(hashes.add(i * 32), 32)
@@ -518,7 +531,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_arrival(
         );
         h.driver
             .zone_mut()
-            .record_arrival(std::slice::from_ref(&id));
+            .record_arrival(std::slice::from_ref(&id), peer);
     }
 }
 

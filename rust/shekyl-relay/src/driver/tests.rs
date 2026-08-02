@@ -748,7 +748,7 @@ fn an_arrival_resolves_the_observation_as_propagated() {
 
     let tx = TxId::from_bytes([9u8; 32]);
     d.zone_mut().record_stem(&[tx], id(1), None, 5_000);
-    d.zone_mut().record_arrival(&[tx]);
+    d.zone_mut().record_arrival(&[tx], Some(id(2)));
 
     let t = d.zone().stem_tally(&id(1)).expect("arrival resolved it");
     assert_eq!(
@@ -757,12 +757,29 @@ fn an_arrival_resolves_the_observation_as_propagated() {
         "seen-before-deadline is propagation, not silence"
     );
 
+    // F-10 at the zone seam: an echo from the charged successor must not
+    // resolve. Armed second observation, echoed by its own successor.
+    let echo = TxId::from_bytes([0x0E; 32]);
+    d.zone_mut().record_stem(&[echo], id(1), None, 5_000);
+    d.zone_mut().record_arrival(&[echo], Some(id(1)));
+    assert_eq!(
+        d.zone().stem_observations_in_flight(),
+        1,
+        "the successor's own echo resolves nothing — it stays in flight"
+    );
+    d.zone_mut().record_arrival(&[echo], Some(id(2)));
+    assert_eq!(
+        d.zone().stem_observations_in_flight(),
+        0,
+        "a different peer having it IS propagation"
+    );
+
     // And the deadline passing afterwards must not double-count it.
     let _ = d.poll(5_000, no_gather, &mut rng);
     let t = d.zone().stem_tally(&id(1)).expect("still there");
     assert_eq!(
         (t.propagated, t.silent),
-        (1, 0),
+        (2, 0),
         "a resolved observation is gone from the pending map — a later expire \
          must not charge the peer a silence it already answered"
     );

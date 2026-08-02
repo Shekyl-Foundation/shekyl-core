@@ -926,7 +926,7 @@ namespace cryptonote
     /* §46: hand every arrived blob to every zone's stem-observation watch
        BEFORE pool admission — a returned tx the pool then rejects still
        proves the successor relayed it (propagation, not admission). */
-    m_p2p->record_tx_arrivals(std::vector<blobdata>{arg.txs.begin(), arg.txs.end()});
+    m_p2p->record_tx_arrivals(std::vector<blobdata>{arg.txs.begin(), arg.txs.end()}, context.m_connection_id);
 
     /* If the txes were received over i2p/tor, the default is to "forward"
        with a randomized delay to further enhance the "white noise" behavior,
