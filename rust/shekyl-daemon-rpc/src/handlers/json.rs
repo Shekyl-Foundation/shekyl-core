@@ -187,3 +187,30 @@ json_handler!(set_limit, "/set_limit");
 json_handler!(out_peers, "/out_peers");
 json_handler!(in_peers, "/in_peers");
 json_handler!(pop_blocks, "/pop_blocks");
+
+/// `/get_stem_tallies` — per-successor relay outcome counts (§55).
+///
+/// **RESTRICTED-ONLY, and the reason belongs here rather than in the route
+/// table.** This endpoint *is* the anonymity graph: which peers this node
+/// stems to, and how each has behaved. Sharma Appendix B spends 50–100 probes
+/// per node to reconstruct exactly that, so serving it unauthenticated hands
+/// over — for free and with better fidelity — what an attacker otherwise pays
+/// for. **It is not "just counters": the peer set is the sensitive part, and
+/// the counts merely make it legible.** If anyone later proposes moving this
+/// to the unrestricted set, that is the argument to answer first.
+///
+/// Raw counts, matching the relay layer's own refusal to pre-compute a rate:
+/// the consumer of this endpoint is a human tuning `n_min`, `cut` and
+/// `cooldown`, and a rate would pick the accumulator's memory policy for
+/// them.
+pub async fn get_stem_tallies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let core = state.core.clone();
+    match tokio::task::spawn_blocking(move || core.stem_tallies())
+        .await
+        .ok()
+        .flatten()
+    {
+        Some(body) => json_ok(body),
+        None => json_dispatch_error(),
+    }
+}

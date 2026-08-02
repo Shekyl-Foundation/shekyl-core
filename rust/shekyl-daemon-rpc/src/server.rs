@@ -183,6 +183,12 @@ pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
 
     if !restricted {
         router = router
+            // §55: the anonymity graph — see the handler's note on why this
+            // must not migrate to the unrestricted set.
+            .route(
+                "/get_stem_tallies",
+                get(json::get_stem_tallies).post(json::get_stem_tallies),
+            )
             .route(
                 "/start_mining",
                 get(json::start_mining).post(json::start_mining),

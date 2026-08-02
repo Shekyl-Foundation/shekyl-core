@@ -148,6 +148,13 @@
 // (docs/design/DAEMON_RELAY_PRIVACY.md §22.2) — derive from the stated
 // anonymity-set objective, fix the family from measurement. Do not change
 // these numerals except through that derivation.
+//
+// BASE currently has NO CONSUMER: it was the derivation input for AVERAGE
+// (22 ~= 15 * 3/2) until the decoupling above replaced both with literals.
+// Kept rather than swept, because it is half of a registered open item and
+// deleting it would delete the record of the pair -- zero consumers is not
+// the same as safe to delete when a constant is a pending derivation's other
+// half. If Q-12 concludes AVERAGE alone is the parameter, BASE goes then.
 #define CRYPTONOTE_FORWARD_DELAY_BASE    15
 #define CRYPTONOTE_FORWARD_DELAY_AVERAGE 22
 
@@ -183,7 +190,6 @@
 #define P2P_FAILED_ADDR_FORGET_SECONDS                  (60*60)     //1 hour
 #define P2P_IP_BLOCKTIME                                (60*60*24)  //24 hour
 #define P2P_IP_FAILS_BEFORE_BLOCK                       10
-#define P2P_IDLE_CONNECTION_KILL_INTERVAL               (5*60) //5 minutes
 
 #define P2P_SUPPORT_FLAG_FLUFFY_BLOCKS                  0x01
 #define P2P_SUPPORT_FLAG_ZSTD_COMPRESSION               0x02

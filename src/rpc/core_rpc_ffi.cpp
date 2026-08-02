@@ -444,6 +444,17 @@ bool core_rpc_ffi_is_restricted(const core_rpc_handle* h)
     return h->rpc->is_restricted();
 }
 
+char* core_rpc_ffi_stem_tallies(core_rpc_handle* h)
+{
+    if (!h || !h->rpc) return nullptr;
+    try {
+        return strdup(h->rpc->stem_tallies_json().c_str());
+    } catch (const std::exception& e) {
+        MERROR("core_rpc_ffi_stem_tallies: " << e.what());
+        return nullptr;
+    }
+}
+
 char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
     const char* uri, const char* body_json)
 {

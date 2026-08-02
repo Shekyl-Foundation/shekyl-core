@@ -264,6 +264,9 @@ namespace nodetool
     };
 
   public:
+    //! §55: stem-outcome tallies across every zone, as one JSON array.
+    //! Transit for a Rust->Rust readout -- see net_node.inl.
+    std::string stem_tallies_json() const;
     typedef t_payload_net_handler payload_net_handler;
 
     node_server(t_payload_net_handler& payload_handler)

@@ -9458,3 +9458,77 @@ known-vs-unknown *precision gain* comparison (0.12 on lines vs 0.06 on
 4-regular at `p = 0.15`), and immediately after, the *degree trend* — unknown
 graph, precision worsens as `d` rises; known graph, *"the performance trend
 reverses"* and precision decreases monotonically as `d` rises.
+
+## 55. The telemetry readout — `/get_stem_tallies`, and a correction about which layer it belonged in
+
+**2026-08-02.** `StemWatch` accumulated **write-only**: nothing outside the
+process could read it, so *"ship reasonable and tune on telemetry"* had no
+telemetry. Closed — after two corrections about where it belonged.
+
+### 55.1 Two corrections, both from not looking
+
+**First**: I built the readout as `connection_info` fields — **73 lines of C++
+across 7 files** against 54 in Rust — for one number. Reverted on the
+rule-20 challenge.
+
+**Second, and it reverses the first's reasoning**: I justified the revert as
+*"premature, and the RPC layer is C++ anyway."* **Wrong — there is a Rust
+daemon RPC** (`shekyl-daemon-rpc`, axum 0.8, its own router). I concluded
+*C++-only* from finding `core_rpc_server.cpp` and never checking for a Rust
+one. **Same error as recording the D++ paper unverifiable while it sat on
+arXiv (§53): concluding *absent* from *did not look*.** Twice in one session,
+on different subject matter, which makes it a habit rather than an incident.
+
+### 55.2 What landed
+
+`StemWatch::snapshot()` → `Zone::stem_snapshot()` →
+`shekyl_relay_zone_stem_snapshot_json` (two-call sizing) → `notify` →
+`node_server::stem_tallies_json` (zone loop) → `core_rpc_server` →
+`core_rpc_ffi_stem_tallies` → `CoreRpc::stem_tallies` →
+`json::get_stem_tallies`, routed **inside the existing `if !restricted`
+block**.
+
+**Two properties held deliberately:**
+
+- **Raw counts, no rate.** §38.2's three open decisions stay open in the
+  readout too — a snapshot returning a *rate* would have chosen the
+  accumulator's memory policy on behalf of the tuner it exists to inform.
+- **Absent ≠ zero.** Only successors with *resolved* observations appear, so
+  an unproven peer and a perfect one do not read alike. Snapshot is sorted, so
+  diffing two shows content changes rather than `HashMap` churn.
+
+**Labelled as transit at all four hops** (Rust export, header, `notify`,
+`node_server`, Rust FFI decl): the data is Rust's and the consumer is Rust's;
+the round trip through C++ exists **only** because `net_node` owns the zone
+handles' lifetime, and it disappears with the p2p migration. **Written down so
+the next reader does not mistake scaffolding for intended structure.**
+
+**The restriction reason lives at the handler, not the route table**: this
+endpoint **is the anonymity graph** — which peers this node stems to and how
+each behaved — and Sharma Appendix B spends **50–100 probes per node** to
+reconstruct exactly that. Serving it unauthenticated hands over, free and at
+better fidelity, what an attacker otherwise pays for. **It is not "just
+counters": the peer set is the sensitive part and the counts make it legible.**
+That is the argument to answer if anyone later proposes moving it.
+
+**Known test gap, stated rather than papered over**: the gate is enforced
+*positionally* (the route sits inside the `!restricted` block) and is **not**
+asserted by a test, because lib tests cannot link `core_rpc_ffi_*` and so
+cannot build an `AppState`. A parallel path-list constant would be
+convention-theater — it cannot fire on the registration changing. The honest
+fix is an integration test that links the FFI; recorded as owed.
+
+### 55.3 The dead-code sweep, and why one of two survived
+
+- **`P2P_IDLE_CONNECTION_KILL_INTERVAL` — removed.** Definition only, zero
+  consumers, no open item. Its absence now *is* §51.1's finding: connection
+  lifetime is not code-driven. Per rule 21, keeping a constant for a policy we
+  might adopt is pre-provisioned flexibility — **if F-8's design concludes
+  rotation is needed, it returns with its consumer.**
+- **`CRYPTONOTE_FORWARD_DELAY_BASE` — kept, annotated.** Also zero consumers
+  (it was AVERAGE's derivation input, `22 ≈ 15 × 3/2`, orphaned by §22's
+  decoupling) — **but it is half of registered open item Q-12**, and deleting
+  it would delete the record of the pair. **Zero consumers is not the same as
+  safe to delete when a constant is a pending derivation's other half.** The
+  zero-consumer fact is now recorded at the site, since Q-12's derivation
+  needs it.
