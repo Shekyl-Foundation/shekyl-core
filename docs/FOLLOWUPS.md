@@ -704,6 +704,96 @@ sustainability is unaffected by the recalibration.
   the cheap consumer inherits the expensive one's cost.
   *Standing caveat carried:* the `λ` arithmetic, `SEB`, mandatory-`k`,
   and the miss-channel ruling remain unreviewed by the maintainer.
+  **AUDIT-BY-OMISSION WITHDRAWN, AND THE HOLE RE-LOCATED (2026-08-02,
+  maintainer).** *Retraction:* the commitment and the records ride the
+  same block, so the miner picks its pair list **after** learning
+  outcomes — read speculatively, commit exactly the pairs whose results
+  it likes, pad to `k` with fabricated misses. Omission is unobservable
+  because the committed set is post-hoc; fixing it needs the commitment
+  on-chain **before** the reads, a two-block protocol requiring the
+  miner to win twice — dead on arrival.
+  *The re-location, which is the real finding:* the hole is not the miss
+  record, it is **mandatory-`k` itself.** A lazy miner cannot fabricate
+  passes (they need `P`'s countersignature over a block-bound nonce);
+  its only free filler is misses. **So the mandate converts laziness
+  from silence into noise** — compelled records plus free misses means
+  every unmotivated miner poisons gap-epochs. Drop the mandate and the
+  lazy miner files nothing: a non-observation, which the three-valued
+  settlement already treats as harmless, and fabrication reverts to the
+  rare-hostile model `e^−λ` was priced for. **The mandate adopted for
+  burden-normalization is what manufactures the adversary.**
+  *The axis this exposes for the set-size pin — the INCENTIVE
+  INVERSION:* under the credit design `P` **wants** to be observed
+  (attestations are its income), while miners gain nothing from reading
+  (3.33 MB over Tor at 30 % failure, for pay that must be
+  verdict-independent and is currently zero). **Coverage is demanded by
+  the party that cannot produce it and costs the party with no reason to
+  produce it.** The mandate papered over the inversion by compulsion,
+  and the laziness analysis shows compulsion is unenforceable — "did the
+  work" is exactly the unverifiable thing.
+  *Three corners, each paying something (maintainer's framing):*
+  **(1) keep the mandate, price the laziness** — treat diligence
+  `(1 − β)` as unmodeled and size `λ_target = 3/(1 − β̂)` against a
+  pessimistic `β̂`; pass-priority contains the damage (one diligent read
+  per pair per epoch clears every fabricated miss); cost = bandwidth
+  plus a false-slash budget hostage to a behavioural parameter.
+  **(2) drop the mandate, let coverage be incentive-borne** — `P`-funded
+  challenges are not corrupt (block-bound nonce + rendezvous topology
+  force a real read); cost = dark `P`s are never observed, never miss,
+  never slash, so retention teeth die (already ruled unacceptable).
+  **(3) make misses costly (filing burn ≈ read cost)** — kills lazy
+  padding, but a truthful miner facing a dark `P` now pays to report it,
+  so real misses go under-filed and detection decays toward (2) by
+  another road. **Maintainer's read: corner 1 with a measured-not-
+  guessed `β̂`, making the pin's output `(k_cap, λ_target, β̂)` rather
+  than one integer.**
+  **THREE ADDITIONS FROM CHECKING IT (2026-08-02):**
+  **(a) `β̂` IS on-chain measurable — corner 1's hostage clause
+  dissolves.** Fabricated and transport misses both surface as
+  **conflicts**: a pass and a miss filed for the same `(P, s, E)`. The
+  pass is self-authenticating (countersignature over a block-bound
+  nonce, unforgeable); so `conflict_rate − expected_transport_rate`
+  estimates fabrication, with the transport term independently measured
+  (~30 % per attempt, TJ-2 above). **It is unevadable** — sets are
+  secret, so a padder cannot steer away from pairs others will read —
+  and the sample is large: at `λ_eff = 3`, **80.1 %** of pairs draw ≥ 2
+  reads per epoch (Poisson), i.e. ~3.3 k overlapping pairs per epoch at
+  4 096 pairs, so `β̂` converges within an epoch or two. It needs **no
+  new observable** — it falls out of the three-valued settlement's own
+  records (the observability test). Corner 1's cost therefore reads
+  "hostage to a parameter measured continuously from chain data", and
+  the reopen criterion gets data rather than judgement.
+  **(b) The knob geometry favours corner 1 more than its framing
+  admits.** The poisonable set is the GAP — epochs with no diligent read
+  — of size `e^−λ_eff`, which falls **exponentially** in bandwidth:
+  `λ_eff` 3 → 6 is 2× the reads but **20×** less gap (4.98 % → 0.25 %).
+  So "double the coverage, double the bandwidth" undersells the return:
+  the fabrication term is the CHEAP term to drive down. (Both terms are
+  exponential in their own resource — transport falls as `p^r` in retry
+  depth — which is why the false-slash budget should be spent on
+  whichever is currently binding, not split evenly.)
+  **(c) A fourth corner exists but does not close — reported rather
+  than proposed. "Contradiction-priced misses":** burn only on misses
+  **contradicted** by a pass in the same epoch. It fixes corner 3's
+  fatal flaw — a genuinely dark `P` cannot be contradicted, so truthful
+  dark-`P` reporting stays free and durably-absent detection survives —
+  and it taxes padding by strategy-cost, since a padder cannot
+  cherry-pick gap epochs under secret sets (~80 % of its fabrications
+  are contradicted at `λ_eff = 3`). **Two defects keep it a corner and
+  not an answer:** (i) it never prices the *harmful* instances —
+  gap-epoch fabrications are exactly the UNcontradicted ones — so it
+  works only as a strategy tax, not as a direct deterrent; (ii) it has
+  **no implementation vehicle**: coinbase amounts are committed at block
+  time and contradiction is known only at settlement, so there is
+  nothing to claw back; the natural carrier is pay-at-settlement, which
+  resurrects witness pay.
+  **And the pay trap, recorded because pay keeps returning:**
+  pay-per-PASS biases selection away from suspected-dark `P`s (corner
+  2's failure by another road — miners learn which `P`s answer);
+  pay-per-RECORD subsidizes lazy padding directly. Only per-record-equal
+  pay with a contradiction penalty threads between them — i.e. (c), with
+  (c)'s defects. **Ruling needed: does mandatory-`k` survive its own
+  laziness analysis?**
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
