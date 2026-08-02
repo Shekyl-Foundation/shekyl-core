@@ -9127,13 +9127,13 @@ whatever the anti-eclipse posture permits.
 **2026-08-02, maintainer. Provenance split, and it matters for how this is
 used.**
 
-> **Paper-side facts (D++ §4.5, Theorem 3, the `C(1−β)` term, `β`'s
-> semantics) are maintainer-supplied and were NOT verifiable in this session
-> — no local copy of the paper exists in the tree.** They carry the same
-> verify-at-source obligation as the Sharma calibration inputs: **the shape
-> and the derivation path may be used; no number may gate a decision until
-> the paper leg is grounded.** Everything on *our* side below is verified
-> against this document's own record and is not subject to that caveat.
+> **~~Paper-side facts are maintainer-supplied and NOT verifiable in this
+> session — no local copy exists in the tree.~~ WITHDRAWN, and the withdrawal
+> is the point: the paper is on arXiv (1805.11060) and I treated it as
+> unavailable without trying to fetch it.** All paper-side facts are now
+> **verified verbatim at §53**, which also **corrects two of them and upgrades
+> the finding**: `C` is *not* unspecified, and the paper does not merely price
+> version-checking — **it rejects it.**
 
 ### 52.1 The mapping
 
@@ -9244,3 +9244,109 @@ is the part that needs care and is not assumed here.**
 match is exact on every leg verifiable here; only the paper leg is
 ungrounded, and it is ungrounded in a direction that makes the mechanism
 *worse*, not better.
+
+## 53. §52 verified at source — and the paper's lesson is *don't build this*
+
+**2026-08-02.** §52's paper leg is now grounded against
+[arXiv:1805.11060](https://arxiv.org/abs/1805.11060) (Fanti et al.,
+*Dandelion++*, PACMPACS 2(2):29). **I had recorded it as unverifiable; it was
+one fetch away.** Three verifications, two corrections, and the finding gets
+materially stronger.
+
+### 53.1 Verified verbatim
+
+- **The warning** — *"While version checking is a natural strategy, adversarial
+  nodes can lie about their version number and/or run nodes that support
+  Dandelion++."*
+- **`β`'s semantics** — *"we assume that all spy nodes run Dandelion++, and a
+  fraction `β` of the remaining honest nodes are using Dandelion++."*
+  **Adversary always carries the attribute; honest carry it with probability
+  `β`.** Exactly as mapped.
+- **Theorem 3's bound**, and the epoch spec (*"each time a node changes epoch,
+  it selects fresh Dandelion++ relays"*) — both as stated.
+
+### 53.2 Correction 1 — `C` is given explicitly, so the number was never blocked
+
+§52.4 recorded `C` as unspecified and proposed pinning it from our ossification
+instrument. **Unnecessary — the paper defines it:**
+
+```text
+C = [1 − (p/f)(1−(1−f)^η)] · (1−(1−φ)^ñ)/(ñφ),   φ = 1−(1−1/(n−η))^η,  ñ = (1−p)n
+```
+
+Evaluated at `η = STEMS = 2`, `n = 5000`:
+
+| `p` | `β′` | `R` lower | **`R` upper** |
+| --- | --- | --- | --- |
+| 0.05 | 0.05 | 0.095 | **1.000** |
+| 0.05 | 0.20 | 0.088 | **0.992** |
+| 0.05 | 0.50 | 0.074 | 0.507 |
+| 0.10 | 0.20 | 0.172 | **0.998** |
+| 0.20 | 0.20 | 0.328 | **1.000** |
+
+**At low `β′` the recall bound is ≈ 1 even at 5 % spies.** The instrument
+proposal stands as an independent cross-check, not as the only route.
+
+> **⚠ Symbol collision, flagged before anyone substitutes:** the paper's `f`
+> is *"the fraction of all nodes that support Dandelion++"* (`= p + (1−p)β`),
+> **not** this document's `f` (the adversary's network share/reach, §6.5,
+> §50.2). Different quantities, same letter.
+
+### 53.3 Correction 2 — the paper does not price version-checking, it **rejects** it
+
+§52 read Theorem 3 as *"prices it with a `C(1−β)` cost term."* **The paper's
+own conclusion is a one-line lesson:**
+
+> **"Lesson. Use no-version-checking to construct the graph."**
+
+with the reasoning stated directly: *"when adoption is low (low `β`), any
+Dandelion++ peers are likely to be spies. Therefore, **version-checking
+actually increases the likelihood of getting deanonymized.**"* In that regime
+version-checking is **worse than plain diffusion**.
+
+**So the finding upgrades.** §12.11's exploit tier is not *"a design with a
+cost term to price."* It is **the design this protocol's own authors tested
+and rejected** — and §52.1's three depressants (25 h warm-up, `forget`-on-
+disconnect, ~12 % ambient false-cooling) mean our `β′` does not merely start
+low, it **stays** low. **We would sit permanently in the exact regime the
+paper measures recall ≈ 1.**
+
+### 53.4 What that does to `ε_explore` — the endpoints are named, and one is the paper's default
+
+**The paper's two options are our `ε` endpoints.** No-version-checking —
+*"each node `v` instead selects 2 outgoing edges uniformly from the set of all
+outgoing edges"* — **is `ε = 1`.** Version-checking is `ε = 0`. §12.11 as
+specified sits near the rejected end.
+
+> **So `ε` does not merely become derivable — it acquires a paper-endorsed
+> default of `ε = 1`, and any `ε < 1` now carries the burden of justifying
+> itself against an explicit published lesson.** That is a stronger position
+> than a minimax against a budget: the budget says *how much*; the lesson says
+> *which direction the default points*.
+
+The one thing our design has that the paper's version-checking does not is
+**exploration itself** — `ε` makes ours a convex combination of the two
+options rather than the pure rejected one. **That is the whole of our defence,
+and it is why `ε`'s derivation is now load-bearing rather than tidy.**
+
+### 53.5 Two smaller notes
+
+**Figure attribution:** the version-checking result is **Figure 10** (`p = 0.2`,
+`q = 0.2`, ~16-regular P2P graph). **Figure 3** is the separate known-graph
+precision comparison — 4-regular vs line, where *"if a 4-regular graph is
+unknown to the adversary, it has a precision very close to that of line
+graphs"* but a known graph gains only half as much. That supports the
+learnable-graph concern in §52.3, though it is a *precision-vs-known-graph*
+result rather than a degree trend; **the "degree trend reverses" phrasing is
+not what I read there and is flagged for the finding's author rather than
+asserted either way.**
+
+**The freeze rule generalises, and the general form is the useful one.**
+Retention is node-local policy and so is not itself genesis-frozen — **but it
+changes what convergence requires, and convergence is set by `q`, `STEMS` and
+epoch length, which are frozen.**
+
+> **General rule: a non-frozen mechanism carries a genesis deadline whenever
+> it constrains a frozen parameter.** Worth applying as a sweep rather than
+> kept as a property of this one item — the freeze surface is larger than the
+> list of frozen constants.
