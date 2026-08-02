@@ -546,6 +546,65 @@ sustainability is unaffected by the recalibration.
   + transferability fork (+ freshness pin `F`, natural at one epoch);
   set-size pin = `λ` with double duty (coverage AND fabrication bound);
   `(m, n)` waits on both — floor from transport, ceiling from W16.**
+  **TRANSFERABILITY FORK RESOLVED (2026-08-01, maintainer):
+  NON-TRANSFERABLE, BLOCK-BOUND — and the failure that decides it is
+  named.** *The bearer branch dies by self-crediting:* with transferable
+  attestations nothing ties the nonce to an actual challenge, so `P` can
+  be its own witness — invent a nonce, countersign locally, hand the
+  finished attestation to whoever wins the next block; mandatory
+  attestation supplies the demand side (a miner obligated to carry `k`
+  prefers pre-made attestations over 3.33 MB Tor reads — adverse
+  selection routes the channel to fabricated supply), and
+  pass-dominates-miss turns each minted pass into a shield over every
+  real miss. Composite: a `P` with its key online and nothing on disk
+  earns full credit forever and is unslashable while alive — `f = 1`
+  with NO bribe, stepping around the clearance argument, which priced
+  the bribe. *The binding:* the producer commits secret randomness `r`
+  in its coinbase; the challenge nonce for `(P, s)` is
+  `H(r ‖ P ‖ s ‖ E)`; verification recomputes the nonce from the
+  revealed commitment and checks `P`'s countersignature over it.
+  Pre-signed attestations are worthless (`P` could not have known `r`);
+  self-crediting collapses to self-mining — the f-equals-hashrate-share
+  lie, already priced and dominated. The reduction to a priced attack IS
+  the argument. *Costs already paid:* the read rides template building
+  and dies with a losing template — speculative work is what mining is;
+  per-`P` inbound stays `miners × k / pairs` (no convergent flood).
+  *Freshness sharpened:* `E` sits inside the nonce derivation, so
+  `F` = one epoch is a CONSEQUENCE — cross-epoch replay fails
+  verification arithmetic, not policy; within-epoch duplication is
+  idempotent on the one-bit ledger. *Sub-questions now well-posed:*
+  commitment residence (cheap to verify; r-grinding buys nothing — a
+  nonce only selects which bytes `P` must return, and a holder answers
+  any); the miss record inherits the binding free (a fabricated miss
+  must carry a nonce from the fabricator's own block commitment —
+  "prove it tried" made concrete).
+  **FINDING (2026-08-01, check of the open template-timing parameter):
+  epoch-only binding admits COPY-FREERIDING, which is what makes the
+  timing parameter load-bearing.** Verification recomputes nonces from
+  the REVEALED `r`, so a winning block's `(r, attestations)` are public
+  bytes; a later block in the same epoch can commit the same now-public
+  `r` and carry the same attestations — arithmetic passes, credit is
+  idempotent, but **mandatory-`k` is satisfied with zero reads**.
+  Per-epoch distinct coverage collapses from ~`blocks × k` toward ~`k`,
+  `λ` hollows, and the `e^−λ` fabrication bound reopens through the
+  floor. Parent-binding at depth 1 re-buys the unmineable-block hazard;
+  a window `D` between them would couple to `W`'s retry budget — the
+  copy attack is WHY `D` would be load-bearing.
+  **CANDIDATE (unratified): bind the nonce to the block's own coinbase
+  output key** — `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` (the key may even
+  replace `r`). The key is fixed at template time, secret until the win
+  (losing templates never publish), fresh per block by stealth
+  construction — so a copier either derives its own key (copied
+  attestations fail arithmetic) or reuses the original's key as its
+  coinbase output and **pays its whole block reward to the miner it
+  copies**. Copying becomes self-financing for the victim. Cost model
+  lands where the mandatory ruling wants it: one key reused across
+  losing templates (never published, no linkage), re-read of `k` pairs
+  only after each WON block — proportional to hashrate; no template-life
+  consensus parameter; retry budget goes fully private; the miss-record
+  binding inherits unchanged. Check before ratification: nothing else in
+  coinbase validity may constrain the output key in a way that gives a
+  copier a third option.
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
