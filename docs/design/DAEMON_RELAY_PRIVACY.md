@@ -8346,3 +8346,59 @@ convergence check — independent, cheapest); the tx-hash plumbing (§39.6's
 element-type constraint); the reverse-parity readouts — **now unblocked**,
 since §26.3 required them to run against `F′` rather than the stale baseline;
 and Unit 2 with its substrate.
+
+## 45. F-8b — the provisioning is safe only across the degree range it was measured over
+
+**2026-08-01, maintainer finding, fix landed same day.**
+
+### 45.1 The finding
+
+§44.3's worst-zone argument holds because 3250 ms is the worst case — **at
+usable degree ≥ 12.** Verified at source: a default zone gets
+`P2P_DEFAULT_CONNECTIONS_COUNT = 12` outbound (`set_max_out_peers` with
+`max == -1`, `net_node.inl:2683`), so the pin is correct **for the default
+deployment**. But `--tx-proxy <zone>,<addr>,N` sets the count directly with no
+floor, and limiting Tor outbound is common operator practice for bandwidth and
+circuit load. **Below degree 12 the real first passage exceeds the provisioned
+value** — the instrument's own slope: degree 16 → 2250 ms, degree 12 →
+3250 ms, and downward from there — **and the embargo is under-provisioned in
+the direction `params.rs` names as a privacy loss.**
+
+**This is not the case the per-zone-`F` rejection covered.** That argument
+compared zones at their real degrees and found the spread costs recovery
+latency, not privacy — true *because 3250 bounded them*. A zone below the
+measured range is not bounded by it, so the reasoning does not extend.
+
+**No `T`.** A configuration-range gap, not an adversary — the same class as
+F-8's convergence condition.
+
+### 45.2 The fix — unrepresentable, with one owner
+
+The preferred shape from the finding (floor-and-refuse) is landed:
+
+- **`MIN_PROVISIONED_OUT_PEERS: u32 = 12`** lives in `params.rs` **next to the
+  constant whose validity domain it states** — the §22 move. If a future
+  re-measure extends the instrument below degree 12, the floor moves with
+  `fluff_return_ms`, not independently of it.
+- **`shekyl_relay_zone_min_provisioned_out_peers()`** exports it through the
+  relay FFI — inside the signature gate's prefix (16 exports checked) — so C++
+  consumes the fact rather than mirroring it. One owner, no desync class.
+- **`get_proxies` refuses** any explicit count in `(0, 12)` at startup with a
+  message naming the derivation, rather than warning and running
+  under-provisioned. Omitted count (default −1 → 12) parses unchanged.
+- **Witness** (`node_server.tx_proxy_outbound_floor_refuses_underprovisioned_counts`):
+  refuses at 4 and at 11, accepts at 12 and at omitted, and pins the FFI floor
+  to the degree the measurement was taken at. **Negative control run and
+  observed to fail** (guard disabled → the refuse assertions fire).
+
+Warn-only was rejected as the weakest shape per the finding, and per the
+standing silent-compliance lens: a warning at startup is a mechanism that
+needs sustained correct operator behaviour.
+
+### 45.3 Queue
+
+F-8b's *measurement* half slots beside F-8's: mean outbound connection
+lifetime and the real degree distribution of deployed zones are both
+questions about actual connection topology, and **one measurement session
+answers both.** Then: tx-hash plumbing, reverse-parity readouts against `F′`,
+Unit 2.

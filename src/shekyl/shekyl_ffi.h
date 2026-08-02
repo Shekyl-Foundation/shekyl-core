@@ -3110,6 +3110,10 @@ RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems,
 //! `!zone::noise.empty()` — a byte payload doubling as its own enable flag.
 //! Frozen at construction, so this is a plain read. False for a null handle.
 bool shekyl_relay_zone_covert_enabled(const RelayZoneHandle* handle);
+
+//! The outbound floor the embargo provisioning assumes (F-8b): counts below
+//! this put real fluff first-passage above the provisioned value.
+std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! Free a zone. Null is a no-op; free exactly once.
 void shekyl_relay_zone_free(RelayZoneHandle* handle);
 //! A peer completed its handshake.

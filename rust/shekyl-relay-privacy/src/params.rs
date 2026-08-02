@@ -54,6 +54,21 @@
 /// the design round can move it and watch the embargo follow.
 pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 
+/// The per-zone outbound-connection floor the F-7 embargo provisioning
+/// assumes (F-8b, §45).
+///
+/// `fluff_return_ms = 3250` is the measured p90 first passage at usable
+/// degree **12** (§44). The worst-zone argument is bounded by that measured
+/// range: below degree 12 the real first passage *exceeds* the provisioned
+/// value and the embargo is under-provisioned in the direction the
+/// `fluff_return_ms` note names as a privacy loss. An operator can reach that
+/// region with `--tx-proxy <zone>,<addr>,N` for `N < 12`, so the C++ argument
+/// parser refuses such counts, consuming this constant through
+/// `shekyl_relay_zone_min_provisioned_out_peers` — one owner, no C++ mirror.
+/// If a future re-measure extends the instrument below degree 12, this floor
+/// moves with `fluff_return_ms`, not independently of it.
+pub const MIN_PROVISIONED_OUT_PEERS: u32 = 12;
+
 /// The stem-graph shape, which fixes how many outbound peers carry stem
 /// traffic in an epoch — i.e. the stem graph's out-degree.
 ///
