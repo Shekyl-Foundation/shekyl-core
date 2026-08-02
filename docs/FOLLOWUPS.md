@@ -885,6 +885,79 @@ sustainability is unaffected by the recalibration.
   rewards to pay their auditors, from emission touches a genesis-frozen
   schedule. **Needs a ruling: is pay-per-record-equal admissible under
   §8.2, and if so, what funds it?**
+  **RULED — NO WITNESS PAY, AS A LEMMA (2026-08-02, maintainer; my
+  candidate withdrawn).** The correction lands before principle: pay
+  withheld on contradiction **breaks §8.2's invariance** (`:790` — income
+  must not move with `P`'s outcome). A paid-iff-uncontradicted miss pays
+  *more when `P` fails*, which is a witness with a stake in failure —
+  and it funds the flood-to-slash pathway rather than merely tolerating
+  it (flood `P`, file uncontradicted misses, collect). Unconditional
+  equal pay subsidizes padding (the padder nets pay; the reader nets
+  pay − cost). **The lemma: every conditioning that fixes one re-opens
+  the other, because the miss is the only free record and the outcome is
+  the only discriminator. Therefore no pay — closed as a lemma, not a
+  preference**, and recorded that way so the emptying worry does not
+  relitigate it when it resurfaces. **Coverage is NORM-BORNE**
+  (default-client behaviour), and `λ_eff` — already the statistic that
+  sizes `k` — is its **tripwire**: loud failure, designed response,
+  honest label rather than a mechanism pretending to enforce.
+  **STEP-1 COMMITMENT RESIDENCE — PARAGRAPH SETTLED (2026-08-02).** `r`
+  rides **in plaintext** in the winning block's coinbase extra alongside
+  the attestation records. No hash-commitment is needed because the
+  secrecy window is **inherently pre-publication**: `r` must be secret
+  only while `P` might pre-sign, and `P`'s countersignature over
+  `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` cannot exist before the miner derived
+  the nonce — the timing is structural, not enforced. Verification is
+  one cSHAKE recomputation per record plus the hybrid signature check.
+  Grinding stays neutral: `r` selects the nonce, the nonce selects
+  nothing `P` cannot answer (whole-shard read, no leaf parameterization
+  to steer). `cb_out_key` uniqueness is the epoch-windowed rule above
+  (≤ `SEB` entries, prunable).
+  **ADDITION FROM CHECKING IT — `k_cap`'s binding constraint is CHAIN
+  GROWTH, not bandwidth.** Each attestation carries a hybrid
+  countersignature: Ed25519 (64 B) + ML-DSA-65 (`SIG_LEN` = 3 309 B,
+  FIPS 204) + framing, so a record is **≈ 3.43 KB** with its
+  `(P_id, shard, epoch)` header. Per block that is **10 KB at `k = 3`,
+  33.5 KB at 10, 100.5 KB at 30**; per year (26 epochs × `SEB`)
+  **2.7 GB / 8.9 GB / 26.7 GB** of pure signature data. Since
+  `k = λ_target · pairs / SEB`, a large pair count forces large `k` —
+  at 100 k pairs, `λ_target = 3` needs `k = 30`, i.e. ~27 GB/yr and a
+  third of a 300 KB block — so the pin's ceiling is set by **permanent
+  chain storage**, a third resource axis alongside bandwidth (reads) and
+  `W`-blocks (retries). **Mitigation to design rather than assume:**
+  attestation records are needed only until the epoch settles and the
+  claim window closes, exactly like the serve-credit ledger that
+  `prune_archival_epochs_before` already drops — so they should ride the
+  **prunable** side of the block (the lineage already separates prunable
+  tx data, `cryptonote_basic.h:505–515`), which turns the cost from
+  linear-forever into bounded. If they cannot be made prunable, `k_cap`
+  is chain-growth-bound and `λ_target` must be sized against that first.
+  **SP-T3 FLOOD-DEFENCE PIN — the coupling that makes it design, not
+  configuration (2026-08-02, maintainer).** Pin `HiddenServicePoW` **on**
+  with deliberate queue-rate/burst values plus intro-point rate limits:
+  an archiver under flood has `FLOOR` at stake, so chat-service defaults
+  are the wrong operating point. The design content: **PoW-defended
+  services convert flood from OUTAGE into LATENCY** — honest witnesses
+  still get through, slower, paying the auto-scaled PoW price. That
+  latency lands inside the response window, so **`W`'s retry budget must
+  include PoW-solve-under-attack time**, or the flood defence succeeds
+  at the Tor layer while still manufacturing misses at the consensus
+  layer — the flood-to-slash pathway surviving its own mitigation. So
+  the pin is `(pow_rate, pow_burst, intro_limits)` **plus a `W`
+  allowance derived from worst-case PoW difficulty**, measured on the
+  stressnet rig that produced the 30 % figure rather than argued.
+  *Two notes from the check:* (a) the 30 % measurement was taken with
+  **no PoW and no flood**, so it does not transfer — under PoW the
+  failure mode shifts from timeout-failure toward slow-success, which
+  may *lower* `p` while raising latency, and both the new `p` and the
+  latency distribution must be re-measured with PoW enabled (the rig is
+  reproducible: pinned Tor 0.4.9.11, `SHARD_BYTES` blob, `NEWNYM` per
+  sample); (b) the witness population is unusually well-matched to this
+  defence — onion PoW taxes access, and our witnesses are **miners**,
+  the one population holding surplus compute, while a flooder pays the
+  same tax per connection without that surplus. Caveat on (b): onion PoW
+  is Equi-X, not RandomX, so solving competes with mining rather than
+  reusing it — an operating-cost note for the pin, not a free lunch.
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes
