@@ -3115,20 +3115,21 @@ bool shekyl_relay_zone_covert_enabled(const RelayZoneHandle* handle);
 //! this put real fluff first-passage above the provisioned value.
 std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 
-//! Record `n` transaction blobs stemmed to `successor` (16-byte uuid);
-//! `source` is the arriving peer's uuid or null for local origin. The join
-//! key is derived Rust-side from the blob bytes; the observation deadline is
-//! drawn Rust-side from the adopted embargo at `now_ms`.
+//! Record `n` packed 32-byte CANONICAL tx hashes stemmed to `successor`
+//! (16-byte uuid); `source` is the arriving peer's uuid or null for local
+//! origin. Canonical, not blob-derived — blob bytes are not a stable identity
+//! across relay hops (F-9). The observation deadline is drawn Rust-side from
+//! the adopted embargo at `now_ms`.
 void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
-    const ShekylRelayBlob* blobs, std::size_t n,
+    const std::uint8_t* hashes, std::size_t n,
     const std::uint8_t* successor, const std::uint8_t* source,
     std::uint64_t now_ms);
 
-//! Record `n` arrived transaction blobs (any peer, any path). Unknown blobs
-//! are ignored; call on EVERY zone's handle, since a stem placed on one zone
-//! can return through another.
+//! Record `n` arrived canonical tx hashes (any peer, any path). Unknown
+//! hashes are ignored; call on EVERY zone's handle, since a stem placed on
+//! one zone can return through another.
 void shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
-    const ShekylRelayBlob* blobs, std::size_t n);
+    const std::uint8_t* hashes, std::size_t n);
 
 //! Stem observations still pending resolution (0 for null handle) — the
 //! liveness read a wiring witness needs.

@@ -20,7 +20,3 @@ repository.workspace = true
 # §18.1).
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 
-# The stem-watch join key (`TxId::from_blob`): a domain-separated Blake2b of
-# the relayed blob. Workspace-pinned; already in the tree via the §3.5
-# BlakeGenerator, so this adds no new supply-chain surface (rule 17).
-blake2 = { workspace = true }

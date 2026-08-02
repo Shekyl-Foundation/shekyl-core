@@ -63,34 +63,13 @@ impl TxId {
         Self(bytes)
     }
 
-    /// Derive the join key from a relayed transaction blob.
-    ///
-    /// **This is deliberately NOT the consensus transaction hash** (rule 20:
-    /// the join key is this layer's fact, so this layer derives it). The
-    /// watch only ever joins its own `stemmed` against its own `seen`, so the
-    /// sole requirement is *same bytes → same key on both paths* — which lets
-    /// C++ hand over the blobs it already holds at each call site instead of
-    /// threading a core-computed hash through three relay layers.
-    ///
-    /// Soundness of blob-identity join for this signal: an honest successor
-    /// relays the bytes unchanged, so the fluffed return matches. A successor
-    /// that *re-serialises* the transaction produces a non-matching return
-    /// and is charged a silence — the incentive runs the right way, since a
-    /// dropper's goal is to *avoid* the silence, and mangling buys it one.
-    ///
-    /// Domain-separated (rule 30) so these keys can never be confused with a
-    /// consensus hash of the same bytes.
-    #[must_use]
-    pub fn from_blob(blob: &[u8]) -> Self {
-        use blake2::digest::{Update, VariableOutput};
-        let mut h = blake2::Blake2bVar::new(32).expect("32 is a valid Blake2b output length");
-        h.update(b"SHEKYL_RELAY_STEM_WATCH_TXID_V1");
-        h.update(blob);
-        let mut out = [0u8; 32];
-        h.finalize_variable(&mut out)
-            .expect("output length matches construction");
-        Self(out)
-    }
+    // A `from_blob` constructor briefly lived here, deriving the key from
+    // blob bytes on the rule-20 argument that the join is local. Deleted at
+    // F-9 (§48): the join is local but its INPUTS are not — the stem side
+    // hashes what it sent, the arrival side what the network returned, and
+    // nothing enforces that intermediate nodes preserve encoding. The key
+    // must be the canonical transaction hash, which is computed from the
+    // parsed transaction and is what the consensus hash exists FOR.
 
     /// The underlying bytes.
     #[must_use]
