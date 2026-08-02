@@ -8912,3 +8912,104 @@ re-derive it here.
 
 **Skip-on-unparseable stands**: no canonical identity means nothing this node
 could have stemmed.
+
+## 50. F-11 retracted to an increment — and the probe harness was vacuous twice
+
+**2026-08-01.** A stem-membership oracle was proposed from `tx_pool.cpp`'s
+loop detection, then **retracted by its author on the position it requires**,
+with one check owed before filing. Both halves are recorded: the retraction
+is the finding, and the harness failure is a process finding.
+
+### 50.1 The retraction — "fire probes at many nodes" smuggles in a supernode
+
+A probe is a `NOTIFY_NEW_TRANSACTIONS`, which requires a **connection**. `T`
+can only probe nodes it is connected to, so it recovers
+`(T's peers) ∩ (stem path)`, not the upstream set:
+
+```text
+E[nodes learned] ≈ (1/q) × f
+```
+
+At `q = 0.2` (stem ≈ 5 nodes) a well-connected node at `f ≈ 0.015` yields
+**≈ 0.08 nodes per transaction — effectively nothing.** A meaningful prefix
+needs `f` large enough to be a supernode, whose budget `W3(g)`, §6.5's reach
+sweep and Q-10 **already price**.
+
+### 50.2 The owed check, run before filing rather than after
+
+The finding asked for the increment at §6.5's measured reach values —
+computable from the formula, no new instrumentation:
+
+| `f` | E[nodes/tx] | P(≥1) | P(origin in set) | passive P(origin) | ratio |
+| --- | --- | --- | --- | --- | --- |
+| 0.05 | 0.25 | 22.6 % | 5.0 % | 0.42 % | **12×** |
+| 0.10 | 0.50 | 41.0 % | 10.0 % | 0.83 % | **12×** |
+| 0.30 | 1.50 | 83.2 % | 30.0 % | 2.50 % | **12×** |
+
+*(Passive baseline: `T` must **be** the origin's nil-mapped successor —
+`f`/out-degree at 12 outbound.)*
+
+**The ratio is flat at ~12× = the out-degree**, which is the structural
+reading: the probe converts *"am I the one slot the origin chose?"* into
+*"am I connected to the origin at all?"*, and that is exactly a factor of
+out-degree. **It is a recall increment and only a recall increment** —
+precision falls to `1/|set|`, and one snapshot per transaction, since the
+first successful probe fluffs it and closes the window for everyone.
+
+**Filed as an increment on a priced capability, not a new threat.** At
+`f = 0.30` a 12× recall gain is not nothing — but a supernode at 30 % reach
+already dominates via channels §6.5 measures directly, and the increment
+scales *linearly* with the quantity that budget bounds. **The peer-identity
+discriminator is noted as the available fix if the ranking ever changes.**
+Behind the topology measurement, `F′` reverse-parity, and Unit 2.
+
+### 50.3 The harness was vacuous twice, and the second catch is the lesson
+
+**Attempt 1** (`txpool_relay_timers` fixture): a zero-fee minimal blob was
+rejected on **fee** grounds long before the branch. Three cases, all vacuous
+— *including the one that appeared to pass.*
+
+**Attempt 2** (`daemon_submit_shims`, fee-valid FCMP-shape txs): the re-send
+was rejected at the **key-image** gate, because the fixture `commit`s the tx
+first. Vacuous again — and this time the run reported *"held in stem,
+unchanged"*, which reads as a **substantive negative result**, and the
+peer-blindness test **PASSED**. Both meant nothing.
+
+> **What caught it was one added line: assert `add_tx` returned true.** The
+> branch under test sits in the `else` of `if (!ch_inp_res)`, so any rejection
+> path skips it silently. **A reachability assertion is the cheapest possible
+> guard against vacuity-by-input, and it belongs in the first draft, not the
+> third.**
+
+Tests kept as `DISABLED_` with the blocker recorded at the site rather than
+deleted or left green. **What a valid harness needs**: deliver the tx to a
+pool holding it in stem state *without* having inserted its key images from a
+local commit — seed at the DB level as `txpool_relay_timers` does, while
+supplying a tx that passes `check_tx_inputs`. Neither existing fixture does
+both.
+
+**One structural fact is not in question and stands independent of the
+harness**: `tx_memory_pool::add_tx` takes **no peer identity**, and
+`add_new_tx`'s short-circuit uses `relay_category::legacy`
+(= `broadcasted` + `none`), which **excludes stem** — so a re-sent stem-held
+tx *does* reach `add_tx` in production, and no identity-based discriminator
+can exist at the decision site because the information is not a parameter
+there. What remains unexecuted is only whether it clears the key-image and
+input gates to reach the promotion.
+
+### 50.4 The pattern, recorded because it is the session's most reusable output
+
+Four findings this session named a capability without pricing the **position**
+it requires: restart induction, selective non-propagation, the forensic
+reader, and this. **Each survived contact with *"who is this, and what did
+they have to pay?"* only in a much smaller form.**
+
+> **The check that would have caught all four: before describing what `T`
+> does, state what `T` had to buy to be in a position to do it.** Run *before*
+> building the argument, it is scoping; run after, it arrives as a retraction.
+
+**This generalises the existing rule.** `name-t-and-its-channel` requires
+naming *who* `T` is and *how* it obtains each observable. **It does not
+require pricing `T`'s position** — and position is where all four failed. The
+sharpened form: **name `T`, name the channel, and name the position — the
+position first, because it is the one that voids the other two.**
