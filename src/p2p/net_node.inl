@@ -58,6 +58,7 @@
 #include "storages/levin_abstract_invoke2.h"
 #include "net/levin_base.h"
 #include "cryptonote_config.h"
+#include "shekyl/shekyl_ffi.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "net/parse.h"
 
@@ -605,7 +606,6 @@ namespace nodetool
       return false;
 
 
-    epee::byte_slice noise = nullptr;
     auto proxies = get_proxies(vm);
     if (!proxies)
       return false;
@@ -626,18 +626,12 @@ namespace nodetool
       else
         m_payload_handler.set_max_out_peers(proxy.zone, proxy.max_connections);
 
-      epee::byte_slice this_noise = nullptr;
-      if (proxy.noise)
-      {
-        static_assert(sizeof(epee::levin::bucket_head2) < CRYPTONOTE_NOISE_BYTES, "noise bytes too small");
-        if (noise.empty())
-          noise = epee::levin::make_noise_notify(CRYPTONOTE_NOISE_BYTES);
-
-        this_noise = noise.clone();
-      }
-
+      // No covert/"noise" payload is wired here — the configuration-B
+      // deletion removed it from configuration (see the `disable_noise` note
+      // in net_node.cpp). The levin machinery behind `make_noise_notify`
+      // stays as Q-11 Unit 2's substrate.
       zone.m_notifier = cryptonote::levin::notify{
-        zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), std::move(this_noise), proxy.zone, pad_txs, m_payload_handler.get_core()
+        zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), nullptr, proxy.zone, pad_txs, m_payload_handler.get_core()
       };
     }
 
@@ -2684,6 +2678,25 @@ namespace nodetool
       zone.m_config.m_net_config.max_out_connection_count = P2P_DEFAULT_CONNECTIONS_COUNT;
       return true;
     }
+    // F-8b: the embargo constant is derived from a fluff first passage
+    // measured at outbound degree `shekyl_relay_zone_min_provisioned_out_peers()`.
+    // A zone capped below that degree fluffs slower than the derivation
+    // assumes, so the embargo is under-provisioned in the privacy-losing
+    // direction. This is the one place every zone's outbound cap is set —
+    // public (`--out-peers`) and anonymity (`--tx-proxy`, whose parser also
+    // refuses with a flag-specific message) — so the floor is enforced here
+    // rather than only at one parser. A cap of 0 stays legal: it stops
+    // outbound relay entirely, which is loud (liveness-visible), unlike a
+    // quietly degraded fluff degree.
+    const int64_t out_floor = shekyl_relay_zone_min_provisioned_out_peers();
+    if (0 < max && max < out_floor)
+    {
+      MERROR("Outbound connection cap " << max << " is below the floor of "
+          << out_floor << " that the relay embargo derivation assumes (F-8b); "
+          "refusing to start under-provisioned. Omit the option for the default ("
+          << P2P_DEFAULT_CONNECTIONS_COUNT << ") or give a value >= " << out_floor << ".");
+      return false;
+    }
     zone.m_config.m_net_config.max_out_connection_count = max;
     return true;
   }
@@ -2698,6 +2711,19 @@ namespace nodetool
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::change_max_out_public_peers(size_t count)
   {
+    // Same F-8b floor as set_max_out_peers, on the runtime path (`out_peers`
+    // console command / RPC) that no startup check can see. The daemon is
+    // already running here, so the under-floor request is clamped loudly
+    // rather than refused; 0 stays legal (see set_max_out_peers).
+    const size_t out_floor =
+        static_cast<size_t>(shekyl_relay_zone_min_provisioned_out_peers());
+    if (0 < count && count < out_floor)
+    {
+      MWARNING("out_peers " << count << " is below the floor of " << out_floor
+          << " that the relay embargo derivation assumes (F-8b); clamping to "
+          << out_floor << ".");
+      count = out_floor;
+    }
     auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
     if (public_zone != m_network_zones.end())
     {
