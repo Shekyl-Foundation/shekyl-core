@@ -8721,11 +8721,15 @@ same key on both paths*, and **Rust derives it from the blob**
 (`TxId::from_blob`: domain-separated Blake2b, `SHEKYL_RELAY_STEM_WATCH_TXID_V1`).
 C++ then hands over only blobs it already holds at each call site.
 
-**Soundness of blob-identity join for this signal**: an honest successor
+~~**Soundness of blob-identity join for this signal**: an honest successor
 relays bytes unchanged, so the return matches. A successor that re-serialises
 produces a non-matching return and is charged a **silence** — the incentive
-runs the right way, since a dropper's goal is to avoid the silence and
-mangling buys it one.
+runs the right way.~~ **Refuted at F-9 (§48): the incentive argument covers
+one hop of a multi-hop return path. A node three hops downstream has no
+observation charged to it and no incentive either way — its re-serialisation
+charges O's honest successor. And nothing enforces encoding preservation at
+all (`parse_and_validate_tx_from_blob` does no canonicality round-trip).
+The join key is now the canonical transaction hash.**
 
 ### 47.2 What landed, and where the two definitions bind
 
@@ -8749,10 +8753,12 @@ mangling buys it one.
 
 ### 47.3 What this closes and what it opens
 
-**Closes §33.2**: the specified mechanism read an oracle wired to nothing;
-the oracle now has a producer, driven by the same poll clock as every other
-relay decision, with the three §12.11 parameters (memory, `(n_min, cut)`,
-persistence) still deliberately open in the type.
+**Closes §33.2** *(completed at §48 — as first landed, the join key was
+blob-derived and unstable across relay hops (F-9); §33.2 closes with the
+canonical-hash key, same wiring)*: the specified mechanism read an oracle
+wired to nothing; the oracle now has a producer, driven by the same poll
+clock as every other relay decision, with the three §12.11 parameters
+(memory, `(n_min, cut)`, persistence) still deliberately open in the type.
 
 **Opens the consumer question on a measured footing**: the watch accumulates
 from genesis, so the Q-10.2 envelope (`obs ≈ 1500·r`) and the §36/§37 ladder
@@ -8762,6 +8768,80 @@ telemetry rather than from Monero-analogue envelopes.
 
 **Remaining queue, unchanged**: the topology measurement session (F-8's
 lifetime + F-8b's degree distribution), reverse-parity against `F′`, Unit 2.
+
+## 48. F-9 — blob bytes are not a stable transaction identity, and the join key is now the canonical hash
+
+**2026-08-01, maintainer finding on §47, fix landed same day.** `from_blob`
+was cleanly constructed and its premise was wrong.
+
+### 48.1 The finding
+
+The rule-20 argument said: the join never leaves this layer, so the only
+requirement is *same bytes → same key on both paths*. **The join is local —
+the inputs are not.** The stem side hashes what `O` sent; the arrival side
+hashes what the network returned, after arbitrary intermediate hops. Nothing
+requires those bytes to match: `parse_and_validate_tx_from_blob` performs
+**no canonicality round-trip**, so a valid-but-byte-variant encoding parses
+fine, and because the consensus hash is computed from the *parsed* object,
+**the network treats both encodings as the same transaction while
+`TxId::from_blob` sees two.**
+
+**T = any relaying node, anywhere.** Capability: emit a valid byte-variant
+encoding. Cost: **zero** — it must serialize anyway. **Every adversary the
+§36 ladder was calibrated against had to win C1 first; this one needs no
+position at all.** Effect: silences charged to honest successors
+network-wide → false cooldowns → pool shrinkage → part C's self-inflicted
+eclipse. **And it lands on the parameter §37.1 named dominant**: it inflates
+the ambient failure rate at zero cost, widening the patient dropper's free
+cover for every other adversary simultaneously.
+
+**It may also fire with no adversary**: implementation, version, or pruning
+variance producing byte-variant encodings would raise the silence rate
+ambiently — indistinguishable from real background failure, which is
+**exactly the measurement the ladder calibrates against.**
+
+### 48.2 The incentive note covered one hop of a multi-hop path
+
+§47.1's argument (a re-serialising successor is charged a silence, so
+mangling buys it one) was **sound for the successor and only the successor**.
+The return path is several hops; a node three hops downstream has no
+observation charged to it and no incentive either way — **its
+re-serialisation charges `O`'s honest successor.** Struck at the site.
+
+### 48.3 The fix — canonical hashes, parsed at the call sites
+
+- `record_stem` / `record_arrival` take **packed 32-byte canonical
+  transaction hashes** (single array — no pairing, no transposition; the
+  blobs never needed to cross for observation at all, so `ShekylRelayBlob`
+  stays two words and the fluff path is untouched).
+- **Both C++ sites parse locally** (`canonical_tx_hashes`):
+  `parse_and_validate_tx_from_blob` at the stem xmit and in the arrival
+  functor. One premise correction from the finding, verified at source:
+  *neither* site holds the canonical hash at its layer —
+  `relay_txpool_transactions`' `(hash, blob, method)` tuples live upstream of
+  `send_txs` — but `core_->on_transactions_relayed` parses these same blobs
+  adjacently anyway, and local parsing preserves §47's zero-signature-change
+  property. A blob that does not parse has no canonical identity and is
+  skipped: it cannot be a transaction this node stemmed.
+- **`from_blob` is deleted**, with the lesson left at the type: the join is
+  local but its inputs are not. The `blake2` dependency went with it.
+- Witness re-run against canonical hashes with **parseable transactions**
+  (the harness's junk blobs would now correctly record nothing); **both
+  negative controls re-run and observed to fail.**
+
+*(On "why Blake2b rather than canonical cSHAKE256": availability — it was
+already workspace-pinned — not a policy choice. Moot by deletion; the join
+key is now the consensus hash itself.)*
+
+### 48.4 The revised rule-20 axis, recorded because it will recur
+
+Rule 20 was applied on *"is this key compared with anything external?"* **The
+load-bearing axis is: do all parties who must agree on the key derive it from
+the same input?** Here one side hashed what it sent and the other what the
+network returned. **The canonical tx hash exists precisely because blob bytes
+are not a stable identity — deriving locally re-introduced the dependency the
+canonical hash was designed to remove.** A locally-derived key is only as
+local as its inputs.
 
 ## 50. F-11 retracted to an increment — and the probe harness was vacuous twice
 

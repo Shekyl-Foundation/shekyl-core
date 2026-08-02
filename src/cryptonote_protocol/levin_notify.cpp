@@ -61,6 +61,7 @@
 #include "common/expect.h"
 #include "common/varint.h"
 #include "cryptonote_config.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "crypto/crypto.h"
 #include "cryptonote_basic/connection_context.h"
 #include "cryptonote_core/i_core_events.h"
@@ -119,22 +120,41 @@ namespace levin
     static_assert(sizeof(boost::uuids::uuid) == 16, "connection ids cross the relay FFI as 16 raw bytes");
 
     //! \return `id` as the 16 raw bytes the relay FFI reads.
-    //! §46: hand the stemmed blobs to the zone's observation watch. The join
-    //! key and the deadline are both derived Rust-side; `source` is null for
-    //! locally-originated (nil uuid), matching `in_mapping_[nil]`.
+    //! §46/§48: canonical tx hashes for the observation watch. Parsed here
+    //! rather than blob-hashed, because blob bytes are not a stable identity
+    //! across relay hops (F-9) — the canonical hash is computed from the
+    //! parsed transaction and is the one identity every hop preserves. A blob
+    //! that does not parse has no canonical identity and is skipped: it
+    //! cannot be a transaction this node stemmed.
+    std::vector<crypto::hash> canonical_tx_hashes(const std::vector<cryptonote::blobdata>& txs)
+    {
+      std::vector<crypto::hash> hashes{};
+      hashes.reserve(txs.size());
+      for (const auto& blob : txs)
+      {
+        cryptonote::transaction tx{};
+        crypto::hash hash{};
+        if (cryptonote::parse_and_validate_tx_from_blob(blob, tx, hash))
+          hashes.push_back(hash);
+      }
+      return hashes;
+    }
+
+    //! §46: hand the stemmed txs to the zone's observation watch. The
+    //! deadline is drawn Rust-side; `source` is null for locally-originated
+    //! (nil uuid), matching `in_mapping_[nil]`.
     void record_stem_observation(
       RelayZoneHandle* const relay,
       const std::vector<cryptonote::blobdata>& txs,
       const boost::uuids::uuid& destination,
-      const boost::uuids::uuid& source) noexcept
+      const boost::uuids::uuid& source)
     {
-      std::vector<ShekylRelayBlob> spans{};
-      spans.reserve(txs.size());
-      for (const auto& tx : txs)
-        spans.push_back(ShekylRelayBlob{reinterpret_cast<const std::uint8_t*>(tx.data()), tx.size()});
+      const std::vector<crypto::hash> hashes = canonical_tx_hashes(txs);
+      if (hashes.empty())
+        return;
       const bool local = source.is_nil();
       shekyl_relay_zone_record_stem(
-        relay, spans.data(), spans.size(),
+        relay, reinterpret_cast<const std::uint8_t*>(hashes.data()), hashes.size(),
         reinterpret_cast<const std::uint8_t*>(std::addressof(destination)),
         local ? nullptr : reinterpret_cast<const std::uint8_t*>(std::addressof(source)),
         now_ms()
@@ -1076,11 +1096,11 @@ namespace levin
        every other handle call rather than racing them. */
     boost::asio::dispatch(zone_->strand, [zone = zone_, txs = std::move(txs)] ()
     {
-      std::vector<ShekylRelayBlob> spans{};
-      spans.reserve(txs->size());
-      for (const auto& tx : *txs)
-        spans.push_back(ShekylRelayBlob{reinterpret_cast<const std::uint8_t*>(tx.data()), tx.size()});
-      shekyl_relay_zone_record_arrival(zone->relay.get(), spans.data(), spans.size());
+      const std::vector<crypto::hash> hashes = canonical_tx_hashes(*txs);
+      if (hashes.empty())
+        return;
+      shekyl_relay_zone_record_arrival(
+        zone->relay.get(), reinterpret_cast<const std::uint8_t*>(hashes.data()), hashes.size());
     });
   }
 

@@ -4247,7 +4247,6 @@ dependencies = [
 name = "shekyl-relay"
 version = "3.1.0"
 dependencies = [
- "blake2",
  "shekyl-relay-privacy",
 ]
 

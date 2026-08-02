@@ -2633,9 +2633,17 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
     notifier.new_out_connection();
     io_service_.poll();
 
+    /* F-9: the watch keys on CANONICAL tx hashes, parsed at the call sites —
+       so unlike the other tests in this file, the blobs must parse. Two
+       minimal transactions, distinguished by unlock_time. */
     std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
+    {
+        cryptonote::transaction tx{};
+        tx.unlock_time = 1;
+        txs[0] = cryptonote::t_serializable_object_to_blob(tx);
+        tx.unlock_time = 2;
+        txs[1] = cryptonote::t_serializable_object_to_blob(tx);
+    }
 
     ASSERT_EQ(0u, notifier.stem_in_flight());
 
