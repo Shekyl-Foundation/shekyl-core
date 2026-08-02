@@ -8537,3 +8537,77 @@ naming *who* `T` is and *how* it obtains each observable. **It does not
 require pricing `T`'s position** — and position is where all four failed. The
 sharpened form: **name `T`, name the channel, and name the position — the
 position first, because it is the one that voids the other two.**
+
+## 51. The measurement queue is empty, and that is the correct state
+
+**2026-08-02, maintainer correction.** A "topology measurement session" was
+queued to answer F-8 and F-8b's empirical halves. **It is dissolved — neither
+was ever going to be answered by measurement, and the proposal to measure
+reached for the wrong population.**
+
+### 51.1 F-8 is a design question, not a measurement
+
+**Verified at source:** `P2P_IDLE_CONNECTION_KILL_INTERVAL` has **only its
+definition** in `cryptonote_config.h` and **zero consumers**; there is no
+rotation, recycle, or connection-age schedule anywhere in `net_node.inl`.
+Outbound connections drop on error or misbehaviour, not on a clock.
+
+**So connection lifetime is not code-driven — but it is also not a fact to
+discover, because the p2p layer is ours and pre-genesis.** The question is
+not *"how long do connections last?"* but **"what lifetime does §12.11
+require, and does the anti-eclipse posture permit it?"** That is a design
+question, and it goes to design.
+
+**F-8b's empirical half was already unmeasurable pre-genesis** — there is no
+population to measure a degree distribution over. **The §45 floor is the
+answer until there is one.**
+
+### 51.2 The proposal to measure another network was the `peers = 8` error, a third time
+
+The queued session would have measured a *different network's* connection
+lifetimes as a proxy. **That is the same defect as `peers = 8` (§40.1's
+provenance note) and `time_between_hop_ms = 175` (§21): a number with a
+provenance instead of a derivation** — and this session had already caught
+both.
+
+> **The shape: a formula with an empty variable invites reaching for the
+> nearest population to fill it.** The reach feels like rigour because the
+> number arrives with a citation. **Check which one you are producing before
+> going to find the number, not after.**
+
+### 51.3 `obs ≈ 1500·r` has no unknown — it has a *free parameter*
+
+**This is the reframing that dissolves the queue.** The formula's inputs are
+set **by us, at genesis**: block time, `q`, `STEMS`, epoch length, and the
+connection-management policy that determines how long a peer relationship
+lasts.
+
+> **§12.11's viability is not a fact about the world waiting to be
+> discovered. It is a constraint on our own parameter choices:** pick them so
+> warm-up lands inside the connection lifetime our p2p policy produces — or
+> make **retention** remove the dependency.
+
+**Consequence (mine): that makes §12.11's viability freeze-sensitive, and it
+was not listed as such.** The parameters it constrains — block time, `q`,
+`STEMS`, epoch length — are genesis-frozen, so *"can §12.11 converge?"* must
+be answered **before** genesis or it becomes a coordinated upgrade. It joins
+staking default-on in that bucket.
+
+**Second consequence (mine): this reorders the remaining three.** Retention
+does not merely *substitute* for a short connection lifetime — it
+**decouples §12.11 from p2p connection policy entirely**, since a tally that
+survives disconnect stops caring how long connections last. **So the
+retention/seam decision comes first: if retention lands, F-8's design form is
+moot.** If it does not, F-8's design form inherits a hard constraint from
+whatever the anti-eclipse posture permits.
+
+### 51.4 The queue
+
+**No measurement session.** Four items, all ours to derive:
+
+1. **The retention / durable-peer-key seam decision** (§39.4) — first,
+   because it determines whether (2) needs answering at all.
+2. **F-8's design form** — what lifetime §12.11 requires against what
+   anti-eclipse permits.
+3. **`F′` reverse-parity readouts** (§26.3) — unblocked since §44.
+4. **Q-11 Unit 2** — shape, on the (b) leg, with §42's proposal as input.
