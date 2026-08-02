@@ -60,6 +60,30 @@ const A1_RAMP_YEARS: u64 = 2;
 /// spanning the [`crate::escalation::KNEE_BAND`].
 const ESCALATION_PREVIEW_N: [u64; 5] = [0, 5_000, 25_000, 100_000, 250_000];
 
+/// False-slash budget the `(m, n)` region is drawn against, per ARCHIVER (not
+/// per pair) over a bond life — the axis an operator experiences, since every
+/// held pair is independently exposed.
+///
+/// **Provisional and reviewable, not a pin:** an honest archiver should face
+/// well under a percent lifetime chance of being slashed for weather it did
+/// not cause. Sized here so the region has a boundary to draw; the value is a
+/// maintainer input, and the sweep reports margins so a different target can
+/// be read off the same table.
+const MN_FALSE_SLASH_TARGET: f64 = 1e-3;
+
+/// W16 ceiling operand: the fraction of observations a placing degrader may
+/// ride free. **Input, not a derivation** — its real value comes from the
+/// crisis-price degrade economics (`E[slash]` vs fiat opex at the pinned ×0.25
+/// multiplier). The shipped `(11, 13)` sits at `10/13 ≈ 0.77`, so a bound
+/// below that would exclude the shipped pin and is exactly the question W16
+/// has to answer.
+const MN_FREE_RIDE_BOUND: f64 = 0.80;
+
+/// `k_cap` from the step-2 pin (band 4–9 off the 1–2 Mbit/s preferred read
+/// rate); the mid-band value is used so the cap-delivered coverage table shows
+/// where the knee actually falls.
+const MN_K_CAP: f64 = 6.0;
+
 /// One sampled year of a scenario's burden trajectory. Storage cost is reported
 /// across the full DQ-2B Kryder band at the base price; the `SKL/fiat`
 /// conversion is an arm concern (the burden is fiat-denominated here).
@@ -1378,6 +1402,21 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
         out,
         rewards.median_per_epoch_skl,
         rewards.max_per_epoch_skl,
+    )?;
+
+    // (m, n) feasibility. Targets are INPUTS, not numbers this arm invents:
+    // the false-slash target is an operator-facing risk budget and the
+    // free-ride bound comes from W16's crisis-price degrade economics. Both
+    // are stated here so the region is reviewable before the rig re-run
+    // replaces the stand-in `p`.
+    crate::mn_feasibility::mn_feasibility_report(
+        out,
+        &crate::mn_feasibility::default_model(),
+        crate::mn_feasibility::BOND_LIFE_EPOCHS,
+        MN_FALSE_SLASH_TARGET,
+        MN_FREE_RIDE_BOUND,
+        MN_K_CAP,
+        shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS as f64,
     )?;
 
     let report = Stage2Report {

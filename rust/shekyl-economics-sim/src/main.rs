@@ -7,6 +7,7 @@ mod cartel;
 mod distribution;
 mod engine;
 mod escalation;
+mod mn_feasibility;
 mod population;
 mod proxy;
 mod redistribution;
