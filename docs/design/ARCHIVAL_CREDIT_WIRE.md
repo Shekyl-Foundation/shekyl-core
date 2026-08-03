@@ -252,13 +252,53 @@ records into the three-valued settlement:
 ```
 
 **Pass-priority** is the rule (any authenticated pass dominates any number of
-misses — the fabrication-containment property). Two hazards to carry from the
-rulings: (a) the miss record must commit to the challenge nonce or a fabricator
-need not even construct a plausible attempt; (b) the **prune path must land on
-non-observation, not miss** — the const-assert at `failure_window.rs:178–184`
-currently guards "a pruned bit reads as a MISS", and under three-valued
-settlement a pruned epoch has a correct value to decay to (non-observation),
-which is the one-line credit-wire hazard the miss-fact ruling flagged.
+misses — the fabrication-containment property).
+
+**The admission ↔ settlement seam (the invariant §4 is built around).**
+`attestation_root` is **mined over** — it enters `get_block_hashing_blob` via the
+tx tree, so the producer commits its attestation set at *mining* time
+(unforgeable after the fact; `get_block_longhash` runs the PoW over it). That
+fixes two lifecycle points on the same records:
+
+- **Admission (block validation, per-block, PRE-prune).** Recompute
+  `attestation_root` over the side-table signatures and check it equals the
+  stored block field; for each **pass** recompute the nonce from
+  `r ‖ cb_out_key ‖ P ‖ s ‖ E` and verify `P`'s signature; require **miss**
+  records carry none; check each `kind` bit matches signature-presence; run the
+  coinbase-output-key uniqueness check. A malformed set invalidates the *block*;
+  it touches signatures + `r` (present pre-prune) and **never touches settlement
+  state**.
+- **Settlement (slash-deadline scan, per-epoch, `MAX_CLAIM_AGE_W` later,
+  POST-prune).** Fold the **kept headers only** — `p_id, shard_id, E, kind` — into
+  `serve_credit_bit` per `(P, s)` per epoch, pass-priority. The signatures and
+  `r` are gone by construction; this path must never re-verify a signature or
+  re-derive a nonce.
+
+**`r` prunes with the signatures — verified, not assumed.** The nonce's only
+consumer is admission: settlement (`r_market_count`, `scarcity_micro`) and claims
+(`emission_verify`) read the `serve_credit` **bit**, and the C++ slash scan
+operates on `serve_credit_bit` — none derive a challenge or nonce. So `r` lives
+in the **prunable side table** (with the signatures), *not* the coinbase
+`tx_extra`, and the coinbase extra holds only the kept per-record headers. (The
+anti-copy defence is unaffected: it binds `cb_out_key`, which is a kept coinbase
+output, not `r`.)
+
+**Make the seam a type, not a discipline.** The settlement fold's input type is
+the kept header alone (a `BaselineObservation`-shaped struct carrying `kind`), so
+the scan is *structurally incapable* of reaching a signature, an `r`, or a nonce
+— the make-bad-states-unrepresentable version of "settlement must not touch
+pruned data." A future maintainer cannot accidentally add a signature check at
+settlement because the type has no signature to reach.
+
+Two hazards from the rulings, resolved under shape 4: (a) the earlier "miss must
+commit to the challenge nonce" concern is **subsumed** — a miss record is a
+`kind = miss` header in the coinbase `tx_extra`, which is mined over (committed
+by PoW via the coinbase tx-hash), so it is the producer's block-bound assertion
+without needing a stored nonce; pass-priority and the `e^−λ` bound contain
+fabricated misses. (b) The **prune path must land on non-observation, not miss** —
+the const-assert at `failure_window.rs:178–184` currently guards "a pruned bit
+reads as a MISS", and under three-valued settlement a pruned epoch decays to
+non-observation (the one-line credit-wire hazard the miss-fact ruling flagged).
 
 ---
 
