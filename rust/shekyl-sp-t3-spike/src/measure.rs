@@ -237,6 +237,56 @@ fn nearest_rank(sorted: &[Duration], p: u8) -> Option<Duration> {
     Some(sorted[idx])
 }
 
+/// A within-arm warm-up check: median success latency of the arm's **first**
+/// quarter against its **last** quarter.
+///
+/// # Why this exists — the cold arm might not be cold
+///
+/// The cold/warm split rests on distinct SOCKS usernames getting distinct
+/// circuits (`IsolateSOCKSAuth`), which controls the **client** side. It does
+/// *not* control the **service** side: a client that has already fetched a
+/// persona's descriptor may have it cached, and tor may reuse service-side
+/// rendezvous machinery across successive fetches to the *same* persona. The
+/// cold arm varies the client id but hits one persona throughout, so fetch #150
+/// can be paying a materially smaller setup cost than fetch #1 while both are
+/// labelled "cold".
+///
+/// **The bias is directional and unsafe.** If later cold fetches are faster, the
+/// arm's tail is optimistic, which pushes `D*` *up* — handing TJ-C a more
+/// generous deadline than reality supports. A consensus safety margin must not
+/// be derived from a distribution that quietly improved as it was measured.
+///
+/// # Why it returns two numbers and not an ordering
+///
+/// §6.4 forbids retaining per-request ordering, so this is computed **in memory
+/// during the run** and only the two medians are reported. That is enough to
+/// answer "did it drift?" without persisting anything that could place a fetch
+/// in a sequence.
+///
+/// Returns `None` when either quarter has no successes to compare.
+#[must_use]
+pub fn warmup_drift(observations: &[Observation]) -> Option<(Duration, Duration)> {
+    // A quarter of the arm at each end; below 8 observations the quarters are too
+    // small for the comparison to mean anything, so it is declined rather than
+    // reported as noise.
+    if observations.len() < 8 {
+        return None;
+    }
+    let q = observations.len() / 4;
+    let median_of = |slice: &[Observation]| -> Option<Duration> {
+        let mut v: Vec<Duration> = slice
+            .iter()
+            .filter(|o| o.is_success())
+            .map(|o| o.elapsed)
+            .collect();
+        v.sort_unstable();
+        nearest_rank(&v, 50)
+    };
+    let first = median_of(&observations[..q])?;
+    let last = median_of(&observations[observations.len() - q..])?;
+    Some((first, last))
+}
+
 /// Summarize one arm.
 #[must_use]
 pub fn summarize(observations: &[Observation]) -> Summary {
@@ -379,6 +429,44 @@ mod tests {
         assert_eq!(nearest_rank(&sorted, 90), Some(secs(9)));
         assert_eq!(nearest_rank(&sorted, 99), Some(secs(10)));
         assert_eq!(nearest_rank(&[], 50), None);
+    }
+
+    #[test]
+    fn warmup_drift_detects_an_arm_that_got_faster_as_it_ran() {
+        // The unsafe case: a "cold" arm whose later fetches are systematically
+        // faster because descriptor/rendezvous state warmed. Left undetected this
+        // makes the tail optimistic and pushes D* up.
+        let mut v: Vec<u64> = vec![40; 10]; // first quarter slow
+        v.extend(vec![20; 20]); // middle
+        v.extend(vec![5; 10]); // last quarter fast
+        let (first, last) = warmup_drift(&oks(&v)).expect("both quarters have successes");
+        assert!(
+            first > last,
+            "a warming arm must show first-quarter median above last-quarter"
+        );
+        assert_eq!(first, secs(40));
+        assert_eq!(last, secs(5));
+    }
+
+    #[test]
+    fn warmup_drift_is_flat_for_a_genuinely_cold_arm() {
+        // The control: a stationary arm must not read as drifting, or the check
+        // would cry wolf on every run and get ignored.
+        let obs = oks(&[10, 12, 9, 11, 10, 13, 9, 10, 11, 12, 10, 9, 11, 10, 12, 10]);
+        let (first, last) = warmup_drift(&obs).expect("both quarters have successes");
+        let delta = first.abs_diff(last);
+        assert!(delta < secs(4), "stationary arm drifted by {delta:?}");
+    }
+
+    #[test]
+    fn warmup_drift_declines_when_there_is_nothing_to_compare() {
+        // Too few observations, and an arm whose quarters hold no successes: both
+        // decline rather than reporting a meaningless number.
+        assert_eq!(warmup_drift(&oks(&[1, 2, 3])), None);
+        let all_failed: Vec<Observation> = (0..16)
+            .map(|_| Observation::failure(secs(1), FailureKind::Circuit))
+            .collect();
+        assert_eq!(warmup_drift(&all_failed), None);
     }
 
     #[test]

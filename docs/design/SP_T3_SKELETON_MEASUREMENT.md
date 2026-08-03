@@ -412,14 +412,36 @@ SHEKYL_SPIKE_HOURS=24 \
 | 2 personas concurrent | §5.2 contention datum | 100 pairs |
 | Soak, ≥ 24 h | Dispersion is time-varying; a one-hour sample understates the tail | continuous |
 
-**On `N`.** The gate turns on a **10 % tail**, so the p90 needs a usable
-confidence interval. At `N = 200` the binomial standard error on a 0.10 tail
-probability is `√(0.1·0.9/200) ≈ 0.021` — so a measured `q̂ = 0.10` carries a
-95 % CI of roughly `[0.06, 0.14]`, which **straddles `q_risk* = 0.1011`**. That
-is the honest reading: `N = 200` distinguishes 0.05 from 0.15, but it does *not*
-resolve 0.10 from 0.1011. An `N` of 30 — the charter's example — would not
-characterise a decile at all. Any verdict that depends on the third decimal place
-of `q` needs an order of magnitude more samples and should say so.
+**On `N`, and on what more `N` can and cannot buy.** The gate turns on a **10 %
+tail**, so the p90 needs a usable confidence interval. At `N = 200` the binomial
+standard error on a 0.10 tail probability is `√(0.1·0.9/200) ≈ 0.021` — a
+measured `q̂ = 0.10` carries a 95 % CI of roughly `[0.06, 0.14]`, which
+**straddles `q_risk* = 0.1011`**. An `N` of 30 — the charter's example — would
+not characterise a decile at all.
+
+**Following that arithmetic through changes what the soak is for.** The soak
+paces a cold fetch every ~30 s plus the fetch itself, so 24 h yields on the order
+of 1 000–1 400 observations. At `N = 1 200` the standard error is `≈ 0.0087` and
+the CI is about `[0.083, 0.117]` — **still straddling 0.1011.** No single-vantage
+run of feasible length resolves `q` to the third decimal place.
+
+That is not a defect in the plan; it is the reason the deliverable is `D*` rather
+than `q̂`. **`D*` does not require resolving `q` at 0.1011** — it requires the
+*latency distribution* characterised well enough to locate where `q` crosses
+~0.10, which is a question about the shape of the tail, not about the third
+decimal of a single probability. So:
+
+- **What more `N` buys:** a tighter estimate of the tail's *location*.
+- **What more `N` does not buy:** a verdict of the form "`q` is 0.1011 ± ε".
+- **What the ≥ 24 h duration buys, and nothing else can:** coverage of **diurnal
+  variation**. §8.3 names circuit-latency *dispersion* as the load-bearing
+  parameter, and dispersion is a time-varying quantity — a thousand samples drawn
+  in one hour describe that hour, not the day. The soak's value is *span*, not
+  count.
+
+Any verdict that does depend on the third decimal place of `q` is outside what
+this instrument can deliver, and should be rejected on that basis rather than
+supported by a longer run.
 
 ### 12.4 The inversion (what gets reported)
 
