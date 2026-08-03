@@ -958,6 +958,49 @@ sustainability is unaffected by the recalibration.
   same tax per connection without that surplus. Caveat on (b): onion PoW
   is Equi-X, not RandomX, so solving competes with mining rather than
   reusing it — an operating-cost note for the pin, not a free lunch.
+  **PoW RIG RUN — VALID MEASUREMENT (2026-08-03).** The re-measurement
+  above, executed. Rig validity is proven from the one side an artifact
+  can't fake: **service-side effort escalation** (`0 → 67` distributed,
+  `0 → 128` colocated), driven by 4 `skl-seed` nodes flooding our own
+  onion (pinned Tor shipped to `/tmp`, torn down clean). Two corrections
+  the run forced on the method, both recorded because each was a real
+  bug: (i) NEWNYM is globally rate-limited (1/10 s → ~0.1 intro/s, no
+  pressure) — the flood MUST use SOCKS stream isolation (unique
+  `--proxy-user`); (ii) a measurement client that bootstrapped
+  *pre-escalation* rides a **stale effort-0 descriptor** and never solves
+  — it must be (re)started *after* escalation so it fetches the escalated
+  descriptor, exactly the criterion-1 failure to guard against.
+  **Result — 12/12 samples PAID at effort 67 (zero effort-0 rides;
+  per-sample client-side solve line as proof):**
+  - **`solve@effort-67`: median 0.19 s, p90 1.00 s** — the transferable
+    `(effort, solve_time)` point;
+  - `serve` (3.33 MB body): median 10.6 s; `total`: median 13.3 s,
+    p90 22.7 s; **solve is 1.4 % of total**;
+  - `p@60s = 0.083` (one 96.8 s slow-circuit outlier, NOT PoW),
+    `p@120s = 0`, `p@300s = 0`;
+  - `capped = none`: the client never hit its give-up ceiling at 67, so
+    the ceiling is `> 67` and remains unmeasured.
+  **Consequence for `W`:** `W = r·(serve + solve@effort) + inclusion`;
+  `solve@67` adds `~0.2·r` s — trivial against `W` measured in 120 s
+  blocks. **PoW defence is ~free for the honest witness at reachable
+  effort; the `W` allowance stays TRANSPORT-bound (retry depth `r`),
+  which the `(m, n)` arm already carries. The SP-T3 pin can proceed** —
+  its `W` allowance does not need a large PoW margin.
+  **Honest limits (stated, not buried):** (1) `QueueRate 1/1` is a rig
+  sensitivity trick — ambient witness load is `λ_eff ≈ 3` intros per
+  *epoch* ≈ 0/s, so a threshold this twitchy never escalates under normal
+  operation; the pin's real constraint is ambient reads + witness traffic
+  under the threshold, satisfied by orders of magnitude. This measures
+  *solve-cost-at-effort*, NOT attack feasibility vs production tuning
+  (4 seeds can't approach tor's stock 250/s). (2) The **client give-up
+  ceiling is unmeasured** — the real pin input is "choose a client
+  max-effort; is solve-at-ceiling under budget?" A resourced DDoS pushes
+  effort past what 4 seeds reach (Equi-X solve ~linear in effort ⇒
+  `solve@128 ≈ 0.4 s`, still small, but effort can go far higher). (3) `p`
+  is single-vantage/session; between-session variance stands
+  (`p = 0.30` on 2026-07-30 vs `0.00` on 2026-08-03, same box) ⇒ **size
+  `r` pessimistically, do not pin `p`** — which the `(m, n)` arm's
+  structure already supports (`p` an input, `r` the lever).
   **STEP 2 CLOSED + `(m, n)` ARM (2026-08-02; PR #387,
   `rust/shekyl-economics-sim/src/mn_feasibility.rs`).** `λ_target = 3`
   **pinned**; the set-size pin is
