@@ -9548,3 +9548,83 @@ fix is an integration test that links the FFI; recorded as owed.
   safe to delete when a constant is a pending derivation's other half.** The
   zero-consumer fact is now recorded at the site, since Q-12's derivation
   needs it.
+
+## 57. Q11-B's exit depends on a mechanism fact — checked before touching constants
+
+**2026-08-03.** §56.5 reopened Q11-B: under an unbounded family
+`MAX_FRAGMENTS ≤ epoch/(min_delay+range)` has no `max` to divide by, and the
+replacement tail bound does not hold at the current mean — a 20-fragment
+transaction fails to clear its epoch **~18 %** of the time (0 % under the
+bounded family, by the assert). Three exits were posed: shorten the mean
+(~36 % shorter → ~56 % more cover bandwidth, ~491 → ~768 B/s per zone),
+lengthen the epoch (a security parameter, not free), or make cross-epoch
+fragmentation safe.
+
+**The third exit's cost cannot be estimated without knowing what the code does
+today**, and the old assert guaranteed the path never ran — which is the shape
+of a latent defect. Checked at source first.
+
+### 57.1 What actually happens: restart, not resume and not abandon
+
+`send_noise`, on a bound-to-bound repoint (which an epoch rollover is):
+
+```text
+if (channel.connection != peer_) { channel.connection = peer_;
+                                   channel.active = nullptr; }   // drop remainder
+…
+else if (!channel.queue.empty()) { channel.active = queue.front().clone(); } // RESTART
+…
+if (send ok && channel.active.empty()) queue.pop_front();        // pop only on completion
+```
+
+**The queue entry outlives the repoint** — it is popped only when a run fully
+drains — so the next send **restarts the message from fragment 0** at the new
+peer. The comment says so explicitly: *"Clearing `active` restarts any
+in-flight message rather than resuming it (CV-1): the remainder … sent to the
+new peer would make this send longer than a dummy, and length is the one thing
+the covert channel holds constant."*
+
+**So liveness is already safe, and for a reason that is not an accident:**
+CV-1's constant-length invariant forces restart, and restart happens to be the
+liveness-preserving choice. `clear_channel`'s harsher path (drop the queue too)
+is justified separately and correctly — every covert message is cloned to
+*every* channel, so a surviving channel still carries it.
+
+### 57.2 What restart costs, and it is not a liveness cost
+
+**The rotated-away peer keeps the fragments it already received.** It holds a
+prefix of a specific transaction it will never see completed, while the whole
+transaction goes to a different peer and later fluffs.
+
+**That is an attribution channel, not a liveness one**: a peer holding a
+partial prefix can match it against the transaction when it appears in the
+fluff phase, and attribute the origin to `O` — the node that sent it the
+prefix. **Precision on that match is not the C1 floor; it is a direct
+observation.**
+
+**Reachability is what the shape change moves.** Today the leak is reachable
+only through *unscheduled* repoints — connection churn — because the assert
+made scheduled rollover-during-a-run impossible for any run ≤ 20 fragments.
+**Memorylessness makes it reachable on a scheduled ~18 % of max-size
+transactions.** A latent path becomes a routine one.
+
+### 57.3 What this does to the three exits
+
+**Exit three is not free, and it is not the exit it looked like.**
+"Make cross-epoch fragmentation safe" reads as a liveness fix; liveness is
+already safe. The actual work is preventing a partial prefix from being
+*retained* by a peer that will not complete the run — which is a different and
+probably harder mechanism change, since it constrains what a peer does with
+bytes it has already received.
+
+**So the constants round chooses between bandwidth and epoch length**, with
+exit three reframed as a privacy fix that would have to be designed rather
+than a plumbing fix that would be nearly free.
+
+**One check this does not settle, flagged rather than assumed**: whether a
+`NOISE_BYTES` = 3 KiB prefix is *sufficient* to identify the transaction when
+it later appears. The attribution channel's existence follows from the
+retention; its **magnitude** depends on how much of a fragmented levin payload
+a prefix reveals, and that is a measurement nobody has taken. **If a single
+fragment is not matchable, the channel is narrower than stated** — but the
+direction of the finding does not change, only its price.
