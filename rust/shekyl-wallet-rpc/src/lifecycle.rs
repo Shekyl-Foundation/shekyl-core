@@ -966,8 +966,8 @@ mod tests {
 
     use serde_json::json;
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
-    use shekyl_engine_core::Network;
     use shekyl_engine_core::__test_helpers::make_staker_for_test;
+    use shekyl_engine_core::Network;
     use tokio::sync::Mutex;
 
     /// The fastest valid Argon2 profile (`m_log2` lower bound 8, `t`/`p` = 1) —

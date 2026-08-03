@@ -4356,6 +4356,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-sp-t3-spike"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "sha2",
+ "sha3",
+ "shekyl-archival-retention",
+ "shekyl-p-transport",
+ "shekyl-tor",
+ "shekyl-types",
+ "tempfile",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-staking-sim"
 version = "3.1.0"
 dependencies = [
