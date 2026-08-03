@@ -64,6 +64,10 @@ name = "pd-f2-measure"
 path = "bins/pd_f2_measure.rs"
 
 [[bin]]
+name = "serve-only"
+path = "bins/serve_only.rs"
+
+[[bin]]
 name = "extract-shard"
 path = "bins/extract_shard.rs"
 

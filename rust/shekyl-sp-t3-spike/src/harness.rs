@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 
 use kameo::actor::Spawn as _;
 use shekyl_p_transport::{PTorClient, PTransportError, RequestErrorKind, TorSocksEndpoint};
-use shekyl_tor::control::onion::{AddOnion, OnionFlags, OnionPort, ServiceId};
+use shekyl_tor::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId};
 use shekyl_tor::control::{BootstrapReadiness, BootstrapState, Command, EventSink, TorControl};
 use shekyl_tor::control::{ManagedTor, SocksPort, TorControlConfig, TorLaunch};
 use shekyl_types::{PCanonicalId, PSlot};
@@ -186,6 +186,32 @@ impl Apparatus {
         persona_count: u32,
         payload: Arc<Vec<u8>>,
     ) -> Result<Self, ApparatusError> {
+        Self::bring_up_with_pow(
+            tor_binary,
+            data_dir,
+            master_seed,
+            persona_count,
+            payload,
+            OnionPow::Disabled,
+        )
+        .await
+    }
+
+    /// [`Self::bring_up`] with the onion's PoW defenses selected.
+    ///
+    /// Split out for SPIKE-F-11's two arms: the same apparatus is measured with
+    /// PoW off and on, and the difference between those runs is the honest-client
+    /// cost of the defense (SPIKE-F-15's coupling). `bring_up` keeps its old
+    /// signature and defaults to [`OnionPow::Disabled`], which is what every
+    /// existing caller and the recorded `D*` were measured under.
+    pub async fn bring_up_with_pow(
+        tor_binary: std::path::PathBuf,
+        data_dir: std::path::PathBuf,
+        master_seed: &[u8; 64],
+        persona_count: u32,
+        payload: Arc<Vec<u8>>,
+        pow: OnionPow,
+    ) -> Result<Self, ApparatusError> {
         let socks_port = free_port();
         let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
@@ -231,7 +257,8 @@ impl Apparatus {
             // the harness never opens more, so 8 leaves headroom without letting
             // one client hold many streams on a rendezvous circuit.
             let request = AddOnion::new(identity.into_onion_key(), port, 8)
-                .with_flags(OnionFlags { discard_pk: true });
+                .with_flags(OnionFlags { discard_pk: true })
+                .with_pow(pow);
             let reply = control
                 .ask(Command::AddOnion(request))
                 .await
@@ -342,6 +369,22 @@ impl Apparatus {
         self.personas
             .iter()
             .map(|p| p.endpoint.request_count())
+            .sum()
+    }
+
+    /// Total connections shed for exceeding the in-flight cap
+    /// ([`MAX_INFLIGHT`](crate::serve::MAX_INFLIGHT)).
+    ///
+    /// The signal that `SPIKE-PIN-2` is binding: a non-zero value during a
+    /// SPIKE-F-11 sweep means the **cap**, not the transport, is shaping the
+    /// tail — so the reported latency would be a measurement of the placeholder
+    /// rather than of the service, and the sweep point must be discarded or the
+    /// cap raised before it is believed.
+    #[must_use]
+    pub fn refused_total(&self) -> u64 {
+        self.personas
+            .iter()
+            .map(|p| p.endpoint.refused_count())
             .sum()
     }
 
