@@ -42,6 +42,12 @@ shekyl-p-transport = { path = "../shekyl-p-transport" }
 shekyl-types = { path = "../shekyl-types" }
 # `p_canonical_id_from_hybrid_pubkey`, for the domain-separation negative control.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `construct_leaf` — the shard fixture must be the leaf bytes a persona archives,
+# not the compressed points the RPC returns (see src/bin/extract_shard.rs).
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+# The extraction binary's JSON-RPC calls to the local regtest daemon. Loopback
+# only, no persona involved, so it deliberately does NOT go through PTorClient.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 # The measurement binary's own temp DataDirectory (it is a binary dependency, not
 # just a test one, so it is not in dev-dependencies).
@@ -50,6 +56,10 @@ tempfile = "3"
 [[bin]]
 name = "pd-f2-measure"
 path = "src/bin/pd_f2_measure.rs"
+
+[[bin]]
+name = "extract-shard"
+path = "src/bin/extract_shard.rs"
 
 [dev-dependencies]
 # The live apparatus test drives the harness on a tokio runtime.

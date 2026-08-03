@@ -4365,11 +4365,13 @@ dependencies = [
  "sha2",
  "sha3",
  "shekyl-archival-retention",
+ "shekyl-fcmp",
  "shekyl-p-transport",
  "shekyl-tor",
  "shekyl-types",
  "tempfile",
  "tokio",
+ "ureq",
  "zeroize",
 ]
 
