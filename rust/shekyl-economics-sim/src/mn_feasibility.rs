@@ -6,85 +6,88 @@
 //! `(m, n)` feasibility — the re-pin's decision surface, reported as a
 //! **region** rather than an optimum.
 //!
-//! The round's closed constraint set (`FOLLOWUPS.md`, TJ entries):
+//! Constraint set (`FOLLOWUPS.md`, TJ entries):
 //!
-//! - **Floor** — false-slash probability over a bond life, from two
-//!   independent sources: transport weather (`p^r` per read attempt-chain)
-//!   and fabrication (bounded by the gap fraction `e^−λ_eff`, since a
-//!   fabricated miss only survives in an epoch no diligent read covered).
+//! - **Floor** — false-slash probability over a bond life, from transport
+//!   weather (`p^r` per read attempt-chain) and fabrication (bounded by the
+//!   gap `e^−λ_eff`: a fabricated miss only survives in an epoch no diligent
+//!   read covered).
 //! - **Ceiling** — W16: every slash-free miss is a baseline a strategic
 //!   degrader rides at crisis prices, so the window's slack has a deterrence
 //!   cost.
 //! - **Hard bound** — `n ≤ 25` from the prune-horizon assert.
 //!
-//! **Wide-guardrails discipline:** the output is the feasible region and where
-//! the shipped `(11, 13)` sits inside it. Moving a genesis-adjacent constant
-//! requires the region to *exclude* it; a confirmation with margins is the
-//! more valuable result and the one this arm is built to produce.
+//! Wide-guardrails: the output is the feasible region and where the shipped
+//! `(11, 13)` sits inside it. A genesis-adjacent constant moves only if the
+//! region *excludes* it.
 //!
-//! # The observation unit — a correction the miss-fact ruling forces
+//! # Observation unit
 //!
 //! Coverage `λ_eff` is **reads per pair per epoch**, but the failure window
-//! counts **observations**, and the ratified three-valued settlement collapses
-//! an epoch's reads to **one** observation: any authenticated pass settles the
-//! epoch served, so `λ_eff` reads of a live pair produce one served
-//! observation, not `λ_eff` of them. Observations therefore still arrive at
-//! **≤ 1 per epoch** — slightly under 1, because a gap epoch (no read at all)
-//! is a *non-observation* the window never sees. A 13-observation window
-//! consequently spans **~13 epochs**, not `13/λ_eff` ≈ 4.3, so detection
-//! latency does not collapse and the within-epoch independence worry does not
-//! arise (the draws remain one-per-epoch and weeks apart).
+//! counts **observations**. Three-valued settlement collapses an epoch's
+//! reads to **one** observation (any authenticated pass settles the epoch
+//! served). Observations therefore arrive at **≤ 1 per epoch** — slightly
+//! under 1, because a gap epoch is a non-observation. A 13-observation window
+//! spans **~13 epochs**, not `13/λ_eff`.
 //!
-//! What `λ_eff` *does* buy is stronger and sits in [`MissModel`]: because any
-//! one pass clears the epoch, the transport term **compounds** across the
-//! epoch's reads — `(p^r)^j` for `j` reads, not `p^r`. Coverage and retry
-//! depth are therefore **substitutes** for the transport term, and coverage's
-//! version is the better one: `j` reads come from `j` different miners on
-//! different circuits and guards, where `r` retries share one client's
-//! vantage.
+//! What `λ_eff` buys sits in [`MissModel`]: pass-dominance **compounds** the
+//! transport term across the epoch's reads — `(p^r)^j` for `j` reads, not
+//! `p^r`. Coverage and retry depth are substitutes; coverage's version has
+//! better independence (`j` miners / circuits vs `r` retries on one client).
+//!
+//! # Structure
+//!
+//! [`evaluate`] is the pure decision surface; [`mn_feasibility_report`] only
+//! formats a [`FeasibilitySnapshot`]. Policy defaults live next to the model
+//! ([`default_sources`], [`FeasibilityTargets::operative_defaults`]).
 
 use core::fmt;
 
-use shekyl_archival_retention::{FAILURE_WINDOW_M, FAILURE_WINDOW_N, MAX_HOLDINGS_SHARDS};
+use shekyl_archival_retention::{
+    FAILURE_WINDOW_M, FAILURE_WINDOW_N, MAX_HOLDINGS_SHARDS, SETTLEMENT_EPOCH_BLOCKS,
+};
 
 use crate::proxy::A5_REWARD_HORIZON_EPOCHS;
 
 /// Hard ceiling on `n` (prune-horizon assert, `failure_window.rs`).
 pub const N_HARD_BOUND: u32 = 25;
 
-/// The two miss **sources'** inputs — transport weather (`p_attempt`,
-/// `retries`) and fabrication (`fabrication_intensity`) — with coverage
-/// **deliberately absent**.
+/// Bond life used by the report — A5's reward horizon (~5 y), not a second
+/// lifetime constant.
+pub const BOND_LIFE_EPOCHS: f64 = A5_REWARD_HORIZON_EPOCHS;
+
+/// Sensitivity grid: retry depths under review (rig re-run still owns `r`).
+const SENSITIVITY_RETRIES: [u32; 3] = [1, 2, 3];
+/// Sensitivity grid: hashrate points (targeted φ saturates by ~1e-3).
+const SENSITIVITY_F: [f64; 3] = [1.0, 0.10, 0.001];
+/// Cap-delivered projection band; the operative projection is marked in-row.
+const CAP_PAIR_BAND: [f64; 5] = [5_000.0, 10_000.0, 20_000.0, 40_000.0, 100_000.0];
+
+// ── sources / model ─────────────────────────────────────────────────────────
+
+/// Transport and fabrication inputs, with coverage **deliberately absent**.
 ///
-/// [`mn_feasibility_report`] derives DELIVERED coverage from
-/// [`FeasibilityTargets`] (`λ_target`, projected pairs, `k_cap`, `SEB`) and
-/// builds every evaluation [`MissModel`] through [`MissSources::at_coverage`],
-/// so a call site cannot hand the region a nominal target where cap-delivered
-/// coverage belongs. (Review finding, 2026-08-02: the arm carried the λ pin
-/// as two unlinked `3.0` literals and evaluated every region number at the
-/// nominal one, against its own cap-delivered mandate.)
+/// [`evaluate`] derives delivered coverage from [`FeasibilityTargets`] and
+/// builds every [`MissModel`] through [`MissSources::at_coverage`], so a call
+/// site cannot hand the region a nominal `λ` where cap-delivered coverage
+/// belongs.
 #[derive(Debug, Clone, Copy)]
 pub struct MissSources {
-    /// Per-attempt transport failure probability. **Stand-in: 0.30**, the
-    /// 2026-07-30 cold-path onion measurement taken with **no PoW and no
-    /// flood** — it does not transfer to the SP-T3 operating point and is
-    /// carried only so the shape is reviewable before the rig re-run gates it.
+    /// Per-attempt transport failure. **Stand-in 0.30** (2026-07-30 cold-path
+    /// onion, no PoW / no flood) — does not transfer to SP-T3; rig re-run gates
+    /// the real value.
     pub p_attempt: f64,
-    /// Attempts per read before a witness gives up (`r`). Retry depth costs
-    /// `W`-blocks, not bandwidth.
+    /// Attempts per read before a witness gives up (`r`).
     pub retries: u32,
-    /// Probability a fabricator files a miss against this pair in a given
-    /// epoch. Under F-1 the operative value is the **targeted** one
-    /// ([`targeted_fabrication_intensity`]), which is ≈ 1 at any measurable
-    /// hashrate — so `1.0` is the realistic setting for an attacked pair, not
-    /// a far corner. [`ambient_fabrication_intensity`] is the no-victim term.
+    /// Probability a fabricator files a miss against this pair in an epoch.
+    /// Under F-1 the operative value is [`targeted_fabrication_intensity`]
+    /// (≈ 1 at any measurable hashrate). [`ambient_fabrication_intensity`] is
+    /// the no-victim contrast only.
     pub fabrication_intensity: f64,
 }
 
 impl MissSources {
-    /// Compose the sources with a **delivered** coverage into the per-epoch
-    /// model. Naming the coverage at the call site is the point: it is the
-    /// one input a report must derive, never assume.
+    /// Compose sources with **delivered** coverage into the per-epoch model.
     #[must_use]
     pub fn at_coverage(&self, lambda_eff: f64) -> MissModel {
         MissModel {
@@ -96,63 +99,45 @@ impl MissSources {
     }
 }
 
-/// Per-epoch miss model for **one honest, live `(P, shard)` pair**.
+/// Per-epoch miss model for one honest, live `(P, shard)` pair.
 ///
-/// Every field is an input the round pinned or measured elsewhere; this type
-/// only composes them. Named so a reader can see which measurement each
-/// number is waiting on. Built via [`MissSources::at_coverage`].
+/// Built via [`MissSources::at_coverage`]. `lambda_eff` is **delivered**
+/// coverage only — the policy target lives in
+/// [`FeasibilityTargets::lambda_target`].
 #[derive(Debug, Clone, Copy)]
 pub struct MissModel {
-    /// **Delivered** diligent reads per pair per epoch — never the policy
-    /// target.
-    ///
-    /// The two coincide only while `k_cap` is slack; past the knee delivered
-    /// coverage decays as `k_cap·SEB/pairs` ([`delivered_lambda`]). Keeping
-    /// this field single-meaning is deliberate: the target lives in
-    /// [`FeasibilityTargets::lambda_target`], so a call site cannot quietly
-    /// pass one where the other belongs and skew the region (review finding,
-    /// 2026-08-02).
+    /// Delivered diligent reads per pair per epoch (never the policy target).
     pub lambda_eff: f64,
-    /// See [`MissSources::p_attempt`].
     pub p_attempt: f64,
-    /// See [`MissSources::retries`].
     pub retries: u32,
-    /// See [`MissSources::fabrication_intensity`].
     pub fabrication_intensity: f64,
 }
 
 impl MissModel {
-    /// Probability one read's attempt-chain fails outright (`p^r`).
+    /// Probability one read's attempt-chain fails (`p^r`).
     #[must_use]
     pub fn read_failure(&self) -> f64 {
         self.p_attempt.clamp(0.0, 1.0).powi(self.retries as i32)
     }
 
-    /// Probability an epoch yields **no** diligent read — the gap, `e^−λ_eff`.
-    /// This is the only epoch class a fabricated miss can survive in, because
-    /// any pass dominates a miss at settlement.
+    /// Gap probability `e^−λ_eff` — the only epoch class a fabricated miss
+    /// can survive in (any pass dominates at settlement).
     #[must_use]
     pub fn gap(&self) -> f64 {
         (-self.lambda_eff.max(0.0)).exp()
     }
 
-    /// Probability an epoch settles as an **observation** (served or missed)
-    /// rather than a non-observation.
-    ///
-    /// A gap epoch is a non-observation *unless* a fabricator files into it.
+    /// Probability an epoch settles as an observation (served or missed).
+    /// A gap is a non-observation unless a fabricator files into it.
     #[must_use]
     pub fn observation_rate(&self) -> f64 {
         1.0 - self.gap() * (1.0 - self.fabrication_intensity.clamp(0.0, 1.0))
     }
 
-    /// Probability an epoch settles as a **missed observation**.
+    /// Probability an epoch settles as a **missed** observation.
     ///
-    /// Two disjoint sources, matching the round's two false-slash terms:
-    ///
-    /// - **fabrication** — a gap epoch a fabricator files into: `e^−λ · φ`;
-    /// - **transport** — an epoch with `j ≥ 1` reads where *all* `j` fail:
-    ///   `Σ_{j≥1} Pois(j; λ)·(p^r)^j = e^{−λ(1−p^r)} − e^{−λ}` (the Poisson
-    ///   PGF, so no truncation error).
+    /// Disjoint sources: fabrication `e^−λ · φ`, and transport
+    /// `e^{−λ(1−p^r)} − e^{−λ}` (Poisson PGF, no truncation).
     #[must_use]
     pub fn missed_epoch_rate(&self) -> f64 {
         let fabricated = self.gap() * self.fabrication_intensity.clamp(0.0, 1.0);
@@ -162,12 +147,7 @@ impl MissModel {
     }
 
     /// Per-**observation** miss probability `q` — the failure window's input.
-    ///
-    /// The window counts observations, so this conditions on the epoch being
-    /// one. **Evaluate at cap-delivered `λ_eff`, not the nominal target:**
-    /// `k = λ_target·pairs/SEB` is capped at `k_cap`, so past the pair count
-    /// where the cap binds, delivered coverage falls below `λ_target` and the
-    /// gap — hence the fabrication term — grows.
+    /// Evaluate at cap-delivered `λ_eff`, not the nominal target.
     #[must_use]
     pub fn miss_given_observation(&self) -> f64 {
         let obs = self.observation_rate();
@@ -178,60 +158,32 @@ impl MissModel {
     }
 }
 
-/// **Ambient** fabrication intensity — a *spraying* adversary with no victim.
-///
-/// At hashrate `f` a fabricator wins `f·SEB` blocks per epoch carrying `k`
-/// records each; spread uniformly over `pairs` pairs that is `f·λ_target` per
-/// pair per epoch, so a given pair draws at least one with probability
-/// `1 − e^(−f·λ)`. This is the right model **only** for the no-victim case:
-/// background noise across the whole population.
-///
-/// It is **not** the model for an attack, and using it as one was F-1 (see
-/// [`targeted_fabrication_intensity`]).
+// ── fabrication / coverage ──────────────────────────────────────────────────
+
+/// Ambient (spraying, no-victim) fabrication intensity: `1 − e^(−f·λ)`.
+/// Not the attack model — see [`targeted_fabrication_intensity`] (F-1).
 #[must_use]
 pub fn ambient_fabrication_intensity(f: f64, lambda_target: f64) -> f64 {
     let f = f.clamp(0.0, 1.0);
     1.0 - (-f * lambda_target.max(0.0)).exp()
 }
 
-/// **Targeted** fabrication intensity — the operative threat, and it does not
-/// scale with hashrate the way the ambient term does.
+/// Targeted fabrication intensity — operative threat.
 ///
-/// **F-1 (2026-08-02):** the ambient model divides the attack by `pairs`, which
-/// silently assumes the adversary does not concentrate. Sets are **miner-chosen**
-/// — that is this round's own ruling — so a fabricator attacking one victim does
-/// not spray: it places the victim's pair in its `k` slots in **every block it
-/// wins**. Poisoning an epoch needs exactly **one** won block, so
-///
-/// ```text
-/// φ_targeted = 1 − (1 − f)^SEB
-/// ```
-///
-/// which saturates almost immediately: `f = 10⁻⁴` already gives ≈ 0.63 and
-/// `f = 10⁻³` gives ≈ 1. **For a targeted adversary `φ ≈ 1` at any measurable
-/// hashrate**, so the floor must be evaluated there and the fabrication term is
-/// *not* an adversary courtesy the region may lean on.
-///
-/// This is the same defect shape the round has rejected before — bounding an
-/// adversary by assuming it does not optimize — arriving through a uniformity
-/// assumption rather than an explicit one.
+/// Sets are miner-chosen, so an attacker places the victim in every won
+/// block: `φ = 1 − (1−f)^SEB`. Saturates almost immediately (`f = 10⁻³` ≈ 1).
+/// Floor evaluation must use this, not the ambient spray term.
 #[must_use]
 pub fn targeted_fabrication_intensity(f: f64, seb: f64) -> f64 {
     let f = f.clamp(0.0, 1.0);
     if f <= 0.0 || seb <= 0.0 {
         return 0.0;
     }
-    // 1 − (1−f)^SEB via ln1p/expm1 so it stays exact at the tiny `f` where the
-    // saturation point actually sits.
+    // 1 − (1−f)^SEB via ln1p/expm1 for tiny-f accuracy.
     -((seb * (-f).ln_1p()).exp_m1())
 }
 
-/// Delivered coverage under the `k_cap` bind: `λ_eff = min(k_cap, k)·SEB/pairs`
-/// where `k` is what `λ_target` would ask for.
-///
-/// Below the knee the cap is slack and delivered coverage is the target; above
-/// it, coverage decays as `k_cap·SEB/pairs` — which is why the standing
-/// discipline evaluates the fabrication term at **projected** pair counts.
+/// Delivered coverage under `k_cap`: `λ_eff = min(k_cap, k)·SEB/pairs`.
 #[must_use]
 pub fn delivered_lambda(lambda_target: f64, pairs: f64, seb: f64, k_cap: f64) -> f64 {
     if pairs <= 0.0 || seb <= 0.0 {
@@ -241,7 +193,13 @@ pub fn delivered_lambda(lambda_target: f64, pairs: f64, seb: f64, k_cap: f64) ->
     k_wanted.min(k_cap.max(0.0)) * seb / pairs
 }
 
+// ── window / bound ──────────────────────────────────────────────────────────
+
 /// Probability a window of `n` i.i.d. observations carries `≥ m` misses.
+///
+/// Two-sided binomial recurrence keyed on `min(q, 1−q)` so seeds stay away
+/// from underflow when `q` is next to 1 (a one-sided `(1−q)^n` seed zeros the
+/// whole tail for `n ≥ 22` and falsely reports infinite margin).
 #[must_use]
 pub fn window_exceedance(m: u32, n: u32, q: f64) -> f64 {
     if m == 0 {
@@ -251,16 +209,7 @@ pub fn window_exceedance(m: u32, n: u32, q: f64) -> f64 {
         return 0.0;
     }
     let q = q.clamp(0.0, 1.0);
-    // Binomial tail by direct term recurrence — n ≤ 25, so no special
-    // machinery is warranted. The recurrence is two-sided, keyed on the
-    // smaller of q and 1−q, because a one-sided walk seeds with the OTHER
-    // side's n-th power: at q within ~1e−16 of 1 the seed `(1−q)^n`
-    // underflows to exactly 0 for n ≥ 22 and every later term inherits the
-    // zero, reporting ~0 where the true tail is ~1 — an infeasible cell
-    // reading as clearing with infinite margin. Keying on the smaller side
-    // bounds either seed below by `0.5^25`, far from underflow.
     let tail = if q <= 0.5 {
-        // Walk the miss axis up from (1−q)^n.
         let ratio = q / (1.0 - q);
         let mut term = (1.0 - q).powi(n as i32);
         let mut sum = 0.0;
@@ -274,7 +223,6 @@ pub fn window_exceedance(m: u32, n: u32, q: f64) -> f64 {
         }
         sum
     } else {
-        // Walk the served axis up from q^n:
         // P(X ≥ m) = Σ_{k=0}^{n−m} C(n,k)·(1−q)^k·q^(n−k).
         let ratio = (1.0 - q) / q;
         let mut term = q.powi(n as i32);
@@ -293,21 +241,13 @@ pub fn window_exceedance(m: u32, n: u32, q: f64) -> f64 {
 /// Union-bound **upper** bound on false-slash over at most `max_observations`
 /// draws.
 ///
-/// Rigorous (a union over the sliding windows) and tight exactly where the
-/// answer matters — the small-probability regime a false-slash target lives
-/// in. [`crate::proxy::first_slash_probability`] — the production-predicate-
-/// backed absorbing chain — measures the slack at the shipped pin (the
-/// union-bound license tests).
+/// `max_observations` must be a **deterministic ceiling**, never an
+/// expectation: a realization above the mean would carry more sliding windows
+/// than an expectation-priced bound covered. The miss fact supplies the
+/// ceiling: ≤ 1 observation per epoch, so `bond_life_epochs` is the hard cap.
 ///
-/// **`max_observations` must be a DETERMINISTIC ceiling, never an
-/// expectation.** The observation count over a bond life is random, and a
-/// realization above its mean would carry more sliding windows than the bound
-/// priced — which would silently void the "upper bound" claim in exactly the
-/// tail the floor target cares about. The ratified miss fact supplies the
-/// ceiling for free: an epoch settles to at most ONE observation, so
-/// `bond_life_epochs` *is* the hard cap and no distribution over counts is
-/// needed. (Found by review, 2026-08-02; the arm previously passed
-/// `bond_life · observation_rate`.)
+/// Tightness in the small-`q` regime is licensed by
+/// [`crate::proxy::first_slash_probability`].
 #[must_use]
 pub fn false_slash_bound(m: u32, n: u32, q: f64, max_observations: f64) -> f64 {
     if max_observations <= 0.0 || n == 0 {
@@ -317,8 +257,7 @@ pub fn false_slash_bound(m: u32, n: u32, q: f64, max_observations: f64) -> f64 {
     (windows * window_exceedance(m, n, q)).clamp(0.0, 1.0)
 }
 
-/// The fraction of observations a *placing* degrader may miss indefinitely
-/// without ever tripping the window — W16's free-ride term, `(m−1)/n`.
+/// W16 free-ride fraction `(m−1)/n`.
 #[must_use]
 pub fn free_ride_fraction(m: u32, n: u32) -> f64 {
     if n == 0 {
@@ -327,103 +266,216 @@ pub fn free_ride_fraction(m: u32, n: u32) -> f64 {
     f64::from(m.saturating_sub(1)) / f64::from(n)
 }
 
-/// Operator-axis exposure for an archiver at `MAX_HOLDINGS_SHARDS`: every
-/// held pair is independently exposed, so `1 − (1 − p)^MAX_HOLDINGS` —
-/// computed via `ln_1p`/`exp_m1` so it stays accurate at the small `p` the
-/// floor targets.
-///
-/// The floor target is set on THIS axis ([`FeasibilityTargets`]'s
-/// `false_slash_target` is per ARCHIVER), so every verdict and margin in the
-/// report goes through here rather than hand-expanding the idiom per site.
+/// Operator-axis exposure at `MAX_HOLDINGS_SHARDS`: `1 − (1 − p)^MAX_HOLDINGS`
+/// via `ln_1p`/`exp_m1`. Floor targets are set on this axis.
 #[must_use]
 pub fn max_holder_exposure(per_pair: f64) -> f64 {
     -((MAX_HOLDINGS_SHARDS as f64) * (-per_pair).ln_1p()).exp_m1()
 }
 
-/// One `(m, n)` cell of the feasibility sweep.
+// ── exposure helpers (single verdict pipeline) ──────────────────────────────
+
+/// Shipped-window (or probe-window) exposure on both axes.
 #[derive(Debug, Clone, Copy)]
-pub struct Cell {
+pub struct PinExposure {
     pub m: u32,
     pub n: u32,
-    /// False-slash probability for ONE pair over the bond life (union bound).
     pub false_slash_pair: f64,
-    /// The same exposure for an archiver at `MAX_HOLDINGS_SHARDS` — what an
-    /// operator actually experiences, since every held pair is independently
-    /// exposed.
     pub false_slash_max_holder: f64,
-    /// W16 free-ride fraction `(m−1)/n`.
     pub free_ride: f64,
 }
 
-/// Sweep the admissible box, returning the **raw** cell for every `(m, n)`.
-///
-/// No filtering happens here: the floor and ceiling targets are policy inputs
-/// and are applied by [`mn_feasibility_report`], so a caller wanting a
-/// different target reads the same cells against it rather than re-running the
-/// sweep.
-#[must_use]
-pub fn sweep(model: &MissModel, bond_life_epochs: f64, n_max: u32) -> Vec<Cell> {
-    let q = model.miss_given_observation();
-    // Deterministic ceiling, not the expected count — see `false_slash_bound`.
-    let observations = bond_life_epochs;
-    let mut cells = Vec::new();
-    for n in 2..=n_max.min(N_HARD_BOUND) {
-        for m in 2..=n {
-            let per_pair = false_slash_bound(m, n, q, observations);
-            cells.push(Cell {
-                m,
-                n,
-                false_slash_pair: per_pair,
-                false_slash_max_holder: max_holder_exposure(per_pair),
-                free_ride: free_ride_fraction(m, n),
-            });
+impl PinExposure {
+    #[must_use]
+    fn at(m: u32, n: u32, q: f64, max_observations: f64) -> Self {
+        let false_slash_pair = false_slash_bound(m, n, q, max_observations);
+        Self {
+            m,
+            n,
+            false_slash_pair,
+            false_slash_max_holder: max_holder_exposure(false_slash_pair),
+            free_ride: free_ride_fraction(m, n),
         }
     }
-    cells
+
+    #[must_use]
+    pub fn clears_floor(&self, false_slash_target: f64) -> bool {
+        self.false_slash_max_holder <= false_slash_target
+    }
+
+    #[must_use]
+    pub fn floor_margin(&self, false_slash_target: f64) -> f64 {
+        if self.false_slash_max_holder > 0.0 {
+            false_slash_target / self.false_slash_max_holder
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    #[must_use]
+    pub fn floor_verdict(&self, false_slash_target: f64) -> &'static str {
+        if self.clears_floor(false_slash_target) {
+            "clears"
+        } else {
+            "EXCEEDS"
+        }
+    }
 }
 
-/// Policy inputs to the feasibility report — every one a maintainer choice or
-/// a pinned constant, none of them derived by this arm.
+#[must_use]
+fn floor_verdict_flag(clears: bool) -> &'static str {
+    if clears {
+        "clears"
+    } else {
+        "EXCEEDS"
+    }
+}
+
+// ── policy inputs ───────────────────────────────────────────────────────────
+
+/// Policy inputs — maintainer choices or pinned constants, none derived here.
 ///
-/// Bundled so the **target vs delivered** split is visible in the type rather
-/// than in a comment: `lambda_target` is what `k` is sized from, while a
-/// [`MissModel`]'s `lambda_eff` is what a pair actually receives.
+/// `lambda_target` sizes `k`; delivered coverage is
+/// [`delivered_lambda`] of it. Bundle keeps the target/delivered split in the
+/// type rather than a comment.
 #[derive(Debug, Clone, Copy)]
 pub struct FeasibilityTargets {
-    /// Coverage the pin asks for (`λ_target = 3`). Sizes `k`, and is the
-    /// spread the *ambient* fabrication term divides across.
+    /// Coverage the pin asks for (`λ_target = 3`). Sizes `k`.
     pub lambda_target: f64,
     /// Floor budget: `P(any pair slashed)` over a bond life, per ARCHIVER.
     pub false_slash_target: f64,
-    /// Ceiling: the fraction of observations a placing degrader may ride free.
-    /// W16's crisis-price economics owns the real value.
+    /// Ceiling: free-ride fraction bound (W16 crisis-price economics).
     pub free_ride_bound: f64,
     /// Step-2 cap on challenges per block.
     pub k_cap: f64,
     /// Settlement-epoch length in blocks.
     pub seb: f64,
-    /// Pair-count projection the OPERATIVE region is evaluated at — an input
-    /// with the same status as `false_slash_target`, not a number this arm
-    /// derives. The report evaluates every verdict at the DELIVERED coverage
-    /// this projection yields ([`delivered_lambda`]), executing the standing
-    /// cap-delivered mandate; the cap-delivered table spans a projection band
-    /// so a different projection reads off the same output.
+    /// Pair-count projection the operative region is evaluated at.
     pub projected_pairs: f64,
 }
 
-/// `(m, n)` feasibility report.
+impl FeasibilityTargets {
+    /// Operative defaults for the stage-2 report — the single home for MN
+    /// policy numbers (not scattered in the orchestrator).
+    ///
+    /// - `λ_target = 3` (step-2 pin)
+    /// - false-slash budget `1e-3` per archiver over a bond life (**provisional**)
+    /// - free-ride bound `0.80` (W16 input; shipped pin sits at `10/13 ≈ 0.77`)
+    /// - `k_cap = 6` (mid-band of 4–9)
+    /// - projection `40_000` pairs (twice the `k_cap` knee at 20 k, so the
+    ///   cap bind is material: delivered = half the target)
+    #[must_use]
+    pub fn operative_defaults() -> Self {
+        Self {
+            lambda_target: 3.0,
+            false_slash_target: 1e-3,
+            free_ride_bound: 0.80,
+            k_cap: 6.0,
+            seb: SETTLEMENT_EPOCH_BLOCKS as f64,
+            projected_pairs: 40_000.0,
+        }
+    }
+}
+
+/// Default sources minus coverage: stand-in `p`, single-retry witnesses,
+/// targeted fabrication intensity `φ ≈ 1`. Coverage is derived by
+/// [`evaluate`] from [`FeasibilityTargets`].
+#[must_use]
+pub fn default_sources() -> MissSources {
+    MissSources {
+        p_attempt: 0.30,
+        retries: 1,
+        fabrication_intensity: 1.0,
+    }
+}
+
+// ── pure evaluation surface ─────────────────────────────────────────────────
+
+/// One sensitivity-table row (retry × hashrate) at the shipped window.
+#[derive(Debug, Clone, Copy)]
+pub struct SensitivityRow {
+    pub retries: u32,
+    pub f: f64,
+    pub phi_targeted: f64,
+    pub phi_ambient: f64,
+    pub q: f64,
+    pub holder: f64,
+    pub clears: bool,
+}
+
+/// One cap-delivered projection row at the shipped window.
+#[derive(Debug, Clone, Copy)]
+pub struct CapDeliveredRow {
+    pub pairs: f64,
+    pub k_wanted: f64,
+    pub lambda_eff: f64,
+    pub gap: f64,
+    pub q: f64,
+    pub holder: f64,
+    pub clears: bool,
+    pub is_operative: bool,
+}
+
+/// Feasible-region edge for one `n`: floor-set `m_min`, ceiling-set `m_max`.
+#[derive(Debug, Clone, Copy)]
+pub struct RegionRow {
+    pub n: u32,
+    pub m_min: Option<u32>,
+    pub m_max: Option<u32>,
+    /// Per-pair false-slash at `m_min` when the row is feasible.
+    pub fs_at_m_min: Option<f64>,
+    /// Free-ride at `m_max` when present.
+    pub free_ride_at_m_max: Option<f64>,
+}
+
+impl RegionRow {
+    #[must_use]
+    pub fn is_feasible(&self) -> bool {
+        matches!((self.m_min, self.m_max), (Some(lo), Some(hi)) if lo <= hi)
+    }
+
+    /// Whether `(m, n)` sits inside this row's feasible band.
+    #[must_use]
+    pub fn contains(&self, m: u32) -> bool {
+        match (self.m_min, self.m_max) {
+            (Some(lo), Some(hi)) => lo <= m && m <= hi,
+            _ => false,
+        }
+    }
+}
+
+/// Pure decision surface: every number the report prints, with no formatting.
+#[derive(Debug, Clone)]
+pub struct FeasibilitySnapshot {
+    pub targets: FeasibilityTargets,
+    pub bond_life_epochs: f64,
+    /// Union-bound ceiling (= bond life): ≤ 1 observation per epoch.
+    pub observation_ceiling: f64,
+    pub delivered_lambda: f64,
+    pub knee_pairs: f64,
+    pub model: MissModel,
+    pub q: f64,
+    pub observation_rate: f64,
+    pub shipped: PinExposure,
+    /// Whether the shipped `(m, n)` lies in the feasible band at the
+    /// operative point (false when the row is infeasible or `m` is outside).
+    pub shipped_in_region: bool,
+    pub sensitivity: Vec<SensitivityRow>,
+    pub cap_delivered: Vec<CapDeliveredRow>,
+    pub region: Vec<RegionRow>,
+}
+
+/// Evaluate the `(m, n)` region at cap-delivered coverage for `targets`.
 ///
-/// Every verdict is evaluated at the OPERATIVE point: cap-DELIVERED coverage
-/// at the targets' pair projection, per the standing mandate at
-/// [`MissModel::miss_given_observation`]. The caller supplies [`MissSources`]
-/// (no coverage field), so the nominal target cannot leak into the region's
-/// evaluation — coverage enters only through [`delivered_lambda`] here.
-pub fn mn_feasibility_report(
-    out: &mut impl fmt::Write,
+/// Coverage enters only through [`delivered_lambda`] — the caller supplies
+/// [`MissSources`] (no λ field), so the nominal target cannot leak into
+/// region numbers.
+#[must_use]
+pub fn evaluate(
     sources: &MissSources,
     bond_life_epochs: f64,
     targets: &FeasibilityTargets,
-) -> fmt::Result {
+) -> FeasibilitySnapshot {
     let FeasibilityTargets {
         lambda_target,
         false_slash_target,
@@ -432,15 +484,147 @@ pub fn mn_feasibility_report(
         seb,
         projected_pairs,
     } = *targets;
+
     let delivered = delivered_lambda(lambda_target, projected_pairs, seb, k_cap);
     let model = sources.at_coverage(delivered);
     let q = model.miss_given_observation();
-    let obs_rate = model.observation_rate();
-    // Deterministic ceiling (<= 1 observation per epoch), not the expected
-    // count — the union bound's guarantee depends on it.
-    let observations = bond_life_epochs;
-    // The knee: below it the cap is slack and delivered = target.
-    let knee_pairs = k_cap * seb / lambda_target;
+    // Deterministic ceiling (≤ 1 obs/epoch), not E[obs] = bond_life · rate.
+    let observation_ceiling = bond_life_epochs;
+    let knee_pairs = if lambda_target > 0.0 {
+        k_cap * seb / lambda_target
+    } else {
+        0.0
+    };
+
+    let shipped = PinExposure::at(FAILURE_WINDOW_M, FAILURE_WINDOW_N, q, observation_ceiling);
+
+    let mut sensitivity = Vec::with_capacity(SENSITIVITY_RETRIES.len() * SENSITIVITY_F.len());
+    for &r in &SENSITIVITY_RETRIES {
+        for &f in &SENSITIVITY_F {
+            let phi = targeted_fabrication_intensity(f, seb);
+            let probe = MissModel {
+                retries: r,
+                fabrication_intensity: phi,
+                ..model
+            };
+            let q_probe = probe.miss_given_observation();
+            let pin = PinExposure::at(
+                FAILURE_WINDOW_M,
+                FAILURE_WINDOW_N,
+                q_probe,
+                observation_ceiling,
+            );
+            sensitivity.push(SensitivityRow {
+                retries: r,
+                f,
+                phi_targeted: phi,
+                phi_ambient: ambient_fabrication_intensity(f, lambda_target),
+                q: q_probe,
+                holder: pin.false_slash_max_holder,
+                clears: pin.clears_floor(false_slash_target),
+            });
+        }
+    }
+
+    let mut cap_delivered = Vec::with_capacity(CAP_PAIR_BAND.len());
+    for &pairs in &CAP_PAIR_BAND {
+        let lam = delivered_lambda(lambda_target, pairs, seb, k_cap);
+        let probe = sources.at_coverage(lam);
+        let q_probe = probe.miss_given_observation();
+        let pin = PinExposure::at(
+            FAILURE_WINDOW_M,
+            FAILURE_WINDOW_N,
+            q_probe,
+            observation_ceiling,
+        );
+        cap_delivered.push(CapDeliveredRow {
+            pairs,
+            k_wanted: lambda_target * pairs / seb,
+            lambda_eff: lam,
+            gap: probe.gap(),
+            q: q_probe,
+            holder: pin.false_slash_max_holder,
+            clears: pin.clears_floor(false_slash_target),
+            is_operative: (pairs - projected_pairs).abs() < 0.5,
+        });
+    }
+
+    let region = region_edges(
+        &model,
+        observation_ceiling,
+        false_slash_target,
+        free_ride_bound,
+    );
+    let shipped_in_region = region
+        .iter()
+        .find(|r| r.n == shipped.n)
+        .is_some_and(|r| r.contains(shipped.m));
+
+    FeasibilitySnapshot {
+        targets: *targets,
+        bond_life_epochs,
+        observation_ceiling,
+        delivered_lambda: delivered,
+        knee_pairs,
+        model,
+        q,
+        observation_rate: model.observation_rate(),
+        shipped,
+        shipped_in_region,
+        sensitivity,
+        cap_delivered,
+        region,
+    }
+}
+
+/// Floor/ceiling edges per `n`, computed in one pass (no re-filter of a flat
+/// cell bag).
+fn region_edges(
+    model: &MissModel,
+    observation_ceiling: f64,
+    false_slash_target: f64,
+    free_ride_bound: f64,
+) -> Vec<RegionRow> {
+    let q = model.miss_given_observation();
+    let mut rows = Vec::with_capacity((N_HARD_BOUND - 1) as usize);
+    for n in 2..=N_HARD_BOUND {
+        let mut m_min = None;
+        let mut m_max = None;
+        let mut fs_at_m_min = None;
+        let mut free_ride_at_m_max = None;
+        for m in 2..=n {
+            let pin = PinExposure::at(m, n, q, observation_ceiling);
+            if m_min.is_none() && pin.clears_floor(false_slash_target) {
+                m_min = Some(m);
+                fs_at_m_min = Some(pin.false_slash_pair);
+            }
+            // free_ride rises with m; last m under the bound is m_max.
+            if pin.free_ride <= free_ride_bound {
+                m_max = Some(m);
+                free_ride_at_m_max = Some(pin.free_ride);
+            }
+        }
+        rows.push(RegionRow {
+            n,
+            m_min,
+            m_max,
+            fs_at_m_min,
+            free_ride_at_m_max,
+        });
+    }
+    rows
+}
+
+// ── report (format only) ────────────────────────────────────────────────────
+
+/// Format a precomputed [`FeasibilitySnapshot`]. Prefer [`evaluate`] + this
+/// when the numbers are needed without prose.
+pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fmt::Result {
+    let t = &snap.targets;
+    let model = &snap.model;
+    let floor = t.false_slash_target;
+    let mh = MAX_HOLDINGS_SHARDS;
+
     writeln!(
         out,
         "\n(m,n) FEASIBILITY — region, not optimum (wide-guardrails: a shipped\n\
@@ -452,10 +636,10 @@ pub fn mn_feasibility_report(
          flood -- does not transfer to the SP-T3 operating point; the rig re-run\n\
          gates the real value), r={R}, fabrication_intensity={FI:.2} (1.00 =\n\
          every gap epoch poisoned).",
-        LT = lambda_target,
-        DL = delivered,
-        PP = projected_pairs,
-        KNEE = knee_pairs,
+        LT = t.lambda_target,
+        DL = snap.delivered_lambda,
+        PP = t.projected_pairs,
+        KNEE = snap.knee_pairs,
         P = model.p_attempt,
         R = model.retries,
         FI = model.fabrication_intensity,
@@ -471,61 +655,52 @@ pub fn mn_feasibility_report(
          transport term across an epoch's reads -- (p^r)^j for j reads, not p^r --\n\
          so coverage and retry depth are SUBSTITUTES on that term, and coverage's\n\
          version has better independence (j miners, j circuits vs r retries on one).",
-        OR = obs_rate,
+        OR = snap.observation_rate,
         N = FAILURE_WINDOW_N,
-        SPAN = f64::from(FAILURE_WINDOW_N) / obs_rate,
+        SPAN = f64::from(FAILURE_WINDOW_N) / snap.observation_rate,
     )?;
     writeln!(
         out,
         "  TERMS: gap (poisonable) = e^-lambda = {G:.4}; read-failure p^r = {RF:.4};\n\
          per-epoch missed = {ME:.6}; per-OBSERVATION miss q = {Q:.6}.\n\
-         Bond life {BL:.0} epochs => {OBS:.0} observations.",
+         Bond life {BL:.0} epochs; union-bound ceiling = {CEIL:.0} observations\n\
+         (<= 1 obs/epoch; E[obs] = bond_life * rate = {EOBS:.1}).",
         G = model.gap(),
         RF = model.read_failure(),
         ME = model.missed_epoch_rate(),
-        Q = q,
-        BL = bond_life_epochs,
-        OBS = observations,
+        Q = snap.q,
+        BL = snap.bond_life_epochs,
+        CEIL = snap.observation_ceiling,
+        EOBS = snap.bond_life_epochs * snap.observation_rate,
     )?;
 
-    // The shipped pin, with its margins on both sides. The margin is quoted
-    // on the HOLDER axis — the target is per ARCHIVER, so a per-pair margin
-    // would overstate safety by up to MAX_HOLDINGS x (the exact framing gap
-    // the ruling below closes).
-    let (sm, sn) = (FAILURE_WINDOW_M, FAILURE_WINDOW_N);
-    let shipped_fs = false_slash_bound(sm, sn, q, observations);
-    let shipped_holder = max_holder_exposure(shipped_fs);
+    let s = &snap.shipped;
     writeln!(
         out,
         "  SHIPPED PIN ({SM} of {SN}): false-slash/pair over bond life = {FS:.3e};\n\
          at MAX_HOLDINGS ({MH} pairs) = {FH:.3e} vs target {T:.1e} per ARCHIVER --\n\
          {VERDICT}, margin {MAR:.1e}x on the operator axis; free-ride fraction =\n\
-         {FR:.3} (W16 bound {FRB:.3}).",
-        SM = sm,
-        SN = sn,
-        FS = shipped_fs,
-        MH = MAX_HOLDINGS_SHARDS,
-        FH = shipped_holder,
-        T = false_slash_target,
-        VERDICT = if shipped_holder <= false_slash_target {
-            "clears"
+         {FR:.3} (W16 bound {FRB:.3}); region membership = {IN}.",
+        SM = s.m,
+        SN = s.n,
+        FS = s.false_slash_pair,
+        MH = mh,
+        FH = s.false_slash_max_holder,
+        T = floor,
+        VERDICT = s.floor_verdict(floor),
+        MAR = s.floor_margin(floor),
+        FR = s.free_ride,
+        FRB = t.free_ride_bound,
+        IN = if snap.shipped_in_region {
+            "inside"
         } else {
-            "EXCEEDS"
+            "OUTSIDE"
         },
-        MAR = if shipped_holder > 0.0 {
-            false_slash_target / shipped_holder
-        } else {
-            f64::INFINITY
-        },
-        FR = free_ride_fraction(sm, sn),
-        FRB = free_ride_bound,
     )?;
 
-    // Which exposure the target applies to is a MATERIAL choice, so report
-    // both rather than smuggling one in: P(any pair slashed) treats a single
-    // shard's FLOOR as the event, while expected-pairs-lost prices it. At
-    // MAX_HOLDINGS the two differ by ~4096x in framing but describe the same
-    // arithmetic, and they support opposite readings of the same margin.
+    // P(any) is the operative frame: a slash opens a record-scoped bad
+    // interval (excludes the whole record from r_market, blocks HoldingsUpdate
+    // until Rebond). Expected pairs lost prices only the burn.
     let bond_floor_skl = crate::proxy::bond_at_risk_skl();
     writeln!(
         out,
@@ -540,16 +715,13 @@ pub fn mn_feasibility_report(
          SKL of {TOT:.0} posted) is recorded only to show the ~{MH}x framing gap the\n\
          ruling closes -- it prices the burn while ignoring the exclusion, which\n\
          is the larger harm.",
-        MH = MAX_HOLDINGS_SHARDS,
-        FH = shipped_holder,
-        EP = MAX_HOLDINGS_SHARDS as f64 * shipped_fs,
-        SKL = MAX_HOLDINGS_SHARDS as f64 * shipped_fs * bond_floor_skl,
-        TOT = MAX_HOLDINGS_SHARDS as f64 * bond_floor_skl,
+        MH = mh,
+        FH = s.false_slash_max_holder,
+        EP = mh as f64 * s.false_slash_pair,
+        SKL = mh as f64 * s.false_slash_pair * bond_floor_skl,
+        TOT = mh as f64 * bond_floor_skl,
     )?;
 
-    // Sensitivity: the region's POSITION is set by two inputs neither pinned
-    // (`r`, and the fabrication intensity). A single-point verdict would read
-    // as a property of (m, n) when it is mostly a property of those two.
     writeln!(
         out,
         "  SENSITIVITY — does the shipped ({SM},{SN}) clear the floor? Evaluated at\n\
@@ -567,49 +739,28 @@ pub fn mn_feasibility_report(
     writeln!(
         out,
         "{:<6} {:>9} {:>10} {:>10} {:>12} {:>14} {:>10}",
-        "r", "f", "phi_tgt", "phi_amb", "q/obs", "P(any) @4096", "verdict"
+        "r",
+        "f",
+        "phi_tgt",
+        "phi_amb",
+        "q/obs",
+        format!("P(any) @{mh}"),
+        "verdict"
     )?;
-    for &r in &[1u32, 2, 3] {
-        for &f in &[1.00_f64, 0.10, 0.001] {
-            let phi = targeted_fabrication_intensity(f, seb);
-            let phi_amb = ambient_fabrication_intensity(f, lambda_target);
-            let probe = MissModel {
-                retries: r,
-                fabrication_intensity: phi,
-                ..model
-            };
-            let q_probe = probe.miss_given_observation();
-            // The same deterministic ceiling as every other verdict — never
-            // `bond_life · observation_rate`, which is an expectation and
-            // voids the union bound's upper-bound claim exactly in the
-            // sparse-observation rows this table exists to probe.
-            let pair = false_slash_bound(FAILURE_WINDOW_M, FAILURE_WINDOW_N, q_probe, observations);
-            let holder = max_holder_exposure(pair);
-            writeln!(
-                out,
-                "{:<6} {:>9.3} {:>10.4} {:>10.4} {:>12.5} {:>14.2e} {:>10}",
-                r,
-                f,
-                phi,
-                phi_amb,
-                q_probe,
-                holder,
-                if holder <= false_slash_target {
-                    "clears"
-                } else {
-                    "EXCEEDS"
-                }
-            )?;
-        }
+    for row in &snap.sensitivity {
+        writeln!(
+            out,
+            "{:<6} {:>9.3} {:>10.4} {:>10.4} {:>12.5} {:>14.2e} {:>10}",
+            row.retries,
+            row.f,
+            row.phi_targeted,
+            row.phi_ambient,
+            row.q,
+            row.holder,
+            floor_verdict_flag(row.clears),
+        )?;
     }
 
-    // The standing discipline, executed rather than restated: the fabrication
-    // term evaluates at CAP-DELIVERED coverage at projected pair counts, not
-    // at the nominal target — past the knee the cap binds and the poisonable
-    // gap grows, which is the term the floor is most sensitive to. The table
-    // COMPOSES delivered lambda into the shipped pin's floor verdict per
-    // projection (review, 2026-08-02: the gap column formerly stood alone
-    // while every verdict stayed priced at the nominal target).
     writeln!(
         out,
         "  CAP-DELIVERED COVERAGE (k_cap = {KC:.0}, SEB = {SEB:.0}): the fabrication\n\
@@ -617,35 +768,32 @@ pub fn mn_feasibility_report(
          k = lambda_target*pairs/SEB is capped. Each row carries the SHIPPED\n\
          pin's floor verdict at that delivery, so the projection choice reads\n\
          off this table:",
-        KC = k_cap,
-        SEB = seb,
+        KC = t.k_cap,
+        SEB = t.seb,
     )?;
     writeln!(
         out,
         "{:<12} {:>10} {:>12} {:>14} {:>12} {:>14} {:>10}",
-        "pairs", "k wanted", "lambda_eff", "gap (poison)", "q/obs", "P(any) @4096", "verdict"
+        "pairs",
+        "k wanted",
+        "lambda_eff",
+        "gap (poison)",
+        "q/obs",
+        format!("P(any) @{mh}"),
+        "verdict"
     )?;
-    for &pairs in &[5_000.0_f64, 10_000.0, 20_000.0, 40_000.0, 100_000.0] {
-        let lam = delivered_lambda(lambda_target, pairs, seb, k_cap);
-        let probe = sources.at_coverage(lam);
-        let q_probe = probe.miss_given_observation();
-        let pair_fs = false_slash_bound(sm, sn, q_probe, observations);
-        let holder = max_holder_exposure(pair_fs);
+    for row in &snap.cap_delivered {
         writeln!(
             out,
             "{:<12.0} {:>10.2} {:>12.3} {:>14.4} {:>12.5} {:>14.2e} {:>10}{OP}",
-            pairs,
-            lambda_target * pairs / seb,
-            lam,
-            probe.gap(),
-            q_probe,
-            holder,
-            if holder <= false_slash_target {
-                "clears"
-            } else {
-                "EXCEEDS"
-            },
-            OP = if (pairs - projected_pairs).abs() < 0.5 {
+            row.pairs,
+            row.k_wanted,
+            row.lambda_eff,
+            row.gap,
+            row.q,
+            row.holder,
+            floor_verdict_flag(row.clears),
+            OP = if row.is_operative {
                 "  <- operative"
             } else {
                 ""
@@ -653,17 +801,12 @@ pub fn mn_feasibility_report(
         )?;
     }
 
-    // Feasible region: the lowest admissible m per n is what the floor sets;
-    // the ceiling caps how high m may go before free-riding is over-cheap.
-    // The full admissible box is rendered (n from 2, matching the sweep's own
-    // lower bound): an infeasible row is a result, not noise — wide-guardrails
-    // wants the box edge visible, not silently cropped.
     writeln!(
         out,
         "  FEASIBLE REGION at the operative point (delivered lambda {DL:.3},\n\
          projection {PP:.0} pairs, r={R}, targeted phi={FI:.2}):",
-        DL = delivered,
-        PP = projected_pairs,
+        DL = snap.delivered_lambda,
+        PP = t.projected_pairs,
         R = model.retries,
         FI = model.fabrication_intensity,
     )?;
@@ -672,35 +815,30 @@ pub fn mn_feasibility_report(
         "{:<5} {:>8} {:>8} {:>14} {:>14}",
         "n", "m_min", "m_max", "fs@m_min", "free-ride@m_max"
     )?;
-    let cells = sweep(&model, bond_life_epochs, N_HARD_BOUND);
-    for n in 2..=N_HARD_BOUND {
-        let row: Vec<&Cell> = cells.iter().filter(|c| c.n == n).collect();
-        let m_min = row
-            .iter()
-            .find(|c| c.false_slash_max_holder <= false_slash_target)
-            .map(|c| c.m);
-        let m_max = row
-            .iter()
-            .filter(|c| c.free_ride <= free_ride_bound)
-            .map(|c| c.m)
-            .next_back();
-        match (m_min, m_max) {
-            (Some(lo), Some(hi)) if lo <= hi => {
-                let fs = row
-                    .iter()
-                    .find(|c| c.m == lo)
-                    .map_or(0.0, |c| c.false_slash_pair);
-                let fr = free_ride_fraction(hi, n);
-                writeln!(out, "{n:<5} {lo:>8} {hi:>8} {fs:>14.2e} {fr:>14.3}")?;
+    for row in &snap.region {
+        if row.is_feasible() {
+            if let (Some(lo), Some(hi), Some(fs), Some(fr)) = (
+                row.m_min,
+                row.m_max,
+                row.fs_at_m_min,
+                row.free_ride_at_m_max,
+            ) {
+                writeln!(
+                    out,
+                    "{n:<5} {lo:>8} {hi:>8} {fs:>14.2e} {fr:>14.3}",
+                    n = row.n
+                )?;
             }
-            (lo, hi) => writeln!(
+        } else {
+            writeln!(
                 out,
                 "{n:<5} {:>8} {:>8} {:>14} {:>14}",
-                lo.map_or("-".to_string(), |v| v.to_string()),
-                hi.map_or("-".to_string(), |v| v.to_string()),
+                row.m_min.map_or_else(|| "-".to_string(), |v| v.to_string()),
+                row.m_max.map_or_else(|| "-".to_string(), |v| v.to_string()),
                 "infeasible",
-                "-"
-            )?,
+                "-",
+                n = row.n,
+            )?;
         }
     }
     writeln!(
@@ -713,43 +851,131 @@ pub fn mn_feasibility_report(
          not from this arm. The operative verdicts are GATED on two labelled\n\
          inputs: the stand-in p (rig re-run) and the pair projection -- move\n\
          either and the same tables re-answer without re-deriving the arm.",
-        MH = MAX_HOLDINGS_SHARDS,
+        MH = mh,
     )?;
     Ok(())
 }
 
-/// The arm's default operating point MINUS coverage: the labelled stand-in
-/// `p`, single-retry witnesses, and the targeted fabrication intensity (F-1:
-/// `φ ≈ 1` at any measurable hashrate). Coverage is not here by design — the
-/// λ pin lives at the call site's `FeasibilityTargets` and the report derives
-/// what a pair actually receives, so the pin exists in exactly one place.
-#[must_use]
-pub fn default_sources() -> MissSources {
-    MissSources {
-        p_attempt: 0.30,
-        retries: 1,
-        fabrication_intensity: 1.0,
-    }
+/// Evaluate then format — stage-2 entry point.
+pub fn mn_feasibility_report(
+    out: &mut impl fmt::Write,
+    sources: &MissSources,
+    bond_life_epochs: f64,
+    targets: &FeasibilityTargets,
+) -> fmt::Result {
+    write_report(out, &evaluate(sources, bond_life_epochs, targets))
 }
-
-/// Bond life used by the report — reuses A5's reward horizon (~5 y) rather
-/// than inventing a second lifetime constant.
-pub const BOND_LIFE_EPOCHS: f64 = A5_REWARD_HORIZON_EPOCHS;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::proxy::first_slash_probability;
 
+    fn default_snapshot() -> FeasibilitySnapshot {
+        evaluate(
+            &default_sources(),
+            BOND_LIFE_EPOCHS,
+            &FeasibilityTargets::operative_defaults(),
+        )
+    }
+
+    #[test]
+    fn shipped_pin_clearance_is_a_snapshot_property() {
+        let snap = default_snapshot();
+        assert_eq!(snap.shipped.m, FAILURE_WINDOW_M);
+        assert_eq!(snap.shipped.n, FAILURE_WINDOW_N);
+        // Clearance and region membership are snapshot booleans — not report
+        // string scraping.
+        let clears = snap.shipped.clears_floor(snap.targets.false_slash_target);
+        assert_eq!(
+            snap.shipped_in_region,
+            snap.region
+                .iter()
+                .find(|r| r.n == snap.shipped.n)
+                .is_some_and(|r| r.contains(snap.shipped.m))
+        );
+        // Free-ride must also sit under the W16 bound for membership to hold.
+        if snap.shipped_in_region {
+            assert!(clears);
+            assert!(snap.shipped.free_ride <= snap.targets.free_ride_bound);
+        }
+        assert!(snap.shipped.false_slash_max_holder.is_finite());
+        assert!(snap.shipped.false_slash_pair >= 0.0);
+        // Delivered λ at the operative projection is below target (cap binds
+        // past 20 k pairs; projection is 40 k).
+        assert!(snap.delivered_lambda < snap.targets.lambda_target);
+        assert!((snap.observation_ceiling - BOND_LIFE_EPOCHS).abs() < 1e-12);
+    }
+
+    #[test]
+    fn region_edges_cover_the_shipped_window_or_mark_it() {
+        let snap = default_snapshot();
+        let row = snap
+            .region
+            .iter()
+            .find(|r| r.n == FAILURE_WINDOW_N)
+            .expect("region includes shipped n");
+        // Either the shipped m is inside the band, or the row is infeasible /
+        // m is outside — both are legitimate snapshot outcomes; the contract
+        // is that evaluate reports the edges consistently with PinExposure.
+        if row.is_feasible() {
+            let lo = row.m_min.unwrap();
+            let hi = row.m_max.unwrap();
+            assert!(lo <= hi);
+            assert!(row.contains(lo));
+            assert!(row.contains(hi));
+            // Edges must match recomputation at the operative q.
+            let at_lo = PinExposure::at(lo, row.n, snap.q, snap.observation_ceiling);
+            assert!(at_lo.clears_floor(snap.targets.false_slash_target));
+            if lo > 2 {
+                let below = PinExposure::at(lo - 1, row.n, snap.q, snap.observation_ceiling);
+                assert!(!below.clears_floor(snap.targets.false_slash_target));
+                assert!(!row.contains(lo - 1));
+            }
+            let at_hi = PinExposure::at(hi, row.n, snap.q, snap.observation_ceiling);
+            assert!(at_hi.free_ride <= snap.targets.free_ride_bound + 1e-15);
+        }
+    }
+
+    #[test]
+    fn sensitivity_holder_falls_as_retry_depth_rises() {
+        let snap = default_snapshot();
+        // Fix f = 1.0 (first column of each retry block) and require holder
+        // to drop when r increases — retry depth is the remaining floor lever
+        // under targeted fabrication.
+        let at_f1: Vec<_> = snap
+            .sensitivity
+            .iter()
+            .filter(|r| (r.f - 1.0).abs() < 1e-15)
+            .collect();
+        assert_eq!(at_f1.len(), SENSITIVITY_RETRIES.len());
+        for w in at_f1.windows(2) {
+            assert!(
+                w[1].holder < w[0].holder,
+                "r={} holder {} should beat r={} holder {}",
+                w[1].retries,
+                w[1].holder,
+                w[0].retries,
+                w[0].holder
+            );
+        }
+    }
+
+    #[test]
+    fn operative_cap_row_is_marked() {
+        let snap = default_snapshot();
+        let marked: Vec<_> = snap
+            .cap_delivered
+            .iter()
+            .filter(|r| r.is_operative)
+            .collect();
+        assert_eq!(marked.len(), 1);
+        assert!((marked[0].pairs - snap.targets.projected_pairs).abs() < 0.5);
+        assert!((marked[0].lambda_eff - snap.delivered_lambda).abs() < 1e-12);
+    }
+
     #[test]
     fn union_bound_is_an_upper_bound_and_tight_where_it_matters() {
-        // The bound is the sweep's workhorse (O(n) per cell); the exact walk
-        // is what licenses it — and the walk is proxy.rs's single
-        // production-predicate-backed kernel, not a local twin (review,
-        // 2026-08-02: the arm carried a duplicate of the chain). Check both
-        // directions: never below the exact value, and within a small factor
-        // in the small-probability regime the floor target lives in. The
-        // kernel runs the SHIPPED window, so the comparison is pinned there.
         let (m, n) = (FAILURE_WINDOW_M, FAILURE_WINDOW_N);
         let obs = 120u64;
         for &q in &[1e-4_f64, 1e-3, 1e-2] {
@@ -772,22 +998,13 @@ mod tests {
 
     #[test]
     fn pass_dominance_compounds_the_transport_term() {
-        // The finding this arm records: because any pass clears the epoch, the
-        // transport term is (p^r)^j across an epoch's j reads, not p^r, so
-        // coverage substitutes for retry depth on that term.
-        //
-        // The size of the effect is bounded by Poisson dispersion, and that is
-        // the part worth pinning: the j = 1 epochs (λe^−λ ≈ 15 % of them at
-        // λ = 3) carry a bare `p^r` and dominate the sum, so compounding buys
-        // ~4×, NOT the (p^r)^λ ≈ 11× a mean-read reading would suggest. An
-        // earlier draft of this arm asserted the mean-read figure and this
-        // test is what refuted it — keep the bound tied to `p^r` so the claim
-        // stays honest if `p` moves after the PoW-enabled rig re-run.
+        // Compounding is real but Poisson-dispersion-bounded: j=1 epochs
+        // dominate, so the gain is ~4× not the mean-read (p^r)^λ myth.
         let m = MissModel {
             lambda_eff: 3.0,
             p_attempt: 0.30,
             retries: 1,
-            fabrication_intensity: 0.0, // isolate the transport term
+            fabrication_intensity: 0.0,
         };
         let transport = m.missed_epoch_rate();
         let single = m.read_failure();
@@ -796,29 +1013,21 @@ mod tests {
             "compounding must beat a single read's failure by >2x: {transport} vs {single}"
         );
         assert!(
-            transport > (single).powi(3),
-            "and must NOT reach the mean-read figure {}: dispersion forbids it",
+            transport > single.powi(3),
+            "must NOT reach the mean-read figure {}: dispersion forbids it",
             single.powi(3)
         );
-        // Coverage must move it monotonically, which is what makes the
-        // substitution real rather than rhetorical.
         let thinner = MissModel {
             lambda_eff: 1.0,
             ..m
         };
         assert!(thinner.missed_epoch_rate() > transport);
-        // And retry depth must move it too — the two are substitutes, so the
-        // allocation between them is a real choice rather than a formality.
         let deeper = MissModel { retries: 2, ..m };
         assert!(deeper.missed_epoch_rate() < transport);
     }
 
     #[test]
     fn observations_arrive_at_most_once_per_epoch() {
-        // The correction: coverage is reads/epoch, but settlement collapses an
-        // epoch to ONE observation, so the observation rate is bounded by 1 and
-        // approaches it as the gap closes. A 13-observation window therefore
-        // spans MORE than 13 epochs, never 13/lambda.
         for &lam in &[1.0_f64, 3.0, 6.0] {
             let m = MissModel {
                 fabrication_intensity: 0.0,
@@ -832,10 +1041,6 @@ mod tests {
 
     #[test]
     fn max_holdings_exposure_dominates_the_per_pair_number() {
-        // Assert on the axis the operator experiences: every held pair is
-        // independently exposed, so a max-holdings archiver's false-slash
-        // exposure is ~MAX_HOLDINGS_SHARDS x the per-pair figure. A target set
-        // per-pair would understate an operator's risk by that factor.
         let per_pair = 1e-9_f64;
         let holder = max_holder_exposure(per_pair);
         assert!(holder > per_pair * 4000.0);
@@ -844,9 +1049,6 @@ mod tests {
 
     #[test]
     fn delivered_coverage_decays_once_k_cap_binds() {
-        // The standing discipline: evaluate the fabrication term at
-        // cap-delivered coverage. Below the knee the cap is slack; above it,
-        // delivered lambda falls and the gap (hence fabrication) grows.
         let (target, seb, k_cap) = (3.0, 10_000.0, 6.0);
         let below = delivered_lambda(target, 10_000.0, seb, k_cap);
         let above = delivered_lambda(target, 40_000.0, seb, k_cap);
@@ -857,16 +1059,8 @@ mod tests {
 
     #[test]
     fn the_bound_holds_against_the_worst_realized_observation_count() {
-        // Review finding, 2026-08-02: the arm passed `bond_life * obs_rate` --
-        // an EXPECTATION -- where the union bound needs a deterministic
-        // ceiling. A bond life that happens to yield more observations than
-        // its mean carries more sliding windows than an expectation-priced
-        // bound accounted for, which voids the "upper bound" claim in exactly
-        // the tail the floor target cares about.
-        //
-        // The ratified miss fact supplies the ceiling: at most ONE observation
-        // per epoch. So the bound taken at `bond_life` must dominate the exact
-        // probability at EVERY realizable count, including the maximum.
+        // Ceiling = bond_life dominates every realizable count; expectation
+        // pricing is strictly smaller and would void the upper-bound claim.
         let (m, n, q) = (FAILURE_WINDOW_M, FAILURE_WINDOW_N, 1e-2_f64);
         let bond_life = 131.0_f64;
         let bound = false_slash_bound(m, n, q, bond_life);
@@ -878,31 +1072,16 @@ mod tests {
                 "bound {bound:.3e} below exact {exact:.3e} at {realized} observations"
             );
         }
-        // And the defect is reachable, not theoretical: pricing at the
-        // expectation (obs_rate < 1) yields a strictly smaller bound, so the
-        // old form really was claiming less than it covered.
         let expectation_priced = false_slash_bound(m, n, q, bond_life * 0.95);
         assert!(expectation_priced < bound);
     }
 
     #[test]
     fn targeted_fabrication_saturates_where_ambient_does_not() {
-        // F-1, as a test. The ambient (spraying) model divides the attack by
-        // `pairs` and so reads as hashrate-bounded; the targeted model does
-        // not, because miner-chosen sets let an adversary concentrate for
-        // free. An earlier draft of this arm shipped the ambient model as THE
-        // model and drew a region that leaned on the difference.
         let (lam, seb) = (3.0, 10_000.0);
         assert!(targeted_fabrication_intensity(0.0, seb).abs() < 1e-12);
-
-        // One block per epoch is all a targeted fabricator needs, so phi
-        // saturates far below any hashrate a real miner would hold.
         assert!(targeted_fabrication_intensity(1e-3, seb) > 0.99);
         assert!(targeted_fabrication_intensity(1e-4, seb) > 0.60);
-
-        // And it must DOMINATE the ambient term everywhere it matters -- that
-        // gap is exactly what the earlier region was silently claiming as
-        // deterrence.
         for &f in &[1e-3_f64, 1e-2, 0.10, 0.30] {
             let tgt = targeted_fabrication_intensity(f, seb);
             let amb = ambient_fabrication_intensity(f, lam);
@@ -911,20 +1090,12 @@ mod tests {
                 "targeted must exceed ambient at f={f}: {tgt} vs {amb}"
             );
         }
-        // Ambient stays the weaker, hashrate-scaled term it always was.
         assert!(ambient_fabrication_intensity(0.10, lam) < 0.30);
     }
 
     #[test]
     fn retry_depth_not_hashrate_is_what_carries_the_floor() {
-        // The consequence of F-1 worth pinning: at the targeted intensity the
-        // fabrication term is fixed at the gap regardless of `f`, so the only
-        // lever left on the floor is `r`. If a future edit re-introduces a
-        // hashrate-scaled fabrication term as the headline model, the second
-        // assertion here is what should fail.
         let seb = 10_000.0;
-        // Coverage is a test input here (3.0, the below-knee point) — the
-        // report derives its own; `default_sources` deliberately has none.
         let base = MissModel {
             fabrication_intensity: targeted_fabrication_intensity(1e-3, seb),
             ..default_sources().at_coverage(3.0)
@@ -933,30 +1104,20 @@ mod tests {
             fabrication_intensity: targeted_fabrication_intensity(1e-2, seb),
             ..base
         };
-        // A 10x hashrate difference must buy the defender essentially nothing.
         assert!(
             (base.miss_given_observation() - tiny_f.miss_given_observation()).abs() < 1e-3,
             "targeted fabrication must not scale with hashrate"
         );
-        // Retry depth, by contrast, must move it materially.
         let deeper = MissModel { retries: 2, ..base };
         assert!(deeper.miss_given_observation() < 0.6 * base.miss_given_observation());
     }
 
     #[test]
     fn window_exceedance_survives_q_next_to_one() {
-        // Regression (review, 2026-08-02): a one-sided recurrence seeded with
-        // (1−q)^n underflows to exactly 0 for q within ~1e−16 of 1 at
-        // n ≥ 22 — below the q >= 1.0 guard, above the seed's range — and
-        // returned 0 where the true tail is ~1, so a catastrophically
-        // infeasible cell read as clearing with infinite margin. The
-        // two-sided recurrence keys on the smaller tail, whose seed is
-        // bounded below by 0.5^25.
-        let q = 1.0 - 1e-16; // rounds to nextdown(1.0), strictly < 1.0
+        let q = 1.0 - 1e-16;
         assert!(q < 1.0);
         assert!(window_exceedance(N_HARD_BOUND, N_HARD_BOUND, q) > 0.999);
-        // The complement identity ties the two branches together across the
-        // q = 1/2 seam: P(X ≥ m; q) = 1 − P(X ≥ n−m+1; 1−q).
+        // Complement identity across the q = 1/2 seam.
         for &qq in &[0.1_f64, 0.3, 0.5, 0.7, 0.9, 0.97] {
             let lhs = window_exceedance(11, 13, qq);
             let rhs = 1.0 - window_exceedance(3, 13, 1.0 - qq);
@@ -969,9 +1130,26 @@ mod tests {
 
     #[test]
     fn free_ride_rises_with_m_and_falls_with_n() {
-        // W16's axis: a wider window or a lower m gives a placing degrader
-        // less free room.
         assert!(free_ride_fraction(11, 13) > free_ride_fraction(6, 13));
         assert!(free_ride_fraction(11, 25) < free_ride_fraction(11, 13));
+    }
+
+    #[test]
+    fn write_report_emits_ceiling_wording_not_arrow_equality() {
+        let snap = default_snapshot();
+        let mut buf = String::new();
+        write_report(&mut buf, &snap).unwrap();
+        assert!(
+            buf.contains("union-bound ceiling"),
+            "report must name the ceiling, not imply bond_life = E[obs]"
+        );
+        assert!(
+            !buf.contains("epochs =>"),
+            "old 'epochs => observations' arrow conflated ceiling with count"
+        );
+        assert!(
+            buf.contains(&format!("P(any) @{MAX_HOLDINGS_SHARDS}")),
+            "table headers must track MAX_HOLDINGS_SHARDS, not a hard-coded 4096"
+        );
     }
 }
