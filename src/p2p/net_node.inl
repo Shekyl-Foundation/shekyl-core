@@ -2262,8 +2262,43 @@ namespace nodetool
     if (m_network_zones.empty())
       return enet::zone::invalid;
 
+    /* R-1 mixed eligibility (§59). The inherited rule sent every RELAYED
+       transaction to clearnet and every ORIGINATED one to the anonymity zone,
+       so a peer holding a stem slot there knew everything it saw was the
+       sender's own — F-6's origin oracle (§29), and the half configuration
+       B's deletion did not close (§58.3).
+
+       Two changes, and the second is not a second decision:
+
+       1. A relayed transaction still stemming is diverted onto the anonymity
+          zone with probability p (Rust owns the rate; this asks for a
+          verdict).
+       2. A transaction that ARRIVED over an anonymity zone and is still
+          stemming stays on it — no re-roll. Rolling per hop would return it
+          to clearnet after one step, leaving the zone carrying originated
+          traffic only, which is the oracle we are removing. Coherence is the
+          absence of a second roll, not a policy beside it.
+
+       `tx_relay` is the exit. Once a transaction fluffs it leaves the zone
+       and goes public — this line is what carries an anonymity-originated
+       transaction to the clearnet network at all, and swallowing it into
+       coherence would strand those transactions in the anonymity subgraph. */
+    const bool still_stemming =
+      tx_relay == cryptonote::relay_method::stem ||
+      tx_relay == cryptonote::relay_method::forward ||
+      tx_relay == cryptonote::relay_method::local;
+
     if (origin != enet::zone::invalid)
-      return send(*m_network_zones.begin()); // send all txs received via p2p over public network
+    {
+      if (still_stemming && origin != enet::zone::public_ && m_network_zones.count(origin))
+        return send(*m_network_zones.find(origin)); // coherence: no re-roll
+
+      if (still_stemming && m_network_zones.size() > 1 &&
+          shekyl_relay_zone_divert_relayed_tx())
+        return send(*m_network_zones.rbegin()); // entry: the one roll
+
+      return send(*m_network_zones.begin()); // relayed → clearnet, and every fluff
+    }
 
     if (m_network_zones.size() <= 2)
       return send(*m_network_zones.rbegin()); // see static asserts below; sends over anonymity network iff enabled

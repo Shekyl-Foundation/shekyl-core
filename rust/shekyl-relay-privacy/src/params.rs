@@ -54,6 +54,74 @@
 /// the design round can move it and watch the embargo follow.
 pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 
+/// R-1 mixed eligibility: the **per-hop** chance a *relayed* transaction is
+/// diverted onto the anonymity zone's stem instead of the public one, in
+/// hundredths of a percent (so `100` = 1.00 %).
+///
+/// # What this fixes
+///
+/// Without it, `net_node`'s routing sends every relayed transaction to
+/// clearnet and every *originated* one to the anonymity zone — so a peer
+/// holding a stem slot on that zone knows everything it sees is the sender's
+/// own. That is F-6's origin oracle (§29), and it is the half configuration
+/// B's deletion did **not** close (§58.3).
+///
+/// # Per-hop, and the distinction is not cosmetic
+///
+/// Every node that receives a relayed transaction over clearnet rolls
+/// independently, so over a stem of `1/q ≈ 5` hops the **network-level**
+/// diversion rate is `1 − (1 − p)^5`, not `p`:
+///
+/// | per-hop | network-level |
+/// | --- | --- |
+/// | 0.01 | 0.049 |
+/// | **0.02** | **0.096** |
+/// | 0.05 | 0.226 |
+///
+/// **This constant is the per-hop figure.** Reading it as the network rate
+/// overstates diversion fivefold; reading the network rate as this one
+/// understates it the same way.
+///
+/// # Why 2 %
+///
+/// Precision against the origin falls to ~2.4 % at a network-level 1 % and
+/// ~0.5 % at 5 %, and the bandwidth cost is negligible across that whole
+/// range — the choice is not knife-edge, so it is made generously rather
+/// than tuned. A per-hop 2 % puts the network level near 10 %: an order of
+/// magnitude above the point where precision is already at the C1 floor,
+/// while still diverting only one relayed transaction in fifty at each hop.
+///
+/// **Set against an origination rate of one transaction per node per day**
+/// (§34's Monero-like envelope). If that assumption moves, this moves with
+/// it — the quantity that matters is diverted-relayed volume *relative to*
+/// originated volume on the zone, and only the numerator is set here.
+pub const MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS: u32 = 200;
+
+/// Should this *relayed* transaction be diverted onto the anonymity zone's
+/// stem? One roll, at entry.
+///
+/// **The roll is at entry only, and that is what makes R-1 work rather than
+/// a second decision.** A transaction already travelling the anonymity zone's
+/// stem must stay on it — re-rolling per hop would send it back to clearnet
+/// after one step, leaving the zone carrying originated traffic only, which
+/// is the oracle R-1 exists to remove. Coherence is not a separate policy;
+/// it is the absence of a second roll.
+///
+/// Callers own the pre-fluff test: this answers *whether to divert*, not
+/// *whether the transaction is still stemming*. Once it fluffs it leaves the
+/// zone, which is what keeps a transaction that entered over Tor reaching the
+/// public network at all.
+#[must_use]
+pub fn divert_to_anonymity_zone<R: crate::rng::RelayRng + ?Sized>(rng: &mut R) -> bool {
+    // `bounded_uniform` rather than `% 10_000` for consistency with every
+    // other draw in this crate, not because the bias matters here: at this
+    // range it is `2^64 mod 10_000 / 2^64` ≈ 8.8e-17, which needs ~1e32
+    // samples to observe. Stated rather than implied, because a comment
+    // claiming a bias defence invites a test that cannot fail — one was
+    // written here and deleted for exactly that reason.
+    crate::rng::bounded_uniform(rng, 9_999) < u64::from(MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS)
+}
+
 /// The per-zone outbound-connection floor the F-7 embargo provisioning
 /// assumes (F-8b, §45).
 ///
@@ -339,6 +407,45 @@ pub mod inherited {
     /// `CRYPTONOTE_NOISE_CHANNELS` — max outbound connections per zone used
     /// for covert sending.
     pub const NOISE_CHANNELS: usize = 2;
+}
+
+#[cfg(test)]
+mod r1_tests {
+    use super::*;
+    use crate::rng::SplitMix64;
+
+    /// The roll fires at the configured per-hop rate, and the *network-level*
+    /// rate it implies is the one that must be quoted.
+    ///
+    /// Both arms matter. The first pins the constant's meaning; the second
+    /// pins the thing that is easy to state wrongly — a per-hop 2 % is a
+    /// ~10 % network-level diversion over a `1/q ≈ 5` stem, and a reader who
+    /// takes 2 % as the network figure is off by five.
+    #[test]
+    fn the_roll_is_per_hop_and_the_network_rate_is_five_times_it() {
+        const N: u32 = 200_000;
+        let mut rng = SplitMix64::new(0x5211);
+        let mut hits = 0_u32;
+        for _ in 0..N {
+            if divert_to_anonymity_zone(&mut rng) {
+                hits += 1;
+            }
+        }
+        let per_hop = f64::from(hits) / f64::from(N);
+        let target = f64::from(MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS) / 10_000.0;
+        assert!(
+            (per_hop - target).abs() < 0.002,
+            "per-hop rate {per_hop:.4} should be {target:.4}"
+        );
+
+        // 1 - (1-p)^5 at p = 0.02 is ~0.096.
+        let network = 1.0 - (1.0 - target).powi(5);
+        assert!(
+            (0.09..0.11).contains(&network),
+            "network-level rate {network:.3} — this is the figure to quote, \
+             not the per-hop one"
+        );
+    }
 }
 
 #[cfg(test)]

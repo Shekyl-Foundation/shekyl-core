@@ -9548,3 +9548,93 @@ fix is an integration test that links the FFI; recorded as owed.
   safe to delete when a constant is a pending derivation's other half.** The
   zero-consumer fact is now recorded at the site, since Q-12's derivation
   needs it.
+
+## 59. R-1 built — mixed eligibility, one roll at entry
+
+**2026-08-03.** F-6's omission half, specified since §30 and the longest-unbuilt
+item in the arc. §58.3 verified it was still unbuilt: configuration B's
+deletion removed the noise flag and left the zone-selection oracle untouched.
+
+### 59.1 The decision, and why coherence is not a second one
+
+**A transaction that enters the anonymity zone's stem stays on it until it
+fluffs. Relayed transactions enter with probability `p`; the roll happens
+once, at entry, not per hop.**
+
+**Coherence is the absence of a second roll, not a policy beside it.** Roll per
+hop and the stem returns to clearnet after one step, leaving the zone carrying
+originated traffic only — which is the oracle R-1 removes. There is no version
+of the first decision without the second.
+
+**`tx_relay` is the exit, and it is load-bearing.** The inherited
+`origin != invalid → clearnet` line is what carries an anonymity-*originated*
+transaction to the public network after it fluffs. Swallowing that line into
+coherence would strand those transactions in the anonymity subgraph — a
+liveness break that would read as correct. So coherence is gated on
+`stem | forward | local`, the three pre-fluff states `notify::send_txs`
+already treats together.
+
+### 59.2 `p` is per-hop, and that is the number that gets misquoted
+
+`MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS = 200` — **2 % per hop.** Every node
+receiving a relayed transaction over clearnet rolls independently, so over a
+stem of `1/q ≈ 5` hops the **network-level** rate is `1 − (1−p)^5 ≈ 9.6 %`.
+
+| per-hop | network-level |
+| --- | --- |
+| 0.01 | 0.049 |
+| **0.02** | **0.096** |
+| 0.05 | 0.226 |
+
+Precision against the origin is ~2.4 % at a network-level 1 % and ~0.5 % at
+5 %, and bandwidth is negligible across the range — **not knife-edge, so
+chosen generously rather than tuned.** Set against an origination rate of one
+transaction per node per day (§34's envelope); if that moves, this moves with
+it, because what matters is diverted-relayed volume *relative to* originated
+volume and only the numerator is set here.
+
+**The witness pins both figures**, because a reader who takes 2 % as the
+network rate is off by five. Control: raising the constant to 10 % fires the
+network-level arm.
+
+### 59.3 What crosses the boundary
+
+**A verdict, not a probability.** `shekyl_relay_zone_divert_relayed_tx()`
+answers yes/no; the rate, its per-hop meaning and the reasoning stay in Rust.
+Handing C++ the probability would put the draw — and a second place to get the
+rate wrong — on the wrong side of the seam.
+
+*Named into the signature gate's coverage:* the first draft was
+`shekyl_relay_divert_to_anonymity_zone`, which the gate does not see (it keys
+on `shekyl_relay_zone_`). **An FFI export outside the gate is an ungated
+surface**, so it was renamed rather than the gate widened. 21 exports checked.
+
+### 59.4 One deleted test, recorded because deleting it was the right call
+
+The roll uses `bounded_uniform` rather than `% 10_000`. A first draft justified
+that as bias defence and added a test for it. **The test could not fail**: at
+this range the modulo bias is `2^64 mod 10_000 / 2^64` ≈ **8.8 × 10⁻¹⁷**,
+needing ~10³² samples to observe — and the control (swapping in `%`) passed
+cleanly.
+
+**So the comment was corrected and the test deleted.** `bounded_uniform` stays
+for consistency with every other draw in the crate, which is the true reason.
+A comment claiming a defence invites a test that cannot fail, and one that
+cannot fail is worse than none — it reports safety it never checked.
+
+### 59.5 What this closes
+
+- **F-6's omission half.** The anonymity zone now carries relayed traffic, so
+  a peer holding a stem slot there no longer knows everything it sees is the
+  sender's own.
+- **§57's severity drops to the floor.** A retained fragment prefix attributes
+  like any stem observation — precision `C1 ≈ f` — rather than directly. §57's
+  channel remains; it stops being above the floor.
+- **The Tor zone's `in_mapping_` stops being nil-only.** Every observation
+  there shared one source key, so §35.4's distinct-source admissibility gate
+  (≥ 2 distinct sources) could **never** be satisfied and §12.11's
+  per-successor signal had one bucket. R-1 is a precondition for the
+  reputation mechanism functioning on the anonymity zone at all.
+
+**Unblocked, not done**: the constants round can now price bandwidth-versus-
+epoch against the post-R-1 severity rather than the inherited one (§58.5).
