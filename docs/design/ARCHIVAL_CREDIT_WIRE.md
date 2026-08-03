@@ -304,19 +304,82 @@ non-observation (the one-line credit-wire hazard the miss-fact ruling flagged).
 
 ## 5. Deletion surface — the atomic consensus swap (the item with teeth)
 
-The old vin is the **only current writer of `serve_credit_bit`**. Delete it
-first and there is a block where credit cannot be earned. So the new writer must
-be **live before the old one dies, in a single consensus-visible change** —
-`shekyl_archival_verify_serve_credit_vin` and its callers, the leaf/path/KAT
-surface (§2), and the vin type/tag are removed in the *same* change that lands
-§3–§4. The equivalence-KAT pair that pins the old path
-(`serve_credit_equivalence_kat_v1.json`, both legs) rides the same change —
-it cannot outlive the path it pins (`42-serialization-policy`: a persisted-block
-wire change bumps the version constant, CI-enforced).
+**The writer is one seam, cleanly located (grounded 2026-08-03).**
+`set_archival_serve_credit_bit` (`db_lmdb.cpp:5034`) is the **sole write
+primitive**, called from exactly two sites in `blockchain_db.cpp` — the add path
+(`:227`, on the `txin_archival_serve_credit_response` variant) and the pop path
+(`:746`, its reversal). The bit's storage (`m_archival_serve_credit`) and its
+readers are all downstream and do not care how the bit was set. So the swap is
+narrow: replace *what calls* the primitive, keep the primitive and everything
+below it. The surface then splits into two independently-sequenced halves, and
+**conflating them is the risk.**
 
-**This is where to be most careful.** It is a byte-for-byte consensus cutover;
-`07-consensus-atomic-cutovers` governs it. Sequencing (writer-live-before-old-dies)
-is the property the whole change is organised around.
+**Half A — the writer relocation (add-time → settlement-time).** Today the bit is
+written when a serve-credit vin is processed in `add_transaction` (`:227`). Under
+shape 4 it is written when the **settlement scan folds the kept attestation
+headers** (§4). These are different lifecycle points — old writer fires at
+block-add on a vin; new writer fires at the slash-deadline scan on headers — so
+this is not "new writer before old dies," it is a *relocation of when the bit is
+written*, and there is a correct-by-design window where a block is added
+(attestation headers present, mined over) but its epoch has not settled, so the
+bit is not yet written. Every reader that assumed "bit is set the moment the tx
+lands" must move to "bit is set at settlement."
+
+**Half B — the vin/leaf/path deletion.** `txin_archival_serve_credit_response`
+and its whole validation path — `check_archival_serve_credit_input`
+(`blockchain.cpp:3711`), the FCMP-proof-absence check (`:3702`),
+`verify_segment_path` / `verify_leaf_index` / `SegmentPathOpening` / `leaf_bytes`
+— all delete. The vin *variant* is woven into the tx machinery (`add_transaction`
+`:222`, `pop_block` `:744`, `tx_verification_utils.cpp:108`, the
+`serve_credit_only` tx-class at `blockchain.cpp:3480`), so removing it touches
+`std::variant` exhaustiveness at every match site — the compiler finds them all,
+but it is a wider mechanical edit than Half A.
+
+**The sequencing is three steps, not two, and the middle is the safety margin
+(`07-consensus-atomic-cutovers`).** You cannot delete the old vin (B) until the
+new writer (A) is live — until settlement writes the bit, the vin is the only
+thing that does, and a block between "vin deleted" and "first settlement" strands
+every archiver at zero credit. But you also cannot turn the new writer on cleanly
+while the old vin still fires, or a block carrying *both* an old vin and new
+headers double-writes the bit. So:
+1. **New writer live; old vin still accepted but its bit-write suppressed** (a
+   parsed no-op).
+2. **Confirm settlement writes bits correctly across a full epoch** — gated by
+   the equivalence KAT (below).
+3. **Reject the old vin at admission and delete its validation surface** (Half B).
+
+**The equivalence KAT gates step 2.** It must demonstrate that for the same
+challenge outcome, old-path (vin writes the bit at add) and new-path (settlement
+folds headers to the bit) produce the **identical `serve_credit_bit` state at the
+epoch's settlement**, compared against the actual `m_archival_serve_credit` table
+— "provably the same bit," not "looks right." Written before step 1 lands; it
+supersedes `serve_credit_equivalence_kat_v1.json`, which pins the old path and
+cannot outlive it (`42-serialization-policy`: the persisted-block wire change
+bumps the version constant, CI-enforced).
+
+**Read-site walk (the assumption the three-step rests on — done 2026-08-03).** No
+surviving consensus rule reads `serve_credit_bit` intra-epoch. The primitive
+`has_archival_serve_credit_bit` has three callers:
+- `blockchain.cpp:5237` — the **old vin's idempotency check** (reject
+  double-credit of `(P,s,E)`). Add-time, but on the vin path — **deletes with
+  Half B**; the idempotency is subsumed by the settlement fold being idempotent
+  by construction (one bit per `(P,s,E)`, computed once).
+- `db_lmdb.cpp:5749` — the slash-candidate fast-path ("an epoch with an
+  affirmative pass is not a candidate"), reading `settlement_epoch`'s own bit.
+  **Settlement-time.**
+- `db_lmdb.cpp:5719` — the failure-window look-back, reading bits for epochs
+  `≤ settlement_epoch`. **Settlement-time.**
+
+**The ordering invariant the walk surfaced (consensus-critical, new under shape
+4).** The two surviving readers are inside the slash scan and read the very bit
+the fold now writes. Under the old model the bit was written at add, so the scan
+only *read*; under shape 4 the settlement scan gains a **write phase (fold →
+write E's bit) that must run before its read phase (E's slash-candidacy `:5749`
+and failure-window eval `:5719`)**, per epoch. Evaluate-before-fold makes E's
+window read a not-yet-written bit and returns the wrong slash verdict. This
+within-scan ordering is a consensus invariant additional to the three-step
+cutover, and it is where a subtle bug would live — pin it explicitly, with a KAT
+that fails on the reversed order.
 
 ---
 
