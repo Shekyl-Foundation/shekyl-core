@@ -959,6 +959,19 @@ have an explicit `[[bin]]` path to make CI notice.
   headroom without letting one client hold many streams on a rendezvous circuit.
   Derive properly from the concurrency TJ-B's draw actually produces.
 
+  **Precondition for SPIKE-F-11 — the pin can corrupt that measurement if the arm
+  is built wrong.** `MaxStreams` is **per rendezvous circuit**, not per service
+  (control-spec: *"the maximum streams that can be attached on a rendezvous
+  circuit"*), and it is paired with `MaxStreamsCloseCircuit`, which **closes the
+  circuit** rather than refusing the extra stream. So:
+  - **`N` readers must be `N` distinct client ids.** Distinct SOCKS usernames ⇒
+    distinct circuits ⇒ distinct rendezvous ⇒ one stream each, and the pin never
+    binds. This is also the faithful model — `N` drawn miners *are* `N` clients.
+  - **Fanning `N` requests out from one client id is the trap.** They share a
+    circuit, so at `N > 8` the pin closes it, and the run records circuit failures
+    that look like network behaviour but are the harness measuring **its own
+    pin**. A tail that appears past `N = 8` is the first thing to suspect.
+
 ---
 
 ## Revision history
