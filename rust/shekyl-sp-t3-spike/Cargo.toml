@@ -53,13 +53,19 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 # just a test one, so it is not in dev-dependencies).
 tempfile = "3"
 
+# NOTE: the binaries live in `bins/`, NOT Cargo's conventional `src/bin/`.
+# The repo's `.gitignore` carries a bare `bin/` rule (line 88), which matches a
+# directory named `bin` at ANY depth — including `src/bin/`. Binaries placed
+# there are silently untracked: they build locally and vanish in CI. See the
+# measurement report's SPIKE-F-9. Do not "tidy" these back into `src/bin/`
+# without fixing the ignore rule first.
 [[bin]]
 name = "pd-f2-measure"
-path = "src/bin/pd_f2_measure.rs"
+path = "bins/pd_f2_measure.rs"
 
 [[bin]]
 name = "extract-shard"
-path = "src/bin/extract_shard.rs"
+path = "bins/extract_shard.rs"
 
 [dev-dependencies]
 # The live apparatus test drives the harness on a tokio runtime.

@@ -26,6 +26,7 @@ This document exists so a maintainer can close or definitively re-scope
 | **SPIKE-F-5** | `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` claimed SP-T0a delivered `ADD_ONION`/`DEL_ONION`. It did not | LOW | **CONFIRMED (source)** — corrected in this branch |
 | **SPIKE-F-6** | The persona descriptor is a **liveness oracle** with ~3 h granularity, and it is an irreducible floor of running an onion service | MEDIUM | **CONFIRMED (measured)** |
 | **SPIKE-F-8** | Two personas' descriptors land on **disjoint HSDir sets** (16 each, zero overlap) — the "shared HSDir" axis SP-T2 flagged does not exist | MEDIUM (as a *negative*) | **REFUTED (measured)** |
+| **SPIKE-F-9** | `.gitignore`'s bare `bin/` rule silently untracks **any Rust crate's `src/bin/`** — Cargo's conventional binary location | MEDIUM (repo-wide) | **CONFIRMED (CI)** |
 | **SPIKE-F-7** | D4's payload is a **cost, not a blocker**: ~5 h of one-time regtest mining plus a batched extraction | INFO | **REFUTED as a halt** |
 
 Two charter halt conditions were pre-registered as likely and **neither fired**:
@@ -533,6 +534,41 @@ should treat it as a bug.
   timeouts, pre-allocation request bound, one route, no logs, identical headers.
   This is transport plan §6a's requirement list made concrete and tested; TJ-B's
   real endpoint should inherit the *shape*, not the bytes.
+
+---
+
+## 14a. SPIKE-F-9 — `.gitignore` silently untracks Cargo's `src/bin/`
+
+`.gitignore:88` carries a bare **`bin/`** rule. A bare directory pattern in
+gitignore matches a directory of that name **at any depth**, so it matches
+`rust/<any-crate>/src/bin/` — Cargo's *conventional* location for a crate's
+binaries.
+
+**The failure mode is the bad kind: silent and late.** The binaries build and run
+locally, `cargo test` passes, `cargo clippy` passes, and nothing warns. They are
+simply absent from the commit. This spike's two binaries were caught only by CI,
+whose `cargo fmt --all -- --check` failed with:
+
+```text
+Error: file `…/rust/shekyl-sp-t3-spike/src/bin/extract_shard.rs` does not exist
+Error: file `…/rust/shekyl-sp-t3-spike/src/bin/pd_f2_measure.rs` does not exist
+```
+
+— i.e. `Cargo.toml` referenced files the repository did not contain. Had the
+crate declared its binaries by convention rather than with explicit `[[bin]]`
+paths, there would have been no `Cargo.toml` reference to dangle and **CI would
+have passed with the binaries missing.**
+
+**Worked around here, not fixed.** The spike's binaries live in `bins/` (not
+`src/bin/`), with a comment in `Cargo.toml` explaining why they must not be
+"tidied" back. That is a local dodge.
+
+**The repo-wide fix is a `.gitignore` change and is out of this charter's file
+list**, so it is reported rather than made. The rule presumably targets build
+output directories; the candidates are anchoring it (`/bin/`, or the specific
+build paths it means) or adding a negation for `src/bin/`. Any Rust crate added
+in future that follows Cargo's convention hits this, and the next person may not
+have an explicit `[[bin]]` path to make CI notice.
 
 ---
 
