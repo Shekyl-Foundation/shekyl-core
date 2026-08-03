@@ -793,6 +793,30 @@ async fn spawn_managed_tor(
         .kill_on_drop(true)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // ---------------------------------------------------------------------------------
+    // NON-ANONYMOUS SERVING IS HELD SHUT HERE, and this is one half of a two-half rule.
+    //
+    // tor can be put into single-hop / non-anonymous onion mode by *two* independent
+    // routes, and they are foreclosed by *different* mechanisms in *different* files:
+    //
+    //   1. `ADD_ONION`'s `NonAnonymous` flag — foreclosed **by type**: it is not a member
+    //      of `control::onion::OnionFlags`, and `onion_line_is_never_non_anonymous`
+    //      asserts over every representable flag/PoW combination that it can never reach
+    //      the wire.
+    //   2. **torrc / config** — `HiddenServiceNonAnonymousMode` (which additionally
+    //      requires `SocksPort 0`) — foreclosed **by construction, right here**: the spawn
+    //      surface is the six typed options above and nothing else. There is no
+    //      `extra_args`, no `-f <torrc>`, no `+Option` append, no `--defaults-torrc`.
+    //
+    // The two halves cannot see each other, which is the hazard worth naming. The
+    // `OnionFlags` test does not fire when someone adds a knob here, and the rationale
+    // below is written about *safety invariants* generally, not about this mode
+    // specifically. So: **when the anticipated future typed knobs arrive (bridges, an
+    // upstream proxy), non-anonymous mode is on the list of things this discipline is
+    // holding shut** — a knob that reaches `HiddenServiceNonAnonymousMode` or zeroes the
+    // `SocksPort` re-opens route 2 while route 1's test stays green and silent.
+    // ---------------------------------------------------------------------------------
+    //
     // The one caller-toggleable knob (see `ManagedTor::disable_network`): an offline tor for
     // the child-lifecycle test. Every other flag is actor-owned, so this is the *only* place
     // caller intent reaches the command line — a typed bool, not a flag passthrough.

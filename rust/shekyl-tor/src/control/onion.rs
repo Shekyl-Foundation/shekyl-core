@@ -600,11 +600,18 @@ mod tests {
         // Foundation's included. "Known" describes a persona's published .onion
         // address, never a clearnet endpoint.
         //
-        // `NonAnonymous` (tor's single-hop / `HiddenServiceSingleHopMode` mode) is
-        // absent from `OnionFlags` rather than merely unset, so a non-anonymous
-        // service is **unrepresentable** — the same posture as `Detach`. Asserted
-        // over every representable value, including with PoW on, so adding the
-        // flag as a member later fails here rather than shipping quietly.
+        // `NonAnonymous` (tor's single-hop mode) is absent from `OnionFlags`
+        // rather than merely unset, so a non-anonymous service is
+        // **unrepresentable** — the same posture as `Detach`. Asserted over every
+        // representable value, including with PoW on, so adding the flag as a
+        // member later fails here rather than shipping quietly.
+        //
+        // **This test covers only ONE of the two routes into that mode.** The other
+        // is torrc (`HiddenServiceNonAnonymousMode` + `SocksPort 0`), which is
+        // foreclosed by construction at the spawn site in `actor.rs` — six typed
+        // options, no `extra_args` — not by this assertion. A future typed knob
+        // added there would re-open it while this test stayed green, so the spawn
+        // site carries a matching comment naming the coupling.
         for discard_pk in [false, true] {
             for pow in [
                 OnionPow::Disabled,
