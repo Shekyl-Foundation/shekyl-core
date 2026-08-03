@@ -44,8 +44,8 @@ pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, Ser
 pub use bootstrap::{parse_bootstrap_progress, BootstrapState};
 pub use framing::{ControlReply, Framed, FramingError, ReplyFramer, ASYNC_EVENT_STATUS};
 pub use onion::{
-    parse_service_id, AddOnion, OnionFlags, OnionKey, OnionPort, ServiceId, ONION_KEY_BYTES,
-    SERVICE_ID_CHARS,
+    parse_service_id, AddOnion, OnionFlags, OnionKey, OnionPort, OnionPow, ServiceId,
+    ONION_KEY_BYTES, SERVICE_ID_CHARS,
 };
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};
 pub use stream::{parse_stream_event, CircId, StreamEvent, StreamStatus};

@@ -1550,6 +1550,43 @@ mod live_tests {
             "the published service must appear in onions/current"
         );
 
+        // PoW defenses, against a real tor. The KAT pins the bytes; only a live
+        // tor says the bytes are *right* — which is exactly the lesson
+        // `MaxStreamsCloseCircuit` taught (a 512 for an argument spelling the unit
+        // test had happily frozen). Tuned rather than plain `Enabled` so all three
+        // arguments and their grammar position are exercised.
+        let mut pow_key = [0u8; super::super::onion::ONION_KEY_BYTES];
+        for (i, b) in pow_key.iter_mut().enumerate() {
+            *b = u8::try_from((i * 7 + 3) % 251).expect("fits u8");
+        }
+        pow_key[0] &= 248;
+        pow_key[31] &= 127;
+        pow_key[31] |= 64;
+        let pow_port =
+            OnionPort::loopback(80, SocketAddr::from((Ipv4Addr::LOCALHOST, free_port())))
+                .expect("loopback target");
+        let pow_reply = actor
+            .ask(Command::AddOnion(
+                AddOnion::new(OnionKey::from_expanded_bytes(pow_key), pow_port, 4)
+                    .with_flags(super::super::onion::OnionFlags { discard_pk: true })
+                    .with_pow(super::super::onion::OnionPow::EnabledTuned {
+                        queue_rate: 40,
+                        queue_burst: 400,
+                    }),
+            ))
+            .await
+            .expect("ADD_ONION with PoW reaches tor");
+        assert_eq!(
+            pow_reply.status(),
+            250,
+            "tor accepted the PoW arguments and their grammar position"
+        );
+        let pow_id = parse_service_id(pow_reply.lines()).expect("PoW service id");
+        actor
+            .ask(Command::DelOnion(pow_id))
+            .await
+            .expect("DEL_ONION the PoW service");
+
         // Withdraw it, and confirm the withdrawal took.
         let deleted = actor
             .ask(Command::DelOnion(service_id.clone()))

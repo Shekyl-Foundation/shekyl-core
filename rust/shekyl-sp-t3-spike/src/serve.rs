@@ -70,6 +70,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
 /// The one route this endpoint answers. Deliberately un-shippable; see the module
@@ -93,6 +94,34 @@ pub const RESPONSE_HEADER_NAMES: &[&str] = &["content-type", "content-length"];
 /// while bounding what a hostile peer can make the endpoint buffer.
 pub const MAX_REQUEST_BYTES: usize = 8 * 1024;
 
+/// Maximum connections served **at once**; further arrivals are refused.
+///
+/// # The gap this closes
+///
+/// `ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §6a pins three inbound protections —
+/// decoupled accept, per-connection timeouts, and a pre-allocation payload bound
+/// — and every one of them is **per connection**. A timeout bounds how long *one*
+/// connection lives; the payload cap bounds *one* request's memory; and
+/// spawn-per-connection *creates* unbounded concurrency rather than limiting it.
+/// **Nothing in §6a bounds aggregate load.**
+///
+/// Nor does the onion's own stream cap: `MaxStreams`/`MaxStreamsCloseCircuit` is
+/// **per rendezvous circuit**, so `N` distinct clients get `N` circuits with one
+/// stream each and never approach it. It stops one client hogging; it does
+/// nothing about `N` clients.
+///
+/// That matters because a shard read is a ~100-byte request answered with
+/// ~3.33 MB — roughly **33 000× egress amplification**, with the requester paying
+/// only its own circuit. A bonded persona's client population is bounded by the
+/// challenge draw; a publicly advertised uncompensated one is bounded by nothing.
+///
+/// **`SPIKE-PIN-2`: the value is a placeholder, not a derivation.** The binding
+/// resource is *egress*, not memory (the payload is one shared `Arc`, so
+/// concurrency costs file descriptors and tasks, not `N × 3.33 MB`). Deriving it
+/// needs SPIKE-F-11's one-persona/many-readers measurement on the hardware that
+/// will actually serve.
+pub const MAX_INFLIGHT: usize = 64;
+
 /// Bound on reading the request head from an accepted connection.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -111,6 +140,7 @@ pub struct ServeEndpoint {
     addr: SocketAddr,
     accept_task: JoinHandle<()>,
     requests: Arc<AtomicU64>,
+    refused: Arc<AtomicU64>,
 }
 
 impl ServeEndpoint {
@@ -131,6 +161,12 @@ impl ServeEndpoint {
         let addr = listener.local_addr()?;
         let requests = Arc::new(AtomicU64::new(0));
         let counter = Arc::clone(&requests);
+        let refused = Arc::new(AtomicU64::new(0));
+        let refused_ctr = Arc::clone(&refused);
+        // Bounds concurrency without queueing: an arrival past the cap is closed
+        // immediately rather than parked, so the refusal costs one accept and
+        // frees the descriptor at once.
+        let permits = Arc::new(Semaphore::new(MAX_INFLIGHT));
         // Decoupled accept loop (§6a): its own task, and one spawned task per
         // connection, so a stalled peer blocks only itself.
         let accept_task = tokio::spawn(async move {
@@ -141,6 +177,18 @@ impl ServeEndpoint {
                     // record it.
                     continue;
                 };
+                // Over capacity: drop the stream, which closes it. Deliberately
+                // **not** a `503` — inventing a status code would add a response
+                // shape to the `x-spike/v0` surface (which §9.4 warns must never be
+                // mistaken for TJ-B's) and would hand a prober a free capacity
+                // oracle. A closed connection is indistinguishable from ordinary
+                // circuit failure, which over Tor is exactly what a client already
+                // has to handle.
+                let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
+                    refused_ctr.fetch_add(1, Ordering::Relaxed);
+                    drop(stream);
+                    continue;
+                };
                 let payload = Arc::clone(&payload);
                 let counter = Arc::clone(&counter);
                 tokio::spawn(async move {
@@ -149,6 +197,9 @@ impl ServeEndpoint {
                     // failure itself becomes an observable. `.ok()` rather than
                     // `let _ =` so the discard is explicit at the call site.
                     handle_connection(stream, &payload, &counter).await.ok();
+                    // Held for the whole connection; released here so the slot
+                    // reopens only once the shard has actually finished sending.
+                    drop(permit);
                 });
             }
         });
@@ -156,6 +207,7 @@ impl ServeEndpoint {
             addr,
             accept_task,
             requests,
+            refused,
         })
     }
 
@@ -163,6 +215,17 @@ impl ServeEndpoint {
     #[must_use]
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// Connections refused for exceeding [`MAX_INFLIGHT`] — an **aggregate**, no
+    /// per-request structure.
+    ///
+    /// The operator-visible signal that the cap is binding, without a log: a
+    /// rising count means the endpoint is shedding load and `SPIKE-PIN-2` wants
+    /// re-deriving for this host.
+    #[must_use]
+    pub fn refused_count(&self) -> u64 {
+        self.refused.load(Ordering::Relaxed)
     }
 
     /// Total requests answered — an **aggregate**, with no per-request structure.
@@ -414,6 +477,75 @@ mod tests {
         s.read_to_end(&mut out).await.expect("read");
         assert!(head_of(&out).starts_with("HTTP/1.1 404"));
         assert_eq!(ep.request_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn concurrency_past_the_cap_is_refused_by_close_not_by_a_status_code() {
+        // The aggregate bound §6a does not provide. Opens MAX_INFLIGHT + 8
+        // connections and holds them open (by never sending a request head, so
+        // each occupies a permit until its READ_TIMEOUT), then asserts the
+        // endpoint sheds the excess.
+        //
+        // Two properties, and the second is the one that matters for the
+        // `x-spike/v0` surface: the refusal must be a CLOSE, never a new status
+        // code, or the response set grows a capacity oracle and a shape TJ-B
+        // might inherit.
+        let ep = ServeEndpoint::bind(Arc::new(vec![3u8; 64]))
+            .await
+            .expect("bind");
+
+        let mut held = Vec::new();
+        for _ in 0..MAX_INFLIGHT {
+            // Connect but send nothing: the connection is accepted, takes a
+            // permit, and sits in `read_head` until its timeout.
+            held.push(TcpStream::connect(ep.addr()).await.expect("connect"));
+        }
+        // Give the accept loop time to take all MAX_INFLIGHT permits.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // The next arrivals must be refused.
+        let mut refused_bodies = Vec::new();
+        for _ in 0..8 {
+            let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
+            let mut out = Vec::new();
+            // A refused connection is closed, so the read returns EOF with no
+            // bytes rather than any HTTP response.
+            tokio::time::timeout(Duration::from_secs(5), s.read_to_end(&mut out))
+                .await
+                .ok();
+            refused_bodies.push(out);
+        }
+
+        assert!(
+            ep.refused_count() > 0,
+            "the cap must actually shed load; refused = {}",
+            ep.refused_count()
+        );
+        for body in &refused_bodies {
+            assert!(
+                !body.starts_with(b"HTTP/"),
+                "a refusal must be a close, never a status line: {:?}",
+                String::from_utf8_lossy(&body[..body.len().min(32)])
+            );
+        }
+        drop(held);
+    }
+
+    #[tokio::test]
+    async fn the_cap_does_not_refuse_below_it() {
+        // Negative control for the test above: without it, a cap of zero (or an
+        // always-failing acquire) would pass "refusals happen" while breaking the
+        // endpoint entirely. Serial requests must all succeed and refuse nothing.
+        let payload = vec![9u8; 512];
+        let ep = ServeEndpoint::bind(Arc::new(payload.clone()))
+            .await
+            .expect("bind");
+        for _ in 0..8 {
+            let r = fetch(ep.addr(), "/x-spike/v0/shard/0").await;
+            assert!(head_of(&r).starts_with("HTTP/1.1 200 OK"));
+        }
+        assert_eq!(ep.refused_count(), 0, "no refusal below the cap");
+        assert_eq!(ep.request_count(), 8);
     }
 
     #[test]

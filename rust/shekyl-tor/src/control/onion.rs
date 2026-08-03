@@ -267,6 +267,81 @@ impl OnionFlags {
     }
 }
 
+/// Onion-service **proof-of-work defenses** — tor's built-in answer to
+/// rendezvous flooding (`ADD_ONION`'s `PoWDefensesEnabled` / `PoWQueueRate` /
+/// `PoWQueueBurst`).
+///
+/// # What it actually bounds, and what it does not
+///
+/// PoW governs the **rendezvous-request priority queue**: how fast tor dispatches
+/// *new* client rendezvous, and at what burst. It therefore throttles **arrival**,
+/// not **egress** — a client that has already established a rendezvous still pulls
+/// a full shard. Aggregate byte-rate is a separate concern and needs a separate
+/// bound (the serve endpoint's in-flight connection cap).
+///
+/// # Why this matters for a shard-serving persona
+///
+/// A shard read is a ~100-byte request answered with ~3.33 MB, an egress
+/// amplification of roughly **33 000×**, where the requester pays only its own
+/// circuit. For a *bonded* persona that asymmetry is bounded by the challenge
+/// draw — its clients are drawn miners, a finite population. For a **publicly
+/// advertised, uncompensated** service (the Foundation's complete-tree `P`) it is
+/// bounded by nothing at all, and PoW is the mechanism that puts cost back on the
+/// requester.
+///
+/// # Default is [`Disabled`](Self::Disabled), matching tor
+///
+/// PoW is not free for honest clients — it is client-side work on every
+/// rendezvous — so it is off unless a deployment asks for it, exactly as tor
+/// ships it (`PoWDefensesEnabled` "Default if not present is 0, disabled").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum OnionPow {
+    /// No PoW defenses. tor's default, and the right choice for a bonded persona
+    /// whose client population is bounded by the challenge draw.
+    #[default]
+    Disabled,
+    /// PoW on, with **tor's own queue parameters** (currently 250 req/s sustained,
+    /// burst 2500).
+    ///
+    /// Renders `PoWDefensesEnabled=1` and nothing else, so those numbers stay
+    /// tor's to own and version. Restating them here would be a second copy of a
+    /// fact this crate does not control — the copy that silently goes stale when
+    /// tor retunes its defaults.
+    Enabled,
+    /// PoW on with explicit queue parameters, for a deployment that has *measured*
+    /// its load and has reason to deviate from tor's defaults.
+    ///
+    /// Prefer [`Enabled`](Self::Enabled) until you have that measurement: tuning a
+    /// queue you have not observed is how a defense becomes a self-inflicted
+    /// outage.
+    EnabledTuned {
+        /// Sustained rendezvous requests dispatched per second.
+        queue_rate: u32,
+        /// Maximum burst dispatched at once.
+        queue_burst: u32,
+    },
+}
+
+impl OnionPow {
+    /// The `PoW*` arguments, in the grammar's order (after `MaxStreams`, before
+    /// `Port`). Empty when disabled — an absent `PoWDefensesEnabled` *is* tor's
+    /// "off", so there is nothing to render.
+    fn to_args(self) -> Vec<String> {
+        match self {
+            Self::Disabled => Vec::new(),
+            Self::Enabled => vec!["PoWDefensesEnabled=1".to_owned()],
+            Self::EnabledTuned {
+                queue_rate,
+                queue_burst,
+            } => vec![
+                "PoWDefensesEnabled=1".to_owned(),
+                format!("PoWQueueRate={queue_rate}"),
+                format!("PoWQueueBurst={queue_burst}"),
+            ],
+        }
+    }
+}
+
 /// A fully-specified `ADD_ONION` request.
 ///
 /// Every field is typed such that the rendered line is well-formed for any
@@ -280,6 +355,7 @@ pub struct AddOnion {
     ports: Vec<OnionPort>,
     flags: OnionFlags,
     max_streams: u16,
+    pow: OnionPow,
 }
 
 impl AddOnion {
@@ -304,7 +380,19 @@ impl AddOnion {
             ports: vec![first_port],
             flags: OnionFlags::default(),
             max_streams,
+            pow: OnionPow::default(),
         }
+    }
+
+    /// Enable onion-service proof-of-work defenses (see [`OnionPow`]).
+    ///
+    /// Default is [`OnionPow::Disabled`], matching tor. Turn it on for a service
+    /// whose client population is **not** bounded by the challenge draw — most
+    /// concretely, a publicly advertised uncompensated one.
+    #[must_use]
+    pub fn with_pow(mut self, pow: OnionPow) -> Self {
+        self.pow = pow;
+        self
     }
 
     /// Set the flags (see [`OnionFlags`] — `Detach` is not expressible).
@@ -333,6 +421,10 @@ impl AddOnion {
         line.push(' ');
         line.push_str(&self.flags.to_arg());
         line.push_str(&format!(" MaxStreams={}", self.max_streams));
+        for arg in self.pow.to_args() {
+            line.push(' ');
+            line.push_str(&arg);
+        }
         for port in &self.ports {
             line.push(' ');
             line.push_str(&port.to_arg());
@@ -460,6 +552,46 @@ mod tests {
                 line.as_str()
             );
         }
+    }
+
+    #[test]
+    fn pow_is_absent_by_default_and_renders_in_grammar_order() {
+        // Default must render NOTHING: an absent `PoWDefensesEnabled` is tor's
+        // own "off", so the disabled case adds no bytes and cannot change the
+        // line a bonded persona sends.
+        let plain = AddOnion::new(key(), loopback_port(), 4).to_wire_line();
+        assert!(!plain.contains("PoW"), "{}", plain.as_str());
+
+        // Enabled-with-tor-defaults renders the switch only — the 250/2500
+        // numbers stay tor's to own, so they cannot go stale here.
+        let on = AddOnion::new(key(), loopback_port(), 4)
+            .with_pow(OnionPow::Enabled)
+            .to_wire_line();
+        assert!(on.contains("PoWDefensesEnabled=1"));
+        assert!(!on.contains("PoWQueueRate"), "{}", on.as_str());
+        assert!(!on.contains("PoWQueueBurst"), "{}", on.as_str());
+
+        // Tuned renders all three, and the grammar's order is
+        // Flags, MaxStreams, PoW*, Port — asserted by position, because tor
+        // answers an out-of-order argument with a 512 (the same class of failure
+        // the MaxStreamsCloseCircuit spelling produced).
+        let tuned = AddOnion::new(key(), loopback_port(), 4)
+            .with_pow(OnionPow::EnabledTuned {
+                queue_rate: 40,
+                queue_burst: 400,
+            })
+            .to_wire_line();
+        let flags = tuned.find("Flags=").expect("flags present");
+        let streams = tuned.find("MaxStreams=").expect("max streams present");
+        let pow = tuned.find("PoWDefensesEnabled=").expect("pow present");
+        let rate = tuned.find("PoWQueueRate=40").expect("rate present");
+        let burst = tuned.find("PoWQueueBurst=400").expect("burst present");
+        let port = tuned.find("Port=").expect("port present");
+        assert!(
+            flags < streams && streams < pow && pow < rate && rate < burst && burst < port,
+            "grammar order violated: {}",
+            tuned.as_str()
+        );
     }
 
     #[test]

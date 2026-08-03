@@ -85,7 +85,8 @@ from its **bond**, not from sharing a host.
 | **SPIKE-F-8** | Two personas' descriptors land on **disjoint HSDir sets** (16 each, zero overlap) — the "shared HSDir" axis SP-T2 flagged does not exist | MEDIUM (as a *negative*) | **REFUTED (measured)** |
 | **SPIKE-F-9** | `.gitignore`'s bare `bin/` rule silently untracks **any Rust crate's `src/bin/`** — Cargo's conventional binary location | MEDIUM (repo-wide) | **CONFIRMED (CI)** |
 | **SPIKE-F-10** | **The price of co-serving, on both axes at once:** complete guard-set overlap (privacy) **and** `D*` 28.57 s → 44.00 s, **≥ ×1.54** (throughput). A **floor, measured once at N=2 on C-tor from one vantage** — not a characterization. Not architecture — the **cost of the layout the design forbids** | MEDIUM | **RETAINED AS A DETERRENCE FLOOR** (§12.0d) |
-| **SPIKE-F-11** | **One** persona facing many simultaneous readers is a genuine, §10.9-unaffected TJ-B question the margin is sensitive to — and it is **unmeasured** | MEDIUM | **OPEN** (§12.0d) |
+| **SPIKE-F-11** | **One** persona facing many simultaneous readers is a genuine, §10.9-unaffected TJ-B question the margin is sensitive to — and it is **unmeasured**. **Not a tail case for the Foundation's uncompensated complete-tree `P`: it is the operating condition** | MEDIUM→**HIGH for that deployment** | **OPEN** (§12.0d, §16) |
+| **SPIKE-F-14** | §6a's three inbound protections are all **per-connection**; **nothing bounds aggregate load**, and `MaxStreams` is per-*circuit* so it does not either. A ~100-byte request returns ~3.33 MB — **~33 000× egress amplification** | **HIGH** for an uncompensated public service | **CONFIRMED (source)** — both levers now built (§16) |
 | **SPIKE-F-7** | D4's payload is a **cost, not a blocker**: ~5 h of one-time regtest mining plus a batched extraction | INFO | **REFUTED as a halt** |
 
 Two charter halt conditions were pre-registered as likely and **neither fired**:
@@ -949,6 +950,78 @@ output directories; the candidates are anchoring it (`/bin/`, or the specific
 build paths it means) or adding a negation for `src/bin/`. Any Rust crate added
 in future that follows Cargo's convention hits this, and the next person may not
 have an explicit `[[bin]]` path to make CI notice.
+
+---
+
+## 16. SPIKE-F-14 — the aggregate-load gap, and the two levers built for it
+
+### The gap
+
+`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §6a pins three inbound protections, and
+every one is **per connection**: a timeout bounds how long *one* connection
+lives, the payload cap bounds *one* request's memory, and spawn-per-connection
+**creates** unbounded concurrency rather than limiting it. **Nothing bounds
+aggregate load.**
+
+The onion's own stream cap does not either: `MaxStreams` /
+`MaxStreamsCloseCircuit` is **per rendezvous circuit**, so `N` distinct clients
+get `N` circuits with one stream each and never approach it. It stops one client
+hogging; it does nothing about `N` clients.
+
+That matters because of the asymmetry: **a ~100-byte request is answered with
+~3.33 MB — roughly 33 000× egress amplification** — and the requester pays only
+its own circuit.
+
+§6a is not wrong; it was scoped for a **bonded** persona serving **drawn miners**,
+a population bounded by the challenge draw. It does not cover a **publicly
+advertised, uncompensated** service, whose requester population is bounded by
+nothing.
+
+### Lever 1 — onion-service PoW (`shekyl_tor::control::onion::OnionPow`)
+
+tor ships a defense for exactly this, and it was missing from the D1 type.
+`ADD_ONION` takes `PoWDefensesEnabled` / `PoWQueueRate` / `PoWQueueBurst`
+(control-spec; defaults **0 / 250 per second / 2500**), which throttle the
+**rendezvous-request priority queue** — i.e. **arrival**, not egress.
+
+Typed as a three-state enum so invalid combinations are unrepresentable:
+`Disabled` (tor's default, and correct for a bonded persona), `Enabled` (renders
+the switch only, leaving 250/2500 as **tor's** numbers to own and version rather
+than a stale copy here), and `EnabledTuned { queue_rate, queue_burst }` for a
+deployment that has *measured* its load.
+
+**Verified against real tor, not just KAT'd.** The live round-trip publishes a
+service with `EnabledTuned` and asserts `250` — the same discipline that caught
+`MaxStreamsCloseCircuit` being a `Flag` rather than an argument. Grammar position
+(Flags → MaxStreams → PoW\* → Port) is pinned by ordinal assertion, because tor
+answers an out-of-order argument with a `512`.
+
+### Lever 2 — bounded in-flight connections (`serve::MAX_INFLIGHT`)
+
+PoW bounds arrival; it does not bound how many accepted connections are streaming
+at once. A semaphore caps concurrency, and an arrival past the cap is **closed
+immediately** rather than queued.
+
+**The refusal is a close, deliberately not a `503`.** A new status code would add
+a response shape to the `x-spike/v0` surface that §9.4 warns must never be
+mistaken for TJ-B's, and would hand a prober a free capacity oracle. A closed
+connection is indistinguishable from ordinary circuit failure — which, over Tor,
+is what a client already handles. `refused_count()` is the aggregate operator
+signal, with no log and no per-request structure.
+
+Tested with a **negative control**: one test asserts the cap sheds load *and*
+that refusals carry no status line; the other asserts the cap does **not** fire
+below it, so a broken-always-refuse implementation cannot pass.
+
+### What is still owed
+
+`MAX_INFLIGHT` is **`SPIKE-PIN-2` — a placeholder, not a derivation.** The binding
+resource is *egress*, not memory (the payload is one shared `Arc`, so concurrency
+costs descriptors and tasks, not `N × 3.33 MB`). Deriving it, and sizing PoW's
+queue parameters, is **SPIKE-F-11 measured on the hardware that will actually
+serve** — which is why F-11 is re-rated for the Foundation deployment: there it is
+not a tail case, it is the operating condition, and the reader count is
+adversarially inflatable.
 
 ---
 
