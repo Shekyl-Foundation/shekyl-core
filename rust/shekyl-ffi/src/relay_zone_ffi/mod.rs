@@ -52,14 +52,14 @@
 
 use std::os::raw::c_void;
 use std::slice;
+use std::fmt::Write as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use shekyl_relay::{Driver, Effect, FluffReach, RelayPlan, TxBlob, TxId, Zone};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
 use shekyl_relay_privacy::stem_map::ConnectionId;
-use shekyl_relay_privacy::EmbargoTimer;
 
 use crate::secure_relay_rng::SecureRelayRng;
 
@@ -182,16 +182,63 @@ pub type OutboundCb = extern "C" fn(ctx: *mut c_void, out_n: *mut usize) -> *con
 pub struct RelayZoneHandle {
     driver: Driver,
     rng: SecureRelayRng,
-    /// Published derived fact for off-task readers. Single writer: `publish`.
+    /// Published derived facts for off-strand readers. Single writer: [`Self::publish`].
+    ///
+    /// Same discipline as §18.5 finding 1 for `live_stems`: anything readable
+    /// from outside the zone strand must be an atomic snapshot, not a direct
+    /// borrow of zone state (which mutators race).
     live_stems: AtomicUsize,
+    /// Pending stem observations — wiring witnesses and future consumers read
+    /// this off-strand; the zone's `HashMap` is only touched on the strand.
+    stem_in_flight: AtomicUsize,
+    /// The §55 telemetry readout, pre-serialised. Same §18.5 discipline as the
+    /// two atomics above, in the shape a variable-length payload allows: a
+    /// `Mutex` snapshot rather than a direct borrow of the tallies map, which
+    /// the strand mutates.
+    ///
+    /// Serialised on the strand rather than by the reader so the zone is never
+    /// borrowed off-strand at all. The cost is bounded and small — one JSON
+    /// array of at most one entry per outbound peer, rebuilt only when
+    /// [`Self::publish`] runs — and it buys the reader a plain memcpy with no
+    /// access to zone state.
+    stem_tallies_json: Mutex<String>,
 }
 
 impl RelayZoneHandle {
-    /// Republish the derived stem count. The **only** writer of `live_stems`;
-    /// every mutating export ends with this call.
+    /// Republish derived facts for off-strand readers. The **only** writer of
+    /// `live_stems` and `stem_in_flight`.
+    ///
+    /// Call from every export that can change either fact: stem-map rebuilds,
+    /// handshake/close, plan-with-refresh, poll/force (expire), and the stem
+    /// observation mutators themselves. Skipping it after a stem-watch write
+    /// would leave `stem_in_flight` stale for off-strand readers.
     fn publish(&self) {
         self.live_stems
             .store(self.driver.zone().live_stems(), Ordering::Release);
+        self.stem_in_flight.store(
+            self.driver.zone().stem_observations_in_flight(),
+            Ordering::Release,
+        );
+        let mut out = String::from("[");
+        for (i, (peer, t)) in self.driver.zone().stem_snapshot().iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            let hex: String = peer.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+            let _ = write!(
+                out,
+                "{{\"peer\":\"{hex}\",\"propagated\":{},\"silent\":{},\"distinct_sources\":{}}}",
+                t.propagated,
+                t.silent,
+                t.distinct_sources()
+            );
+        }
+        out.push(']');
+        // Poisoning cannot happen: the only writer is this method and the only
+        // reader is a memcpy, neither of which panics while holding the lock.
+        if let Ok(mut slot) = self.stem_tallies_json.lock() {
+            *slot = out;
+        }
     }
 }
 
@@ -251,6 +298,34 @@ unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
             b.copy_from_slice(&bytes[i * 16..i * 16 + 16]);
             (b != NIL).then(|| ConnectionId::from_bytes(b))
         })
+        .collect()
+}
+
+/// Read `n` packed 32-byte transaction ids.
+///
+/// Mirrors [`read_ids`]' boundary discipline: the length is computed with
+/// `checked_mul` so a bogus `n` cannot wrap into a short slice, and the raw
+/// pointer is turned into a slice **once** rather than per element — there is
+/// no index arithmetic left to get wrong.
+///
+/// **No nil filtering, unlike [`read_ids`].** An all-zero connection id is a
+/// sentinel meaning "no peer"; an all-zero *transaction* hash is just a hash
+/// this node will never have stemmed, and dropping it would silently shorten
+/// the caller's batch.
+///
+/// # Safety
+/// `hashes` must point to `n * 32` readable bytes, or be null with `n == 0`.
+unsafe fn read_tx_ids(hashes: *const u8, n: usize) -> Vec<TxId> {
+    let Some(len) = n.checked_mul(32) else {
+        debug_assert!(false, "read_tx_ids: n * 32 overflows");
+        return Vec::new();
+    };
+    if len == 0 || hashes.is_null() {
+        return Vec::new();
+    }
+    slice::from_raw_parts(hashes, len)
+        .chunks_exact(32)
+        .map(|c| TxId::from_bytes(c.try_into().expect("chunks_exact(32) yields 32 bytes")))
         .collect()
 }
 
@@ -321,6 +396,8 @@ pub extern "C" fn shekyl_relay_zone_new(
         driver: Driver::new(zone),
         rng,
         live_stems: AtomicUsize::new(0),
+        stem_in_flight: AtomicUsize::new(0),
+        stem_tallies_json: Mutex::new(String::from("[]")),
     };
     handle.publish();
     Box::into_raw(Box::new(handle))
@@ -440,15 +517,14 @@ pub unsafe extern "C" fn shekyl_relay_zone_covert_enabled(handle: *const RelayZo
 /// it sent and the arrival side what the network returned, and nothing
 /// enforces intermediate nodes preserve encoding. The canonical hash is
 /// computed from the *parsed* transaction, so both sides derive the key from
-/// the same input. C++ parses at each call site (work core does adjacently
-/// anyway); no blobs cross for observation. `successor` is the peer's 16-byte
-/// connection uuid; `source` is the arriving peer's uuid or null for
-/// locally-originated (`in_mapping_[nil]`). **The observation window is drawn
-/// here, from the adopted embargo distribution at `now_ms`** — this call site
-/// is the "caller" §38.2 left the window to, and it deliberately reuses the
-/// embargo draw because both ask the same question of the same peer; if
-/// §12.11's decision window ever diverges from the embargo, this is the one
-/// line that changes.
+/// the same input. C++ parses once and hands packed hashes; no blobs cross for
+/// observation. `successor` is the peer's 16-byte connection uuid; `source` is
+/// the arriving peer's uuid or null for locally-originated (`in_mapping_[nil]`).
+///
+/// **The observation window is drawn in the zone**, from the adopted embargo
+/// timer cached at zone construction against the zone's own params — not
+/// rebuilt here. This export is marshaling only (rule 20): if §12.11's window
+/// ever diverges from the embargo, the change is one field on `Zone`.
 ///
 /// # Safety
 /// `handle` must be null (no-op) or a live zone from
@@ -465,29 +541,21 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_stem(
     now_ms: u64,
 ) {
     let Some(h) = handle.as_mut() else { return };
-    if hashes.is_null() || successor.is_null() || n == 0 {
+    // A nil successor is refused as well as a null one: `read_id`'s
+    // nil-means-no-id contract is live here, and an observation charged to
+    // "no peer" is not a thing this watch can resolve.
+    let Some(succ) = read_id(successor) else {
+        return;
+    };
+    let ids = read_tx_ids(hashes, n);
+    if ids.is_empty() {
         return;
     }
-    let succ = ConnectionId::from_bytes(
-        std::slice::from_raw_parts(successor, 16)
-            .try_into()
-            .unwrap(),
-    );
-    let src = source
-        .as_ref()
-        .map(|p| ConnectionId::from_bytes(std::slice::from_raw_parts(p, 16).try_into().unwrap()));
-    let params = DandelionParams::inherited();
-    let deadline = now_ms + EmbargoTimer::adopted(&params).deadline(0, &mut h.rng);
-    let ids: Vec<TxId> = (0..n)
-        .map(|i| {
-            TxId::from_bytes(
-                std::slice::from_raw_parts(hashes.add(i * 32), 32)
-                    .try_into()
-                    .unwrap(),
-            )
-        })
-        .collect();
-    h.driver.zone_mut().record_stem(&ids, succ, src, deadline);
+    let src = read_id(source);
+    h.driver
+        .zone_mut()
+        .record_stem(&ids, succ, src, now_ms, &mut h.rng);
+    h.publish();
 }
 
 /// Record that `n` transactions arrived `from` a peer — any zone, any path,
@@ -517,22 +585,15 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_arrival(
     from: *const u8,
 ) {
     let Some(h) = handle.as_mut() else { return };
-    if hashes.is_null() {
+    let ids = read_tx_ids(hashes, n);
+    if ids.is_empty() {
         return;
     }
-    let peer = from
-        .as_ref()
-        .map(|p| ConnectionId::from_bytes(std::slice::from_raw_parts(p, 16).try_into().unwrap()));
-    for i in 0..n {
-        let id = TxId::from_bytes(
-            std::slice::from_raw_parts(hashes.add(i * 32), 32)
-                .try_into()
-                .unwrap(),
-        );
-        h.driver
-            .zone_mut()
-            .record_arrival(std::slice::from_ref(&id), peer);
-    }
+    // One call with the whole batch, not one per id: `record_arrival` takes a
+    // slice, and the per-id loop was re-entering the zone `n` times to do work
+    // it does in one pass.
+    h.driver.zone_mut().record_arrival(&ids, read_id(from));
+    h.publish();
 }
 
 /// Serialise this zone's stem-outcome tallies as a JSON array into `buf`
@@ -567,38 +628,32 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_snapshot_json(
     cap: usize,
 ) -> usize {
     let Some(h) = handle.as_ref() else { return 0 };
-    let mut out = String::from("[");
-    for (i, (peer, t)) in h.driver.zone().stem_snapshot().iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        let hex: String = peer.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
-        out.push_str(&format!(
-            "{{\"peer\":\"{hex}\",\"propagated\":{},\"silent\":{},\"distinct_sources\":{}}}",
-            t.propagated,
-            t.silent,
-            t.distinct_sources()
-        ));
-    }
-    out.push(']');
-    let bytes = out.as_bytes();
+    // Reads the published snapshot, never the zone: §18.5's rule is that
+    // anything reachable off-strand is a published fact, and the tallies map
+    // is strand-owned. `publish` rebuilds this string; here it is a memcpy.
+    let Ok(slot) = h.stem_tallies_json.lock() else {
+        return 0;
+    };
+    let bytes = slot.as_bytes();
     if !buf.is_null() && bytes.len() <= cap {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
     }
     bytes.len()
 }
 
-/// Stem observations still pending resolution — the liveness read a C++
-/// wiring witness needs (a recorded stem must be visible as in-flight and an
-/// arrival must clear it), and cheap enough to leave in production builds.
+/// Stem observations still pending resolution.
+///
+/// Reads the published atomic, so it is safe from any thread — the same
+/// discipline as [`shekyl_relay_zone_live_stems`]. The zone's pending map is
+/// only touched on the strand; this export never borrows it. A null handle
+/// reads 0.
 ///
 /// # Safety
-/// `handle` must be null (returns 0) or a live zone from
-/// [`shekyl_relay_zone_new`].
+/// `handle` must be null or a live zone from [`shekyl_relay_zone_new`].
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_stem_in_flight(handle: *const RelayZoneHandle) -> usize {
     match handle.as_ref() {
-        Some(h) => h.driver.zone().stem_observations_in_flight(),
+        Some(h) => h.stem_in_flight.load(Ordering::Acquire),
         None => 0,
     }
 }

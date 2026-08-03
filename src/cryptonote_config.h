@@ -115,7 +115,7 @@
 // follow from the derivation printed beside it (the formula it cited gives
 // 16.61 s; 39 s reproduces only if you read log10 for ln), and it was drawn
 // from a Poisson under a derivation assuming exponential survival, so the
-// backstop it exists to provide never fired. Both the value (now 144 s) and the
+// backstop it exists to provide never fired. Both the value (now 190 s) and the
 // distribution come from shekyl-relay-privacy's `EmbargoTimer` via
 // src/shekyl/shekyl_ffi.h, where the number and its
 // derivation live in the same place and are pinned by tests.

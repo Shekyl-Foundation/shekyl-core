@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "byte_slice.h"
+#include "crypto/hash.h"
 #include "cryptonote_basic/blobdatatype.h"
 #include "cryptonote_protocol/enums.h"
 #include "cryptonote_protocol/fwd.h"
@@ -141,20 +142,30 @@ namespace levin
       \return True iff the notification is queued for sending. */
     bool send_txs(std::vector<blobdata> txs, const boost::uuids::uuid& source, relay_method tx_relay);
 
-    //! §46: resolve pending stem observations for arrived blobs (any peer,
-    //! any path — called on every zone, before pool admission). Shared,
-    //! not copied per zone; unknown blobs are ignored Rust-side.
-    void record_arrival(std::shared_ptr<const std::vector<blobdata>> txs, const boost::uuids::uuid& from);
+    //! §46: resolve pending stem observations for arrived **canonical hashes**
+    //! (any peer, any path — called on every zone, before pool admission).
+    //! Hashes are the join key (F-9); the caller parses once and fans one
+    //! shared vector so multi-zone nodes do not re-parse per zone. Unknown
+    //! hashes are ignored Rust-side.
+    void record_arrival(std::shared_ptr<const std::vector<crypto::hash>> hashes, const boost::uuids::uuid& from);
 
     //! §55: this zone's stem-outcome tallies as a JSON array. Two-call
     //! sizing: returns bytes NEEDED, writes nothing if that exceeds `cap`.
-    //! Transit for a Rust->Rust readout; see the .cpp note.
+    //! Reads a published snapshot on the relay handle, so it is safe from any
+    //! thread — same discipline as `stem_in_flight` below. Transit for a
+    //! Rust->Rust readout; see the .cpp note.
     std::size_t stem_snapshot_json(std::uint8_t* buf, std::size_t cap) const;
 
-    //! §46: stem observations pending resolution. Test-facing liveness read;
-    //! call only when the zone strand is quiescent (the gtest harness drives
-    //! executors to completion before reading).
+    //! §46: stem observations pending resolution. Reads a published atomic on
+    //! the relay handle (same discipline as `live_stems` / get_status), so it
+    //! is safe from any thread — including the gtest harness after it drains
+    //! the strand.
     std::size_t stem_in_flight() const;
   };
+
+  //! §46/§48: canonical tx hashes for the stem-observation watch (F-9).
+  //! Parsed once at the fan-out boundary; blob bytes are not a stable identity
+  //! across relay hops.
+  std::vector<crypto::hash> stem_watch_tx_hashes(const std::vector<cryptonote::blobdata>& txs);
 } // levin
-} // net
+} // cryptonote

@@ -2987,7 +2987,7 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 // reason cannot drift apart again.
 
 /// One embargo duration in seconds, drawn from the adopted memoryless
-/// distribution (mean 144 s). A 0 s draw is legitimate and rare (~0.17 %): the
+/// distribution (mean 190 s). A 0 s draw is legitimate and rare (~0.13 %): the
 /// geometric support includes 0 and the table is not clamped at the boundary,
 /// so what ships is what was derived and tested. A zero draw does not mean "fire
 /// this instant" — deadlines are whole seconds, so it resolves to the earliest
@@ -3000,7 +3000,7 @@ uint64_t shekyl_dandelionpp_embargo_draw_seconds(void);
 /// How long to wait before judging a still-unseen transaction failed, in
 /// seconds — a quantile of the embargo distribution (at most 1 in 100 embargoes
 /// still running), not a multiple of its mean. On the adopted table that is
-/// exactly 664 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
+/// exactly 874 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
 /// pinned so the wait cannot drift from the distribution. A stem transaction is
 /// invisible to its sender until it fluffs, so a shorter deadline declares
 /// healthy transactions dead while their backstop is still running, and the
@@ -3118,8 +3118,8 @@ std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! Record `n` packed 32-byte CANONICAL tx hashes stemmed to `successor`
 //! (16-byte uuid); `source` is the arriving peer's uuid or null for local
 //! origin. Canonical, not blob-derived — blob bytes are not a stable identity
-//! across relay hops (F-9). The observation deadline is drawn Rust-side from
-//! the adopted embargo at `now_ms`.
+//! across relay hops (F-9). The observation deadline is drawn in the zone from
+//! its cached adopted-embargo timer at `now_ms` (not rebuilt at the FFI edge).
 void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
     const std::uint8_t* hashes, std::size_t n,
     const std::uint8_t* successor, const std::uint8_t* source,
@@ -3136,7 +3136,9 @@ void shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
 
 //! Serialise this zone's stem-outcome tallies as a JSON array into `buf`.
 //! Returns the bytes NEEDED, which may exceed `cap` -- in that case nothing
-//! is written and the caller retries with a larger buffer.
+//! is written and the caller retries with a larger buffer. Reads a published
+//! snapshot, not the tallies map: safe from any thread, same discipline as
+//! stem_in_flight.
 //!
 //! TRANSIT, NOT STRUCTURE: the data is Rust's and the consumer is Rust's
 //! (shekyl-daemon-rpc); this round trip exists only because C++ net_node owns
@@ -3145,8 +3147,8 @@ void shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
 std::size_t shekyl_relay_zone_stem_snapshot_json(const RelayZoneHandle* handle,
     std::uint8_t* buf, std::size_t cap);
 
-//! Stem observations still pending resolution (0 for null handle) — the
-//! liveness read a wiring witness needs.
+//! Stem observations still pending resolution (0 for null handle). Reads a
+//! published atomic — safe from any thread, same discipline as live_stems.
 std::size_t shekyl_relay_zone_stem_in_flight(const RelayZoneHandle* handle);
 //! Free a zone. Null is a no-op; free exactly once.
 void shekyl_relay_zone_free(RelayZoneHandle* handle);

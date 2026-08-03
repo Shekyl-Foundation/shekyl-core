@@ -3446,7 +3446,8 @@ the same `OsRng` the map FFI uses:
 `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE` constant are then **deleted**. The
 constant had **two** consumers at re-census: the daemon draw, and the wallet's
 `EMBARGO_AVERAGE * 3/2` failed-transfer wait (which un-spends reserved inputs
-on expiry). Leaving a stale 39 s next to a Rust-owned 144 s is exactly the ghost
+on expiry). Leaving a stale 39 s next to a Rust-owned 144 s (now 190 s after
+F-7, §44) is exactly the ghost
 this round exists to remove (rule 15: delete, don't deprecate).
 
 **Wallet wait is a quantile of the same table, not a multiple of the mean.** A
@@ -3456,14 +3457,16 @@ is a survival question on the embargo. The inherited `3/2 × mean` is only the
 fired so the blunt verdict was moot; once the backstop fires, a short deadline
 declares healthy transactions dead mid-recovery. The rate is policy:
 `PROPAGATION_FALSE_FAIL_ONE_IN = 100` (at most 1 in 100 embargoes still running).
-On the adopted table that is exactly **`ADOPTED_PROPAGATION_TIMEOUT_SECS = 664`**,
+On the adopted table that is exactly **`ADOPTED_PROPAGATION_TIMEOUT_SECS`**
+(**664** at RP-4's F = 2250; now **874** at the F-7-corrected F′ = 3250, §44),
 pinned by test at the crate and the FFI so the seconds cannot drift from the
 table (the F-1 class again if left as a loose bound).
 
 **This round has no unchanged-gtest oracle, and that is not an oversight.**
 RP-2a was a *faithful port*, so "the 6 gtests pass unchanged" was the correct
 proof. RP-4 is a deliberate **correction**: the behaviour changes on purpose
-(39 s Poisson → 144 s geometric), so an unchanged-behaviour oracle would be
+(39 s Poisson → 144 s geometric; 190 s after F-7, §44), so an
+unchanged-behaviour oracle would be
 proving the wrong thing. The proof burden moves to the crate — the derivation
 tests, the analytic-vs-simulator cross-check, and the golden vector already pin
 the new distribution — plus the C++-side obligation that nothing *else* regresses.
@@ -3473,7 +3476,8 @@ the new distribution — plus the C++-side obligation that nothing *else* regres
 STEMS=2 established the treatment: a load-bearing constant carries its derivation
 **at every site it is reasoned about**, including a guard comment where a
 well-meaning contributor would actually edit. The 39 s is the case that proved
-why — an unrecorded reason is how it survived. RP-4 records the 144 s at three
+why — an unrecorded reason is how it survived. RP-4 records the derived value
+(144 s then; 190 s after F-7, §44) at three
 sites, matching:
 
 1. **§17 / §5** — the full derivation (already in the doc: F-3's exact solve,
@@ -3494,7 +3498,8 @@ sites, matching:
    the §15.4 reconciliation cannot rot.
 3. **The wallet propagation timeout is pinned**:
    `judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN)` equals
-   `ADOPTED_PROPAGATION_TIMEOUT_SECS` (664) at the crate and the FFI export — not
+   `ADOPTED_PROPAGATION_TIMEOUT_SECS` (664 then; 874 after F-7, §44) at the
+   crate and the FFI export — not
    a loose bound that can drift when the table or rate changes.
 4. No C++ test depends on the old 39 s value or the Poisson shape — verified, not
    assumed, during implementation; any that does is re-pinned to the derived value
@@ -8638,7 +8643,9 @@ design fact discovered.**
 
 ### 46.1 What landed
 
-Two exports, inside the signature gate (**18 exports checked**):
+Two exports, inside the signature gate (**18 exports checked** at this point
+in the series; §47's wiring witness adds `stem_in_flight` and lands the gate
+at 19):
 
 - **`shekyl_relay_zone_record_stem(handle, hashes, n, successor, source,
   now_ms)`** — packed 32-byte ids; null `source` = local origin
@@ -8646,8 +8653,10 @@ Two exports, inside the signature gate (**18 exports checked**):
   the adopted embargo distribution** — this is the "caller" §38.2 left the
   window to, reusing the embargo draw because both ask the same question of
   the same peer; if §12.11's window ever diverges, one line changes.
-- **`shekyl_relay_zone_record_arrival(handle, hashes, n)`** — any peer, any
-  path; unknown ids free. **Documented: call on *every* zone's handle**, since
+- **`shekyl_relay_zone_record_arrival(handle, hashes, n, from)`** — any peer,
+  any path; unknown ids free. `from` is the arriving peer, added by §49's
+  F-10 correction: an arrival from the successor the observation is charged
+  to resolves nothing. **Documented: call on *every* zone's handle**, since
   a stem placed on one zone can return through another, and only the zone
   holding the pending entry can resolve it.
 
@@ -9025,8 +9034,11 @@ finding invites a design round.
 > probe-from-a-non-predecessor arm is exactly that shape, and it is the arm
 > the whole finding turns on.
 
-Tests kept as `DISABLED_` with the blocker recorded at the site rather than
-deleted or left green. **What a valid harness needs**: deliver the tx to a
+The probes were kept as `DISABLED_` with the blocker recorded at the site
+through this round, then **deleted in the Q-11 census corrections (#384)**: a
+permanently-disabled probe compiled into the suite reads as coverage while
+gating nothing, and what the future harness needs is the spec below, not the
+twice-vacuous code. **What a valid harness needs**: deliver the tx to a
 pool holding it in stem state *without* having inserted its key images from a
 local commit — seed at the DB level as `txpool_relay_timers` does, while
 supplying a tx that passes `check_tx_inputs`. Neither existing fixture does
@@ -9211,7 +9223,7 @@ time with a symmetric effect on composition; only the first is symmetric.**
 The spec is explicit that each node picks two outbound edges **uniformly at
 random** and selects **fresh** relays each epoch. **Reputation-weighted
 selection is neither uniform nor fresh** — the same top-ranked peers persist
-across epochs. That is §12.11's measured ossification (2-of-12 at `ε = 0`),
+across epochs. That is §12.11's measured ossification (2 of 12 at `ε = 0`),
 but the paper-level consequence is larger: **a graph that does not
 re-randomise is a static graph**, which is Sharma Appendix B's cheap-learning
 regime at roughly half the probe cost against our `q`.
@@ -9413,7 +9425,7 @@ of preference — which is the same lever, correctly signed.)*
   and §52.3's retention objection largely go with it. **Retention now affects
   only who is *admissible*, never who is *preferred*** — a far smaller
   footprint on the anonymity graph.
-- **§12.11's ossification finding (2-of-12) is moot rather than mitigated** —
+- **§12.11's ossification finding (2 of 12) is moot rather than mitigated** —
   there is no ranking to collapse.
 - **Remaining parameters are already on derivation paths**: the `(n_min, cut)`
   rung by minimax against yield (§37.2), and cooldown by

@@ -1309,9 +1309,89 @@ TEST(node_server, tx_proxy_outbound_floor_refuses_underprovisioned_counts)
   ASSERT_EQ(1u, at_floor->size());
   EXPECT_EQ(12, at_floor->front().max_connections);
 
-  // Omitted count: the default (-1 -> P2P_DEFAULT_CONNECTIONS_COUNT) is above
-  // the floor by construction and must keep parsing.
+  // Omitted count: the default (-1 -> P2P_DEFAULT_CONNECTIONS_COUNT) resolves
+  // at or above the floor — today they are EQUAL (12), so "above by
+  // construction" would be false — and must keep parsing. The relation is
+  // asserted, not assumed: if the floor ever rises past the default, the
+  // default configuration itself becomes under-provisioned and this is the
+  // test that says so.
+  EXPECT_LE(floor_value, P2P_DEFAULT_CONNECTIONS_COUNT)
+    << "the default outbound count must satisfy the floor the embargo derivation assumes";
   const auto omitted = parse("tor,127.0.0.1:9050");
   ASSERT_TRUE(omitted.has_value());
   EXPECT_EQ(-1, omitted->front().max_connections);
+}
+
+TEST(node_server, out_peers_floor_guards_public_zone_init_and_runtime)
+{
+  // F-8b, the public-zone half: `--tx-proxy` counts are floored at the parser
+  // (test above), but the same outbound-degree quantity is also set by
+  // `--out-peers` at init and by the `out_peers` console/RPC command at
+  // runtime. The floor lives in `set_max_out_peers` (every zone's one setter)
+  // and, for the runtime path, `change_max_out_public_peers` clamps loudly —
+  // otherwise a NAT'd operator at `--out-peers 2` runs a fluff degree far
+  // below any point `fluff_return_ms` was measured at and the embargo is
+  // under-provisioned in the privacy-losing direction.
+  struct test_data_t
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+
+    test_data_t(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+  };
+
+  const auto init_with_out_peers = [](test_data_t& d, const std::int64_t out_peers) -> bool {
+    boost::program_options::options_description desc_options("Command line options");
+    cryptonote::core::init_options(desc_options);
+    Server::init_options(desc_options);
+
+    const char* argv[2] = {nullptr, nullptr};
+    boost::program_options::variables_map vm;
+    boost::program_options::store(
+      boost::program_options::parse_command_line(1, argv, desc_options), vm);
+
+    // 127.0.0.2 for the same TIME_WAIT reason as bind_same_p2p_port above.
+    vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+      boost::program_options::variable_value(std::string("127.0.0.2"), false);
+    vm.find(nodetool::arg_p2p_bind_port.name)->second =
+      boost::program_options::variable_value(std::string("48083"), false);
+    vm.find(nodetool::arg_out_peers.name)->second =
+      boost::program_options::variable_value(out_peers, false);
+
+    boost::program_options::notify(vm);
+    return d.server->init(vm);
+  };
+
+  // Init with an under-floor cap: refused at startup.
+  {
+    test_data_t data;
+    EXPECT_FALSE(init_with_out_peers(data, 4))
+      << "--out-peers below the floor must refuse to start, exactly as --tx-proxy does";
+  }
+
+  // Init at the floor: accepted; then the runtime path clamps an under-floor
+  // request and passes 0 (full outbound stop) and above-floor values through.
+  {
+    test_data_t data;
+    ASSERT_TRUE(init_with_out_peers(data, 12));
+    EXPECT_EQ(12u, data.server->get_max_out_public_peers());
+
+    data.server->change_max_out_public_peers(4);
+    EXPECT_EQ(12u, data.server->get_max_out_public_peers())
+      << "a runtime under-floor request must clamp to the floor, not take effect";
+
+    data.server->change_max_out_public_peers(0);
+    EXPECT_EQ(0u, data.server->get_max_out_public_peers())
+      << "0 (no outbound at all) stays legal — loud isolation, not quiet degradation";
+
+    data.server->change_max_out_public_peers(24);
+    EXPECT_EQ(24u, data.server->get_max_out_public_peers());
+
+    data.server->deinit();
+  }
 }

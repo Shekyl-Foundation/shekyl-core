@@ -958,6 +958,63 @@ sustainability is unaffected by the recalibration.
   same tax per connection without that surplus. Caveat on (b): onion PoW
   is Equi-X, not RandomX, so solving competes with mining rather than
   reusing it — an operating-cost note for the pin, not a free lunch.
+  **STEP 2 CLOSED + `(m, n)` ARM (2026-08-02; PR #387,
+  `rust/shekyl-economics-sim/src/mn_feasibility.rs`).** `λ_target = 3`
+  **pinned**; the set-size pin is
+  `(λ_target = 3, k_cap ∈ 4–9 from the 1–2 Mbit/s preferred band,
+  r from the PoW-enabled re-measurement)`, with `k` derived per epoch
+  from measured `(pairs, λ_eff)`, records **prunable-side with permanent
+  headers**, and the standing discipline that the fabrication term
+  evaluates at **cap-delivered** `λ_eff` at projected pair counts — the
+  knee lands at exactly 20 k pairs at `k_cap = 6` (gap 4.98 % → 22.3 % at
+  40 k → 54.9 % at 100 k), not at the nominal 3.
+  **Two maintainer concessions, recorded because both correct rulings
+  this file carries:** (a) *observation unit* — "13 observations span
+  4–5 epochs" contradicted the miss-fact ratification (an epoch's reads
+  collapse to ONE observation; `BaselineObservation` untouched), so
+  detection latency does **not** collapse and the within-epoch
+  independence worry never arises; the correct residue is that
+  pass-dominance **compounds** transport as `(p^r)^j`, making coverage
+  and retry depth substitutes with coverage's version better-independent
+  (`j` miners on `j` circuits) — bounded by Poisson dispersion at
+  **~4×, not ~11×**, since the `j = 1` epochs carry a bare `p^r`;
+  (b) *exposure framing* — **RULED: `P(any pair slashed)` is operative**,
+  mechanically rather than by preference: `bad_intervals` are
+  **record-scoped**, so one slashed pair excludes the whole record from
+  `r_market` (`good_through`) and blocks `HoldingsUpdate` until `Rebond`.
+  One pair slashed is a whole-portfolio disruption plus a burn; the harm
+  is record-scoped, so the probability must be. Expected-pairs-lost
+  prices the burn while ignoring the exclusion — the larger harm.
+  **F-1 ON THE ARM (maintainer, applied `ba9ba371`): the fabrication
+  model assumed a SPRAYING adversary.** Spreading `f·SEB·k` records
+  uniformly over pairs gave `φ = 1 − e^(−f·λ)`; but sets are
+  **miner-chosen**, so a fabricator attacking one victim places it in its
+  `k` slots in **every block it wins**, and poisoning an epoch needs
+  **one** won block ⇒ `φ = 1 − (1 − f)^SEB` ≈ 0.63 at `f = 1e-4`, ≈ 1 by
+  `f = 1e-3`. **Targeted `φ ≈ 1` at any measurable hashrate.** The
+  uniform assumption divided the attack by the pair count exactly where
+  concentration is free — *bounding an adversary by assuming it does not
+  optimize*, the shape this round rejects elsewhere. Consequence: the
+  row "`r = 1` clears at `f ≤ 0.3`" **flips** to `r = 1` exceeding at
+  every hashrate down to `1e-3`. **The headline survives — `r = 2` gives
+  `q ≈ 0.065`, `P(any) = 3.05e-6`, orders under target — but on RETRY
+  DEPTH alone, not on fabrication being hashrate-bounded: a stronger
+  confirmation, and it makes `r ≥ 2` load-bearing rather than merely
+  preferable.** `φ` stays hashrate-bounded only for the *ambient*
+  (no-victim) term.
+  **PRUNABILITY RESOLVED — and the earlier "transaction-shaped, not
+  coinbase-extra" phrasing was wrong (it broke the block-binding).**
+  Reconciliation: the records ride **the coinbase transaction's prunable
+  region**. The `txs_pruned` / `txs_prunable` / `txs_prunable_hash` /
+  `txs_prunable_tip` split (`db_lmdb.cpp:236–240`) is **per-tx**, the
+  miner tx's prunable blob is empty today, and putting the 3.43 KB
+  countersignatures there keeps them **inside the very transaction whose
+  `cb_out_key` the nonce binds** — verify-at-admission, prune-after-depth,
+  headers on the kept side. Block-binding and prunability stop competing.
+  **With that, `k_cap` is bandwidth-bound rather than chain-growth-bound,
+  and both PR gates reduce to the one real measurement: the PoW-enabled
+  rig run** (which must produce both the new `p` and the latency
+  distribution the SP-T3 `W` allowance needs).
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes

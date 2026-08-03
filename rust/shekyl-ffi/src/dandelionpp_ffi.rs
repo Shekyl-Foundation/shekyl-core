@@ -74,7 +74,7 @@ fn embargo_timer() -> &'static EmbargoTimer {
 /// that shaved up to 999 ms off every draw would err the wrong way.
 ///
 /// **A 0 s draw is legitimate and intended.** A memoryless geometric has support
-/// `{0, 1, 2, ...}`, so ~`1/(mean_ticks+1)` ≈ 0.17 % of draws are zero — the
+/// `{0, 1, 2, ...}`, so ~`1/(mean_ticks+1)` ≈ 0.13 % of draws are zero — the
 /// distribution's minimum, honoured rather than clamped. That is a real change
 /// from the inherited `Poisson(39 s)`, which produced 0 with probability
 /// `e^-39` — effectively never — and it is *not* patched here: the table is the
@@ -161,7 +161,7 @@ mod tests {
     fn embargo_draws_match_the_adopted_distribution() {
         // What the boundary must preserve is the *distribution*, not a floor.
         // A memoryless geometric has support {0, 1, 2, ...}, so a 0 s draw is
-        // legitimate and occurs at ~1/(mean_ticks+1) ≈ 0.17% — rare, and part
+        // legitimate and occurs at ~1/(mean_ticks+1) ≈ 0.13% — rare, and part
         // of the derived survival solve. Clamping it here would make shipped
         // behaviour diverge from the golden-vector-pinned table, which is the
         // exact class of defect §17 exists to remove; if a 0 draw were wrong it

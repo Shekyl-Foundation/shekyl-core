@@ -84,58 +84,34 @@ preserving network. Currently only Tor or I2P hidden services are supported.
 This option be specified multiple times, but only once per network (see below).
 
 The format for `--tx-proxy` is
-`network,[socks5://[user:pass@]]ip:port[,max_connections][,disable_noise]`.
+`network,[socks5://[user:pass@]]ip:port[,max_connections]`.
 Examples:
 
 ```
 --tx-proxy tor,127.0.0.1:1050
 --tx-proxy tor,127.0.0.1:1050,100
---tx-proxy tor,127.0.0.1:1050,disable_noise
---tx-proxy tor,127.0.0.1:1050,100,disable_noise
 --tx-proxy tor,socks5://127.0.0.1:1050
 --tx-proxy tor,socks5://127.0.0.1:1050,100
---tx-proxy tor,socks5://127.0.0.1:1050,disable_noise
---tx-proxy tor,socks5://127.0.0.1:1050,100,disable_noise
 --tx-proxy tor,socks5://username:password@127.0.0.1:1050
 --tx-proxy tor,socks5://username:password@127.0.0.1:1050,100
---tx-proxy tor,socks5://username:password@127.0.0.1:1050,disable_noise
---tx-proxy tor,socks5://username:password@127.0.0.1:1050,100,disable_noise
 --tx-proxy tor,[::1]:1050
 --tx-proxy tor,[::1]:1050,100
---tx-proxy tor,[::1]:1050,disable_noise
---tx-proxy tor,[::1]:1050,100,disable_noise
 --tx-proxy tor,socks5://[::1]:1050
 --tx-proxy tor,socks5://[::1]:1050,100
---tx-proxy tor,socks5://[::1]:1050,disable_noise
---tx-proxy tor,socks5://[::1]:1050,100,disable_noise
 --tx-proxy tor,socks5://username:password@[::1]:1050
 --tx-proxy tor,socks5://username:password@[::1]:1050,100
---tx-proxy tor,socks5://username:password@[::1]:1050,disable_noise
---tx-proxy tor,socks5://username:password@[::1]:1050,100,disable_noise
 --tx-proxy i2p,127.0.0.1:1050
 --tx-proxy i2p,127.0.0.1:1050,100
---tx-proxy i2p,127.0.0.1:1050,disable_noise
---tx-proxy i2p,127.0.0.1:1050,100,disable_noise
 --tx-proxy i2p,socks5://127.0.0.1:1050
 --tx-proxy i2p,socks5://127.0.0.1:1050,100
---tx-proxy i2p,socks5://127.0.0.1:1050,disable_noise
---tx-proxy i2p,socks5://127.0.0.1:1050,100,disable_noise
 --tx-proxy i2p,socks5://username:password@127.0.0.1:1050
 --tx-proxy i2p,socks5://username:password@127.0.0.1:1050,100
---tx-proxy i2p,socks5://username:password@127.0.0.1:1050,disable_noise
---tx-proxy i2p,socks5://username:password@127.0.0.1:1050,100,disable_noise
 --tx-proxy i2p,[::1]:1050
 --tx-proxy i2p,[::1]:1050,100
---tx-proxy i2p,[::1]:1050,disable_noise
---tx-proxy i2p,[::1]:1050,100,disable_noise
 --tx-proxy i2p,socks5://[::1]:1050
 --tx-proxy i2p,socks5://[::1]:1050,100
---tx-proxy i2p,socks5://[::1]:1050,disable_noise
---tx-proxy i2p,socks5://[::1]:1050,100,disable_noise
 --tx-proxy i2p,socks5://username:password@[::1]:1050
 --tx-proxy i2p,socks5://username:password@[::1]:1050,100
---tx-proxy i2p,socks5://username:password@[::1]:1050,disable_noise
---tx-proxy i2p,socks5://username:password@[::1]:1050,100,disable_noise
 ```
 
 The above examples are fairly exhaustive of all the possible option scenarios
@@ -162,17 +138,24 @@ An optional username and password can also be included. These fields support
 percent-encoding, see [wallet](#wallet) section for more information.
 
 #### The last portion of the option
-After the ip:port section two options can be specified: the number of max
-connections and `disable_noise`. They can be specified in either order, but
-must be after the ip:port section.
+After the ip:port section, the maximum number of outgoing connections to the
+proxy can be specified.
 
 The max connections does exactly as advertised, it limits the number of
-outgoing connections to the proxy. The `disable_noise` feature lowers the
-bandwidth requirements, and decreases the tx-relay time. When **NOT**
-specified, dummy P2P packets are sent periodically to connections (via the
-proxy) to conceal when a transaction is forwarded over the connection. When
-the option is specified, P2P links only send data for peerlist information and
-local outgoing transactions.
+outgoing connections to the proxy. Values below 12 are refused at startup:
+the transaction-relay embargo is derived from a fluff first passage measured
+at outbound degree 12, and a smaller cap would under-provision that embargo
+in the privacy-losing direction. Omit the value to use the default (12).
+
+A legacy `disable_noise` token is still accepted — and ignored, with a
+warning — for command-line compatibility. The covert ("noise") channels it
+used to disable were removed entirely: they let a peer holding a covert slot
+enumerate transaction origins (see
+`docs/design/DAEMON_RELAY_PRIVACY.md` §§25, 29–31, 41). Every `--tx-proxy`
+zone now behaves as the old `disable_noise` configuration did — P2P links
+send data only for peerlist information and local outgoing transactions — and
+the daemon warns at startup that relay activity on the node↔proxy wire is
+not masked by cover traffic.
 
 ### `--anonymous-inbound`
 Currently the daemon cannot configure incoming hidden services connections.

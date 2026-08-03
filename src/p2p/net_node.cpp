@@ -155,7 +155,7 @@ namespace nodetool
     const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_exclusive_node   = {"add-exclusive-node", "Specify list of peers to connect to only."
                                                                                                   " If this option is given the options add-priority-node and seed-node are ignored"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_seed_node   = {"seed-node", "Connect to a node to retrieve peer addresses, and disconnect"};
-    const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy = {"tx-proxy", "Send local txes through proxy: <network-type>,[socks5://[user:pass@]]<socks-ip:port>[,max_connections][,disable_noise] i.e. \"tor,127.0.0.1:9050,100,disable_noise\""};
+    const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy = {"tx-proxy", "Send local txes through proxy: <network-type>,[socks5://[user:pass@]]<socks-ip:port>[,max_connections] i.e. \"tor,127.0.0.1:9050,100\""};
     const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound = {"anonymous-inbound", "<hidden-service-address>,<[bind-ip:]port>[,max_connections] i.e. \"x.onion,127.0.0.1:18083,100\""};
     const command_line::arg_descriptor<std::string> arg_ban_list = {"ban-list", "Specify ban list file, one IP address per line"};
     const command_line::arg_descriptor<bool> arg_p2p_hide_my_port   =    {"hide-my-port", "Do not announce yourself as peerlist candidate", false, true};
@@ -208,12 +208,24 @@ namespace nodetool
                     return std::nullopt;
                 }
 
-                // `disable_noise` retired with the configuration-B deletion:
-                // covert channels are off by default and there is deliberately
-                // no flag to turn them on, because doing so re-creates the
-                // origin oracle (see net_node.h's `noise` note). Accepted and
-                // ignored so existing command lines keep working rather than
-                // failing to start.
+                // `disable_noise` retired with the configuration-B deletion,
+                // and there is deliberately no flag to turn covert channels
+                // back on. They were not merely unfinished: with noise enabled
+                // the zone ran NEITHER Dandelion++ NOR the derived black-hole
+                // embargo (the stem->local demotion cleared `dandelionpp_stem`,
+                // which gates both), and origin routing sent only
+                // locally-originated transactions to the anonymity zone — so a
+                // peer holding a covert slot attributed the origin with
+                // precision ~1 and, because send_txs cloned to every channel,
+                // recall ~1: an enumeration list, strictly worse on the peer
+                // axis than the clearnet floor it was meant to improve on. The
+                // levin noise machinery is retained as Q-11 Unit 2's substrate;
+                // re-enabling requires the §30 composition (relayed traffic
+                // eligible for the anonymity zone, so the channel stops being
+                // an origin oracle) plus the restored backstop. See
+                // docs/design/DAEMON_RELAY_PRIVACY.md §§25, 29-31, 41. The
+                // token is accepted and ignored so existing command lines keep
+                // working rather than failing to start.
                 if (boost::string_ref{next->begin(), next->size()} == "disable_noise")
                     MWARNING("--" << arg_tx_proxy.name << " 'disable_noise' is accepted but "
                              "has no effect: covert channels are off by default");
@@ -266,6 +278,19 @@ namespace nodetool
 
             proxies.back().address = std::move(*endpoint);
         }
+
+        // Loud default (not a silent flip): builds before the configuration-B
+        // deletion sent constant-rate cover ("noise") on these zones by
+        // default. An operator upgrading across that deletion should learn at
+        // startup — not from a wire observer — that relay activity on the
+        // node<->proxy link is no longer masked.
+        if (!proxies.empty())
+            MWARNING("--" << arg_tx_proxy.name << " zones run without cover traffic: a "
+                "passive observer of the node<->proxy wire can see when this node relays "
+                "transactions. The covert ('noise') channels were removed because they "
+                "acted as a transaction-origin oracle toward the peers holding covert "
+                "slots; a wire-observer defense returns with the Q-11 Unit 2 composition "
+                "(docs/design/DAEMON_RELAY_PRIVACY.md sec 41).");
 
         return proxies;
     }
