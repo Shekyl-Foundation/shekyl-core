@@ -153,8 +153,22 @@ impl Apparatus {
     /// — the guard set is per-datadir, and `ADD_ONION` exposes no per-service
     /// isolation knob. That is transport-PR work; this harness does not do it.
     ///
-    /// `persona_count > 1` is retained only to reproduce the non-conformant
-    /// measurement, and callers doing so must label the result accordingly.
+    /// **`persona_count > 1` is retained deliberately — to *price* the forbidden
+    /// layout, not by accident.** A measurement of a configuration the design
+    /// rules out is what lets the project quantify the cost of doing it anyway,
+    /// and that cost lands on **both** axes at once: complete entry-guard overlap
+    /// (privacy) *and* **≥ ×1.54** on `D*` (throughput). Co-serving is therefore
+    /// never the efficient choice, which is a stronger deterrent than the rule
+    /// alone. The ×1.54 is a **floor** — C-tor-specific, `N = 2`, one vantage,
+    /// one run — so cite it as "at least this bad, measured once", never as a
+    /// coefficient. Callers using this path must label results non-conformant.
+    ///
+    /// **The serving rule:** one persona serves per wallet. An operator wanting
+    /// several *serving* personas uses separate wallets — and should use separate
+    /// machines behind separate Tor clients. Beyond linkability, each co-served
+    /// persona is added **attack surface** (an inbound onion, intro points, a
+    /// descriptor, a share of one process's failure domain) for a reward that
+    /// comes from its *bond*, not from sharing a host.
     ///
     /// `tor_binary` goes through the **real SP-T0c hash-pin gate**
     /// (`binary::discover_and_verify_at`), not the test bypass: the pinned Tor
