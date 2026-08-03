@@ -229,6 +229,15 @@ extern "C" {
     pub fn core_rpc_ffi_create(rpc_server_ptr: *mut std::ffi::c_void) -> *mut CoreRpcHandle;
     pub fn core_rpc_ffi_destroy(h: *mut CoreRpcHandle);
 
+    /// §55: relay stem-outcome tallies as a JSON array. Caller frees.
+    ///
+    /// **Transit, not structure** — the tallies are Rust's (the relay zone
+    /// owns them) and this consumer is Rust; the hop out to C++ and back
+    /// exists only because C++ `net_node` owns the zone handles' lifetime.
+    /// It disappears with the p2p migration, at which point this crate reads
+    /// the zone directly. Do not build on the round trip.
+    pub fn core_rpc_ffi_stem_tallies(h: *mut CoreRpcHandle) -> *mut std::os::raw::c_char;
+
     pub fn core_rpc_ffi_json_endpoint(
         h: *mut CoreRpcHandle,
         uri: *const c_char,

@@ -878,3 +878,52 @@ fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
         shekyl_relay_zone_free(h);
     }
 }
+
+/// The §55 telemetry readout crosses the boundary as fixed rows, and its
+/// two-call sizing contract holds: a short buffer writes nothing and reports
+/// the needed row count.
+#[test]
+fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
+    unsafe {
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        shekyl_relay_zone_on_handshake(h, id(9).as_ptr(), true);
+
+        // Empty zone: zero rows, not an error.
+        let mut rows = [std::mem::zeroed::<ShekylStemTallyRow>(); 4];
+        let n = shekyl_relay_zone_stem_snapshot(h, rows.as_mut_ptr(), rows.len());
+        assert_eq!(n, 0, "no observations is an empty snapshot");
+
+        let mut hashes = [0u8; 32];
+        hashes[0] = 0xA1;
+        shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 1, id(9).as_ptr(), std::ptr::null(), 0);
+        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(3).as_ptr());
+
+        let need = shekyl_relay_zone_stem_snapshot(h, std::ptr::null_mut(), 0);
+        assert_eq!(need, 1, "a resolved observation must produce one row");
+
+        // Short buffer: nothing written, count still reported. Sentinel proves
+        // "wrote nothing" rather than a partial fill.
+        let mut small = [ShekylStemTallyRow {
+            peer: [0xEE; 16],
+            propagated: 0xEEEE_EEEE_EEEE_EEEE,
+            silent: 0xEEEE_EEEE_EEEE_EEEE,
+            distinct_sources: 0xEEEE_EEEE_EEEE_EEEE,
+        }];
+        assert_eq!(
+            shekyl_relay_zone_stem_snapshot(h, small.as_mut_ptr(), 0),
+            need
+        );
+        assert_eq!(small[0].peer, [0xEE; 16], "cap 0 must not touch the buffer");
+
+        let n = shekyl_relay_zone_stem_snapshot(h, rows.as_mut_ptr(), rows.len());
+        assert_eq!(n, 1);
+        assert_eq!(rows[0].peer, id(9));
+        assert_eq!(rows[0].propagated, 1);
+        assert_eq!(rows[0].silent, 0);
+        assert_eq!(
+            rows[0].distinct_sources, 1,
+            "local origin (null source) is still one distinct source key"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}

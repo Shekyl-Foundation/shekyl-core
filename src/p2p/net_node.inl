@@ -2185,6 +2185,53 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
+  std::string node_server<t_payload_net_handler>::stem_tallies_json() const
+  {
+    /* §55 TRANSIT, NOT STRUCTURE. Collects published rows from every zone
+       (a peer belongs to exactly one; zones do not share connection ids),
+       sorts globally by peer id so operator diffs are content-stable, and
+       emits one JSON array. Serialisation lives here — once — rather than
+       on the relay hot path or as multi-zone array splicing. Disappears
+       with the p2p migration. */
+    using row_t = cryptonote::levin::notify::stem_tally_row;
+    std::vector<row_t> rows;
+    for (const auto& zone : m_network_zones)
+    {
+      auto part = zone.second.m_notifier.stem_snapshot();
+      rows.insert(rows.end(), part.begin(), part.end());
+    }
+    std::sort(rows.begin(), rows.end(),
+      [](const row_t& a, const row_t& b) {
+        return std::lexicographical_compare(
+          std::begin(a.peer), std::end(a.peer),
+          std::begin(b.peer), std::end(b.peer));
+      });
+
+    static constexpr char HEX[] = "0123456789abcdef";
+    std::string out = "[";
+    for (std::size_t i = 0; i < rows.size(); ++i)
+    {
+      if (i)
+        out += ',';
+      out += "{\"peer\":\"";
+      for (std::uint8_t b : rows[i].peer)
+      {
+        out += HEX[b >> 4];
+        out += HEX[b & 0xf];
+      }
+      out += "\",\"propagated\":";
+      out += std::to_string(rows[i].propagated);
+      out += ",\"silent\":";
+      out += std::to_string(rows[i].silent);
+      out += ",\"distinct_sources\":";
+      out += std::to_string(rows[i].distinct_sources);
+      out += '}';
+    }
+    out += ']';
+    return out;
+  }
+
+  template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::record_tx_arrivals(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& from)
   {
     /* §46: every zone's watch, not the receiving zone's alone — a stem placed
