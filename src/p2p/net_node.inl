@@ -2185,6 +2185,22 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
+  void node_server<t_payload_net_handler>::record_tx_arrivals(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& from)
+  {
+    /* §46: every zone's watch, not the receiving zone's alone — a stem placed
+       on one zone can return through another, and only the zone holding the
+       pending entry can resolve it. Parse to canonical hashes **once** (F-9
+       join key) and fan the shared hash vector; re-parsing the same batch in
+       each zone's strand was pure zone-count waste. */
+    auto hashes = std::make_shared<const std::vector<crypto::hash>>(
+      cryptonote::levin::stem_watch_tx_hashes(txs));
+    if (hashes->empty())
+      return;
+    for (auto& zone : m_network_zones)
+      zone.second.m_notifier.record_arrival(hashes, from);
+  }
+
+  template<class t_payload_net_handler>
   epee::net_utils::zone node_server<t_payload_net_handler>::send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, const cryptonote::relay_method tx_relay)
   {
     namespace enet = epee::net_utils;

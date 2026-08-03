@@ -7876,6 +7876,222 @@ all.**
 whether `decision_interval` is constant, and whether the adversary controls the
 timing of its own judgement.** All three belong in the comparison.
 
+## 38. Q-10.1 answered: Rust owns it — and rule 20 dissolves the plumbing problem
+
+**2026-08-01, maintainer ruling: the reputation state is Rust's, and per rule
+20 Rust should own as much of this as possible.** That does not merely assign
+the accumulator — **it changes the architecture, because the obvious wiring
+becomes the wrong one.**
+
+### 38.1 The tx_pool path is rejected, not deferred
+
+The obvious design lets `tx_pool` report each embargo's resolution, since that
+is where it arms and fires today. **`tx_pool` holds no relay-zone handle**, so
+importing the outcome means **building a new C++ path from the mempool into
+the relay layer** — and every byte of that path is **C++ deciding something
+Rust could decide.** Rejected under rule 20.
+
+**The relay layer already sees both directions**: it *chooses* the stem
+successor, and it is told the `source` of every arriving transaction. So
+*"did my successor propagate this?"* is answerable **here**, from facts this
+layer already owns — and **the only thing C++ must hand over is transaction
+identity, which is data, not a decision.** The plumbing problem does not get
+solved; it stops existing.
+
+**The two definitions differ, and the relay-layer one is the more correct for
+this purpose — named now rather than discovered at comparison.** `tx_pool`
+disarms on `upgrade_relay_method` (pool **admission**); this disarms on
+re-arrival (**propagation**). A transaction that comes back and is *then*
+rejected by the pool still proves the successor relayed it, which is exactly
+what the reputation signal asks.
+
+### 38.2 What landed — `StemWatch`, recording without judging
+
+[`shekyl-relay/src/stem_watch.rs`](../../rust/shekyl-relay/src/stem_watch.rs):
+a pending join (`tx → successor, source, deadline`) and per-successor tallies,
+driven from the zone's existing poll clock so the outcome is a function of the
+same `now` every other relay decision uses.
+
+**Three open decisions are deliberately not encoded**, because encoding one
+would freeze it in the layer hardest to change:
+
+- **Accumulator memory** (§37.3) — windowed versus cumulative is upstream of
+  every threshold, and under cumulative memory §36.1's ladder does not apply.
+  `StemTally` therefore **does not decay, reset, or average**; it exposes raw
+  counts and lets a consumer window them.
+- **The `(n_min, cut)` pair** (§36.1) — a rate threshold is the wrong
+  parameterisation at these counts, so **nothing here compares a ratio.**
+- **Reputation persistence** (§33.6) — ~~`forget()` drops rather than
+  retaining, so the type does not decide it~~ **corrected at F-8 (§39):
+  dropping *is* the decision, with the opposite sign and no less quiet, and it
+  resets at *connection* granularity — a strictly stronger convergence
+  condition than §33.6 analysed.**
+
+**Two properties it does encode, each with its control run and observed to
+fail:**
+
+- **A re-stem moves the observation to the new successor.** Reshape fires
+  precisely when a successor looks dark, so charging the *original* peer for a
+  silence it was no longer holding is the operative case, not an edge one.
+  *(Control: make the insert additive → the original peer is charged, named
+  assertion fails.)*
+- **`distinct_sources` counts mappings, not volume.** A farmer supplying 100
+  transactions contributes **one** source (§35.4's gate input). *(Control:
+  return the observation count → 100 reads as 100 distinct sources, and the
+  gate can no longer distinguish farming from breadth.)*
+
+### 38.3 Lifecycle wired; the FFI half is blocked on a named, verified fact
+
+**Wired 2026-08-01, same day.** `Zone` owns the `StemWatch`;
+`Driver::poll` calls `expire_stem_observations(now)` — **on the poll clock, no
+second timer, so the force hooks exercise it for free** — and
+`on_connection_close` calls `forget`. Two lifecycle witnesses in
+`driver/tests.rs`, each **negative-controlled and observed to fail**: removing
+the `expire` call leaves the silence unresolved; removing `forget` leaves a
+departed peer's reputation retained.
+
+**Placement inside `poll` is deliberate**: after the epoch block, so a
+rollover's fresh map cannot retroactively change who an in-flight observation
+was charged to.
+
+**The window is supplied by the caller, not chosen here.** Today it is the
+adopted embargo draw — the same question — but §12.11's decision window is an
+open parameter and need not equal the embargo, so binding them in this type
+would decide something the round left open.
+
+**What remains is the FFI half, and it is blocked on a fact verified today
+rather than on an unknown:** `notify::send_txs(std::vector<blobdata>, source,
+relay_method)` carries **opaque blobs and no transaction identity**, and
+`levin_notify.cpp` computes no hash anywhere. So `record_stem` / `record_arrival`
+cannot be called until identity reaches that layer, and there are exactly two
+ways to get it: **hash the blobs in the notify path** (new work in a layer that
+deliberately treats them as opaque) or **plumb hashes from `cryptonote_core`,
+which already has them**, through `net_node` → `notify`. The second is the
+rule-20 direction — core hands over data it already holds — and it is a
+signature change through two layers, which is its own commit.
+
+**So §33.2's finding is *not* closed: the signal still does not exist in
+production, and F-6 / §12.11 remain blocked on it.** What is closed is the
+architecture (§38.1), the shape (§38.2) and the lifecycle (this section) —
+leaving a mechanical plumbing step with a known blocker rather than an open
+design question.
+
+### 38.4 The original unwired note, kept for lineage
+
+**When `StemWatch` first landed, nothing called it.** Wiring needs transaction identity on the
+paths that already cross the FFI, which is a signature change and a C++ edit —
+a second commit, not this one.
+
+**Recorded explicitly because "unwired-is-closed" is a fossil this project has
+had to dig out before.** This commit closes the *architectural* question
+(Q-10.1: Rust owns it; no tx_pool path) by landing the shape that answer
+implies. It does **not** close §33.2's finding — **the signal still does not
+exist in production**, and F-6/§12.11 remain blocked on it. The next step is
+named: `TxId` in at the stem plan and at arrival, `expire()` on the poll, and
+`forget()` on connection close.
+
+## 39. F-8 — `forget` resets at connection granularity, which is a stricter convergence condition than §33.6 analysed
+
+**2026-08-01, maintainer, verified at source.** `StemWatch::forget` does two
+things and the doc comment claimed only one of them was a decision. **It was
+wrong, and is corrected at the site.**
+
+### 39.1 The decision that was described as cleanup
+
+Dropping **in-flight** observations is uncontroversial — a peer that
+disconnected was not given its deadline, so charging it a silence charges it
+for our own disconnect.
+
+Dropping the **tally** (`stem_watch.rs`, `self.tallies.remove(peer)`) **is
+§33.6's persistence question, answered "no."** The earlier comment said the
+type *"does not quietly decide it by retaining"*; **it decided it by
+dropping**, which is the same decision with the opposite sign and no less
+quiet.
+
+### 39.2 The consequence is a different variable, and it is strictly stronger
+
+§33.6 compared warm-up (~25 h at `obs ≈ 0.07`/epoch) against **process
+uptime**. With `forget` on close, the reset happens at **connection**
+granularity:
+
+```text
+§33.6 (analysed):   warm-up ≪ mean process uptime
+F-8   (binding):    warm-up ≪ mean outbound connection lifetime
+```
+
+**Connection lifetime is bounded above by process uptime, so the second
+condition is strictly stronger — it subsumes the first.** It can fail where
+§33.6's holds, and never the reverse. On a churning p2p network connection
+lifetime is hours at best, and **on Tor it is worse.**
+
+**If mean outbound connection lifetime is below warm-up, no tally ever reaches
+`n_min` and the mechanism is *permanently inert* — not merely slow.** That is
+the same inert/degraded distinction §33.6 drew, now arriving on a tighter
+variable.
+
+**Checkable with no new instrument: mean outbound connection lifetime is
+measurable on the existing p2p stack.** It joins Q-10.2 on the
+must-measure-before-parameters list, and unlike Q-10.2 it needs **no economic
+envelope** — it is a plain measurement of the kind §34 established Q-10.2 is
+not.
+
+### 39.3 The adversary attribution, and it moves the whitewash picture
+
+**T** = a node holding an outbound stem slot of the target. **Capability:**
+close the connection. **Cost:** reconnection must win `O`'s selection again —
+C1, peerlist influence, **already priced**.
+
+**So the adversary no longer needs a fresh identity to clear its record — it
+reconnects.** §35.3's stockpiling analysis assumed **identity-minting** was the
+cost; it is not. And **§35.3's tenure repair resets along with everything else**
+— first-draw-by-explore is per-connection too — so it does not survive this
+either.
+
+**Sharpening (mine): the reset is total, not partial.** All three of §35.4's
+promotion conditions reset together on disconnect — observations, tenure, and
+distinct-sources. **So the reconnection cost is the *entire* defence**, which
+makes C1/peerlist influence load-bearing for a second mechanism it was not
+priced against. **And §33.6's anchor wrinkle arrives somewhere concrete:** if
+anchors give a standing re-dial claim, reconnection is nearly free and the
+defence is nearly nothing.
+
+### 39.4 Why `forget` is nonetheless not simply wrong
+
+**Retention is not a one-line alternative.** `ConnectionId` is
+**per-connection**, so retaining across a disconnect needs a **durable peer
+key** — an address, or an onion identity — which is a **p2p-owned fact this
+layer deliberately does not hold.**
+
+**So retention pulls against Q-10.1's own answer.** *"Rust owns the reputation
+state"* is answerable while the key is per-connection; the moment retention is
+required, the key must come from p2p, and the ownership question reopens on a
+different axis than it was closed on. **That is a seam question in its own
+right**, plus §33.6's forensic-artifact cost, and it is registered as such
+rather than treated as a missing line.
+
+### 39.5 Minor, recorded so a census can tell intent from rot
+
+`Driver::poll`'s `let _resolved = …` discards a **production** call's return.
+Correct today — §12.11's selection tier is the consumer and is not built — but
+a dropped return is otherwise indistinguishable from rot at the next census, so
+the site now says **intentional, pending a consumer**, the same note the covert
+machinery carries.
+
+### 39.6 A constraint on the plumbing commit, settled before it is written
+
+`send_txs` takes a **vector**, so carrying identity alongside it means a
+parallel `Vec<TxId>` whose correspondence to the blob vector is **positional** —
+**exactly the transposition hazard `flags: u32` was chosen to delete** (§20.2's
+named-bits decision). Two vectors that must agree by convention is the same
+failure with more elements.
+
+**Settled now rather than after: extend the element type, do not add a second
+array.** The FFI already passes `ShekylRelayBlob` spans; giving that struct the
+hash makes the correspondence **structural rather than positional**, costs no
+extra array, and cannot transpose. If a future caller genuinely needs them
+separate, it owes the argument at that point — but the default is one array of
+paired elements.
+
 ## 40. Closing F-7 is a bigger unit than two constants — the degree-matched result, and the cascade
 
 **2026-08-01.** The ordered plan puts *"close F-7: re-derive the embargo at
@@ -8357,7 +8573,7 @@ re-baselined, and §14 restated. Configuration C's embargo is now provisioned
 from the fluff rule it actually uses.
 
 **Leaves, unchanged in order:** mean outbound connection lifetime (F-8's
-convergence check — independent, cheapest); the tx-hash plumbing (F-8's
+convergence check — independent, cheapest); the tx-hash plumbing (§39.6's
 element-type constraint); the reverse-parity readouts — **now unblocked**,
 since §26.3 required them to run against `F′` rather than the stale baseline;
 and Unit 2 with its substrate.
@@ -8385,9 +8601,7 @@ latency, not privacy — true *because 3250 bounded them*. A zone below the
 measured range is not bounded by it, so the reasoning does not extend.
 
 **No `T`.** A configuration-range gap, not an adversary — the same class as
-F-8's convergence condition. (F-8 is StemWatch's `forget`-granularity
-finding; it is cited here ahead of its section, which lands in the StemWatch
-PR stacked on this one.)
+F-8's convergence condition.
 
 ### 45.2 The fix — unrepresentable, with one owner
 
@@ -8419,6 +8633,304 @@ lifetime and the real degree distribution of deployed zones are both
 questions about actual connection topology, and **one measurement session
 answers both.** Then: tx-hash plumbing, reverse-parity readouts against `F′`,
 Unit 2.
+
+## 46. The tx-hash plumbing — FFI half landed; the C++ half is a traced checklist
+
+**2026-08-01.** §38.3 named the remaining step: transaction identity onto the
+paths that cross the FFI. **The chain is now fully traced, the Rust/FFI half
+is landed and witnessed, and the C++ half reduces to a checklist with one
+design fact discovered.**
+
+### 46.1 What landed
+
+Two exports, inside the signature gate (**18 exports checked** at this point
+in the series; §47's wiring witness adds `stem_in_flight` and lands the gate
+at 19):
+
+- **`shekyl_relay_zone_record_stem(handle, hashes, n, successor, source,
+  now_ms)`** — packed 32-byte ids; null `source` = local origin
+  (`in_mapping_[nil]`). **The observation window is drawn at this site from
+  the adopted embargo distribution** — this is the "caller" §38.2 left the
+  window to, reusing the embargo draw because both ask the same question of
+  the same peer; if §12.11's window ever diverges, one line changes.
+- **`shekyl_relay_zone_record_arrival(handle, hashes, n, from)`** — any peer,
+  any path; unknown ids free. `from` is the arriving peer, added by §49's
+  F-10 correction: an arrival from the successor the observation is charged
+  to resolves nothing. **Documented: call on *every* zone's handle**, since
+  a stem placed on one zone can return through another, and only the zone
+  holding the pending entry can resolve it.
+
+Boundary witness (`record_stem_and_arrival_cross_the_boundary_into_the_watch`):
+packed-byte decoding reaches the watch, arrival resolves as propagated, and
+the unreturned id resolves as **silent through the production poll path** at
+a `now` past any adopted draw — plus null-handle/null-hash no-op checks.
+
+> **SUPERSEDED SAME DAY BY §47 — rule 20 applied to the checklist below
+> deleted it.** The join key is *this layer's* fact (`TxId` is documented as
+> opaque join bytes), so Rust derives it **from the blob** and C++ hands over
+> only what it already holds at each call site. `tvc.m_tx_hash`, the
+> `relayed_tx` element type, the three-layer signature change and the 35-test
+> sweep were all scaffolding for moving a *C++-computed* hash — none of it is
+> needed when the key is Rust-computed. Kept for the record: the tracing below
+> is what made the collapse visible.
+
+### 46.2 The C++ half — traced at source, one discovery, five steps *(superseded)*
+
+**The discovery: the hash exists at every origination site and is dropped at
+the boundary.** `relay_txpool_transactions` holds `(hash, blob, method)`
+tuples and pushes only `get<1>` into the wire request; the incoming path
+verifies through `handle_incoming_tx(blob, tvc, …)` whose
+`tx_verification_context` **carries no hash out** — core computes it
+(`add_new_tx(tx, tx_hash, …)`) and drops it on return. **So the C++ half's
+first step is `tvc.m_tx_hash`: fill it where core already computes the hash,
+and every downstream site inherits identity without recomputation** — the
+delete-the-duplicate direction; hashing again at the notify layer would be
+the two-copies defect.
+
+The checklist, in dependency order:
+
+1. **`tx_verification_context` gains `m_tx_hash`**, filled in core's incoming
+   path at the one site the hash is computed.
+2. **`relayed_tx { crypto::hash hash; blobdata blob; }`** — the §39.6
+   element-type pairing; `notify::send_txs`, `node_server::send_txs`, and
+   `relay_transactions` change element type (`NOTIFY_NEW_TRANSACTIONS` is
+   wire and does not change; the request is built at the levin layer, which
+   strips hashes into `record_*` calls and blobs into the payload).
+3. **Both callers of `relay_transactions`** supply the pair: the pool path
+   from its tuples' `get<0>`, the incoming path from the new `tvc.m_tx_hash`.
+4. **`node_server::send_txs` fans `record_arrival` to every network's
+   notifier before zone routing** (§46.1's every-zone rule); the levin stem
+   xmit calls `record_stem` with the plan's destination after a successful
+   stem send.
+5. **The levin gtests** (35) construct `send_txs` with blobs — mechanical
+   sweep to the paired type.
+
+**Deliberately not landed here**: the C++ half is one signature change through
+three layers plus a test sweep — a single self-contained commit, now with no
+design left in it. Landing the FFI half separately keeps the branch green and
+puts the contract (window choice, every-zone arrival, packed layout) under
+test before its first C++ caller exists.
+
+## 47. §12.11's signal exists in production — the plumbing landed as a rule-20 collapse
+
+**2026-08-01.** The maintainer's reminder — *rule 20 as you proceed* — applied
+to §46.2's checklist deleted most of it. **The C++ half landed as ~40 lines
+with no signature changes, and §33.2's finding is closed: the per-successor
+disarm signal production never recorded now exists.**
+
+### 47.1 The collapse
+
+§46.2 planned to move a **C++-computed** hash through three relay layers
+(`tvc.m_tx_hash` → `relayed_tx` element type → 35-test sweep). **The join key
+is this layer's fact** — `TxId` joins `stemmed` against `seen` and is never
+compared with anything external — so the sole requirement is *same bytes →
+same key on both paths*, and **Rust derives it from the blob**
+(`TxId::from_blob`: domain-separated Blake2b, `SHEKYL_RELAY_STEM_WATCH_TXID_V1`).
+C++ then hands over only blobs it already holds at each call site.
+
+~~**Soundness of blob-identity join for this signal**: an honest successor
+relays bytes unchanged, so the return matches. A successor that re-serialises
+produces a non-matching return and is charged a **silence** — the incentive
+runs the right way.~~ **Refuted at F-9 (§48): the incentive argument covers
+one hop of a multi-hop return path. A node three hops downstream has no
+observation charged to it and no incentive either way — its re-serialisation
+charges O's honest successor. And nothing enforces encoding preservation at
+all (`parse_and_validate_tx_from_blob` does no canonicality round-trip).
+The join key is now the canonical transaction hash.**
+
+### 47.2 What landed, and where the two definitions bind
+
+- **FFI** (19 exports checked): `record_stem` / `record_arrival` take
+  `ShekylRelayBlob` spans — the existing struct, unchanged; `stem_in_flight`
+  added as the liveness read a wiring witness needs.
+- **Stem site**: both success branches of the levin stem xmit call
+  `record_stem_observation(...)` with the blobs, destination, and source
+  (nil → null → `in_mapping_[nil]`).
+- **Arrival site — before pool admission, per §38's definition**:
+  `handle_notify_new_transactions` calls the new
+  `i_p2p_endpoint::record_tx_arrivals`, which fans **one shared copy** to
+  **every** zone's notifier (a stem placed on one zone can return through
+  another); each notifier posts through its zone strand — the handle's
+  serializer — so the watch is never raced. **Amended at F-10 (§49): the fan
+  also carries the arriving peer's uuid. *Any zone* and *any peer* are
+  different relaxations, and this text collapsed them.**
+- **Witness** (`levin_notify.stem_watch_records_and_arrival_resolves`): a real
+  stem send through the production notifier arms one observation per tx;
+  `record_arrival` with the same blobs resolves them. **Both negative controls
+  run and observed to fail** — removing the stem-site call leaves in-flight at
+  0; removing the arrival dispatch leaves it at 2.
+
+### 47.3 What this closes and what it opens
+
+**Closes §33.2** *(completed at §48 — as first landed, the join key was
+blob-derived and unstable across relay hops (F-9); §33.2 closes with the
+canonical-hash key, same wiring)*: the specified mechanism read an oracle
+wired to nothing; the oracle now has a producer, driven by the same poll
+clock as every other relay decision, with the three §12.11 parameters
+(memory, `(n_min, cut)`, persistence) still deliberately open in the type.
+
+**Opens the consumer question on a measured footing**: the watch accumulates
+from genesis, so the Q-10.2 envelope (`obs ≈ 1500·r`) and the §36/§37 ladder
+analysis now have a production data source to check themselves against —
+the first mechanism in this arc whose parameters can be derived from its own
+telemetry rather than from Monero-analogue envelopes.
+
+**Remaining queue, unchanged**: the topology measurement session (F-8's
+lifetime + F-8b's degree distribution), reverse-parity against `F′`, Unit 2.
+
+## 48. F-9 — blob bytes are not a stable transaction identity, and the join key is now the canonical hash
+
+**2026-08-01, maintainer finding on §47, fix landed same day.** `from_blob`
+was cleanly constructed and its premise was wrong.
+
+### 48.1 The finding
+
+The rule-20 argument said: the join never leaves this layer, so the only
+requirement is *same bytes → same key on both paths*. **The join is local —
+the inputs are not.** The stem side hashes what `O` sent; the arrival side
+hashes what the network returned, after arbitrary intermediate hops. Nothing
+requires those bytes to match: `parse_and_validate_tx_from_blob` performs
+**no canonicality round-trip**, so a valid-but-byte-variant encoding parses
+fine, and because the consensus hash is computed from the *parsed* object,
+**the network treats both encodings as the same transaction while
+`TxId::from_blob` sees two.**
+
+**T = any relaying node, anywhere.** Capability: emit a valid byte-variant
+encoding. Cost: **zero** — it must serialize anyway. **Every adversary the
+§36 ladder was calibrated against had to win C1 first; this one needs no
+position at all.** Effect: silences charged to honest successors
+network-wide → false cooldowns → pool shrinkage → part C's self-inflicted
+eclipse. **And it lands on the parameter §37.1 named dominant**: it inflates
+the ambient failure rate at zero cost, widening the patient dropper's free
+cover for every other adversary simultaneously.
+
+**It may also fire with no adversary**: implementation, version, or pruning
+variance producing byte-variant encodings would raise the silence rate
+ambiently — indistinguishable from real background failure, which is
+**exactly the measurement the ladder calibrates against.**
+
+### 48.2 The incentive note covered one hop of a multi-hop path
+
+§47.1's argument (a re-serialising successor is charged a silence, so
+mangling buys it one) was **sound for the successor and only the successor**.
+The return path is several hops; a node three hops downstream has no
+observation charged to it and no incentive either way — **its
+re-serialisation charges `O`'s honest successor.** Struck at the site.
+
+### 48.3 The fix — canonical hashes, parsed at the call sites
+
+- `record_stem` / `record_arrival` take **packed 32-byte canonical
+  transaction hashes** (single array — no pairing, no transposition; the
+  blobs never needed to cross for observation at all, so `ShekylRelayBlob`
+  stays two words and the fluff path is untouched).
+- **Both C++ sites parse locally** (`canonical_tx_hashes`):
+  `parse_and_validate_tx_from_blob` at the stem xmit and in the arrival
+  functor. One premise correction from the finding, verified at source:
+  *neither* site holds the canonical hash at its layer —
+  `relay_txpool_transactions`' `(hash, blob, method)` tuples live upstream of
+  `send_txs` — but `core_->on_transactions_relayed` parses these same blobs
+  adjacently anyway, and local parsing preserves §47's zero-signature-change
+  property. A blob that does not parse has no canonical identity and is
+  skipped: it cannot be a transaction this node stemmed.
+- **`from_blob` is deleted**, with the lesson left at the type: the join is
+  local but its inputs are not. The `blake2` dependency went with it.
+- Witness re-run against canonical hashes with **parseable transactions**
+  (the harness's junk blobs would now correctly record nothing); **both
+  negative controls re-run and observed to fail.**
+
+*(On "why Blake2b rather than canonical cSHAKE256": availability — it was
+already workspace-pinned — not a policy choice. Moot by deletion; the join
+key is now the consensus hash itself.)*
+
+### 48.4 The revised rule-20 axis, recorded because it will recur
+
+Rule 20 was applied on *"is this key compared with anything external?"* **The
+load-bearing axis is: do all parties who must agree on the key derive it from
+the same input?** Here one side hashed what it sent and the other what the
+network returned. **The canonical tx hash exists precisely because blob bytes
+are not a stable identity — deriving locally re-introduced the dependency the
+canonical hash was designed to remove.** A locally-derived key is only as
+local as its inputs.
+
+## 49. F-10 — the dropper resolved its own observation by echoing; the signal was defeated by one message
+
+**2026-08-01, maintainer finding on §47/§48, fix landed same day.** F-9 closed
+the identity question at the root; verifying it surfaced a worse defect in the
+same path.
+
+### 49.1 The finding
+
+`record_arrival` took `(handle, hashes, n)` — **no peer identity** — and
+`StemWatch::seen` resolved `Propagated` regardless of provenance. The doc
+comment stated it as intent: *"from any peer, by any path."*
+
+**T = the successor holding `O`'s stem slot.** Capability: receive the stem,
+drop it, **echo it back**. Cost: **one message**, no propagation, no other
+position. Same canonical hash, so F-9's fix does not help. And because the
+arrival hook fires **before pool admission** — deliberately, per §38's
+propagation-not-admission definition — `O`'s duplicate check has not run when
+the observation resolves.
+
+**This is not a degradation, it is a total defeat**, available to precisely
+the adversary the mechanism exists to detect, at a cost below the attack
+itself. **Every downstream artifact — the §36 ladder, the §37 yield curve, the
+rung minimax, Q-10.2's envelope — is computed over a signal this `T` can
+zero.**
+
+### 49.2 What hid it: two relaxations collapsed into one
+
+*"A stem placed on one zone can return through another, so fan to every zone"*
+is correct, and it is what motivated dropping peer attribution. **But *any
+zone* and *any peer* are different relaxations: the zone must be
+unconstrained, the peer must not be.** §47.2's text is amended in place.
+
+### 49.3 The fix — one exclusion, exactly one peer wide
+
+`record_arrival` carries the arriving peer's uuid; `seen` refuses to resolve a
+pending entry whose `successor` equals it. **That single exclusion is the whole
+difference between *"someone else has it"* — propagation — and *"the peer I
+gave it to gave it back"* — nothing.**
+
+Both checks the finding asked for, confirmed rather than assumed:
+
+- **The nil/local case needs no special handling.** A locally-originated stem
+  has `source = None`, but `successor` is always a real connection, so the
+  comparison is well-defined; and an arrival with **no** peer (`None`) can
+  never equal a successor, so it resolves normally. Asserted in the witness.
+- **The exclusion is exactly one peer wide** — asserted directly, because an
+  over-broad exclusion would silently stop counting real relays. A different
+  peer having the transaction still resolves.
+
+Witnessed at three layers, each with its **negative control run and observed
+to fail**: `StemWatch` (echo resolves nothing, other peer does, `None` does),
+the zone/driver seam, and the FFI boundary. The C++ witness uses the harness's
+first context, which is created **incoming** — and a stem destination is
+always an *outgoing* connection, so it is provably not the successor, which
+makes the assertion prove peer-scoping rather than blanket resolution.
+
+**The echo as a positive signal is deliberately not built.** A successor
+returning a transaction it was stemmed and did not propagate exhibits
+behaviour no honest node has reason to exhibit — but that is a detector for
+one strategy rather than a metric farming cannot move, and §35's stated
+preference is the latter. Left alone.
+
+### 49.4 The duplicate parse, recorded as a trade
+
+`canonical_tx_hashes` parses every arriving blob, and `handle_incoming_tx`
+parses the same blobs moments later. **§47's "zero signature changes" was
+bought with a duplicate parse on the hot path** — one fact computed twice,
+which is the delete-the-duplicate shape in *compute* rather than state.
+
+`T` = any peer; capability = send a batch of blobs; cost = bandwidth —
+**already priced by existing size and rate limits**, so what changes is a
+constant factor on servicing it, ahead of admission checks. Not a new threat,
+and the trade is accepted — but **recorded at the site**, because "zero
+signature changes" reads as free and this one has a bill. If it appears in
+profiles, the fix is to carry the hash out of verification rather than
+re-derive it here.
+
+**Skip-on-unparseable stands**: no canonical identity means nothing this node
+could have stemmed.
 
 ## 50. F-11 retracted to an increment — and the probe harness was vacuous twice
 
@@ -8468,7 +8980,7 @@ structural facts — `relay_category::legacy` excluding stem
 ([`blockchain_db.h:117`](../../src/blockchain_db/blockchain_db.h#L117)) and
 `add_tx` taking no peer
 ([`tx_pool.cpp:376`](../../src/cryptonote_core/tx_pool.cpp#L376)) — say the
-**incoming path drops identity, exactly as it dropped the hash**. Third
+**incoming path drops identity, exactly as it dropped the hash (§48)**. Third
 instance of one shape. So the peer discriminator needs a signature change
 *through the incoming path*, not a comparison at the decision site.
 
@@ -8625,8 +9137,7 @@ whatever the anti-eclipse posture permits.
 
 **No measurement session.** Four items, all ours to derive:
 
-1. **The retention / durable-peer-key seam decision** (F-8's seam
-   question) — first,
+1. **The retention / durable-peer-key seam decision** (§39.4) — first,
    because it determines whether (2) needs answering at all.
 2. **F-8's design form** — what lifetime §12.11 requires against what
    anti-eclipse permits.
@@ -8673,8 +9184,8 @@ nodes are excluded.
 
 **And `β′` is worse than their `β` on three counts this document already
 established** (all verified here, none paper-dependent): warm-up ≈ **25 h** at
-`obs ≈ 0.07`/epoch (§34.5); **F-8's `forget` resets it at every
-disconnect**; and the **~12 % ambient failure rate false-cools honest peers** off
+`obs ≈ 0.07`/epoch (§34.5); **F-8's `forget` resets it at every disconnect**
+(§39.2); and the **~12 % ambient failure rate false-cools honest peers** off
 the ladder's low rungs (§36.1, §37.1). **Their `β` only grows with deployment.
 Ours is depressed by the mechanism's own dynamics, permanently.**
 

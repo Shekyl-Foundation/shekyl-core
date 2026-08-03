@@ -3114,6 +3114,29 @@ bool shekyl_relay_zone_covert_enabled(const RelayZoneHandle* handle);
 //! The outbound floor the embargo provisioning assumes (F-8b): counts below
 //! this put real fluff first-passage above the provisioned value.
 std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
+
+//! Record `n` packed 32-byte CANONICAL tx hashes stemmed to `successor`
+//! (16-byte uuid); `source` is the arriving peer's uuid or null for local
+//! origin. Canonical, not blob-derived — blob bytes are not a stable identity
+//! across relay hops (F-9). The observation deadline is drawn in the zone from
+//! its cached adopted-embargo timer at `now_ms` (not rebuilt at the FFI edge).
+void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
+    const std::uint8_t* hashes, std::size_t n,
+    const std::uint8_t* successor, const std::uint8_t* source,
+    std::uint64_t now_ms);
+
+//! Record `n` arrived canonical tx hashes, `from` a peer (16-byte uuid, or
+//! null when the arrival has no peer). Any zone, any path -- but NOT any
+//! peer: an arrival from the successor an observation is charged to resolves
+//! nothing, or a dropper clears its own record by echoing (F-10). Unknown
+//! hashes are ignored; call on EVERY zone's handle, since a stem placed on
+//! one zone can return through another.
+void shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
+    const std::uint8_t* hashes, std::size_t n, const std::uint8_t* from);
+
+//! Stem observations still pending resolution (0 for null handle). Reads a
+//! published atomic — safe from any thread, same discipline as live_stems.
+std::size_t shekyl_relay_zone_stem_in_flight(const RelayZoneHandle* handle);
 //! Free a zone. Null is a no-op; free exactly once.
 void shekyl_relay_zone_free(RelayZoneHandle* handle);
 //! A peer completed its handshake.

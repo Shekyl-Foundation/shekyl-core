@@ -721,3 +721,160 @@ fn zone_flag_bits_do_not_transpose() {
         assert!(!shekyl_relay_zone_covert_enabled(std::ptr::null()));
     }
 }
+
+/// The FFI observation pair round-trips into the zone's `StemWatch`: a
+/// recorded stem resolves as *propagated* on arrival, and the deadline drawn
+/// at the FFI site is the adopted embargo's (so a poll far past it resolves
+/// the unresolved one as *silent*). This is the boundary witness — the
+/// per-crate tests already cover the arithmetic; what this asserts is that
+/// the packed-byte decoding (32-byte ids, 16-byte uuids, null source =
+/// local origin) reaches the right zone calls.
+#[test]
+fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
+    fn stem_map_id(byte: u8) -> shekyl_relay_privacy::stem_map::ConnectionId {
+        shekyl_relay_privacy::stem_map::ConnectionId::from_bytes(id(byte))
+    }
+    unsafe {
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        shekyl_relay_zone_on_handshake(h, id(9).as_ptr(), true);
+
+        let mut hashes = [0u8; 64]; // two packed 32-byte canonical tx hashes
+        hashes[0] = 0xA1;
+        hashes[32] = 0xB2;
+        shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 2, id(9).as_ptr(), std::ptr::null(), 0);
+        assert_eq!(
+            h.as_ref()
+                .expect("live zone")
+                .driver
+                .zone()
+                .stem_observations_in_flight(),
+            2,
+            "both packed ids armed against the successor"
+        );
+
+        // First id returns: resolved as propagated.
+        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(9).as_ptr());
+        assert_eq!(
+            shekyl_relay_zone_stem_in_flight(h),
+            2,
+            "F-10: an echo from the charged successor resolves nothing"
+        );
+        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(3).as_ptr());
+        let t = h
+            .as_ref()
+            .expect("live zone")
+            .driver
+            .zone()
+            .stem_tally(&stem_map_id(9))
+            .expect("arrival resolved against the successor");
+        assert_eq!((t.propagated, t.silent), (1, 0));
+
+        // The second never returns. Its deadline was drawn from the adopted
+        // embargo at now=0, so a poll at 1h — far past any draw — resolves it
+        // as silent through the production poll path, not a test back door.
+        shekyl_relay_zone_poll(
+            h,
+            3_600_000,
+            std::ptr::null_mut(),
+            rec_gather,
+            rec_fluff,
+            rec_unbind,
+            rec_covert,
+        );
+        let t = h
+            .as_ref()
+            .expect("live zone")
+            .driver
+            .zone()
+            .stem_tally(&stem_map_id(9))
+            .expect("tally survives");
+        assert_eq!(
+            (t.propagated, t.silent),
+            (1, 1),
+            "the unreturned id resolved as silent on the poll clock"
+        );
+
+        // Null handle and null hashes: no-ops, not crashes.
+        shekyl_relay_zone_record_stem(
+            std::ptr::null_mut(),
+            hashes.as_ptr(),
+            1,
+            id(9).as_ptr(),
+            std::ptr::null(),
+            0,
+        );
+        shekyl_relay_zone_record_arrival(h, std::ptr::null(), 1, std::ptr::null());
+        assert_eq!(
+            shekyl_relay_zone_stem_in_flight(h),
+            0,
+            "both resolved — the in-flight accessor reads the same fact"
+        );
+
+        shekyl_relay_zone_free(h);
+    }
+}
+
+/// An overflowing batch length trips the guard rather than the multiply.
+///
+/// Without `checked_mul`, `n * 32` wraps to a small number and
+/// `from_raw_parts` builds a slice over memory the caller never provided —
+/// undefined behaviour reached from a plain integer argument. `read_tx_ids`
+/// mirrors `read_ids`: loud in debug, empty in release, never wrapped.
+///
+/// **Driven at the helper, not through the export, and that is forced rather
+/// than chosen.** A panic cannot unwind out of an `extern "C"` function, so
+/// reaching this `debug_assert` through `shekyl_relay_zone_record_stem`
+/// *aborts the process* instead of unwinding — `#[should_panic]` cannot
+/// observe it, and a debug-built daemon would die rather than return. That is
+/// acceptable (the guard is a caller-bug tripwire, and `debug_assert`
+/// compiles out of release), but it means the guard is only testable where it
+/// is defined.
+#[test]
+#[should_panic(expected = "overflows")]
+fn an_overflowing_batch_length_trips_the_guard_not_the_multiply() {
+    let hashes = [0u8; 32];
+    let ids = unsafe { read_tx_ids(hashes.as_ptr(), usize::MAX) };
+    unreachable!("guard did not fire; got {} ids", ids.len());
+}
+
+/// A nil successor arms nothing — and the second arm is what makes the first
+/// mean something.
+///
+/// `read_id`'s nil-means-no-id contract is live at this boundary, so an
+/// observation charged to "no peer" must not be armed at all. Before these
+/// exports went through `read_id`, a nil successor built an all-zeros
+/// `ConnectionId` and the observation was charged to a connection that cannot
+/// exist — it could never resolve, and would age into a silence against a
+/// peer that was never asked to do anything.
+#[test]
+fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
+    unsafe {
+        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let mut hashes = [0u8; 32];
+        hashes[0] = 0xA1;
+
+        shekyl_relay_zone_record_stem(
+            h,
+            hashes.as_ptr(),
+            1,
+            id(0).as_ptr(), // all-zero uuid == nil
+            std::ptr::null(),
+            0,
+        );
+        assert_eq!(
+            shekyl_relay_zone_stem_in_flight(h),
+            0,
+            "a nil successor must arm nothing — an observation it can never \
+             resolve would age into a silence against a peer that does not exist"
+        );
+
+        shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 1, id(9).as_ptr(), std::ptr::null(), 0);
+        assert_eq!(
+            shekyl_relay_zone_stem_in_flight(h),
+            1,
+            "liveness: the identical call with a real successor DOES arm — \
+             without this the assertion above passes for any reason at all"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}

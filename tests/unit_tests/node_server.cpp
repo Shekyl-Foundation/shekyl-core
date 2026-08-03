@@ -649,6 +649,7 @@ TEST(cryptonote_protocol_handler, race_condition)
     virtual zone_t send_txs(blobs_t, const zone_t, const uuid_t&, relay_t) override {
       return {};
     }
+    virtual void record_tx_arrivals(blobs_t, const uuid_t&) override {}
     virtual bans::subnets get_blocked_subnets() override {
       return {};
     }

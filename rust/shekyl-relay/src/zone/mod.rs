@@ -19,9 +19,11 @@ use std::sync::Arc;
 use shekyl_relay_privacy::params::{inherited, DandelionParams};
 use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::{
-    DelayFamily, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
+    DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
 use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap};
+
+use crate::stem_watch::{StemTally, StemWatch, TxId};
 
 /// One opaque transaction blob shared across every peer that accepted a fluff
 /// batch.
@@ -232,6 +234,18 @@ pub struct Zone {
     /// double duty as its own enable flag. C++ still holds the payload buffers;
     /// Rust owns *whether* and *when* channels fire.
     covert: CovertSchedule,
+    /// Per-successor stem outcomes — §12.11's signal, **derived here rather
+    /// than imported from `tx_pool`** (§38.1). Records; never judges.
+    stem_watch: StemWatch,
+    /// Observation window for stem outcomes. Built once from this zone's
+    /// [`DandelionParams`] at construction — the adopted embargo draw, because
+    /// both questions ask the same peer the same thing (*did you propagate
+    /// this?*). Cached here rather than rebuilt on every stem: the timer is a
+    /// pure function of params and never changes for the life of the zone.
+    ///
+    /// If §12.11's decision window ever diverges from the embargo, this is the
+    /// one field that changes — not an FFI export and not a C++ call site.
+    observation_timer: EmbargoTimer,
 }
 
 impl Zone {
@@ -263,7 +277,12 @@ impl Zone {
         } else {
             CovertSchedule::Off
         };
+        // Observation window shares the zone's params, not a second
+        // `DandelionParams::inherited()` rebuild at the FFI edge.
+        let observation_timer = EmbargoTimer::adopted(&params);
         Self {
+            stem_watch: StemWatch::default(),
+            observation_timer,
             contexts: BTreeMap::new(),
             // Built at full width with no peers rather than `StemMap::empty()`,
             // so `update_stems` can grow into it. An empty map has no slots to
@@ -332,6 +351,89 @@ impl Zone {
             .or_insert_with(|| PeerFluff::new(direction));
     }
 
+    /// Record that `txs` were stemmed to `successor`, keyed under `source`
+    /// (`None` = locally originated, matching `in_mapping_[nil]`).
+    ///
+    /// The observation window is drawn here from the zone's cached adopted
+    /// embargo timer at `now` — the same question the pool's embargo asks of
+    /// the same peer (*did you propagate this?*). Domain ownership stays in
+    /// this crate (rule 20): the FFI only marshals bytes and a clock.
+    pub fn record_stem<R: RelayRng + ?Sized>(
+        &mut self,
+        txs: &[TxId],
+        successor: ConnectionId,
+        source: Option<ConnectionId>,
+        now: Millis,
+        rng: &mut R,
+    ) {
+        let deadline = self.observation_timer.deadline(now, rng);
+        for tx in txs {
+            self.stem_watch.stemmed(*tx, successor, source, deadline);
+        }
+    }
+
+    /// Record stems with an explicit observation deadline.
+    ///
+    /// **Test / deterministic-drive only.** Production always goes through
+    /// [`Zone::record_stem`], which draws from the cached embargo timer. Fixed
+    /// deadlines let the poll-clock and next-wake witnesses assert without
+    /// sampling the geometric table.
+    #[cfg(test)]
+    pub fn record_stem_at(
+        &mut self,
+        txs: &[TxId],
+        successor: ConnectionId,
+        source: Option<ConnectionId>,
+        deadline: Millis,
+    ) {
+        for tx in txs {
+            self.stem_watch.stemmed(*tx, successor, source, deadline);
+        }
+    }
+
+    /// Resolve every stem observation whose deadline has passed as *silent*.
+    ///
+    /// Driven from [`crate::Driver::poll`]'s `now`, so the outcome is a
+    /// function of the same clock every other relay decision uses — no second
+    /// reactor. The earliest pending deadline is also folded into
+    /// [`crate::Driver::next_wake`], so the asio timer wakes for silences on
+    /// time rather than only when fluff/epoch/covert happen to fire. Returns
+    /// how many resolved, so a witness can assert the drive ran.
+    pub fn expire_stem_observations(&mut self, now: Millis) -> usize {
+        self.stem_watch.expire(now)
+    }
+
+    /// Earliest in-flight stem-observation deadline, if any.
+    #[must_use]
+    pub fn stem_observation_deadline(&self) -> Option<Millis> {
+        self.stem_watch.next_deadline()
+    }
+
+    /// Record that `txs` arrived `from` a peer (`None` when the arrival has
+    /// no peer). Any zone, any path — but **not** any peer: an arrival from
+    /// the successor an observation is charged to resolves nothing (F-10,
+    /// §49).
+    ///
+    /// This is the *only* input the outcome needs from outside, and it is
+    /// **data, not a decision** (§38.1).
+    pub fn record_arrival(&mut self, txs: &[TxId], from: Option<ConnectionId>) {
+        for tx in txs {
+            self.stem_watch.seen(tx, from);
+        }
+    }
+
+    /// Per-successor stem outcomes, for a future selection consumer.
+    #[must_use]
+    pub fn stem_tally(&self, successor: &ConnectionId) -> Option<&StemTally> {
+        self.stem_watch.tally(successor)
+    }
+
+    /// Observations still in flight — liveness witness for the drive.
+    #[must_use]
+    pub fn stem_observations_in_flight(&self) -> usize {
+        self.stem_watch.in_flight()
+    }
+
     /// A peer disconnected.
     ///
     /// Mirrors `notify::on_connection_close`. Anything still queued for that
@@ -340,6 +442,12 @@ impl Zone {
     /// step is not entitled to make.
     pub fn on_connection_close(&mut self, id: &ConnectionId) {
         self.contexts.remove(id);
+        // F-8 (§39): dropping the tally is the intentional answer to §33.6's
+        // persistence question under a per-connection key — "no". In-flight
+        // observations go too (a disconnected peer was not given its deadline).
+        // Retention across reconnect needs a durable peer key from p2p, not a
+        // quiet keep of connection-scoped state here.
+        self.stem_watch.forget(id);
         // The scheduler holds its own pending-deadline map; leaving the peer
         // there would keep waking the driver for a connection that is gone.
         self.fluff.forget(*id);

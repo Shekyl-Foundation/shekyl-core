@@ -146,8 +146,9 @@ impl Driver {
         &self.zone
     }
 
-    /// When the driver next has work — the earliest of the epoch boundary and
-    /// any pending fluff batch.
+    /// When the driver next has work — the earliest of the epoch boundary,
+    /// any pending fluff batch, any covert channel, and any in-flight stem
+    /// observation.
     ///
     /// **Derived on every call, never cached.** A stored copy would be a second
     /// owner of a fact the schedulers already hold, and it would go stale the
@@ -155,22 +156,27 @@ impl Driver {
     /// armed. `next_wake_follows_a_newly_queued_batch_without_re_arming` is the
     /// test that fails if someone adds that cache.
     pub fn next_wake(&self) -> Millis {
-        // Three sources now, folded into one answer: the epoch always has a
+        // Four sources, folded into one answer: the epoch always has a
         // deadline; fluff has one only with a batch pending; covert has one
-        // only when the zone runs covert channels.
+        // only when the zone runs covert channels; stem observations have one
+        // while anything is in flight (§38 — silence resolves on this clock).
         //
         // **Folding the sleep is not folding the schedule** (§20.2a). Each
         // covert channel keeps its own deadline in the zone; this only asks
         // which is earliest. That distinction is the whole of CV-3: the shared
         // wake is what makes a resample-on-foreign-wake bug *reachable*, so the
         // re-arm stays in `Zone::due_covert_channel`, which touches only the
-        // single channel that actually fired.
+        // single channel that actually fired. Stem observation is the same
+        // shape: per-tx deadlines live in `StemWatch`; this only folds the min.
         let mut wake = self.zone.epoch_deadline();
         if let Some(fluff) = self.zone.fluff_deadline() {
             wake = wake.min(fluff);
         }
         if let Some(covert) = self.zone.covert_deadline() {
             wake = wake.min(covert);
+        }
+        if let Some(stem) = self.zone.stem_observation_deadline() {
+            wake = wake.min(stem);
         }
         wake
     }
@@ -200,6 +206,19 @@ impl Driver {
             self.zone.start_epoch(now, rng);
             self.zone.rebuild_stems(gather_outbound(), rng);
         }
+
+        // Stem observations resolve here: a deadline passed with no re-arrival
+        // is a silence (§38). After the epoch block, so a rollover's fresh map
+        // cannot retroactively change who an in-flight observation was charged
+        // to. The earliest pending deadline is folded into `next_wake`, so the
+        // asio timer actually fires for these — not only when fluff/epoch
+        // happen to wake first.
+        // The count is discarded **intentionally, pending a consumer** — the
+        // selection tier that reads these tallies is §12.11 and is not built.
+        // Said here because a production call with a dropped return is
+        // otherwise indistinguishable from rot at the next census, which is
+        // the same note the covert machinery carries.
+        let _resolved = self.zone.expire_stem_observations(now);
 
         for (peer, blobs) in self.zone.flush_fluff(now, false) {
             effects.push(Effect::Fluff { peer, blobs });

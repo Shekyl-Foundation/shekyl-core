@@ -2613,3 +2613,95 @@ TEST_F(levin_notify, command_max_bytes)
     EXPECT_EQ(1u, contexts_.front().process_send_queue(false));
     EXPECT_EQ(0u, receiver_.notified_size());
 }
+
+TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
+{
+    // §46 wiring witness: a successful Dandelion++ stem send must arm one
+    // observation per tx in the zone's stem watch (record_stem at the xmit
+    // site), and record_arrival with the same blobs must resolve them. The
+    // arithmetic is covered Rust-side; what this asserts is that the TWO C++
+    // call sites are actually wired — negative controls: removing the
+    // record_stem call leaves in-flight at 0 (first assert fails); removing
+    // the record_arrival dispatch leaves it at 2 (second assert fails).
+    static constexpr const unsigned test_connections_count = (CRYPTONOTE_DANDELIONPP_STEMS + 1) * 2;
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < test_connections_count; ++count)
+        add_connection(count % 2 == 0);
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    /* F-9: the watch keys on CANONICAL tx hashes, parsed at the call sites —
+       so unlike the other tests in this file, the blobs must parse. Two
+       minimal transactions, distinguished by unlock_time. */
+    std::vector<cryptonote::blobdata> txs(2);
+    {
+        cryptonote::transaction tx{};
+        tx.unlock_time = 1;
+        txs[0] = cryptonote::t_serializable_object_to_blob(tx);
+        tx.unlock_time = 2;
+        txs[1] = cryptonote::t_serializable_object_to_blob(tx);
+    }
+
+    ASSERT_EQ(0u, notifier.stem_in_flight());
+
+    // Drive until a stem epoch actually sends (fluff epochs re-roll). Bound
+    // the re-rolls so a scheduling regression fails with an assertion rather
+    // than hanging the suite — q is high enough that a stem epoch arrives
+    // well within a few dozen flips under the test RNG.
+    static constexpr unsigned kMaxEpochRolls = 64;
+    unsigned rolls = 0;
+    for (;;)
+    {
+        ASSERT_LT(rolls, kMaxEpochRolls)
+            << "no stem send after " << kMaxEpochRolls
+            << " epoch rolls — zone never entered a stem epoch";
+        auto context = contexts_.begin();
+        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
+        io_service_.restart();
+        ASSERT_LT(0u, io_service_.poll());
+        if (events_.has_stem_txes())
+            break;
+        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
+        notifier.run_fluff();
+        io_service_.restart();
+        io_service_.poll();
+        for (auto &ctx : contexts_)
+            ctx.process_send_queue();
+        while (receiver_.notified_size())
+            receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+        notifier.run_epoch();
+        io_service_.restart();
+        io_service_.poll();
+        ++rolls;
+    }
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::stem));
+    for (auto &ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+
+    EXPECT_EQ(2u, notifier.stem_in_flight())
+        << "a successful stem send must arm one observation per tx";
+
+    /* F-10: an arrival from the charged successor resolves nothing. The
+       stem destination is always an OUTGOING connection, so the first
+       context (created incoming) is provably not it — using it proves the
+       exclusion is peer-scoped rather than blanket. The exclusion's own
+       semantics are witnessed Rust-side; this asserts the uuid reaches it. */
+    auto incoming = contexts_.begin();
+    ASSERT_TRUE(incoming->is_incoming());
+    /* Arrival path takes canonical hashes (join key), not blobs — same shape
+       production uses after the one-shot parse at fan-out. */
+    notifier.record_arrival(
+        std::make_shared<const std::vector<crypto::hash>>(
+            cryptonote::levin::stem_watch_tx_hashes(txs)),
+        incoming->get_id());
+    io_service_.restart();
+    io_service_.poll();
+
+    EXPECT_EQ(0u, notifier.stem_in_flight())
+        << "the same txs arriving from another peer must resolve the observations";
+}

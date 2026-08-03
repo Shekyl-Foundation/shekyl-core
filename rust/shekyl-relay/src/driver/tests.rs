@@ -4,6 +4,7 @@
 // BSD-3-Clause
 
 use super::*;
+use crate::stem_watch::TxId;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -676,5 +677,118 @@ fn a_late_poll_emits_at_most_one_covert_channel() {
     assert_ne!(
         second[0], fired,
         "the second late poll serves the OTHER channel"
+    );
+}
+
+/// A stem observation resolves on the **poll clock**, not on a timer of its
+/// own — and a disconnect drops it rather than charging the departed peer.
+///
+/// This is the wiring witness for §38: `StemWatch` landed unwired, and an
+/// unwired accumulator is the "unwired-is-closed" fossil this project has had
+/// to dig out before. What it asserts is the lifecycle, not the arithmetic
+/// (which `stem_watch`'s own tests cover): that `poll` reaches `expire`, and
+/// that `on_connection_close` reaches `forget`.
+///
+/// Negative-controlled, both run and observed to fail:
+/// - remove the `expire_stem_observations` call from `poll` → the silence is
+///   never resolved and the tally assertion fails;
+/// - remove `forget` from `on_connection_close` → the departed peer keeps a
+///   tally and the drop assertion fails.
+#[test]
+fn a_stem_observation_resolves_on_the_poll_clock_and_a_close_drops_it() {
+    let mut rng = SplitMix64::new(0x57E3);
+    let mut d = driver(&mut rng);
+    d.zone_mut()
+        .on_handshake_complete(id(1), PeerDirection::Outbound);
+
+    let tx = TxId::from_bytes([7u8; 32]);
+    let deadline = 5_000;
+    // Fixed deadline: production draws from the embargo timer; this witness
+    // pins the clock so expire / next_wake assertions are deterministic.
+    d.zone_mut().record_stem_at(&[tx], id(1), None, deadline);
+    assert_eq!(
+        d.zone().stem_observations_in_flight(),
+        1,
+        "fixture: the observation is armed"
+    );
+    assert_eq!(
+        d.next_wake(),
+        deadline,
+        "next_wake must fold the observation deadline — if this is the epoch \
+         only, silences wait on unrelated schedules"
+    );
+
+    // Before the deadline: polling must not resolve it.
+    assert!(d.zone().epoch_deadline() > deadline, "fixture: no rollover");
+    let _ = d.poll(deadline - 1, no_gather, &mut rng);
+    assert_eq!(
+        d.zone().stem_observations_in_flight(),
+        1,
+        "an observation must not resolve before its deadline"
+    );
+    assert!(d.zone().stem_tally(&id(1)).is_none());
+
+    // At the deadline: the poll resolves it as silent.
+    let _ = d.poll(deadline, no_gather, &mut rng);
+    assert_eq!(d.zone().stem_observations_in_flight(), 0);
+    let t = d
+        .zone()
+        .stem_tally(&id(1))
+        .expect("the poll clock resolved it — if this is None, poll never reached expire");
+    assert_eq!((t.propagated, t.silent), (0, 1));
+
+    // A close drops the tally rather than retaining it (F-8: no persistence).
+    d.zone_mut().on_connection_close(&id(1));
+    assert!(
+        d.zone().stem_tally(&id(1)).is_none(),
+        "a departed peer's reputation is dropped, not quietly retained"
+    );
+}
+
+/// An arrival resolves the observation as *propagated* — the other half of the
+/// lifecycle, and the half that makes the signal a signal rather than a timer.
+#[test]
+fn an_arrival_resolves_the_observation_as_propagated() {
+    let mut rng = SplitMix64::new(0x57E4);
+    let mut d = driver(&mut rng);
+    d.zone_mut()
+        .on_handshake_complete(id(1), PeerDirection::Outbound);
+
+    let tx = TxId::from_bytes([9u8; 32]);
+    d.zone_mut().record_stem_at(&[tx], id(1), None, 5_000);
+    d.zone_mut().record_arrival(&[tx], Some(id(2)));
+
+    let t = d.zone().stem_tally(&id(1)).expect("arrival resolved it");
+    assert_eq!(
+        (t.propagated, t.silent),
+        (1, 0),
+        "seen-before-deadline is propagation, not silence"
+    );
+
+    // F-10 at the zone seam: an echo from the charged successor must not
+    // resolve. Armed second observation, echoed by its own successor.
+    let echo = TxId::from_bytes([0x0E; 32]);
+    d.zone_mut().record_stem_at(&[echo], id(1), None, 5_000);
+    d.zone_mut().record_arrival(&[echo], Some(id(1)));
+    assert_eq!(
+        d.zone().stem_observations_in_flight(),
+        1,
+        "the successor's own echo resolves nothing — it stays in flight"
+    );
+    d.zone_mut().record_arrival(&[echo], Some(id(2)));
+    assert_eq!(
+        d.zone().stem_observations_in_flight(),
+        0,
+        "a different peer having it IS propagation"
+    );
+
+    // And the deadline passing afterwards must not double-count it.
+    let _ = d.poll(5_000, no_gather, &mut rng);
+    let t = d.zone().stem_tally(&id(1)).expect("still there");
+    assert_eq!(
+        (t.propagated, t.silent),
+        (2, 0),
+        "a resolved observation is gone from the pending map — a later expire \
+         must not charge the peer a silence it already answered"
     );
 }
