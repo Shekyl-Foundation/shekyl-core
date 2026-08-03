@@ -26,6 +26,7 @@
 #![deny(unsafe_code)]
 
 pub mod admission;
+pub mod attestation;
 pub mod bond_connect;
 pub mod bond_ct_balance;
 pub mod bond_duration;
