@@ -95,13 +95,15 @@ pub enum StemOutcome {
 ///
 /// **Raw counts only.** See the module note: memory policy, thresholds and the
 /// `(n_min, cut)` pair are all open decisions, and a tally that decayed or
-/// compared would have chosen one.
+/// compared would have chosen one. Counters are `u64` so a long-lived node
+/// under cumulative memory (§37.3 still open) cannot wrap a `u32` and corrupt
+/// the future selection consumer's `n`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StemTally {
     /// Observations that resolved as [`StemOutcome::Propagated`].
-    pub propagated: u32,
+    pub propagated: u64,
     /// Observations that resolved as [`StemOutcome::Silent`].
-    pub silent: u32,
+    pub silent: u64,
     /// Distinct `in_mapping_` keys that contributed observations — the
     /// §35.4 admissibility-gate input. Farmed observations all arrive under
     /// **one** key (the farmer's own), honest traffic under many.
@@ -114,8 +116,8 @@ pub struct StemTally {
 impl StemTally {
     /// Total resolved observations — `n` in §36's `(n_min, cut)`.
     #[must_use]
-    pub fn observations(&self) -> u32 {
-        self.propagated + self.silent
+    pub fn observations(&self) -> u64 {
+        self.propagated.saturating_add(self.silent)
     }
 
     /// How many distinct source-mappings contributed (§35.4).

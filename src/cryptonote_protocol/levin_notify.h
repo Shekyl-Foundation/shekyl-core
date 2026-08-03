@@ -149,9 +149,10 @@ namespace levin
     //! hashes are ignored Rust-side.
     void record_arrival(std::shared_ptr<const std::vector<crypto::hash>> hashes, const boost::uuids::uuid& from);
 
-    //! §46: stem observations pending resolution. Test-facing liveness read;
-    //! call only when the zone strand is quiescent (the gtest harness drives
-    //! executors to completion before reading).
+    //! §46: stem observations pending resolution. Reads a published atomic on
+    //! the relay handle (same discipline as `live_stems` / get_status), so it
+    //! is safe from any thread — including the gtest harness after it drains
+    //! the strand.
     std::size_t stem_in_flight() const;
   };
 

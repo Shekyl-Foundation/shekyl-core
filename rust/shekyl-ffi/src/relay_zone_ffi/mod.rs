@@ -181,20 +181,32 @@ pub type OutboundCb = extern "C" fn(ctx: *mut c_void, out_n: *mut usize) -> *con
 pub struct RelayZoneHandle {
     driver: Driver,
     rng: SecureRelayRng,
-    /// Published derived fact for off-task readers. Single writer: `publish`.
+    /// Published derived facts for off-strand readers. Single writer: [`Self::publish`].
+    ///
+    /// Same discipline as §18.5 finding 1 for `live_stems`: anything readable
+    /// from outside the zone strand must be an atomic snapshot, not a direct
+    /// borrow of zone state (which mutators race).
     live_stems: AtomicUsize,
+    /// Pending stem observations — wiring witnesses and future consumers read
+    /// this off-strand; the zone's `HashMap` is only touched on the strand.
+    stem_in_flight: AtomicUsize,
 }
 
 impl RelayZoneHandle {
-    /// Republish the derived stem count. The **only** writer of `live_stems`.
+    /// Republish derived facts for off-strand readers. The **only** writer of
+    /// `live_stems` and `stem_in_flight`.
     ///
-    /// Call from every export that can change `live_stems` (stem map rebuilds,
-    /// handshake/close, plan-with-refresh). Mutators that only touch stem
-    /// observations, fluff queues, or other unpublished state do not need it —
-    /// stem-watch does not affect the published count.
+    /// Call from every export that can change either fact: stem-map rebuilds,
+    /// handshake/close, plan-with-refresh, poll/force (expire), and the stem
+    /// observation mutators themselves. Skipping it after a stem-watch write
+    /// would leave `stem_in_flight` stale for off-strand readers.
     fn publish(&self) {
         self.live_stems
             .store(self.driver.zone().live_stems(), Ordering::Release);
+        self.stem_in_flight.store(
+            self.driver.zone().stem_observations_in_flight(),
+            Ordering::Release,
+        );
     }
 }
 
@@ -352,6 +364,7 @@ pub extern "C" fn shekyl_relay_zone_new(
         driver: Driver::new(zone),
         rng,
         live_stems: AtomicUsize::new(0),
+        stem_in_flight: AtomicUsize::new(0),
     };
     handle.publish();
     Box::into_raw(Box::new(handle))
@@ -509,6 +522,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_stem(
     h.driver
         .zone_mut()
         .record_stem(&ids, succ, src, now_ms, &mut h.rng);
+    h.publish();
 }
 
 /// Record that `n` transactions arrived `from` a peer — any zone, any path,
@@ -546,19 +560,22 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_arrival(
     // slice, and the per-id loop was re-entering the zone `n` times to do work
     // it does in one pass.
     h.driver.zone_mut().record_arrival(&ids, read_id(from));
+    h.publish();
 }
 
-/// Stem observations still pending resolution — the liveness read a C++
-/// wiring witness needs (a recorded stem must be visible as in-flight and an
-/// arrival must clear it), and cheap enough to leave in production builds.
+/// Stem observations still pending resolution.
+///
+/// Reads the published atomic, so it is safe from any thread — the same
+/// discipline as [`shekyl_relay_zone_live_stems`]. The zone's pending map is
+/// only touched on the strand; this export never borrows it. A null handle
+/// reads 0.
 ///
 /// # Safety
-/// `handle` must be null (returns 0) or a live zone from
-/// [`shekyl_relay_zone_new`].
+/// `handle` must be null or a live zone from [`shekyl_relay_zone_new`].
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_stem_in_flight(handle: *const RelayZoneHandle) -> usize {
     match handle.as_ref() {
-        Some(h) => h.driver.zone().stem_observations_in_flight(),
+        Some(h) => h.stem_in_flight.load(Ordering::Acquire),
         None => 0,
     }
 }

@@ -2647,9 +2647,17 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
 
     ASSERT_EQ(0u, notifier.stem_in_flight());
 
-    // Drive until a stem epoch actually sends (fluff epochs re-roll).
+    // Drive until a stem epoch actually sends (fluff epochs re-roll). Bound
+    // the re-rolls so a scheduling regression fails with an assertion rather
+    // than hanging the suite — q is high enough that a stem epoch arrives
+    // well within a few dozen flips under the test RNG.
+    static constexpr unsigned kMaxEpochRolls = 64;
+    unsigned rolls = 0;
     for (;;)
     {
+        ASSERT_LT(rolls, kMaxEpochRolls)
+            << "no stem send after " << kMaxEpochRolls
+            << " epoch rolls — zone never entered a stem epoch";
         auto context = contexts_.begin();
         EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
         io_service_.restart();
@@ -2667,6 +2675,7 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
         notifier.run_epoch();
         io_service_.restart();
         io_service_.poll();
+        ++rolls;
     }
     EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::stem));
     for (auto &ctx : contexts_)

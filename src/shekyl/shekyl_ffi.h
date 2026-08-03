@@ -3134,8 +3134,8 @@ void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
 void shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
     const std::uint8_t* hashes, std::size_t n, const std::uint8_t* from);
 
-//! Stem observations still pending resolution (0 for null handle) — the
-//! liveness read a wiring witness needs.
+//! Stem observations still pending resolution (0 for null handle). Reads a
+//! published atomic — safe from any thread, same discipline as live_stems.
 std::size_t shekyl_relay_zone_stem_in_flight(const RelayZoneHandle* handle);
 //! Free a zone. Null is a no-op; free exactly once.
 void shekyl_relay_zone_free(RelayZoneHandle* handle);
