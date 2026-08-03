@@ -15,11 +15,54 @@ This document exists so a maintainer can close or definitively re-scope
 
 ---
 
+## ⚠️ Correction (2026-08-03, post-run) — the apparatus was non-conformant
+
+**The spike's harness put two personas on the wire simultaneously behind one tor
+daemon. The firewall forbids that**, and this document's first revision reported
+the predicted consequence as if it were a discovery.
+
+The ratified position, verified at source:
+
+- **Multi-persona per wallet is real** — `PSlot` is *"the index into the staker's
+  derive-forward persona set"* (`shekyl-types/src/lib.rs:273`,
+  `ARCHIVAL_BOND_CONSTRUCTION.md` §10.2 **Model D**). The held set is
+  `{personas with live bonds} ∪ {p_slot ..= p_slot + k}`, `k` default 2. A staker
+  wallet routinely holds several persona bundles at once.
+- **But the permission is conditional, and the condition is exactly
+  co-activation.** `ARCHIVAL_BOND_CONSTRUCTION.md:667`, on why retired-but-bonded
+  personas may coexist: *"dormant consensus balances (**not co-activation — no
+  simultaneous wire activity — so the firewall permits it**)"*. Many held; **one
+  on the wire.** The code agrees: `stake_engine.rs:767` `active: Option<PSlot>`.
+- **`ARCHIVAL_FIREWALL_GATE6.md` §10.9 (`:1241`, ratified Round-2 exit pin,
+  checked off `:1297`)** already requires *"separate Arti client instances with
+  **non-overlapping guard sets**"* for `P`'s serving HS, `P`'s outbound broadcast,
+  and the principal's traffic — because *"a shared guard lets a guard-level
+  observer correlate `P` and principal **regardless** of own-node-vs-Dandelion"*.
+
+**Consequences applied throughout this document:**
+
+1. **SPIKE-F-1 is re-dispositioned REFUTED AS STATED** (§2). It did not discover
+   that personas share guards; it built a configuration in which they do and
+   measured what §10.9 predicts. Its data is repurposed to inform the *open*
+   §10.9-enforcement carry (§2a).
+2. **The former "mitigation may be counterproductive" disposition is
+   WITHDRAWN.** It argued against a ratified pin from a measurement of the
+   forbidden configuration, and §10.9 had already weighed and ruled on that exact
+   trade.
+3. **`D*` is re-derived from the single-persona arms only** (§12.0b). The
+   concurrency arm is labelled **non-conformant** and excluded from the verdict.
+4. **SPIKE-F-10 splits** (§12.0d): the co-hosted-persona contention number is a
+   forbidden-layout artifact and is withdrawn; the single-persona reader-
+   concurrency question survives as **SPIKE-F-11**.
+
+---
+
 ## 0. What this spike found, in one screen
 
 | # | Finding | Severity | Verdict |
 |---|---|---|---|
-| **SPIKE-F-1** | Two personas behind one tor **share entry guards**; `ADD_ONION` has no per-service isolation knob, so the inbound axis has no analogue of SP-T1's SOCKS-username isolation | **HIGH** | **CONFIRMED (measured)** |
+| **SPIKE-F-1** | ~~Two personas behind one tor share entry guards~~ | — | **REFUTED AS STATED** — the apparatus built a co-activation layout §10.9 forbids; not new information (§2) |
+| **SPIKE-F-12** | **`ADD_ONION` has no per-service isolation knob, so C-tor with N onions on one daemon cannot satisfy §10.9's non-overlapping guard sets.** §10.9 specifies *Arti*; the enforcement mechanism is an **open rule-21 carry** (`:1644`, routed to the Transport PR) and shekyl-tor is C-tor | **HIGH** | **CONFIRMED (measured)** — the live carried item this spike actually informs (§2a) |
 | **SPIKE-F-2** | Two personas' onion services do **not** share introduction points | HIGH (as a *negative*) | **REFUTED (measured)** — halt condition §8.5 does not fire |
 | **SPIKE-F-3** | `MaxStreamsCloseCircuit` is a **`Flag`**, not a `MaxStreamsCloseCircuit=1` argument; the argument spelling earns `512` from tor | MEDIUM | **CONFIRMED (measured)** |
 | **SPIKE-F-4** | A production persona onion key belongs in `archival_p.rs`, not in a second cSHAKE256 path from the master seed | MEDIUM | **CONFIRMED (source)** |
@@ -27,7 +70,8 @@ This document exists so a maintainer can close or definitively re-scope
 | **SPIKE-F-6** | The persona descriptor is a **liveness oracle** with ~3 h granularity, and it is an irreducible floor of running an onion service | MEDIUM | **CONFIRMED (measured)** |
 | **SPIKE-F-8** | Two personas' descriptors land on **disjoint HSDir sets** (16 each, zero overlap) — the "shared HSDir" axis SP-T2 flagged does not exist | MEDIUM (as a *negative*) | **REFUTED (measured)** |
 | **SPIKE-F-9** | `.gitignore`'s bare `bin/` rule silently untracks **any Rust crate's `src/bin/`** — Cargo's conventional binary location | MEDIUM (repo-wide) | **CONFIRMED (CI)** |
-| **SPIKE-F-10** | Co-hosted personas **contend**: 2 concurrent readers move `D*` 28.57 s → 44.00 s (×1.54). The margin to a block deadline is concurrency-sensitive | MEDIUM | **CONFIRMED (measured)** |
+| **SPIKE-F-10** | ~~Co-hosted personas contend (×1.54)~~ | — | **WITHDRAWN** — measured under the forbidden co-activation layout; artifact, not architecture (§12.0d) |
+| **SPIKE-F-11** | **One** persona facing many simultaneous readers is a genuine, §10.9-unaffected TJ-B question the margin is sensitive to — and it is **unmeasured** | MEDIUM | **OPEN** (§12.0d) |
 | **SPIKE-F-7** | D4's payload is a **cost, not a blocker**: ~5 h of one-time regtest mining plus a batched extraction | INFO | **REFUTED as a halt** |
 
 Two charter halt conditions were pre-registered as likely and **neither fired**:
@@ -50,73 +94,110 @@ The single question that section names is whether the adversary can tie the
 
 ---
 
-## 2. SPIKE-F-1 — guards are shared, and this is the serving axis's real finding
+## 2. SPIKE-F-1 — **REFUTED AS STATED**: the apparatus built a forbidden layout
 
-### The measurement
+### What was claimed, and why it does not stand
 
-One tor, two personas added back to back, both publishing v3 onion services.
-Circuit paths read from `GETINFO circuit-status`, attributed by which circuits
-existed before the second `ADD_ONION`:
+The first revision reported that "two personas behind one tor share entry
+guards" as a HIGH finding and the spike's principal output. **The measurement is
+real; the finding is not.**
 
 ```text
-persona 0 intro points: 1654A650 35F5A0B2 38CC95A8 6A801638 7FD2CD60 A3E13656
-persona 1 intro points: 00B561BE 2705B1D3 506408D4 8FA37B93 BF54EE31 D7ABD3E5
-INTRO_OVERLAP         : (empty)
-
 persona 0 guards      : 7BBE05B2 843E20D6
 persona 1 guards      : 7BBE05B2 843E20D6
 GUARD_OVERLAP         : 7BBE05B2 843E20D6      <-- complete
 ```
 
-Both personas' HS_SERVICE_INTRO and HS_SERVICE_HSDIR circuits enter the network
-through the **same two guard relays**. This is not a defect in the
-implementation — it is Tor's guard design working as intended (a small, stable
-guard set is what limits malicious-guard exposure) — but it means:
+Those two personas were **on the wire at the same time**, which
+`ARCHIVAL_BOND_CONSTRUCTION.md:667` forbids: multi-persona holding is permitted
+*because* it is "**not co-activation — no simultaneous wire activity**". The
+apparatus created co-activation, and then measured the guard sharing that
+`ARCHIVAL_FIREWALL_GATE6.md` §10.9 says follows from putting `P` traffic on a
+shared Tor client.
 
-> **SOCKS-username isolation is an outbound-only mechanism. `ADD_ONION` has no
-> per-service isolation parameter at all.** SP-T2 proved per-`P` isolation on the
-> *fetch* axis; that proof **does not transfer** to the serving axis, exactly as
-> [`ARCHIVAL_BOND_2D2_SP_T2_FETCH.md`](ARCHIVAL_BOND_2D2_SP_T2_FETCH.md):134
-> warned it would not.
+So this is a **conformance failure of the apparatus against a ratified
+requirement** — not new information about the architecture. §10.9 (`:1241`,
+checked off `:1297`) already states the rule and already states the reason:
 
-### The threat tuple, and what it does *not* say
+> "A shared guard lets a guard-level observer correlate `P` and principal
+> **regardless** of own-node-vs-Dandelion (fork 1) — so isolation is the
+> structural pin and origin-dilution … is a refinement on top of it, not a
+> substitute."
 
-`T = ⟨`
-- **who:** an operator of, or observer at, one of the wallet's entry guards (C2);
-- **capability:** sees that one IP maintains N long-lived circuits with
-  HS-service purposes, and their timing;
-- **cost:** run a relay long enough to earn the Guard flag and be selected
-  (weeks, plus bandwidth), or compromise/observe an existing one;
-- **priced-where:** the C2 bucket in transport plan §7.
-`⟩`
+### The disposition that compounded it — withdrawn
 
-**What T learns:** *co-residency and cardinality* — "this host runs onion
-services, and roughly how many." The guard sees circuits, not services: a v3
-descriptor is encrypted, the intro point is three hops away, and nothing on the
-circuit names the onion address.
+The first revision left the mitigation open, arguing one-tor-per-persona "may be
+counterproductive: more guard sets means more independent guard draws." **That is
+withdrawn.** It argued against a ratified exit pin using a measurement of the
+configuration that pin forbids, and §10.9 had already weighed precisely that
+trade and ruled the other way — on the ground that a shared guard defeats
+dilution *regardless*, which makes isolation structural rather than a cost to be
+traded off.
 
-**What T does not learn:** which `.onion` addresses these are. Completing the
-linkage `persona A ↔ persona B ↔ this host` requires *additionally* binding an
-onion address to this IP, which is the standard hidden-service location-discovery
-problem that Tor's guard design exists to make expensive.
+If the guard-multiplication argument is to be reopened at all, it must be
+reopened **against §10.9, on §10.9's own terms**, as an amendment to a closed
+Round-2 exit item — not carried forward as a fresh open question discovered by a
+spike.
 
-So the honest statement is: **guard sharing gives a co-residency channel, not an
-address-linkage channel** — and it is *the* structural difference between the
-client axis (isolated per persona, by construction) and the serving axis (not
-isolated, with no knob to isolate it).
+### What the persona↔persona axis is actually worth
 
-### Why the obvious mitigation is not obviously right
+Under Model D the realistic co-tenants on one host are, in descending order of
+how continuously they exist:
 
-The mitigation is one tor instance per persona, each with its own guard set. That
-is materially expensive (N processes, N `DataDirectory` trees, N bootstraps) —
-but the decisive objection is not cost, it is that **it may be
-counterproductive**: more guard sets means more independent guard draws, and each
-draw is a fresh chance of landing on a hostile guard. Tor uses few guards
-precisely because rotating and multiplying them is the worse failure mode.
+1. **`P` (the one active persona) ↔ principal wallet** — always both. §10.9's
+   primary target.
+2. **`P`'s serving HS ↔ `P`'s outbound broadcast** — also continuous, and also
+   named in §10.9.
+3. **`P_old` ↔ `P_new`** — only during a slot move, and `stake_engine.rs:239`
+   notes "most sessions … move the active slot at most once".
 
-**Disposition:** this is a design question for SP-T3 proper, not a spike
-decision. It is recorded here with the measurement that grounds it, and it is the
-single most important input this spike hands forward.
+Persona↔persona co-activation, which is what this spike measured, is **not on
+that list**. It is forbidden outright.
+
+---
+
+## 2a. SPIKE-F-12 — the finding the data actually supports: **C-tor cannot deliver §10.9**
+
+This is where SPIKE-F-1's measurement belongs, restated against a question that
+is genuinely open.
+
+**§10.9's enforcement mechanism is an unresolved rule-21 carry, not a closed
+door.** `ARCHIVAL_FIREWALL_GATE6.md:1644`:
+
+> **§10.9 isolation enforcement mechanism** (Arti config vs. policy) + S-6
+> key-locality provisioning → **Transport PR** + PHASE_2B engines. *Independent
+> guard sets + restore-flow non-co-activation must be **structural**.*
+
+And §10.9 specifies the mechanism as **separate Arti client instances**. This
+spike ran **C-tor** — the hash-pinned Tor Expert Bundle driven over the control
+port — because that is what `shekyl-tor` is. (`:479` carries the at-source Arti
+pin to the transport PR under GF-12; the Arti-vs-C-tor question is live.)
+
+**The measured statement, scoped to what was actually established:**
+
+> With C-tor, **`ADD_ONION` exposes no per-service isolation parameter of any
+> kind.** Every onion service published on one tor daemon, and every client
+> circuit that daemon builds, draws from that daemon's single guard set. Measured:
+> two services on one daemon received *identical* two-guard sets, while their
+> introduction points (6+6) and HSDir sets (16+16) were disjoint — so the sharing
+> is specifically at the **guard** layer, and specifically **not** at the layers
+> tor derives per-service from the blinded key.
+
+**Why that matters to the carry.** §10.9 requires the isolation to be
+*structural*. On C-tor there is no config knob that provides it: non-overlapping
+guard sets would require **separate tor processes with separate `DataDirectory`
+trees** (the guard set lives in the datadir's `state` file — see
+`ManagedTor::data_dir`'s DQ-T0.7 note on guard-identity persistence). That is a
+material provisioning fact for the transport PR, and it is the thing this spike
+is genuinely able to tell it.
+
+`T = ⟨` guard-level observer (C2); sees that one IP's circuits share an entry
+relay; cost = run/observe a Guard-flagged relay; priced in transport plan §7 `⟩`
+— **as §10.9 already prices it.** The novelty here is not the threat, it is the
+**mechanism gap**: C-tor has no knob, so the pin needs process separation.
+
+**Disposition:** hand to the Transport PR as input to the `:1644` carry. This
+spike does **not** decide Arti-vs-C-tor and does not reopen §10.9.
 
 ---
 
@@ -288,10 +369,10 @@ introduction-point reuse. All three are measured below.
 | Axis | Verdict | Evidence |
 |---|---|---|
 | Shared introduction points | **REFUTED** | Disjoint 6+6 sets, measured (§3) |
-| Shared entry guards | **CONFIRMED** | Identical 2-guard set, measured (§2) |
+| Shared entry guards *(between two co-active personas)* | **MEASURED, BUT UNDER A FORBIDDEN LAYOUT** | Identical 2-guard set — but co-activation is ruled out by `ARCHIVAL_BOND_CONSTRUCTION.md:667`, so this is not an architectural finding. Re-dispositioned in §2; the mechanism fact it does support (C-tor has no per-service knob) is **SPIKE-F-12**, §2a. |
 | Shared HSDir set | **REFUTED** | Each persona uploaded its descriptor to **16 HSDirs; the two sets overlap in zero relays.** A v3 descriptor's directory position derives from the blinded key, which differs per service, so this is theory confirmed by measurement rather than luck. **No single HSDir sees both personas' descriptors.** |
 | Correlated descriptor publication timing | **CONFIRMED (weak), and weaker than expected** | Two personas added **0.043 s** apart began publishing **0.98 s** apart — a tight, genuinely correlated window. But the HSDir result above blunts it: exploiting the correlation requires observing **≥ 2 of the 32 distinct directories** the two descriptors land on *and* correlating across them, because no directory sees both. Combined with the fact that two unrelated services starting at once on a busy directory look identical, this is a real-but-weak channel, not a break. `T = ⟨`multi-HSDir operator; sees upload times at the directories it runs; cost = running a meaningful fraction of the HSDir ring; priced in the C2/C3 bucket`⟩`. |
-| Co-hosted personas contend under concurrent load | **CONFIRMED (measured)** | SPIKE-F-10: two concurrent readers move p90 28.99 s → 44.04 s and `D*` ×1.54. The coupling mechanism is the shared tor process, NIC, and — per SPIKE-F-1 — the shared **guards**. A design assuming co-hosted personas are independent under load is now *contradicted by data*, not merely unsupported. |
+| ~~Co-hosted personas contend under concurrent load~~ | **WITHDRAWN** | Measured under the forbidden co-activation layout; an artifact of a deployment §10.9 prevents. Superseded by **SPIKE-F-11** (one persona, many readers), which is conformant and **unmeasured**. |
 | `MaxStreams` **exhaustion** on A observable at B | **UNMEASURABLE-HERE** | Distinct from the contention row above and **not claimed either way**. Deliberate flooding to the stream cap, distinguished from ambient variance, needs a controlled load generator and a quiet baseline this spike does not have. Contention at concurrency 2 is not evidence about the exhaustion path. |
 | Error responses fingerprint the shared backend | **REFUTED (by construction)** | `serve.rs` renders one identical 404 for every non-matching request — wrong path, wrong method, malformed — asserted by `every_non_route_gets_one_identical_error`. Two personas' success headers are asserted byte-identical by `two_personas_are_header_identical`, and the complete header set is pinned to `content-type` + `content-length` (no `server`, no `date`, no `etag`, no `accept-ranges`). |
 
@@ -434,23 +515,39 @@ floor of 0.0167** — a single truncated response in 60, and an apparatus-class
 failure at that. No fetch in the arm exceeded 40 s, so every block-denominated
 deadline is far out on the flat part of the curve.
 
-### 12.0b All three arms, and the verdict is unanimous
+### 12.0b The conformant arms — `D*` re-derived, concurrency arm excluded
 
-| Arm | `n` | p50 | p90 | p99 | `D*` | `q(120 s)` | at 1 block |
-|---|---|---|---|---|---|---|---|
-| Warm circuit | 60 | 8.21 s | 13.46 s | 20.13 s | 13.22 s | 0.0167 | does **not** force |
-| Cold circuit | 60 | 14.71 s | 28.99 s | 39.27 s | 28.57 s | 0.0167 | does **not** force |
-| 2 personas concurrent | 60 | 21.65 s | 44.04 s | 72.29 s | 44.00 s | 0.0000 | does **not** force |
+**Only the single-persona arms are conformant.** The 2-persona concurrent arm ran
+the co-activation layout §10.9 forbids (see §2) and is **excluded from the
+verdict**.
 
-**Even the worst arm clears the bar with room.** The concurrent arm — the slowest,
-and the one modelling a persona under simultaneous load — has `D* = 44.00 s`, still
-**2.7 × below** the 120 s block boundary, and its `q(120 s)` is **0.0000**: not one
-of its 60 fetches failed or exceeded two minutes.
+| Arm | Conformant? | `n` | p50 | p90 | p99 | `D*` | `q(120 s)` | at 1 block |
+|---|---|---|---|---|---|---|---|---|
+| Warm circuit, single persona | ✅ | 60 | 8.21 s | 13.46 s | 20.13 s | 13.22 s | 0.0167 | does **not** force |
+| **Cold circuit, single persona** | ✅ | 60 | 14.71 s | 28.99 s | 39.27 s | **28.57 s** | 0.0167 | does **not** force |
+| ~~2 personas concurrent~~ | ❌ **non-conformant** | 60 | 21.65 s | 44.04 s | 72.29 s | ~~44.00 s~~ | ~~0.0000~~ | *excluded* |
+
+**`D* = 28.57 s`, from the cold single-persona arm** — the pessimistic conformant
+case, and the faithful model of a drawn miner (circuit build + rendezvous inside
+the timed path, a different client each fetch).
+
+**Excluding the non-conformant arm strengthens the conclusion rather than
+weakening it.** That arm was the *slowest* of the three, so it produced the
+*largest* `D*` (44.00 s). Dropping it moves the governing `D*` **down** from
+44.00 s to 28.57 s — further below the 120 s block boundary, widening the margin
+from 2.7× to **4.2×**. The verdict therefore holds *a fortiori*: the forbidden
+layout has more shared-process contention than production will, so a conformant
+deployment is faster, not slower.
+
+The first revision's "even the worst arm clears with room" reassurance **leaned
+on the non-conformant arm and is withdrawn.** The correct statement is that the
+verdict rests on the two conformant arms alone and does not need the third.
 
 **Apparatus cross-check passed exactly.** The endpoints report **181** requests
-served against 180 counted fetches (60 + 60 + 60) plus the one reachability
-probe. No "success" came from anywhere other than the persona it was attributed
-to.
+served against 180 counted fetches plus the one reachability probe — so no
+"success" came from anywhere other than the persona it was attributed to. (This
+is an integrity check on the harness, and is unaffected by the conformance
+question.)
 
 ### 12.0c The drift detector fired where it should — which is what makes its silence meaningful
 
@@ -463,34 +560,33 @@ The value of that firing is as a **positive control**. A drift check that never
 fires is indistinguishable from a broken one, and the cold arm's clean **1.16**
 would then be a vacuous negative. Because the same detector fires at 0.57 on an
 arm that genuinely warms and reads 1.16 on the arm that must not, the cold arm's
-result is a *measured* absence of warming, not an unexercised assertion.
+result — the one `D*` rests on — is a *measured* absence of warming, not an
+unexercised assertion.
 
-### 12.0d SPIKE-F-10 — co-hosted personas contend, and the margin is concurrency-sensitive
+### 12.0d SPIKE-F-10 splits: one artifact discarded, one real question carried
 
-Serving **two** personas concurrently through one tor moved p90 from 28.99 s →
-44.04 s and `D*` from 28.57 s → 44.00 s (**× 1.54**). That is measured contention
-between co-hosted personas: they share the tor process, the NIC, and — per
-SPIKE-F-1 — the **same entry guards**, which is the mechanism.
+The first revision reported "co-hosted personas contend, `D*` ×1.54" as
+SPIKE-F-10. That splits into two claims with opposite fates.
 
-This partially answers the §8 axis previously marked *unmeasurable-here*. It is
-**contention under concurrent load**, not `MaxStreams` exhaustion, and the two
-should not be conflated; but a design assuming co-hosted personas are independent
-under load is now contradicted by data rather than merely unsupported.
+**Withdrawn — the contention number is a forbidden-layout artifact.** Two
+personas serving simultaneously through one tor is precisely the co-activation
+`ARCHIVAL_BOND_CONSTRUCTION.md:667` rules out. Under §10.9 the production shape
+has *more* isolation and *less* shared-process contention, so the ×1.54 measures
+a deployment that will not exist. It is not evidence about the architecture and
+must not be cited as such.
 
-**The extrapolation, with its weakness stated first.** Two points is not a curve.
-Fitting `D*(c) = 28.57 · c^k` to `c ∈ {1, 2}` gives `k ≈ 0.62`, and solving for
-`D* = 120 s` gives **`c ≈ 10` concurrent readers**. Treat that as an
-order-of-magnitude indication only — a two-point power-law fit has no error bars,
-assumes a functional form nothing justifies, and extrapolates 5 × beyond its
-support.
+**Carried as SPIKE-F-11 — single-persona reader concurrency is genuinely open.**
+How one persona behaves under many *simultaneous readers* is untouched by §10.9:
+that is one persona, one tor, one guard set — conformant — with N clients
+arriving at once. It is a real TJ-B question (draw rate × shard count × organic
+demand), the margin is plausibly sensitive to it, and **this spike did not
+measure it.** The concurrency arm cannot stand in for it, because it varied the
+wrong thing: two *personas*, not one persona's *readers*.
 
-What it is good for is a **sense of the safety margin's shape**: closing the gap
-to a block-denominated deadline needs roughly an order of magnitude more
-concurrency than was measured, not a small perturbation. Whether a persona in
-production faces ~10 simultaneous readers is a TJ-B question (draw rate × shard
-count × organic demand) that this spike cannot answer. **If it can, the margin is
-narrower than the cold arm alone suggests, and this axis deserves its own
-measurement.**
+The former ~10-concurrent-readers extrapolation is **withdrawn with the
+artifact** — it was fitted to two points from the forbidden layout, and its
+functional form was never justified. SPIKE-F-11 needs its own measurement, on a
+conformant single-persona apparatus.
 
 ### 12.1 Apparatus validation (done)
 
@@ -599,12 +695,18 @@ overstate how generous TJ-C's deadline could be — in the worked fixture, by 5�
 
 ### The data selects **NOT FORCEABLE**
 
-`D* = 28.57 s`, and the **smallest deadline a block-granular rule can express is
-one block = 120 s**. Every expressible deadline sits on the flat part of the
-curve where `q = 0.0167`, six times below `q_risk* = 0.1011`. There is no
-block-denominated deadline that forces the threshold, and this is not a near
-miss: `D*` is **4.2 × smaller** than the finest available granularity, and no
-fetch in the arm took even 40 s.
+`D* = 28.57 s` **from the conformant cold single-persona arm** (§12.0b), and the
+**smallest deadline a block-granular rule can express is one block = 120 s**.
+Every expressible deadline sits on the flat part of the curve where `q = 0.0167`,
+six times below `q_risk* = 0.1011`. There is no block-denominated deadline that
+forces the threshold, and this is not a near miss: `D*` is **4.2 × smaller** than
+the finest available granularity, and no fetch in the arm took even 40 s.
+
+The verdict rests on the **single-persona arms only**. Excluding the
+non-conformant concurrency arm *lowers* the governing `D*` (44.00 s → 28.57 s),
+so the conclusion holds **a fortiori** — a §10.9-conformant deployment has more
+isolation and less shared-process contention than the layout that produced the
+larger number.
 
 **Consequence: receipt-attested transfer is the only branch, and §8.2 is the
 whole scope.** TJ-A's sampling candidate does not come back to life on this
@@ -648,6 +750,21 @@ population-level p90 near 120 s — and the multiplier that condition requires.
 ---
 
 ## 14. What in this branch is disposable, and what may survive
+
+> **Apparatus conformance (read before reusing the harness).**
+> `Apparatus::bring_up` takes a `persona_count` and publishes that many onions
+> **behind one tor daemon**. For `persona_count > 1` that is a **co-activation
+> layout the firewall forbids** (`ARCHIVAL_BOND_CONSTRUCTION.md:667`), and any
+> number it produces is an artifact — this is how the first revision's SPIKE-F-1
+> and SPIKE-F-10 went wrong. **The conformant configuration is
+> `persona_count = 1`**, which is what `D*` is derived from.
+>
+> A harness that legitimately needs two *isolated* network identities on one host
+> — `P` vs principal, per §10.9 — must run **separate tor processes with separate
+> `DataDirectory` trees**, because the guard set is per-datadir (`ManagedTor::data_dir`,
+> DQ-T0.7) and `ADD_ONION` offers no per-service knob (SPIKE-F-12). Building that
+> is transport-PR work, not spike work.
+
 
 **Disposable — everything in `shekyl-sp-t3-spike`.** The crate's first doc
 paragraph says so, its name says so, and its route says so (`x-spike/v0`,
@@ -721,5 +838,23 @@ have an explicit `[[bin]]` path to make CI notice.
 
 - **2026-08-03:** Created. D1–D6 built; halt conditions §8.2 (regtest shard) and
   §8.3 (v3 key encoding) both evaluated and **not** fired; §8.5 (intro-point
-  sharing) evaluated and **refuted**. SPIKE-F-1 (shared guards) is the spike's
-  principal output. PD-F-2 distribution pending the ≥ 24 h soak.
+  sharing) evaluated and **refuted**. SPIKE-F-1 (shared guards) reported as the
+  spike's principal output. PD-F-2 distribution pending.
+- **2026-08-03 (same day, post-run):** PD-F-2 measured on a real shard —
+  `D* = 28.57 s`, §8.3 answered **NOT FORCEABLE**.
+- **2026-08-03 (correction, maintainer-sourced):** the apparatus was found
+  **non-conformant** — it put two personas on the wire simultaneously, which
+  `ARCHIVAL_BOND_CONSTRUCTION.md:667` forbids, and `ARCHIVAL_FIREWALL_GATE6.md`
+  §10.9 (ratified Round-2 exit pin) already required non-overlapping guard sets
+  for exactly that reason. **SPIKE-F-1 re-dispositioned REFUTED AS STATED**; its
+  "mitigation may be counterproductive" disposition **withdrawn** as an argument
+  against a ratified pin sourced from the forbidden configuration.
+  **SPIKE-F-10 withdrawn** as a forbidden-layout artifact and split, with the
+  conformant half carried as **SPIKE-F-11** (one persona, many readers —
+  unmeasured). `D*` **re-derived from the single-persona arms only**; the
+  conclusion holds *a fortiori* because the excluded arm was the slowest. The
+  data is repurposed as **SPIKE-F-12** — C-tor exposes no per-service isolation
+  knob, so §10.9's *structural* requirement needs separate tor processes — which
+  is input to the **open** `:1644` enforcement-mechanism carry (Arti vs. policy),
+  routed to the Transport PR. This spike does not decide Arti-vs-C-tor and does
+  not reopen §10.9.

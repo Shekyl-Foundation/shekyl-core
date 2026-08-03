@@ -131,9 +131,30 @@ impl Apparatus {
     /// Bring up `persona_count` personas, each serving `payload`, behind one
     /// managed tor.
     ///
-    /// One tor for all personas **on purpose**: that is the deployment the §5.2
-    /// linkage question is about, and measuring a one-tor-per-persona layout
-    /// would answer a question nobody asked.
+    /// # ⚠️ `persona_count > 1` builds a layout the firewall FORBIDS
+    ///
+    /// Multi-persona *holding* is real (Model D — `PSlot` is the index into the
+    /// staker's derive-forward persona set), but the permission is **conditional
+    /// on non-co-activation**: `ARCHIVAL_BOND_CONSTRUCTION.md:667` permits
+    /// retired-but-bonded personas precisely because they are "**not
+    /// co-activation — no simultaneous wire activity**". `stake_engine.rs`'s
+    /// `active: Option<PSlot>` says the same thing in code — **many held, one on
+    /// the wire.**
+    ///
+    /// Publishing two onions on one daemon puts two personas on the wire at once.
+    /// Any latency or linkage number taken that way is an **artifact of a
+    /// deployment that will not exist**, and
+    /// `ARCHIVAL_FIREWALL_GATE6.md` §10.9 — a ratified Round-2 exit pin — already
+    /// requires non-overlapping guard sets for exactly this reason. The PD-F-2
+    /// `D*` is therefore derived from **`persona_count = 1`** runs only.
+    ///
+    /// Two *legitimately* isolated identities on one host (`P` vs principal, per
+    /// §10.9) need **separate tor processes with separate `DataDirectory` trees**
+    /// — the guard set is per-datadir, and `ADD_ONION` exposes no per-service
+    /// isolation knob. That is transport-PR work; this harness does not do it.
+    ///
+    /// `persona_count > 1` is retained only to reproduce the non-conformant
+    /// measurement, and callers doing so must label the result accordingly.
     ///
     /// `tor_binary` goes through the **real SP-T0c hash-pin gate**
     /// (`binary::discover_and_verify_at`), not the test bypass: the pinned Tor
