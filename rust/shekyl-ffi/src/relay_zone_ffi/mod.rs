@@ -59,7 +59,6 @@ use shekyl_relay::{Driver, Effect, FluffReach, RelayPlan, TxBlob, TxId, Zone};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
 use shekyl_relay_privacy::stem_map::ConnectionId;
-use shekyl_relay_privacy::EmbargoTimer;
 
 use crate::secure_relay_rng::SecureRelayRng;
 
@@ -187,8 +186,12 @@ pub struct RelayZoneHandle {
 }
 
 impl RelayZoneHandle {
-    /// Republish the derived stem count. The **only** writer of `live_stems`;
-    /// every mutating export ends with this call.
+    /// Republish the derived stem count. The **only** writer of `live_stems`.
+    ///
+    /// Call from every export that can change `live_stems` (stem map rebuilds,
+    /// handshake/close, plan-with-refresh). Mutators that only touch stem
+    /// observations, fluff queues, or other unpublished state do not need it —
+    /// stem-watch does not affect the published count.
     fn publish(&self) {
         self.live_stems
             .store(self.driver.zone().live_stems(), Ordering::Release);
@@ -468,15 +471,14 @@ pub unsafe extern "C" fn shekyl_relay_zone_covert_enabled(handle: *const RelayZo
 /// it sent and the arrival side what the network returned, and nothing
 /// enforces intermediate nodes preserve encoding. The canonical hash is
 /// computed from the *parsed* transaction, so both sides derive the key from
-/// the same input. C++ parses at each call site (work core does adjacently
-/// anyway); no blobs cross for observation. `successor` is the peer's 16-byte
-/// connection uuid; `source` is the arriving peer's uuid or null for
-/// locally-originated (`in_mapping_[nil]`). **The observation window is drawn
-/// here, from the adopted embargo distribution at `now_ms`** — this call site
-/// is the "caller" §38.2 left the window to, and it deliberately reuses the
-/// embargo draw because both ask the same question of the same peer; if
-/// §12.11's decision window ever diverges from the embargo, this is the one
-/// line that changes.
+/// the same input. C++ parses once and hands packed hashes; no blobs cross for
+/// observation. `successor` is the peer's 16-byte connection uuid; `source` is
+/// the arriving peer's uuid or null for locally-originated (`in_mapping_[nil]`).
+///
+/// **The observation window is drawn in the zone**, from the adopted embargo
+/// timer cached at zone construction against the zone's own params — not
+/// rebuilt here. This export is marshaling only (rule 20): if §12.11's window
+/// ever diverges from the embargo, the change is one field on `Zone`.
 ///
 /// # Safety
 /// `handle` must be null (no-op) or a live zone from
@@ -504,9 +506,9 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_stem(
         return;
     }
     let src = read_id(source);
-    let params = DandelionParams::inherited();
-    let deadline = now_ms + EmbargoTimer::adopted(&params).deadline(0, &mut h.rng);
-    h.driver.zone_mut().record_stem(&ids, succ, src, deadline);
+    h.driver
+        .zone_mut()
+        .record_stem(&ids, succ, src, now_ms, &mut h.rng);
 }
 
 /// Record that `n` transactions arrived `from` a peer — any zone, any path,

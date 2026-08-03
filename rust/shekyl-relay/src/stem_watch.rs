@@ -277,6 +277,17 @@ impl StemWatch {
         self.tallies.remove(peer);
         self.pending.retain(|_, p| p.successor != *peer);
     }
+
+    /// Earliest in-flight observation deadline, if any.
+    ///
+    /// Folded into [`crate::Driver::next_wake`] so silences resolve on the
+    /// observation clock rather than waiting for an unrelated fluff/epoch
+    /// wake. `None` when the map is empty — the other schedules carry the
+    /// wake alone.
+    #[must_use]
+    pub fn next_deadline(&self) -> Option<Millis> {
+        self.pending.values().map(|p| p.deadline).min()
+    }
 }
 
 #[cfg(test)]
@@ -426,6 +437,22 @@ mod tests {
             (t.propagated, t.silent, t.observations()),
             (0, 10, 10),
             "counts are exact and undecayed after ten silences"
+        );
+    }
+
+    #[test]
+    fn next_deadline_is_the_earliest_in_flight_observation() {
+        let mut w = StemWatch::default();
+        assert!(w.next_deadline().is_none(), "empty watch has no wake");
+        w.stemmed(tx(1), peer(9), None, 5_000);
+        w.stemmed(tx(2), peer(8), None, 3_000);
+        w.stemmed(tx(3), peer(7), None, 9_000);
+        assert_eq!(w.next_deadline(), Some(3_000));
+        w.seen(&tx(2), Some(peer(1)));
+        assert_eq!(
+            w.next_deadline(),
+            Some(5_000),
+            "resolving the earliest moves the wake to the next"
         );
     }
 }

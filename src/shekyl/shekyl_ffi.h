@@ -3118,8 +3118,8 @@ std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! Record `n` packed 32-byte CANONICAL tx hashes stemmed to `successor`
 //! (16-byte uuid); `source` is the arriving peer's uuid or null for local
 //! origin. Canonical, not blob-derived — blob bytes are not a stable identity
-//! across relay hops (F-9). The observation deadline is drawn Rust-side from
-//! the adopted embargo at `now_ms`.
+//! across relay hops (F-9). The observation deadline is drawn in the zone from
+//! its cached adopted-embargo timer at `now_ms` (not rebuilt at the FFI edge).
 void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
     const std::uint8_t* hashes, std::size_t n,
     const std::uint8_t* successor, const std::uint8_t* source,

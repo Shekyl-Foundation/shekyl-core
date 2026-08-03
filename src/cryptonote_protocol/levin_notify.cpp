@@ -120,47 +120,16 @@ namespace levin
     static_assert(sizeof(boost::uuids::uuid) == 16, "connection ids cross the relay FFI as 16 raw bytes");
     static_assert(sizeof(crypto::hash) == 32, "tx hashes cross the relay FFI as packed 32-byte ids");
 
-    /*! \brief Canonical tx hashes for the observation watch (§46/§48).
-
-        Parsed here rather than blob-hashed, because blob bytes are not a
-        stable identity across relay hops (F-9): the canonical hash is
-        computed from the *parsed* transaction and is the one identity every
-        hop preserves. A blob that does not parse has no canonical identity
-        and is skipped — it cannot be a transaction this node stemmed.
-
-        \note **Recorded as a trade, not a free win (§49.4).** These blobs are
-        parsed again by `handle_incoming_tx` moments later, so §47's
-        "zero signature changes" was bought with a duplicate parse on the hot
-        path — one fact computed twice, ahead of admission checks. The
-        capability (send a batch of blobs) is already priced by existing size
-        and rate limits, so this changes a constant factor on servicing it
-        rather than opening a threat; accepted on that basis. If it ever
-        shows up in profiles, the fix is to carry the hash out of
-        verification rather than to re-derive it here. */
-    std::vector<crypto::hash> canonical_tx_hashes(const std::vector<cryptonote::blobdata>& txs)
-    {
-      std::vector<crypto::hash> hashes{};
-      hashes.reserve(txs.size());
-      for (const auto& blob : txs)
-      {
-        cryptonote::transaction tx{};
-        crypto::hash hash{};
-        if (cryptonote::parse_and_validate_tx_from_blob(blob, tx, hash))
-          hashes.push_back(hash);
-      }
-      return hashes;
-    }
-
     //! §46: hand the stemmed txs to the zone's observation watch. The
-    //! deadline is drawn Rust-side; `source` is null for locally-originated
-    //! (nil uuid), matching `in_mapping_[nil]`.
+    //! deadline is drawn Rust-side (zone-cached embargo timer); `source` is
+    //! null for locally-originated (nil uuid), matching `in_mapping_[nil]`.
     void record_stem_observation(
       RelayZoneHandle* const relay,
       const std::vector<cryptonote::blobdata>& txs,
       const boost::uuids::uuid& destination,
       const boost::uuids::uuid& source)
     {
-      const std::vector<crypto::hash> hashes = canonical_tx_hashes(txs);
+      const std::vector<crypto::hash> hashes = stem_watch_tx_hashes(txs);
       if (hashes.empty())
         return;
       const bool local = source.is_nil();
@@ -1098,26 +1067,48 @@ namespace levin
     });
   }
 
-  void notify::record_arrival(std::shared_ptr<const std::vector<blobdata>> txs, const boost::uuids::uuid& from)
+  void notify::record_arrival(std::shared_ptr<const std::vector<crypto::hash>> hashes, const boost::uuids::uuid& from)
   {
-    if (!zone_ || !txs || txs->empty())
+    if (!zone_ || !hashes || hashes->empty())
       return;
 
     /* The strand serializes all access to the relay handle; this is a
        read-modify of the zone's stem watch, so it takes the same path as
-       every other handle call rather than racing them. */
-    boost::asio::dispatch(zone_->strand, [zone = zone_, txs = std::move(txs), from] ()
+       every other handle call rather than racing them. Hashes are the join
+       key — the caller already parsed once for the whole fan-out. */
+    boost::asio::dispatch(zone_->strand, [zone = zone_, hashes = std::move(hashes), from] ()
     {
-      const std::vector<crypto::hash> hashes = canonical_tx_hashes(*txs);
-      if (hashes.empty())
-        return;
       /* `from` identifies the arriving peer so the watch can refuse to
          resolve an observation charged to that same peer (F-10). A nil uuid
          means "no peer", which never matches a successor. */
       shekyl_relay_zone_record_arrival(
-        zone->relay.get(), reinterpret_cast<const std::uint8_t*>(hashes.data()), hashes.size(),
+        zone->relay.get(), reinterpret_cast<const std::uint8_t*>(hashes->data()), hashes->size(),
         from.is_nil() ? nullptr : reinterpret_cast<const std::uint8_t*>(std::addressof(from)));
     });
+  }
+
+  std::vector<crypto::hash> stem_watch_tx_hashes(const std::vector<cryptonote::blobdata>& txs)
+  {
+    /* F-9: blob bytes are not a stable identity across relay hops. The
+       canonical hash is computed from the *parsed* transaction — the one
+       identity every hop preserves. A blob that does not parse has no
+       canonical identity and is skipped.
+
+       **Recorded as a trade, not a free win (§49.4).** These blobs are parsed
+       again by `handle_incoming_tx` moments later, so the observation path
+       still pays a duplicate parse relative to admission — but it pays it
+       **once per batch**, not once per network zone. Carrying the hash out of
+       verification would remove the remaining duplicate. */
+    std::vector<crypto::hash> hashes{};
+    hashes.reserve(txs.size());
+    for (const auto& blob : txs)
+    {
+      cryptonote::transaction tx{};
+      crypto::hash hash{};
+      if (cryptonote::parse_and_validate_tx_from_blob(blob, tx, hash))
+        hashes.push_back(hash);
+    }
+    return hashes;
   }
 
   std::size_t notify::stem_in_flight() const

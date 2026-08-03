@@ -53,9 +53,10 @@ namespace nodetool
   {
     virtual bool relay_notify_to_list(int command, epee::levin::message_writer message, std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> connections)=0;
     virtual epee::net_utils::zone send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay)=0;
-    //! §46: hand every arrived tx blob to every zone's stem-observation watch,
+    //! §46: hand every arrived tx to every zone's stem-observation watch,
     //! BEFORE pool admission — a returned tx that the pool then rejects still
-    //! proves the successor relayed it.
+    //! proves the successor relayed it. Implementation parses to canonical
+    //! hashes once and fans the join key (not the blobs) across zones.
     virtual void record_tx_arrivals(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& from)=0;
     virtual bool invoke_notify_to_peer(int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context)=0;
     virtual bool drop_connection(const epee::net_utils::connection_context_base& context)=0;

@@ -703,11 +703,19 @@ fn a_stem_observation_resolves_on_the_poll_clock_and_a_close_drops_it() {
 
     let tx = TxId::from_bytes([7u8; 32]);
     let deadline = 5_000;
-    d.zone_mut().record_stem(&[tx], id(1), None, deadline);
+    // Fixed deadline: production draws from the embargo timer; this witness
+    // pins the clock so expire / next_wake assertions are deterministic.
+    d.zone_mut().record_stem_at(&[tx], id(1), None, deadline);
     assert_eq!(
         d.zone().stem_observations_in_flight(),
         1,
         "fixture: the observation is armed"
+    );
+    assert_eq!(
+        d.next_wake(),
+        deadline,
+        "next_wake must fold the observation deadline — if this is the epoch \
+         only, silences wait on unrelated schedules"
     );
 
     // Before the deadline: polling must not resolve it.
@@ -729,7 +737,7 @@ fn a_stem_observation_resolves_on_the_poll_clock_and_a_close_drops_it() {
         .expect("the poll clock resolved it — if this is None, poll never reached expire");
     assert_eq!((t.propagated, t.silent), (0, 1));
 
-    // A close drops the tally rather than retaining it (§33.6 is open).
+    // A close drops the tally rather than retaining it (F-8: no persistence).
     d.zone_mut().on_connection_close(&id(1));
     assert!(
         d.zone().stem_tally(&id(1)).is_none(),
@@ -747,7 +755,7 @@ fn an_arrival_resolves_the_observation_as_propagated() {
         .on_handshake_complete(id(1), PeerDirection::Outbound);
 
     let tx = TxId::from_bytes([9u8; 32]);
-    d.zone_mut().record_stem(&[tx], id(1), None, 5_000);
+    d.zone_mut().record_stem_at(&[tx], id(1), None, 5_000);
     d.zone_mut().record_arrival(&[tx], Some(id(2)));
 
     let t = d.zone().stem_tally(&id(1)).expect("arrival resolved it");
@@ -760,7 +768,7 @@ fn an_arrival_resolves_the_observation_as_propagated() {
     // F-10 at the zone seam: an echo from the charged successor must not
     // resolve. Armed second observation, echoed by its own successor.
     let echo = TxId::from_bytes([0x0E; 32]);
-    d.zone_mut().record_stem(&[echo], id(1), None, 5_000);
+    d.zone_mut().record_stem_at(&[echo], id(1), None, 5_000);
     d.zone_mut().record_arrival(&[echo], Some(id(1)));
     assert_eq!(
         d.zone().stem_observations_in_flight(),
