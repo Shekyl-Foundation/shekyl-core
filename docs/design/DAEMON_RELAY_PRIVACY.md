@@ -9592,6 +9592,13 @@ is justified separately and correctly — every covert message is cloned to
 
 ### 57.2 What restart costs, and it is not a liveness cost
 
+> **⚠ CORRECTED AT §58.** The severity below is **inherited from F-6, not
+> intrinsic to retention**: a retained prefix attributes directly only because
+> the zone-selection oracle puts *originated-only* traffic on that zone, and
+> **R-1 is still unbuilt (verified on dev, §58.3)**. Under mixed eligibility
+> the same retention attributes at `C1 ≈ f`. §58.1 also downgrades the cost
+> from a failure to a geometric retry (~1.22 epochs).
+
 **The rotated-away peer keeps the fragments it already received.** It holds a
 prefix of a specific transaction it will never see completed, while the whole
 transaction goes to a different peer and later fluffs.
@@ -9628,3 +9635,99 @@ retention; its **magnitude** depends on how much of a fragmented levin payload
 a prefix reveals, and that is a measurement nobody has taken. **If a single
 fragment is not matchable, the channel is narrower than stated** — but the
 direction of the finding does not change, only its price.
+
+## 58. §57 corrected — the cost is milder, the fix is cheaper, and the severity is *inherited*
+
+**2026-08-03, maintainer, with two source claims verified here.** §57's
+mechanism reading (restart, not discard) stands. Three things around it were
+wrong or unpriced.
+
+### 58.1 The cost is a geometric retry, not a failure
+
+A 20-fragment transaction that misses its epoch **restarts in the next one
+with a fresh 300 s window** — so the ~18 % is a retry probability, not a
+failure rate. Geometric at `p = 0.18`: expected **~1.22 epochs**, tail
+decaying fast. §57 implied a severity the mechanism does not have.
+
+What it actually costs: **wasted cover bandwidth** (the partial run consumed
+slots that carried nothing, against a fixed capacity), **latency** of up to a
+full epoch for the ~18 %, and a **modest exposure increment** — each restart
+hands a prefix of the *same* transaction to a different peer, and the covert
+channel is transparent to the peer decoder (G-1), so each learns it saw real
+traffic rather than dummy. **Colluding recipients gain nothing**: the prefixes
+are the same message restarted. Real, small, worth recording rather than
+acting on.
+
+### 58.2 Admission control is the fix, and §57's objection to it dissolves
+
+**Do not promote a message from `queue` to `active` when the remaining epoch
+time cannot plausibly deliver its fragment count.** It waits for the fresh
+epoch instead.
+
+§57 treated deferral as needing a new holding place. It does not: **`queue`
+already survives the rebind — only `active` clears.** So this is a predicate
+at the promotion site, one branch, in a path that already exists.
+
+It beats restart on every axis: no wasted fragments, no partial handed to an
+extra peer, bounded wait, and **CV-1 untouched because no run is ever
+interrupted.** What it needs is the threshold — *start iff
+`P(k fragments clear in the remaining epoch) ≥ θ`*, a Poisson tail at send
+time, with `θ` derivable against an acceptable deferral rate. **That is a
+constants-round input, not a workaround.**
+
+### 58.3 The severity is inherited from F-6, and R-1 has not landed
+
+**Verified on dev**, `net_node.inl`:
+
+```cpp
+if (origin != enet::zone::invalid)
+  return send(*m_network_zones.begin());   // relayed  → clearnet
+if (m_network_zones.size() <= 2)
+  return send(*m_network_zones.rbegin());  // originated → anonymity zone
+```
+
+**Configuration B's deletion (§41) removed the noise flag. It did not touch
+the zone-selection oracle.** The Tor zone still carries *only* originated
+transactions, so **R-1 — mixed eligibility, the load-bearing half of F-6's
+remedy — is still unbuilt.**
+
+**That makes §57.2's "attribute the origin to `O` directly, not at the C1
+floor" correct today and correct for the wrong reason.** It is origin-
+attributing because of **F-6's routing rule** — anything on that zone is `O`'s
+own — not because of the prefix. Under R-1's mixed eligibility the covert
+channel carries relayed traffic too, and a retained prefix attributes exactly
+like any stem observation: **precision back at `C1 ≈ f`.** The retention
+channel does not disappear; it stops being above the floor.
+
+**Two consequences:**
+
+- **R-1 fixes §57's severity as a side effect**, making it load-bearing for
+  *two* findings rather than one — and it is the item that has been specified
+  and unbuilt the longest.
+- **The constants round is pricing against the wrong channel.** At present
+  severity retention is origin-attributing and worth paying a lot to prevent;
+  post-R-1 it is a floor-level observation worth much less. **Choosing a
+  constant now over-provisions against a defect the remedy already dissolves**
+  — which is part D's own failure mode, arriving in the round that was about
+  to open.
+
+### 58.4 Matchability resolves at the wide end
+
+§57 flagged whether a 3 KiB prefix suffices to identify the transaction.
+**Verified**: `transaction_prefix`'s `BEGIN_SERIALIZE` order is
+`version` (varint), `unlock_time` (varint), **`vin`**, `vout`, `extra` — so
+the key images, 32 bytes each, sit third, after two varints. Well inside
+3 KiB even allowing for the levin header and epee wrapper.
+
+Key images are **globally unique per spend** and appear in the confirmed
+transaction on-chain, and the peer needs **no parse** — it byte-matches its
+retained prefix against the same serialization when the transaction reappears.
+**So a single fragment is matchable with near-certainty. The direction holds
+and the price does not move down.**
+
+### 58.5 Ordering
+
+**R-1 goes ahead of the constants round, not beside it.** It closes F-6's
+remaining half, drops §57 to the floor, and is the input that determines what
+the bandwidth-versus-epoch trade is actually buying. **Deciding a constant
+first means deciding it against a severity that is about to change.**
