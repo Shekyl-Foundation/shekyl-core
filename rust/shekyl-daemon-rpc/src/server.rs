@@ -183,6 +183,12 @@ pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
 
     if !restricted {
         router = router
+            // §55: anonymity graph — admin/unrestricted listener only.
+            // Keep in lockstep with UNRESTRICTED_ONLY_JSON_PATHS below.
+            .route(
+                "/get_stem_tallies",
+                get(json::get_stem_tallies).post(json::get_stem_tallies),
+            )
             .route(
                 "/start_mining",
                 get(json::start_mining).post(json::start_mining),
@@ -349,6 +355,17 @@ pub const BINARY_URI_PATHS: &[&str] = &[
     "/get_o_indexes.bin",
 ];
 
+/// JSON REST paths that must be registered **only** on the unrestricted
+/// (admin) listener — never on the restricted (public) one.
+///
+/// Same dual-maintenance trade as [`BINARY_URI_PATHS`]: handler-free so
+/// `cargo test -p shekyl-daemon-rpc` can assert membership without linking
+/// `core_rpc_ffi_*`. **Not** a substitute for the dual-arm integration test
+/// (restricted ⇒ 404 **and** unrestricted ⇒ not-404) owed for
+/// `/get_stem_tallies`; it makes the sensitive set grepable and reviewable.
+/// Keep in lockstep with the `if !restricted` block in [`build_router`].
+pub const UNRESTRICTED_ONLY_JSON_PATHS: &[&str] = &["/get_stem_tallies"];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,6 +383,14 @@ mod tests {
         // Spot-check the live table still matches the routes wired above.
         assert!(BINARY_URI_PATHS.contains(&"/get_blocks.bin"));
         assert!(BINARY_URI_PATHS.contains(&"/get_o_indexes.bin"));
+    }
+
+    #[test]
+    fn stem_tallies_is_named_unrestricted_only() {
+        assert!(
+            UNRESTRICTED_ONLY_JSON_PATHS.contains(&"/get_stem_tallies"),
+            "anonymity-graph readout must stay on the unrestricted-only path list"
+        );
     }
 
     #[tokio::test]

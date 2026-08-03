@@ -73,6 +73,18 @@ impl CoreRpc {
         }
     }
 
+    /// §55: relay stem-outcome tallies as a JSON array string.
+    ///
+    /// Not routed through [`Self::json_endpoint`] because the data does not
+    /// live in `core_rpc_server` — it lives in the relay zones, and this is
+    /// the shortest path to it while C++ owns their lifetime.
+    pub fn stem_tallies(&self) -> Option<String> {
+        if self.handle.is_null() {
+            return None;
+        }
+        unsafe { consume_c_string(ffi::core_rpc_ffi_stem_tallies(self.handle)) }
+    }
+
     /// Dispatch a binary endpoint (e.g. "/get_blocks.bin").
     /// Returns `Ok(data)` on success, `Err(rc)` with the FFI error code on failure.
     /// rc -1 = bad request (parse failure), rc -2 = internal error.

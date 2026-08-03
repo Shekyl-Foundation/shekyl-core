@@ -23,7 +23,7 @@ use shekyl_relay_privacy::schedule::{
 };
 use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap};
 
-use crate::stem_watch::{StemTally, StemWatch, TxId};
+use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
 /// One opaque transaction blob shared across every peer that accepted a fluff
 /// batch.
@@ -420,6 +420,13 @@ impl Zone {
         for tx in txs {
             self.stem_watch.seen(tx, from);
         }
+    }
+
+    /// Every successor with resolved observations — the §55 telemetry
+    /// readout. See [`StemWatch::snapshot`] for why the counts stay raw.
+    #[must_use]
+    pub fn stem_snapshot(&self) -> Vec<(ConnectionId, StemTallySnapshot)> {
+        self.stem_watch.snapshot()
     }
 
     /// Per-successor stem outcomes, for a future selection consumer.
