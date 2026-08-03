@@ -73,10 +73,12 @@ use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use zeroize::Zeroizing;
 
 use super::auth::{parse_authchallenge, read_cookie_file, AuthError};
 use super::bootstrap::{bootstrap_step, parse_bootstrap_progress, BootstrapState, BootstrapStep};
 use super::framing::{ControlReply, Framed, FramingError, ReplyFramer};
+use super::onion::{AddOnion, ServiceId};
 use super::safecookie::verify_server_hash;
 use crate::binary::VerifiedTorBinary;
 
@@ -212,34 +214,63 @@ impl EventSink {
 
 /// A control command the engine asks the actor to run, **one in flight at a time**.
 ///
-/// `ADD_ONION`/`DEL_ONION` (the SP-T3 onion surface) are intentionally *not* here
-/// yet — the enum extends without reshaping the actor, so they land when SP-T3
-/// builds them rather than as unused variants now. `TAKEOWNERSHIP` is also absent
-/// by design: it is issued internally as the first command after `AUTHENTICATE`,
-/// not engine-driven.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The enum extends without reshaping the actor, which is what let the SP-T3
+/// onion surface ([`Command::AddOnion`] / [`Command::DelOnion`]) land as two more
+/// variants rather than a second actor. `TAKEOWNERSHIP` remains absent by design:
+/// it is issued internally as the first command after `AUTHENTICATE`, not
+/// engine-driven.
+///
+/// **Not `Clone`, and not `PartialEq`.** `AddOnion` carries the persona's onion
+/// secret key ([`OnionKey`]), so the enum inherits that type's discipline: a
+/// derived `Clone` would silently duplicate the key outside its `Zeroize`
+/// wrapper, and a derived `PartialEq` would compare secret bytes non-constant-time.
+/// The `Debug` derive is safe because every secret-bearing member redacts its own.
+#[derive(Debug)]
 pub enum Command {
     /// `GETINFO <keys>` — e.g. `status/bootstrap-phase`, `version`, circuit info.
     GetInfo(Vec<String>),
     /// `SETEVENTS <events>` — subscribe to async events (`STREAM` for the
     /// DQ-T0.4 measurement).
     SetEvents(Vec<String>),
+    /// `ADD_ONION ED25519-V3:<key> …` — publish the persona's v3 onion service
+    /// (SP-T3). Built from typed parts, so it cannot render a malformed line;
+    /// see [`onion`](super::onion) for why that is a type property here rather
+    /// than a validation.
+    AddOnion(AddOnion),
+    /// `DEL_ONION <service-id>` — tear the service down. Issued on the actor's
+    /// shutdown path as well as on demand.
+    DelOnion(ServiceId),
 }
 
 impl Command {
     /// The wire line (without the trailing CRLF), or [`ControlError::InvalidCommand`]
-    /// if the token list is empty or any token carries a forbidden character.
+    /// if a token-list command is empty or any token carries a forbidden character.
     ///
-    /// Tokens are space-joined into one control line. An **empty** list would render
-    /// as a malformed trailing-space line (`"GETINFO "`); a token containing a space
-    /// (the separator) or an ASCII control byte — notably `\r`/`\n` — could split
-    /// into extra control commands and desync the no-request-ID FIFO correlation.
-    /// Validating *before* the line is built keeps both off the wire. (We never
-    /// issue an argument-less command, `SETEVENTS`-clear-all included.)
-    fn to_wire(&self) -> Result<String, ControlError> {
+    /// **Two shapes meet here, deliberately.** The token-list commands (`GETINFO`,
+    /// `SETEVENTS`) take caller-supplied strings and are therefore *validated*:
+    /// an empty list would render as a malformed trailing-space line
+    /// (`"GETINFO "`), and a token containing a space (the separator) or an ASCII
+    /// control byte — notably `\r`/`\n` — could split into extra control commands
+    /// and desync the no-request-ID FIFO correlation. Validating before the line
+    /// is built keeps both off the wire.
+    ///
+    /// The onion commands take **typed arguments that cannot render an invalid
+    /// token at all** ([`onion`](super::onion)), so their arms are infallible.
+    /// The wider, more attacker-adjacent input (a key blob and flag/port
+    /// arguments) is the reason it is worth making the bad state unrepresentable
+    /// instead of adding more string checks to the same validator.
+    ///
+    /// The result is [`Zeroizing`] because the `ADD_ONION` line embeds the
+    /// base64-encoded onion secret key; the other arms produce no secret, but a
+    /// uniform return type keeps the one secret-bearing line from being the
+    /// exceptional path a future edit forgets.
+    fn to_wire(&self) -> Result<Zeroizing<String>, ControlError> {
         let (verb, tokens) = match self {
             Self::GetInfo(keys) => ("GETINFO", keys),
             Self::SetEvents(events) => ("SETEVENTS", events),
+            // Infallible by construction — no validation step exists to fail.
+            Self::AddOnion(add) => return Ok(add.to_wire_line()),
+            Self::DelOnion(id) => return Ok(Zeroizing::new(format!("DEL_ONION {}", id.as_str()))),
         };
         if tokens.is_empty() {
             return Err(ControlError::InvalidCommand);
@@ -249,12 +280,28 @@ impl Command {
                 return Err(ControlError::InvalidCommand);
             }
         }
-        Ok(format!("{verb} {}", tokens.join(" ")))
+        Ok(Zeroizing::new(format!("{verb} {}", tokens.join(" "))))
     }
 }
 
 /// Reply type the caller of a [`Command`] receives.
 pub type CommandResult = Result<ControlReply, ControlError>;
+
+/// What the actor owes a reply beyond handing it to the caller.
+///
+/// The control protocol has no request IDs, so by the time a reply arrives the
+/// actor has forgotten which command produced it. Most commands need nothing —
+/// but `ADD_ONION`'s reply carries the `ServiceID=` the shutdown path must
+/// `DEL_ONION`, so the one bit of "what was this" travels alongside the
+/// [`ReplySender`] rather than being re-derived from the reply's shape (which
+/// would misfire on any future command whose reply happens to look similar).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingKind {
+    /// Forward the reply; nothing else.
+    Plain,
+    /// An `ADD_ONION`: on success, record the service id for teardown.
+    AddOnion,
+}
 
 /// Spawn-time configuration ([`Actor::Args`]).
 pub struct TorControlConfig {
@@ -365,13 +412,29 @@ pub struct TorControl {
     writer: OwnedWriteHalf,
     /// Async-event sink.
     events: EventSink,
-    /// The command currently on the wire, awaiting its reply (`DelegatedReply`).
-    pending: Option<ReplySender<CommandResult>>,
+    /// The command currently on the wire, awaiting its reply (`DelegatedReply`),
+    /// with what the actor must do with that reply beyond forwarding it.
+    pending: Option<(ReplySender<CommandResult>, PendingKind)>,
     /// Commands that arrived while one was on the wire — their **already-validated
     /// wire lines** — drained FIFO as each reply lands, so order (the only reply
     /// correlation there is) is preserved. Storing the rendered line (not the
     /// `Command`) means `to_wire` runs exactly once per command.
-    queue: VecDeque<(String, ReplySender<CommandResult>)>,
+    ///
+    /// [`Zeroizing`] because a queued `ADD_ONION` line embeds the persona's onion
+    /// secret key: a queued command may sit here across several reply round-trips,
+    /// so the encoded key must be wiped when the entry is dropped rather than left
+    /// in a freed allocation.
+    queue: VecDeque<(Zeroizing<String>, ReplySender<CommandResult>, PendingKind)>,
+    /// Onion services this actor published, torn down with `DEL_ONION` on the
+    /// shutdown path.
+    ///
+    /// **Why the actor tracks them rather than the caller:** the services are
+    /// bound to *this control connection* (no `Detach` is expressible — see
+    /// [`onion`](super::onion)), so the actor is the only component whose
+    /// lifetime matches theirs. A caller-held list would be a second copy of the
+    /// same fact, and the shutdown path would depend on the caller still being
+    /// alive to hand it over — which on a crash path it is not.
+    published_onions: Vec<ServiceId>,
     /// The managed `tor` child, for [`TorLaunch::Managed`]. `None` for
     /// [`TorLaunch::Attached`] — an attached `tor` is not ours to kill. `on_stop` takes
     /// it and runs the bounded shutdown.
@@ -557,21 +620,43 @@ impl Actor for TorControl {
             events,
             pending: None,
             queue: VecDeque::new(),
+            published_onions: Vec::new(),
             child,
             bootstrap_poll,
         })
     }
 
-    /// Clean shutdown (wallet close): kill the managed child. `TAKEOWNERSHIP` (landed in
-    /// PR-2) is the *crash* backstop — a panic / SIGKILL sends no `on_stop`, and the
-    /// control connection dropping then exits `tor` — but on a clean stop the connection
-    /// is still open here, so this is the primary path. Attached mode has no child to
-    /// kill. (The bootstrap poll task is aborted in `Drop`.)
+    /// Clean shutdown (wallet close): withdraw the persona's onion services, then kill
+    /// the managed child. `TAKEOWNERSHIP` (landed in PR-2) is the *crash* backstop — a
+    /// panic / SIGKILL sends no `on_stop`, and the control connection dropping then exits
+    /// `tor` — but on a clean stop the connection is still open here, so this is the
+    /// primary path. Attached mode has no child to kill. (The bootstrap poll task is
+    /// aborted in `Drop`.)
+    ///
+    /// **`DEL_ONION` runs first, and the order is load-bearing.** Killing the child
+    /// first would take the services down too, but only for a *managed* tor; against an
+    /// **attached** tor (`TorLaunch::Attached` — bring-your-own-`tor`, and every
+    /// integration harness) there is no child to kill, so without this step the persona's
+    /// services would keep running inside someone else's long-lived tor after the wallet
+    /// closed — still publishing descriptors that assert the persona is online while
+    /// nothing is left to serve a byte. That is the same orphan-advertisement failure
+    /// `Detach` is excluded to prevent, arriving by a different route.
+    ///
+    /// Failures are swallowed: shutdown is best-effort by nature (the connection may
+    /// already be dying, which is *why* we are stopping), and a `DEL_ONION` that cannot
+    /// be written is one whose services tor is about to drop anyway when the connection
+    /// closes.
     async fn on_stop(
         &mut self,
         _actor_ref: WeakActorRef<Self>,
         _reason: ActorStopReason,
     ) -> Result<(), Self::Error> {
+        for id in std::mem::take(&mut self.published_onions) {
+            let line = Zeroizing::new(format!("DEL_ONION {}", id.as_str()));
+            if write_line(&mut self.writer, &line).await.is_err() {
+                break;
+            }
+        }
         if let Some(child) = self.child.take() {
             child.shutdown().await;
         }
@@ -885,10 +970,10 @@ async fn bootstrap_poll_loop(actor: ActorRef<TorControl>, tx: watch::Sender<Boot
 impl TorControl {
     /// Fail every in-flight and queued caller with `err` — the actor is stopping.
     fn fail_all_pending(&mut self, err: &ControlError) {
-        if let Some(tx) = self.pending.take() {
+        if let Some((tx, _kind)) = self.pending.take() {
             tx.send(Err(err.clone()));
         }
-        for (_line, tx) in self.queue.drain(..) {
+        for (_line, tx, _kind) in self.queue.drain(..) {
             tx.send(Err(err.clone()));
         }
     }
@@ -899,6 +984,12 @@ impl Message<Command> for TorControl {
 
     async fn handle(&mut self, cmd: Command, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let (delegated, reply_sender) = ctx.reply_sender();
+        // What this command's reply will owe the actor — captured before `cmd` is
+        // consumed by `to_wire`.
+        let kind = match &cmd {
+            Command::AddOnion(_) => PendingKind::AddOnion,
+            _ => PendingKind::Plain,
+        };
         // Commands must be `ask` — a `tell` (no reply channel) would write a
         // command whose reply has nowhere to go and would desync the stream, so a
         // tell is dropped rather than written.
@@ -911,10 +1002,10 @@ impl Message<Command> for TorControl {
                 Err(e) => tx.send(Err(e)),
                 // One already on the wire — queue the validated line to preserve FIFO
                 // + one-on-the-wire.
-                Ok(line) if self.pending.is_some() => self.queue.push_back((line, tx)),
+                Ok(line) if self.pending.is_some() => self.queue.push_back((line, tx, kind)),
                 // The wire is free — write the line now.
                 Ok(line) => match write_line(&mut self.writer, &line).await {
-                    Ok(()) => self.pending = Some(tx),
+                    Ok(()) => self.pending = Some((tx, kind)),
                     // An Io failure mid-write disturbs the wire; fail the actor.
                     Err(e) => {
                         tx.send(Err(e.clone()));
@@ -951,11 +1042,25 @@ impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl
             // A command reply — complete the in-flight command, then put the next
             // queued command (if any) on the wire.
             StreamMessage::Next(Ok(Framed::CommandReply(reply))) => match self.pending.take() {
-                Some(tx) => {
+                Some((tx, kind)) => {
+                    // An accepted `ADD_ONION` is the one reply the actor reads for
+                    // itself: the service id must be recorded *here*, before the
+                    // reply is moved to the caller, or shutdown has nothing to
+                    // `DEL_ONION`. A non-250 published nothing, so there is nothing
+                    // to record — and a 250 whose `ServiceID=` does not parse is
+                    // left unrecorded deliberately: sending `DEL_ONION` for an id
+                    // this crate could not validate would put an unvalidated string
+                    // on the wire, which is exactly what `ServiceId::parse` exists
+                    // to prevent. (The service still dies with the connection.)
+                    if kind == PendingKind::AddOnion && reply.status() == 250 {
+                        if let Some(id) = super::onion::parse_service_id(reply.lines()) {
+                            self.published_onions.push(id);
+                        }
+                    }
                     tx.send(Ok(reply));
-                    if let Some((next_line, next_tx)) = self.queue.pop_front() {
+                    if let Some((next_line, next_tx, next_kind)) = self.queue.pop_front() {
                         match write_line(&mut self.writer, &next_line).await {
-                            Ok(()) => self.pending = Some(next_tx),
+                            Ok(()) => self.pending = Some((next_tx, next_kind)),
                             Err(e) => {
                                 next_tx.send(Err(e.clone()));
                                 self.fail_all_pending(&e);
@@ -1108,7 +1213,7 @@ mod tests {
             "status/bootstrap-phase".to_owned(),
         ]);
         assert_eq!(
-            cmd.to_wire().unwrap(),
+            cmd.to_wire().unwrap().as_str(),
             "GETINFO version status/bootstrap-phase"
         );
     }
@@ -1116,7 +1221,10 @@ mod tests {
     #[test]
     fn setevents_renders_space_separated_events() {
         let cmd = Command::SetEvents(vec!["STREAM".to_owned(), "STATUS_CLIENT".to_owned()]);
-        assert_eq!(cmd.to_wire().unwrap(), "SETEVENTS STREAM STATUS_CLIENT");
+        assert_eq!(
+            cmd.to_wire().unwrap().as_str(),
+            "SETEVENTS STREAM STATUS_CLIENT"
+        );
     }
 
     #[test]
@@ -1350,6 +1458,117 @@ mod live_tests {
             .await
             .expect("SETEVENTS");
         assert_eq!(reply.status(), 250);
+    }
+
+    /// The onion round-trip against a **bootstrapped** tor: publish the service,
+    /// confirm tor is advertising it, then withdraw it.
+    ///
+    /// Network-requiring (unlike the other two live tests, which run offline):
+    /// `ADD_ONION` on a `DisableNetwork 1` instance would be accepted but could
+    /// never establish introduction points, so "tor took the key" would pass while
+    /// "tor published a reachable service" went untested. Bootstrapping is what
+    /// makes `onions/current` a statement about a real service.
+    ///
+    /// What each assertion is actually for:
+    /// - **`ADD_ONION` → 250 with a parseable `ServiceID`** proves the wire line
+    ///   this crate renders is one tor accepts — the KATs pin the bytes, but only a
+    ///   live tor can say those bytes are *right*. It also proves the key encoding:
+    ///   tor derives the service id from the key we supplied, so a service id at
+    ///   all means our expanded-key blob was understood as a key.
+    /// - **`onions/current` lists it** proves tor considers the service ours and
+    ///   live on *this* connection (a detached service would not be listed here),
+    ///   which is the property `Detach`'s absence is protecting.
+    /// - **`DEL_ONION` → 250 and the id disappears** proves teardown actually
+    ///   withdraws rather than merely returning OK.
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps, network)"]
+    async fn onion_publish_resolve_delete_round_trip() {
+        use super::super::onion::{parse_service_id, AddOnion, OnionKey, OnionPort};
+        use std::net::{Ipv4Addr, SocketAddr};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (readiness, mut ready_rx) = BootstrapReadiness::new();
+        let actor = TorControl::spawn(TorControlConfig {
+            launch: TorLaunch::Managed(ManagedTor {
+                tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
+                data_dir: dir.path().to_path_buf(),
+                socks_port: super::SocksPort::Fixed(free_port()),
+                // The whole point: a service that can reach the network.
+                disable_network: false,
+                exit_observer: None,
+            }),
+            events: EventSink::new(tx),
+            readiness,
+        });
+
+        // Bootstrap first — intro-point circuits need a working network.
+        let deadline = Instant::now() + Duration::from_secs(180);
+        loop {
+            if matches!(*ready_rx.borrow_and_update(), super::BootstrapState::Ready) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "tor did not bootstrap in 180s");
+            tokio::time::timeout(Duration::from_secs(10), ready_rx.changed())
+                .await
+                .ok();
+        }
+
+        // A deterministic, obviously-test key: the *expanded* form tor wants, with
+        // the clamp applied so tor and this crate agree on the derived service id.
+        let mut expanded = [0u8; super::super::onion::ONION_KEY_BYTES];
+        for (i, b) in expanded.iter_mut().enumerate() {
+            *b = u8::try_from(i % 251).expect("fits u8");
+        }
+        expanded[0] &= 248;
+        expanded[31] &= 127;
+        expanded[31] |= 64;
+        let port = OnionPort::loopback(80, SocketAddr::from((Ipv4Addr::LOCALHOST, free_port())))
+            .expect("loopback target");
+        let reply = actor
+            .ask(Command::AddOnion(
+                AddOnion::new(OnionKey::from_expanded_bytes(expanded), port, 4)
+                    .with_flags(super::super::onion::OnionFlags { discard_pk: true }),
+            ))
+            .await
+            .expect("ADD_ONION reaches tor");
+        assert_eq!(reply.status(), 250, "tor accepted the rendered ADD_ONION");
+        let service_id = parse_service_id(reply.lines()).expect("reply carries a v3 ServiceID");
+
+        // tor is advertising it, on this connection.
+        let listed = actor
+            .ask(Command::GetInfo(vec!["onions/current".to_owned()]))
+            .await
+            .expect("GETINFO onions/current");
+        assert_eq!(listed.status(), 250);
+        assert!(
+            listed
+                .lines()
+                .iter()
+                .any(|l| l.contains(service_id.as_str())),
+            "the published service must appear in onions/current"
+        );
+
+        // Withdraw it, and confirm the withdrawal took.
+        let deleted = actor
+            .ask(Command::DelOnion(service_id.clone()))
+            .await
+            .expect("DEL_ONION reaches tor");
+        assert_eq!(deleted.status(), 250, "tor accepted DEL_ONION");
+        let after = actor
+            .ask(Command::GetInfo(vec!["onions/current".to_owned()]))
+            .await
+            .expect("GETINFO onions/current after delete");
+        assert!(
+            !after
+                .lines()
+                .iter()
+                .any(|l| l.contains(service_id.as_str())),
+            "DEL_ONION must actually withdraw the service, not just return 250"
+        );
+
+        actor.stop_gracefully().await.expect("graceful stop");
+        actor.wait_for_shutdown().await;
     }
 
     /// Reserve a free loopback port (bind `:0`, read it, drop). A small TOCTOU window
