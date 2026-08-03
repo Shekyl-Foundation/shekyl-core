@@ -27,6 +27,7 @@ This document exists so a maintainer can close or definitively re-scope
 | **SPIKE-F-6** | The persona descriptor is a **liveness oracle** with ~3 h granularity, and it is an irreducible floor of running an onion service | MEDIUM | **CONFIRMED (measured)** |
 | **SPIKE-F-8** | Two personas' descriptors land on **disjoint HSDir sets** (16 each, zero overlap) — the "shared HSDir" axis SP-T2 flagged does not exist | MEDIUM (as a *negative*) | **REFUTED (measured)** |
 | **SPIKE-F-9** | `.gitignore`'s bare `bin/` rule silently untracks **any Rust crate's `src/bin/`** — Cargo's conventional binary location | MEDIUM (repo-wide) | **CONFIRMED (CI)** |
+| **SPIKE-F-10** | Co-hosted personas **contend**: 2 concurrent readers move `D*` 28.57 s → 44.00 s (×1.54). The margin to a block deadline is concurrency-sensitive | MEDIUM | **CONFIRMED (measured)** |
 | **SPIKE-F-7** | D4's payload is a **cost, not a blocker**: ~5 h of one-time regtest mining plus a batched extraction | INFO | **REFUTED as a halt** |
 
 Two charter halt conditions were pre-registered as likely and **neither fired**:
@@ -290,7 +291,8 @@ introduction-point reuse. All three are measured below.
 | Shared entry guards | **CONFIRMED** | Identical 2-guard set, measured (§2) |
 | Shared HSDir set | **REFUTED** | Each persona uploaded its descriptor to **16 HSDirs; the two sets overlap in zero relays.** A v3 descriptor's directory position derives from the blinded key, which differs per service, so this is theory confirmed by measurement rather than luck. **No single HSDir sees both personas' descriptors.** |
 | Correlated descriptor publication timing | **CONFIRMED (weak), and weaker than expected** | Two personas added **0.043 s** apart began publishing **0.98 s** apart — a tight, genuinely correlated window. But the HSDir result above blunts it: exploiting the correlation requires observing **≥ 2 of the 32 distinct directories** the two descriptors land on *and* correlating across them, because no directory sees both. Combined with the fact that two unrelated services starting at once on a busy directory look identical, this is a real-but-weak channel, not a break. `T = ⟨`multi-HSDir operator; sees upload times at the directories it runs; cost = running a meaningful fraction of the HSDir ring; priced in the C2/C3 bucket`⟩`. |
-| `MaxStreams` exhaustion on A observable at B | **UNMEASURABLE-HERE** | Both services share one tor process, so shared-resource coupling is *structurally* present; but distinguishing "B degraded because A was flooded" from ambient Tor variance needs a controlled load generator and a quiet baseline, which this spike does not have. **Not claimed either way.** A design that assumes independence between co-hosted personas under load is unsupported by anything measured here. |
+| Co-hosted personas contend under concurrent load | **CONFIRMED (measured)** | SPIKE-F-10: two concurrent readers move p90 28.99 s → 44.04 s and `D*` ×1.54. The coupling mechanism is the shared tor process, NIC, and — per SPIKE-F-1 — the shared **guards**. A design assuming co-hosted personas are independent under load is now *contradicted by data*, not merely unsupported. |
+| `MaxStreams` **exhaustion** on A observable at B | **UNMEASURABLE-HERE** | Distinct from the contention row above and **not claimed either way**. Deliberate flooding to the stream cap, distinguished from ambient variance, needs a controlled load generator and a quiet baseline this spike does not have. Contention at concurrency 2 is not evidence about the exhaustion path. |
 | Error responses fingerprint the shared backend | **REFUTED (by construction)** | `serve.rs` renders one identical 404 for every non-matching request — wrong path, wrong method, malformed — asserted by `every_non_route_gets_one_identical_error`. Two personas' success headers are asserted byte-identical by `two_personas_are_header_identical`, and the complete header set is pinned to `content-type` + `content-length` (no `server`, no `date`, no `etag`, no `accept-ranges`). |
 
 ---
@@ -432,6 +434,64 @@ floor of 0.0167** — a single truncated response in 60, and an apparatus-class
 failure at that. No fetch in the arm exceeded 40 s, so every block-denominated
 deadline is far out on the flat part of the curve.
 
+### 12.0b All three arms, and the verdict is unanimous
+
+| Arm | `n` | p50 | p90 | p99 | `D*` | `q(120 s)` | at 1 block |
+|---|---|---|---|---|---|---|---|
+| Warm circuit | 60 | 8.21 s | 13.46 s | 20.13 s | 13.22 s | 0.0167 | does **not** force |
+| Cold circuit | 60 | 14.71 s | 28.99 s | 39.27 s | 28.57 s | 0.0167 | does **not** force |
+| 2 personas concurrent | 60 | 21.65 s | 44.04 s | 72.29 s | 44.00 s | 0.0000 | does **not** force |
+
+**Even the worst arm clears the bar with room.** The concurrent arm — the slowest,
+and the one modelling a persona under simultaneous load — has `D* = 44.00 s`, still
+**2.7 × below** the 120 s block boundary, and its `q(120 s)` is **0.0000**: not one
+of its 60 fetches failed or exceeded two minutes.
+
+**Apparatus cross-check passed exactly.** The endpoints report **181** requests
+served against 180 counted fetches (60 + 60 + 60) plus the one reachability
+probe. No "success" came from anywhere other than the persona it was attributed
+to.
+
+### 12.0c The drift detector fired where it should — which is what makes its silence meaningful
+
+The **warm** arm tripped the warning at ratio **0.57** (first-quarter p50 12.26 s →
+last-quarter 6.93 s). That is **correct and expected**: the warm arm reuses one
+client id by design, so tor progressively warms its circuit. The warning's text
+is conditioned on being the cold arm, and it is not.
+
+The value of that firing is as a **positive control**. A drift check that never
+fires is indistinguishable from a broken one, and the cold arm's clean **1.16**
+would then be a vacuous negative. Because the same detector fires at 0.57 on an
+arm that genuinely warms and reads 1.16 on the arm that must not, the cold arm's
+result is a *measured* absence of warming, not an unexercised assertion.
+
+### 12.0d SPIKE-F-10 — co-hosted personas contend, and the margin is concurrency-sensitive
+
+Serving **two** personas concurrently through one tor moved p90 from 28.99 s →
+44.04 s and `D*` from 28.57 s → 44.00 s (**× 1.54**). That is measured contention
+between co-hosted personas: they share the tor process, the NIC, and — per
+SPIKE-F-1 — the **same entry guards**, which is the mechanism.
+
+This partially answers the §8 axis previously marked *unmeasurable-here*. It is
+**contention under concurrent load**, not `MaxStreams` exhaustion, and the two
+should not be conflated; but a design assuming co-hosted personas are independent
+under load is now contradicted by data rather than merely unsupported.
+
+**The extrapolation, with its weakness stated first.** Two points is not a curve.
+Fitting `D*(c) = 28.57 · c^k` to `c ∈ {1, 2}` gives `k ≈ 0.62`, and solving for
+`D* = 120 s` gives **`c ≈ 10` concurrent readers**. Treat that as an
+order-of-magnitude indication only — a two-point power-law fit has no error bars,
+assumes a functional form nothing justifies, and extrapolates 5 × beyond its
+support.
+
+What it is good for is a **sense of the safety margin's shape**: closing the gap
+to a block-denominated deadline needs roughly an order of magnitude more
+concurrency than was measured, not a small perturbation. Whether a persona in
+production faces ~10 simultaneous readers is a TJ-B question (draw rate × shard
+count × organic demand) that this spike cannot answer. **If it can, the margin is
+narrower than the cold arm alone suggests, and this axis deserves its own
+measurement.**
+
 ### 12.1 Apparatus validation (done)
 
 The full path — managed tor bootstraps → two personas derived → two loopback
@@ -462,12 +522,12 @@ SHEKYL_SPIKE_HOURS=24 \
 
 ### 12.3 Arms and their sample sizes
 
-| Arm | Purpose | `N` |
+| Arm | Purpose | `N` run |
 |---|---|---|
-| Cold circuit, single stream | Pessimistic; circuit build + rendezvous inside the timed path. The faithful model — each drawn miner *is* a different client | 200 |
-| Warm circuit, single stream | Optimistic; circuit reused | 200 |
-| 2 personas concurrent | §5.2 contention datum | 100 pairs |
-| Soak, ≥ 24 h | Dispersion is time-varying; a one-hour sample understates the tail | continuous |
+| Cold circuit, single stream | Pessimistic; circuit build + rendezvous inside the timed path. The faithful model — each drawn miner *is* a different client | **60** |
+| Warm circuit, single stream | Optimistic; circuit reused | **60** |
+| 2 personas concurrent | §5.2 contention datum | **30 pairs (60 obs)** |
+| Soak, ≥ 24 h | Dispersion is time-varying; a one-hour sample understates the tail | **not run** — see §13 |
 
 **On `N`, and on what more `N` can and cannot buy.** The gate turns on a **10 %
 tail**, so the p90 needs a usable confidence interval. At `N = 200` the binomial
