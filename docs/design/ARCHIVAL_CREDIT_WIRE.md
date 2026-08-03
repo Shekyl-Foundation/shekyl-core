@@ -88,71 +88,108 @@ manipulation surface).** Applied hard, they collapse most of a first draft:
   because `r` (coinbase extra) and `cb_out_key` (coinbase output) are kept-side
   and survive the signature prune. Storing it is redundant moving data.
 
-**3.1 Kept side (permanent) — the header, at its floor.**
-`p_id (32) + shard_id (8) + settlement_epoch (8) + kind (1 bit)` ≈ **49 B**.
-Nothing else survives the collapse above.
+**3.1 Kept side (permanent, coinbase `tx_extra`) — the header.**
+`p_id (32) + shard_id (8) + settlement_epoch (8) + sig_commit (32)` ≈ **80 B**,
+committed via `prefix_hash` (see the resolution below — the `tx_extra` residence
+is what makes the commitment work without a tx-hash change). Nothing else
+survives the derive-don't-store collapse above.
 
 *The one field that exists only because pruning destroys what it summarises is
-the `kind` bit, and its exact form is the round's sharpest sub-decision.*
-Post-prune (the 3.43 KB signature dropped), a pass header and a miss header must
-stay distinguishable — and no recompute path avoids a kept discriminator,
-because the **nonce is identical for a pass and a miss of the same
-`(P, s, E)`** (both derive from the same block's `r`/`cb_out_key`), no other
-kept datum distinguishes them, and signature validity — the distinguishing
-fact — is pruned before `MAX_CLAIM_AGE_W` (a late claim outlives the sig). So a
-discriminator is **forced**. Its form:
+`sig_commit`, and code analysis (2026-08-03) settled it — RESOLVED to
+`sig_commit: [u8;32] = H(countersignature)` (zero = miss, nonzero = pass), which
+doubles as the pass/miss discriminant (no separate `kind` bit).*
 
-- **Candidate A — `sig_commit: [u8;32] = H(countersignature)`** (miss = zeroes).
-  Derived-from-the-signature at admission, self-consistent (a pass cannot carry
-  a zero hash), survives the prune.
-- **Candidate B — a single `kind` bit**, validated at admission
-  (`kind = pass ⇒ a valid signature was present`) and committed in the block
-  hash alongside the header.
+A one-bit `kind` was considered and **rejected at source.** The rejection turns
+on a coinbase-hashing fact: the v3 tx-hash is
+`cn_fast_hash({prefix_hash, base_rct_hash, pqc_auth_hash, prunable_hash})`, but
+`prunable_hash` is **hardcoded to `null_hash` whenever
+`rct_signatures.type == CTTypeNull`** (`cryptonote_format_utils.cpp:1236`), and
+the coinbase is always `CTTypeNull` (`prevalidate_miner_transaction`:
+"FCMP++ signatures not allowed in coinbase"). **So the coinbase commits
+`null_hash` for its prunable region regardless of content** — the commitment
+slot exists in the tx-hash but is wired to null for the coinbase. The signatures
+placed there (§3.2) therefore get **no** commitment from the coinbase's own
+`prunable_hash`.
 
-**Provisional lean: B (the bit), 32× smaller — because A's advantages evaporate
-exactly post-prune:** (i) once the sig is gone `sig_commit` is no longer
-*derived*, it is stored opaque data *exactly as stored* as a bit, so the
-derive-don't-store distinction that justified it no longer applies and only
-footprint remains; (ii) A's self-consistency is redundant with **admission
-validation** — a `kind = pass` in an *admitted* block provably had a valid sig
-(a block lacking one was rejected and never prunes), and the bit is committed in
-the block hash; (iii) prune-integrity is already provided by the coinbase tx's
-**collective `txs_prunable_hash`** over the `k` signatures plus the committed
-kept headers, so no *per-record* commitment is needed. The **only** thing A adds
-is *which specific* valid signature was admitted (ML-DSA is randomised, so `P`
-can produce several for one nonce) — and no post-prune consumer of
-signature-*identity* is yet found (disputes settle at admission; light clients
-trust the committed bit; pruned-IBD trusts admission either way).
-**OPEN — the boundary to test before pinning B:** is there any consumer that
-must re-exhibit *the* admitted signature rather than *a* valid one? If yes, A
-earns its 32 bytes; if no, B is the floor.
+Consequences, and they force `sig_commit`:
 
-*Further open:* can `E` be derived from block height (−8 B)? Only if the
-response-window→epoch map is unambiguous across the boundary — a record for `E`
-may land in a block in `E` **or** in `E+1`'s grace, so `E` is not simply "the
-block's epoch." Keep it explicit unless that pinning rule comes out clean.
-Remaining: byte order and `p_id`/`shard_id` encoding (fixed vs varint).
+- **The kept header is committed unconditionally.** It lives in the coinbase
+  `tx_extra`, which is in the prefix, so it rides `prefix_hash` (`hashes[0]`) →
+  tx-hash → block-hash. The `CTTypeNull` short-circuit only nulls `hashes[3]`,
+  never the prefix. So anything in the header is committed **today, with no
+  tx-hash change.**
+- **`sig_commit` in the header is the ONLY consensus commitment the pruned
+  signatures can get.** Putting `H(sig)` in the header commits the signature via
+  `prefix_hash`, sidestepping the null coinbase `prunable_hash` entirely.
+- **A bare `kind` bit would leave the signatures uncommitted** — the block would
+  attest only a 1-bit flag, with no on-chain evidence the pruned signatures were
+  the admitted ones — **or** force a change to `calculate_transaction_hash`
+  (un-nulling the coinbase's prunable_hash), the single most consensus-critical
+  function in the tree. `sig_commit` avoids both for 32 bytes.
 
-**3.2 Prunable side (coinbase-tx prunable region) — the countersignature.** The
-3.43 KB hybrid countersignature (Ed25519 64 B + ML-DSA-65 3309 B + framing) over
-the block-bound nonce. Residence is ruled (`FOLLOWUPS`: the coinbase tx's
-`txs_prunable` region, `db_lmdb.cpp:236–240`, keeps it inside the very
-transaction whose `cb_out_key` the nonce binds; verify-at-admission,
-prune-after-depth). Open: how `k` records' signatures **pack** in that region
-(concatenation + count, or length-prefixed), and how the prunable-hash
-commitment covers them so a pruned node still validates the block header.
+(An earlier draft leaned toward the bit on the argument that prune-integrity was
+already carried by the coinbase's collective `txs_prunable_hash`; the
+`CTTypeNull` finding shows that hash is null for the coinbase, so it carries
+nothing — the lean is retracted.)
+
+*`E` stays explicit (−8 B not taken):* the response window crosses `E`/`E+1`
+(a record for `E` may land in a block in `E` or in `E+1`'s grace), so height
+does not map to a single `E` and deriving it would reintroduce the boundary
+off-by-one the explicit field buys out. Remaining sub-decisions: byte order and
+`p_id`/`shard_id` encoding (fixed vs varint).
+
+> **Disambiguation (maintainer, 2026-08-03).** "v3" in this doc is the **Shekyl
+> transaction version** (`miner_tx.version ≥ 3`). It is NOT the **Tor onion v3**
+> ed25519 address of the step-1 identity ruling. The two never share the bare
+> token here.
+
+**3.2 Prunable side — the countersignature, on the miner tx (shape 1, chosen
+2026-08-03).** The 3.43 KB hybrid countersignature (Ed25519 64 B + ML-DSA-65
+3309 B + framing) over the block-bound nonce, held in **the coinbase tx's own
+prunable region** — physically inside the transaction whose `cb_out_key` the
+nonce binds. Its commitment is the header's `sig_commit` (§3.1 resolution), NOT
+the coinbase's `prunable_hash` (null under `CTTypeNull`); verified at admission
+against `sig_commit` + the recomputed nonce, then dropped after depth.
+
+*Shape chosen — 1 (miner-tx prunable region) over 2 (a separate attestation tx
+class).* The binding is **physical** in 1 (a future maintainer sees the whole
+mechanism in one tx) vs **referential** in 2 (an attestation tx carrying
+`cb_out_key` as data, cross-referenced to the coinbase — the class of
+replay/mis-association bug the Dandelion++ inheritance is currently costing us).
+1 is also smaller on the *permanent* kept side — 2 carries per-tx overhead
+(type tag, own tx-hash, own indexing) `k`× per block for the life of the chain,
+re-inflating the footprint two rounds just removed. Shape 2's one edge — a
+non-coinbase tx gets a real `prunable_hash` for free — **evaporates**, because
+`sig_commit` already commits shape 1's signatures via the header. **The audit
+shape 1 costs (stated plainly, and bounded — not a tx-hash change):** the
+coinbase already has a `txs_prunable` slot and a `txs_prunable_tip` entry
+(`add_transaction_data`), empty today, so this fills an existing slot; confirm
+the prune worker (`prune_worker`, iterating `txs_prunable_tip`) prunes a
+*populated* coinbase region (it participates, pending one walk for a `txin_gen`
+skip), and grep for anything asserting the coinbase / `miner_tx` is whole. The
+split is *within* the tx: outputs/amounts/supply-relevant fields (the
+unprunable prefix) are untouched — only a prunable appendix is added — so the
+supply-verification path reads exactly what it read before. Open: how `k`
+signatures **pack** in the region (concat + count, or length-prefixed), keyed to
+the `k` headers by order.
 
 **3.3 The verify entrypoint that replaces `shekyl_archival_verify_serve_credit_vin`.**
 Its contract inverts: instead of a path opening it (a) recomputes the nonce from
-`r ‖ cb_out_key ‖ P ‖ s ‖ E`, (b) checks `P`'s hybrid countersignature over it,
+`r ‖ cb_out_key ‖ P ‖ s ‖ E`, (b) checks the prunable `HybridSignature` hashes to
+the header's `sig_commit` **and** is `P`'s valid countersignature over the nonce,
 (c) binds the attester to the block producer (the coinbase authorship *is* the
 attestation — no separate witness key), and (d) invokes the **epoch-windowed
 coinbase-output-key uniqueness** check (the copy-freeride repair). A **miss**
-record verifies (a) + (c) + (d) with an **empty** countersignature field — it
-proves the challenge was posed (nonce is real) without proving a response.
+record carries `sig_commit = 0` and verifies (a) + (c) + (d) with **no**
+signature — it proves the challenge was posed (nonce is real) without proving a
+response. `sig_commit` binds the kept header to the pruned signature, so the
+verdict survives the prune with no reliance on the coinbase's null
+`prunable_hash`.
 
-**Gating question for the round:** the §3.1 byte layout and the §3.2 packing —
-because the scan reads the header and the deletion/KAT rewrite key off both.
+**Gating question for the round — RESOLVED (2026-08-03):** the §3.1 header
+(`p_id, shard_id, E, sig_commit` in coinbase `tx_extra`) and the §3.2 residence
+(signature in the coinbase prunable region, shape 1) are settled. The scan fold
+(§4) now keys off this format.
 
 ---
 
