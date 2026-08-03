@@ -151,8 +151,35 @@ nonce binds. Its commitment is the header's `sig_commit` (§3.1 resolution), NOT
 the coinbase's `prunable_hash` (null under `CTTypeNull`); verified at admission
 against `sig_commit` + the recomputed nonce, then dropped after depth.
 
-*Shape chosen — 1 (miner-tx prunable region) over 2 (a separate attestation tx
-class).* The binding is **physical** in 1 (a future maintainer sees the whole
+**SHAPE REOPENED (2026-08-03) — the prune-worker confirmation surfaced a
+block-blob obstacle that reverses the pruning axis.** Confirmed green: the prune
+worker (`prune_worker`) deletes `txs_prunable` by tx_id with **no `txin_gen`
+exclusion** (only gate `!is_v1_tx`, which the v3 coinbase passes), keeping the
+unprunable prefix. **But** the coinbase is stored *twice*: in
+`txs_pruned`/`txs_prunable` (pruned) **and** in the block blob in the `blocks`
+table via `block_to_blob(FIELD(miner_tx))` — and **`blocks` is never pruned**.
+Non-coinbase tx *bodies* are not in the block blob (only their hashes,
+`FIELD(tx_hashes)`). Consequence:
+- **Shape 1** — an appendix serialized with `FIELD(miner_tx)` lands in the
+  never-pruned block blob, so the signatures persist there *forever* and
+  pruning `txs_prunable` leaves them; pruning is defeated unless `block_to_blob`
+  is changed to store the coinbase **base-only** — block-format surgery on the
+  one tx whose body rides the never-pruned `blocks` table.
+- **Shape 2** — a separate attestation tx's body is never in the block blob, so
+  it prunes cleanly with the confirmed machinery.
+- **Shape 3 (new candidate)** — the attestation blob as its *own* per-block
+  prunable LMDB table (keyed by height), committed by `sig_commit` in the
+  coinbase `tx_extra` and bound by the nonce's `cb_out_key` term: keeps shape
+  1's coherence (commitment in the coinbase, one place to read) with neither
+  shape 2's per-tx overhead nor shape 1's block-blob problem.
+The pruning axis now favours 2 or 3 over 1. `sig_commit` and the §3.1 header are
+unaffected (they are in the kept prefix regardless of where the signature
+lives). **Shape decision pending maintainer.** The comparison below is the
+pre-finding weighing, retained for the coherence/footprint axes it still scores
+correctly:
+
+*Original weighing — 1 (miner-tx prunable region) over 2 (a separate
+attestation tx class).* The binding is **physical** in 1 (a future maintainer sees the whole
 mechanism in one tx) vs **referential** in 2 (an attestation tx carrying
 `cb_out_key` as data, cross-referenced to the coinbase — the class of
 replay/mis-association bug the Dandelion++ inheritance is currently costing us).
