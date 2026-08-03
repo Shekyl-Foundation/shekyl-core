@@ -51,7 +51,7 @@
 //! `Scalar` would produce a key that still yields a valid service id, just a
 //! **different one** from the key tor was handed, and the service would be
 //! unreachable at the address the persona advertises. So the clamp is applied to
-//! raw bytes here ([`expand_seed`]) and never round-tripped through a `Scalar`.
+//! raw bytes here (`expand_seed`) and never round-tripped through a `Scalar`.
 //!
 //! # SPIKE-F: this derivation is in the wrong crate, and that is not fixable here
 //!

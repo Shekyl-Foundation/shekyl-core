@@ -8,7 +8,7 @@
 //!
 //! # Why the arguments are types rather than validated strings
 //!
-//! [`Command::to_wire`](super::actor::Command::to_wire) validates `GETINFO` /
+//! [`Command`](super::actor::Command)'s `to_wire` validates `GETINFO` /
 //! `SETEVENTS` tokens by *string-checking* a caller-supplied list: reject empty
 //! tokens, spaces, and ASCII controls, because a `\r`/`\n` would split into extra
 //! control commands and desync the no-request-ID FIFO correlation.
@@ -44,7 +44,7 @@
 //! orphan.
 //!
 //! So `Detach` is not an [`OnionFlags`] variant that callers are asked to avoid;
-//! it is **absent from the type**, and [`AddOnion::to_wire_line`] can only render
+//! it is **absent from the type**, and [`AddOnion`]'s `to_wire_line` can only render
 //! the flags the enum can hold. `onion_line_never_detaches` asserts the rendered
 //! wire line for every representable flag combination is `Detach`-free.
 //!
@@ -79,7 +79,7 @@ pub const SERVICE_ID_CHARS: usize = 56;
 /// secret posture: `ZeroizeOnDrop`, redacting `Debug`, no `Clone`, no
 /// `PartialEq` against arbitrary bytes, and no accessor that hands out the raw
 /// array. The only way the bytes leave this type is
-/// [`AddOnion::to_wire_line`]'s base64 rendering, which itself lands in a
+/// [`AddOnion`]'s `to_wire_line` base64 rendering, which itself lands in a
 /// [`Zeroizing<String>`].
 ///
 /// # The 64 bytes are *expanded*, not a seed
@@ -234,7 +234,7 @@ impl OnionPort {
 /// identity in memory and one fewer thing a mis-logged reply could leak.
 ///
 /// `MaxStreamsCloseCircuit` is deliberately **not** a member: it is emitted
-/// unconditionally by [`AddOnion::to_wire_line`], because it is the enforcement
+/// unconditionally by [`AddOnion`]'s `to_wire_line`, because it is the enforcement
 /// half of the stream cap and must not be independently switchable. See
 /// [`AddOnion::new`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

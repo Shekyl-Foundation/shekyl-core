@@ -221,7 +221,8 @@ impl EventSink {
 /// engine-driven.
 ///
 /// **Not `Clone`, and not `PartialEq`.** `AddOnion` carries the persona's onion
-/// secret key ([`OnionKey`]), so the enum inherits that type's discipline: a
+/// secret key ([`OnionKey`](super::onion::OnionKey)), so the enum inherits that
+/// type's discipline: a
 /// derived `Clone` would silently duplicate the key outside its `Zeroize`
 /// wrapper, and a derived `PartialEq` would compare secret bytes non-constant-time.
 /// The `Debug` derive is safe because every secret-bearing member redacts its own.
