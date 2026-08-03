@@ -306,8 +306,11 @@ envelope (Argon2id + AEAD over `.wallet`/`.wallet.keys`) an external process can
 **Reopening criteria (`21`):** (a) reopen to **ephemeral** if a C6/target-specific forensic review
 judges the on-disk guard identity to outweigh the malicious-guard-draw cost for a supported
 platform; (b) reopen the **at-rest** half if the stack gains a wallet-controlled encrypted mount
-facility — or if the §10 **arti** anchor ever fires, since an in-process tor's guard state could
-then live inside the wallet's own encrypted store (a second, independent benefit of that anchor).
+facility — ~~or if the §10 **arti** anchor ever fires, since an in-process tor's guard state could
+then live inside the wallet's own encrypted store (a second, independent benefit of that anchor)~~
+**(the arti half of this criterion is RETIRED, 2026-08-03 maintainer ruling: Arti is not the path —
+the Tor Expert Bundle is consumed as an external hash-pinned process — so that trigger cannot
+fire. The encrypted-mount half of (b) stands.)**
 (Cross-ref §7 in the transport plan.)
 
 ---
@@ -613,8 +616,13 @@ serving-layer miss accounting (transport plan §5/§6) — both consume the post
   raw isolation key (so Shekyl owns `derive_socks_user`) **and** raw `STREAM`/CircID (so DQ-T0.4 is
   performable); `tor-interface`'s opaque `CircuitToken` is a *false door* that satisfies neither (see
   DQ-T0.2's reopen). Verify in source, not docs.
-- **embedded Arti** (the §10 anchor) — unchanged, on its real trigger (SOCKS-isolation unenforceable);
-  DQ-T0.4 is the detector for that trigger.
+- ~~**embedded Arti** (the §10 anchor) — unchanged, on its real trigger (SOCKS-isolation
+  unenforceable); DQ-T0.4 is the detector for that trigger.~~ **RETIRED as a *remedy*, 2026-08-03
+  (maintainer ruling): Arti is not the path — the Tor Expert Bundle is consumed as an external
+  hash-pinned process. Note the asymmetry deliberately: the *trigger* remains real (if SOCKS
+  isolation ever became unenforceable, that would still matter, and DQ-T0.4 remains its detector),
+  but the *named remedy* is gone and no replacement is specified here. Should the trigger fire,
+  the remedy is an open question for that round — it is not "embed Arti".**
 - **packaging targets** — the per-target Guix / hash-pin split is a detail to work at SP-T0c.
 
 ## Revision history

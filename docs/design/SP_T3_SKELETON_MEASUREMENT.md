@@ -76,7 +76,7 @@ from its **bond**, not from sharing a host.
 |---|---|---|---|
 | **SPIKE-F-1** | ~~Two personas behind one tor share entry guards~~ | — | **REFUTED AS STATED** — the apparatus built a co-activation layout §10.9 forbids; not new information (§2) |
 | **SPIKE-F-12** | `ADD_ONION` has no per-service isolation knob; guard sets are per-process/datadir. **This corroborates an accepted residual — it does not motivate action.** `TRANSPORT_PLAN:616` accepts the `P`↔principal guard coupling and explicitly forecloses separate instances | INFO | **CONFIRMS ACCEPTED RESIDUAL** — no action, **no routing** (§2a) |
-| **SPIKE-F-13** | §10.9's named mechanism (**separate Arti client instances**) is **dead text**: Arti is not the path — we consume the Tor Project's Expert Bundle as an external process. Three further sites rest on the same abandoned anchor | LOW (doc hygiene) | **OPEN — maintainer ruling** (§2b); no ratified text edited here |
+| **SPIKE-F-13** | §10.9's named mechanism (**separate Arti client instances**) was **dead text**: Arti is not the path — we consume the Tor Project's Expert Bundle as an external process. **Five** sites rested on the abandoned anchor | LOW (doc hygiene) | **CLOSED** — maintainer ruled; correction pass applied to all five (§2b) |
 | **SPIKE-F-2** | Two personas' onion services do **not** share introduction points | HIGH (as a *negative*) | **REFUTED (measured)** — halt condition §8.5 does not fire |
 | **SPIKE-F-3** | `MaxStreamsCloseCircuit` is a **`Flag`**, not a `MaxStreamsCloseCircuit=1` argument; the argument spelling earns `512` from tor | MEDIUM | **CONFIRMED (measured)** |
 | **SPIKE-F-4** | A production persona onion key belongs in `archival_p.rs`, not in a second cSHAKE256 path from the master seed | MEDIUM | **CONFIRMED (source)** |
@@ -254,10 +254,27 @@ is where the residual lives. What is unavailable is its *named mechanism*, and
 `TRANSPORT_PLAN:616` already records what is done instead: accept the coupling,
 do not split instances.
 
-**No ratified text is edited by this branch.** Whether this warrants a correction
-pass or is left as understood-in-context is a maintainer decision, recorded here
-so it is not rediscovered by the next reader who follows §10.9 to a mechanism that
-cannot be built.
+### Ruled and applied (2026-08-03)
+
+The maintainer ruled the correction pass. **All five sites are annotated in
+place** — original text struck through and retained for history, never deleted,
+with the supersession dated and the replacement position cross-referenced:
+
+| Site | Applied |
+|---|---|
+| `FIREWALL_GATE6.md` §10.9 | Correction block above the bullet: **intent stands**, mechanism superseded, points at `TRANSPORT_PLAN`'s accepted-residual note and *"do not split instances"* |
+| `FIREWALL_GATE6.md` `:479` | Arti at-source pin **RETIRED** — no consumer |
+| `FIREWALL_GATE6.md` `:1644` | Enforcement-mechanism carry **CLOSED** — no mechanism is owed; the S-6 key-locality half stays carried |
+| `SP_T0_TOR.md` DQ-T0.7 (b) | Arti half **retired**; the encrypted-mount half of (b) **stands** |
+| `SP_T0_TOR.md` §6 anchor | Embedded-Arti **retired as a *remedy***, with the asymmetry stated: the *trigger* (SOCKS isolation unenforceable) remains real and DQ-T0.4 remains its detector, but **no replacement remedy is specified** — that is an open question for the round in which it fires, and the answer is not "embed Arti" |
+
+The fifth site was not in the original enumeration; it is `SP_T0_TOR.md` §6's
+"embedded Arti (**the §10 anchor**)" — literally the anchor declared dead, so the
+ruling covers it. It is the one place where care was needed: retiring a *remedy*
+must not silently retire the *trigger* it answered, so the annotation separates
+them explicitly rather than striking the whole bullet.
+
+**Gate:** `scripts/ci/check_doc_links.py` — all relative links resolve.
 
 ---
 
