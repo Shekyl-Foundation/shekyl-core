@@ -4361,6 +4361,7 @@ version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
  "ed25519-dalek",
+ "kameo",
  "sha2",
  "sha3",
  "shekyl-archival-retention",

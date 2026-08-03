@@ -33,6 +33,9 @@ zeroize = { version = "1", default-features = false, features = ["alloc", "deriv
 tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "time", "macros", "sync"] }
 # The onion surface (D1) and the managed-tor lifecycle the measurement rides.
 shekyl-tor = { path = "../shekyl-tor" }
+# The harness holds the control actor's `ActorRef` to issue ADD_ONION; kameo is
+# the workspace's actor stack, already pinned there.
+kameo = { workspace = true }
 # The client leg: per-persona SOCKS isolation + the bounded `blocking_get`.
 shekyl-p-transport = { path = "../shekyl-p-transport" }
 # `PCanonicalId` / `PSlot` — the persona identity the derivation binds to.
@@ -40,8 +43,17 @@ shekyl-types = { path = "../shekyl-types" }
 # `p_canonical_id_from_hybrid_pubkey`, for the domain-separation negative control.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 
-[dev-dependencies]
+# The measurement binary's own temp DataDirectory (it is a binary dependency, not
+# just a test one, so it is not in dev-dependencies).
 tempfile = "3"
+
+[[bin]]
+name = "pd-f2-measure"
+path = "src/bin/pd_f2_measure.rs"
+
+[dev-dependencies]
+# The live apparatus test drives the harness on a tokio runtime.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 [lints]
 workspace = true
