@@ -85,7 +85,8 @@ from its **bond**, not from sharing a host.
 | **SPIKE-F-8** | Two personas' descriptors land on **disjoint HSDir sets** (16 each, zero overlap) — the "shared HSDir" axis SP-T2 flagged does not exist | MEDIUM (as a *negative*) | **REFUTED (measured)** |
 | **SPIKE-F-9** | `.gitignore`'s bare `bin/` rule silently untracks **any Rust crate's `src/bin/`** — Cargo's conventional binary location | MEDIUM (repo-wide) | **CONFIRMED (CI)** |
 | **SPIKE-F-10** | **The price of co-serving, on both axes at once:** complete guard-set overlap (privacy) **and** `D*` 28.57 s → 44.00 s, **≥ ×1.54** (throughput). A **floor, measured once at N=2 on C-tor from one vantage** — not a characterization. Not architecture — the **cost of the layout the design forbids** | MEDIUM | **RETAINED AS A DETERRENCE FLOOR** (§12.0d) |
-| **SPIKE-F-11** | **One** persona facing many simultaneous readers is a genuine, §10.9-unaffected TJ-B question the margin is sensitive to — and it is **unmeasured**. **Not a tail case for the Foundation's uncompensated complete-tree `P`: it is the operating condition** | MEDIUM→**HIGH for that deployment** | **OPEN** (§12.0d, §16) |
+| **SPIKE-F-11** | One persona under many simultaneous readers — **MEASURED** on four seed nodes in four regions. Reader concurrency does **not** materially degrade the persona (p50 10.9 s → 14.8 s across 4→32 readers); the tail is dominated by **circuit draw**, not by load | MEDIUM | **ANSWERED** (§18) — `q(120 s) ≤ 0.042` at every `N` |
+| **SPIKE-F-16** | **Circuit-latency dispersion dominates everything else.** Identical requests to the same persona span **4.49 s → 133.05 s (30×)**; per-region medians agree within 2.7 s. `D*` is a tail statistic and is therefore **non-monotonic in load** | **HIGH** (methodological) | **CONFIRMED (measured)** (§18) |
 | **SPIKE-F-14** | §6a's three inbound protections are all **per-connection**; **nothing bounds aggregate load**, and `MaxStreams` is per-*circuit* so it does not either. A ~100-byte request returns ~3.33 MB — **~33 000× egress amplification** | **HIGH** (general, every `P`) | **CONFIRMED (source)** — both levers now built (§16) |
 | **SPIKE-F-15** | **PoW effort is adaptive (AIMD), so the DoS defense and the §8.3 margin are coupled — not independent as this report first recorded them.** `D*` was measured with PoW **disabled**; under escalation honest miners pay solve time and the distribution shifts toward the deadline | MEDIUM | **CONFIRMED (spec + measured on `dev`)** — immaterial at measured effort, **ceiling unmeasured** (§17) |
 | **SPIKE-F-7** | D4's payload is a **cost, not a blocker**: ~5 h of one-time regtest mining plus a batched extraction | INFO | **REFUTED as a halt** |
@@ -1050,6 +1051,114 @@ queue parameters, is **SPIKE-F-11 measured on the hardware that will actually
 serve** — which is why F-11 is re-rated for the Foundation deployment: there it is
 not a tail case, it is the operating condition, and the reader count is
 adversarially inflatable.
+
+---
+
+## 18. SPIKE-F-11 — ANSWERED: reader concurrency is not the variable that matters
+
+### Method
+
+Four **real remote hosts** (`skl-seedaus`, `skl-seedeu`, `skl-seeduse`,
+`skl-seedusw` — four regions), each running the **hash-pinned Tor Expert Bundle**
+(sha256 verified against `CURRENT_PIN` on all four before the run), fetching the
+**real 3 326 976-byte shard** from **one conformant persona**
+(`persona_count = 1`) over live Tor.
+
+Every fetch used a **unique SOCKS proxy-user**, so each got its own circuit and
+its own rendezvous carrying one stream — the faithful model (`N` drawn miners
+*are* `N` clients) and the reason the per-circuit `MaxStreams` cap never binds
+(`SPIKE-PIN-1`'s recorded trap).
+
+This is the confound `pd-f2-measure` could not escape: there, client and server
+share one host, so at concurrency the box is measured rather than the persona.
+Here the readers are elsewhere.
+
+### Result — 180 fetches
+
+| readers | `n` | completion | p50 | p75 | p90 | `>20 s` | `>120 s` | `D*` | `q(120 s)` |
+|---|---|---|---|---|---|---|---|---|---|
+| 4 | 12 | 1.000 | 10.92 s | 13.32 s | 14.07 s | 0.083 | 0.000 | 13.39 s | 0.0000 |
+| 8 | 24 | 1.000 | 11.45 s | 24.93 s | 109.50 s | 0.333 | 0.042 | 70.80 s | 0.0417 |
+| 16 | 48 | 0.958 | 11.43 s | 16.39 s | 24.89 s | 0.188 | 0.042 | 26.39 s | 0.0417 |
+| 32 | 96 | 0.990 | 14.83 s | 21.79 s | 33.03 s | 0.260 | 0.021 | 33.03 s | 0.0208 |
+
+**`q(120 s)` never exceeds 0.0417 at any `N`** — always well below
+`q_risk* = 0.1011`. **NOT FORCEABLE holds across the entire sweep**, and the
+worst point is the *least* loaded one.
+
+**`MAX_INFLIGHT` never bound: `refused = 0` at every `N`.** So `SPIKE-PIN-2` was
+not the limiting factor at ≤ 32 readers, and sizing it requires load well beyond
+what this rig produced. The cap remains a placeholder, now with a measured lower
+bound on where it *isn't* binding.
+
+### The answer, and it is not the one the question expected
+
+**Reader concurrency is not the variable that matters.** An 8× increase in
+readers moved the median from 10.92 s to 14.83 s (+36 %) and *reduced* the
+outright-failure share. Completion stayed ≥ 95.8 %.
+
+Meanwhile `D*` went **13.39 → 70.80 → 26.39 → 33.03 s** — **non-monotonic**. More
+load produced a *smaller* `D*`. That is not noise to be sampled away; it is
+SPIKE-F-16.
+
+## SPIKE-F-16 — circuit dispersion dominates, and it is §8.3's own named parameter
+
+Pooling all 177 successful fetches of the **identical** request to the **same**
+persona:
+
+```text
+min 4.49 s   p50 13.36 s   max 133.05 s        spread = 30x
+per-region p50:  seed-use 11.40   SeedEU 13.31   seedaus 13.87   seedusw 14.07
+```
+
+**A 30× spread on an identical request, with regional medians agreeing within
+2.7 s.** The variance is not geography, not the service, and not reader load — it
+is *which relays the circuit drew*. Over Tor the path is three relays plus a
+rendezvous: **someone else's connection, unknown and unpredictable.**
+
+That is exactly what §8.3 named — *"circuit-latency dispersion as the load-bearing
+parameter"* — now demonstrated rather than asserted.
+
+**Three independent apparatus agree on the median and disagree on the tail:**
+
+| apparatus | median total |
+|---|---|
+| `c76cc6ad8` (parallel thread, PoW rig) | 13.3 s |
+| this spike, single-host cold arm | 14.71 s |
+| this spike, distributed 4-region | 13.36 s |
+
+**The median is reproducible; the tail is a lottery.** Since `D*` *is* a tail
+statistic, `D*` inherits that instability — which has a direct methodological
+consequence:
+
+> **More concurrency does not characterise the tail. More independent circuit
+> draws over time does.** The ≥ 24 h soak is therefore the right instrument for
+> `D*`, and this sweep is the wrong one — it varies the parameter that does not
+> matter while holding fixed the one that does.
+
+### Honest limits
+
+- **Percentiles above p90 are not meaningful here.** At `n = 12…96`, the reported
+  "p99" is at or near the **maximum observation**, not a 99th percentile.
+- **Environment, measured not assumed:** the service host's egress was measured at
+  **60.3 Mb/s** (50 MB over ssh to a seed, interface counters sampled). An earlier
+  draft of this section cited 10 Mb/s from `/sys/class/net/<if>/speed`; that file
+  reports the NIC's negotiated link, is unreliable for USB adapters, and was
+  **wrong by 6×**. At ~2.4 Mb/s per fetch the measured figure supports ~25
+  concurrent, so **only the 32-reader point is near the host's egress** and should
+  be treated as the least trustworthy row.
+- Four vantage points, one service host, one time window. Per §11, this does not
+  generalise to a globally distributed miner population — and SPIKE-F-16 is
+  precisely why it cannot.
+
+### What this does not answer
+
+The **client give-up ceiling** (§17). `c76cc6ad8` reached effort 67 without its
+client hitting the ceiling; the spec's client bound is 10 000. That measurement
+needs *sustained escalation*, which needs `QueueRate` tuned as a sensitivity trick
+(ambient load is ~3 intros/epoch, nowhere near tor's stock 250/s). The rig built
+here supports it — `serve-only` takes `SHEKYL_SPIKE_POW=tuned:<rate>:<burst>` —
+but it is a separate run.
 
 ---
 
