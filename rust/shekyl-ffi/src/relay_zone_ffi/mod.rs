@@ -50,9 +50,9 @@
 //! is **single writer**: only [`RelayZoneHandle::publish`] writes it, and only
 //! the mutating exports call that.
 
+use std::fmt::Write as _;
 use std::os::raw::c_void;
 use std::slice;
-use std::fmt::Write as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -225,13 +225,14 @@ impl RelayZoneHandle {
                 out.push(',');
             }
             let hex: String = peer.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
-            let _ = write!(
+            write!(
                 out,
                 "{{\"peer\":\"{hex}\",\"propagated\":{},\"silent\":{},\"distinct_sources\":{}}}",
                 t.propagated,
                 t.silent,
                 t.distinct_sources()
-            );
+            )
+            .expect("`fmt::Write` for `String` is infallible");
         }
         out.push(']');
         // Poisoning cannot happen: the only writer is this method and the only
