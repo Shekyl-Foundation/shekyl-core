@@ -67,5 +67,5 @@ pub mod stem_watch;
 pub mod zone;
 
 pub use driver::{Driver, Effect};
-pub use stem_watch::{StemOutcome, StemTally, StemWatch, TxId};
+pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
 pub use zone::{FluffReach, PeerFluff, RelayPlan, TxBlob, Zone};

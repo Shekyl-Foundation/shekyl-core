@@ -2187,26 +2187,45 @@ namespace nodetool
   template<class t_payload_net_handler>
   std::string node_server<t_payload_net_handler>::stem_tallies_json() const
   {
-    /* §55 TRANSIT, NOT STRUCTURE. This forwards a Rust-owned value to a
-       Rust consumer (shekyl-daemon-rpc); the hop through C++ exists only
-       because net_node owns the relay zone handles' lifetime. It disappears
-       with the p2p migration -- do not build on it. */
-    /* Every zone, because a peer belongs to exactly one and the caller does
-       not know which; zones do not share connection ids, so concatenating
-       their arrays cannot duplicate a peer. */
-    std::string out = "[";
+    /* §55 TRANSIT, NOT STRUCTURE. Collects published rows from every zone
+       (a peer belongs to exactly one; zones do not share connection ids),
+       sorts globally by peer id so operator diffs are content-stable, and
+       emits one JSON array. Serialisation lives here — once — rather than
+       on the relay hot path or as multi-zone array splicing. Disappears
+       with the p2p migration. */
+    using row_t = cryptonote::levin::notify::stem_tally_row;
+    std::vector<row_t> rows;
     for (const auto& zone : m_network_zones)
     {
-      const std::size_t need = zone.second.m_notifier.stem_snapshot_json(nullptr, 0);
-      if (need <= 2) // "[]" -- nothing resolved in this zone
-        continue;
-      std::vector<std::uint8_t> buf(need);
-      if (zone.second.m_notifier.stem_snapshot_json(buf.data(), buf.size()) != need)
-        continue;
-      // Splice the inner array's contents, dropping its own brackets.
-      if (out.size() > 1)
+      auto part = zone.second.m_notifier.stem_snapshot();
+      rows.insert(rows.end(), part.begin(), part.end());
+    }
+    std::sort(rows.begin(), rows.end(),
+      [](const row_t& a, const row_t& b) {
+        return std::lexicographical_compare(
+          std::begin(a.peer), std::end(a.peer),
+          std::begin(b.peer), std::end(b.peer));
+      });
+
+    static constexpr char HEX[] = "0123456789abcdef";
+    std::string out = "[";
+    for (std::size_t i = 0; i < rows.size(); ++i)
+    {
+      if (i)
         out += ',';
-      out.append(reinterpret_cast<const char*>(buf.data()) + 1, need - 2);
+      out += "{\"peer\":\"";
+      for (std::uint8_t b : rows[i].peer)
+      {
+        out += HEX[b >> 4];
+        out += HEX[b & 0xf];
+      }
+      out += "\",\"propagated\":";
+      out += std::to_string(rows[i].propagated);
+      out += ",\"silent\":";
+      out += std::to_string(rows[i].silent);
+      out += ",\"distinct_sources\":";
+      out += std::to_string(rows[i].distinct_sources);
+      out += '}';
     }
     out += ']';
     return out;

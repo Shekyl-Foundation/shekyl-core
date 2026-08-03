@@ -127,6 +127,30 @@ impl StemTally {
     }
 }
 
+/// Light export of a [`StemTally`] for telemetry and off-strand publish.
+///
+/// Three numbers only — no source-set clone. The readout (§55) and any
+/// future FFI/RPC path should take this rather than cloning [`StemTally`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StemTallySnapshot {
+    pub propagated: u64,
+    pub silent: u64,
+    /// Distinct `in_mapping_` keys that contributed (§35.4).
+    pub distinct_sources: u64,
+}
+
+impl From<&StemTally> for StemTallySnapshot {
+    fn from(t: &StemTally) -> Self {
+        Self {
+            propagated: t.propagated,
+            silent: t.silent,
+            // `BTreeSet::len` is `usize`; cast once at the export edge so the
+            // wire/readout contract stays a fixed-width counter.
+            distinct_sources: t.distinct_sources() as u64,
+        }
+    }
+}
+
 /// Stem observations in flight, and their per-successor resolutions.
 ///
 /// One instance per zone, owned by [`crate::Zone`]. Sync by construction:
@@ -262,10 +286,17 @@ impl StemWatch {
     /// Only successors with at least one *resolved* observation appear.
     /// Absent and all-zero are different facts: an unproven peer and a
     /// perfect one must not read alike.
+    ///
+    /// Returns a light [`StemTallySnapshot`] — the three numbers a readout
+    /// needs — rather than cloning the full [`StemTally`] (and its source
+    /// set). In-process selection keeps using [`Self::tally`].
     #[must_use]
-    pub fn snapshot(&self) -> Vec<(ConnectionId, StemTally)> {
-        let mut out: Vec<(ConnectionId, StemTally)> =
-            self.tallies.iter().map(|(k, v)| (*k, v.clone())).collect();
+    pub fn snapshot(&self) -> Vec<(ConnectionId, StemTallySnapshot)> {
+        let mut out: Vec<(ConnectionId, StemTallySnapshot)> = self
+            .tallies
+            .iter()
+            .map(|(k, v)| (*k, StemTallySnapshot::from(v)))
+            .collect();
         // Deterministic order: `HashMap` iteration is randomised per process,
         // and an operator diffing two snapshots should see content changes,
         // not ordering churn.

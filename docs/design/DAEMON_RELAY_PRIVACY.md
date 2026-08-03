@@ -9493,12 +9493,14 @@ on different subject matter, which makes it a habit rather than an incident.
 
 ### 55.2 What landed
 
-`StemWatch::snapshot()` → `Zone::stem_snapshot()` →
-`shekyl_relay_zone_stem_snapshot_json` (two-call sizing) → `notify` →
-`node_server::stem_tallies_json` (zone loop) → `core_rpc_server` →
-`core_rpc_ffi_stem_tallies` → `CoreRpc::stem_tallies` →
-`json::get_stem_tallies`, routed **inside the existing `if !restricted`
-block**.
+`StemWatch::snapshot()` → light `StemTallySnapshot` rows → published as
+`Arc` on the zone handle (not JSON — publish is on the hot path) →
+`shekyl_relay_zone_stem_snapshot` (fixed 40-byte rows, two-call sizing;
+write-call return is authoritative) → `notify::stem_snapshot` →
+`node_server::stem_tallies_json` (merge all zones, **global** peer-id sort,
+**one** JSON emit) → `core_rpc_server` → `core_rpc_ffi_stem_tallies` →
+`CoreRpc::stem_tallies` → `json::get_stem_tallies`, routed **inside the
+existing `if !restricted` block** (admin / unrestricted listener only).
 
 **Two properties held deliberately:**
 
@@ -9506,10 +9508,11 @@ block**.
   readout too — a snapshot returning a *rate* would have chosen the
   accumulator's memory policy on behalf of the tuner it exists to inform.
 - **Absent ≠ zero.** Only successors with *resolved* observations appear, so
-  an unproven peer and a perfect one do not read alike. Snapshot is sorted, so
-  diffing two shows content changes rather than `HashMap` churn.
+  an unproven peer and a perfect one do not read alike. The merged array is
+  sorted by peer id, so diffing two shows content changes rather than
+  `HashMap` or zone-map iteration churn.
 
-**Labelled as transit at all four hops** (Rust export, header, `notify`,
+**Labelled as transit at all hops** (Rust export, header, `notify`,
 `node_server`, Rust FFI decl): the data is Rust's and the consumer is Rust's;
 the round trip through C++ exists **only** because `net_node` owns the zone
 handles' lifetime, and it disappears with the p2p migration. **Written down so
@@ -9518,10 +9521,11 @@ the next reader does not mistake scaffolding for intended structure.**
 **The restriction reason lives at the handler, not the route table**: this
 endpoint **is the anonymity graph** — which peers this node stems to and how
 each behaved — and Sharma Appendix B spends **50–100 probes per node** to
-reconstruct exactly that. Serving it unauthenticated hands over, free and at
-better fidelity, what an attacker otherwise pays for. **It is not "just
-counters": the peer set is the sensitive part and the counts make it legible.**
-That is the argument to answer if anyone later proposes moving it.
+reconstruct exactly that. Serving it on the *restricted* (public) listener
+hands over, free and at better fidelity, what an attacker otherwise pays for.
+**It is not "just counters": the peer set is the sensitive part and the counts
+make it legible.** That is the argument to answer if anyone later proposes
+moving it onto the public listener.
 
 **Known test gap, stated rather than papered over**: the gate is enforced
 *positionally* (the route sits inside the `!restricted` block) and is **not**

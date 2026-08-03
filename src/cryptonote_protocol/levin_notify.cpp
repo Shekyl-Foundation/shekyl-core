@@ -1111,19 +1111,43 @@ namespace levin
     return hashes;
   }
 
-  std::size_t notify::stem_snapshot_json(std::uint8_t* buf, std::size_t cap) const
+  std::vector<notify::stem_tally_row> notify::stem_snapshot() const
   {
-    /* §55 TRANSIT, NOT STRUCTURE. This forwards a Rust-owned value to a
-       Rust consumer (shekyl-daemon-rpc); the hop through C++ exists only
-       because net_node owns the relay zone handles' lifetime. It disappears
-       with the p2p migration -- do not build on it.
+    /* §55 TRANSIT, NOT STRUCTURE. Forwards a Rust-owned published snapshot
+       to a Rust consumer (shekyl-daemon-rpc); the hop through C++ exists
+       only because net_node owns the relay zone handles' lifetime. It
+       disappears with the p2p migration -- do not build on it.
 
-       Reads a PUBLISHED snapshot on the relay handle, not the tallies map,
-       so it is safe from the RPC thread -- the same §18.5 discipline that
-       `stem_in_flight` follows. */
+       Two-call sizing on row count. The second call's return is
+       authoritative: publish can shrink or grow between probes, so never
+       require wrote == first_need (that discards a successful shrink write).
+       One retry covers a concurrent grow. */
+    static_assert(sizeof(stem_tally_row) == sizeof(ShekylStemTallyRow),
+      "stem_tally_row must match ShekylStemTallyRow");
+    static_assert(alignof(stem_tally_row) == alignof(ShekylStemTallyRow),
+      "stem_tally_row alignment must match ShekylStemTallyRow");
+
+    std::vector<stem_tally_row> out;
     if (!zone_)
-      return 0;
-    return shekyl_relay_zone_stem_snapshot_json(zone_->relay.get(), buf, cap);
+      return out;
+    auto* handle = zone_->relay.get();
+    std::size_t need = shekyl_relay_zone_stem_snapshot(handle, nullptr, 0);
+    for (int attempt = 0; attempt < 2; ++attempt)
+    {
+      out.resize(need);
+      const std::size_t wrote = shekyl_relay_zone_stem_snapshot(
+        handle,
+        need ? reinterpret_cast<ShekylStemTallyRow*>(out.data()) : nullptr,
+        need);
+      if (wrote <= need)
+      {
+        out.resize(wrote);
+        return out;
+      }
+      need = wrote;
+    }
+    out.clear();
+    return out;
   }
 
   std::size_t notify::stem_in_flight() const

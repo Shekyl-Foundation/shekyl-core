@@ -53,7 +53,7 @@ bool core_rpc_ffi_is_restricted(const core_rpc_handle* h);
 // JSON REST endpoints (/get_info, /get_transactions, etc.).
 // Returns serialized JSON response body, or NULL if the URI is unknown.
 //! \brief §55: relay stem-outcome tallies as a JSON array (caller frees with
-//!        core_rpc_ffi_string_free).
+//!        core_rpc_ffi_free_string).
 //!
 //! TRANSIT, NOT STRUCTURE: a Rust-owned value forwarded to a Rust consumer,
 //! hopping through C++ only because net_node owns the relay zone handles.

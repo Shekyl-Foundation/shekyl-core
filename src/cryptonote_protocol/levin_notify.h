@@ -149,12 +149,23 @@ namespace levin
     //! hashes are ignored Rust-side.
     void record_arrival(std::shared_ptr<const std::vector<crypto::hash>> hashes, const boost::uuids::uuid& from);
 
-    //! §55: this zone's stem-outcome tallies as a JSON array. Two-call
-    //! sizing: returns bytes NEEDED, writes nothing if that exceeds `cap`.
-    //! Reads a published snapshot on the relay handle, so it is safe from any
-    //! thread — same discipline as `stem_in_flight` below. Transit for a
-    //! Rust->Rust readout; see the .cpp note.
-    std::size_t stem_snapshot_json(std::uint8_t* buf, std::size_t cap) const;
+    //! §55: one published stem-outcome row (peer + raw counts). Layout
+    //! matches the Rust FFI row; kept as a C++ type here so this header does
+    //! not pull in the whole shekyl_ffi surface.
+    struct stem_tally_row
+    {
+      std::uint8_t peer[16];
+      std::uint64_t propagated;
+      std::uint64_t silent;
+      std::uint64_t distinct_sources;
+    };
+
+    //! §55: this zone's published stem-outcome rows. Two-call sizing on row
+    //! count; the write-call return is authoritative when it fits. Reads a
+    //! published snapshot, so it is safe from any thread — same discipline
+    //! as `stem_in_flight` below. Transit for a Rust->Rust readout; see the
+    //! .cpp note.
+    std::vector<stem_tally_row> stem_snapshot() const;
 
     //! §46: stem observations pending resolution. Reads a published atomic on
     //! the relay handle (same discipline as `live_stems` / get_status), so it

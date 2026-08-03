@@ -50,13 +50,12 @@
 //! is **single writer**: only [`RelayZoneHandle::publish`] writes it, and only
 //! the mutating exports call that.
 
-use std::fmt::Write as _;
 use std::os::raw::c_void;
 use std::slice;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use shekyl_relay::{Driver, Effect, FluffReach, RelayPlan, TxBlob, TxId, Zone};
+use shekyl_relay::{Driver, Effect, FluffReach, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
 use shekyl_relay_privacy::stem_map::ConnectionId;
@@ -191,22 +190,20 @@ pub struct RelayZoneHandle {
     /// Pending stem observations — wiring witnesses and future consumers read
     /// this off-strand; the zone's `HashMap` is only touched on the strand.
     stem_in_flight: AtomicUsize,
-    /// The §55 telemetry readout, pre-serialised. Same §18.5 discipline as the
-    /// two atomics above, in the shape a variable-length payload allows: a
-    /// `Mutex` snapshot rather than a direct borrow of the tallies map, which
-    /// the strand mutates.
+    /// The §55 telemetry readout as a published light snapshot.
     ///
-    /// Serialised on the strand rather than by the reader so the zone is never
-    /// borrowed off-strand at all. The cost is bounded and small — one JSON
-    /// array of at most one entry per outbound peer, rebuilt only when
-    /// [`Self::publish`] runs — and it buys the reader a plain memcpy with no
-    /// access to zone state.
-    stem_tallies_json: Mutex<String>,
+    /// Same §18.5 discipline as the atomics above, for a variable-length
+    /// payload: the strand publishes an [`Arc`] of [`StemTallySnapshot`] rows
+    /// (no zone borrow off-strand). JSON is **not** built here — that is a
+    /// rare RPC concern and would tax every handshake/poll/`publish` for a
+    /// path that is almost never read. Off-strand readers clone the `Arc`
+    /// (cheap) and copy fixed-size rows; the C++ merge edge emits JSON once.
+    stem_tallies: Mutex<Arc<Vec<(ConnectionId, StemTallySnapshot)>>>,
 }
 
 impl RelayZoneHandle {
     /// Republish derived facts for off-strand readers. The **only** writer of
-    /// `live_stems` and `stem_in_flight`.
+    /// `live_stems`, `stem_in_flight`, and `stem_tallies`.
     ///
     /// Call from every export that can change either fact: stem-map rebuilds,
     /// handshake/close, plan-with-refresh, poll/force (expire), and the stem
@@ -219,29 +216,33 @@ impl RelayZoneHandle {
             self.driver.zone().stem_observations_in_flight(),
             Ordering::Release,
         );
-        let mut out = String::from("[");
-        for (i, (peer, t)) in self.driver.zone().stem_snapshot().iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            let hex: String = peer.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
-            write!(
-                out,
-                "{{\"peer\":\"{hex}\",\"propagated\":{},\"silent\":{},\"distinct_sources\":{}}}",
-                t.propagated,
-                t.silent,
-                t.distinct_sources()
-            )
-            .expect("`fmt::Write` for `String` is infallible");
-        }
-        out.push(']');
+        let snap = Arc::new(self.driver.zone().stem_snapshot());
         // Poisoning cannot happen: the only writer is this method and the only
-        // reader is a memcpy, neither of which panics while holding the lock.
-        if let Ok(mut slot) = self.stem_tallies_json.lock() {
-            *slot = out;
+        // reader is an Arc clone + row copy, neither of which panics while
+        // holding the lock.
+        if let Ok(mut slot) = self.stem_tallies.lock() {
+            *slot = snap;
         }
     }
 }
+
+/// Fixed-layout stem-tally row for the §55 transit path.
+///
+/// Native endian, 40 bytes. Published as rows so multi-zone merge can sort and
+/// emit JSON once at the edge rather than splicing hand-rolled arrays. Layout
+/// must match `ShekylStemTallyRow` in `shekyl_ffi.h`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ShekylStemTallyRow {
+    pub peer: [u8; 16],
+    pub propagated: u64,
+    pub silent: u64,
+    pub distinct_sources: u64,
+}
+
+const STEM_TALLY_ROW_SIZE: usize = 40;
+
+const _: () = assert!(std::mem::size_of::<ShekylStemTallyRow>() == STEM_TALLY_ROW_SIZE);
 
 /// Hand each effect to the matching callback. Dispatch happens here, in Rust,
 /// so no variant tag ever crosses the boundary — the reason the C++ side has no
@@ -398,7 +399,7 @@ pub extern "C" fn shekyl_relay_zone_new(
         rng,
         live_stems: AtomicUsize::new(0),
         stem_in_flight: AtomicUsize::new(0),
-        stem_tallies_json: Mutex::new(String::from("[]")),
+        stem_tallies: Mutex::new(Arc::new(Vec::new())),
     };
     handle.publish();
     Box::into_raw(Box::new(handle))
@@ -597,49 +598,57 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_arrival(
     h.publish();
 }
 
-/// Serialise this zone's stem-outcome tallies as a JSON array into `buf`
-/// (§55). Returns the number of bytes the payload needs — **which may exceed
-/// `cap`**, in which case nothing was written and the caller should retry
-/// with a larger buffer.
+/// Copy this zone's published stem-outcome rows into `buf` (§55).
 ///
-/// **This is transit through a layer scheduled for deletion, and is labelled
-/// so nobody reads it as intended structure.** The data is Rust's (the relay
-/// zone owns the tallies) and the consumer is Rust's (`shekyl-daemon-rpc`,
-/// axum) — the round trip out to C++ and back in exists *only* because C++
-/// `net_node` owns the zone handles' lifetime. **When p2p migrates, this
-/// export and its C++ passthrough both disappear and the RPC reads the zone
-/// directly.** Do not build structure on the round trip.
+/// Returns the number of rows the snapshot holds — **which may exceed
+/// `cap`**, in which case nothing is written and the caller retries with a
+/// larger buffer (or uses the returned count after a successful write; never
+/// require the second call's count to equal the first probe).
 ///
-/// JSON rather than a struct array: the payload crosses two FFI boundaries to
-/// reach a JSON endpoint, so a typed struct would be marshalled twice and
-/// pin a layout in a header for a transitional path. Bytes in, bytes out.
+/// **Transit, not structure.** The data is Rust's and the consumer is Rust's
+/// (`shekyl-daemon-rpc`); the hop through C++ exists only because `net_node`
+/// owns zone-handle lifetime. Rows (not JSON) so multi-zone merge can sort
+/// and serialise once at the edge. Disappears with the p2p migration.
 ///
-/// Counts are raw — see [`shekyl_relay::StemWatch::snapshot`]; a readout that
-/// pre-computed a rate would decide the accumulator's memory policy for the
-/// tuner it exists to inform.
+/// Reads a published [`Arc`] snapshot, never the zone map (§18.5).
 ///
 /// # Safety
-/// `handle` must be null (writes nothing, returns 0) or a live zone from
-/// [`shekyl_relay_zone_new`]. `buf` must be writable for `cap` bytes when
-/// `cap > 0`.
+/// `handle` must be null (returns 0) or a live zone from
+/// [`shekyl_relay_zone_new`]. When `cap > 0`, `buf` must be writable for
+/// `cap` [`ShekylStemTallyRow`]s.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_relay_zone_stem_snapshot_json(
+pub unsafe extern "C" fn shekyl_relay_zone_stem_snapshot(
     handle: *const RelayZoneHandle,
-    buf: *mut u8,
+    buf: *mut ShekylStemTallyRow,
     cap: usize,
 ) -> usize {
-    let Some(h) = handle.as_ref() else { return 0 };
-    // Reads the published snapshot, never the zone: §18.5's rule is that
-    // anything reachable off-strand is a published fact, and the tallies map
-    // is strand-owned. `publish` rebuilds this string; here it is a memcpy.
-    let Ok(slot) = h.stem_tallies_json.lock() else {
+    let Some(h) = handle.as_ref() else {
         return 0;
     };
-    let bytes = slot.as_bytes();
-    if !buf.is_null() && bytes.len() <= cap {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+    // Clone the Arc under the lock, then drop the guard before writing so a
+    // slow reader cannot stall the strand's next `publish`.
+    let snap = {
+        let Ok(slot) = h.stem_tallies.lock() else {
+            return 0;
+        };
+        Arc::clone(&*slot)
+    };
+    let n = snap.len();
+    if !buf.is_null() && n <= cap {
+        for (i, (peer, t)) in snap.iter().enumerate() {
+            // SAFETY: `n <= cap` and `buf` is writable for `cap` rows.
+            std::ptr::write(
+                buf.add(i),
+                ShekylStemTallyRow {
+                    peer: *peer.as_bytes(),
+                    propagated: t.propagated,
+                    silent: t.silent,
+                    distinct_sources: t.distinct_sources,
+                },
+            );
+        }
     }
-    bytes.len()
+    n
 }
 
 /// Stem observations still pending resolution.

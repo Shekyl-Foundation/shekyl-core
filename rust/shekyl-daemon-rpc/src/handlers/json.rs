@@ -190,26 +190,30 @@ json_handler!(pop_blocks, "/pop_blocks");
 
 /// `/get_stem_tallies` — per-successor relay outcome counts (§55).
 ///
-/// **RESTRICTED-ONLY, and the reason belongs here rather than in the route
-/// table.** This endpoint *is* the anonymity graph: which peers this node
-/// stems to, and how each has behaved. Sharma Appendix B spends 50–100 probes
-/// per node to reconstruct exactly that, so serving it unauthenticated hands
-/// over — for free and with better fidelity — what an attacker otherwise pays
-/// for. **It is not "just counters": the peer set is the sensitive part, and
-/// the counts merely make it legible.** If anyone later proposes moving this
-/// to the unrestricted set, that is the argument to answer first.
+/// **Admin-only (unrestricted listener), and the reason belongs here rather
+/// than in the route table.** In daemon RPC terms: `restricted` is the
+/// *public* limited listener; this route is registered only when
+/// `!restricted`. This endpoint *is* the anonymity graph: which peers this
+/// node stems to, and how each has behaved. Sharma Appendix B spends 50–100
+/// probes per node to reconstruct exactly that, so serving it on the public
+/// listener hands over — for free and with better fidelity — what an attacker
+/// otherwise pays for. **It is not "just counters": the peer set is the
+/// sensitive part, and the counts merely make it legible.** If anyone later
+/// proposes moving this onto the restricted (public) set, that is the
+/// argument to answer first.
 ///
 /// Raw counts, matching the relay layer's own refusal to pre-compute a rate:
 /// the consumer of this endpoint is a human tuning `n_min`, `cut` and
 /// `cooldown`, and a rate would pick the accumulator's memory policy for
 /// them.
 ///
-/// # The gate is positional and NOT asserted by any test
+/// # The gate is positional; named in `UNRESTRICTED_ONLY_JSON_PATHS`
 ///
-/// Registration inside `build_router`'s `if !restricted` block is the whole
-/// enforcement. **Stated here rather than filed away, because this endpoint
-/// is the one thing in its PR that touches live surface — an owed test that
-/// goes quiet is how the gate ends up unguarded.**
+/// Registration inside `build_router`'s `if !restricted` block is the
+/// enforcement. The path is also listed in
+/// [`crate::server::UNRESTRICTED_ONLY_JSON_PATHS`] so the sensitive set is
+/// grepable (same dual-maintenance trade as `BINARY_URI_PATHS`). That list
+/// is **not** the binding proof — the owed dual-arm integration test is.
 ///
 /// **The test must have both arms, and each is the other's control:**
 ///
@@ -221,13 +225,13 @@ json_handler!(pop_blocks, "/pop_blocks");
 /// Only the pair is self-witnessing. A single negative arm is §50.3's failure
 /// mode: unchanged is the default state of everything that did not happen.
 ///
-/// **Why not a unit test.** `AppState` needs a `CoreRpc`, whose `Drop`
-/// references `core_rpc_ffi_destroy`, and Cargo never links the C++ side —
-/// those symbols resolve when CMake links the Rust staticlib into `shekyld`.
-/// Stubbing them means ~18 `#[no_mangle]` definitions across two FFI families,
-/// each an **ABI assertion the compiler cannot check**: a wrong signature is
-/// silent UB. That trades a known gap for an unknown one, which is a bad
-/// trade at any price.
+/// **Why not a unit test of the live handlers.** `AppState` needs a
+/// `CoreRpc`, whose `Drop` references `core_rpc_ffi_destroy`, and Cargo never
+/// links the C++ side — those symbols resolve when CMake links the Rust
+/// staticlib into `shekyld`. Stubbing them means ~18 `#[no_mangle]`
+/// definitions across two FFI families, each an **ABI assertion the compiler
+/// cannot check**: a wrong signature is silent UB. That trades a known gap
+/// for an unknown one, which is a bad trade at any price.
 ///
 /// **The path that works.** `shekyl_daemon_rpc_start` takes `restricted`
 /// directly, so a C++ test can start the listener twice on ephemeral ports

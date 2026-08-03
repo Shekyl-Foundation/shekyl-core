@@ -3134,18 +3134,31 @@ void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
 void shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
     const std::uint8_t* hashes, std::size_t n, const std::uint8_t* from);
 
-//! Serialise this zone's stem-outcome tallies as a JSON array into `buf`.
-//! Returns the bytes NEEDED, which may exceed `cap` -- in that case nothing
-//! is written and the caller retries with a larger buffer. Reads a published
-//! snapshot, not the tallies map: safe from any thread, same discipline as
-//! stem_in_flight.
+//! Fixed-layout stem-tally row for the §55 transit path (native endian, 40
+//! bytes). Must match `ShekylStemTallyRow` in the Rust FFI.
+struct ShekylStemTallyRow
+{
+  std::uint8_t peer[16];
+  std::uint64_t propagated;
+  std::uint64_t silent;
+  std::uint64_t distinct_sources;
+};
+static_assert(sizeof(ShekylStemTallyRow) == 40, "stem tally row layout");
+
+//! Copy this zone's published stem-outcome rows into `buf`. Returns the row
+//! count NEEDED, which may exceed `cap_rows` -- in that case nothing is
+//! written and the caller retries. The second call's return is authoritative
+//! when a write succeeds; do not require it to equal the first probe (publish
+//! can shrink or grow between calls). Reads a published snapshot, not the
+//! tallies map: safe from any thread, same discipline as stem_in_flight.
 //!
-//! TRANSIT, NOT STRUCTURE: the data is Rust's and the consumer is Rust's
+//! TRANSIT, NOT STRUCTURE: rows (not JSON) so multi-zone merge can sort and
+//! serialise once. The data is Rust's and the consumer is Rust's
 //! (shekyl-daemon-rpc); this round trip exists only because C++ net_node owns
 //! the zone handles' lifetime. When p2p migrates, this and its C++
 //! passthrough both disappear. Do not build on it.
-std::size_t shekyl_relay_zone_stem_snapshot_json(const RelayZoneHandle* handle,
-    std::uint8_t* buf, std::size_t cap);
+std::size_t shekyl_relay_zone_stem_snapshot(const RelayZoneHandle* handle,
+    ShekylStemTallyRow* buf, std::size_t cap_rows);
 
 //! Stem observations still pending resolution (0 for null handle). Reads a
 //! published atomic — safe from any thread, same discipline as live_stems.

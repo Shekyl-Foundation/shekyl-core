@@ -56,9 +56,11 @@ namespace cryptonote
   {
   public:
 
-    //! §55: relay stem-outcome tallies as a JSON array. RESTRICTED-ONLY at
-    //! the route -- this endpoint is the anonymity graph, which Sharma
-    //! Appendix B spends 50-100 probes per node to reconstruct.
+    //! §55: relay stem-outcome tallies as a JSON array. Admin-only at the
+    //! Rust route (`if !restricted` — unrestricted listener): this endpoint
+    //! is the anonymity graph, which Sharma Appendix B spends 50-100 probes
+    //! per node to reconstruct. Must not be registered on the restricted
+    //! (public) listener.
     std::string stem_tallies_json() const;
 
     static const command_line::arg_descriptor<std::string, false, true, 2> arg_rpc_bind_port;

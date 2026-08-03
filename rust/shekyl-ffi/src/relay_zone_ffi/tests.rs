@@ -879,48 +879,50 @@ fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
     }
 }
 
-/// The §55 telemetry readout crosses the boundary intact, and its
+/// The §55 telemetry readout crosses the boundary as fixed rows, and its
 /// two-call sizing contract holds: a short buffer writes nothing and reports
-/// the needed length.
+/// the needed row count.
 #[test]
-fn stem_snapshot_json_reports_its_size_and_writes_only_when_it_fits() {
+fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
     unsafe {
         let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(9).as_ptr(), true);
 
-        // Empty zone: a valid empty array, not a null or an error.
-        let mut buf = [0u8; 512];
-        let n = shekyl_relay_zone_stem_snapshot_json(h, buf.as_mut_ptr(), buf.len());
-        assert_eq!(&buf[..n], b"[]", "no observations is an empty array");
+        // Empty zone: zero rows, not an error.
+        let mut rows = [std::mem::zeroed::<ShekylStemTallyRow>(); 4];
+        let n = shekyl_relay_zone_stem_snapshot(h, rows.as_mut_ptr(), rows.len());
+        assert_eq!(n, 0, "no observations is an empty snapshot");
 
         let mut hashes = [0u8; 32];
         hashes[0] = 0xA1;
         shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 1, id(9).as_ptr(), std::ptr::null(), 0);
         shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(3).as_ptr());
 
-        let need = shekyl_relay_zone_stem_snapshot_json(h, std::ptr::null_mut(), 0);
-        assert!(need > 2, "a resolved observation must produce a payload");
+        let need = shekyl_relay_zone_stem_snapshot(h, std::ptr::null_mut(), 0);
+        assert_eq!(need, 1, "a resolved observation must produce one row");
 
-        // Short buffer: nothing written, size still reported. Sentinel proves
-        // "wrote nothing" rather than "wrote something that happens to match".
-        let mut small = [0xEEu8; 8];
-        assert!(need > small.len());
+        // Short buffer: nothing written, count still reported. Sentinel proves
+        // "wrote nothing" rather than a partial fill.
+        let mut small = [ShekylStemTallyRow {
+            peer: [0xEE; 16],
+            propagated: 0xEEEE_EEEE_EEEE_EEEE,
+            silent: 0xEEEE_EEEE_EEEE_EEEE,
+            distinct_sources: 0xEEEE_EEEE_EEEE_EEEE,
+        }];
         assert_eq!(
-            shekyl_relay_zone_stem_snapshot_json(h, small.as_mut_ptr(), small.len()),
+            shekyl_relay_zone_stem_snapshot(h, small.as_mut_ptr(), 0),
             need
         );
-        assert!(
-            small.iter().all(|b| *b == 0xEE),
-            "an undersized buffer must be left untouched, not partly filled"
-        );
+        assert_eq!(small[0].peer, [0xEE; 16], "cap 0 must not touch the buffer");
 
-        let n = shekyl_relay_zone_stem_snapshot_json(h, buf.as_mut_ptr(), buf.len());
-        let s = std::str::from_utf8(&buf[..n]).expect("utf-8");
-        assert!(s.contains("\"propagated\":1"), "got {s}");
-        assert!(s.contains("\"silent\":0"), "got {s}");
-        assert!(
-            s.contains("09000000000000000000000000000000"),
-            "peer id is hex-encoded: {s}"
+        let n = shekyl_relay_zone_stem_snapshot(h, rows.as_mut_ptr(), rows.len());
+        assert_eq!(n, 1);
+        assert_eq!(rows[0].peer, id(9));
+        assert_eq!(rows[0].propagated, 1);
+        assert_eq!(rows[0].silent, 0);
+        assert_eq!(
+            rows[0].distinct_sources, 1,
+            "local origin (null source) is still one distinct source key"
         );
         shekyl_relay_zone_free(h);
     }
