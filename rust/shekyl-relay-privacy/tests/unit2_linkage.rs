@@ -2,34 +2,42 @@
 //
 // All rights reserved.
 // BSD-3-Clause
-//! Q-11 Unit 2: does the covert cadence's shape change linkability?
+//! Q-11 Unit 2: does the covert cadence's shape change linkability, and does
+//! the answer depend on how strong the observer is?
 #![allow(clippy::cast_precision_loss)]
-use shekyl_relay_privacy::conformance::linkage::{simulate_cadence_linkage, CadenceShape};
+use shekyl_relay_privacy::conformance::linkage::{
+    simulate_cadence_linkage, CadenceShape, MatcherStrength,
+};
 use shekyl_relay_privacy::SplitMix64;
 
 #[test]
 fn unit2_shape_sweep() {
-    println!("\nQ-11 Unit 2 — re-identification across a blackout (matching test)");
-    println!(
-        "{:>14} {:>7} {:>10} {:>9} {:>10}",
-        "shape", "M", "match", "chance", "advantage"
-    );
-    println!("{}", "-".repeat(56));
-    for blackout_s in [0_u64, 30, 300] {
-        println!("  blackout = {blackout_s}s");
-        for (shape, name) in [
-            (CadenceShape::Metronome, "Metronome"),
-            (CadenceShape::BoundedUniform, "Bounded U"),
-            (CadenceShape::Memoryless, "Memoryless"),
-        ] {
-            for m in [4_usize, 16] {
-                let mut rng = SplitMix64::new(0x5732_u64 + m as u64 + blackout_s);
-                let r = simulate_cadence_linkage(shape, m, blackout_s * 1_000, 4_000, &mut rng);
-                println!(
-                    "{name:>14} {m:>7} {:>9.3} {:>9.3} {:>+10.3}",
-                    r.match_rate, r.chance, r.advantage
-                );
+    const M: usize = 20;
+    const TRIALS: usize = 1_500;
+    for matcher in [
+        MatcherStrength::NearestPredicted,
+        MatcherStrength::MarginalizedOverK,
+    ] {
+        println!(
+            "\n=== matcher: {matcher:?}   (M={M}, chance={:.3})",
+            1.0 / M as f64
+        );
+        println!(
+            "{:>10} {:>12} {:>14} {:>12}",
+            "blackout", "bounded", "memoryless", "metronome"
+        );
+        for b in [10_u64, 20, 30, 45, 60, 90, 150] {
+            let mut row = format!("{b:>9}s");
+            for shape in [
+                CadenceShape::BoundedUniform,
+                CadenceShape::Memoryless,
+                CadenceShape::Metronome,
+            ] {
+                let mut rng = SplitMix64::new(0x5732 + b);
+                let r = simulate_cadence_linkage(shape, matcher, M, b * 1_000, TRIALS, &mut rng);
+                row.push_str(&format!(" {:>13.3}", r.match_rate));
             }
+            println!("{row}");
         }
     }
 }

@@ -9603,7 +9603,14 @@ recovers ~1.0. **The metronome's true advantage is ~perfect at every blackout;
 the dip is my matcher's naivety, and reporting it as a result would have been
 the artifact-as-finding error.**
 
-### 56.3 What is decided, and what this instrument does not decide
+### 56.3 ~~What is decided, and what this instrument does not decide~~ — **CORRECTED at §56.4**
+
+> **⚠ The null below does not hold. It was a property of the *matcher*, not of
+> the families.** §56.4 replaces it: with an observer that marginalises over
+> how many emissions the blackout hid, **bounded separates from memoryless**
+> and the answer is memoryless. The text is kept because the failure is the
+> lesson.
+
 
 **Decided: the metronome is disqualified.** Not on a marginal channel — on
 perfect linkability at every observation gap tested.
@@ -9628,3 +9635,78 @@ admits — one that accumulates across many blackouts rather than matching
 across one — could aggregate the bounded family's small per-window advantage.
 That is a different instrument (sequential, not single-shot) and it is the
 named reopening condition for choosing memoryless over bounded.
+
+### 56.4 The matcher was the weak link — corrected, and the answer flips
+
+**2026-08-03, maintainer.** §56.2's matcher predicts `last + mean` and takes
+the nearest emission. **It only ever tests `k = 1`** — it assumes exactly one
+emission was missed. An observer that knows the blackout duration and the
+family (**both public**) marginalises over `k` instead.
+
+**The tell was already in §56.2 and I did not generalise it.** The metronome's
+apparent −0.250 was rejected there *because a knowledgeable observer inverts it
+and recovers ~1.0*. That is this same insight — a knowledgeable observer beats
+the greedy matcher — **applied to one data point and not to the instrument
+that produced it.**
+
+**Re-run with the matcher upgraded, everything else identical** (`M = 20`,
+1 500 trials, chance = 0.050; the weak matcher is retained in-instrument as a
+control):
+
+| blackout | bounded | memoryless | metronome |
+| --- | --- | --- | --- |
+| 10 s | **0.105** | 0.051 | **1.000** |
+| 20 s | 0.091 | 0.051 | 1.000 |
+| 30 s | 0.079 | 0.050 | 1.000 |
+| 45 s | 0.072 | 0.053 | 1.000 |
+| 60 s | 0.067 | 0.051 | 1.000 |
+| 90 s | 0.058 | 0.050 | 1.000 |
+| 150 s | 0.053 | 0.051 | 1.000 |
+
+*Weak matcher, same runs: every cell at chance except metronome at 10 s
+(0.200) and **0.000** thereafter — so it did not merely under-report, it
+inverted the metronome result too.*
+
+**Why, and it is analytic rather than empirical.** Bounded support
+concentrates: elapsed over `k` intervals has mean `12.5k` and sd `1.44√k`, so
+the *relative* spread shrinks as `k` grows, `k` becomes identifiable from `Δ`,
+and residual phase is readable within it. The signal decays only when adjacent
+`k`-components blur, near `k ≈ 17` — the ~90 s washout the table shows.
+**Memorylessness kills it exactly**: the time from blackout-end to the next
+emission is `Exp(µ)` independent of everything prior, so `Δ` carries zero
+information about which stream it was. That is not a measurement outcome, it
+is the defining property — D++ §4.4's lemma, the anchor **(b)** was pinned to.
+
+**Magnitude differs from the maintainer's model** (0.105 vs 0.152 at 10 s,
+~1.4×) while direction, decay shape and washout point all reproduce. The two
+differ in the memoryless arm's discretisation (geometric on a 250 ms grid here)
+and in the bounded arm going through production `next_send`. **Recorded rather
+than reconciled** — the mechanism is what carries the decision, and the
+decision is the same at either magnitude.
+
+### 56.5 What this changes
+
+- **§56.3's null is withdrawn.** "Bounded is adequate, memoryless not
+  measurably better" holds **only for a `k = 1` matcher.**
+- **The answer is memoryless.** Bounded carries a real residual channel — 2.1×
+  chance at a 10 s gap, above chance to ~90 s — and memoryless removes it by
+  construction rather than by margin.
+- **Q11-B reopens, and the constants round *does* inherit a shape
+  constraint.** `MAX_FRAGMENTS ≤ epoch/(min_delay+range)` has its **form**
+  invalidated by unbounded support: there is no `max` to divide by. That is
+  precisely the outcome §22.1's family-surviving restatement was written for,
+  so the restatement is now load-bearing rather than precautionary.
+- **The reopening condition I recorded was second-order and the real one was
+  first-order.** I named *sequential accumulation across many blackouts*; the
+  break is **one blackout and a better matcher**.
+- **The metronome disqualification is untouched and strengthened** — 1.000 at
+  every gap under the strong matcher, confirming §56.2's reading of the
+  artifact.
+
+**The generalised lesson, which is the vacuity discipline one level up:** the
+instrument graded production code correctly and modelled an adversary weaker
+than the threat model names. **A green result then measures the observer, not
+the mechanism** — and unlike a vacuous fixture, everything about it looks
+right: real code, real draws, real trials. `MatcherStrength` stays in the
+instrument as a permanent second arm so the next reader can see the result
+move with observer strength rather than trusting one number.

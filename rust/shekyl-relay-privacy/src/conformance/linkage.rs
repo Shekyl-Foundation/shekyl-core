@@ -69,6 +69,92 @@ pub enum CadenceShape {
     Memoryless,
 }
 
+/// How strong an observer the matching runs against.
+///
+/// **This is an axis of the instrument, not a detail**, and keeping the weak
+/// arm is deliberate: the first Unit 2 run reported "bounded and memoryless
+/// are indistinguishable" when that was a property of the *matcher*, not of
+/// the families. A green result from a weak observer measures the observer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatcherStrength {
+    /// Predicts `last + mean` and takes the nearest post-blackout emission.
+    /// Only ever tests `k = 1` — it assumes exactly one emission was missed.
+    /// **Retained as a control**, because it is what produced the original
+    /// null and its failure is the finding.
+    NearestPredicted,
+    /// Marginalises over `k`, the number of emissions the blackout hid.
+    /// Both the blackout duration and the family are public, so this is the
+    /// observer the scope rule (§28) actually admits — the same reasoning that
+    /// rejected the metronome's apparent −0.250 as an invertible artifact,
+    /// applied to the matcher rather than to one data point.
+    MarginalizedOverK,
+}
+
+/// Log-density of the sum of `k` inter-emission intervals landing on `delta`.
+///
+/// The observer knows the family; this is its likelihood for "`k` emissions
+/// were missed". Bounded support concentrates — mean `k·µ`, sd `σ√k`, so the
+/// *relative* spread shrinks as `k` grows and `k` becomes identifiable, which
+/// is what lets residual phase be read within it. Under an exponential
+/// `σ = µ`, the components never separate, and by memorylessness the residual
+/// from blackout-end is independent of everything prior — the D++ §4.4 lemma
+/// (b) was pinned to, showing up as a flat likelihood.
+fn log_density_k(shape: CadenceShape, delta_ms: f64, k: u32, mean_ms: f64) -> f64 {
+    let kf = f64::from(k);
+    match shape {
+        CadenceShape::Metronome => {
+            // Point mass: score by proximity to k·µ. No spread to marginalise.
+            -(delta_ms - kf * mean_ms).abs()
+        }
+        CadenceShape::BoundedUniform => {
+            let lo = f64::from(crate::params::inherited::NOISE_MIN_DELAY_SECS) * 1_000.0;
+            let hi = lo + f64::from(crate::params::inherited::NOISE_DELAY_JITTER_SECS) * 1_000.0;
+            // Outside the k-fold support the component contributes nothing —
+            // that hard cutoff is most of the discriminating power at small k.
+            if delta_ms < kf * lo || delta_ms > kf * hi {
+                return f64::NEG_INFINITY;
+            }
+            let sd = (hi - lo) / 12.0_f64.sqrt() * kf.sqrt();
+            let z = (delta_ms - kf * mean_ms) / sd;
+            -0.5 * z * z - sd.ln()
+        }
+        CadenceShape::Memoryless => {
+            // Erlang(k, 1/µ), exact.
+            if delta_ms <= 0.0 {
+                return f64::NEG_INFINITY;
+            }
+            let lambda = 1.0 / mean_ms;
+            let log_fact: f64 = (1..k).map(|i| f64::from(i).ln()).sum();
+            kf * lambda.ln() + (kf - 1.0) * delta_ms.ln() - lambda * delta_ms - log_fact
+        }
+    }
+}
+
+/// Marginal log-likelihood of `delta`, summing over how many emissions the
+/// blackout could have hidden.
+fn log_likelihood(shape: CadenceShape, delta_ms: f64, mean_ms: f64, k_max: u32) -> f64 {
+    let mut best = f64::NEG_INFINITY;
+    let mut acc = 0.0_f64;
+    for k in 1..=k_max {
+        let l = log_density_k(shape, delta_ms, k, mean_ms);
+        if l == f64::NEG_INFINITY {
+            continue;
+        }
+        // log-sum-exp, streaming.
+        if l > best {
+            acc = acc * (best - l).exp() + 1.0;
+            best = l;
+        } else {
+            acc += (l - best).exp();
+        }
+    }
+    if best == f64::NEG_INFINITY {
+        f64::NEG_INFINITY
+    } else {
+        best + acc.ln()
+    }
+}
+
 /// Result of one matching trial set.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinkageSummary {
@@ -119,6 +205,7 @@ fn interval<R: RelayRng + ?Sized>(shape: CadenceShape, rng: &mut R, mean_ms: u64
 #[must_use]
 pub fn simulate_cadence_linkage<R: RelayRng + ?Sized>(
     shape: CadenceShape,
+    matcher: MatcherStrength,
     streams: usize,
     blackout_ms: Millis,
     trials: usize,
@@ -128,6 +215,12 @@ pub fn simulate_cadence_linkage<R: RelayRng + ?Sized>(
     assert!(trials > 0, "trials must be non-zero");
     let mean_ms = u64::from(crate::params::inherited::NOISE_MIN_DELAY_SECS) * 1_000
         + u64::from(crate::params::inherited::NOISE_DELAY_JITTER_SECS) * 1_000 / 2;
+
+    // How many emissions the blackout could plausibly have hidden. Generous:
+    // an observer that truncated too early would be handicapped by the
+    // instrument rather than by the law.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let k_max = ((blackout_ms / mean_ms) as u32 + 8).max(4);
 
     let mut correct = 0_usize;
     let mut total = 0_usize;
@@ -156,30 +249,40 @@ pub fn simulate_cadence_linkage<R: RelayRng + ?Sized>(
             first_after.push(t);
         }
 
-        // The observer predicts each stream's next emission from its last one
-        // plus the law's mean, then matches greedily to the nearest unclaimed
-        // post-blackout emission. Under a phase-bearing law the prediction
-        // tracks the stream; under a memoryless one it cannot.
-        let mut taken = vec![false; streams];
-        for (i, &l) in last.iter().enumerate() {
-            let predicted = l + mean_ms;
-            let mut best: Option<(usize, u64)> = None;
-            for (j, &f) in first_after.iter().enumerate() {
-                if taken[j] {
-                    continue;
-                }
-                let d = f.abs_diff(predicted);
-                if best.is_none_or(|(_, bd)| d < bd) {
-                    best = Some((j, d));
+        // Score every (pre, post) pair, then assign globally best-first. The
+        // per-`i` greedy the first version used is itself an observer
+        // weakness — it commits stream 0's match before seeing stream 1's
+        // better claim on the same emission.
+        #[allow(clippy::cast_precision_loss)]
+        let score = |i: usize, j: usize| -> f64 {
+            let delta = first_after[j].saturating_sub(last[i]) as f64;
+            match matcher {
+                MatcherStrength::NearestPredicted => -(delta - mean_ms as f64).abs(),
+                MatcherStrength::MarginalizedOverK => {
+                    log_likelihood(shape, delta, mean_ms as f64, k_max)
                 }
             }
-            if let Some((j, _)) = best {
-                taken[j] = true;
-                if j == i {
-                    correct += 1;
-                }
-                total += 1;
+        };
+        let mut pairs: Vec<(usize, usize)> = (0..streams)
+            .flat_map(|i| (0..streams).map(move |j| (i, j)))
+            .collect();
+        pairs.sort_by(|&(ai, aj), &(bi, bj)| {
+            score(bi, bj)
+                .partial_cmp(&score(ai, aj))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut pre_taken = vec![false; streams];
+        let mut post_taken = vec![false; streams];
+        for (i, j) in pairs {
+            if pre_taken[i] || post_taken[j] {
+                continue;
             }
+            pre_taken[i] = true;
+            post_taken[j] = true;
+            if i == j {
+                correct += 1;
+            }
+            total += 1;
         }
     }
 
