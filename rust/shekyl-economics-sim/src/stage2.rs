@@ -1380,6 +1380,15 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
         rewards.max_per_epoch_skl,
     )?;
 
+    // (m, n) feasibility — policy defaults live in the arm
+    // (`default_sources`, `FeasibilityTargets::operative_defaults`).
+    crate::mn_feasibility::mn_feasibility_report(
+        out,
+        &crate::mn_feasibility::default_sources(),
+        crate::mn_feasibility::BOND_LIFE_EPOCHS,
+        &crate::mn_feasibility::FeasibilityTargets::operative_defaults(),
+    )?;
+
     let report = Stage2Report {
         burden_trajectories: trajectories,
         a1_clearance: a1,
