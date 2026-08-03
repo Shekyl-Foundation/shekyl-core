@@ -9548,3 +9548,83 @@ fix is an integration test that links the FFI; recorded as owed.
   safe to delete when a constant is a pending derivation's other half.** The
   zero-consumer fact is now recorded at the site, since Q-12's derivation
   needs it.
+
+## 56. Q-11 Unit 2 — the shape, measured; and the metronome is disqualified
+
+**2026-08-03. The charter this session opened on, reached last.** §20.9 set
+the order *adversary → shape → constants*; §23–§28 fixed the adversary and its
+scope rule, §31 fixed the goal as non-enumerability, and this is the shape.
+
+### 56.1 What the instrument measures, and why it is a matching test
+
+New: `conformance::linkage::simulate_cadence_linkage`. `M` covert streams run
+to steady state at independent phases, a blackout of `D` interrupts
+observation, and the observer — given each stream's last pre-blackout emission
+*and the law itself* — tries to say **which post-blackout stream is which**.
+The number that matters is the **advantage over `1/M`**.
+
+**Matching, not prediction, and the distinction decides the question.** "Can
+the observer predict the next emission?" is *yes* for any non-degenerate law
+and says nothing about enumeration. "Can it re-identify the stream?" is the
+assembly step §31 names.
+
+The bounded arm draws through **production** `NoiseCadence::next_send` rather
+than a re-derived copy, so the instrument grades the daemon's law and not its
+own restatement of it.
+
+### 56.2 The result, and it reverses the expected answer
+
+Advantage over chance, 4 000 trials:
+
+| shape | `M`=4, `D`=0 | `M`=16, `D`=0 | `M`=4, `D`=30 s | `M`=4, `D`=300 s |
+| --- | --- | --- | --- | --- |
+| **Metronome** | **+0.750** | **+0.938** | −0.250 † | **+0.750** |
+| Bounded `U` (shipped) | +0.262 | +0.038 | +0.003 | −0.000 |
+| Memoryless | +0.003 | +0.001 | +0.002 | −0.002 |
+
+**The metronome matches at 1.000 — perfect re-identification.** A deterministic
+emitter's phase is a *permanent per-stream identifier*: predict `last + mean`
+and you land exactly on its next emission, forever.
+
+> **§25.3's reading was right about what it claimed and wrong about what it
+> implied.** Loopix licenses no randomness at the sender's link *for
+> count-denial*, and payload-independence does that work — a metronome denies
+> recall completely. But **payload-independence and unlinkability are
+> different properties, and the metronome has the first while maximally
+> lacking the second.** The case for randomising the cadence does not rest on
+> (b)'s subtle phase-tag after all; it rests on the blunt fact that a
+> deterministic carrier is a perfect tracker.
+
+**† The −0.250 at `D` = 30 s is anti-correlation, not safety.** 30 s is exactly
+two 15 s periods, so a `last + mean` prediction is one period early and the
+greedy matcher is *consistently* wrong — which is as much information as being
+consistently right. An observer that knows the blackout length inverts it and
+recovers ~1.0. **The metronome's true advantage is ~perfect at every blackout;
+the dip is my matcher's naivety, and reporting it as a result would have been
+the artifact-as-finding error.**
+
+### 56.3 What is decided, and what this instrument does not decide
+
+**Decided: the metronome is disqualified.** Not on a marginal channel — on
+perfect linkability at every observation gap tested.
+
+**Not decided: bounded versus memoryless.** They separate only at `D` = 0,
+which is the degenerate case of *uninterrupted* observation, where the
+observer never lost the streams and "matching" is trivial for anything with a
+predictable component. **At every non-zero blackout the two are
+indistinguishable, both at chance.** The shipped `10 s + U[0, 5 s]` is
+therefore *adequate* at this observer's capability, and memoryless is not
+measurably better.
+
+**So the honest Unit 2 output is a disqualification plus a null**, and the
+null is the more useful half: it says the constants round (§20.9's third step)
+inherits no shape constraint from linkability, and Q11-B's `MAX_FRAGMENTS ≤
+epoch/(min_delay+range)` assert **survives in its current form**, because the
+bounded family survives. That was the open question blocking C+noise, and it
+closes in the direction that keeps the existing invariant.
+
+**What would change the answer**: a stronger observer than the scope rule
+admits — one that accumulates across many blackouts rather than matching
+across one — could aggregate the bounded family's small per-window advantage.
+That is a different instrument (sequential, not single-shot) and it is the
+named reopening condition for choosing memoryless over bounded.
