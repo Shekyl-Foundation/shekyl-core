@@ -25,6 +25,7 @@ This document exists so a maintainer can close or definitively re-scope
 | **SPIKE-F-4** | A production persona onion key belongs in `archival_p.rs`, not in a second cSHAKE256 path from the master seed | MEDIUM | **CONFIRMED (source)** |
 | **SPIKE-F-5** | `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` claimed SP-T0a delivered `ADD_ONION`/`DEL_ONION`. It did not | LOW | **CONFIRMED (source)** — corrected in this branch |
 | **SPIKE-F-6** | The persona descriptor is a **liveness oracle** with ~3 h granularity, and it is an irreducible floor of running an onion service | MEDIUM | **CONFIRMED (measured)** |
+| **SPIKE-F-8** | Two personas' descriptors land on **disjoint HSDir sets** (16 each, zero overlap) — the "shared HSDir" axis SP-T2 flagged does not exist | MEDIUM (as a *negative*) | **REFUTED (measured)** |
 | **SPIKE-F-7** | D4's payload is a **cost, not a blocker**: ~5 h of one-time regtest mining plus a batched extraction | INFO | **REFUTED as a halt** |
 
 Two charter halt conditions were pre-registered as likely and **neither fired**:
@@ -278,11 +279,16 @@ adding a health endpoint — which is why `serve.rs` has exactly one route).
 
 ## 8. Remaining §5.2 axes — honest verdicts
 
+SP-T2's flag (`ARCHIVAL_BOND_2D2_SP_T2_FETCH.md`:134) named three serving-side
+axes to enumerate: descriptor-publication timing, the **shared HSDir set**, and
+introduction-point reuse. All three are measured below.
+
 | Axis | Verdict | Evidence |
 |---|---|---|
 | Shared introduction points | **REFUTED** | Disjoint 6+6 sets, measured (§3) |
 | Shared entry guards | **CONFIRMED** | Identical 2-guard set, measured (§2) |
-| Correlated descriptor publication timing | **CONFIRMED (weak)** | Two personas added back to back publish within seconds of each other; an HSDir seeing two first-publications in a tight window has a correlation signal. **But** the cost of exploiting it is high (an adversary must run or observe the specific HSDirs both descriptors land on) and the signal is indistinguishable from two unrelated services starting at once on a busy directory. Priced as a real-but-weak channel, not a break. |
+| Shared HSDir set | **REFUTED** | Each persona uploaded its descriptor to **16 HSDirs; the two sets overlap in zero relays.** A v3 descriptor's directory position derives from the blinded key, which differs per service, so this is theory confirmed by measurement rather than luck. **No single HSDir sees both personas' descriptors.** |
+| Correlated descriptor publication timing | **CONFIRMED (weak), and weaker than expected** | Two personas added **0.043 s** apart began publishing **0.98 s** apart — a tight, genuinely correlated window. But the HSDir result above blunts it: exploiting the correlation requires observing **≥ 2 of the 32 distinct directories** the two descriptors land on *and* correlating across them, because no directory sees both. Combined with the fact that two unrelated services starting at once on a busy directory look identical, this is a real-but-weak channel, not a break. `T = ⟨`multi-HSDir operator; sees upload times at the directories it runs; cost = running a meaningful fraction of the HSDir ring; priced in the C2/C3 bucket`⟩`. |
 | `MaxStreams` exhaustion on A observable at B | **UNMEASURABLE-HERE** | Both services share one tor process, so shared-resource coupling is *structurally* present; but distinguishing "B degraded because A was flooded" from ambient Tor variance needs a controlled load generator and a quiet baseline, which this spike does not have. **Not claimed either way.** A design that assumes independence between co-hosted personas under load is unsupported by anything measured here. |
 | Error responses fingerprint the shared backend | **REFUTED (by construction)** | `serve.rs` renders one identical 404 for every non-matching request — wrong path, wrong method, malformed — asserted by `every_non_route_gets_one_identical_error`. Two personas' success headers are asserted byte-identical by `two_personas_are_header_identical`, and the complete header set is pinned to `content-type` + `content-length` (no `server`, no `date`, no `etag`, no `accept-ranges`). |
 
