@@ -972,10 +972,37 @@ That matters because of the asymmetry: **a ~100-byte request is answered with
 ~3.33 MB — roughly 33 000× egress amplification** — and the requester pays only
 its own circuit.
 
-§6a is not wrong; it was scoped for a **bonded** persona serving **drawn miners**,
-a population bounded by the challenge draw. It does not cover a **publicly
-advertised, uncompensated** service, whose requester population is bounded by
-nothing.
+**This is a general defect, not a Foundation carve-out.** Unbounded
+spawn-per-connection is wrong for **every** `P`: any persona can be handed more
+concurrent readers than it can serve, and §6a's per-connection bounds do not
+notice. The fix therefore replaces the accept path **in one place**, for all
+personas, rather than adding a special mode.
+
+What *is* Foundation-specific is the **load profile, not the mechanism** — and
+that distinction is the whole point:
+
+| | Bonded `P` | Foundation complete-tree `P` |
+|---|---|---|
+| Shard set | bonded subset; cold shards exist | **complete tree — no shard is cold** |
+| Requester friction | economic | **none — uncompensated** |
+| Reader count | bounded by the challenge draw | **not bounded by any schedule** |
+
+**One mechanism, one defense surface, sized once — against the worst profile and
+applied to all.** The Foundation deployment is the *measurement target* for where
+the PoW rate/burst floor and the in-flight cap land; it is not a separate code
+path, and it must not become one.
+
+### One serving path, and non-anonymous serving stays unrepresentable
+
+All shard retrieval — every persona's, the Foundation's included — occurs over a
+**v3 rendezvous**. "Known" describes a persona's **published `.onion` address**,
+never a clearnet endpoint. `ADD_ONION`'s `NonAnonymous` flag is therefore **absent
+from [`OnionFlags`]**, not merely unset: there is no two-type split and no
+single-hop mode to configure, because the type cannot express one. That is
+simpler than gating a capability, and it is the same posture as `Detach`.
+
+*(`docs/V3_STAKER_ARCHIVAL.md` previously described a clearnet fetch leg for the
+Foundation seeds; corrected 2026-08-03 — see that file's correction note.)*
 
 ### Lever 1 — onion-service PoW (`shekyl_tor::control::onion::OnionPow`)
 

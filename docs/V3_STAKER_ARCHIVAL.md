@@ -205,21 +205,38 @@ pass/fail — no economic extraction path.
 #### Foundation complete-tree seeds (first subsection — the guarantee's base)
 
 Foundation **seed nodes are seeds of the tree, not just of discovery:**
+> **Correction (2026-08-03).** This subsection previously said the Foundation
+> seeds sit at "known locations (Tor-client fetch to **public addresses** — **not**
+> six-hop hidden-service rendezvous for the fetch leg)", and repeated the claim
+> twice more (the seeding bullet below, and the seeding-transport note in the
+> retrieval-latency section). **Both halves were wrong**, and the sentence
+> actively misled: it reads as though the Foundation has a clearnet fetch path
+> that ordinary `P`s do not.
+>
+> **The ruling: all shard retrieval occurs across Tor, period.** "Known" describes
+> the **address**, not the transport — a *published, known `.onion` v3 address* —
+> and the fetch is an **ordinary v3 rendezvous**, the same path every `P` serves
+> over. There is **no separate Foundation retrieval mechanism** and no clearnet
+> leg. (Non-anonymous serving is not merely unused: `ADD_ONION`'s `NonAnonymous`
+> flag is absent from `shekyl_tor::control::onion::OnionFlags`, so it is
+> unrepresentable.)
+
 each holds **complete sets B + C** (deep archival substrate and canonical
-block history; §*Archival data scope*) from genesis, at **known**
-locations (Tor-client fetch to public addresses — not six-hop hidden-
-service rendezvous for the fetch leg). They provide:
+block history; §*Archival data scope*) from genesis, at **known `.onion` v3
+addresses** — retrieved over an **ordinary v3 rendezvous**, exactly as any other
+`P` is. They provide:
 
 - **Durability floor** — observable, placement-controlled correlated-loss
-  tail (you choose providers/jurisdictions; location-hiding does not
-  apply here).
+  tail (you choose providers/jurisdictions — a **placement** property; the
+  *durability* argument does not lean on location-hiding, which is a separate
+  statement from the transport, and the transport is still a rendezvous).
 - **Bootstrap source** — real complete tree before any market archiver
   seats (L12 cold-start closes against a source, not a synthetic decay
   alone).
-- **Fast seeding source** — new archivers backfill from public complete
-  copies; onion rendezvous remains for **serving anonymous queriers**, not
-  for fetching from a public foundation source (soundness pass step 2
-  scope shrinks accordingly).
+- **Fast seeding source** — new archivers backfill from the Foundation's
+  complete copies **over the same v3 rendezvous** every other read uses. What is
+  "public" about the source is its **published address**, not its transport;
+  backfill is not a privileged or clearnet path.
 - **Fee-era backstop** — always present when the market thins (replaces
   L12 **decaying** floor — see gate-list item 5 amendment below).
 
@@ -454,9 +471,10 @@ code paths today.
 
 Archivers seeding or backfilling deep shards should meet a **bounded
 seeding latency** internal target (L10 timing channel). User historical
-queries do not inherit that bound. Transport for seeding may differ from
-user query transport (soundness pass step 2 — largely reduced if fetch
-is from public foundation complete copies).
+queries do not inherit that bound. **Transport for seeding does not differ from
+user query transport** — both are the v3 rendezvous (2026-08-03 correction; the
+earlier "may differ … if fetch is from public foundation complete copies" wording
+contradicted the one-mechanism ruling).
 
 ---
 

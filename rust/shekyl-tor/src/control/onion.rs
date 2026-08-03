@@ -595,6 +595,45 @@ mod tests {
     }
 
     #[test]
+    fn onion_line_is_never_non_anonymous() {
+        // All shard retrieval occurs over a v3 rendezvous — every persona's, the
+        // Foundation's included. "Known" describes a persona's published .onion
+        // address, never a clearnet endpoint.
+        //
+        // `NonAnonymous` (tor's single-hop / `HiddenServiceSingleHopMode` mode) is
+        // absent from `OnionFlags` rather than merely unset, so a non-anonymous
+        // service is **unrepresentable** — the same posture as `Detach`. Asserted
+        // over every representable value, including with PoW on, so adding the
+        // flag as a member later fails here rather than shipping quietly.
+        for discard_pk in [false, true] {
+            for pow in [
+                OnionPow::Disabled,
+                OnionPow::Enabled,
+                OnionPow::EnabledTuned {
+                    queue_rate: 1,
+                    queue_burst: 2,
+                },
+            ] {
+                let line = AddOnion::new(key(), loopback_port(), 2)
+                    .with_flags(OnionFlags { discard_pk })
+                    .with_pow(pow)
+                    .to_wire_line();
+                let lower = line.to_ascii_lowercase();
+                assert!(
+                    !lower.contains("nonanonymous"),
+                    "non-anonymous serving must be unrepresentable: {}",
+                    line.as_str()
+                );
+                assert!(
+                    !lower.contains("singlehop"),
+                    "single-hop serving must be unrepresentable: {}",
+                    line.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn onion_line_never_detaches() {
         // Hard invariant 3, asserted over *every* representable flag combination —
         // which is the whole point of `Detach` being absent from `OnionFlags`
