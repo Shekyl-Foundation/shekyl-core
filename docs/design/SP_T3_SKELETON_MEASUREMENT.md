@@ -376,11 +376,61 @@ probably lower.
 
 ## 12. PD-F-2 results
 
-> **STATUS: the apparatus is complete and validated end-to-end against the real
-> Tor network; the shard-payload run had not completed when this document was
-> written.** The numbers below are filled by the `pd-f2-measure` binary. This
-> section is deliberately left explicit rather than populated with a placeholder
-> figure — see §13.
+**Payload: a real archival shard.** 3 326 976 bytes — 25 992 leaves × 128 B —
+extracted from a regtest chain mined to height 26 344 (`leaf_count` 26 218).
+Not synthetic; the crate has no synthetic path.
+
+**Environment:** Tor Expert Bundle 15.0.17 (hash-pin verified against
+`CURRENT_PIN`), real public Tor network, single vantage point. Descriptor
+publication took 32.2 s and is **excluded from every arm**.
+
+### 12.0 The cold arm — the result the gate turns on
+
+```text
+n = 60, successes = 59, completion rate = 0.9833
+failures: 1 × Truncated          (apparatus-class, not a network timeout)
+
+  p50  =  14.71 s
+  p75  =  23.22 s
+  p90  =  28.99 s
+  p95  =  32.75 s
+  p99  =  39.27 s
+
+D* = 28.57 s     (q(D) ≥ 0.1011 for all D ≤ D*)
+
+warm-up check: first-quarter p50 = 13.97 s, last-quarter p50 = 16.17 s
+               ratio 1.16
+```
+
+**The warm-up check came back clean, in the safe direction.** The concern was
+that a "cold" arm hitting one persona repeatedly might warm via descriptor
+caching or rendezvous reuse, making its tail optimistic and inflating `D*`. The
+measured ratio is **1.16 — the arm got slightly *slower*, not faster.** Whatever
+drift exists is conservative: it can only depress `D*`, never inflate it. The
+unsafe bias is empirically absent rather than argued away.
+
+### 12.0a Inverting against a **block-denominated** deadline — the decisive step
+
+`D*` is in seconds; TJ-C's deadline is in **blocks**. Shekyl's target block time
+is **120 s** (`config/consensus_constants.json`: `daa_target_seconds = 120`,
+independently corroborated by `shekyl_blocks_per_year = 262800` →
+31 536 000 / 262 800 = 120). The smallest deadline a block-granular rule can
+express is therefore **one block ≈ 120 s**, which is **4.2 × larger than `D*`**.
+
+Evaluating `q(D)` from the cold arm at every candidate:
+
+| Deadline | `q(D)` | vs `q_risk* = 0.1011` |
+|---|---|---|
+| `D* = 28.57 s` | 0.1167 | ≥ q\* — **forces** |
+| **1 block (120 s)** | **0.0167** | **< q\* — does *not* force** |
+| 2 blocks (240 s) | 0.0167 | < q\* |
+| 10 blocks (20 min) | 0.0167 | < q\* |
+| `CHALLENGE_RESOLUTION_BLOCKS` = 10 000 blocks (≈ 14 d) | 0.0167 | < q\* |
+
+At one block and beyond, `q` has already collapsed to the **outright-failure
+floor of 0.0167** — a single truncated response in 60, and an apparatus-class
+failure at that. No fetch in the arm exceeded 40 s, so every block-denominated
+deadline is far out on the flat part of the curve.
 
 ### 12.1 Apparatus validation (done)
 
@@ -481,33 +531,59 @@ overstate how generous TJ-C's deadline could be — in the worked fixture, by 5�
 
 ## 13. §6.5 — which branch the data selects
 
-**As of this writing: INSUFFICIENT to select, and the reason is stated rather
-than papered over.**
-
 §8.3's two outcomes are different rounds:
 
 - **Forceable** ⇒ sampling-plus-priced-deadline is live; TJ-A weighs the fork.
 - **Not forceable** ⇒ receipt-attested transfer is the only branch, and §8.2 is
   the whole scope.
 
-What is settled:
+### The data selects **NOT FORCEABLE**
 
-- The apparatus is real, validated end to end against the public Tor network, and
-  rides the production hash-pinned tor.
-- The payload is obtainable as a genuine shard at a known, modest cost.
-- The statistical machinery reports `D*` correctly, including the two degenerate
-  cases that a naive percentile would hide.
+`D* = 28.57 s`, and the **smallest deadline a block-granular rule can express is
+one block = 120 s**. Every expressible deadline sits on the flat part of the
+curve where `q = 0.0167`, six times below `q_risk* = 0.1011`. There is no
+block-denominated deadline that forces the threshold, and this is not a near
+miss: `D*` is **4.2 × smaller** than the finest available granularity, and no
+fetch in the arm took even 40 s.
 
-What is not settled: the distribution itself, which needs the ≥ 24 h soak. **The
-24-hour arm cannot be short-circuited** — §8.3 names *circuit-latency dispersion*
-as the load-bearing parameter, and dispersion is precisely the quantity a short
-sample gets wrong. A number produced from a one-hour window would be a number
-nobody should trust, which §10 of the charter names as the failure mode worse
-than halting.
+**Consequence: receipt-attested transfer is the only branch, and §8.2 is the
+whole scope.** TJ-A's sampling candidate does not come back to life on this
+measurement — which is the same direction §5.6's ROI ledger already reached
+independently, now with a transport measurement rather than a cost argument
+behind it.
 
-**"Insufficient" is a valid outcome and this is it, for now** — with the
-apparatus, the payload path, and the statistics all in place, so producing the
-number is a matter of running the soak rather than of further design.
+### The one way this conclusion could flip, stated precisely
+
+The measurement is single-vantage (§11), and the bias direction **matters here
+and is unfavourable to the conclusion**: a slower miner population raises `q` at
+every `D`, which raises `D*`. So `D* = 28.57 s` is a *lower* estimate of the
+population's `D*`, not an upper one.
+
+Quantified: for `q(120 s) ≥ 0.1011`, **more than one fetch in ten would have to
+exceed 120 s.** In this arm, *zero* did — the slowest success was 39.27 s, so the
+population's tail would need to stretch by roughly 3–4 × beyond anything observed
+here. That is not absurd for miners on poor links, but it is a large, specific,
+and *testable* gap rather than a hand-wave.
+
+**The honest verdict:** not forceable from a well-connected vantage, by a wide
+margin, with the single named condition that would overturn it — a
+population-level p90 near 120 s — and the multiplier that condition requires.
+
+### What would settle the residual, and what would not
+
+- **Would settle it:** the same harness run from several *deliberately
+  disadvantaged* vantage points (constrained bandwidth, high-latency AS,
+  bridge/pluggable transport). That attacks the actual uncertainty.
+- **Would not settle it:** more samples from *this* vantage. §12.3's arithmetic
+  applies — at any feasible `N` the CI on a 0.10 tail still straddles 0.1011, and
+  in any case the question is no longer where `q` sits at 28 s but whether a
+  different population has a 10 % tail past 120 s. **More `N` here cannot answer
+  that.**
+- **The ≥ 24 h soak** remains worth running for the diurnal-dispersion reason
+  (§8.3's load-bearing parameter), and is the arm this report does *not* yet
+  carry. But note what the cold arm already shows: the gap to the finest
+  block-denominated deadline is 4.2 ×, so diurnal variation would have to be
+  enormous to close it. **The soak is now a confirmation, not the pivot.**
 
 ---
 
