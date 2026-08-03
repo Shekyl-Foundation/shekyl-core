@@ -254,6 +254,34 @@ unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
         .collect()
 }
 
+/// Read `n` packed 32-byte transaction ids.
+///
+/// Mirrors [`read_ids`]' boundary discipline: the length is computed with
+/// `checked_mul` so a bogus `n` cannot wrap into a short slice, and the raw
+/// pointer is turned into a slice **once** rather than per element — there is
+/// no index arithmetic left to get wrong.
+///
+/// **No nil filtering, unlike [`read_ids`].** An all-zero connection id is a
+/// sentinel meaning "no peer"; an all-zero *transaction* hash is just a hash
+/// this node will never have stemmed, and dropping it would silently shorten
+/// the caller's batch.
+///
+/// # Safety
+/// `hashes` must point to `n * 32` readable bytes, or be null with `n == 0`.
+unsafe fn read_tx_ids(hashes: *const u8, n: usize) -> Vec<TxId> {
+    let Some(len) = n.checked_mul(32) else {
+        debug_assert!(false, "read_tx_ids: n * 32 overflows");
+        return Vec::new();
+    };
+    if len == 0 || hashes.is_null() {
+        return Vec::new();
+    }
+    slice::from_raw_parts(hashes, len)
+        .chunks_exact(32)
+        .map(|c| TxId::from_bytes(c.try_into().expect("chunks_exact(32) yields 32 bytes")))
+        .collect()
+}
+
 /// Read one connection id, mapping "no id" to `None`.
 ///
 /// **Two encodings arrive here and both mean "no id".** The nil UUID is the
@@ -465,28 +493,19 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_stem(
     now_ms: u64,
 ) {
     let Some(h) = handle.as_mut() else { return };
-    if hashes.is_null() || successor.is_null() || n == 0 {
+    // A nil successor is refused as well as a null one: `read_id`'s
+    // nil-means-no-id contract is live here, and an observation charged to
+    // "no peer" is not a thing this watch can resolve.
+    let Some(succ) = read_id(successor) else {
+        return;
+    };
+    let ids = read_tx_ids(hashes, n);
+    if ids.is_empty() {
         return;
     }
-    let succ = ConnectionId::from_bytes(
-        std::slice::from_raw_parts(successor, 16)
-            .try_into()
-            .unwrap(),
-    );
-    let src = source
-        .as_ref()
-        .map(|p| ConnectionId::from_bytes(std::slice::from_raw_parts(p, 16).try_into().unwrap()));
+    let src = read_id(source);
     let params = DandelionParams::inherited();
     let deadline = now_ms + EmbargoTimer::adopted(&params).deadline(0, &mut h.rng);
-    let ids: Vec<TxId> = (0..n)
-        .map(|i| {
-            TxId::from_bytes(
-                std::slice::from_raw_parts(hashes.add(i * 32), 32)
-                    .try_into()
-                    .unwrap(),
-            )
-        })
-        .collect();
     h.driver.zone_mut().record_stem(&ids, succ, src, deadline);
 }
 
@@ -517,22 +536,14 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_arrival(
     from: *const u8,
 ) {
     let Some(h) = handle.as_mut() else { return };
-    if hashes.is_null() {
+    let ids = read_tx_ids(hashes, n);
+    if ids.is_empty() {
         return;
     }
-    let peer = from
-        .as_ref()
-        .map(|p| ConnectionId::from_bytes(std::slice::from_raw_parts(p, 16).try_into().unwrap()));
-    for i in 0..n {
-        let id = TxId::from_bytes(
-            std::slice::from_raw_parts(hashes.add(i * 32), 32)
-                .try_into()
-                .unwrap(),
-        );
-        h.driver
-            .zone_mut()
-            .record_arrival(std::slice::from_ref(&id), peer);
-    }
+    // One call with the whole batch, not one per id: `record_arrival` takes a
+    // slice, and the per-id loop was re-entering the zone `n` times to do work
+    // it does in one pass.
+    h.driver.zone_mut().record_arrival(&ids, read_id(from));
 }
 
 /// Stem observations still pending resolution — the liveness read a C++
