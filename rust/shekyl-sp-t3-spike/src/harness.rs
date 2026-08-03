@@ -148,10 +148,13 @@ impl Apparatus {
     /// requires non-overlapping guard sets for exactly this reason. The PD-F-2
     /// `D*` is therefore derived from **`persona_count = 1`** runs only.
     ///
-    /// Two *legitimately* isolated identities on one host (`P` vs principal, per
-    /// §10.9) need **separate tor processes with separate `DataDirectory` trees**
-    /// — the guard set is per-datadir, and `ADD_ONION` exposes no per-service
-    /// isolation knob. That is transport-PR work; this harness does not do it.
+    /// **Do not "fix" this by splitting tor instances.** `P` and the principal
+    /// sharing one guard set is the deliberate §7 residual, accepted at
+    /// `ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md:616` under "correct as-is — do not
+    /// 'fix'": separate instances are *worse*, because a non-default config is
+    /// itself a fingerprint to a guard observer — a weaker adversary than the
+    /// correlator the shared guard exposes. **One tor process is the correct
+    /// shape.**
     ///
     /// **`persona_count > 1` is retained deliberately — to *price* the forbidden
     /// layout, not by accident.** A measurement of a configuration the design
@@ -165,7 +168,8 @@ impl Apparatus {
     ///
     /// **The serving rule:** one persona serves per wallet. An operator wanting
     /// several *serving* personas uses separate wallets — and should use separate
-    /// machines behind separate Tor clients. Beyond linkability, each co-served
+    /// machines, each with its own default-configured tor. Beyond linkability,
+    /// each co-served
     /// persona is added **attack surface** (an inbound onion, intro points, a
     /// descriptor, a share of one process's failure domain) for a reward that
     /// comes from its *bond*, not from sharing a host.

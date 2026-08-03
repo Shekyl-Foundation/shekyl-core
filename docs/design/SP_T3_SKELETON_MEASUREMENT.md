@@ -43,8 +43,9 @@ The ratified position, verified at source:
 
 1. **SPIKE-F-1 is re-dispositioned REFUTED AS STATED** (§2). It did not discover
    that personas share guards; it built a configuration in which they do and
-   measured what §10.9 predicts. Its data is repurposed to inform the *open*
-   §10.9-enforcement carry (§2a).
+   measured a coupling the design **already accepts on purpose**
+   (`TRANSPORT_PLAN:616`, *"correct as-is — do not 'fix'"*). Its data becomes
+   **SPIKE-F-12: corroboration, no action, no routing** (§2a).
 2. **The former "mitigation may be counterproductive" disposition is
    WITHDRAWN.** It argued against a ratified pin from a measurement of the
    forbidden configuration, and §10.9 had already weighed and ruled on that exact
@@ -61,8 +62,8 @@ The ratified position, verified at source:
 **The serving rule, for the record:** **one persona serves per wallet.**
 Multi-persona *holding* is real and necessary (retired personas' `bond_spend` keys
 must stay derivable to unbond). An operator wanting several *serving* personas
-uses **separate wallets**, and is advised to use **separate machines behind
-separate Tor clients**. The rationale is linkability *and*, independently,
+uses **separate wallets**, and is advised to run them on **separate machines**
+(each with its own, default-configured tor). The rationale is linkability *and*, independently,
 **attack surface**: each co-served persona adds an inbound onion, intro points, a
 descriptor, and a share of one process's failure domain — for a reward that comes
 from its **bond**, not from sharing a host.
@@ -74,7 +75,8 @@ from its **bond**, not from sharing a host.
 | # | Finding | Severity | Verdict |
 |---|---|---|---|
 | **SPIKE-F-1** | ~~Two personas behind one tor share entry guards~~ | — | **REFUTED AS STATED** — the apparatus built a co-activation layout §10.9 forbids; not new information (§2) |
-| **SPIKE-F-12** | **`ADD_ONION` has no per-service isolation knob, so C-tor with N onions on one daemon cannot satisfy §10.9's non-overlapping guard sets.** §10.9 specifies *Arti*; the enforcement mechanism is an **open rule-21 carry** (`:1644`, routed to the Transport PR) and shekyl-tor is C-tor | **HIGH** | **CONFIRMED (measured)** — the live carried item this spike actually informs (§2a) |
+| **SPIKE-F-12** | `ADD_ONION` has no per-service isolation knob; guard sets are per-process/datadir. **This corroborates an accepted residual — it does not motivate action.** `TRANSPORT_PLAN:616` accepts the `P`↔principal guard coupling and explicitly forecloses separate instances | INFO | **CONFIRMS ACCEPTED RESIDUAL** — no action, **no routing** (§2a) |
+| **SPIKE-F-13** | §10.9's named mechanism (**separate Arti client instances**) is **dead text**: Arti is not the path — we consume the Tor Project's Expert Bundle as an external process. Three further sites rest on the same abandoned anchor | LOW (doc hygiene) | **OPEN — maintainer ruling** (§2b); no ratified text edited here |
 | **SPIKE-F-2** | Two personas' onion services do **not** share introduction points | HIGH (as a *negative*) | **REFUTED (measured)** — halt condition §8.5 does not fire |
 | **SPIKE-F-3** | `MaxStreamsCloseCircuit` is a **`Flag`**, not a `MaxStreamsCloseCircuit=1` argument; the argument spelling earns `512` from tor | MEDIUM | **CONFIRMED (measured)** |
 | **SPIKE-F-4** | A production persona onion key belongs in `archival_p.rs`, not in a second cSHAKE256 path from the master seed | MEDIUM | **CONFIRMED (source)** |
@@ -168,65 +170,94 @@ that list**. It is forbidden outright.
 
 ---
 
-## 2a. SPIKE-F-12 — the finding the data actually supports: **C-tor cannot deliver §10.9**
+## 2a. SPIKE-F-12 — corroboration of an accepted residual. **Not an open item.**
 
-This is where SPIKE-F-1's measurement belongs, restated against a question that
-is genuinely open.
+> **Read this before acting on the measurement below.** It appears to motivate
+> running separate tor instances. **It does not, and that remedy is explicitly
+> foreclosed.** This section exists partly to stop a future reader doing what two
+> earlier revisions of this document nearly argued for.
 
-**§10.9's enforcement mechanism is an unresolved rule-21 carry, not a closed
-door.** `ARCHIVAL_FIREWALL_GATE6.md:1644`:
+### The measurement
 
-> **§10.9 isolation enforcement mechanism** (Arti config vs. policy) + S-6
-> key-locality provisioning → **Transport PR** + PHASE_2B engines. *Independent
-> guard sets + restore-flow non-co-activation must be **structural**.*
+With C-tor, `ADD_ONION` exposes **no per-service isolation parameter**, and the
+guard set is a property of the **process / `DataDirectory`** (persisted in the
+datadir `state` file). Two onion services on one daemon drew **identical** guard
+sets (2 of 2), while their introduction points (6+6) and HSDir sets (16+16) were
+**disjoint**. So the coupling is **exactly guard-level** — the layers tor derives
+per-service from the blinded key are unaffected.
 
-And §10.9 specifies the mechanism as **separate Arti client instances**. This
-spike ran **C-tor** — the hash-pinned Tor Expert Bundle driven over the control
-port — because that is what `shekyl-tor` is. (`:479` carries the at-source Arti
-pin to the transport PR under GF-12; the Arti-vs-C-tor question is live.)
+### It was already decided, twice, and in the opposite direction to "fix it"
 
-**The measured statement, scoped to what was actually established:**
+`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md:616`, under a heading that reads
+***"Two notes recorded (correct as-is — do not 'fix')"***:
 
-> With C-tor, **`ADD_ONION` exposes no per-service isolation parameter of any
-> kind.** Every onion service published on one tor daemon, and every client
-> circuit that daemon builds, draws from that daemon's single guard set. Measured:
-> two services on one daemon received *identical* two-guard sets, while their
-> introduction points (6+6) and HSDir sets (16+16) were disjoint — so the sharing
-> is specifically at the **guard** layer, and specifically **not** at the layers
-> tor derives per-service from the blinded key.
+> **SP-T0 guard coupling is the deliberate §7 residual.** "One Tor process, never
+> one circuit" (§13) means `P` and the principal share one **guard set** — exactly
+> where §7's named residual (guard-level + timing correlation, the case Tor does
+> not defeat) lives. Severing it means *separate Tor instances*, which is
+> **worse**: a non-default config is itself a fingerprint to any guard observer (a
+> weaker adversary than the correlator the shared guard exposes). **Accept the
+> coupling; the doc states it so a future reader does not split instances.**
 
-**Why that matters to the `:1644` carry — and exactly how far it goes.** That
-carry asks whether §10.9's isolation is deliverable by **config** or only by
-**policy/provisioning**, and requires it be *structural*. This measurement bears
-on it directly, but the claim must be scoped to what was actually established:
+And `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` DQ-T0.7 (decided 2026-07-02), on the
+`DataDirectory` choice:
 
-- **Measured:** two onion services published on one C-tor daemon, under the
-  managed-launch config this project ships, drew **identical** guard sets.
-- **Structural, from tor's own design:** the guard set is a property of the
-  **process/`DataDirectory`** — it is persisted in the datadir's `state` file, and
-  keeping it stable across sessions is *why* `ManagedTor::data_dir` is persistent
-  (DQ-T0.7). `ADD_ONION`'s grammar has no per-service isolation parameter, so
-  there is no place for a per-service guard scope to be expressed.
-- **Therefore:** within a single daemon, guard sets are per-process, not
-  per-service. **Non-overlapping guard sets on C-tor require separate tor
-  processes with separate `DataDirectory` trees.**
+> **Within-session** — the §7 residual (`P` and the principal share one guard) —
+> is **unaffected** either way: same process, same guards.
 
-**Not claimed:** an exhaustive sweep of tor's configuration space. The argument
-above is one measurement plus tor's documented grammar and datadir semantics —
-strong, but if the transport PR wants "config cannot do this" as a *settled*
-negative, that is a torrc-surface review, not a spike result.
+### There is also no configuration surface to review
 
-This is the shape of the input the carry needs: it says C-tor's answer to
-"config or policy?" leans hard toward **provisioning**, and it says so with a
-measurement rather than an expectation.
+An earlier revision of this document suggested a "torrc-surface review" could
+settle whether config alone suffices. **That suggestion is withdrawn: the design
+refuses to have such a surface.** `actor.rs` passes six typed options
+(`DataDirectory`, `ControlPort auto`, `ControlPortWriteToFile`,
+`CookieAuthentication`, `SocksPort`, `Log`, plus test-only `DisableNetwork`) and
+states why a free-form flag list is excluded — it can smuggle the safety
+invariants open "directly, or indirectly via `-f <torrc>` / `+Option` append /
+`--defaults-torrc`, which no denylist reliably covers." Future customization
+arrives as further **typed knobs**. Reviewing a torrc surface means reviewing
+something that deliberately does not exist.
 
-`T = ⟨` guard-level observer (C2); sees that one IP's circuits share an entry
-relay; cost = run/observe a Guard-flagged relay; priced in transport plan §7 `⟩`
-— **as §10.9 already prices it.** The novelty here is not the threat, it is the
-**mechanism gap**: C-tor has no knob, so the pin needs process separation.
+### Disposition
 
-**Disposition:** hand to the Transport PR as input to the `:1644` carry. This
-spike does **not** decide Arti-vs-C-tor and does not reopen §10.9.
+**Corroboration, no action, no routing.** The measurement independently confirms
+the premise `:616` asserts (same process ⇒ same guards) and *refines its scope*
+(the coupling is guard-level only; intro points and HSDirs stay disjoint). That
+refinement is the one genuinely new thing here, and it is useful for reasoning
+about the residual's blast radius — not for reopening it.
+
+**Explicitly not routed to `:1644`.** An earlier revision routed this to the
+"§10.9 isolation enforcement mechanism (Arti config vs. policy)" carry. That was
+wrong twice over: the coupling is accepted rather than open, and the carry is
+premised on **Arti**, which is not the path (SPIKE-F-13).
+
+---
+
+## 2b. SPIKE-F-13 — §10.9's mechanism clause is dead text (doc hygiene, maintainer's call)
+
+**Tor Project owns Tor; this project consumes the Expert Bundle as an external
+process** — hash-pinned, driven over the control port. The spike ran against
+exactly that. **So the Arti anchor never fires**, and text conditioned on it does
+not describe a reachable future state.
+
+Four sites rest on that abandoned anchor:
+
+| Site | Text resting on Arti |
+|---|---|
+| `ARCHIVAL_FIREWALL_GATE6.md` §10.9 (`:1241`) | "separate **Arti client instances** with non-overlapping guard sets" |
+| `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` DQ-T0.7 | reopen criterion **(b)**, which names the Arti anchor as its trigger |
+| `ARCHIVAL_FIREWALL_GATE6.md` `:479` | carried "at-source **Arti** pin → transport PR" (GF-12) |
+| `ARCHIVAL_FIREWALL_GATE6.md` `:1644` | "§10.9 isolation enforcement mechanism (**Arti** config vs. policy)" |
+
+**§10.9's *intent* stands** — `P`↔principal isolation matters, and the guard layer
+is where the residual lives. What is unavailable is its *named mechanism*, and
+`TRANSPORT_PLAN:616` already records what is done instead: accept the coupling,
+do not split instances.
+
+**No ratified text is edited by this branch.** Whether this warrants a correction
+pass or is left as understood-in-context is a maintainer decision, recorded here
+so it is not rediscovered by the next reader who follows §10.9 to a mechanism that
+cannot be built.
 
 ---
 
@@ -606,7 +637,9 @@ forbids.
 (Model D — retired personas' bonds sit on chain and their `bond_spend` keys must
 remain derivable to unbond later), but **serving** is singular. An operator who
 wants several serving personas runs them **on separate wallets**, and is advised
-to run them **on separate machines behind separate Tor clients**.
+to run them on **separate machines**, each with its own default-configured tor.
+*(Separate machines, not two tor clients on one host — the latter is the
+deviation-from-defaults fingerprint `TRANSPORT_PLAN:616` objects to.)*
 
 The rule is not only the linkability argument this spike measured. It is also, and
 independently, **attack surface**: each co-served persona adds an inbound onion,
@@ -834,11 +867,13 @@ population-level p90 near 120 s — and the multiplier that condition requires.
 > and SPIKE-F-10 went wrong. **The conformant configuration is
 > `persona_count = 1`**, which is what `D*` is derived from.
 >
-> A harness that legitimately needs two *isolated* network identities on one host
-> — `P` vs principal, per §10.9 — must run **separate tor processes with separate
-> `DataDirectory` trees**, because the guard set is per-datadir (`ManagedTor::data_dir`,
-> DQ-T0.7) and `ADD_ONION` offers no per-service knob (SPIKE-F-12). Building that
-> is transport-PR work, not spike work.
+> **Do not "fix" this by splitting tor instances.** `P` and the principal sharing
+> one guard set is the **deliberate §7 residual**, accepted at
+> `ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md:616` under a heading reading *"correct as-is
+> — do not 'fix'"*, because separate instances are **worse**: a non-default config
+> is itself a fingerprint to a guard observer — a weaker adversary than the
+> correlator the shared guard exposes. One tor process is the correct shape
+> (§2a).
 
 
 **Disposable — everything in `shekyl-sp-t3-spike`.** The crate's first doc
@@ -932,8 +967,19 @@ have an explicit `[[bin]]` path to make CI notice.
   reader-concurrency question is separate and carried as **SPIKE-F-11**
   (unmeasured). `D*` **re-derived from the single-persona arms only**; the
   conclusion holds *a fortiori* because the excluded arm was the slowest. The
-  data is repurposed as **SPIKE-F-12** — C-tor exposes no per-service isolation
-  knob, so §10.9's *structural* requirement needs separate tor processes — which
-  is input to the **open** `:1644` enforcement-mechanism carry (Arti vs. policy),
-  routed to the Transport PR. This spike does not decide Arti-vs-C-tor and does
-  not reopen §10.9.
+  data is repurposed as **SPIKE-F-12**.
+- **2026-08-03 (third correction, maintainer-sourced):** SPIKE-F-12's routing was
+  **wrong** and is removed. `TRANSPORT_PLAN:616` accepts the `P`↔principal guard
+  coupling as the deliberate §7 residual and **explicitly forecloses separate
+  instances** (a non-default config is a stronger fingerprint than the correlator
+  the shared guard exposes); DQ-T0.7 independently records that within-session
+  guard sharing is "unaffected either way: same process, same guards." So the
+  measurement **corroborates an accepted residual** — no action, **no routing to
+  `:1644`** — and every "separate tor processes" recommendation this document
+  carried has been purged, since it invited exactly what `:616` was written to
+  prevent. The suggested "torrc-surface review" is likewise withdrawn: `actor.rs`
+  passes typed options only and deliberately has no free-form config surface.
+  New **SPIKE-F-13** records that §10.9's *Arti* mechanism clause (and three
+  further sites) is dead text, since the Expert Bundle is the path and the Arti
+  anchor never fires — flagged for maintainer ruling, **no ratified text edited
+  here**.
