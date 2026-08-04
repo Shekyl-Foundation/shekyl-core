@@ -89,6 +89,7 @@ from its **bond**, not from sharing a host.
 | **SPIKE-F-16** | **Circuit-latency dispersion dominates everything else.** Identical requests to the same persona span **4.49 s → 133.05 s (30×)**; per-region medians agree within 2.7 s. `D*` is a tail statistic and is therefore **non-monotonic in load** | **HIGH** (methodological) | **CONFIRMED (measured)** (§18) |
 | **SPIKE-F-17** | **The PoW client ceiling is a compile-time CLAMP, not a give-up.** The client solves at its own maximum and proceeds, so honest-client PoW cost is bounded by a **constant** — it cannot be driven arbitrarily high by service escalation. This **bounds SPIKE-F-15's coupling** | MEDIUM | **CONFIRMED (source)** (§19) |
 | **SPIKE-F-18** | **PoW-enabled ≠ PoW-active.** Below escalation the service advertises **no `pow-params` at all** and honest clients solve **nothing** — enabling the defense costs a quiescent persona zero, and is invisible until actually attacked | MEDIUM | **CONFIRMED (measured)** (§19a) |
+| **SPIKE-F-19** | **The fixed 3,326,976-byte payload is a guard→persona confirmation oracle.** A guard-holding adversary confirms *which* `.onion` its circuit carries by fetching the shard on demand (public + free + fixed-size = the signature is the payload). Turns the literature's "expensive" active-confirmation step nearly free. **Wire-format property ⇒ freezes at genesis** | HIGH | **TJ-B, not spike** (§20); recorded so it cannot drift past the §9.4 freeze |
 | **SPIKE-F-14** | §6a's three inbound protections are all **per-connection**; **nothing bounds aggregate load**, and `MaxStreams` is per-*circuit* so it does not either. A ~100-byte request returns ~3.33 MB — **~33 000× egress amplification** | **HIGH** (general, every `P`) | **CONFIRMED (source)** — both levers now built (§16) |
 | **SPIKE-F-15** | **PoW effort is adaptive (AIMD), so the DoS defense and the §8.3 margin are coupled — not independent as this report first recorded them.** `D*` was measured with PoW **disabled**; under escalation honest miners pay solve time and the distribution shifts toward the deadline | MEDIUM | **CONFIRMED (spec + measured on `dev`)** — immaterial at measured effort, **ceiling unmeasured** (§17) |
 | **SPIKE-F-7** | D4's payload is a **cost, not a blocker**: ~5 h of one-time regtest mining plus a batched extraction | INFO | **REFUTED as a halt** |
@@ -1288,6 +1289,85 @@ confirmed cannot show it (§19).
 from source regardless of achievable effort; SPIKE-F-18 shows the quiescent cost is
 zero; and the one residual (solve-time at the clamp) is measured by solving at a
 fixed effort, not by a flood.
+
+---
+
+## 20. SPIKE-F-19 — the fixed payload size is a guard→persona confirmation oracle (TJ-B)
+
+**Recorded here, decided in TJ-B.** This is a wire-format property, and §9.4
+freezes the response format at genesis — so it is decided *once*, and adding the
+mitigation later is not a patch. It is written down now because it is exactly the
+kind of finding that gets rediscovered expensively after the format has frozen.
+
+### The correction to this report's own earlier reassurance
+
+This report's earlier guard-threat framing (SPIKE-F-1's original threat tuple, and
+the PR's guard-coupling note) held that a guard learns co-residency but **not**
+which `.onion` addresses it carries — that binding an address to an IP is the
+standard hidden-service location-discovery problem *"Tor's guard design exists to
+make expensive."* **That reassurance is too optimistic for a *serving* persona,
+and in the direction this report has repeatedly had to correct** (underestimating
+the adversary). The serving design makes the binding cheap, not expensive.
+
+### What a guard actually sees, and it is not circuit contents
+
+Circuit *contents* are encrypted end to end; the guard never sees them, and Tor
+never claimed to hide circuit-level *metadata*. Two results on that metadata:
+
+- **Passive.** Kwon et al. (USENIX Security '15, *Circuit Fingerprinting
+  Attacks*) showed an entry guard can classify hidden-service circuits from cell
+  sequences, direction, timing, and duration at **> 98 % TPR / < 0.1 % FPR**, and
+  the classifier also tells the adversary *which side it is on* (client-of-HS vs
+  HS). A cruder tell needs no classifier: an intro-point circuit is a long-lived
+  connection on which the OP sends only **3 cells at the very beginning** —
+  structurally distinctive because of what intro circuits are for. Follow-up work
+  extended the attack to a **middle relay (~99.98 %)**, which needs *fewer*
+  resources than earning the guard flag.
+- **Active — the part that matters for Shekyl.** Classification says "I carry a
+  hidden service," not *which one*. Linking a guard to a specific `.onion`
+  normally needs a confirmation step: force the service to build a rendezvous to
+  an adversary-controlled RP, inject a traffic signature, recognise it at the
+  colluding relay.
+
+**The serving design makes that step nearly free.** The `.onion` is public by
+necessity, the fetch is uncompensated, and the payload is **exactly 3,326,976
+bytes**. A guard-holding adversary fetches a shard at a moment of its choosing and
+looks for the matching flow — **no padding signature to construct, because the
+shard *is* the signature**: large, fixed-size, requestable on demand. Repeat
+twice and the false-positive rate collapses.
+
+### Throttling needs even less than deanonymization
+
+The papers above aim to *deanonymize* — learn *where* the service is. A
+**throttling** adversary needs only to know *which circuit to slow*; location is
+irrelevant. So the oracle feeds SPIKE-F-14's targeted-DoS surface even against a
+persona whose location is already public (the Foundation `P`), where
+deanonymization reveals nothing new.
+
+### Economics — why the probe amortises
+
+Guards are held for months (Tor's own framing: *"one fast guard for life, or 9
+months"*), so the confirmation is **one-time per persona and amortises across the
+guard's whole lifetime**. A guard slot covers whatever personas draw it, and the
+operator enumerates them cheaply because **every `P` is publicly fetchable**.
+
+### Where this is tempered (the honest bound, stated with the finding)
+
+These are **research accuracies under controlled conditions**; open-world base
+rates degrade them, and Tor has shipped padding changes since 2015 that the 2015
+results do not account for. The per-draw probability of an adversary landing on
+any *specific* persona's guard is small. So the claim is **not** "guards know
+which persona this is" — it is *"a guard operator who cares can find out cheaply,
+and the fixed payload shape makes it cheaper than the literature assumes."*
+
+### The one design lever, and why it cannot wait
+
+Variable-length responses (padding the shard to a distribution of sizes) blunt the
+active confirmation, at a bandwidth cost. **That trade is TJ-B's**, and it
+**must** be taken inside the frozen response format if taken at all: padding is a
+wire-format property, so a TJ-B that lands without it cannot add it later without
+a consensus-boundary change. Recorded against §9.4's freeze consequence and as
+open item **TJ-H** so whoever specifies the format meets it there.
 
 ---
 

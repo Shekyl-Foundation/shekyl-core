@@ -329,6 +329,17 @@ change post-genesis.
   gate. RED today: `challenge_leaf_index` derives exactly one index per
   `(P, s, E)`. `#[ignore]`d with TJ-A's landing as the un-ignore trigger —
   the D1 red-test pattern.
+- **TJ-H — the response payload's size is a guard→persona confirmation oracle.**
+  A fixed 3,326,976-byte response, fetchable publicly and freely on demand, lets a
+  guard-holding adversary confirm which `.onion` its circuit carries (the payload
+  is the traffic signature; Kwon et al., USENIX Sec '15, active-confirmation made
+  nearly free) and, more cheaply, choose *which circuit to slow* for targeted
+  throttling regardless of location. The lever is **variable-length padding**, a
+  **wire-format property** that §9.4 freezes at genesis — a TJ-B decision taken
+  once, not a later patch. Tempered (research accuracies, open-world degradation,
+  post-2015 padding) and analysed in full at
+  [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) §20
+  (SPIKE-F-19). Registered here per rule 94.
 
 ## 5. The ROI ledger — why R1 closes it, and what the closure rests on
 
@@ -1047,6 +1058,15 @@ exists to prevent.)*
   promotes the **response semantics** to consensus-critical, so they freeze at
   genesis under §3's split. The request/transport side stays node-local; what
   freezes is what a validator checks.
+  **A response-format decision the freeze forces (TJ-H, do not skip when
+  specifying the format):** the shard payload's **fixed size** (3,326,976 B) is a
+  guard→persona confirmation oracle — a guard-holding adversary confirms *which*
+  `.onion` its circuit carries by fetching the public, free, fixed-size shard on
+  demand (the payload *is* the traffic signature; cf. Kwon et al., USENIX Sec
+  '15). The only mitigation, **variable-length padding**, is itself a wire-format
+  property, so it must be decided **inside** this frozen format or it cannot be
+  added later without a consensus-boundary change. Full analysis + the honest
+  bound: `SP_T3_SKELETON_MEASUREMENT.md` §20 (SPIKE-F-19).
 - **TJ-A5 — ~~the evidence question~~ DISSOLVED (2026-07-29), and the
   dissolution is three separate findings.**
 
