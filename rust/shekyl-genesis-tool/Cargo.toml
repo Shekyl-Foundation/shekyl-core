@@ -1,0 +1,48 @@
+[package]
+name = "shekyl-genesis-tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Genesis build/verify tool (`geblock`) — deterministic Rust replacement for the retired C++ genesis_builder. The pinned GENESIS_TX is reproducible from config/genesis_recipients.*.json."
+
+# Named bin (source at src/main.rs, no src/bin/ dir: the repo-root `.gitignore`
+# `bin/` pattern silently swallows src/bin/ directories).
+[[bin]]
+name = "geblock"
+path = "src/main.rs"
+
+[dependencies]
+# Wire format: the genesis tx/block serializer, tx_extra grammar, varint.
+shekyl-wire = { path = "../shekyl-wire" }
+# Output construction (deterministic KEM), account derivation (gen-wallets),
+# BIP-39 helpers, Edwards→Montgomery map for the recipient X25519 key.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# cSHAKE256 domain-separated hashing for the deterministic genesis tx key.
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# Post-#327 address encode/decode (three bech32m segments, ek_bind tag).
+shekyl-address = { path = "../shekyl-address" }
+# Empty curve-tree root for the genesis header (`selene_hash_init`).
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+# Empty attestation root for the v9 genesis header (`attestation_root(&[])`).
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# Single source for the coinbase maturity window (`COINBASE_LOCK_WINDOW`),
+# the genesis tx unlock_time.
+shekyl-consensus = { path = "../shekyl-consensus" }
+clap = { version = "4", features = ["derive"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+hex = "0.4"
+rand = "0.8"
+# Tx public key from the derived scalar (R = r·G). Version/features mirror
+# `shekyl-crypto-pq`'s pin.
+curve25519-dalek = { version = "4", features = ["zeroize"] }
+
+[dev-dependencies]
+# Deterministic placeholder-recipient derivation (tests/placeholder_recipients.rs).
+sha2 = { workspace = true }
+
+[lints]
+workspace = true

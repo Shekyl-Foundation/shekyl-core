@@ -194,18 +194,28 @@ governed institution funded voluntarily — whether through founder donations,
 community fundraising, or other means decided at that time. No coins are
 reserved or earmarked for this purpose at launch.
 
-**Pre-launch treasury (mainnet and stagenet).** Until production wallets
-can emit final founder addresses, genesis allocates the full 100_000 SKL
-founder pool to a single on-chain treasury output per network. Keys are
-deterministic placeholders (domain-separated BIP-39 entropy; see
-the `shekyl-dev` repository (`tools/genesis_builder/GENESIS_BUILD_INFO.txt`) and
-`rust/shekyl-crypto-pq/examples/gen_genesis_addrs.rs`), not operational
-founder wallets. Testnet continues to use five separate developer outputs
-for integration testing.
+**Genesis shape and reproducibility.** Genesis carries the five-output
+20,000 SKL split on **every** network (the earlier single combined
+treasury output on mainnet/stagenet is retired). The genesis coinbase is
+built by the Rust `geblock` tool (`rust/shekyl-genesis-tool`) from the
+committed recipients files `config/genesis_recipients.{mainnet,testnet,stagenet}.json`,
+with a **deterministic transaction key** derived from the recipients file
+itself (cSHAKE256, customization `shekyl/genesis-txkey-v1`; full spec in
+the tool's `txkey` module). Genesis is transparent by design — CT type
+Null, cleartext amounts, published recipients — so the public derivation
+discloses nothing beyond this document, and it makes the pinned
+`GENESIS_TX` byte-reproducible by anyone: `geblock verify` rebuilds all
+three networks from the committed files and byte-compares against
+`src/cryptonote_config.h`.
 
-The specific genesis addresses for each founder on mainnet/stagenet will
-be published in `docs/GENESIS_ALLOCATIONS.md` when production wallet
-addresses replace the treasury placeholders.
+**Pre-launch placeholders.** Until the founder wallet ceremony runs, the
+committed recipients files hold deterministic placeholder addresses
+(label-derived keys; recorded and regenerable via the tool's
+`placeholder_recipients` test), not operational founder wallets. The
+final fresh-entropy founder addresses will replace them, and the
+specific genesis addresses for each founder will be published in
+`docs/GENESIS_ALLOCATIONS.md` together with the exact reproduction
+commands.
 
 ---
 

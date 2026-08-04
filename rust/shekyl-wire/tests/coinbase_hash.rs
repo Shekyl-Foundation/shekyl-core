@@ -27,8 +27,8 @@
 //! Rust agree without a third hex constant.
 //!
 //! Mining address note: `capture_coinbase.py` mines to a freshly derived
-//! current-format regtest address (`vectors/regtest_mining_recipients.json`),
-//! NOT the pre-#327 stale-format `shekyl-dev` genesis treasury address — see
+//! current-format regtest fixture address (`vectors/regtest_mining_recipients.json`),
+//! NOT the genesis treasury — a vector concern, not the treasury allocation; see
 //! `vectors/README.md` for the full rationale.
 
 use shekyl_archival_retention::empty_attestation_root;

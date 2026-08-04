@@ -4164,6 +4164,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-genesis-tool"
+version = "3.1.0"
+dependencies = [
+ "clap",
+ "curve25519-dalek",
+ "hex",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shekyl-address",
+ "shekyl-archival-retention",
+ "shekyl-consensus",
+ "shekyl-crypto-hash",
+ "shekyl-crypto-pq",
+ "shekyl-fcmp",
+ "shekyl-wire",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-logging"
 version = "3.1.0"
 dependencies = [
