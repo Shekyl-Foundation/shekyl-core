@@ -9954,3 +9954,198 @@ and the price does not move down.**
 remaining half, drops §57 to the floor, and is the input that determines what
 the bandwidth-versus-epoch trade is actually buying. **Deciding a constant
 first means deciding it against a severity that is about to change.**
+
+## 59. R-1 built — mixed eligibility, one roll at entry
+
+**2026-08-03.** F-6's omission half, specified since §30 and the longest-unbuilt
+item in the arc. §58.3 verified it was still unbuilt: configuration B's
+deletion removed the noise flag and left the zone-selection oracle untouched.
+
+### 59.1 The decision, and why coherence is not a second one
+
+**A transaction that enters the anonymity zone's stem stays on it until it
+fluffs. Relayed transactions enter with probability `p`; the roll happens
+once, at entry, not per hop.**
+
+**Coherence is the absence of a second roll, not a policy beside it.** Roll per
+hop and the stem returns to clearnet after one step, leaving the zone carrying
+originated traffic only — which is the oracle R-1 removes. There is no version
+of the first decision without the second.
+
+**`tx_relay` is the exit, and it is load-bearing.** The inherited
+`origin != invalid → clearnet` line is what carries an anonymity-*originated*
+transaction to the public network after it fluffs. Swallowing that line into
+coherence would strand those transactions in the anonymity subgraph — a
+liveness break that would read as correct. So coherence is gated on
+`stem | forward | local`, the three pre-fluff states `notify::send_txs`
+already treats together.
+
+### 59.2 `p` is per-hop, and that is the number that gets misquoted
+
+`MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS = 200` — **2 % per hop.** Every node
+receiving a relayed transaction over clearnet rolls independently, so over a
+stem of `1/q ≈ 5` hops the **network-level** rate is `1 − (1−p)^5 ≈ 9.6 %`.
+
+| per-hop | network-level |
+| --- | --- |
+| 0.01 | 0.049 |
+| **0.02** | **0.096** |
+| 0.05 | 0.226 |
+
+Precision against the origin is ~2.4 % at a network-level 1 % and ~0.5 % at
+5 %, and bandwidth is negligible across the range — **not knife-edge, so
+chosen generously rather than tuned.** Set against an origination rate of one
+transaction per node per day (§34's envelope); if that moves, this moves with
+it, because what matters is diverted-relayed volume *relative to* originated
+volume and only the numerator is set here.
+
+**The witness pins both figures**, because a reader who takes 2 % as the
+network rate is off by five. Control: raising the constant to 10 % fires the
+network-level arm.
+
+### 59.3 What crosses the boundary
+
+**A verdict, not a probability.** `shekyl_relay_zone_divert_relayed_tx()`
+answers yes/no; the rate, its per-hop meaning and the reasoning stay in Rust.
+Handing C++ the probability would put the draw — and a second place to get the
+rate wrong — on the wrong side of the seam.
+
+*Named into the signature gate's coverage:* the first draft was
+`shekyl_relay_divert_to_anonymity_zone`, which the gate does not see (it keys
+on `shekyl_relay_zone_`). **An FFI export outside the gate is an ungated
+surface**, so it was renamed rather than the gate widened. 21 exports checked.
+
+### 59.4 One deleted test, recorded because deleting it was the right call
+
+The roll uses `bounded_uniform` rather than `% 10_000`. A first draft justified
+that as bias defence and added a test for it. **The test could not fail**: at
+this range the modulo bias is `2^64 mod 10_000 / 2^64` ≈ **8.8 × 10⁻¹⁷**,
+needing ~10³² samples to observe — and the control (swapping in `%`) passed
+cleanly.
+
+**So the comment was corrected and the test deleted.** `bounded_uniform` stays
+for consistency with every other draw in the crate, which is the true reason.
+A comment claiming a defence invites a test that cannot fail, and one that
+cannot fail is worse than none — it reports safety it never checked.
+
+### 59.5 What this closes
+
+- **F-6's omission half.** The anonymity zone now carries relayed traffic, so
+  a peer holding a stem slot there no longer knows everything it sees is the
+  sender's own.
+- **§57's severity drops to the floor.** A retained fragment prefix attributes
+  like any stem observation — precision `C1 ≈ f` — rather than directly. §57's
+  channel remains; it stops being above the floor.
+- **The Tor zone's `in_mapping_` stops being nil-only.** Every observation
+  there shared one source key, so §35.4's distinct-source admissibility gate
+  (≥ 2 distinct sources) could **never** be satisfied and §12.11's
+  per-successor signal had one bucket. R-1 is a precondition for the
+  reputation mechanism functioning on the anonymity zone at all.
+
+**Unblocked, not done**: the constants round can now price bandwidth-versus-
+epoch against the post-R-1 severity rather than the inherited one (§58.5).
+
+### 59.6 Dual-stack: one selection, or the oracle survives on the preferred zone
+
+**2026-08-04.** The first landing diverted with `m_network_zones.rbegin()` —
+tor by enum order — while originated traffic kept the size-`>2` loop that
+prefers i2p when usable. On a dual-stack node the mix therefore landed on tor
+and i2p continued to carry this node's originated traffic only: §30.1's
+acceptance criterion failed on the preferred zone.
+
+**The fix is not a second policy.** Originated placement and R-1 divert share
+one `select_anonymity` (noise-filled, else outbound; i2p before tor). The mix
+is only a mix if both classes take that path. When the roll says divert but
+no anonymity zone is usable, relayed traffic falls through to clearnet — the
+roll is eligibility, not a drop commitment, and clearnet was always that
+traffic's home. Originated traffic still fails closed without a usable
+anonymity zone: leaking an origin over clearnet is the first-spy case §30.5
+forbids.
+
+### 59.7 Review round — the roll fired on re-relays, and the two-zone divert could not fall back
+
+**2026-08-04.** Two findings on #389, both real, both in the routing change.
+
+**The roll fired on every mempool re-relay, not once at entry.**
+`relay_txpool_transactions` re-sends due stem traffic as
+`relay_transactions(stem_req, nil_source, zone::public_, relay_method::stem)`
+— so `origin == public_`, which coherence cannot match, and the verdict was
+drawn again. Two consequences, and the second is the one that breaks a stated
+number: the same transaction could be diverted on one pass and sent to
+clearnet on the next, **and the effective rate over `k` re-relays becomes
+`1 − (1−p)^k` rather than the `p` §59.2 states and pins.**
+
+`source` is the clean discriminator — a real connection on arrival, nil on a
+pool re-relay — so the roll is now gated on `!source.is_nil()`. **One roll at
+entry means one roll per entry, and a re-relay is not an entry**: it carries no
+arrival zone to cohere with, and it goes to clearnet exactly as it did before
+R-1. That bounds R-1's scope honestly: diversion and coherence act on the
+arrival path, and the pool path is unchanged.
+
+**The two-zone divert could not fall through to clearnet.**
+`select_anonymity` returned `rbegin()` unconditionally when
+`m_network_zones.size() <= 2`, skipping the readiness check the three-zone
+path applies — so a winning divert routed relayed traffic onto a zone with no
+outbound connections and lost it, while the *same* zone would have been
+rejected on a three-zone node.
+
+The fix is a `require_usable` split, because the two callers are correct in
+**opposite** directions:
+
+- **Originated** traffic takes the zone regardless and **fails closed** —
+  falling back to clearnet would put our own transaction on the public
+  network, the first-spy case §30.5 exists to prevent. Better to send nothing.
+- **Relayed** traffic diverted by the roll must **not** fail closed. Its home
+  was always clearnet, the roll is *eligibility rather than a drop
+  commitment*, and dropping a transaction that is not ours protects nobody
+  while costing the network a relay.
+
+**Both defects share a shape worth naming: R-1 routed relayed traffic through
+paths built for originated traffic, and inherited their assumptions.** The
+unconditional two-zone return and the roll-per-send were both correct for a
+sender deciding about its own transaction, and wrong for a node deciding about
+someone else's.
+
+### 59.8 Two dormant defects that a *scheduled* change would have woken
+
+**2026-08-04.** Two further findings on #389. Both are unreachable today, both
+become reachable at the same moment, and that moment is **planned work** —
+which is what makes them worth fixing now rather than filing.
+
+**A failed diverted send dropped the batch.** `send` **moves** `txs`, so
+returning its result directly meant a failed anonymity send left nothing to
+hand to clearnet. §59.7 established that for relayed traffic *the roll is
+eligibility, not a drop commitment* — but that held only for an **unusable
+zone**, not for a **send error**. Now a copy is kept across the diverted
+attempt and restored on failure. The copy is paid only on the diverted path
+(~2 % of relayed traffic) and never on the clearnet path, which keeps the move.
+
+**The noise-priority tier ignored `require_usable`.** §59.7 added the
+readiness gate to the `size() <= 2` branch and to the second three-zone loop,
+but not to the first — so a three-zone node could hand a diverted transaction
+to a noise-preferred zone with no outbound connections. Noise priority says
+which zone is *preferred*, not that it can send.
+
+### 59.8.1 Why they are the same finding
+
+**Both are dormant behind §41's covert deletion, and both wake with §30's
+composition.**
+
+- The reachable failure in the first is `notify::send_txs`'s
+  **covert fragment-oversize** check — the only `return false` a stem send on
+  an anonymity zone can hit. Covert is off since §41, so it cannot fire.
+- The second gates on `status.has_noise`, which is false everywhere for the
+  same reason.
+
+So the covert channel's return does not merely restore a feature — **it
+activates two latent paths in code written while it was off.** §57–58 spent a
+round on fragment behaviour precisely because that surface is coming back; the
+oversize failure is the same surface, one layer up.
+
+> **The general shape, worth carrying: a deletion that makes a path
+> unreachable does not make code written afterwards correct — it makes the
+> code's *incorrectness* unobservable until the deletion is reversed.** Both
+> defects were introduced after §41 and would have been caught immediately
+> before it. A planned reactivation is therefore a review trigger for
+> everything written in the interval, not just for the mechanism being
+> restored.
