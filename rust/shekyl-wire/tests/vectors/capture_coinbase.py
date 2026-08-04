@@ -29,9 +29,10 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 SHEKYLD = os.environ.get("SHEKYLD_BIN", os.path.join(ROOT, "build", "bin", "shekyld"))
 # Default to a freshly-derived current-format regtest address committed beside the
 # vectors (regenerate via `cargo test -p shekyl-wire --test emit_regtest_addr
-# -- --ignored --nocapture`). The shekyl-dev genesis treasury addresses are pre-#327
-# stale format (65-byte classical segment, missing the 16-byte ek_bind tag), so
-# get_account_address_from_str rejects them and generateblocks cannot mine to them.
+# -- --ignored --nocapture`). The genesis treasury recipients live in-repo at
+# config/genesis_recipients.*.json (current post-#327 format), but the mining
+# target here is deliberately a local fixture: what gets mined to is a vector
+# concern, not the treasury allocation.
 # Env: prefer MINING_RECIPIENTS; GENESIS_RECIPIENTS kept as a legacy alias.
 MINING_RECIPIENTS_PATH = os.environ.get(
     "MINING_RECIPIENTS",

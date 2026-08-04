@@ -19,6 +19,16 @@ members = [
     # (docs/design/GENESIS_TX_WIRE_FORMAT.md, Decision 1 / §4).
     "shekyl-wire",
 
+    # Genesis build/verify tool (`geblock`) — Rust replacement for the deleted
+    # C++ genesis_builder (formerly shekyl-dev/tools/genesis_builder). Derives
+    # the genesis tx key deterministically (domain-separated cSHAKE over the
+    # recipients file), so the pinned GENESIS_TX in src/cryptonote_config.h is
+    # byte-reproducible from config/genesis_recipients.*.json — the property
+    # the fresh-txkey C++ tool could never provide and the config-pin CI gate
+    # rests on. Also owns the fresh-entropy genesis wallet ceremony
+    # (`geblock gen-wallets`).
+    "shekyl-genesis-tool",
+
     # Structural tx-weight predictor (byte-mirror of shekyl_wire::Transaction::write)
     # + bounded input/output counts. Hoisted from shekyl-engine-core so the wallet
     # fee path and shekyl-economics-sim share one single-sourced weight model
