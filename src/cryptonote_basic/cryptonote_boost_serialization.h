@@ -42,7 +42,6 @@
 #include <boost/serialization/split_free.hpp>
 #include <boost/version.hpp>
 #include <optional>
-#include <stdexcept>
 #include <variant>
 
 // Use Boost's own std::variant serialization when available (Boost >= 1.78)
@@ -126,6 +125,25 @@ namespace boost { namespace serialization {
 #include "crypto/crypto.h"
 #include "fcmp/rctTypes.h"
 #include "fcmp/rctOps.h"
+
+namespace cryptonote
+{
+  // Content-validation failure inside a boost serializer (non-canonical or
+  // coupling-violating data). Derives from archive_exception so the archive
+  // load/save paths' corruption handling catches it exactly like boost's own
+  // throws, but overrides what(): the base's other_exception code renders only
+  // "unknown derived exception" — it is boost's designated slicing marker for
+  // derived exceptions like this one, not a message carrier. `msg` must be a
+  // string literal (the pointer is stored, not copied).
+  struct boost_archive_content_error : boost::archive::archive_exception
+  {
+    explicit boost_archive_content_error(const char* msg) noexcept
+      : boost::archive::archive_exception(boost::archive::archive_exception::other_exception),
+        m_msg(msg) {}
+    const char* what() const noexcept override { return m_msg; }
+    const char* m_msg;
+  };
+}
 
 namespace boost
 {
@@ -269,14 +287,11 @@ namespace boost
     {
       a & x.bond_spend_pk;
       if (x.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
-        // std::runtime_error, not archive_exception(other_exception, ...): the
-        // latter's what() is "unknown derived exception" — the message never
-        // reaches a log. Only code-agnostic broad catches consume these paths.
-        throw std::runtime_error("archival bond-post bond_spend_pk length not canonical");
+        throw cryptonote::boost_archive_content_error("archival bond-post bond_spend_pk length not canonical");
     }
     else if (!x.bond_spend_pk.empty())
     {
-      throw std::runtime_error("bond_spend_pk is JoinMarket-coupled");
+      throw cryptonote::boost_archive_content_error("bond_spend_pk is JoinMarket-coupled");
     }
     a & x.holdings;
     a & x.bonded_total_atomic;
@@ -445,7 +460,7 @@ namespace boost
       return;
     }
     if (x.type != rct::CTTypeFcmpPlusPlusPqc)
-      throw std::runtime_error("Unsupported rct type"); // not archive_exception(other_exception): its what() drops the message
+      throw cryptonote::boost_archive_content_error("Unsupported rct type");
     a & x.enc_amounts;
     a & x.enc_labels;
     serializeOutPk(a, x.outPk, ver);
@@ -472,7 +487,7 @@ namespace boost
       return;
     }
     if (x.type != rct::CTTypeFcmpPlusPlusPqc)
-      throw std::runtime_error("Unsupported rct type"); // not archive_exception(other_exception): its what() drops the message
+      throw cryptonote::boost_archive_content_error("Unsupported rct type");
     a & x.enc_amounts;
     a & x.enc_labels;
     serializeOutPk(a, x.outPk, ver);
