@@ -87,6 +87,7 @@ from its **bond**, not from sharing a host.
 | **SPIKE-F-10** | **The price of co-serving, on both axes at once:** complete guard-set overlap (privacy) **and** `D*` 28.57 s → 44.00 s, **≥ ×1.54** (throughput). A **floor, measured once at N=2 on C-tor from one vantage** — not a characterization. Not architecture — the **cost of the layout the design forbids** | MEDIUM | **RETAINED AS A DETERRENCE FLOOR** (§12.0d) |
 | **SPIKE-F-11** | One persona under many simultaneous readers — **MEASURED** on four seed nodes in four regions. Reader concurrency does **not** materially degrade the persona (p50 10.9 s → 14.8 s across 4→32 readers); the tail is dominated by **circuit draw**, not by load | MEDIUM | **ANSWERED** (§18) — `q(120 s) ≤ 0.042` at every `N` |
 | **SPIKE-F-16** | **Circuit-latency dispersion dominates everything else.** Identical requests to the same persona span **4.49 s → 133.05 s (30×)**; per-region medians agree within 2.7 s. `D*` is a tail statistic and is therefore **non-monotonic in load** | **HIGH** (methodological) | **CONFIRMED (measured)** (§18) |
+| **SPIKE-F-17** | **The PoW client ceiling is a compile-time CLAMP, not a give-up.** The client solves at its own maximum and proceeds, so honest-client PoW cost is bounded by a **constant** — it cannot be driven arbitrarily high by service escalation. This **bounds SPIKE-F-15's coupling** | MEDIUM | **CONFIRMED (source)** (§19) |
 | **SPIKE-F-14** | §6a's three inbound protections are all **per-connection**; **nothing bounds aggregate load**, and `MaxStreams` is per-*circuit* so it does not either. A ~100-byte request returns ~3.33 MB — **~33 000× egress amplification** | **HIGH** (general, every `P`) | **CONFIRMED (source)** — both levers now built (§16) |
 | **SPIKE-F-15** | **PoW effort is adaptive (AIMD), so the DoS defense and the §8.3 margin are coupled — not independent as this report first recorded them.** `D*` was measured with PoW **disabled**; under escalation honest miners pay solve time and the distribution shifts toward the deadline | MEDIUM | **CONFIRMED (spec + measured on `dev`)** — immaterial at measured effort, **ceiling unmeasured** (§17) |
 | **SPIKE-F-7** | D4's payload is a **cost, not a blocker**: ~5 h of one-time regtest mining plus a batched extraction | INFO | **REFUTED as a halt** |
@@ -1159,6 +1160,85 @@ needs *sustained escalation*, which needs `QueueRate` tuned as a sensitivity tri
 (ambient load is ~3 intros/epoch, nowhere near tor's stock 250/s). The rig built
 here supports it — `serve-only` takes `SHEKYL_SPIKE_POW=tuned:<rate>:<burst>` —
 but it is a separate run.
+
+---
+
+## 19. SPIKE-F-17 — the ceiling is a clamp, which bounds SPIKE-F-15
+
+`c76cc6ad8` left "the client give-up ceiling" as the real pin input, and §17
+carried it as the regime where PoW could move `D*` materially. **Reading the
+pinned binary changes that framing**, and in the reassuring direction.
+
+### PoW is genuinely compiled in (a caveat now closed)
+
+§17 flagged that tor *accepting* the PoW arguments is not proof the defense is
+built. Verified on the pinned Expert Bundle 15.0.17:
+
+```text
+$ tor --list-torrc-options | grep -i pow
+HiddenServicePoWDefensesEnabled
+HiddenServicePoWQueueBurst
+HiddenServicePoWQueueRate
+```
+
+and the binary carries the implementation's own strings (`pow-params`,
+`Recalculated suggested effort: %u`, `tor_hs_pow_suggested_effort`). The caveat is
+discharged.
+
+### The ceiling is a clamp, and the client does not give up
+
+The client-side string is:
+
+> `Onion service suggested effort %d which is higher than we want to solve.`
+> `Solving at %d instead.`
+
+**The client clamps to its own maximum and still solves.** It does not abandon the
+fetch. And there is **no client torrc knob** for that maximum — the only
+PoW-related client option is `CompiledProofOfWorkHash` (which implementation to
+use, not how much effort to spend), so the bound is a **compile-time constant**,
+not operator-tunable.
+
+**Consequence for SPIKE-F-15.** §17's concern was that escalation drives honest
+miners' solve cost up without limit, shifting `D*` toward the deadline. That is
+**bounded**: however high a service escalates its `suggested_effort`, an honest
+client pays at most *solve-at-clamp*, a fixed quantity. The coupling between the
+DoS defense and the §8.3 margin is therefore **real but capped**, and the cap is a
+property of the client binary rather than of the attack.
+
+What remains genuinely unmeasured is the **value** of that constant and the solve
+time at it. Per `hspow-spec` the client bound is **10 000**; `c76cc6ad8` measured
+solve at effort 67 as median 0.19 s. Naive linearity would put solve-at-10 000
+near ~28 s — **but that is exactly the kind of unjustified extrapolation this
+report withdrew once already (§12.0d), and it is not asserted here.** It is
+directly measurable without any escalation rig, by solving at a fixed effort, and
+that is the right way to close it.
+
+### Method findings from the escalation attempt (which did not escalate)
+
+An escalation run was attempted — service on the dev box with
+`PoW tuned:1:1`, four seed nodes flooding — and **failed to raise
+`suggested_effort` off 0**. Three things were learned that the next attempt needs:
+
+- **Bandwidth pressure is not queue pressure.** Flooding with full 3.33 MB fetches
+  drove a measurement fetch from 9.5 s to **109 s** — real congestion — with
+  **zero** escalation. The AIMD controller reacts to *rendezvous arrival rate*,
+  not bytes. Re-pointing the flood at a 404 path (full rendezvous, tiny response)
+  raised churn but still did not escalate within the run.
+- **`pow-params` is unreadable from the control port.** It lives in the
+  descriptor's **superencrypted** layer, so `GETINFO hs/service/desc/id/<addr>`
+  cannot show the service's current effort. An effort-watcher built on that
+  returned nothing, correctly.
+- **The right instrument is `MetricsPort`.** The binary exports
+  `tor_hs_pow_suggested_effort`. Reading that is a direct, unencrypted,
+  service-side observable — and unlike the descriptor it needs no decryption and
+  no fresh-client dance. Note that `ManagedTor`'s spawn surface is six typed
+  options with **no** `MetricsPort` knob, so wiring this is a typed-knob addition
+  (`actor.rs`), not a config change.
+
+**Disposition:** SPIKE-F-15's coupling is bounded by SPIKE-F-17. The residual —
+solve-time at the client clamp — is a small, self-contained measurement that needs
+no flood, no seeds, and no escalation. It should be done that way rather than by
+rebuilding the escalation rig.
 
 ---
 
