@@ -88,6 +88,7 @@ from its **bond**, not from sharing a host.
 | **SPIKE-F-11** | One persona under many simultaneous readers — **MEASURED** on four seed nodes in four regions. Reader concurrency does **not** materially degrade the persona (p50 10.9 s → 14.8 s across 4→32 readers); the tail is dominated by **circuit draw**, not by load | MEDIUM | **ANSWERED** (§18) — `q(120 s) ≤ 0.042` at every `N` |
 | **SPIKE-F-16** | **Circuit-latency dispersion dominates everything else.** Identical requests to the same persona span **4.49 s → 133.05 s (30×)**; per-region medians agree within 2.7 s. `D*` is a tail statistic and is therefore **non-monotonic in load** | **HIGH** (methodological) | **CONFIRMED (measured)** (§18) |
 | **SPIKE-F-17** | **The PoW client ceiling is a compile-time CLAMP, not a give-up.** The client solves at its own maximum and proceeds, so honest-client PoW cost is bounded by a **constant** — it cannot be driven arbitrarily high by service escalation. This **bounds SPIKE-F-15's coupling** | MEDIUM | **CONFIRMED (source)** (§19) |
+| **SPIKE-F-18** | **PoW-enabled ≠ PoW-active.** Below escalation the service advertises **no `pow-params` at all** and honest clients solve **nothing** — enabling the defense costs a quiescent persona zero, and is invisible until actually attacked | MEDIUM | **CONFIRMED (measured)** (§19a) |
 | **SPIKE-F-14** | §6a's three inbound protections are all **per-connection**; **nothing bounds aggregate load**, and `MaxStreams` is per-*circuit* so it does not either. A ~100-byte request returns ~3.33 MB — **~33 000× egress amplification** | **HIGH** (general, every `P`) | **CONFIRMED (source)** — both levers now built (§16) |
 | **SPIKE-F-15** | **PoW effort is adaptive (AIMD), so the DoS defense and the §8.3 margin are coupled — not independent as this report first recorded them.** `D*` was measured with PoW **disabled**; under escalation honest miners pay solve time and the distribution shifts toward the deadline | MEDIUM | **CONFIRMED (spec + measured on `dev`)** — immaterial at measured effort, **ceiling unmeasured** (§17) |
 | **SPIKE-F-7** | D4's payload is a **cost, not a blocker**: ~5 h of one-time regtest mining plus a batched extraction | INFO | **REFUTED as a halt** |
@@ -1239,6 +1240,54 @@ An escalation run was attempted — service on the dev box with
 solve-time at the client clamp — is a small, self-contained measurement that needs
 no flood, no seeds, and no escalation. It should be done that way rather than by
 rebuilding the escalation rig.
+
+## 19a. SPIKE-F-18 — enabling PoW costs a quiescent persona nothing
+
+A second escalation attempt (six hosts — four seeds + two 8-core miners — 160
+concurrent rendezvous attempts, against **both** an `ADD_ONION` service and a
+**native-torrc** service with `HiddenServicePoWQueueRate 1`) again **did not raise
+`suggested_effort` off 0**. But it produced a cleaner, decisive observation.
+
+**An idle client fetching the PoW-enabled service sees no `pow-params` at all.** A
+fresh client with tor at `info` verbosity fetched the native service in 5.7 s
+(HTTP 200) and logged **none** of the implementation's PoW strings — no `PoW
+params present in descriptor`, no solve. This is not a failure; it is the
+mechanism working as `hspow-spec` describes:
+
+> *"The service starts with a default suggested-effort value of 0, which keeps the
+> PoW defenses **dormant** until we notice signs of queue overload."*
+
+At effort 0 the descriptor carries **no `pow-params`**, so clients have nothing to
+solve. PoW is *armed*, not *active*.
+
+**Operational consequence, and it is favourable for the Foundation `P`.** Turning
+PoW on is **free in quiescence**: a persona that enables it pays nothing, its
+clients pay nothing, and it advertises nothing extra — the defense materialises
+*only* under genuine rendezvous-queue overload, and recedes again after. So PoW is
+a correct default to ship **enabled** on the uncompensated complete-tree persona
+(§16): no steady-state cost, protection exactly when attacked.
+
+### Why escalation did not reproduce (recorded so the next attempt does not repeat it)
+
+The rig was not the bottleneck: **client tor sat at < 2 % CPU, load 0.00**, so this
+was not the flood saturating the client side. The signature was 100 %
+client-side timeouts (`http_000`) at a 25 s bound. The most consistent reading is
+the interaction between `QueueRate 1` (the service dispatches one rendezvous per
+second) and the client timeout: at ~160 arrivals against 1/s service, all but the
+first few queue past 25 s and the clients **disconnect**, cancelling their queued
+requests faster than the AIMD's overload condition persists at the verbosity
+available. `c76cc6ad8` *did* reach effort 67/128 from four seeds, so escalation is
+achievable — the difference is almost certainly that its flood requests **completed**
+(short successful rendezvous that churn the queue) rather than timing out. A future
+escalation rig should use a **completing** load with a longer client timeout, and
+observe effort through **`MetricsPort`** (`tor_hs_pow_suggested_effort`) rather than
+the superencrypted descriptor or the notice-level log — both of which this run
+confirmed cannot show it (§19).
+
+**This does not change any disposition.** SPIKE-F-17 bounds the honest-client cost
+from source regardless of achievable effort; SPIKE-F-18 shows the quiescent cost is
+zero; and the one residual (solve-time at the clamp) is measured by solving at a
+fixed effort, not by a flood.
 
 ---
 
