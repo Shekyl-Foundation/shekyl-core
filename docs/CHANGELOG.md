@@ -24,15 +24,19 @@
   build. The placeholder-era generator test is deleted with the era.
 
   Derived artifacts re-pinned in the same change: the `mining_parity`
-  frozen genesis ids, and the `shekyl-wire` regtest vectors
+  frozen genesis ids; the `shekyl-wire` regtest vectors
   (`regtest_coinbase_h{0,1,2}.block` + hashes; h0 **is** the mainnet genesis,
   so it now carries five outputs — `coinbase_roundtrip` asserts the count per
-  height). Each network's genesis id is confirmed by three independent
-  derivations: `geblock block-id` (pure Rust), the C++
+  height); and the `shekyl-rpc-types` §3.4 txid-oracle miner-tx blobs
+  (`regtest_coinbase_h{0,1}.tx` + pins), which extract from those wire
+  vectors and must move with them. Each network's genesis id is confirmed by
+  three independent derivations: `geblock block-id` (pure Rust), the C++
   `generate_genesis_block` path in `mining_parity`, and the live-daemon RPC
-  capture. `mining_parity` additionally asserts the shipped genesis
-  `tx_extra` is a fixed point of C++ `sort_tx_extra`, making geblock's
-  canonical-emit-order claim executable against the real sorter.
+  capture (`coinbase_hash` also CI-cross-anchors h0 to the published mainnet
+  id). `mining_parity` asserts the shipped genesis `tx_extra` is a fixed
+  point of C++ `sort_tx_extra` **and** the explicit field order
+  `0x01 → 0x06 → 0x07`, making geblock's canonical-emit-order claim fully
+  executable against the real sorter and field parser.
 
 - **`docs/GENESIS_ALLOCATIONS.md` published**, fulfilling the
   `GENESIS_TRANSPARENCY.md` §5 commitment: per-network allocation tables,

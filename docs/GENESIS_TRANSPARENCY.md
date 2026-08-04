@@ -195,7 +195,7 @@ community fundraising, or other means decided at that time. No coins are
 reserved or earmarked for this purpose at launch.
 
 **Genesis shape and reproducibility.** Genesis carries the five-output
-20,000 SKL split on **every** network (the earlier single combined
+20,000 SHEKYL split on **every** network (the earlier single combined
 treasury output on mainnet/stagenet is retired). The genesis coinbase is
 built by the Rust `geblock` tool (`rust/shekyl-genesis-tool`) from the
 committed recipients files `config/genesis_recipients.{mainnet,testnet,stagenet}.json`,

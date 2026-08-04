@@ -21,10 +21,11 @@ claim you have to take on trust. See [Reproducing genesis](#reproducing-genesis)
 | Foundation allocation | none |
 | Premine beyond the above | none |
 
-Genesis is the only block whose contents are not earned by proof of work,
-and it is deliberately small, equal, and public. All five allocations are
-identical; there is no tiered or preferential distribution. The remaining
-99.997671% of all SHEKYL that will ever exist must be mined.
+Amounts use the full currency name **SHEKYL** (the ticker SKL is not used
+in this document). Genesis is the only block whose contents are not earned
+by proof of work, and it is deliberately small, equal, and public. All five
+allocations are identical; there is no tiered or preferential distribution.
+The remaining 99.997671% of all SHEKYL that will ever exist must be mined.
 
 Genesis outputs carry **cleartext amounts** (CT type Null) — unlike every
 later transaction, they are not confidential. That is intentional: the
@@ -40,11 +41,11 @@ Source of truth: [`config/genesis_recipients.mainnet.json`](../config/genesis_re
 
 | # | Label | Amount | Address |
 |---|---|---|---|
-| 1 | Founder allocation 1 | 20,000 SKL | `shekyl1q9y7r7cn83zne…xqjudqx2ex3q` (2064 chars) |
-| 2 | Founder allocation 2 | 20,000 SKL | `shekyl1q8slynhuac3hu…mz3c8s48rrt0` (2064 chars) |
-| 3 | Founder allocation 3 | 20,000 SKL | `shekyl1q9g0g2vmt8fzx…9epsysdwr77m` (2064 chars) |
-| 4 | Founder allocation 4 | 20,000 SKL | `shekyl1qyuvwck4vqyrp…z32unsvq9jqx` (2064 chars) |
-| 5 | Founder allocation 5 | 20,000 SKL | `shekyl1qypaqfqxflcr9…leqzus5pdly4` (2064 chars) |
+| 1 | Founder allocation 1 | 20,000 SHEKYL | `shekyl1q9y7r7cn83zne…xqjudqx2ex3q` |
+| 2 | Founder allocation 2 | 20,000 SHEKYL | `shekyl1q8slynhuac3hu…mz3c8s48rrt0` |
+| 3 | Founder allocation 3 | 20,000 SHEKYL | `shekyl1q9g0g2vmt8fzx…9epsysdwr77m` |
+| 4 | Founder allocation 4 | 20,000 SHEKYL | `shekyl1qyuvwck4vqyrp…z32unsvq9jqx` |
+| 5 | Founder allocation 5 | 20,000 SHEKYL | `shekyl1qypaqfqxflcr9…leqzus5pdly4` |
 
 Genesis identity:
 
@@ -60,11 +61,11 @@ Source of truth: [`config/genesis_recipients.stagenet.json`](../config/genesis_r
 
 | # | Label | Amount | Address |
 |---|---|---|---|
-| 1 | Founder allocation 1 | 20,000 SKL | `sshekyl1q8tpl0cj84zk…00568qam38dc` (2067 chars) |
-| 2 | Founder allocation 2 | 20,000 SKL | `sshekyl1q9fet8jhlwxa…4cy77qkxahm5` (2067 chars) |
-| 3 | Founder allocation 3 | 20,000 SKL | `sshekyl1qy69mmkk9aly…xad49sykauun` (2067 chars) |
-| 4 | Founder allocation 4 | 20,000 SKL | `sshekyl1q92cx59c6630…lahv3s2z5yst` (2067 chars) |
-| 5 | Founder allocation 5 | 20,000 SKL | `sshekyl1qyspctq2y88a…tw5cwsqk2u2q` (2067 chars) |
+| 1 | Founder allocation 1 | 20,000 SHEKYL | `sshekyl1q8tpl0cj84zk…00568qam38dc` |
+| 2 | Founder allocation 2 | 20,000 SHEKYL | `sshekyl1q9fet8jhlwxa…4cy77qkxahm5` |
+| 3 | Founder allocation 3 | 20,000 SHEKYL | `sshekyl1qy69mmkk9aly…xad49sykauun` |
+| 4 | Founder allocation 4 | 20,000 SHEKYL | `sshekyl1q92cx59c6630…lahv3s2z5yst` |
+| 5 | Founder allocation 5 | 20,000 SHEKYL | `sshekyl1qyspctq2y88a…tw5cwsqk2u2q` |
 
 Genesis identity:
 
@@ -80,11 +81,11 @@ Source of truth: [`config/genesis_recipients.testnet.json`](../config/genesis_re
 
 | # | Label | Amount | Address |
 |---|---|---|---|
-| 1 | Developer 1 | 20,000 SKL | `tshekyl1q849z9k40wpj…7qun4s3prjf4` (2067 chars) |
-| 2 | Developer 2 | 20,000 SKL | `tshekyl1q9c7ffknyduf…yhzf4q5qx6yq` (2067 chars) |
-| 3 | Developer 3 | 20,000 SKL | `tshekyl1qxrg5vxx7y0m…2fg0zs9x74gn` (2067 chars) |
-| 4 | Developer 4 | 20,000 SKL | `tshekyl1q9h4aw68zfe3…0lkhnszd0epx` (2067 chars) |
-| 5 | Developer 5 | 20,000 SKL | `tshekyl1q8eagpjhvee9…qnn9fq4jnkjy` (2067 chars) |
+| 1 | Developer 1 | 20,000 SHEKYL | `tshekyl1q849z9k40wpj…7qun4s3prjf4` |
+| 2 | Developer 2 | 20,000 SHEKYL | `tshekyl1q9c7ffknyduf…yhzf4q5qx6yq` |
+| 3 | Developer 3 | 20,000 SHEKYL | `tshekyl1qxrg5vxx7y0m…2fg0zs9x74gn` |
+| 4 | Developer 4 | 20,000 SHEKYL | `tshekyl1q9h4aw68zfe3…0lkhnszd0epx` |
+| 5 | Developer 5 | 20,000 SHEKYL | `tshekyl1q8eagpjhvee9…qnn9fq4jnkjy` |
 
 Genesis identity:
 

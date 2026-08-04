@@ -34,14 +34,19 @@ fn hex32(bytes: &[u8; 32]) -> String {
 /// (blob, daemon-captured txid) pairs. The txid hex is copied from
 /// `shekyl-wire/tests/vectors/regtest_coinbase_hashes.json` — C++
 /// `get_transaction_hash` output — never recomputed on the Rust side.
+/// Blobs are the miner txs extracted from the matching
+/// `regtest_coinbase_h{0,1}.block` vectors (re-extract with
+/// `cargo test -p shekyl-wire --test extract_rpc_oracle -- --ignored --nocapture`
+/// after any wire-vector re-capture).
 const ORACLE_CORPUS: [(&[u8], &str); 2] = [
     (
         include_bytes!("vectors/regtest_coinbase_h0.tx"),
-        "e8718621fa0e3fec9fda9251caaa1b19ceaef76f56ed00126412dc60e6dc0ed7",
+        // mainnet genesis miner_tx (regtest h0 shares GENESIS_TX)
+        "c9a86b116babf1844f2b6c4549e29f8e863c248581b41cbed6b19ca2a69cf459",
     ),
     (
         include_bytes!("vectors/regtest_coinbase_h1.tx"),
-        "6eb4e78a369270447c1a4416bcebc0fd7bf1b9b8de1976962ad87313c8adc52e",
+        "02a5dd69ed4dfc68d40da0e7f12470dd7b7cf445de54524d43822bd081a766fb",
     ),
 ];
 

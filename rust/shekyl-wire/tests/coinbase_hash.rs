@@ -16,30 +16,31 @@
 //! `vectors/capture_coinbase.py`. Regenerate the JSON and the `*.block` blobs
 //! together; nothing here is hand-copied, so the vectors can't drift out of sync.
 //!
-//! Regenerated for the credit-wire cutover (2026-08-04): the `block_header` gained
-//! `attestation_root` (`ARCHIVAL_CREDIT_WIRE.md` §3), moving every block hash, so
-//! all three heights were recaptured. Genesis (h0) is deterministic and equals
-//! `mining_parity`'s mainnet genesis id; h1/h2 are mined regtest blocks.
+//! Genesis (h0) is deterministic and equals `mining_parity`'s mainnet genesis
+//! id (CI-enforced below); h1/h2 are mined regtest blocks.
 //!
 //! Empty-set invariant: every captured height (no pass records yet) must carry
 //! `empty_attestation_root()` — live-derived from `shekyl-archival-retention`, not
 //! a hand-copied pin — so C++ `empty_attestation_root()` / constructor default and
 //! Rust agree without a third hex constant.
 //!
-//! Mining address note: `capture_coinbase.py` mines to a **freshly derived
-//! current-format** regtest address (`vectors/regtest_mining_recipients.json`,
-//! reproducible via `cargo test -p shekyl-wire --test emit_regtest_addr --
-//! --ignored --nocapture`), NOT the genesis treasury address in `shekyl-dev`.
-//! The latter is a **pre-#327 stale format** — its classical segment is 65 bytes
-//! (`version‖spend‖view`) where the current decoder expects 81 (the 16-byte
-//! `ek_bind` tag from #327), so `get_account_address_from_str` rejects it and
-//! `generateblocks` could not mine. (The genesis block itself is unaffected:
-//! `GENESIS_TX` was baked from those addresses when they were current, and the
-//! daemon parses the pre-baked coinbase, not the address.) Regenerating the
-//! canonical genesis recipients is a separate, genesis-scoped concern.
+//! Mining address note: `capture_coinbase.py` mines to a local fixture address
+//! in `vectors/regtest_mining_recipients.json` (reproduce via
+//! `cargo test -p shekyl-wire --test emit_regtest_addr -- --ignored --nocapture`),
+//! **not** the genesis recipients in `config/genesis_recipients.*.json`. What
+//! gets mined to is a vector concern; the treasury allocation is a separate,
+//! genesis-scoped pin. h0 still **is** the mainnet genesis (regtest shares
+//! `GENESIS_TX`), so any genesis re-pin requires re-capturing this corpus.
 
 use shekyl_archival_retention::empty_attestation_root;
 use shekyl_wire::Block;
+
+/// Published mainnet genesis block id (`docs/GENESIS_ALLOCATIONS.md`,
+/// `mining_parity` frozen_id for MAINNET). h0 of this corpus must equal it:
+/// regtest shares mainnet `GENESIS_TX`, so the live-daemon capture and the C++
+/// `generate_genesis_block` path are two independent derivations of one id.
+const MAINNET_GENESIS_BLOCK_ID: &str =
+    "49d590b6e783c77dbe019436b283009c76de76ef6800211f56ca41a137a70d89";
 
 fn hex32(bytes: &[u8; 32]) -> String {
     let mut s = String::with_capacity(64);
@@ -91,5 +92,14 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
             block.header.attestation_root, empty_root,
             "height {height}: attestation_root must be empty_attestation_root(), not null_hash"
         );
+        if height == 0 {
+            // Cross-anchor: daemon-captured h0 must equal the published mainnet
+            // genesis id that mining_parity freezes independently via C++.
+            assert_eq!(
+                block_hash, MAINNET_GENESIS_BLOCK_ID,
+                "height 0 block_hash must equal the published mainnet genesis id \
+                 (mining_parity MAINNET frozen_id / GENESIS_ALLOCATIONS.md)"
+            );
+        }
     }
 }

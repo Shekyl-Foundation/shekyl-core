@@ -17,7 +17,15 @@ pinned in `../txid_kat.rs`. Provenance chain:
    daemon's `get_transaction_hash`, which is the §3.4 txid-authority
    equivalence (`docs/design/DAEMON_SUBMIT_VERDICT.md`).
 
-Regenerate by re-running `capture_coinbase.py` (which rewrites the
-shekyl-wire vectors), re-extracting the miner txs, and updating the pinned
-hex in `txid_kat.rs` from the regenerated JSON. All three move together;
-none is hand-derived.
+**A genesis / wire-vector re-pin is atomic or it is a lie.** Re-running
+`capture_coinbase.py` rewrites the shekyl-wire `*.block` blobs and
+`regtest_coinbase_hashes.json`; then re-extract these miner txs and update
+the pinned hex in `txid_kat.rs` from that JSON in the same change. None is
+hand-derived.
+
+```sh
+# After capture_coinbase.py has rewritten the shekyl-wire vectors:
+cd rust
+cargo test -p shekyl-wire --test extract_rpc_oracle -- --ignored --nocapture
+# then paste the printed miner_tx_hash values into txid_kat.rs
+```

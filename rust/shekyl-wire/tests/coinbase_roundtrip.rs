@@ -12,18 +12,18 @@
 //! `UnexpectedEof`. See `docs/design/GENESIS_TX_WIRE_FORMAT.md` (§9, §11) and
 //! `tests/vectors/README.md`.
 //!
-//! Regenerated for the credit-wire cutover (2026-08-04): the `block_header` gained
-//! `attestation_root`, so all three heights were recaptured. h1/h2 are mined to a
-//! freshly derived current-format regtest address (the genesis treasury address is
-//! pre-#327 stale format) — see `coinbase_hash.rs` for the full rationale.
+//! Corpus shape: h0 **is** the mainnet genesis (regtest shares `GENESIS_TX`) and
+//! therefore carries five founder outputs; h1/h2 are mined regtest blocks with a
+//! single miner output. Mining targets the local fixture in
+//! `vectors/regtest_mining_recipients.json` (vector isolation — not the genesis
+//! allocation). See `coinbase_hash.rs` and `vectors/README.md`.
 
 use shekyl_wire::Block;
 
 #[test]
 fn regtest_coinbase_blocks_round_trip_byte_identical() {
-    // Output count is height-dependent: h0 **is** the mainnet genesis (regtest
-    // shares GENESIS_TX), which pays the five 20,000 SKL founder allocations;
-    // mined blocks pay a single miner output.
+    // Output count is height-dependent: h0 = mainnet genesis (5 × 20,000 SKL);
+    // mined heights pay a single miner output.
     let corpus: [(u64, usize, &[u8]); 3] = [
         (0, 5, include_bytes!("vectors/regtest_coinbase_h0.block")),
         (1, 1, include_bytes!("vectors/regtest_coinbase_h1.block")),
