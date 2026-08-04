@@ -1533,6 +1533,22 @@ TEST_F(levin_notify, private_fluff_without_padding)
 TEST_F(levin_notify, private_stem_without_padding)
 {
     // private mode always uses fluff but marked as stem
+    //
+    // Load-bearing beyond its inherited scope (§63 of
+    // docs/design/DAEMON_RELAY_PRIVACY.md). Three assertions below pin facts
+    // four sections of relay-privacy analysis were written against the
+    // opposite of, and each is the tripwire for a different claim:
+    //
+    //   - every outbound peer is notified (not one successor): the anonymity
+    //     zone DIFFUSES, so there is no stem slot on it (§63.4);
+    //   - `dandelionpp_fluff` is true on the wire: the flag does not vary on
+    //     this zone, which is why exit (b) is not dominated (§63.7);
+    //   - the txpool is told `stem`: the embargo still arms, which is the
+    //     half of "stem and embargo present" that was right (§63.3).
+    //
+    // If a future change makes this zone run Dandelion++ — the design
+    // question §63.6 leaves open — this test SHOULD fail, and §63 is what to
+    // re-read before adjusting it.
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
     auto &notifier = *notifier_ptr;
 

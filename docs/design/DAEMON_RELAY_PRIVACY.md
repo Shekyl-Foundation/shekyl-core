@@ -6143,7 +6143,10 @@ undirected/`EveryPeer` graph**, and it is fed into the embargo derivation for
 **every** transport (`S(h) = Σ ceil((k·hop + F)/τ)`, `derive.rs`).
 
 On **configuration C** (Tor + `disable_noise`: Dandelion++ runs, embargo arms,
-fluff reach is `OutboundOnly`) the real fluff graph is **directed**. First
+fluff reach is `OutboundOnly`) the real fluff graph is **directed**.
+[**Corrected 2026-08-04 by §63.3: D++ does not run on C — only the embargo
+arms.** The finding below is unaffected and is if anything reinforced: it is
+about the *fluff* graph's directedness, and on C every send is a fluff.] First
 passage on a directed out-degree-`d` graph is strictly slower than on the
 undirected graph the instrument builds — fewer usable edges per hop (out-degree
 `peers` versus effective ~`2·peers`) *and* direction-constrained paths, both
@@ -6844,7 +6847,10 @@ the one a reasonable implementer reaches for first.
 If configuration B is removed before the composition lands, the fallback is
 **configuration C** (Tor + `disable_noise`): stem and embargo present, the
 constant-rate carrier gone, so a wire observer at the guard regains emission
-timing. **That is a real loss on the axis §20.9 was chartered to defend.**
+timing. [**Corrected 2026-08-04 by §63.3: the embargo is present, the stem is
+not.** C diffuses to its outbound set, marked `dandelionpp_fluff` on the wire
+while the txpool is told `stem`. The trade below is unaffected — it is about
+the carrier, not the stem — but "stem present" was wrong.] **That is a real loss on the axis §20.9 was chartered to defend.**
 
 **C strictly dominates B on the peer axis** (B is not merely absent there — it
 is *inverted* to ≈ 1) and **loses to B on the wire axis.**
@@ -9919,7 +9925,11 @@ floor" correct today and correct for the wrong reason.** It is origin-
 attributing because of **F-6's routing rule** — anything on that zone is `O`'s
 own — not because of the prefix. Under R-1's mixed eligibility the covert
 channel carries relayed traffic too, and a retained prefix attributes exactly
-like any stem observation: **precision back at `C1 ≈ f`.** The retention
+like any stem observation: **precision back at `C1 ≈ f`.** *(**Re-graded at §60: R-1 as shipped
+reaches ~71 % on the zone, not the floor — the calibration assumed an eligible
+set 1000× larger than what ships. §63.4 removed this sentence's second half:
+there is no nil-mapped slot on that zone, because it does not run
+Dandelion++, so ~71 % is uniform across the outbound set.**)* The retention
 channel does not disappear; it stops being above the floor.
 
 **Two consequences:**
@@ -9962,6 +9972,14 @@ item in the arc. §58.3 verified it was still unbuilt: configuration B's
 deletion removed the noise flag and left the zone-selection oracle untouched.
 
 ### 59.1 The decision, and why coherence is not a second one
+
+> **DORMANT AS SHIPPED — §63.8.** The coherence half cannot fire today: every
+> anonymity-zone release carries `dandelionpp_fluff`, so a receiver assigns
+> `relay_method::fluff` and `still_stemming` is false on arrival. R-1 as
+> shipped is **the roll alone**; the reasoning below describes the world
+> covert's return creates, and is correct for it. §60.1's 71.4 % and §63.5's
+> stem shortening were both computed against the roll alone and are
+> unaffected.
 
 **A transaction that enters the anonymity zone's stem stays on it until it
 fluffs. Relayed transactions enter with probability `p`; the roll happens
@@ -10149,3 +10167,604 @@ oversize failure is the same surface, one layer up.
 > before it. A planned reactivation is therefore a review trigger for
 > everything written in the interval, not just for the mechanism being
 > restored.
+
+## 60. §57 re-graded after R-1 — and the severity did not drop
+
+**2026-08-04.** §58.3 predicted that R-1 would drop §57's retained-prefix
+channel from origin-attributing to the `C1 ≈ f` floor, and §58.5 ordered R-1
+ahead of the constants round on exactly that basis. **R-1 landed. The
+prediction is false as shipped, and the reason is an eligibility-set
+mismatch nobody caught at the time.**
+
+### 60.1 The calibration and the implementation used different eligible sets
+
+§59.2 justified `p = 2 %` per hop against *"precision ~2.4 % at a
+network-level 1 % and ~0.5 % at 5 %."* **Those figures only reproduce if
+*all relayed traffic* is eligible for diversion.** What shipped diverts
+**pre-fluff traffic only** (`still_stemming` — `stem | forward | local`),
+which at §34's envelope is a different quantity by three orders of
+magnitude:
+
+| eligible set | per node per day |
+| --- | --- |
+| pre-fluff forwards (**shipped**) | ~20 |
+| all relayed, incl. fluff (**calibrated against**) | ~20 000 |
+
+A peer holding a stem slot sees `own + p·eligible`, so precision is
+`own / (own + p·eligible)`:
+
+| `p` | pre-fluff only (shipped) | all relayed (calibrated) |
+| --- | --- | --- |
+| 0.01 | 83.3 % | 0.5 % |
+| **0.02** | **71.4 %** | 0.2 % |
+| 0.05 | 50.0 % | 0.1 % |
+| 0.45 | 10.0 % | ~0 % |
+
+**R-1 as shipped moved the anonymity zone from 100 % own traffic to 71 %.
+That is a real improvement and it is not the floor.**
+
+### 60.2 And the slot that matters is worse than the average
+
+> **RETRACTED 2026-08-04 by §63.4.** There is no nil-mapped slot on the
+> anonymity zone: `in_mapping_` is D++ state and D++ never runs there, so the
+> zone diffuses to its whole outbound set. Precision is uniform, and §60.1's
+> **71.4 %** is the operative figure — 83.3 % was never a real slot. §35.5
+> itself is unaffected; it is a statement about the clearnet zone.
+
+§35.5 established that a node's own transactions all resolve through
+`in_mapping_[nil]` to a **single** successor, while relayed traffic carries
+real sources and spreads across the slots. So the diluting traffic does not
+land where the originations do:
+
+- **nil-mapped slot — carries every origination: 83.3 %** (was 100 %)
+- other slot: no own traffic at all
+
+**The adversary that matters is not the average one.** §35.5 recorded the
+nil-slot concentration as a *positive* — the node learns fastest about the
+peer with precision-1 visibility into its own stream. Here the same
+concentration works against us, and it was not carried across.
+
+### 60.3 What this does to the ordering
+
+**§57's severity is unchanged, so the fragment-rollover work is still a
+privacy fix.** §58.5's reasoning stands but its conclusion inverts: R-1 was
+correctly placed ahead of the constants round, and having run it we now know
+the constants round inherits a severity that is still high rather than one
+that dissolved.
+
+**Two exits, and the constants round has to pick — this is its first real
+input:**
+
+1. **Raise `p`.** Precision `≈ 10 %` needs `p ≈ 45 %` per hop against the
+   pre-fluff set — a different parameter regime, not a tweak, and it diverts
+   nearly half of forwarded stem traffic onto Tor.
+2. **Widen eligibility to include fluff-phase relays.** That is what the
+   calibration assumed, and it reaches the quoted precision at `p ≈ 1–2 %`.
+   It is a **design change, not a bug fix**: it would put ~400 relayed
+   transactions/day on the anonymity zone against ~0.4 today. The exit
+   remains intact — a fluff arriving with an anonymity `origin` is not
+   `still_stemming`, so it goes public on the next hop — but the bandwidth
+   and the F-7 outbound-only fluff rule both need pricing first.
+
+**Neither is chosen here.** What is settled is that §59.2's stated precision
+does not describe what shipped, and the constant's doc comment says so now.
+
+### 60.4 The shape
+
+**A parameter was calibrated against one population and implemented against
+another, and both steps were individually defensible.** Restricting diversion
+to pre-fluff traffic follows directly from *"stays on it until it fluffs"* —
+that sentence is about **coherence**, about a transaction already on the zone,
+and it was read as also defining **eligibility**, about which transactions may
+enter. Those are different questions and the design statement only answered
+one.
+
+> **The check that would have caught it: state the eligible population's
+> *size* next to the rate, not just its definition.** "2 % of relayed
+> transactions" and "2 % of pre-fluff forwards" read almost identically and
+> differ by 1000×. A rate without its denominator's magnitude is not a
+> specification — the same failure §59.2 already documented once for per-hop
+> versus network-level, one level down.
+
+## 61. The eligibility decision — exit (b) is dominated, and one repair is rejected on the merits
+
+**2026-08-04.** §60.3 left two exits open. One is settled by a wire fact.
+
+### 61.1 Exit (b) is dominated: the fluff flag is in the clear
+
+**Verified**: `NOTIFY_NEW_TRANSACTIONS` carries `dandelionpp_fluff` as a
+serialised field
+([`cryptonote_protocol_defs.h:200`](../../src/cryptonote_protocol/cryptonote_protocol_defs.h#L200),
+`KV_SERIALIZE_OPT` at :205, set at
+[`levin_notify.cpp:275`](../../src/cryptonote_protocol/levin_notify.cpp#L275)).
+**The receiving peer reads it directly.**
+
+So an adversary holding a slot on the anonymity zone **partitions incoming
+traffic by the flag** and looks only at the stem-flagged bucket.
+
+> **REVERSED 2026-08-04 by §63.7.** The flag does not vary on the anonymity
+> zone — `levin_notify.cpp:561` sends *"with `fluff` flag, even over i2p/tor"*
+> for everything the zone releases, and the stem path that would set it false
+> is clearnet-only. There is no stem-flagged bucket to look at, so exit (b)
+> dilutes the same bucket as exit (a) and is **not dominated**. Both exits
+> return to the constants round live. (Also §63.4: read "any outbound peer"
+> for "a slot" — the zone diffuses, so the population is ~12× larger.) Widening
+eligibility to fluff-phase relays adds ~400 tx/day of *fluff-flagged* traffic
+and leaves the stem bucket at **1 own + 0.4 diverted — 71.4 %, unchanged.**
+
+**The added traffic is pure cost.** It does not fool the peer, because the
+flag is not hidden from it; and it does not help against the wire observer,
+which sees encrypted Tor frames either way. **Exit (b) is dominated, not
+merely worse.**
+
+*This is the §32.6 grid doing its job: cover only helps against an observer
+that cannot already separate the buckets, and this one can.*
+
+### 61.2 Exit (a)'s cost is propagation, not bandwidth
+
+45 % of ~20 pre-fluff forwards is **~9 transactions per day** — bandwidth is
+not the constraint.
+
+~~The cost is that a diverted transaction stems *and fluffs* on the Tor zone
+under `OutboundOnly`, so its first passage is `F′ = 3250 ms`.~~ ~~**Withdrawn at
+§62: `tx_relay` is the exit, so a diverted transaction stems on Tor and
+*fluffs on clearnet* at `F ≈ 1250`. Exit (a) costs nothing in diffusion. The
+cost is in `hop`, and it is worse.**~~
+
+**Both readings withdrawn at §63.5. Neither described the path.** A diverted
+transaction is *diffused* on Tor — the anonymity zone has no stem — reaching
+the diverting node's whole outbound set on independent `FluffScheduler`
+deadlines, each recipient then fluffing on **clearnet** (`tx_relay` is the
+exit, and they receive it flagged `fluff`). So the shape is: **one
+Tor-transport diffusion, then a clearnet flood seeded from ~12 nodes at
+once.**
+
+Neither `F = 1250` nor `F′ = 3250` is that quantity. The two effects have
+opposite signs — one Tor latency added at the front, twelve-way seeding
+subtracted behind it — so **the net is a measurement, not a derivation, and
+it is not yet made.** It joins the constants round as such rather than being
+asserted here in a third direction. What *is* settled: exit (a)'s real
+constraint is §63.5's stem shortening, not diffusion.
+
+**That is the arc's usual direction — privacy over latency — and it is why
+"a different regime, not a tweak" was the right phrase**: at 45 % the Tor
+subgraph stops being a trickle and becomes a real fraction of the stem
+network, which changes propagation *modelling* rather than one constant.
+
+**And the two sides are priced against different denominators**, which is
+§60.4's lesson arriving immediately:
+
+| `p` | network-level diversion at Tor share 1.0 / 0.30 / 0.10 / 0.03 |
+| --- | --- |
+| 0.02 | 0.096 / 0.030 / 0.010 / 0.003 |
+| 0.10 | 0.410 / 0.141 / 0.049 / 0.015 |
+| **0.45** | **0.950 / 0.516 / 0.206 / 0.066** |
+
+**`p` is conditioned on the node running an anonymity zone.** The *privacy*
+gain is per-node (71 % → 10 %) and does not depend on adoption. The
+*propagation* cost is network-wide and depends on it entirely — 95 % of
+transactions touch Tor at full adoption, 21 % at 10 %. **Choosing `p` without
+stating an assumed Tor share sets one of those two and leaves the other
+unquoted.**
+
+### 61.3 Rejected on the merits: pinning diverted traffic to the nil slot
+
+> **§63.4 removes this proposal's motive and its target both.** The asymmetry
+> it repairs does not exist (precision is uniform), and there is no nil slot
+> on the anonymity zone to pin to — it diffuses. **The argument below is kept
+> because it is transport-independent and still binding**: it is the reason
+> not to reach for slot-pinning anywhere, including on clearnet where the
+> slots are real, and its closing principle is load-bearing for §63.5.
+
+§60.2's asymmetry — 83 % on the `in_mapping_[nil]` slot against 71 % averaged
+— has an obvious-looking repair: **pin diverted relayed traffic to the
+nil-mapped successor**, putting the dilution exactly where the originations
+land. **Do not.**
+
+It splits those transactions' source across successors, which is precisely
+what D++ Theorem 2 prices. **Verified in the paper**: one-to-one gives
+`D_OPT-OtO = Θ(p² log(1/p))`, all-to-one gives `D_OPT-AtO = Θ(p)` — and since
+`p < 1`, one-to-one is **quadratically better**. Departing from it raises
+precision against the *upstream* origin whose transactions we are re-routing.
+
+> **It improves our own precision by degrading someone else's, and if every
+> node does it the network is net worse.** That makes it not a trade we are
+> entitled to take unilaterally — the same reasoning that made §59.7's
+> relayed-versus-originated split necessary: a node deciding about someone
+> else's transaction does not get to spend their anonymity for its own.
+
+**Recorded as rejected now rather than when proposed**, because it is the
+first thing anyone will reach for on seeing §60.2's numbers, and the argument
+against it is not obvious from the numbers themselves.
+
+### 61.4 What remains
+
+> **Overtaken by §63.7 and §63.5.** Exit (a) is **not** the only live option —
+> §61.1's grounds for eliminating exit (b) were false, so both return to the
+> constants round. And exit (a) is now the *worse-placed* of the two: §63.5
+> prices its stem shortening at 64 % against exit (b)'s zero, because a
+> fluff-phase transaction has no stem left to shorten.
+
+Exit (a) is the only live option. **What it still owes before a value can be
+set: an assumed Tor share**, so the propagation cost has a denominator, and
+the F′ propagation model re-run at the diverted fraction — which is exactly
+the reverse-parity readout already owed and already unblocked (§44.5).
+
+**The two owed items and the constants round are now the same work.**
+
+## 62. F-12 — `time_between_hop_ms` is F-7 on the sibling parameter, and it predates R-1
+
+> **RETRACTED 2026-08-04 by §63.2, on the instrument this section built.**
+> F-12's premise — that Tor-latency hops sit inside a stem — is false: the
+> anonymity zone diffuses rather than stems, so its origin's stem length is 1
+> and the shipped embargo **over**-provisions that path by 75–82 %. The sign
+> is backwards. §62.1's sensitivity table is still correct arithmetic about
+> the clearnet stem; §62.2's conclusion is not. Kept in place, per the
+> standing rule that a retraction is recorded rather than deleted. §62.4
+> stands on its own and is unaffected.
+
+**2026-08-04. §61.2's cost was in the wrong term.** A diverted transaction
+does **not** fluff on the Tor zone: `tx_relay` is the exit, `still_stemming`
+excludes `fluff`, so the fluff falls through to clearnet at `F ≈ 1250`.
+**Exit (a) costs nothing in diffusion.** Corrected in place.
+
+The cost is in the other term of the same expression, and it is larger:
+
+```text
+S(h) = Σ_{k=1..h} ceil((k·hop + F) / τ)
+```
+
+### 62.1 One global `hop` for two transports
+
+`time_between_hop_ms = 175` is a **single field on `DandelionParams`** with no
+per-zone form — the derivation, and every conformance instrument, reads the
+same value whatever transport the stem runs on. **That is exactly what
+`fluff_return_ms` was before F-7** (§26, §44): a derivation input measured
+under one configuration and applied to another.
+
+An onion-service hop traverses **six relays** where clearnet traverses one, so
+the true Tor figure is plausibly 5–10× the clearnet one. **And 175 was never
+measured for either** — §21 recorded it as a provenance rather than a
+derivation, against a published Bitcoin figure of 300 ms.
+
+**A larger true `hop` means a larger `S(h)`, so more preemption exposure than
+the derivation accounts for — the under-provisioning direction, which
+`params.rs`'s own note names as a privacy loss.** Same sign as F-7.
+
+### 62.2 The magnitude, and it predates R-1 entirely
+
+Adopted embargo re-derived at each `hop`
+(`tests/hop_sensitivity.rs`, monotonicity and the 6× margin both asserted):
+
+| `hop_ms` | embargo | vs shipped |
+| --- | --- | --- |
+| **175** (shipped, assumed) | **190 s** | — |
+| 300 (published Bitcoin) | 216 s | +14 % |
+| 500 | 250 s | +32 % |
+| 875 (5×) | 328 s | +73 % |
+| 1050 (6×) | **366 s** | **+93 %** |
+| 1750 (10×) | 499 s | +163 % |
+
+> **This is not introduced by exit (a), or by R-1. Originated traffic has
+> always stemmed on the anonymity zone** — that was the *whole* of F-6's
+> oracle — **so every Tor-running node has been arming a clearnet-derived
+> embargo over Tor-latency hops since the beginning.** R-1 extends the
+> mismatch to relayed traffic; exit (a) makes it the common case.
+
+So F-12 is a **pre-existing** defect that the eligibility decision surfaces
+rather than causes, and its fix has the same shape as F-7's: provision at the
+worst transport, accepting recovery latency on the other, per §44.3's
+resolution of exactly this trade.
+
+### 62.3 The cluster is one derivation with four inputs
+
+§61.4 said the owed items and the constants round are the same work. **They
+are one derivation, and it has four inputs, not three:**
+
+1. **exit (a)'s `p`**, with its assumed Tor share stated (§61.2);
+2. **`F′` reverse-parity's three readouts** — owed since §44.5, unblocked;
+3. **`time_between_hop_ms` for the Tor path** — and for the clearnet path,
+   since neither is measured;
+4. **the embargo re-derivation** at whatever `(hop, F)` pair the diverted
+   fraction implies.
+
+**Picking `p` without the other three sets a constant against an embargo that
+moves underneath it.** At 6× hop that embargo is +93 %, which is not a
+correction a `p` chosen against the current value survives.
+
+> **Amended 2026-08-04 by §63.2/§63.5.** Input 3 loses its Tor half — there is
+> no Tor path through `hop` — and shrinks to *"the clearnet `hop` is a
+> provenance, not a derivation."* Input 4 loses its urgency with it: the
+> embargo does not move underneath `p`, so `p` can be chosen first. **A new
+> input replaces them**, and it does bind `p`: R-1 diverts into a diffusion,
+> shortening the D++ stem by `0.8·p` per hop (§63.5) — 7.4 % at `p = 2 %`,
+> 38 % at exit (a)'s `p ≈ 45 %`. That is a cost of `p` borne by third-party
+> transactions, and it is the term that now constrains the range.
+
+### 62.4 §60.4 is promoted from observation to required field
+
+Three instances now, each in different clothes:
+
+- `obs ≈ 1500·r` — a **free parameter** read as an unknown (§51.3);
+- R-1's eligible set — "2 % of relayed" versus "2 % of pre-fluff forwards",
+  1000× apart and read identically (§60.1);
+- `p`'s adoption denominator — a per-node privacy gain quoted beside a
+  network-wide propagation cost (§61.2).
+
+> **A rate that enters a decision carries its denominator at the definition
+> site, or it is not a number yet.** Not a habit to watch for — a field the
+> definition is incomplete without.
+
+## 63. The anonymity zone has never run a stem — and F-12 retracts on its own instrument
+
+**2026-08-04.** The dormant-path audit (§59.8.1's charter: a planned
+reactivation is a review trigger for everything written while the path was
+dark) did not find a dormant path. It found that the path the last four
+sections have been reasoning about **does not exist and never did.**
+
+### 63.1 The primitive fact, with its three citations
+
+**`notify::send_txs` dispatches `dandelionpp_notify` only when
+`zone_->nzone == public_`.** On i2p/tor, `stem`, `forward` and `local` fall
+through the `case` labels into the **`fluff`** arm:
+
+- `src/cryptonote_protocol/levin_notify.cpp:1222` — the `nzone == public_`
+  gate around the D++ dispatch; `:1231` — the `/* fallthrough */` into
+  `relay_fluff`.
+- `tests/unit_tests/levin.cpp:1536-1582`
+  (`levin_notify.private_stem_without_padding`) asserts it: a `stem` send on a
+  private zone reaches **every** outbound peer (5 of 10 connections), each
+  notification carries `dandelionpp_fluff == true`, and the local txpool is
+  told `relay_method::stem` — so the embargo arms.
+- `tests/unit_tests/levin.cpp:1588` names it in an inherited comment:
+  *"private mode always uses fluff but marked as stem."*
+
+`relay_fluff` → `shekyl_relay_zone_queue_fluff` is a **scheduled per-peer
+diffusion**, not an immediate broadcast: each outbound peer gets its own
+`FluffScheduler` deadline. Outbound-only, per `FluffReach::OutboundOnly`.
+
+> **So the anonymity zone diffuses where the doc has been saying it stems.**
+> One transmission to the whole outbound set, on independent delays, with the
+> wire told `fluff` and the txpool told `stem`. There is no successor, no
+> per-hop chain, and no `in_mapping_`.
+
+**This is inherited behaviour, not a regression** — the gate, the fallthrough
+and the naming comment all predate the Shekyl fork. What is ours is four
+sections of analysis written against the wrong mechanism.
+
+### 63.2 F-12 retracts — measured, on the instrument that raised it
+
+§62.2's load-bearing sentence was *"originated traffic has always stemmed on
+the anonymity zone… so every Tor-running node has been arming a
+clearnet-derived embargo over Tor-latency hops since the beginning."* **The
+premise is false: no Tor transmission has ever sat inside a stem.**
+
+`hop` spaces the nodes of a D++ stem. From a Tor-configured origin the stem
+length is **1 with certainty**, which is exactly `fluff_probability_pct = 100`
+in the production derivation — so the requirement is measurable without a new
+model. `tests/hop_sensitivity.rs::anonymity_zone_origin_is_over_provisioned_not_under`:
+
+| Tor `hop_ms` | single-hop requirement | vs shipped 190 s |
+| --- | --- | --- |
+| 175 | 34 s | −82 % |
+| 500 | 36 s | −81 % |
+| 1050 (6×) | 43 s | −77 % |
+| 1750 (10×) | 48 s | −75 % |
+
+**Even at ten times clearnet latency the anonymity path needs a quarter of the
+embargo that ships.** The two errors in §62 ran opposite — `h` was
+over-stated (1, not geometric-mean 5) and `hop` under-stated — and the
+`h` term dominates by an order of magnitude. **The global constant
+over-provisions the anonymity path; it does not under-provision it. F-12's
+sign is backwards and the finding retracts.**
+
+What survives, and only this: `time_between_hop_ms = 175` remains a
+**provenance rather than a derivation** (§21), and it governs the clearnet
+stem, where it is the same value for everyone. That is a measurement debt on
+one transport, not a two-transport mismatch.
+
+> **F-7 and F-12 look like the same finding and are not, for a reason worth
+> keeping: `fluff_return_ms` crosses transports because a fluff wave returns
+> over whatever network the node is on. `time_between_hop_ms` cannot, because
+> the stem it spaces only ever runs on one.** "A single global applied to two
+> transports" is a defect only where both transports reach the term.
+
+### 63.3 §26.2 and §30.6 are half-true, and the wrong half is sealed
+
+§30.6 recorded configuration C as *"stem and embargo present"*; §26.2 as
+*"Dandelion++ runs, embargo arms."* **The embargo half is right and the stem
+half is wrong** — the txpool is told `stem` and arms, while the wire gets a
+diffusion. Reopened here on the record rather than edited silently, per the
+standing rule on sealed text.
+
+This does not disturb F-7. F-7 measured the **fluff return** on configuration
+C, which is real, transport-crossing, and unaffected: the return traverses Tor
+whether or not a stem preceded it. §44's re-baseline stands.
+
+### 63.4 §60.2 retracts, in the favourable direction
+
+§60.2 imported §35.5's nil-slot concentration onto the anonymity zone: *"the
+nil-mapped slot carries every origination: 83.3 %."* **`in_mapping_` is D++
+state and D++ does not run there** — §35.5 is a statement about the clearnet
+zone, and a node with an anonymity zone never routes its own transactions to
+clearnet at all.
+
+Under diffusion every outbound peer sees every origination *and* every divert,
+so precision is uniform across the outbound set. **§60.1's 71.4 % is the
+operative number and §60.2's 83.3 % was never a real slot.**
+
+The correction has a second half that is not favourable, and it belongs to
+F-6 rather than to R-1: **the pre-R-1 oracle was never one slot-holder.** It
+was the node's *entire outbound set on the anonymity zone* — ~12 peers at the
+F-8b floor, each with precision 1 on everything the node originated. R-1
+lowers all twelve to 71.4 % together. Wider reach than F-6 recorded, same
+precision, and the same fix.
+
+### 63.5 R-1 diverts into a diffusion, not into a stem — graded
+
+A relayed transaction diverted by R-1 arrives at `notify::send_txs` with
+`tx_relay ∈ {stem, forward, local}` and is therefore **diffused to the
+diverting node's outbound Tor set**, terminating its stem at that hop.
+
+Per-hop termination rises from `q` to `q + (1−q)p`, so the shortening of the
+mean stem length is `(1−q)p / (q + (1−q)p)`:
+
+| `p` | per-hop termination | mean stem length | shortening |
+| --- | --- | --- | --- |
+| 0 | 0.200 | 5.00 | — |
+| **0.02** (shipped) | 0.216 | 4.63 | **7.4 %** |
+| 0.05 | 0.240 | 4.17 | 16.7 % |
+| 0.10 | 0.280 | 3.57 | 28.6 % |
+| **0.45** (exit (a)) | 0.560 | **1.79** | **64.3 %** |
+
+**Graded: small as shipped, and disqualifying at exit (a)'s `p`.** The cost is
+borne by a third party's transaction rather than by the diverting node. The
+alternative — continuing the stem over Tor — requires the anonymity zone to
+run D++, which is the design change §63.6 scopes and not a fix.
+
+**The expression saturates rather than scaling**, which matters for how the
+constants round reads it: `(1−q)p / (q + (1−q)p)` is near-linear at `p ≲ 0.05`
+(≈ `4p`) and flattens toward 1, so extrapolating the shipped 7.4 % by a factor
+of 22 gives 38 % where the true figure is 64 %. **Exit (a) at `p ≈ 45 %` cuts
+the mean stem from five hops to 1.79 — it does not merely shorten the stem, it
+very nearly removes it**, and a D++ stem of length 1.79 is not delivering the
+property the arc exists to defend.
+
+That is a third input the constants round must carry, alongside §62.3's four,
+and on present evidence it is the one that rules exit (a) out.
+
+### 63.6 What this opens, and what it does not
+
+**Not scoped here:** making the anonymity zone run D++. The inherited comment
+at `levin_notify.cpp:1172-1175` gives the reason it does not — *"the
+mempool/stempool needs to know the zone a tx originated from to work
+properly"* — which is a real dependency, not an oversight, and §41's covert
+deletion did not touch it. It is the natural home for the §30 composition's
+in-zone question and should be taken up there, with the origin-zone
+bookkeeping named as its precondition.
+
+**Opened now, because it is cheap and it is a false reading:**
+`record_stem_observation` is called only inside `dandelionpp_notify`, so
+**StemWatch has never had anything to record on the anonymity zone.**
+`/get_stem_tallies` therefore reports an empty Tor tally, which reads as *"no
+drops"* when it means *"no stems."* That is an oracle that cannot fire on the
+axis the defect lives on. The tallies are not yet consumed as evidence by
+anything, so this is a labelling fix rather than a live misreading — but it
+should be labelled before something starts consuming them.
+
+### 63.7 Exit (b) is not dominated — the flag it was judged on does not vary
+
+**This reverses §61.1, which was confirmed as settling the exit choice.
+Reopened on the record with the evidence, per the standing rule.**
+
+§61.1 rejected exit (b) because an adversary *"partitions incoming traffic by
+the flag and looks only at the stem-flagged bucket"* — so fluff-phase relays
+would land in the wrong bucket and dilute nothing.
+
+**On the anonymity zone there is no stem-flagged bucket.** The
+`dandelionpp_fluff` flag is set by the transport path taken, not by
+`tx_relay`:
+
+- `levin_notify.cpp:807,827` — the D++ stem path passes `fluff = false`, and
+  it is clearnet-only (§63.1);
+- `levin_notify.cpp:561` — the fluff release passes `fluff = true`, and it is
+  the *only* path an anonymity zone takes. Its inherited comment says so
+  directly: *"Always send with `fluff` flag, even over i2p/tor."*
+
+So a peer on the anonymity zone sees **every** transaction from this node
+flagged `fluff` — its originations, R-1's diverts, and exit (b)'s fluff-phase
+relays alike. The flag cannot separate them because it does not vary.
+
+**Consequences, in order of size:**
+
+1. **Exit (b) dilutes the same bucket after all.** Per unit of volume it works
+   exactly as well as exit (a), and it delivers ~400 tx/day where exit (a)
+   delivers ~9. §61.1's "dominated, not merely worse" is withdrawn; on this
+   axis exit (b) now looks **better**, and it does not pay §63.5's stem
+   shortening either, because a fluff-phase transaction has no stem left to
+   shorten.
+2. **§61.1's grid reading was right and its input was wrong.** *"Cover only
+   helps against an observer that cannot already separate the buckets"* is the
+   correct test (§32.6). The error was answering "can it separate them?" from
+   `tx_relay`, which is node-local state, instead of from the wire field the
+   adversary actually reads.
+3. **The exit choice is reopened, not re-decided.** Exit (b) was rejected on a
+   false premise, which does not make it right — it has its own cost (~400
+   tx/day of added Tor volume, §60.3) that was never weighed because the
+   domination argument closed the question first. **Both exits return to the
+   constants round live.**
+
+> **The observable an adversary sorts on is a wire field, and it must be read
+> at the site that writes it.** `tx_relay` and `dandelionpp_fluff` agree on
+> clearnet and disagree on every other transport — so an argument built on
+> "the stem-flagged bucket" was, on the anonymity zone, describing a partition
+> with one side empty.
+
+### 63.8 R-1's coherence branch is unreachable — half of §59 is not running
+
+**§59 shipped as two changes and describes itself as *"one roll at entry,
+coherence until fluff."* Only the roll is live.** The coherence branch
+(`net_node.inl:2381`, `still_stemming && origin != public_`) cannot fire
+today, and the chain that closes it is four links, each verified:
+
+1. Every anonymity-zone release sets the flag — `levin_notify.cpp:561`,
+   *"Always send with `fluff` flag, even over i2p/tor"* (§63.1).
+2. A receiver reads it first: `cryptonote_protocol_handler.inl:941-948`
+   defaults a non-public arrival to `forward`, then **overrides to `fluff`
+   whenever `arg.dandelionpp_fluff` is set**.
+3. The txpool cannot walk it back: `upgrade_relay_method`
+   (`blockchain_db.cpp:141-155`) is monotone *upward* over
+   `none < local < forward < stem < fluff < block`, so a transaction admitted
+   as `fluff` never returns as `stem` or `forward`.
+4. So a transaction whose `origin` is an anonymity zone always reaches
+   `send_txs` with `tx_relay == fluff` ⇒ `still_stemming == false` ⇒ the
+   coherence branch is skipped and the transaction goes to clearnet.
+
+**It is dormant in exactly §59.8.1's sense, and wakes with the same event.**
+The covert send path passes `make_tx_message(…, false, false)`
+(`levin_notify.cpp:1195`), so with covert on the flag is *clear*, the receiver
+keeps the `forward` default, `still_stemming` holds, and coherence starts
+firing. **§59's description is of the post-§30 world, not the shipped one.**
+
+**Not a defect, and deliberately not "fixed".** The branch is correct for the
+world it will run in, and there is nothing to repair — R-1 as shipped is
+simply the roll alone, which is what §60.1's 71.4 % was computed against and
+what §63.5 priced. What is wrong is only the *description*: "coherence until
+fluff" reads as a live invariant.
+
+It does sharpen §63.5. With coherence dead, a diverted transaction gets
+**one diffusion on the anonymity zone and leaves** — there is no mechanism
+holding it there for a second hop, so the stem shortening is the whole of the
+effect rather than the first term of it.
+
+### 63.9 The audit's own lesson
+
+§59.8.1 predicted that a deletion which makes a path unreachable makes later
+code's incorrectness unobservable. **The audit found the stronger version:
+a mechanism that was never there at all is invisible to a review that reasons
+from the design document, because the document is where the mechanism lives.**
+
+Three passages — §60.2, §61.1–61.2, and §62 entire — were written against
+`dandelionpp_notify` running on a zone it has never run on. Each review round
+checked the reasoning against the *previous round*, and the chain was
+consistent: the error entered before the chain started, at the point where
+"configuration C" was defined from the configuration flag rather than from
+the dispatch.
+
+**§57 is not among them**, and the distinction is the useful part. Its channel
+is covert *fragment* retention across an epoch rotation — a covert-channel
+mechanism, which the anonymity zone does run when covert is on. §57 reasoned
+from a dispatch it had actually read. The three that failed all reasoned from
+the taxonomy.
+
+*(And the anonymity zone does not stem under covert either:
+`levin_notify.cpp:1184` demotes `stem` to `local` on the covert path with
+`MWARNING("Dandelion++ stem not supported over noise networks")`. **Neither
+configuration has ever run D++ off clearnet** — which is what licenses "and
+never did" in §63.1 rather than "not since §41".)*
+
+> **Ground a mechanism at its dispatch site, not at its configuration
+> switch.** `disable_noise` names what is turned *off*; it does not tell you
+> what is left running. The one-line check that would have caught this —
+> "which call site actually runs D++, and what gates it?" — was never run
+> because the configuration taxonomy read like an answer to it.
