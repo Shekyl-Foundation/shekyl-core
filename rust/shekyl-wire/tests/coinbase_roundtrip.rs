@@ -21,13 +21,16 @@ use shekyl_wire::Block;
 
 #[test]
 fn regtest_coinbase_blocks_round_trip_byte_identical() {
-    let corpus: [(u64, &[u8]); 3] = [
-        (0, include_bytes!("vectors/regtest_coinbase_h0.block")),
-        (1, include_bytes!("vectors/regtest_coinbase_h1.block")),
-        (2, include_bytes!("vectors/regtest_coinbase_h2.block")),
+    // Output count is height-dependent: h0 **is** the mainnet genesis (regtest
+    // shares GENESIS_TX), which pays the five 20,000 SKL founder allocations;
+    // mined blocks pay a single miner output.
+    let corpus: [(u64, usize, &[u8]); 3] = [
+        (0, 5, include_bytes!("vectors/regtest_coinbase_h0.block")),
+        (1, 1, include_bytes!("vectors/regtest_coinbase_h1.block")),
+        (2, 1, include_bytes!("vectors/regtest_coinbase_h2.block")),
     ];
 
-    for (height, blob) in corpus {
+    for (height, n_outputs, blob) in corpus {
         let block = Block::from_bytes(blob)
             .unwrap_or_else(|e| panic!("height {height}: Block::from_bytes failed: {e}"));
 
@@ -37,9 +40,13 @@ fn regtest_coinbase_blocks_round_trip_byte_identical() {
             Some(height),
             "height {height}: coinbase gen height mismatch"
         );
-        // Coinbase shape: one gen input, one tagged_key output, Null ct base.
+        // Coinbase shape: one gen input, tagged_key outputs, Null ct base.
         assert_eq!(block.miner_transaction.prefix.inputs.len(), 1);
-        assert_eq!(block.miner_transaction.prefix.outputs.len(), 1);
+        assert_eq!(
+            block.miner_transaction.prefix.outputs.len(),
+            n_outputs,
+            "height {height}: coinbase output count"
+        );
         assert!(block.transaction_hashes.is_empty());
 
         let reserialized = block.serialize();

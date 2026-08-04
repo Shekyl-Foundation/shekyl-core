@@ -208,14 +208,14 @@ discloses nothing beyond this document, and it makes the pinned
 three networks from the committed files and byte-compares against
 `src/cryptonote_config.h`.
 
-**Pre-launch placeholders.** Until the founder wallet ceremony runs, the
-committed recipients files hold deterministic placeholder addresses
-(label-derived keys; recorded and regenerable via the tool's
-`placeholder_recipients` test), not operational founder wallets. The
-final fresh-entropy founder addresses will replace them, and the
-specific genesis addresses for each founder will be published in
-`docs/GENESIS_ALLOCATIONS.md` together with the exact reproduction
-commands.
+**The allocations are final and published.** The recipient wallets were
+generated with fresh operating-system entropy, restore-verified from their
+written seeds, and their addresses committed to the recipients files above.
+Every genesis address, amount, and block identity — together with the exact
+commands to rebuild and check the pinned bytes yourself — is published in
+[`GENESIS_ALLOCATIONS.md`](GENESIS_ALLOCATIONS.md). No seed material has ever
+been committed to any repository; the placeholder era ended with that
+ceremony.
 
 ---
 

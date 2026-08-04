@@ -41,7 +41,8 @@ rand = "0.8"
 curve25519-dalek = { version = "4", features = ["zeroize"] }
 
 [dev-dependencies]
-# Deterministic placeholder-recipient derivation (tests/placeholder_recipients.rs).
+# Golden-KAT blob digest (tests/golden_kat.rs) — a compact pin over the full
+# serialized genesis tx, so any wire-level drift fails on one line.
 sha2 = { workspace = true }
 
 [lints]

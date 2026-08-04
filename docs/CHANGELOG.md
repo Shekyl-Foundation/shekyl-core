@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Genesis regenerated: the final five-founder allocation on every network,
+  and the pins are now reproducible.** All three `GENESIS_TX` strings in
+  `src/cryptonote_config.h` are re-pinned from freshly generated production
+  wallets (fresh OS entropy via `geblock gen-wallets`; BIP-39 on
+  mainnet/stagenet, raw-32 on testnet; every wallet restore-verified from its
+  written seed before its address was committed). Mainnet and stagenet move
+  from a single combined 100,000 SKL treasury output to the same **5 ×
+  20,000 SKL** shape testnet already shipped; the total (100,000 SKL, the
+  block-0 reward) is unchanged, as are every `NETWORK_ID` and `GENESIS_NONCE`
+  (10000 / 10101 / 10002). Only public addresses are committed — no seed
+  material is in any repository.
+
+  Because the genesis tx key is derived from the recipients file, the pins
+  are reproducible from committed inputs: `geblock verify` is green on all
+  three networks and the byte-compare gate
+  (`shekyl-genesis-tool/tests/config_pin_gate.rs::genesis_hex_matches_config_pin`)
+  is **un-ignored and live in CI** — recipients-vs-pin drift now fails the
+  build. The placeholder-era generator test is deleted with the era.
+
+  Derived artifacts re-pinned in the same change: the `mining_parity`
+  frozen genesis ids, and the `shekyl-wire` regtest vectors
+  (`regtest_coinbase_h{0,1,2}.block` + hashes; h0 **is** the mainnet genesis,
+  so it now carries five outputs — `coinbase_roundtrip` asserts the count per
+  height). Each network's genesis id is confirmed by three independent
+  derivations: `geblock block-id` (pure Rust), the C++
+  `generate_genesis_block` path in `mining_parity`, and the live-daemon RPC
+  capture. `mining_parity` additionally asserts the shipped genesis
+  `tx_extra` is a fixed point of C++ `sort_tx_extra`, making geblock's
+  canonical-emit-order claim executable against the real sorter.
+
+- **`docs/GENESIS_ALLOCATIONS.md` published**, fulfilling the
+  `GENESIS_TRANSPARENCY.md` §5 commitment: per-network allocation tables,
+  genesis identities, the tx-key derivation spec, key-custody statement, and
+  the commands to rebuild and check the pinned bytes independently.
+
 ### Added
 
 - **`geblock` — deterministic Rust genesis pipeline

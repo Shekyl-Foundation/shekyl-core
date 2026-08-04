@@ -166,11 +166,13 @@ TEST(mining_parity, genesis_identity_is_pow_independent)
   //
   // frozen_id is a regression anchor. If a *legitimate* pre-genesis change to
   // GENESIS_TX or a header field moves it, set frozen_id to "" to re-capture the
-  // printed value, then re-pin it. The mainnet id is independently anchored: it
-  // equals the height-0 block_hash in
+  // printed value, then re-pin it. Each id is independently anchored by
+  // `geblock block-id --network <net>` (rust/shekyl-genesis-tool), which derives
+  // the same id in pure Rust from config/genesis_recipients.<net>.json; the
+  // mainnet id additionally equals the height-0 block_hash in
   // rust/shekyl-wire/tests/vectors/regtest_coinbase_hashes.json, captured from
-  // the daemon by capture_coinbase.py before this cutover — two independent
-  // derivations of the same PoW-independent genesis id.
+  // the daemon by capture_coinbase.py — three independent derivations of the
+  // same PoW-independent genesis id.
   struct NetCase
   {
     cryptonote::network_type net;
@@ -178,9 +180,9 @@ TEST(mining_parity, genesis_identity_is_pow_independent)
     const char* frozen_id;
   };
   const NetCase nets[] = {
-    { cryptonote::MAINNET,  "mainnet",  "bcdcf5e0c5267a3760bc2bb9a06947a20711c08f46cd7b12812945a7fe624bcd" },
-    { cryptonote::TESTNET,  "testnet",  "1b7af208e4bf2a4df801dbc569b60a90fa1b3153dc19ae94e2c822dc319d9a4a" },
-    { cryptonote::STAGENET, "stagenet", "7937c12908503e2fa39c0e972386c48b42826e452c03e4485523817482633887" },
+    { cryptonote::MAINNET,  "mainnet",  "49d590b6e783c77dbe019436b283009c76de76ef6800211f56ca41a137a70d89" },
+    { cryptonote::TESTNET,  "testnet",  "ac2c43bd041edb3d379f203a3648e50c26c3ef19d35c51bb510593f99fd0f20e" },
+    { cryptonote::STAGENET, "stagenet", "f34560b4787451edb6ddba36c8b5d4be90dabf4a00847df96b6c1a44696d3e70" },
   };
 
   for (const NetCase& nc : nets)
@@ -191,6 +193,20 @@ TEST(mining_parity, genesis_identity_is_pow_independent)
       << nc.name << ": generate_genesis_block failed";
     EXPECT_EQ(cfg.GENESIS_NONCE, bl.nonce)
       << nc.name << ": genesis nonce moved (difficulty-1 invariant broken)";
+
+    // The genesis coinbase is built offline by `geblock`
+    // (rust/shekyl-genesis-tool), which emits tx_extra directly in the
+    // canonical order rather than porting sort_tx_extra: 0x01 pubkey, then the
+    // aggregated 0x06 KEM-ciphertext blob, then the aggregated 0x07 leaf-hash
+    // blob. Assert that claim against the real sorter — the shipped extra must
+    // be a fixed point of sort_tx_extra, or the Rust builder and the C++
+    // canonicalizer have drifted.
+    std::vector<uint8_t> sorted_extra;
+    ASSERT_TRUE(cryptonote::sort_tx_extra(bl.miner_tx.extra, sorted_extra))
+      << nc.name << ": sort_tx_extra failed on the genesis extra";
+    EXPECT_EQ(bl.miner_tx.extra, sorted_extra)
+      << nc.name << ": genesis tx_extra is not canonically ordered "
+                    "(geblock emit order vs sort_tx_extra drift)";
 
     crypto::hash id{};
     ASSERT_TRUE(cryptonote::get_block_hash(bl, id)) << nc.name << ": get_block_hash failed";
