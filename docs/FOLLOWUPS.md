@@ -14700,7 +14700,11 @@ Retained for citation in review; each links to the canonical record.
   (`X25519_pub || ML-KEM_ek`), and routes through
   `build_genesis_coinbase_from_destinations`. See
   `scripts/verify_genesis.py` in `shekyl-dev` for reproducibility
-  verification.
+  verification. *(Superseded 2026-08-04: that C++ builder and both
+  shekyl-dev scripts are retired; the pipeline is the Rust `geblock`
+  (`rust/shekyl-genesis-tool`) with a deterministic tx key, and
+  reproducibility is `geblock verify` / the crate's config-pin gate
+  test.)*
 
 - **scheme_id tx-wide binding — WITHDRAWN by MSW-6.** This entry
   previously read "confirmed active" (`blockchain.cpp` derived
