@@ -10768,3 +10768,194 @@ never did" in §63.1 rather than "not since §41".)*
 > what is left running. The one-line check that would have caught this —
 > "which call site actually runs D++, and what gates it?" — was never run
 > because the configuration taxonomy read like an answer to it.
+
+## 64. Should the anonymity zone stem? — the round scoped, and three corrections to its inputs
+
+**2026-08-04, maintainer-opened.** §63 established that the anonymity zone
+diffuses rather than stems. The question that follows is whether it *should*,
+and it outranks the constants round because everything downstream is priced
+against a posture that turns out not to exist.
+
+The exposure arithmetic is the maintainer's, and it stands:
+
+| adversary share of `O`'s peers | anon zone (12 peers) | clearnet stem (`STEMS = 2`) |
+| --- | --- | --- |
+| 5 % | 46 % | 9.8 % |
+| 10 % | 72 % | 19 % |
+| 20 % | 93 % | 36 % |
+
+**Three to five times more exposed to the peer adversary, on the
+configuration a privacy-motivated user selects deliberately.** With no stem
+`O` is the hub of a star: it diffuses to twelve peers at once and every one of
+them sees the hub. The stem exists precisely to move the apparent source away
+from the origin *before* diffusion, and outbound-only is a **reach** rule —
+§6.5 measured it collapsing the inbound supernode to 0.0000 — not a substitute
+for having a stem at all. The inherited comment at `levin_notify.cpp:1166-1175`
+conflates the two, which is the sybil-substitution fallacy in its last hiding
+place: minting onion addresses is free, so it is the outbound-only rule doing
+the work, not the network.
+
+### 64.1 Item 1 is not independent of item 2 — it is downstream of it
+
+**The eligibility decision cannot be landed first.** Four of §63's conclusions
+are consequences of the no-stem posture rather than facts about the design,
+and the stem work reverses all four:
+
+| §63 conclusion | why it holds today | under a stemming anon zone |
+| --- | --- | --- |
+| §63.7 exit (b) not dominated | `:561` flags **everything** `fluff` | stem sends pass `fluff = false` (`:807`, `:827`) — **the flag varies again, and §61.1's partition argument revives verbatim** |
+| §63.5 stem shortening rules out exit (a) | diversion **terminates** a stem | a diverted transaction **continues** stemming; the 64 % cost disappears |
+| §63.8 coherence dormant | arrivals are always `fluff` | receiver takes the `forward` default (`:941-942`), `still_stemming` holds, **coherence fires** |
+| §62 F-12 retracted | no Tor-latency hops exist | the change **creates** them — un-retracts forward-looking (§64.3) |
+
+**So the ranking inverts: exit (a) regains its footing and exit (b) loses
+its.** Item 1 can still be landed, but only as **posture-conditional** — the
+value is correct for the shipped posture and wrong for the one item 2 may
+adopt. Landing a constant against conclusions a live decision flips is how the
+`obs ≈ 1500·r` and eligible-set errors happened (§60.4, §62.4).
+
+### 64.2 The scope is three gates, not one — and they are the same §18 error
+
+**Verified.** The maintainer's central claim is right where it matters: the
+per-zone D++ *state* already exists. `detail::zone`'s constructor calls
+`make_relay_zone(zone, …)` unconditionally (`levin_notify.cpp:380`), and a
+non-covert anonymity zone receives `public_zone_params()` — so
+`CRYPTONOTE_DANDELIONPP_STEMS = 2` and the D++ epoch range are **already
+correctly sized and parameterised** on that zone. Nothing needs building to
+hold the state.
+
+But `:1222` is not the only branch. Three gate on a transport or covert fact
+where §18 says the transport is a parameter:
+
+1. **`notify::notify` (`:936`)** — `if (covert_enabled || zone == public_)`
+   guards the *constructor's* initial `relay_update_stems` **and**
+   `relay_wake::arm`. A non-covert anonymity zone gets **neither**.
+2. **`notify::new_out_connection` (`:976`)** — returns early unless covert is
+   enabled, so a newly-connected peer **never** triggers a stem-map refresh.
+3. **`notify::send_txs` (`:1222`)** — the dispatch gate §63 found.
+
+**Severity of leaving 1 and 2 in place: under-maintenance, not a liveness
+break.** `plan_relay_with_refresh` merges the outbound snapshot on `NoRoute`
+and re-plans (`zone/mod.rs:591-605`), and the send-failure path refreshes
+explicitly (`:821`), so the map self-populates. What is lost is *proactive*
+refresh — a new peer enters the stem map only when a `NoRoute` or a send
+failure forces an update. **That biases the stem map toward long-lived
+connections**, which is precisely the `g` surface (adversary outbound-selection
+share) the Q-10 `g_max` work exists to bound: an adversary that connects early
+and stays up is over-represented relative to later honest peers. Removing
+`:1222` alone would ship that bias.
+
+> **All three are one category error, and it is the maintainer's §18 point
+> rather than an exception to it:** the transport is being used as a *branch*
+> where the principle says *parameter*. `:1222` is the visible instance, not
+> the only one.
+
+### 64.3 The measurement is already in hand, and the answer is "not free"
+
+The proposal was to spend §63.2's 75–82 % over-provisioning as budget for Tor
+hop latency. **That is not a budget, and the instrument already says so.**
+
+The over-provisioning exists **because `h = 1`** — and `h = 1` is exactly what
+the change removes. `S(h) = Σ_{k=1..h} ceil((k·hop + F)/τ)` grows with the sum
+over stem length, so surplus measured on a one-hop path cannot be spent on a
+five-hop one. Re-read at `q = 0.2` (`tests/hop_sensitivity.rs`, unchanged):
+
+| Tor `hop_ms` | required embargo | vs shipped 190 s |
+| --- | --- | --- |
+| 175 (clearnet, assumed) | 190 s | — |
+| 300 (published Bitcoin) | 216 s | **+14 %** |
+| 1050 (6×) | 366 s | **+93 %** |
+| 1750 (10×) | 499 s | +163 % |
+
+**The shipped embargo does not cover a real Tor stem at any plausible Tor
+hop** — it is short by 14 % even at the *clearnet* published figure. So the
+gate removal does move a constant, and by how much is set by the one number
+nobody has: `time_between_hop_ms` for Tor.
+
+**F-12 un-retracts as a consequence, not as a rediscovery.** §63.2 retracted
+it because no Tor-latency hop sat inside a stem. This work creates them, so
+F-12 becomes a *design input to the change* rather than a present defect.
+Recorded here so a later round does not re-derive it and file it as new.
+
+### 64.4 The real blocker is the one §63.6 already named, now concrete
+
+Splitting `hop` per zone means splitting the embargo per zone, and **the
+embargo cannot currently be per-zone**:
+
+- `shekyl_dandelionpp_embargo_draw_seconds()` (`dandelionpp_ffi.rs:95`) takes
+  **no arguments** — there is no zone to pass.
+- `tx_pool.cpp` carries **no** `epee::net_utils::zone` reference at all; the
+  arm site (`:1058`) is zone-blind.
+
+This is exactly the dependency the inherited comment names at
+`levin_notify.cpp:1172-1175` — *"the mempool/stempool needs to know the zone a
+tx originated from to work properly"* — and which §63.6 recorded as the
+blocker. It is now concrete: **origin-zone bookkeeping on the txpool entry is
+the precondition**, and it is a persisted-metadata change, so §42's
+version-constant discipline applies.
+
+**Honest gate-versus-build verdict:** the *dispatch* is a gate removal (three
+branches, all §18). The *correctness* is a build, and its precondition is the
+txpool's origin-zone field. `:1222` is not the gate; §63.6's blocker is.
+
+### 64.5 SPIKE-F-1 does not transfer — and the correction strengthens the point
+
+**Checked against PR #388's measurement report rather than its commit
+messages, and the finding is retracted on that branch.**
+`SP_T3_SKELETON_MEASUREMENT.md` re-dispositions it: **"SPIKE-F-1 is
+re-dispositioned REFUTED AS STATED … It did not discover that personas share
+guards; it built a configuration in which they do"** — a co-activation layout
+`ARCHIVAL_FIREWALL_GATE6.md` §10.9 forbids. Its data survives as
+**SPIKE-F-12**, marked *"corroboration, no action, no routing."*
+
+**But the relay argument never needed two personas, so it does not inherit the
+refutation.** SPIKE-F-12 is **CONFIRMED** and says the load-bearing thing:
+*"guard sets are per-process/datadir."* One daemon, one tor process, therefore
+one guard set across every outbound circuit — and `TRANSPORT_PLAN:616` states
+it directly (*"One Tor process, never one circuit"*), as a **deliberate**
+residual, because severing it is worse: a non-default config is itself a
+fingerprint. **Same conclusion, correct provenance, and a citation a reviewer
+would otherwise reject.**
+
+**Two corrections to what follows from it, and the second is the useful one.**
+
+**(a) Guard-sharing does not break D++'s independence assumption.** That
+assumption is over *peers* — what makes holding one stem slot worth `f` is
+slot occupancy, and a guard is not a slot-holder. The guard is a **wire**
+observer, a different adversary class on §31's grid. Reading a transport-level
+observer into a peer-level independence argument is the same category error
+§63 was about.
+
+**(b) The ordering conclusion survives, and for a stronger reason: the guard
+already has the timeline, today.** Every outbound send from a Tor-configured
+node already crosses its guard. Today the anonymity zone **diffuses**, so per
+transaction the guard sees *twelve* sends where a stem would produce *one* —
+and, before R-1, essentially all of that traffic was the node's own, which is
+**F-6's oracle at the guard rather than at the peer**. So:
+
+- the wire observer is undefended **now**, not as a consequence of future work;
+- stems would **reduce** its per-transaction observable (1 send, not 12) and,
+  with coherence live (§64.1), increase the relayed cover mixed into it.
+
+**§30's composition therefore moves earlier than the maintainer placed it, but
+not because the stem work creates the exposure — because the exposure is
+already live and the stem work partially mitigates it.** Cover restoration is
+owed against today's posture regardless of how item 2 resolves.
+
+### 64.6 What the round needs, in order
+
+1. **`time_between_hop_ms` for Tor** — the only unmeasured input, and it sets
+   the embargo delta. PR #388's rig (derived onion key, loopback serve, real
+   remote hosts) is the right *shape*, but its findings are **serving-side**;
+   client-side circuit RTT is a different measurement on the same apparatus.
+   **SPIKE-F-16 is the warning to carry**: identical requests to one persona
+   spanned 4.49 s → 133.05 s (**30×**), so a Tor hop figure is a *distribution
+   with a heavy tail*, not a mean — and `S(h)` is a tail statistic already.
+2. **The onion-address linkability price** — the counterweight nobody has
+   costed. Detection is worse on Tor (guard + peer both), identification is
+   weaker (onion, not IP). SPIKE-F-6 is directly relevant and already
+   measured: the persona descriptor is a **liveness oracle with ~3 h
+   granularity**, an irreducible floor of running an onion service.
+3. **The txpool origin-zone field** (§64.4) — the precondition, and a §42
+   surface.
+4. **Item 1, posture-conditional or held** (§64.1) — the maintainer's call.
