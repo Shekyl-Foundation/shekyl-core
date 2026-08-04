@@ -18,10 +18,11 @@
 //! material cannot end up committed by accident.
 //!
 //! The ceremony always emits exactly [`GENESIS_RECIPIENT_COUNT`] wallets —
-//! the consensus allocation shape, not a tooling knob. Writes stage under a
-//! temporary subdirectory and only promote to the final names after every
-//! file is complete, so a mid-run failure never leaves a partial seed set at
-//! the operator's `out_dir` paths.
+//! the consensus allocation shape, not a tooling knob. The full set is
+//! written to a sibling staging directory and published with a single
+//! `rename(staging → out_dir)` so a failure never leaves a partial seed set
+//! at the operator's final path (and never wipes un-promoted seeds after
+//! some finals already exist).
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -180,12 +181,38 @@ fn skeleton_filename(net: Network) -> String {
     format!("genesis_recipients.{}.json", net.as_str())
 }
 
-/// Remove a staging directory; ignore errors (best-effort wipe of partial secrets).
+/// Create a directory with mode `0700` on Unix (owner-only). On non-Unix the
+/// platform default is used — production ceremony storage is Unix offline
+/// media; the cfg keeps the workspace building on Windows CI.
+fn create_dir_private(path: &Path, recursive: bool) -> Result<(), GenesisToolError> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(recursive);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(path)
+        .map_err(|e| invalid(format!("cannot create {}: {e}", path.display())))
+}
+
+/// Open a new file for writing with mode `0600` on Unix (owner read/write).
+fn open_file_private(path: &Path) -> Result<std::fs::File, GenesisToolError> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+        .map_err(|e| invalid(format!("cannot create {}: {e}", path.display())))
+}
+
+/// Remove a staging directory; best-effort (warn on failure).
 fn wipe_staging(staging: &Path) {
     if let Err(e) = std::fs::remove_dir_all(staging) {
-        // Staging holds the only in-progress copies of seeds; a wipe failure
-        // after a successful promote is noisy but non-fatal. After a failed
-        // stage the operator's final paths are untouched.
         eprintln!(
             "geblock: warning: could not remove staging dir {}: {e}",
             staging.display()
@@ -193,24 +220,114 @@ fn wipe_staging(staging: &Path) {
     }
 }
 
+/// Write the complete ceremony set into `staging` (must already exist, empty).
+fn write_ceremony_tree(
+    staging: &Path,
+    net: Network,
+    wallets: &[GeneratedWallet],
+) -> Result<(), GenesisToolError> {
+    let net_name = net.as_str();
+    let role = match net {
+        Network::Mainnet | Network::Stagenet => "Founder allocation",
+        Network::Testnet => "Developer",
+    };
+
+    for w in wallets {
+        let path = staging.join(custody_filename(net, w.index));
+        let mut file = open_file_private(&path)?;
+
+        let (seed_kind, seed_value): (&str, &str) = match &w.backup {
+            SeedBackup::Mnemonic(m) => ("BIP-39 mnemonic (24 words, empty passphrase)", m),
+            SeedBackup::RawHex(h) => ("raw 32-byte seed, hex (testnet derivation)", h),
+        };
+        let body = Zeroizing::new(format!(
+            "Shekyl genesis wallet — {net_name} {role} #{index}\n\
+             \n\
+             This file is the ONLY copy of this wallet's seed. It was shown once at\n\
+             generation and cannot be re-exported by any tool in the stack. Store it\n\
+             offline (paper / HSM). Anyone holding the seed controls the funds.\n\
+             \n\
+             address: {address}\n\
+             \n\
+             seed ({seed_kind}):\n{seed_value}\n",
+            index = w.index,
+            address = w.address,
+        ));
+        file.write_all(body.as_bytes())
+            .map_err(|e| invalid(format!("write {}: {e}", path.display())))?;
+    }
+
+    let skeleton = RecipientsFile {
+        network: net_name.to_owned(),
+        recipients: wallets
+            .iter()
+            .map(|w| RecipientEntry {
+                label: format!("{role} {}", w.index),
+                address: w.address.clone(),
+                amount_atomic: GENESIS_RECIPIENT_AMOUNT_ATOMIC,
+            })
+            .collect(),
+    };
+    let skel_path = staging.join(skeleton_filename(net));
+    let mut file = open_file_private(&skel_path)?;
+    let mut body = serde_json::to_string_pretty(&skeleton)?;
+    body.push('\n');
+    file.write_all(body.as_bytes())
+        .map_err(|e| invalid(format!("write {}: {e}", skel_path.display())))?;
+    Ok(())
+}
+
+/// True when `rename` failed because the paths are on different mount points.
+fn is_cross_device(err: &std::io::Error) -> bool {
+    // Linux/macOS: EXDEV. Windows: ERROR_NOT_SAME_DEVICE (17) sometimes
+    // surfaces as Other; we also match the raw os error where available.
+    err.raw_os_error() == Some(18) /* EXDEV on Linux/macOS */
+        || err.kind() == std::io::ErrorKind::CrossesDevices
+}
+
+/// Copy every entry of a fully-written staging tree into an empty `dest`.
+/// Used only when same-FS `rename(staging → dest)` is unavailable (EXDEV).
+/// On any failure the caller must remove `dest` and leave `staging` intact.
+fn copy_tree_into(staging: &Path, dest: &Path) -> Result<(), GenesisToolError> {
+    let entries = std::fs::read_dir(staging)
+        .map_err(|e| invalid(format!("read staging {}: {e}", staging.display())))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| invalid(format!("read staging entry: {e}")))?;
+        let from = entry.path();
+        let to = dest.join(entry.file_name());
+        std::fs::copy(&from, &to)
+            .map_err(|e| invalid(format!("copy {} → {}: {e}", from.display(), to.display())))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // `copy` does not preserve our 0600; re-apply owner-only.
+            std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| invalid(format!("chmod {}: {e}", to.display())))?;
+        }
+    }
+    Ok(())
+}
+
 /// Write per-wallet custody files (0600, never overwritten) plus a
 /// ready-to-commit recipients-JSON skeleton (addresses only — no secrets).
-/// Returns the skeleton path.
+/// Returns the skeleton path under the published `out_dir`.
 ///
-/// Ordering:
+/// Publish is atomic on the common path:
 /// 1. refuse any git worktree (before creating anything);
-/// 2. preflight that no final path already exists;
-/// 3. stage every file under a temporary subdirectory;
-/// 4. promote staged files to their final names only after the full set is
-///    written — a mid-run failure leaves the operator's final paths untouched
-///    and wipes the staging directory (including any partial seeds).
+/// 2. require `out_dir` does not already exist;
+/// 3. write the full set into a sibling staging directory;
+/// 4. `rename(staging → out_dir)` — one filesystem operation; either the
+///    complete ceremony appears at `out_dir` or nothing does.
+///
+/// Cross-device fallback (rare for offline ceremony media): create `out_dir`,
+/// copy the full tree, wipe staging only after every copy succeeds. A mid-copy
+/// failure removes the incomplete `out_dir` and **leaves staging intact** so
+/// seeds are never destroyed after a partial publish.
 pub fn write_custody_files(
     dir: &Path,
     net: Network,
     wallets: &[GeneratedWallet],
 ) -> Result<PathBuf, GenesisToolError> {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-
     if wallets.len() != GENESIS_RECIPIENT_COUNT {
         return Err(invalid(format!(
             "gen-wallets: expected exactly {GENESIS_RECIPIENT_COUNT} wallets, got {}",
@@ -218,154 +335,90 @@ pub fn write_custody_files(
         )));
     }
 
-    // (1) Refuse before any mkdir — a missing path inside a repo must not
-    // leave an empty directory behind.
+    // (1) Refuse before any mkdir.
     refuse_git_worktree(dir)?;
 
-    if !dir.exists() {
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .map_err(|e| invalid(format!("cannot create {}: {e}", dir.display())))?;
+    // (2) Atomic publish requires a vacant final path — no merge into a
+    // pre-existing directory (that path re-introduces partial-promote races).
+    if dir.exists() {
+        return Err(invalid(format!(
+            "out-dir {} already exists; pass a new path so the ceremony can \
+             publish the full wallet set in one rename (refusing to merge into \
+             an existing directory)",
+            dir.display()
+        )));
     }
 
-    // Re-check after create (covers the race where dir was created between
-    // refuse and mkdir on a path that somehow escaped, and catches an
-    // out_dir that is itself a freshly-initialized git repo).
-    refuse_git_worktree(dir)?;
-
-    let net_name = net.as_str();
-    let role = match net {
-        Network::Mainnet | Network::Stagenet => "Founder allocation",
-        Network::Testnet => "Developer",
-    };
-
-    // (2) Preflight final destinations — refuse before drawing any staged secrets.
-    let final_paths: Vec<PathBuf> = wallets
-        .iter()
-        .map(|w| dir.join(custody_filename(net, w.index)))
-        .collect();
-    let skeleton_path = dir.join(skeleton_filename(net));
-    for path in final_paths.iter().chain(std::iter::once(&skeleton_path)) {
-        if path.exists() {
-            return Err(invalid(format!(
-                "refusing to overwrite existing path {}",
-                path.display()
-            )));
-        }
+    let abs_out = absolute_path(dir)?;
+    let parent = abs_out.parent().ok_or_else(|| {
+        invalid(format!(
+            "out-dir {} has no parent directory",
+            abs_out.display()
+        ))
+    })?;
+    if !parent.exists() {
+        create_dir_private(parent, true)?;
+        // Parent was just created; re-check it is not inside a git tree.
+        refuse_git_worktree(parent)?;
     }
 
-    // (3) Stage under a unique subdirectory of out_dir.
-    let staging = dir.join(format!(
-        ".geblock-staging-{}-{}",
+    // Sibling staging: same parent as out_dir so rename is typically same-FS.
+    let staging = parent.join(format!(
+        ".{}.geblock-staging-{}-{}",
+        abs_out
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "out".into()),
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    if let Err(e) = std::fs::DirBuilder::new().mode(0o700).create(&staging) {
-        return Err(invalid(format!(
-            "cannot create staging dir {}: {e}",
-            staging.display()
-        )));
+    refuse_git_worktree(&staging)?;
+    create_dir_private(&staging, false)?;
+
+    // (3) Write the complete set into staging. Any failure → wipe staging
+    // (nothing has been published to out_dir).
+    if let Err(e) = write_ceremony_tree(&staging, net, wallets) {
+        wipe_staging(&staging);
+        return Err(e);
     }
 
-    let stage_result = (|| -> Result<(), GenesisToolError> {
-        for w in wallets {
-            let path = staging.join(custody_filename(net, w.index));
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&path)
-                .map_err(|e| {
-                    invalid(format!(
-                        "cannot create staging custody file {}: {e}",
-                        path.display()
-                    ))
-                })?;
-
-            let (seed_kind, seed_value): (&str, &str) = match &w.backup {
-                SeedBackup::Mnemonic(m) => ("BIP-39 mnemonic (24 words, empty passphrase)", m),
-                SeedBackup::RawHex(h) => ("raw 32-byte seed, hex (testnet derivation)", h),
-            };
-            let body = Zeroizing::new(format!(
-                "Shekyl genesis wallet — {net_name} {role} #{index}\n\
-                 \n\
-                 This file is the ONLY copy of this wallet's seed. It was shown once at\n\
-                 generation and cannot be re-exported by any tool in the stack. Store it\n\
-                 offline (paper / HSM). Anyone holding the seed controls the funds.\n\
-                 \n\
-                 address: {address}\n\
-                 \n\
-                 seed ({seed_kind}):\n{seed_value}\n",
-                index = w.index,
-                address = w.address,
-            ));
-            file.write_all(body.as_bytes())
-                .map_err(|e| invalid(format!("write {}: {e}", path.display())))?;
-        }
-
-        let skeleton = RecipientsFile {
-            network: net_name.to_owned(),
-            recipients: wallets
-                .iter()
-                .map(|w| RecipientEntry {
-                    label: format!("{role} {}", w.index),
-                    address: w.address.clone(),
-                    amount_atomic: GENESIS_RECIPIENT_AMOUNT_ATOMIC,
-                })
-                .collect(),
-        };
-        let staged_skel = staging.join(skeleton_filename(net));
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staged_skel)
-            .map_err(|e| {
-                invalid(format!(
-                    "cannot create staging skeleton {}: {e}",
-                    staged_skel.display()
-                ))
-            })?;
-        let mut body = serde_json::to_string_pretty(&skeleton)?;
-        body.push('\n');
-        file.write_all(body.as_bytes())
-            .map_err(|e| invalid(format!("write {}: {e}", staged_skel.display())))?;
-
-        // (4) Promote: rename each staged file into its final name. Same-fs
-        // rename is atomic per file; we preflighted that finals do not exist.
-        for w in wallets {
-            let from = staging.join(custody_filename(net, w.index));
-            let to = dir.join(custody_filename(net, w.index));
-            std::fs::rename(&from, &to).map_err(|e| {
-                invalid(format!(
-                    "promote custody file {} → {}: {e}",
-                    from.display(),
-                    to.display()
-                ))
-            })?;
-        }
-        std::fs::rename(&staged_skel, &skeleton_path).map_err(|e| {
-            invalid(format!(
-                "promote skeleton {} → {}: {e}",
-                staged_skel.display(),
-                skeleton_path.display()
-            ))
-        })?;
-        Ok(())
-    })();
-
-    match stage_result {
-        Ok(()) => {
+    // (4) Atomic publish.
+    match std::fs::rename(&staging, &abs_out) {
+        Ok(()) => Ok(abs_out.join(skeleton_filename(net))),
+        Err(e) if is_cross_device(&e) => {
+            // Different mount points: copy full tree, never wipe staging
+            // until every file is at abs_out.
+            if let Err(create_err) = create_dir_private(&abs_out, false) {
+                // Staging still holds the only seeds.
+                return Err(invalid(format!(
+                    "cross-device publish: cannot create {}: {create_err} \
+                     (seeds remain in staging {})",
+                    abs_out.display(),
+                    staging.display()
+                )));
+            }
+            if let Err(copy_err) = copy_tree_into(&staging, &abs_out) {
+                // Incomplete out_dir must not remain; staging still has seeds.
+                wipe_staging(&abs_out);
+                return Err(invalid(format!(
+                    "cross-device publish failed: {copy_err}; \
+                     incomplete out-dir removed; seeds remain in staging {}",
+                    staging.display()
+                )));
+            }
             wipe_staging(&staging);
-            Ok(skeleton_path)
+            Ok(abs_out.join(skeleton_filename(net)))
         }
         Err(e) => {
+            // rename failed before any publish: wipe staging, out_dir absent.
             wipe_staging(&staging);
-            Err(e)
+            Err(invalid(format!(
+                "cannot publish ceremony to {}: {e}",
+                abs_out.display()
+            )))
         }
     }
 }
@@ -396,7 +449,6 @@ mod tests {
 
     #[test]
     fn write_custody_rejects_wrong_wallet_count() {
-        // Empty slice — no entropy, pure contract check.
         let dir = std::env::temp_dir().join(format!(
             "geblock-count-check-{}-{}",
             std::process::id(),
@@ -405,15 +457,66 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        // temp_dir is typically outside the repo; if it is not, refuse will
-        // fire first — either error is fine for this contract test.
         let err = write_custody_files(&dir, Network::Testnet, &[]).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("expected exactly") || msg.contains("git tree"),
             "unexpected error: {msg}"
         );
-        // Count check runs before mkdir: the path must not have been created.
         assert!(!dir.exists(), "count mismatch must not create out_dir");
+    }
+
+    #[test]
+    fn write_custody_rejects_existing_out_dir() {
+        let dir = std::env::temp_dir().join(format!(
+            "geblock-exists-check-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        if refuse_git_worktree(&dir).is_err() {
+            return; // cannot exercise exists-check inside a git tree
+        }
+        std::fs::create_dir_all(&dir).expect("create pre-existing out_dir");
+        let wallets = generate_wallets(Network::Testnet).expect("generate");
+        let err = write_custody_files(&dir, Network::Testnet, &wallets).unwrap_err();
+        assert!(
+            err.to_string().contains("already exists"),
+            "unexpected error: {err}"
+        );
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn write_custody_atomic_publish_complete_or_absent() {
+        if refuse_git_worktree(&std::env::temp_dir()).is_err() {
+            return; // cannot write custody under a git-ish temp root
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "geblock-atomic-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        assert!(!dir.exists());
+        let wallets = generate_wallets(Network::Testnet).expect("generate");
+        let skel = write_custody_files(&dir, Network::Testnet, &wallets).expect("write");
+        assert!(dir.is_dir(), "out_dir must exist after success");
+        assert!(skel.is_file(), "skeleton published");
+        let mut custody = 0usize;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            // No leftover staging names under out_dir.
+            assert!(!name.contains("geblock-staging"), "{name}");
+            if name.starts_with("genesis-wallet-") {
+                custody += 1;
+            }
+        }
+        assert_eq!(custody, GENESIS_RECIPIENT_COUNT);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 }

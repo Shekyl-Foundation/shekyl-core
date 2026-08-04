@@ -42,8 +42,8 @@ enum Cmd {
         /// Target network: mainnet | testnet | stagenet.
         #[arg(long, value_parser = parse_network)]
         network: Network,
-        /// Output directory on user-secured storage. Refused inside any git
-        /// tree; created 0700 if missing.
+        /// New output directory on user-secured storage (must not already
+        /// exist). Refused inside any git tree; published atomically as 0700.
         #[arg(long)]
         out_dir: PathBuf,
     },
