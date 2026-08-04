@@ -10273,10 +10273,13 @@ that cannot already separate the buckets, and this one can.*
 ### 61.2 Exit (a)'s cost is propagation, not bandwidth
 
 45 % of ~20 pre-fluff forwards is **~9 transactions per day** — bandwidth is
-not the constraint. The cost is that a diverted transaction stems *and fluffs*
-on the Tor zone under `OutboundOnly`, so its first passage is
-**`F′ = 3250 ms` against clearnet's ~1250 ms** (§40.1, §44). Nearly half a
-Tor-running node's stem traffic takes the slow diffusion path.
+not the constraint.
+
+~~The cost is that a diverted transaction stems *and fluffs* on the Tor zone
+under `OutboundOnly`, so its first passage is `F′ = 3250 ms`.~~ **Withdrawn at
+§62: `tx_relay` is the exit, so a diverted transaction stems on Tor and
+*fluffs on clearnet* at `F ≈ 1250`. Exit (a) costs nothing in diffusion. The
+cost is in `hop`, and it is worse.**
 
 **That is the arc's usual direction — privacy over latency — and it is why
 "a different regime, not a tweak" was the right phrase**: at 45 % the Tor
@@ -10330,3 +10333,88 @@ the F′ propagation model re-run at the diverted fraction — which is exactly
 the reverse-parity readout already owed and already unblocked (§44.5).
 
 **The two owed items and the constants round are now the same work.**
+
+## 62. F-12 — `time_between_hop_ms` is F-7 on the sibling parameter, and it predates R-1
+
+**2026-08-04. §61.2's cost was in the wrong term.** A diverted transaction
+does **not** fluff on the Tor zone: `tx_relay` is the exit, `still_stemming`
+excludes `fluff`, so the fluff falls through to clearnet at `F ≈ 1250`.
+**Exit (a) costs nothing in diffusion.** Corrected in place.
+
+The cost is in the other term of the same expression, and it is larger:
+
+```text
+S(h) = Σ_{k=1..h} ceil((k·hop + F) / τ)
+```
+
+### 62.1 One global `hop` for two transports
+
+`time_between_hop_ms = 175` is a **single field on `DandelionParams`** with no
+per-zone form — the derivation, and every conformance instrument, reads the
+same value whatever transport the stem runs on. **That is exactly what
+`fluff_return_ms` was before F-7** (§26, §44): a derivation input measured
+under one configuration and applied to another.
+
+An onion-service hop traverses **six relays** where clearnet traverses one, so
+the true Tor figure is plausibly 5–10× the clearnet one. **And 175 was never
+measured for either** — §21 recorded it as a provenance rather than a
+derivation, against a published Bitcoin figure of 300 ms.
+
+**A larger true `hop` means a larger `S(h)`, so more preemption exposure than
+the derivation accounts for — the under-provisioning direction, which
+`params.rs`'s own note names as a privacy loss.** Same sign as F-7.
+
+### 62.2 The magnitude, and it predates R-1 entirely
+
+Adopted embargo re-derived at each `hop`
+(`tests/hop_sensitivity.rs`, monotonicity and the 6× margin both asserted):
+
+| `hop_ms` | embargo | vs shipped |
+| --- | --- | --- |
+| **175** (shipped, assumed) | **189 s** | — |
+| 300 (published Bitcoin) | 215 s | +14 % |
+| 500 | 249 s | +32 % |
+| 875 (5×) | 328 s | +74 % |
+| 1050 (6×) | **365 s** | **+93 %** |
+| 1750 (10×) | 498 s | +163 % |
+
+> **This is not introduced by exit (a), or by R-1. Originated traffic has
+> always stemmed on the anonymity zone** — that was the *whole* of F-6's
+> oracle — **so every Tor-running node has been arming a clearnet-derived
+> embargo over Tor-latency hops since the beginning.** R-1 extends the
+> mismatch to relayed traffic; exit (a) makes it the common case.
+
+So F-12 is a **pre-existing** defect that the eligibility decision surfaces
+rather than causes, and its fix has the same shape as F-7's: provision at the
+worst transport, accepting recovery latency on the other, per §44.3's
+resolution of exactly this trade.
+
+### 62.3 The cluster is one derivation with four inputs
+
+§61.4 said the owed items and the constants round are the same work. **They
+are one derivation, and it has four inputs, not three:**
+
+1. **exit (a)'s `p`**, with its assumed Tor share stated (§61.2);
+2. **`F′` reverse-parity's three readouts** — owed since §44.5, unblocked;
+3. **`time_between_hop_ms` for the Tor path** — and for the clearnet path,
+   since neither is measured;
+4. **the embargo re-derivation** at whatever `(hop, F)` pair the diverted
+   fraction implies.
+
+**Picking `p` without the other three sets a constant against an embargo that
+moves underneath it.** At 6× hop that embargo is +93 %, which is not a
+correction a `p` chosen against the current value survives.
+
+### 62.4 §60.4 is promoted from observation to required field
+
+Three instances now, each in different clothes:
+
+- `obs ≈ 1500·r` — a **free parameter** read as an unknown (§51.3);
+- R-1's eligible set — "2 % of relayed" versus "2 % of pre-fluff forwards",
+  1000× apart and read identically (§60.1);
+- `p`'s adoption denominator — a per-node privacy gain quoted beside a
+  network-wide propagation cost (§61.2).
+
+> **A rate that enters a decision carries its denominator at the definition
+> site, or it is not a number yet.** Not a habit to watch for — a field the
+> definition is incomplete without.
