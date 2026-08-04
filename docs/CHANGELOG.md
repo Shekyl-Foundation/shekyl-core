@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.1.0-alpha.7] - 2026-08-03
+
 ### Changed
 
 - **8C retention-proof Status REVERSED in part — the challenge payload is
