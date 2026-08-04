@@ -14,12 +14,13 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::str::FromStr;
 
 use clap::{Parser, Subcommand};
 use shekyl_address::Network;
 use shekyl_genesis_tool::builder::{build_genesis_tx, genesis_block};
 use shekyl_genesis_tool::config_pin::{load_config_pins, verify_networks};
-use shekyl_genesis_tool::recipients::{load_and_validate, network_str};
+use shekyl_genesis_tool::recipients::{load_and_validate, GENESIS_RECIPIENT_COUNT};
 use shekyl_genesis_tool::wallets::{generate_wallets, write_custody_files};
 use shekyl_genesis_tool::GenesisToolError;
 
@@ -34,15 +35,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Generate fresh genesis wallets: custody files (seeds, 0600) plus a
-    /// ready-to-commit recipients-JSON skeleton (addresses only).
+    /// Generate the genesis wallet set (exactly five): custody files (seeds,
+    /// 0600) plus a ready-to-commit recipients-JSON skeleton (addresses only).
+    /// Count is consensus policy (`GENESIS_RECIPIENT_COUNT`), not a flag.
     GenWallets {
         /// Target network: mainnet | testnet | stagenet.
         #[arg(long, value_parser = parse_network)]
         network: Network,
-        /// Number of wallets to generate.
-        #[arg(long, default_value_t = 5)]
-        count: u32,
         /// Output directory on user-secured storage. Refused inside any git
         /// tree; created 0700 if missing.
         #[arg(long)]
@@ -83,15 +82,9 @@ enum Cmd {
     },
 }
 
+/// Clap value parser: delegates to [`Network::from_str`] (case-insensitive).
 fn parse_network(s: &str) -> Result<Network, String> {
-    match s {
-        "mainnet" => Ok(Network::Mainnet),
-        "testnet" => Ok(Network::Testnet),
-        "stagenet" => Ok(Network::Stagenet),
-        other => Err(format!(
-            "unknown network `{other}` (expected mainnet | testnet | stagenet)"
-        )),
-    }
+    Network::from_str(s)
 }
 
 /// Repo root as seen at compile time (`rust/shekyl-genesis-tool` → repo).
@@ -109,18 +102,14 @@ fn default_recipients(explicit: Option<PathBuf>, net: Network) -> PathBuf {
     explicit.unwrap_or_else(|| {
         default_repo_root()
             .join("config")
-            .join(format!("genesis_recipients.{}.json", network_str(net)))
+            .join(format!("genesis_recipients.{}.json", net.as_str()))
     })
 }
 
 fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
     match cmd {
-        Cmd::GenWallets {
-            network,
-            count,
-            out_dir,
-        } => {
-            let wallets = generate_wallets(network, count)?;
+        Cmd::GenWallets { network, out_dir } => {
+            let wallets = generate_wallets(network)?;
             let skeleton = write_custody_files(&out_dir, network, &wallets)?;
             for w in &wallets {
                 println!("wallet {:02}: {}", w.index, w.address);
@@ -132,7 +121,8 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
                  - restore-verify each wallet from its seed before committing \
                  to the allocation\n\
                  - recipients skeleton (addresses only, safe to commit): {skel}",
-                net = network_str(network),
+                count = GENESIS_RECIPIENT_COUNT,
+                net = network.as_str(),
                 dir = out_dir.display(),
                 skel = skeleton.display(),
             );
@@ -147,7 +137,7 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
             let built = build_genesis_tx(network, &recipients)?;
             eprintln!(
                 "genesis coinbase [{net}]: {n} outputs, tx hash {hash}, {len} hex chars",
-                net = network_str(network),
+                net = network.as_str(),
                 n = recipients.len(),
                 hash = hex::encode(built.tx_hash),
                 len = built.hex.len(),
@@ -167,7 +157,7 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
                 if o.matches {
                     eprintln!(
                         "{net}: OK ({len} hex chars)",
-                        net = network_str(o.network),
+                        net = o.network.as_str(),
                         len = o.pinned_len
                     );
                 } else {
@@ -175,13 +165,13 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
                     match o.first_mismatch {
                         Some(at) => eprintln!(
                             "{net}: MISMATCH at hex offset {at} (built {b} chars, pinned {p})",
-                            net = network_str(o.network),
+                            net = o.network.as_str(),
                             b = o.built_len,
                             p = o.pinned_len,
                         ),
                         None => eprintln!(
                             "{net}: MISMATCH — length differs (built {b} chars, pinned {p})",
-                            net = network_str(o.network),
+                            net = o.network.as_str(),
                             b = o.built_len,
                             p = o.pinned_len,
                         ),
@@ -212,7 +202,7 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
             let block = genesis_block(built.tx, nonce)?;
             println!(
                 "network={net} nonce={nonce} tx_hash={hash} block_id={id}",
-                net = network_str(network),
+                net = network.as_str(),
                 hash = hex::encode(tx_hash),
                 id = hex::encode(block.hash()),
             );

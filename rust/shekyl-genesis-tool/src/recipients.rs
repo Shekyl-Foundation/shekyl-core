@@ -68,13 +68,12 @@ pub struct Recipient {
 
 /// Canonical lowercase network name used in filenames, the recipients file,
 /// and the tx-key derivation preimage.
+///
+/// Thin alias of [`Network::as_str`] so call sites in this crate stay
+/// readable without re-importing the address type's method name.
 #[must_use]
 pub fn network_str(net: Network) -> &'static str {
-    match net {
-        Network::Mainnet => "mainnet",
-        Network::Testnet => "testnet",
-        Network::Stagenet => "stagenet",
-    }
+    net.as_str()
 }
 
 /// Parse and validate a recipients file body for `expected` network.

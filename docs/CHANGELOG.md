@@ -6,12 +6,13 @@
 
 - **`geblock` — deterministic Rust genesis pipeline
   (`rust/shekyl-genesis-tool`).** Replaces the C++ `genesis_builder`
-  end-to-end: `gen-wallets` (fresh-entropy founder/developer wallet
-  ceremony — BIP-39 for mainnet/stagenet, raw-32 for testnet, 0600 custody
-  files refused inside any git tree), `build` (genesis coinbase hex, same
-  stdout contract as the old tool), `verify` (rebuilds all three networks
-  and byte-compares against the `GENESIS_TX` pins in
-  `src/cryptonote_config.h`, replacing the dead `verify_genesis.py`), and
+  end-to-end: `gen-wallets` (exactly five fresh-entropy founder/developer
+  wallets — BIP-39 for mainnet/stagenet, raw-32 for testnet; 0600 custody
+  files staged then promoted, refused inside any git tree before mkdir),
+  `build` (genesis coinbase hex, same stdout contract as the old tool),
+  `verify` (rebuilds all three networks and byte-compares against the
+  `GENESIS_TX` pins in `src/cryptonote_config.h`, replacing the dead
+  `verify_genesis.py`; pin-parser always gated on the real header), and
   `block-id` (v9-header genesis block id + tx hash). The genesis tx key is
   now **deterministic** — cSHAKE256 with customization
   `shekyl/genesis-txkey-v1` over the recipients file — so the pinned
@@ -22,8 +23,9 @@
   in the final 5 × 20,000 SKL shape on **all** networks (mainnet/stagenet
   placeholder-keyed until the founder ceremony; the combined single
   treasury output is retired). Golden KATs pin the derivation → output
-  construction → wire encoding → v9 block hash chain; the config-pin gate
-  test lands `#[ignore]`d until the post-regen re-pin un-ignores it.
+  construction → wire encoding → v9 block hash chain; the config-pin
+  **byte-compare** gate lands `#[ignore]`d until the post-regen re-pin
+  un-ignores it (parse coverage is always on).
 
 ### Removed
 

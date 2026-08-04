@@ -10,10 +10,15 @@
 //! (b) is what the deterministic tx key exists for: the pinned genesis is
 //! reproducible from committed inputs, so drift between the recipients
 //! files and the pins is a CI failure instead of a silent lie.
+//!
+//! The **parser** itself is always gated (see
+//! [`config_pins_parse_from_real_header`]): a region-model break that made
+//! `geblock verify` unable to find pins would otherwise only surface when
+//! the ignored byte-compare is un-ignored.
 
 use shekyl_address::Network;
-use shekyl_genesis_tool::config_pin::verify_networks;
-use shekyl_genesis_tool::recipients::{load_and_validate, network_str};
+use shekyl_genesis_tool::config_pin::{load_config_pins, verify_networks};
+use shekyl_genesis_tool::recipients::load_and_validate;
 use std::path::PathBuf;
 
 fn repo_root() -> PathBuf {
@@ -28,11 +33,68 @@ fn recipients_files_are_valid() {
     for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
         let path = repo_root()
             .join("config")
-            .join(format!("genesis_recipients.{}.json", network_str(net)));
+            .join(format!("genesis_recipients.{}.json", net.as_str()));
         let recipients =
             load_and_validate(&path, net).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert_eq!(recipients.len(), 5);
     }
+}
+
+/// Always on: the real `cryptonote_config.h` must yield exactly three
+/// networks' pins with even-length non-empty hex and parseable nonces.
+///
+/// This is the load-bearing check that the pin scraper still understands
+/// the header (east-const house style, namespace regions, config_t fields
+/// excluded). Byte-compare against the rebuilt genesis is a separate,
+/// Phase-B-gated test below.
+#[test]
+fn config_pins_parse_from_real_header() {
+    let path = repo_root().join("src/cryptonote_config.h");
+    let pins = load_config_pins(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+
+    for (net, pin) in [
+        (Network::Mainnet, &pins.mainnet),
+        (Network::Testnet, &pins.testnet),
+        (Network::Stagenet, &pins.stagenet),
+    ] {
+        assert!(
+            !pin.genesis_tx_hex.is_empty(),
+            "{}: GENESIS_TX empty",
+            net.as_str()
+        );
+        assert_eq!(
+            pin.genesis_tx_hex.len() % 2,
+            0,
+            "{}: GENESIS_TX odd length {}",
+            net.as_str(),
+            pin.genesis_tx_hex.len()
+        );
+        assert!(
+            pin.genesis_tx_hex.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{}: GENESIS_TX not hex",
+            net.as_str()
+        );
+        // Nonces are network-distinct today; a zero would be a parse miss
+        // against the live header (mainnet 10000, testnet 10101, stagenet 10002).
+        assert_ne!(
+            pin.genesis_nonce,
+            0,
+            "{}: GENESIS_NONCE parsed as 0",
+            net.as_str()
+        );
+    }
+    assert_ne!(
+        pins.mainnet.genesis_nonce, pins.testnet.genesis_nonce,
+        "mainnet/testnet nonces must differ"
+    );
+    assert_ne!(
+        pins.mainnet.genesis_nonce, pins.stagenet.genesis_nonce,
+        "mainnet/stagenet nonces must differ"
+    );
+    assert_ne!(
+        pins.testnet.genesis_nonce, pins.stagenet.genesis_nonce,
+        "testnet/stagenet nonces must differ"
+    );
 }
 
 /// The byte-compare gate. Ignored until the Phase B regen replaces the
@@ -50,7 +112,7 @@ fn genesis_hex_matches_config_pin() {
             o.matches,
             "{}: rebuilt genesis hex does not match the cryptonote_config.h pin \
              (built {} chars, pinned {}, first mismatch {:?})",
-            network_str(o.network),
+            o.network.as_str(),
             o.built_len,
             o.pinned_len,
             o.first_mismatch
