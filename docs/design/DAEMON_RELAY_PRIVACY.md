@@ -10243,3 +10243,90 @@ one.
 > differ by 1000×. A rate without its denominator's magnitude is not a
 > specification — the same failure §59.2 already documented once for per-hop
 > versus network-level, one level down.
+
+## 61. The eligibility decision — exit (b) is dominated, and one repair is rejected on the merits
+
+**2026-08-04.** §60.3 left two exits open. One is settled by a wire fact.
+
+### 61.1 Exit (b) is dominated: the fluff flag is in the clear
+
+**Verified**: `NOTIFY_NEW_TRANSACTIONS` carries `dandelionpp_fluff` as a
+serialised field
+([`cryptonote_protocol_defs.h:200`](../../src/cryptonote_protocol/cryptonote_protocol_defs.h#L200),
+`KV_SERIALIZE_OPT` at :205, set at
+[`levin_notify.cpp:275`](../../src/cryptonote_protocol/levin_notify.cpp#L275)).
+**The receiving peer reads it directly.**
+
+So an adversary holding a slot on the anonymity zone **partitions incoming
+traffic by the flag** and looks only at the stem-flagged bucket. Widening
+eligibility to fluff-phase relays adds ~400 tx/day of *fluff-flagged* traffic
+and leaves the stem bucket at **1 own + 0.4 diverted — 71.4 %, unchanged.**
+
+**The added traffic is pure cost.** It does not fool the peer, because the
+flag is not hidden from it; and it does not help against the wire observer,
+which sees encrypted Tor frames either way. **Exit (b) is dominated, not
+merely worse.**
+
+*This is the §32.6 grid doing its job: cover only helps against an observer
+that cannot already separate the buckets, and this one can.*
+
+### 61.2 Exit (a)'s cost is propagation, not bandwidth
+
+45 % of ~20 pre-fluff forwards is **~9 transactions per day** — bandwidth is
+not the constraint. The cost is that a diverted transaction stems *and fluffs*
+on the Tor zone under `OutboundOnly`, so its first passage is
+**`F′ = 3250 ms` against clearnet's ~1250 ms** (§40.1, §44). Nearly half a
+Tor-running node's stem traffic takes the slow diffusion path.
+
+**That is the arc's usual direction — privacy over latency — and it is why
+"a different regime, not a tweak" was the right phrase**: at 45 % the Tor
+subgraph stops being a trickle and becomes a real fraction of the stem
+network, which changes propagation *modelling* rather than one constant.
+
+**And the two sides are priced against different denominators**, which is
+§60.4's lesson arriving immediately:
+
+| `p` | network-level diversion at Tor share 1.0 / 0.30 / 0.10 / 0.03 |
+| --- | --- |
+| 0.02 | 0.096 / 0.030 / 0.010 / 0.003 |
+| 0.10 | 0.410 / 0.141 / 0.049 / 0.015 |
+| **0.45** | **0.950 / 0.516 / 0.206 / 0.066** |
+
+**`p` is conditioned on the node running an anonymity zone.** The *privacy*
+gain is per-node (71 % → 10 %) and does not depend on adoption. The
+*propagation* cost is network-wide and depends on it entirely — 95 % of
+transactions touch Tor at full adoption, 21 % at 10 %. **Choosing `p` without
+stating an assumed Tor share sets one of those two and leaves the other
+unquoted.**
+
+### 61.3 Rejected on the merits: pinning diverted traffic to the nil slot
+
+§60.2's asymmetry — 83 % on the `in_mapping_[nil]` slot against 71 % averaged
+— has an obvious-looking repair: **pin diverted relayed traffic to the
+nil-mapped successor**, putting the dilution exactly where the originations
+land. **Do not.**
+
+It splits those transactions' source across successors, which is precisely
+what D++ Theorem 2 prices. **Verified in the paper**: one-to-one gives
+`D_OPT-OtO = Θ(p² log(1/p))`, all-to-one gives `D_OPT-AtO = Θ(p)` — and since
+`p < 1`, one-to-one is **quadratically better**. Departing from it raises
+precision against the *upstream* origin whose transactions we are re-routing.
+
+> **It improves our own precision by degrading someone else's, and if every
+> node does it the network is net worse.** That makes it not a trade we are
+> entitled to take unilaterally — the same reasoning that made §59.7's
+> relayed-versus-originated split necessary: a node deciding about someone
+> else's transaction does not get to spend their anonymity for its own.
+
+**Recorded as rejected now rather than when proposed**, because it is the
+first thing anyone will reach for on seeing §60.2's numbers, and the argument
+against it is not obvious from the numbers themselves.
+
+### 61.4 What remains
+
+Exit (a) is the only live option. **What it still owes before a value can be
+set: an assumed Tor share**, so the propagation cost has a denominator, and
+the F′ propagation model re-run at the diverted fraction — which is exactly
+the reverse-parity readout already owed and already unblocked (§44.5).
+
+**The two owed items and the constants round are now the same work.**
