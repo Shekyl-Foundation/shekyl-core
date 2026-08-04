@@ -9926,8 +9926,10 @@ attributing because of **F-6's routing rule** — anything on that zone is `O`'s
 own — not because of the prefix. Under R-1's mixed eligibility the covert
 channel carries relayed traffic too, and a retained prefix attributes exactly
 like any stem observation: **precision back at `C1 ≈ f`.** *(**Re-graded at §60: R-1 as shipped
-reaches ~71 % on the zone and ~83 % on the nil-mapped slot, not the floor —
-the calibration assumed an eligible set 1000× larger than what ships.**)* The retention
+reaches ~71 % on the zone, not the floor — the calibration assumed an eligible
+set 1000× larger than what ships. §63.4 removed this sentence's second half:
+there is no nil-mapped slot on that zone, because it does not run
+Dandelion++, so ~71 % is uniform across the outbound set.**)* The retention
 channel does not disappear; it stops being above the floor.
 
 **Two consequences:**
@@ -10347,6 +10349,13 @@ unquoted.**
 
 ### 61.3 Rejected on the merits: pinning diverted traffic to the nil slot
 
+> **§63.4 removes this proposal's motive and its target both.** The asymmetry
+> it repairs does not exist (precision is uniform), and there is no nil slot
+> on the anonymity zone to pin to — it diffuses. **The argument below is kept
+> because it is transport-independent and still binding**: it is the reason
+> not to reach for slot-pinning anywhere, including on clearnet where the
+> slots are real, and its closing principle is load-bearing for §63.5.
+
 §60.2's asymmetry — 83 % on the `in_mapping_[nil]` slot against 71 % averaged
 — has an obvious-looking repair: **pin diverted relayed traffic to the
 nil-mapped successor**, putting the dilution exactly where the originations
@@ -10370,6 +10379,12 @@ against it is not obvious from the numbers themselves.
 
 ### 61.4 What remains
 
+> **Overtaken by §63.7 and §63.5.** Exit (a) is **not** the only live option —
+> §61.1's grounds for eliminating exit (b) were false, so both return to the
+> constants round. And exit (a) is now the *worse-placed* of the two: §63.5
+> prices its stem shortening at 64 % against exit (b)'s zero, because a
+> fluff-phase transaction has no stem left to shorten.
+
 Exit (a) is the only live option. **What it still owes before a value can be
 set: an assumed Tor share**, so the propagation cost has a denominator, and
 the F′ propagation model re-run at the diverted fraction — which is exactly
@@ -10382,7 +10397,7 @@ the reverse-parity readout already owed and already unblocked (§44.5).
 > **RETRACTED 2026-08-04 by §63.2, on the instrument this section built.**
 > F-12's premise — that Tor-latency hops sit inside a stem — is false: the
 > anonymity zone diffuses rather than stems, so its origin's stem length is 1
-> and the shipped embargo **over**-provisions that path by 75–83 %. The sign
+> and the shipped embargo **over**-provisions that path by 75–82 %. The sign
 > is backwards. §62.1's sensitivity table is still correct arithmetic about
 > the clearnet stem; §62.2's conclusion is not. Kept in place, per the
 > standing rule that a retraction is recorded rather than deleted. §62.4
@@ -10423,12 +10438,12 @@ Adopted embargo re-derived at each `hop`
 
 | `hop_ms` | embargo | vs shipped |
 | --- | --- | --- |
-| **175** (shipped, assumed) | **189 s** | — |
-| 300 (published Bitcoin) | 215 s | +14 % |
-| 500 | 249 s | +32 % |
-| 875 (5×) | 328 s | +74 % |
-| 1050 (6×) | **365 s** | **+93 %** |
-| 1750 (10×) | 498 s | +163 % |
+| **175** (shipped, assumed) | **190 s** | — |
+| 300 (published Bitcoin) | 216 s | +14 % |
+| 500 | 250 s | +32 % |
+| 875 (5×) | 328 s | +73 % |
+| 1050 (6×) | **366 s** | **+93 %** |
+| 1750 (10×) | 499 s | +163 % |
 
 > **This is not introduced by exit (a), or by R-1. Originated traffic has
 > always stemmed on the anonymity zone** — that was the *whole* of F-6's
@@ -10529,12 +10544,12 @@ length is **1 with certainty**, which is exactly `fluff_probability_pct = 100`
 in the production derivation — so the requirement is measurable without a new
 model. `tests/hop_sensitivity.rs::anonymity_zone_origin_is_over_provisioned_not_under`:
 
-| Tor `hop_ms` | single-hop requirement | vs shipped 189 s |
+| Tor `hop_ms` | single-hop requirement | vs shipped 190 s |
 | --- | --- | --- |
-| 175 | 33 s | −83 % |
-| 500 | 35 s | −81 % |
-| 1050 (6×) | 42 s | −78 % |
-| 1750 (10×) | 47 s | −75 % |
+| 175 | 34 s | −82 % |
+| 500 | 36 s | −81 % |
+| 1050 (6×) | 43 s | −77 % |
+| 1750 (10×) | 48 s | −75 % |
 
 **Even at ten times clearnet latency the anonymity path needs a quarter of the
 embargo that ships.** The two errors in §62 ran opposite — `h` was

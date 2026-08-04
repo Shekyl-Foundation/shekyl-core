@@ -27,6 +27,13 @@ use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABIL
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
 
 /// The adopted embargo, in whole seconds, for a given parameter set.
+///
+/// Reports through [`EmbargoDerivation::mean_secs`] rather than dividing by
+/// 1000 here. The two disagree: ticks are 250 ms, so a floor undercounts by up
+/// to 0.75 s, and the crate's reporting convention rounds *up*. Dividing here
+/// put this file's shipped row at 189 s against the 190 s §44 adopted and the
+/// whole arc quotes — **one number, two values, from a rounding choice made
+/// in a test.**
 fn embargo_secs(p: &DandelionParams) -> u64 {
     let d = derive_embargo(
         p,
@@ -34,30 +41,18 @@ fn embargo_secs(p: &DandelionParams) -> u64 {
         EMBARGO_FULL_TRAVEL_PROBABILITY,
     )
     .expect("solves");
-    u64::from(d.mean_ticks) * d.tick_millis / 1000
+    u64::from(d.mean_secs())
 }
 
 #[test]
 fn hop_sensitivity() {
     let mut seen: Vec<(u32, u64)> = Vec::new();
     println!("\n  hop_ms   embargo(s)   vs shipped");
-    let base = derive_embargo(
-        &DandelionParams::inherited(),
-        DEFAULT_EMBARGO_TICK_MILLIS,
-        EMBARGO_FULL_TRAVEL_PROBABILITY,
-    )
-    .expect("solves");
-    let base_s = u64::from(base.mean_ticks) * base.tick_millis / 1000;
+    let base_s = embargo_secs(&DandelionParams::inherited());
     for hop in [175_u32, 300, 500, 875, 1050, 1750] {
         let mut p = DandelionParams::inherited();
         p.time_between_hop_ms = hop;
-        let d = derive_embargo(
-            &p,
-            DEFAULT_EMBARGO_TICK_MILLIS,
-            EMBARGO_FULL_TRAVEL_PROBABILITY,
-        )
-        .expect("solves");
-        let s = u64::from(d.mean_ticks) * d.tick_millis / 1000;
+        let s = embargo_secs(&p);
         println!(
             "  {hop:>6}   {s:>8}   {:>+7.0}%{}",
             (s as f64 / base_s as f64 - 1.0) * 100.0,
@@ -69,6 +64,15 @@ fn hop_sensitivity() {
         );
         seen.push((hop, s));
     }
+
+    // The shipped row must BE the arc's adopted embargo. §44 landed 190 s and
+    // every section since quotes it; a table here reading 189 s would be the
+    // same number with two values, which is how a rounding choice made in a
+    // test leaks into a design document as a second fact.
+    assert_eq!(
+        base_s, 190,
+        "shipped row must match §44's adopted 190 s embargo"
+    );
 
     // Monotone in hop: a longer stem needs a longer embargo, so any
     // under-estimate of `hop` under-provisions in the privacy-losing
