@@ -100,7 +100,14 @@ using namespace crypto;
 // (`archival_frozen_shard_count`, ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4);
 // a pre-V8 DB has segment rows the counter does not account for.
 // Nodes with pre-V8 data dirs must delete and resync.
-#define VERSION 8
+// V9: block header gains `attestation_root` (ARCHIVAL_CREDIT_WIRE.md §3), so
+// the persisted block blob in `blocks` grows 32 bytes; a pre-V9 blob has no
+// attestation_root and the V9 parser cannot read it. Delete and resync. NOTE:
+// this guard covers the LMDB store only. The block also has a boost serializer
+// (cryptonote_boost_serialization.h, the alt-block / txpool caches) with no
+// version gate, so a stale `poolstate.bin` / alt-block cache from a pre-V9 build
+// misparses silently — clear those alongside the data dir.
+#define VERSION 9
 
 namespace
 {
@@ -9611,13 +9618,23 @@ void BlockchainLMDB::migrate(const uint32_t oldversion)
 {
   // Pre-genesis posture (15-deletion-and-debt.mdc, 60-no-monero-legacy.mdc):
   // no in-Shekyl migration code; `rm -rf` and resync is the migration path.
-  // V8 added the persisted frozen-shard counter (properties
-  // `archival_frozen_shard_count`); a pre-V8 DB carries segment rows the
-  // counter does not account for, and proceeding would feed the M1 reward
-  // gate a wrong operand. Refuse loudly. (The Monero-era migrate_0_1..
-  // migrate_5_6 ladder was unreachable from this guard and has been deleted.)
-  if (oldversion < 8)
-    throw0(DB_ERROR("Database schema is pre-V8; no pre-genesis migration path exists. Delete the data directory and resync."));
+  // V9 added the block-header `attestation_root` (ARCHIVAL_CREDIT_WIRE.md §3):
+  // a pre-V9 block blob has no attestation_root bytes, so the V9 parser cannot
+  // read it. V8 added the persisted frozen-shard counter (properties
+  // `archival_frozen_shard_count`); a pre-V8 DB carries segment rows the counter
+  // does not account for. Neither has an in-place path; refuse loudly. (The
+  // Monero-era migrate_0_1..migrate_5_6 ladder was unreachable from this guard
+  // and has been deleted.)
+  if (oldversion < VERSION)
+  {
+    // Message tracks VERSION so the next bump cannot leave a stale "pre-VN".
+#define SHEKYL_DB_VERSION_STRINGIFY_(x) #x
+#define SHEKYL_DB_VERSION_STRINGIFY(x) SHEKYL_DB_VERSION_STRINGIFY_(x)
+    throw0(DB_ERROR("Database schema is pre-V" SHEKYL_DB_VERSION_STRINGIFY(VERSION)
+      "; no pre-genesis migration path exists. Delete the data directory and resync."));
+#undef SHEKYL_DB_VERSION_STRINGIFY
+#undef SHEKYL_DB_VERSION_STRINGIFY_
+  }
 }
 
 }  // namespace cryptonote

@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! Block       := BlockHeader Transaction(miner) V(n_tx) n_tx×Hash[32]
-//! BlockHeader := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32]
+//! BlockHeader := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32] attestation_root[32]
 //! ```
 //!
 //! The miner transaction is embedded inline; `n_tx` counts the *other*
@@ -62,6 +62,10 @@ pub struct BlockHeader {
     pub nonce: u32,
     /// The FCMP++ curve-tree root committing to the chain's outputs after this block.
     pub curve_tree_root: [u8; 32],
+    /// The archival credit-wire attestation root over this block's pass records
+    /// (`ARCHIVAL_CREDIT_WIRE.md` §3). A `block_header` field alongside
+    /// `curve_tree_root`, mined via the header being the PoW preimage.
+    pub attestation_root: [u8; 32],
 }
 
 impl BlockHeader {
@@ -72,7 +76,8 @@ impl BlockHeader {
         write_varint(self.timestamp, w)?;
         w.write_all(&self.previous)?;
         w.write_all(&self.nonce.to_le_bytes())?;
-        w.write_all(&self.curve_tree_root)
+        w.write_all(&self.curve_tree_root)?;
+        w.write_all(&self.attestation_root)
     }
 
     /// Read the header.
@@ -84,6 +89,7 @@ impl BlockHeader {
             previous: read_array(r)?,
             nonce: u32::from_le_bytes(read_array::<4, _>(r)?),
             curve_tree_root: read_array(r)?,
+            attestation_root: read_array(r)?,
         })
     }
 }
@@ -235,5 +241,50 @@ impl Block {
         write_varint(blob.len(), &mut preimage).expect("Vec write is infallible");
         preimage.extend_from_slice(&blob);
         cn_fast_hash(&preimage)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shekyl_archival_retention::empty_attestation_root;
+
+    fn header(attestation_root: [u8; 32]) -> BlockHeader {
+        BlockHeader {
+            major_version: 1,
+            minor_version: 0,
+            timestamp: 1_700_000_000,
+            previous: [0x11; 32],
+            nonce: 0xDEAD_BEEF,
+            curve_tree_root: [0x22; 32],
+            attestation_root,
+        }
+    }
+
+    #[test]
+    fn attestation_root_roundtrips_and_is_the_final_header_field() {
+        let empty = empty_attestation_root();
+        let h = header(empty);
+        let mut bytes = Vec::new();
+        h.write(&mut bytes).unwrap();
+        // It is the LAST 32 bytes of the serialized header (after curve_tree_root),
+        // so appending it never shifts the nonce/curve_tree_root offsets.
+        assert_eq!(&bytes[bytes.len() - 32..], &empty);
+        let back = BlockHeader::read(&mut &bytes[..]).unwrap();
+        assert_eq!(back, h);
+        assert_eq!(back.attestation_root, empty);
+    }
+
+    #[test]
+    fn attestation_root_is_committed_by_the_wire() {
+        // Two headers differing ONLY in attestation_root serialize differently and
+        // to equal length — the field is on the wire (hence in the PoW/block-hash
+        // preimage, since the header is the preimage prefix), never dropped.
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        header([0u8; 32]).write(&mut a).unwrap();
+        header(empty_attestation_root()).write(&mut b).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(a.len(), b.len());
     }
 }

@@ -808,6 +808,7 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> Scanna
         // field, so it must be the sentinel (not `[0u8; 32]`) for the verify to
         // pass on the synthetic-block test paths.
         curve_tree_root: shekyl_fcmp::tree::selene_hash_init(),
+        attestation_root: [0u8; 32],
     };
 
     // A coinbase carrying no outputs: the sole `Gen` input and a `Null` ct whose

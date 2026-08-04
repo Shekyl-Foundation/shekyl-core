@@ -1780,6 +1780,11 @@ struct shekyl_archival_verify_ctx {
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH    13
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE      14
 
+/// Empty-set archival attestation root (`attestation_root(&[])`). Writes 32
+/// bytes to `out_ptr`. Returns true on success. Not the all-zero null hash —
+/// see ARCHIVAL_CREDIT_WIRE.md §3.
+bool shekyl_attestation_root_empty(uint8_t* out_ptr);
+
 /// Returns 1 on success; writes 32-byte `P_canonical_id` to `out_p_id`.
 uint8_t shekyl_archival_p_canonical_id_from_pubkey(
     const uint8_t* hybrid_pubkey_ptr,

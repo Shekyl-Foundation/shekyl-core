@@ -135,9 +135,62 @@ off-by-one the explicit field buys out. Remaining sub-decisions: byte order and
 ML-DSA-65 3309 B + framing, over the block-bound nonce). Residence RESOLVED to
 shape 4.**
 
-**SHAPE RESOLVED → 4 (2026-08-03, after the merkle walk).** The attestation set
-for a block is committed by a single **`attestation_root`** added as one extra
-leaf to the block's tx merkle tree, alongside the tx-hashes; the signatures live
+**AMENDMENT (2026-08-04) — SUPERSEDES the shape-4 residence below: a `block_header`
+field, not a tx-merkle leaf.** The C++ map surfaced a fact the shape 1/2/3/4
+enumeration never had in view: `curve_tree_root` (`cryptonote_basic.h:843`) is
+already a `crypto::hash` **block-header field**, mined because
+`get_block_hashing_blob` serializes the whole `block_header` into the PoW
+preimage, defaulting to `null_hash`. `attestation_root` is the same object, so it
+becomes a **second `block_header` field alongside `curve_tree_root`**, and the
+tx-merkle-leaf mechanism described in the rest of this section is **superseded**.
+Why the leaf lost once the precedent was in view:
+
+- **The leaf's whole advantage was avoiding a block wire-format change; the map
+  shows it changes the format anyway.** The stored 32 B root must ride *both*
+  block serializers (`cryptonote_basic.h` binary + `cryptonote_boost_serialization.h`)
+  under either residence — that row is identical. The leaf then pays
+  `get_tx_tree_hash` surgery *on top* of the serializer change. Strictly more
+  machinery for the same reach.
+- **The header field deletes two hand-maintained invariants.** The leaf needed
+  *fixed-position* and *defined-empty* enforced inside `get_tx_tree_hash`. A
+  struct field has neither: position is fixed by layout, "empty" is the field's
+  value exactly as `curve_tree_root` already does it. Make-bad-states-
+  unrepresentable prefers the version with no invariant to state.
+- **Live precedent = survives-the-team.** A maintainer who understands
+  `curve_tree_root` understands `attestation_root` with zero new concepts.
+- **Cost:** +32 B per block header, permanent (~8.4 MB/yr at 2-min blocks) — the
+  one real mark against it, and it is on the *size* axis the mission's
+  robust > small order subordinates, versus the leaf's cost being a modification
+  to the merkle-root construction, the most consensus-critical hashing path.
+  Accepted.
+
+Value semantics: the empty-set `attestation_root` is `attestation_root(&[])` (Rust
+`empty_attestation_root()` / C++ `empty_attestation_root()` via
+`shekyl_attestation_root_empty`), **not** `null_hash` — every empty block commits
+the *valid* empty commitment, exactly as `curve_tree_root`'s mined value is the
+empty Selene root, not its `null_hash` constructor default. The C++
+`block_header` constructor **defaults to that empty root** so no construction path
+can emit the dual-empty `null_hash` by accident; `create_block_template` also sets
+it explicitly until pass-record computation lands. Everything below about the
+**record format, nonce, settlement fold, and Half-B deletion** stands unchanged;
+only the root's *residence* is a header field (not a tx-merkle leaf). The
+block-format carrier — field + both serializers + LMDB `VERSION` 8→9 + RPC
+exposure + empty-root default — landed as Plan B slice 1. Normal blocks compute
+`attestation_root(records)` at creation once the attestation machinery lands;
+`tx_extra` packing, the full-record FFI verify, and the admission
+recompute-and-compare are the next slice.
+
+**HISTORICAL (SUPERSEDED 2026-08-04) — former shape-4 leaf design.** The text
+below records the merkle-walk that established *block-level* (non-transaction)
+residence and the defined-empty / stored-root consequences. **It is not the
+current residence.** Current residence is the `block_header` field above. Kept as
+design history so the walk's still-valid conclusions (attestations are not
+transactions; root is stored, not recomputed post-prune; `sig_commit` dropped)
+remain citable.
+
+~~**SHAPE RESOLVED → 4 (2026-08-03, after the merkle walk).**~~ The attestation set
+for a block was originally planned as a single **`attestation_root`** extra
+leaf on the block's tx merkle tree, alongside the tx-hashes; the signatures live
 in a height-keyed prunable side table. Walk result (verified at source): the
 merkle change is **contained** — (i) `tree_branch`/`tree_branch_hash` have **zero
 callers** in `src/` (the block tx-tree has no inclusion-proof consumers; the
@@ -149,15 +202,13 @@ nowhere; (ii) every block-hash / PoW path (`get_block_hash`,
 `+2` stays consistent. The leaf goes last (miner_tx stays leaf 0, tx_hashes
 keep 1..n), and mandatory-`k` makes it always present (uniform every block).
 **Refinement the walk forced:** `attestation_root` must be a **stored block
-field** (32 B, serialized next to `tx_hashes`, kept in the never-pruned block
-blob), NOT recomputed from the signatures — `get_tx_tree_hash(b)` is recomputed
-at every verification, and a pruned node (signatures gone) must still recompute
-the block hash. So the root persists post-prune; the signatures drop from the
-side table. It is a block wire-format change (rule 42 version bump) and touches
-`get_tx_tree_hash` + `get_block_hashing_blob` + the block struct — bounded, and
-it never touches the coinbase.
-*Consequences:* `sig_commit` per record is **dropped** — the root now carries
-the signature-set commitment, so the header returns to
+field** (32 B, kept in the never-pruned block blob), NOT recomputed from the
+signatures — a pruned node (signatures gone) must still recompute the block
+hash. So the root persists post-prune; the signatures drop from the side table.
+*(The 2026-08-04 amendment places that stored field on `block_header`, not as a
+tx-merkle leaf — same stored-root property, fewer merkle invariants.)*
+*Consequences that still hold:* `sig_commit` per record is **dropped** — the root
+now carries the signature-set commitment, so the header returns to
 `p_id(32) + shard_id(8) + E(8) + kind(1 bit) ≈ 49 B`, the `kind` bit committed
 via `prefix_hash` (§3.1) and carrying per-record pass/miss post-prune. Concern 1
 (totality) **dissolves** — extra-or-missing signatures change the root, block
@@ -171,9 +222,9 @@ block, dropped after horizon), so the redb-migration template already covers it.
 block-level consensus data, NOT transactions.** Shapes 1–3 forced a
 non-transaction object into transaction machinery — shape 1 in the coinbase (a
 tx), shape 2 as its own txs, shape 3 riding the coinbase's `tx_extra` (a tx
-prefix). Shape 4 is the first where an attestation is not a transaction at all:
-a sibling to the tx set, committed by the same block via its own merkle leaf,
-verified and pruned on its own path. **The transaction set stays pure**
+prefix). Shape 4 (and the header-field amendment) is where an attestation is not
+a transaction at all: block-level data, committed by the block, verified and
+pruned on its own path. **The transaction set stays pure**
 (archival / spend / bond txs), which is the FCMP-purity separation — attestations
 never touch a tx, so they cannot perturb the tx-hash or the output-commitment
 machinery.
@@ -358,8 +409,15 @@ folds headers to the bit) produce the **identical `serve_credit_bit` state at th
 epoch's settlement**, compared against the actual `m_archival_serve_credit` table
 — "provably the same bit," not "looks right." Written before step 1 lands; it
 supersedes `serve_credit_equivalence_kat_v1.json`, which pins the old path and
-cannot outlive it (`42-serialization-policy`: the persisted-block wire change
-bumps the version constant, CI-enforced).
+cannot outlive it. **Correction (2026-08-04): `42-serialization-policy` and its
+`schema-snapshot.yml` CI cover only `rust/shekyl-engine-state/**` wallet-state
+blocks — NOT the C++ consensus `block` wire or the LMDB store `VERSION`
+(`db_lmdb.cpp:103`). This surface has no automatic version-bump gate.** So the
+credit-wire block-format change bumps `VERSION` **by hand** (done 8→9, with the
+reject-older/`migrate()` resync path) and carries its **own** compensating
+control: the C++↔Rust block-hash differential (`shekyl-wire`'s `coinbase_hash.rs`,
+its daemon-captured genesis vector regenerated with the new field) is the oracle
+the schema-snapshot workflow would have been, hand-placed.
 
 **Read-site walk (the assumption the three-step rests on — done 2026-08-03).** No
 surviving consensus rule reads `serve_credit_bit` intra-epoch. The primitive

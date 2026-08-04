@@ -855,6 +855,9 @@ namespace cryptonote
     bl.timestamp = 0;
     bl.nonce = nonce;
     shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&bl.curve_tree_root));
+    // attestation_root: block_header() already defaults to empty_attestation_root()
+    // (Rust attestation_root(&[]) via FFI) — the valid empty-set commitment, not
+    // null_hash (ARCHIVAL_CREDIT_WIRE.md §3). Genesis has no pass records.
     miner::find_nonce_for_given_block([](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, unsigned int threads, crypto::hash &hash){
       return cryptonote::get_block_longhash(NULL, b, hash, height, seed_hash, threads);
     }, bl, 1, 0, NULL);

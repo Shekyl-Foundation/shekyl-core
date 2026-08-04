@@ -360,6 +360,7 @@ namespace boost
     a & b.prev_id;
     a & b.nonce;
     a & b.curve_tree_root;
+    a & b.attestation_root;
     //------------------
     a & b.miner_tx;
     a & b.tx_hashes;

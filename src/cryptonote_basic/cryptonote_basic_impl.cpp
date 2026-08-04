@@ -32,6 +32,8 @@
 #include "include_base_utils.h"
 using namespace epee;
 
+#include <stdexcept>
+
 #include "cryptonote_basic_impl.h"
 #include "string_tools.h"
 #include "cryptonote_format_utils.h"
@@ -46,6 +48,20 @@ using namespace epee;
 #define SHEKYL_DEFAULT_LOG_CATEGORY "cn"
 
 namespace cryptonote {
+
+  const crypto::hash& empty_attestation_root()
+  {
+    // Once-per-process: Rust owns the cSHAKE derivation (rule 20). Fail closed
+    // if the FFI cannot produce the empty-set root — a header must never fall
+    // back to null_hash for "empty".
+    static const crypto::hash h = [] {
+      crypto::hash out{};
+      if (!shekyl_attestation_root_empty(reinterpret_cast<uint8_t*>(&out)))
+        throw std::runtime_error("shekyl_attestation_root_empty failed");
+      return out;
+    }();
+    return h;
+  }
 
   static uint8_t nettype_to_ffi_network(network_type nettype)
   {

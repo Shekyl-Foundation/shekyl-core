@@ -11,6 +11,11 @@
 //! the coinbase `Null` ct base (`enc_amounts`/`enc_labels`/`outPk`) and died with
 //! `UnexpectedEof`. See `docs/design/GENESIS_TX_WIRE_FORMAT.md` (§9, §11) and
 //! `tests/vectors/README.md`.
+//!
+//! Regenerated for the credit-wire cutover (2026-08-04): the `block_header` gained
+//! `attestation_root`, so all three heights were recaptured. h1/h2 are mined to a
+//! freshly derived current-format regtest address (the genesis treasury address is
+//! pre-#327 stale format) — see `coinbase_hash.rs` for the full rationale.
 
 use shekyl_wire::Block;
 

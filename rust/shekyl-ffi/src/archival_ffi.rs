@@ -12,7 +12,7 @@
 use std::io::Cursor;
 
 use shekyl_archival_retention::{
-    as_of_e_served_work, bond_post_block_unique, challenge_fire_height,
+    as_of_e_served_work, attestation_root, bond_post_block_unique, challenge_fire_height,
     challenge_leaf_chunk_bounds, challenge_seal_height, challenge_seal_on_chain,
     claim_window_floor, claimed_epochs_check_and_set, credited_work_milli,
     effective_settlement_epoch_blocks, emission_block_claims_unique, emission_vin_verify,
@@ -523,6 +523,26 @@ pub extern "C" fn shekyl_archival_challenge_fire_height(
     let mut p = [0u8; 32];
     p.copy_from_slice(pid);
     challenge_fire_height(h_open, h_close, &hash, &p, shard_id, settlement_epoch)
+}
+
+/// Empty-set archival attestation root — `attestation_root(&[])`
+/// (`ARCHIVAL_CREDIT_WIRE.md` §3). The valid empty commitment a block header
+/// carries when it has no pass records; **not** the all-zero `null_hash`.
+///
+/// # Safety
+/// `out_ptr` must be non-null and point at 32 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_attestation_root_empty(out_ptr: *mut u8) -> bool {
+    if out_ptr.is_null() {
+        return false;
+    }
+    // Empty input has no signatures to canonicalize; the Result is infallible.
+    let root = match attestation_root(&[]) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    std::ptr::copy_nonoverlapping(root.as_ptr(), out_ptr, 32);
+    true
 }
 
 /// Frozen-segment count at a curve-tree leaf count — the first-crossing

@@ -1162,7 +1162,8 @@ namespace cryptonote
       uint64_t long_term_weight;
       std::string miner_tx_hash;
       std::string curve_tree_root;
-      
+      std::string attestation_root;
+
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(major_version)
         KV_SERIALIZE(minor_version)
@@ -1187,6 +1188,7 @@ namespace cryptonote
         KV_SERIALIZE_OPT(long_term_weight, (uint64_t)0)
         KV_SERIALIZE(miner_tx_hash)
         KV_SERIALIZE(curve_tree_root)
+        KV_SERIALIZE(attestation_root)
       END_KV_SERIALIZE_MAP()
   };
 

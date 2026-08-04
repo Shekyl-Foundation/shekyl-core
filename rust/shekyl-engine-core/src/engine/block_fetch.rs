@@ -466,6 +466,7 @@ mod tests {
                 previous: [0u8; 32],
                 nonce: 0,
                 curve_tree_root: [0u8; 32],
+                attestation_root: [0u8; 32],
             },
             miner_transaction: Transaction {
                 prefix: TxPrefix {

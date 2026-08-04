@@ -69,9 +69,9 @@ pub use admission::{
 };
 pub use attestation::{settle_epoch, AttestationKind, EpochSettlement};
 pub use attestation_wire::{
-    attestation_nonce, attestation_root, verify_pass_countersignature, AttestationHeader,
-    AttestationHeaderError, PassRecord, ATTESTATION_HEADER_LEN, ATTESTATION_NONCE_CUSTOMIZATION,
-    ATTESTATION_ROOT_CUSTOMIZATION,
+    attestation_nonce, attestation_root, empty_attestation_root, verify_pass_countersignature,
+    AttestationHeader, AttestationHeaderError, PassRecord, ATTESTATION_HEADER_LEN,
+    ATTESTATION_NONCE_CUSTOMIZATION, ATTESTATION_ROOT_CUSTOMIZATION,
 };
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,

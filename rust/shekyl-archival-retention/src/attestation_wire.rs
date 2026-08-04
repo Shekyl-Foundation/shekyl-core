@@ -232,6 +232,15 @@ pub fn attestation_root(records: &[PassRecord]) -> Result<[u8; 32], CryptoError>
     Ok(cshake256_32(ATTESTATION_ROOT_CUSTOMIZATION, &input))
 }
 
+/// Empty-set root: `attestation_root(&[])`. Infallibly the defined-empty
+/// commitment a block header carries with no pass records (not the all-zero
+/// hash). Prefer this over re-hexing the KAT pin at call sites.
+#[inline]
+pub fn empty_attestation_root() -> [u8; 32] {
+    // No signatures to canonicalize; the empty path cannot fail.
+    attestation_root(&[]).expect("empty attestation_root is infallible")
+}
+
 /// Verify one **pass** record's countersignature at admission (§3.3 step b).
 ///
 /// Two bindings, both self-contained so no correctness rides on the caller:
