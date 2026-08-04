@@ -30,10 +30,14 @@ fn a_full_window_of_misses_slashes_and_pass_priority_clears_mixed_epochs() {
     // remaining (n − m) are *mixed* sets [Miss, Miss, Pass] that pass-priority
     // resolves to Served — so a real pass clears an epoch even when misses were
     // also filed against it.
+    //
+    // Head epoch is derived from n so the descending walk never underflows if
+    // FAILURE_WINDOW_N is raised later.
     let (m, n) = (u64::from(FAILURE_WINDOW_M), u64::from(FAILURE_WINDOW_N));
+    let head = 1000 + n;
     let mut window = Vec::new();
     for i in 0..n {
-        let epoch = 1000 - i; // strictly descending, head = 1000
+        let epoch = head - i; // strictly descending, head = 1000 + n
         let kinds: Vec<AttestationKind> = if i < m {
             vec![AttestationKind::Miss]
         } else {
@@ -57,8 +61,12 @@ fn pruned_epochs_decay_to_non_observation_and_do_not_slash() {
     // sets) fold to NonObservation and are dropped, so the window is just the two
     // misses — below m, not slashable. Were NonObservation to collapse to Missed,
     // the window would be full of misses and wrongly slash.
+    //
+    // Head derived from FAILURE_WINDOW_N so the descending walk cannot underflow
+    // if the constant grows.
+    let n = u64::from(FAILURE_WINDOW_N);
     let mut raw = Vec::new();
-    let mut epoch = 2000u64;
+    let mut epoch = 2000 + n + 5;
     raw.push(observe(epoch, &[AttestationKind::Miss])); // head: a real miss
     epoch -= 1;
     for _ in 0..(FAILURE_WINDOW_N + 5) {
@@ -75,7 +83,7 @@ fn pruned_epochs_decay_to_non_observation_and_do_not_slash() {
     // slash. This proves it was the non-observation *drop* that spared the
     // archiver — not a window that was too short for some unrelated reason.
     let mut all_miss = Vec::new();
-    let mut e = 2000u64;
+    let mut e = 2000 + n;
     for _ in 0..FAILURE_WINDOW_N {
         all_miss.push(observe(e, &[AttestationKind::Miss]).expect("observed"));
         e -= 1;

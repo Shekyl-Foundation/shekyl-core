@@ -29,9 +29,11 @@
 use crate::failure_window::BaselineObservation;
 
 /// The kept per-record discriminant (§3.1): a pass carried a countersignature
-/// (now in the pruned side table); a miss carried none. **Only the kind
-/// survives the prune**, in the coinbase `tx_extra` header, committed via
-/// `prefix_hash` — which is exactly, and only, what the settlement fold needs.
+/// (now in the prunable side table); a miss carried none. The full kept header
+/// (`p_id, shard_id, E, kind`) survives the signature prune in coinbase
+/// `tx_extra` (committed via `prefix_hash`). After the settlement scan has
+/// keyed by `(P, s, E)`, **only this discriminant** is what the fold needs —
+/// which is why [`settle_epoch`] takes `&[AttestationKind]` alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttestationKind {
     /// A countersigned pass: `P` served the read and signed the block-bound

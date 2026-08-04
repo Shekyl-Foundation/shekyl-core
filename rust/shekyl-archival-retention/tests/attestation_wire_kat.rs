@@ -21,9 +21,12 @@
 //! then paste the printed hexes into the constants below.
 
 use shekyl_archival_retention::{
-    attestation_nonce, attestation_root, AttestationHeader, AttestationKind,
+    attestation_nonce, attestation_root, AttestationHeader, AttestationKind, PassRecord,
 };
-use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSignature, SignatureScheme};
+use shekyl_crypto_pq::signature::{
+    HybridSignature, HYBRID_SCHEME_ID_ED25519_ML_DSA_65, HYBRID_SIG_VERSION,
+    ML_DSA_65_SIGNATURE_LENGTH,
+};
 
 // ---- Header vector (hand-verifiable: p_id ‖ shard_le ‖ epoch_le ‖ kind) ----
 const HDR_P_ID: [u8; 32] = [0x11; 32];
@@ -69,30 +72,60 @@ fn header(p_id: [u8; 32], shard_id: u64, settlement_epoch: u64) -> AttestationHe
     }
 }
 
-/// Two dummy same-length canonical signatures, sized from a real signature so no
-/// signature-length magic number is baked into the test.
+/// Ed25519 signature length implied by the public hybrid framing
+/// (`HybridSignature::CANONICAL_LEN` − framing − ML-DSA-65 sig).
+const ED25519_SIG_LEN: usize =
+    HybridSignature::CANONICAL_LEN - 1 - 1 - 2 - 4 - 4 - ML_DSA_65_SIGNATURE_LENGTH;
+
+/// Two dummy same-length canonical signatures from fixed fills — **no RNG**.
+/// Lengths come from the scheme framing constants, not from a live keygen.
 fn dummy_sig_pair() -> (HybridSignature, HybridSignature) {
-    let (_pk, sk) = HybridEd25519MlDsa.keypair_generate().expect("keypair");
-    let real = HybridEd25519MlDsa.sign(&sk, b"length-probe").expect("sign");
-    let (ed_len, ml_len) = (real.ed25519.len(), real.ml_dsa.len());
     (
         HybridSignature {
-            ed25519: vec![SIG_A_ED_FILL; ed_len],
-            ml_dsa: vec![SIG_A_ML_FILL; ml_len],
+            ed25519: vec![SIG_A_ED_FILL; ED25519_SIG_LEN],
+            ml_dsa: vec![SIG_A_ML_FILL; ML_DSA_65_SIGNATURE_LENGTH],
         },
         HybridSignature {
-            ed25519: vec![SIG_B_ED_FILL; ed_len],
-            ml_dsa: vec![SIG_B_ML_FILL; ml_len],
+            ed25519: vec![SIG_B_ED_FILL; ED25519_SIG_LEN],
+            ml_dsa: vec![SIG_B_ML_FILL; ML_DSA_65_SIGNATURE_LENGTH],
         },
     )
+}
+
+/// Sanity: dummy fills round-trip through canonical framing (lengths valid).
+#[test]
+fn dummy_sigs_are_canonical_length() {
+    let (sa, sb) = dummy_sig_pair();
+    assert_eq!(
+        sa.to_canonical_bytes().unwrap().len(),
+        HybridSignature::CANONICAL_LEN
+    );
+    assert_eq!(
+        sb.to_canonical_bytes().unwrap().len(),
+        HybridSignature::CANONICAL_LEN
+    );
+    // Framing constants used above match what to_canonical_bytes emits.
+    let bytes = sa.to_canonical_bytes().unwrap();
+    assert_eq!(bytes[0], HYBRID_SIG_VERSION);
+    assert_eq!(bytes[1], HYBRID_SCHEME_ID_ED25519_ML_DSA_65);
 }
 
 /// The two-record root vector: header A + dummy A, header B + dummy B.
 fn two_record_root() -> [u8; 32] {
     let (sa, sb) = dummy_sig_pair();
     attestation_root(&[
-        (header(HDR_P_ID, 1, 100), sa),
-        (header([0x22; 32], 2, 200), sb),
+        PassRecord {
+            p_id: HDR_P_ID,
+            shard_id: 1,
+            settlement_epoch: 100,
+            signature: sa,
+        },
+        PassRecord {
+            p_id: [0x22; 32],
+            shard_id: 2,
+            settlement_epoch: 200,
+            signature: sb,
+        },
     ])
     .expect("root over canonical-length dummies")
 }
