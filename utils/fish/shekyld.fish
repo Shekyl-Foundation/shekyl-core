@@ -30,7 +30,7 @@ complete -c shekyld -l prep-blocks-threads -r -d "Max number of threads to use w
 complete -c shekyld -l fast-block-sync -r -d "Sync up most of the way by using embedded, known block hashes. Default: 1"
 complete -c shekyld -l show-time-stats -r -d "(=0) Show time-stats when processing blocks/txs and disk synchronization. Default: 0"
 complete -c shekyld -l block-sync-size -r -d "(=0) How many blocks to sync at once during chain synchronization (0 = adaptive). Default: 0"
-complete -c shekyld -l check-updates -x -a "disabled notify download update" -d "Check for new versions of monero. Default: notify"
+complete -c shekyld -l check-updates -x -a "disabled notify download update" -d "Check for new versions. Default: notify"
 complete -c shekyld -l fluffy-blocks -d "Relay blocks as fluffy blocks (obsolete, now default)"
 complete -c shekyld -l no-fluffy-blocks -d "Relay blocks as normal blocks"
 complete -c shekyld -l test-dbg-lock-sleep -r -d "Sleep time in ms, defaults to 0 (off), used to debug before/after locking mutex. Values 100 to 1000 are good for tests."
