@@ -210,14 +210,16 @@ fn open_file_private(path: &Path) -> Result<std::fs::File, GenesisToolError> {
         .map_err(|e| invalid(format!("cannot create {}: {e}", path.display())))
 }
 
-/// Remove a staging directory; best-effort (warn on failure).
+/// Remove a staging (or incomplete publish) directory; best-effort.
+///
+/// Failures are silent: the house "no debug macros in production library
+/// Rust" gate forbids `eprintln!` here, and after a successful
+/// `rename(staging → out_dir)` the staging path is already empty of
+/// secrets. After a failed write the caller's primary `Err` is what the
+/// operator acts on; a leftover `.*.geblock-staging-*` dir is still
+/// discoverable by name if the wipe itself fails.
 fn wipe_staging(staging: &Path) {
-    if let Err(e) = std::fs::remove_dir_all(staging) {
-        eprintln!(
-            "geblock: warning: could not remove staging dir {}: {e}",
-            staging.display()
-        );
-    }
+    drop(std::fs::remove_dir_all(staging));
 }
 
 /// Write the complete ceremony set into `staging` (must already exist, empty).
