@@ -2278,10 +2278,37 @@ namespace nodetool
     static_assert(unsigned(enet::zone::i2p) == 2, "i2p expected to be 2");
     static_assert(unsigned(enet::zone::tor) == 3, "tor expected to be 3");
 
-    const auto select_anonymity = [this]() -> zone_entry*
+    /* `require_usable` splits two callers whose correct behaviour differs when
+       the anonymity zone cannot currently send.
+
+       ORIGINATED traffic (false) takes the zone regardless and fails closed:
+       falling back to clearnet would put our own transaction on the public
+       network, which is the first-spy case this arc exists to prevent (§30.5).
+       Better to send nothing.
+
+       RELAYED traffic diverted by R-1's roll (true) must NOT fail closed. Its
+       home was always clearnet, the roll is eligibility rather than a drop
+       commitment, and dropping a transaction that is not ours protects nobody
+       while costing the network a relay. So an unusable zone yields nullptr
+       and the caller falls through.
+
+       Without the split the two-zone case is silently wrong: `size() <= 2`
+       returned the zone unconditionally, so a divert onto a zone with no
+       outbound connections lost the transaction — while the same zone would
+       have been rejected on a three-zone node by the readiness loop below. */
+    const auto select_anonymity = [this](const bool require_usable) -> zone_entry*
     {
       if (m_network_zones.size() <= 2)
-        return std::addressof(*m_network_zones.rbegin()); // public alone, or the one anonymity zone
+      {
+        auto candidate = m_network_zones.rbegin();
+        if (require_usable && candidate->first != enet::zone::public_)
+        {
+          const auto status = candidate->second.m_notifier.get_status();
+          if (!candidate->second.m_connect || !status.has_outgoing)
+            return nullptr;
+        }
+        return std::addressof(*candidate); // public alone, or the one anonymity zone
+      }
 
       for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
       {
@@ -2345,17 +2372,28 @@ namespace nodetool
       if (still_stemming && origin != enet::zone::public_ && m_network_zones.count(origin))
         return send(*m_network_zones.find(origin)); // coherence: no re-roll
 
-      if (still_stemming && m_network_zones.size() > 1 &&
+      /* The roll fires only on a genuine ARRIVAL — `source` is a real peer.
+         A mempool re-relay passes a nil source (and `origin == public_`,
+         which is why coherence above cannot see it), and re-rolling those
+         would break the design in two ways at once: the same transaction
+         could be diverted on one pass and sent to clearnet on the next,
+         and the effective rate over `k` re-relays would be
+         `1 - (1-p)^k` rather than the `p` §59.2 states and pins.
+
+         One roll at entry means one roll per entry. Re-relays are not
+         entries — they carry no arrival zone to cohere with, and they go to
+         clearnet exactly as they did before R-1. */
+      if (still_stemming && !source.is_nil() && m_network_zones.size() > 1 &&
           shekyl_relay_zone_divert_relayed_tx())
       {
-        if (zone_entry* anonymity = select_anonymity())
+        if (zone_entry* anonymity = select_anonymity(/*require_usable=*/true))
           return send(*anonymity); // entry: the one roll, shared placement
       }
 
       return send(*m_network_zones.begin()); // relayed → clearnet, and every fluff
     }
 
-    if (zone_entry* anonymity = select_anonymity())
+    if (zone_entry* anonymity = select_anonymity(/*require_usable=*/false))
       return send(*anonymity);
 
     MWARNING("Unable to send " << txs.size() << " transaction(s): anonymity networks had no outgoing connections");

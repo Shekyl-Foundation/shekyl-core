@@ -3213,7 +3213,7 @@ deletion target). No map *logic* is reimplemented in C++.
 
 **The map FFI surface** — `ConnectionId([u8; 16])` (a Boost-UUID memcpy); every
 call site is `\pre` inside the zone strand, so the handle is single-threaded by
-external serialisation and needs no internal lock:
+external serialization and needs no internal lock:
 
 | C++ call site | FFI |
 | --- | --- |
@@ -8729,11 +8729,11 @@ same key on both paths*, and **Rust derives it from the blob**
 C++ then hands over only blobs it already holds at each call site.
 
 ~~**Soundness of blob-identity join for this signal**: an honest successor
-relays bytes unchanged, so the return matches. A successor that re-serialises
+relays bytes unchanged, so the return matches. A successor that re-serializes
 produces a non-matching return and is charged a **silence** — the incentive
 runs the right way.~~ **Refuted at F-9 (§48): the incentive argument covers
 one hop of a multi-hop return path. A node three hops downstream has no
-observation charged to it and no incentive either way — its re-serialisation
+observation charged to it and no incentive either way — its re-serialization
 charges O's honest successor. And nothing enforces encoding preservation at
 all (`parse_and_validate_tx_from_blob` does no canonicality round-trip).
 The join key is now the canonical transaction hash.**
@@ -8811,11 +8811,11 @@ ambiently — indistinguishable from real background failure, which is
 
 ### 48.2 The incentive note covered one hop of a multi-hop path
 
-§47.1's argument (a re-serialising successor is charged a silence, so
+§47.1's argument (a re-serializing successor is charged a silence, so
 mangling buys it one) was **sound for the successor and only the successor**.
 The return path is several hops; a node three hops downstream has no
 observation charged to it and no incentive either way — **its
-re-serialisation charges `O`'s honest successor.** Struck at the site.
+re-serialization charges `O`'s honest successor.** Struck at the site.
 
 ### 48.3 The fix — canonical hashes, parsed at the call sites
 
@@ -9225,7 +9225,7 @@ random** and selects **fresh** relays each epoch. **Reputation-weighted
 selection is neither uniform nor fresh** — the same top-ranked peers persist
 across epochs. That is §12.11's measured ossification (2 of 12 at `ε = 0`),
 but the paper-level consequence is larger: **a graph that does not
-re-randomise is a static graph**, which is Sharma Appendix B's cheap-learning
+re-randomize is a static graph**, which is Sharma Appendix B's cheap-learning
 regime at roughly half the probe cost against our `q`.
 
 **And it composes with F-8 into a two-sided trade nobody had stated
@@ -9549,6 +9549,412 @@ fix is an integration test that links the FFI; recorded as owed.
   zero-consumer fact is now recorded at the site, since Q-12's derivation
   needs it.
 
+## 56. Q-11 Unit 2 — the shape, measured; and the metronome is disqualified
+
+**2026-08-03. The charter this session opened on, reached last.** §20.9 set
+the order *adversary → shape → constants*; §23–§28 fixed the adversary and its
+scope rule, §31 fixed the goal as non-enumerability, and this is the shape.
+
+### 56.1 What the instrument measures, and why it is a matching test
+
+New: `conformance::linkage::simulate_cadence_linkage`. `M` covert streams run
+to steady state at independent phases, a blackout of `D` interrupts
+observation, and the observer — given each stream's last pre-blackout emission
+*and the law itself* — tries to say **which post-blackout stream is which**.
+The number that matters is the **advantage over `1/M`**.
+
+**Matching, not prediction, and the distinction decides the question.** "Can
+the observer predict the next emission?" is *yes* for any non-degenerate law
+and says nothing about enumeration. "Can it re-identify the stream?" is the
+assembly step §31 names.
+
+The bounded arm draws through **production** `NoiseCadence::next_send` rather
+than a re-derived copy, so the instrument grades the daemon's law and not its
+own restatement of it.
+
+### 56.2 The result, and it reverses the expected answer
+
+Advantage over chance, 4 000 trials:
+
+| shape | `M`=4, `D`=0 | `M`=16, `D`=0 | `M`=4, `D`=30 s | `M`=4, `D`=300 s |
+| --- | --- | --- | --- | --- |
+| **Metronome** | **+0.750** | **+0.938** | −0.250 † | **+0.750** |
+| Bounded `U` (shipped) | +0.262 | +0.038 | +0.003 | −0.000 |
+| Memoryless | +0.003 | +0.001 | +0.002 | −0.002 |
+
+**The metronome matches at 1.000 — perfect re-identification.** A deterministic
+emitter's phase is a *permanent per-stream identifier*: predict `last + mean`
+and you land exactly on its next emission, forever.
+
+> **§25.3's reading was right about what it claimed and wrong about what it
+> implied.** Loopix licenses no randomness at the sender's link *for
+> count-denial*, and payload-independence does that work — a metronome denies
+> recall completely. But **payload-independence and unlinkability are
+> different properties, and the metronome has the first while maximally
+> lacking the second.** The case for randomizing the cadence does not rest on
+> (b)'s subtle phase-tag after all; it rests on the blunt fact that a
+> deterministic carrier is a perfect tracker.
+
+**† The −0.250 at `D` = 30 s is anti-correlation, not safety.** 30 s is exactly
+two 15 s periods, so a `last + mean` prediction is one period early and the
+greedy matcher is *consistently* wrong — which is as much information as being
+consistently right. An observer that knows the blackout length inverts it and
+recovers ~1.0. **The metronome's true advantage is ~perfect at every blackout;
+the dip is my matcher's naivety, and reporting it as a result would have been
+the artifact-as-finding error.**
+
+### 56.3 ~~What is decided, and what this instrument does not decide~~ — **CORRECTED at §56.4**
+
+> **⚠ The null below does not hold. It was a property of the *matcher*, not of
+> the families.** §56.4 replaces it: with an observer that marginalises over
+> how many emissions the blackout hid, **bounded separates from memoryless**
+> and the answer is memoryless. The text is kept because the failure is the
+> lesson.
+
+
+**Decided: the metronome is disqualified.** Not on a marginal channel — on
+perfect linkability at every observation gap tested.
+
+**Not decided: bounded versus memoryless.** They separate only at `D` = 0,
+which is the degenerate case of *uninterrupted* observation, where the
+observer never lost the streams and "matching" is trivial for anything with a
+predictable component. **At every non-zero blackout the two are
+indistinguishable, both at chance.** The shipped `10 s + U[0, 5 s]` is
+therefore *adequate* at this observer's capability, and memoryless is not
+measurably better.
+
+**So the honest Unit 2 output is a disqualification plus a null**, and the
+null is the more useful half: it says the constants round (§20.9's third step)
+inherits no shape constraint from linkability, and Q11-B's `MAX_FRAGMENTS ≤
+epoch/(min_delay+range)` assert **survives in its current form**, because the
+bounded family survives. That was the open question blocking C+noise, and it
+closes in the direction that keeps the existing invariant.
+
+**What would change the answer**: a stronger observer than the scope rule
+admits — one that accumulates across many blackouts rather than matching
+across one — could aggregate the bounded family's small per-window advantage.
+That is a different instrument (sequential, not single-shot) and it is the
+named reopening condition for choosing memoryless over bounded.
+
+### 56.4 The matcher was the weak link — corrected, and the answer flips
+
+**2026-08-03, maintainer.** §56.2's matcher predicts `last + mean` and takes
+the nearest emission. **It only ever tests `k = 1`** — it assumes exactly one
+emission was missed. An observer that knows the blackout duration and the
+family (**both public**) marginalises over `k` instead.
+
+**The tell was already in §56.2 and I did not generalise it.** The metronome's
+apparent −0.250 was rejected there *because a knowledgeable observer inverts it
+and recovers ~1.0*. That is this same insight — a knowledgeable observer beats
+the greedy matcher — **applied to one data point and not to the instrument
+that produced it.**
+
+**Re-run with the matcher upgraded, everything else identical** (`M = 20`,
+1 500 trials, chance = 0.050; the weak matcher is retained in-instrument as a
+control):
+
+| blackout | bounded | memoryless | metronome |
+| --- | --- | --- | --- |
+| 10 s | **0.120** | 0.053 | **1.000** |
+| 20 s | 0.103 | 0.050 | 1.000 |
+| 30 s | 0.087 | 0.050 | 1.000 |
+| 45 s | 0.074 | 0.050 | 1.000 |
+| 60 s | 0.069 | 0.049 | 1.000 |
+| 90 s | 0.062 | 0.048 | 1.000 |
+| 150 s | 0.052 | 0.051 | 1.000 |
+
+*Re-measured after the §56.6 review round; the pre-review figures were
+0.105 / 0.091 / 0.079 / 0.072 / 0.067 / 0.058 / 0.053 on the bounded arm.
+Every correction moved the bounded signal **up**, so the conclusion holds with
+more margin, not less.*
+
+*Weak matcher, same runs: every cell at chance except metronome at 10 s
+(0.200) and **0.000** thereafter — so it did not merely under-report, it
+inverted the metronome result too.*
+
+**Why, and it is analytic rather than empirical.** Bounded support
+concentrates: elapsed over `k` intervals has mean `12.5k` and sd `1.44√k`, so
+the *relative* spread shrinks as `k` grows, `k` becomes identifiable from `Δ`,
+and residual phase is readable within it. The signal decays only when adjacent
+`k`-components blur, near `k ≈ 17` — the ~90 s washout the table shows.
+**Memorylessness kills it exactly**: the time from blackout-end to the next
+emission is `Exp(µ)` independent of everything prior, so `Δ` carries zero
+information about which stream it was. That is not a measurement outcome, it
+is the defining property — D++ §4.4's lemma, the anchor **(b)** was pinned to.
+
+**Magnitude differs from the maintainer's model** (0.105 vs 0.152 at 10 s,
+~1.4×) while direction, decay shape and washout point all reproduce. The two
+differ in the memoryless arm's discretisation (geometric on a 250 ms grid here)
+and in the bounded arm going through production `next_send`. **Recorded rather
+than reconciled** — the mechanism is what carries the decision, and the
+decision is the same at either magnitude.
+
+### 56.5 What this changes
+
+- **§56.3's null is withdrawn.** "Bounded is adequate, memoryless not
+  measurably better" holds **only for a `k = 1` matcher.**
+- **The answer is memoryless.** Bounded carries a real residual channel — 2.1×
+  chance at a 10 s gap, above chance to ~90 s — and memoryless removes it by
+  construction rather than by margin.
+- **Q11-B reopens, and the constants round *does* inherit a shape
+  constraint.** `MAX_FRAGMENTS ≤ epoch/(min_delay+range)` has its **form**
+  invalidated by unbounded support: there is no `max` to divide by. That is
+  precisely the outcome §22.1's family-surviving restatement was written for,
+  so the restatement is now load-bearing rather than precautionary.
+- **The reopening condition I recorded was second-order and the real one was
+  first-order.** I named *sequential accumulation across many blackouts*; the
+  break is **one blackout and a better matcher**.
+- **The metronome disqualification is untouched and strengthened** — 1.000 at
+  every gap under the strong matcher, confirming §56.2's reading of the
+  artifact.
+
+**The generalised lesson, which is the vacuity discipline one level up:** the
+instrument graded production code correctly and modelled an adversary weaker
+than the threat model names. **A green result then measures the observer, not
+the mechanism** — and unlike a vacuous fixture, everything about it looks
+right: real code, real draws, real trials. `MatcherStrength` stays in the
+instrument as a permanent second arm so the next reader can see the result
+move with observer strength rather than trusting one number.
+
+### 56.6 Review round — four real defects, one mis-severity, one wrong claim
+
+**2026-08-03.** Six findings on #390. All six were acted on; two are worth
+recording because the reasoning is not obvious.
+
+**The instrument was measuring the wrong residual.** `blackout_end` was derived
+from `max(last)`, but each stream's *own* warm-up endpoint was recorded as its
+last pre-blackout emission — so for every stream but the latest, the observer
+was handed a `last` it could not have held, with real emissions in between it
+would have seen. Fixed with an explicit common `blackout_start` and a per-stream
+advance to the true last emission before it. **This is a measurement bug, not a
+style one, and it moved the numbers.**
+
+**The strong arm was not computing the strongest assignment.** Best-first greedy
+commits an early pair before seeing a later, better claim on the same emission —
+it can only *understate* matchability, which is precisely how §56.2's null
+arose. Replaced with `O(n³)` Kuhn–Munkres, **verified against a brute-force
+optimum at `n = 5`**, because an *incorrectly* optimal matcher is worse than an
+honestly greedy one: it reports a number nobody can reproduce and carries the
+authority of the word.
+
+**The memoryless arm could emit twice at one instant.** An unshifted geometric
+has a ~2 % atom at zero; the bounded (`min 10 s`) and metronome arms cannot do
+that. Left in, it is an asymmetry *between the arms* the shape comparison would
+have had to explain. Shifted by one grid step, with the table built for
+`mean − 1` so the arms stay matched in rate and differ only in shape.
+
+**One finding's severity was wrong and the defect under it was real.** It was
+reported as a hang — a zero draw stalling the emission loop. It cannot hang:
+the loop redraws each iteration, so `P(stall) = 0`. But the zero-interval atom
+beneath it was the arm asymmetry above, so the fix stands and the severity does
+not.
+
+**Two were performance and they mattered more than performance.** The geometric
+table was rebuilt per draw and the score matrix recomputed inside a sort
+comparator. **Runtime 388 s → 7.6 s.** At six minutes the sweep is something CI
+runs reluctantly and nobody re-runs while thinking; at eight seconds it is a
+thing you can ask questions of.
+
+**And the sweep asserted nothing.** It printed a table and passed unless it
+panicked — the §50.3 class in its plainest form, in the file that *records*
+that lesson. It now pins the three properties the shape decision rests on
+(metronome > 0.95, memoryless within 0.02 of chance, bounded above chance at
+10 s), plus the weak-matcher arm as a property, since the instrument's own
+failure mode is worth a regression test. The table is still printed — it is
+the readout the decision was taken against — but it is no longer the test.
+
+## 57. Q11-B's exit depends on a mechanism fact — checked before touching constants
+
+**2026-08-03.** §56.5 reopened Q11-B: under an unbounded family
+`MAX_FRAGMENTS ≤ epoch/(min_delay+range)` has no `max` to divide by, and the
+replacement tail bound does not hold at the current mean — a 20-fragment
+transaction fails to clear its epoch **~18 %** of the time (0 % under the
+bounded family, by the assert). Three exits were posed: shorten the mean
+(~36 % shorter → ~56 % more cover bandwidth, ~491 → ~768 B/s per zone),
+lengthen the epoch (a security parameter, not free), or make cross-epoch
+fragmentation safe.
+
+**The third exit's cost cannot be estimated without knowing what the code does
+today**, and the old assert guaranteed the path never ran — which is the shape
+of a latent defect. Checked at source first.
+
+### 57.1 What actually happens: restart, not resume and not abandon
+
+`send_noise`, on a bound-to-bound repoint (which an epoch rollover is):
+
+```text
+if (channel.connection != peer_) { channel.connection = peer_;
+                                   channel.active = nullptr; }   // drop remainder
+…
+else if (!channel.queue.empty()) { channel.active = channel.queue.front().clone(); } // RESTART
+…
+if (send ok && channel.active.empty()) channel.queue.pop_front();  // pop only on completion
+```
+
+**The queue entry outlives the repoint** — it is popped only when a run fully
+drains — so the next send **restarts the message from fragment 0** at the new
+peer. The comment says so explicitly: *"Clearing `active` restarts any
+in-flight message rather than resuming it (CV-1): the remainder … sent to the
+new peer would make this send longer than a dummy, and length is the one thing
+the covert channel holds constant."*
+
+**So liveness is already safe, and for a reason that is not an accident:**
+CV-1's constant-length invariant forces restart, and restart happens to be the
+liveness-preserving choice. `clear_channel`'s harsher path (drop the queue too)
+is justified separately and correctly — every covert message is cloned to
+*every* channel, so a surviving channel still carries it.
+
+### 57.2 What restart costs, and it is not a liveness cost
+
+> **⚠ CORRECTED AT §58.** The severity below is **inherited from F-6, not
+> intrinsic to retention**: a retained prefix attributes directly only because
+> the zone-selection oracle puts *originated-only* traffic on that zone, and
+> **R-1 is still unbuilt (verified on dev, §58.3)**. Under mixed eligibility
+> the same retention attributes at `C1 ≈ f`. §58.1 also downgrades the cost
+> from a failure to a geometric retry (~1.22 epochs).
+
+**The rotated-away peer keeps the fragments it already received.** It holds a
+prefix of a specific transaction it will never see completed, while the whole
+transaction goes to a different peer and later fluffs.
+
+**That is an attribution channel, not a liveness one**: a peer holding a
+partial prefix can match it against the transaction when it appears in the
+fluff phase, and attribute the origin to `O` — the node that sent it the
+prefix. **Precision on that match is not the C1 floor; it is a direct
+observation.**
+
+**Reachability is what the shape change moves.** Today the leak is reachable
+only through *unscheduled* repoints — connection churn — because the assert
+made scheduled rollover-during-a-run impossible for any run ≤ 20 fragments.
+**Memorylessness makes it reachable on schedule, in ~18 % of max-size
+transactions.** A latent path becomes a routine one.
+
+### 57.3 What this does to the three exits
+
+**Exit three is not free, and it is not the exit it looked like.**
+"Make cross-epoch fragmentation safe" reads as a liveness fix; liveness is
+already safe. The actual work is preventing a partial prefix from being
+*retained* by a peer that will not complete the run — which is a different and
+probably harder mechanism change, since it constrains what a peer does with
+bytes it has already received.
+
+**So the constants round chooses between bandwidth and epoch length**, with
+exit three reframed as a privacy fix that would have to be designed rather
+than a plumbing fix that would be nearly free.
+
+**One check this does not settle, flagged rather than assumed**: whether a
+`NOISE_BYTES` = 3 KiB prefix is *sufficient* to identify the transaction when
+it later appears. The attribution channel's existence follows from the
+retention; its **magnitude** depends on how much of a fragmented levin payload
+a prefix reveals, and that is a measurement nobody has taken. **If a single
+fragment is not matchable, the channel is narrower than stated** — but the
+direction of the finding does not change, only its price.
+
+## 58. §57 corrected — the cost is milder, the fix is cheaper, and the severity is *inherited*
+
+**2026-08-03, maintainer, with two source claims verified here.** §57's
+mechanism reading (restart, not discard) stands. Three things around it were
+wrong or unpriced.
+
+### 58.1 The cost is a geometric retry, not a failure
+
+A 20-fragment transaction that misses its epoch **restarts in the next one
+with a fresh 300 s window** — so the ~18 % is a retry probability, not a
+failure rate. Geometric at `p = 0.18`: expected **~1.22 epochs**, tail
+decaying fast. §57 implied a severity the mechanism does not have.
+
+What it actually costs: **wasted cover bandwidth** (the partial run consumed
+slots that carried nothing, against a fixed capacity), **latency** of up to a
+full epoch for the ~18 %, and a **modest exposure increment** — each restart
+hands a prefix of the *same* transaction to a different peer, and the covert
+channel is transparent to the peer decoder (G-1), so each learns it saw real
+traffic rather than dummy. **Colluding recipients gain nothing**: the prefixes
+are the same message restarted. Real, small, worth recording rather than
+acting on.
+
+### 58.2 Admission control is the fix, and §57's objection to it dissolves
+
+**Do not promote a message from `queue` to `active` when the remaining epoch
+time cannot plausibly deliver its fragment count.** It waits for the fresh
+epoch instead.
+
+§57 treated deferral as needing a new holding place. It does not: **`queue`
+already survives the rebind — only `active` clears.** So this is a predicate
+at the promotion site, one branch, in a path that already exists.
+
+It beats restart on every axis: no wasted fragments, no partial handed to an
+extra peer, bounded wait, and **CV-1 untouched because no run is ever
+interrupted.** What it needs is the threshold — *start iff
+`P(k fragments clear in the remaining epoch) ≥ θ`*, a Poisson tail at send
+time, with `θ` derivable against an acceptable deferral rate. **That is a
+constants-round input, not a workaround.**
+
+### 58.3 The severity is inherited from F-6, and R-1 has not landed
+
+**Verified on dev**, `net_node.inl`:
+
+```cpp
+if (origin != enet::zone::invalid)
+  return send(*m_network_zones.begin());   // lowest zone  → clearnet
+if (m_network_zones.size() <= 2)
+  return send(*m_network_zones.rbegin());  // highest zone → anonymity zone
+```
+
+**The positional selection means what the comments say because
+`m_network_zones` is a sorted map keyed on the zone enum**, and `net_node.inl`
+pins that ordering with `static_assert`s immediately below this code —
+`invalid == 0 < public_ == 1 < i2p == 2 < tor == 3`. So `begin()` is clearnet
+and `rbegin()` is the anonymity zone *by construction*, not by convention.
+Named here rather than assumed, because the whole point of this section is
+that the routing rule is an oracle, and a reader who cannot see why the
+positions map to the zones cannot check that claim.
+
+**Configuration B's deletion (§41) removed the noise flag. It did not touch
+the zone-selection oracle.** The Tor zone still carries *only* originated
+transactions, so **R-1 — mixed eligibility, the load-bearing half of F-6's
+remedy — is still unbuilt.**
+
+**That makes §57.2's "attribute the origin to `O` directly, not at the C1
+floor" correct today and correct for the wrong reason.** It is origin-
+attributing because of **F-6's routing rule** — anything on that zone is `O`'s
+own — not because of the prefix. Under R-1's mixed eligibility the covert
+channel carries relayed traffic too, and a retained prefix attributes exactly
+like any stem observation: **precision back at `C1 ≈ f`.** The retention
+channel does not disappear; it stops being above the floor.
+
+**Two consequences:**
+
+- **R-1 fixes §57's severity as a side effect**, making it load-bearing for
+  *two* findings rather than one — and it is the item that has been specified
+  and unbuilt the longest.
+- **The constants round is pricing against the wrong channel.** At present
+  severity retention is origin-attributing and worth paying a lot to prevent;
+  post-R-1 it is a floor-level observation worth much less. **Choosing a
+  constant now over-provisions against a defect the remedy already dissolves**
+  — which is part D's own failure mode, arriving in the round that was about
+  to open.
+
+### 58.4 Matchability resolves at the wide end
+
+§57 flagged whether a 3 KiB prefix suffices to identify the transaction.
+**Verified**: `transaction_prefix`'s `BEGIN_SERIALIZE` order is
+`version` (varint), `unlock_time` (varint), **`vin`**, `vout`, `extra` — so
+the key images, 32 bytes each, sit third, after two varints. Well inside
+3 KiB even allowing for the levin header and epee wrapper.
+
+Key images are **globally unique per spend** and appear in the confirmed
+transaction on-chain, and the peer needs **no parse** — it byte-matches its
+retained prefix against the same serialization when the transaction reappears.
+**So a single fragment is matchable with near-certainty. The direction holds
+and the price does not move down.**
+
+### 58.5 Ordering
+
+**R-1 goes ahead of the constants round, not beside it.** It closes F-6's
+remaining half, drops §57 to the floor, and is the input that determines what
+the bandwidth-versus-epoch trade is actually buying. **Deciding a constant
+first means deciding it against a severity that is about to change.**
+
 ## 59. R-1 built — mixed eligibility, one roll at entry
 
 **2026-08-03.** F-6's omission half, specified since §30 and the longest-unbuilt
@@ -9655,3 +10061,47 @@ roll is eligibility, not a drop commitment, and clearnet was always that
 traffic's home. Originated traffic still fails closed without a usable
 anonymity zone: leaking an origin over clearnet is the first-spy case §30.5
 forbids.
+
+### 59.7 Review round — the roll fired on re-relays, and the two-zone divert could not fall back
+
+**2026-08-04.** Two findings on #389, both real, both in the routing change.
+
+**The roll fired on every mempool re-relay, not once at entry.**
+`relay_txpool_transactions` re-sends due stem traffic as
+`relay_transactions(stem_req, nil_source, zone::public_, relay_method::stem)`
+— so `origin == public_`, which coherence cannot match, and the verdict was
+drawn again. Two consequences, and the second is the one that breaks a stated
+number: the same transaction could be diverted on one pass and sent to
+clearnet on the next, **and the effective rate over `k` re-relays becomes
+`1 − (1−p)^k` rather than the `p` §59.2 states and pins.**
+
+`source` is the clean discriminator — a real connection on arrival, nil on a
+pool re-relay — so the roll is now gated on `!source.is_nil()`. **One roll at
+entry means one roll per entry, and a re-relay is not an entry**: it carries no
+arrival zone to cohere with, and it goes to clearnet exactly as it did before
+R-1. That bounds R-1's scope honestly: diversion and coherence act on the
+arrival path, and the pool path is unchanged.
+
+**The two-zone divert could not fall through to clearnet.**
+`select_anonymity` returned `rbegin()` unconditionally when
+`m_network_zones.size() <= 2`, skipping the readiness check the three-zone
+path applies — so a winning divert routed relayed traffic onto a zone with no
+outbound connections and lost it, while the *same* zone would have been
+rejected on a three-zone node.
+
+The fix is a `require_usable` split, because the two callers are correct in
+**opposite** directions:
+
+- **Originated** traffic takes the zone regardless and **fails closed** —
+  falling back to clearnet would put our own transaction on the public
+  network, the first-spy case §30.5 exists to prevent. Better to send nothing.
+- **Relayed** traffic diverted by the roll must **not** fail closed. Its home
+  was always clearnet, the roll is *eligibility rather than a drop
+  commitment*, and dropping a transaction that is not ours protects nobody
+  while costing the network a relay.
+
+**Both defects share a shape worth naming: R-1 routed relayed traffic through
+paths built for originated traffic, and inherited their assumptions.** The
+unconditional two-zone return and the roll-per-send were both correct for a
+sender deciding about its own transaction, and wrong for a node deciding about
+someone else's.

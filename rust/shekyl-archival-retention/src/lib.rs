@@ -1,14 +1,17 @@
-//! Archival serve-credit verification primitives.
+//! Archival serve-credit and credit-wire verification primitives.
 //!
 //! Consensus-facing replay of epoch challenges and Merkle openings to frozen
 //! segment sub-roots `R_k`, per
-//! [`docs/design/ARCHIVAL_RETENTION_GATE2.md`](../../docs/design/ARCHIVAL_RETENTION_GATE2.md).
+//! [`docs/design/ARCHIVAL_RETENTION_GATE2.md`](../../docs/design/ARCHIVAL_RETENTION_GATE2.md),
+//! plus the TJ-B step 3 **credit-wire** logic core
+//! ([`docs/design/ARCHIVAL_CREDIT_WIRE.md`](../../docs/design/ARCHIVAL_CREDIT_WIRE.md)):
+//! settlement fold and admission wire (header / nonce / root / pass verify).
 //!
 //! # Crate posture
 //!
 //! - **Verify-only at genesis.** Challenge derivation, path replay, and leaf-index
 //!   checks live here; vin deserialization and LMDB bit writes land in consensus /
-//!   engine crates (gate-2 §10).
+//!   engine crates (gate-2 §10). Credit-wire C++ block format + FFI land in Plan B.
 //! - **Public material only.** Leaf bytes and path siblings are on-chain public
 //!   inputs; no secrets in this crate (`35-secure-memory.mdc`).
 //!
@@ -19,13 +22,18 @@
 //!   Selene leaf-layer chunk scalars for the challenged output's parent node).
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
+//! - [`attestation`] — settlement fold over kept kinds (`settle_epoch`).
+//! - [`attestation_wire`] — header, nonce, `PassRecord`, root, pass verify.
 //!
 //! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
-//! `cargo test -p shekyl-archival-retention regenerate_gate2_kat_fixture -- --ignored`).
+//! `cargo test -p shekyl-archival-retention regenerate_gate2_kat_fixture -- --ignored`);
+//! credit-wire vectors in `tests/attestation_wire_kat.rs`.
 
 #![deny(unsafe_code)]
 
 pub mod admission;
+pub mod attestation;
+pub mod attestation_wire;
 pub mod bond_connect;
 pub mod bond_ct_balance;
 pub mod bond_duration;
@@ -58,6 +66,12 @@ pub use admission::{
     admission_code_cstr, admission_code_static_str, check_admission, check_admission_of,
     credited_work_at_admission, parent_state_shards_from_gather, AdmissionError, AdmissionShard,
     ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
+};
+pub use attestation::{settle_epoch, AttestationKind, EpochSettlement};
+pub use attestation_wire::{
+    attestation_nonce, attestation_root, verify_pass_countersignature, AttestationHeader,
+    AttestationHeaderError, PassRecord, ATTESTATION_HEADER_LEN, ATTESTATION_NONCE_CUSTOMIZATION,
+    ATTESTATION_ROOT_CUSTOMIZATION,
 };
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,
