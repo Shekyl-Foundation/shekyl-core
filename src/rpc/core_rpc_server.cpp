@@ -2041,6 +2041,7 @@ namespace cryptonote
     response.long_term_weight = m_core.get_blockchain_storage().get_db().get_block_long_term_weight(height);
     response.miner_tx_hash = string_tools::pod_to_hex(cryptonote::get_transaction_hash(blk.miner_tx));
     response.curve_tree_root = string_tools::pod_to_hex(blk.curve_tree_root);
+    response.attestation_root = string_tools::pod_to_hex(blk.attestation_root);
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------

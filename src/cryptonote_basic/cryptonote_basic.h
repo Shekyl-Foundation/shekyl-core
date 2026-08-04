@@ -841,10 +841,11 @@ namespace cryptonote
     crypto::hash  prev_id;
     uint32_t nonce;
     crypto::hash  curve_tree_root; // FCMP++ curve tree root after this block's outputs
+    crypto::hash  attestation_root; // archival credit-wire attestation root over this block's pass records (ARCHIVAL_CREDIT_WIRE.md §3)
 
     block_header()
       : major_version(0), minor_version(0), timestamp(0), prev_id(crypto::null_hash),
-        nonce(0), curve_tree_root(crypto::null_hash) {}
+        nonce(0), curve_tree_root(crypto::null_hash), attestation_root(crypto::null_hash) {}
 
     BEGIN_SERIALIZE()
       VARINT_FIELD(major_version)
@@ -853,6 +854,7 @@ namespace cryptonote
       FIELD(prev_id)
       FIELD(nonce)
       FIELD(curve_tree_root)
+      FIELD(attestation_root)
     END_SERIALIZE()
   };
 

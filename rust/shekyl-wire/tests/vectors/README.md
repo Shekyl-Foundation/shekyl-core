@@ -4,6 +4,23 @@
 `shekyld --regtest --fixed-difficulty 1` via the `get_block` RPC. The C++ daemon
 is the genesis wire-format / hashing oracle. Two assertions ride these:
 
+> **Regenerated for the credit-wire cutover (2026-08-04).** The `block_header`
+> gained `attestation_root` (`docs/design/ARCHIVAL_CREDIT_WIRE.md` §3), moving every
+> block hash, so all three heights were recaptured. Genesis (h0) is the
+> deterministic, doubly-anchored oracle (it equals `mining_parity`'s mainnet genesis
+> id); h1/h2 are mined regtest blocks.
+>
+> **Mining address:** `capture_coinbase.py` mines to a freshly-derived current-format
+> regtest address in `regtest_mining_recipients.json` (reproduce via `cargo test -p
+> shekyl-crypto-pq --test emit_regtest_addr -- --ignored --nocapture`), **not** the
+> `shekyl-dev` genesis treasury address. That treasury address is **pre-#327 stale
+> format** — a 65-byte classical segment (`version‖spend‖view`) where today's decoder
+> expects 81 (the 16-byte `ek_bind` tag from #327) — so `get_account_address_from_str`
+> rejects it and `generateblocks` cannot mine to it. Genesis itself is unaffected:
+> `GENESIS_TX` was baked from those addresses when they were current, and the daemon
+> parses the pre-baked coinbase, not the address string. Regenerating the canonical
+> genesis recipients is a separate, genesis-scoped concern.
+
 - **Round-trip byte-identity** (`../coinbase_roundtrip.rs`): `Block::from_bytes` →
   `Block::serialize` == blob.
 - **Hash identity** (`../coinbase_hash.rs`, §11): `Block::hash()` /
@@ -17,11 +34,10 @@ the pre-fix vendored reader skipped, which this crate consumes.
 
 ## Regenerate
 
-```
-# coinbase blobs + their consensus hashes (no wallet needed):
-SHEKYLD_BIN=<build>/bin/shekyld \
-GENESIS_RECIPIENTS=<shekyl-dev>/tools/genesis_builder/genesis_recipients.mainnet.json \
-  python3 capture_coinbase.py
+```sh
+# coinbase blobs + their consensus hashes (no wallet needed); defaults to the
+# committed regtest_mining_recipients.json address:
+SHEKYLD_BIN=<build>/bin/shekyld python3 capture_coinbase.py
 ```
 
 The FCMP++ spend byte-identity proof needs no captured blob: `../fcmp_spend_e2e.rs`

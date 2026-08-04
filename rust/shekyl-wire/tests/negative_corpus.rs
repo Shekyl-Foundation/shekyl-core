@@ -19,12 +19,14 @@ use shekyl_wire::Block;
 /// so individual fields can be made invalid in isolation.
 fn minimal_coinbase(input_tag: u8, ct_type: u8, include_null_base: bool) -> Vec<u8> {
     let mut b = Vec::new();
-    // BlockHeader: major=1, minor=0, timestamp=0, prev[32], nonce[4], root[32].
+    // BlockHeader: major=1, minor=0, timestamp=0, prev[32], nonce[4],
+    // curve_tree_root[32], attestation_root[32].
     b.push(0x01);
     b.push(0x00);
     b.push(0x00);
     b.extend_from_slice(&[0u8; 32]);
     b.extend_from_slice(&[0u8; 4]);
+    b.extend_from_slice(&[0u8; 32]);
     b.extend_from_slice(&[0u8; 32]);
     // Transaction: version=3, unlock_time=0.
     b.push(0x03);
@@ -131,6 +133,7 @@ fn rejects_oversized_input_count() {
     blob.extend_from_slice(&[0u8; 32]); // prev_id
     blob.extend_from_slice(&[0u8; 4]); // nonce (u32 LE)
     blob.extend_from_slice(&[0u8; 32]); // curve_tree_root
+    blob.extend_from_slice(&[0u8; 32]); // attestation_root
     blob.push(0x03); // tx version
     blob.push(0x00); // unlock_time
     shekyl_wire::varint::write_varint(2_000_000usize, &mut blob).expect("Vec write is infallible");

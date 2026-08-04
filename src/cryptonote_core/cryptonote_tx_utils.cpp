@@ -855,6 +855,21 @@ namespace cryptonote
     bl.timestamp = 0;
     bl.nonce = nonce;
     shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&bl.curve_tree_root));
+    // The archival attestation root over genesis's (empty) attestation set:
+    // attestation_root(&[]) — cSHAKE over the bare count prefix — pinned in
+    // rust/shekyl-archival-retention/tests/attestation_wire_kat.rs
+    // (ROOT_EMPTY_EXPECT_HEX). Genesis commits the valid empty-set root, exactly
+    // as curve_tree_root above commits the valid empty Selene tree, not null_hash
+    // (ARCHIVAL_CREDIT_WIRE.md §3). Normal blocks compute this from their records
+    // once the attestation machinery lands (the FFI slice); until then every block
+    // is empty, so the constant is the value. cSHAKE has no C++ home in this slice,
+    // so the 32 bytes are pinned here and tied to Rust by the KAT above and the
+    // shekyl-wire block-hash differential (coinbase_hash.rs).
+    static const uint8_t ATTESTATION_ROOT_EMPTY[32] = {
+      0x32, 0xb1, 0xbc, 0xd9, 0x53, 0x2f, 0x6f, 0x0c, 0xad, 0x78, 0x7e, 0xee, 0xb1, 0x26, 0xc3, 0x07,
+      0xcd, 0xd6, 0xc9, 0x71, 0x2b, 0x91, 0x4f, 0xd6, 0xba, 0x08, 0x7d, 0x6a, 0x36, 0xbb, 0x7b, 0xf2,
+    };
+    std::memcpy(reinterpret_cast<uint8_t*>(&bl.attestation_root), ATTESTATION_ROOT_EMPTY, 32);
     miner::find_nonce_for_given_block([](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, unsigned int threads, crypto::hash &hash){
       return cryptonote::get_block_longhash(NULL, b, hash, height, seed_hash, threads);
     }, bl, 1, 0, NULL);
