@@ -55,16 +55,22 @@
 pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 
 /// R-1 mixed eligibility: the **per-hop** chance a *relayed* transaction is
-/// diverted onto the anonymity zone's stem instead of the public one, in
-/// hundredths of a percent (so `100` = 1.00 %).
+/// diverted onto the anonymity zone instead of the public one, in hundredths
+/// of a percent (so `100` = 1.00 %).
 ///
 /// # What this fixes
 ///
 /// Without it, `net_node`'s routing sends every relayed transaction to
-/// clearnet and every *originated* one to the anonymity zone — so a peer
-/// holding a stem slot on that zone knows everything it sees is the sender's
-/// own. That is F-6's origin oracle (§29), and it is the half configuration
-/// B's deletion did **not** close (§58.3).
+/// clearnet and every *originated* one to the anonymity zone — so a peer on
+/// that zone knows everything it sees is the sender's own. That is F-6's
+/// origin oracle (§29), and it is the half configuration B's deletion did
+/// **not** close (§58.3).
+///
+/// *"Onto the anonymity zone", not "onto its stem": the zone has no stem.
+/// `dandelionpp_notify` dispatches only when `nzone == public_`, so an
+/// anonymity zone **diffuses** to its outbound set instead — which is why
+/// F-6's oracle reached every outbound peer rather than one slot-holder, and
+/// why diverting costs a stem hop (§63).*
 ///
 /// # Per-hop, and the distinction is not cosmetic
 ///
@@ -92,17 +98,32 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// site — which is ~20 transactions per node per day against ~20 000. Three
 /// orders of magnitude.
 ///
-/// **Against the shipped eligible set, `p = 2 %` gives ~71 % precision on
-/// the zone as a whole, and ~83 % on the `in_mapping_[nil]` slot that
-/// carries every origination (§35.5, §60.2).** Pre-R-1 those were 100 %. So
-/// this constant buys a real reduction and **not** the `C1 ≈ f` floor §58.3
+/// **Against the shipped eligible set, `p = 2 %` gives ~71 % precision,
+/// uniformly across the zone's outbound set.** Pre-R-1 it was 100 %. So this
+/// constant buys a real reduction and **not** the `C1 ≈ f` floor §58.3
 /// predicted.
 ///
+/// *(§60.2 originally quoted a worse ~83 % on the `in_mapping_[nil]` slot.
+/// **Retracted at §63.4:** `in_mapping_` is Dandelion++ state and the
+/// anonymity zone does not run D++ — it diffuses to its whole outbound set —
+/// so there is no such slot and precision does not vary across peers. The
+/// unfavourable half of that correction belongs to F-6 rather than here: the
+/// pre-R-1 oracle was the entire outbound set, ~12 peers, not one
+/// slot-holder.)*
+///
 /// Reaching ~10 % against the pre-fluff set needs `p ≈ 45 %`, which is a
-/// different regime rather than a tweak. The alternative is widening
-/// eligibility to fluff-phase relays — what the original figures assumed —
-/// which is a design change owed a bandwidth and F-7 review, not a constant
-/// change. **§60.3 leaves that choice to the constants round; this value is
+/// different regime rather than a tweak — and **§63.5 prices it**: because a
+/// diverted transaction is diffused rather than stemmed, raising `p` shortens
+/// the D++ stem by `(1−q)p / (q + (1−q)p)`, which is 7.4 % here but **64 % at
+/// `p ≈ 45 %`** (mean stem 5.00 → 1.79). On present evidence that rules the
+/// raise out.
+///
+/// The alternative is widening eligibility to fluff-phase relays — what the
+/// original figures assumed. §61.1 called it dominated because an adversary
+/// could partition on `dandelionpp_fluff`; **§63.7 reverses that** — the flag
+/// does not vary on this zone, so the added traffic dilutes the same bucket.
+/// It remains a design change owed a bandwidth and F-7 review, not a constant
+/// change. **§60.3 leaves the choice to the constants round; this value is
 /// the conservative one until it is made.**
 ///
 /// **State the eligible population's SIZE beside any rate that reads from

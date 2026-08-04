@@ -44,6 +44,21 @@
 //!
 //! Baking any of them in would freeze a decision the round has explicitly left
 //! open, and would do it in the layer hardest to change later.
+//!
+//! # Scope: this observes the clearnet zone, and only that (§63.6)
+//!
+//! `record_stem_observation` is called from `dandelionpp_notify`, which
+//! `levin_notify.cpp` dispatches **only when `nzone == public_`**. An i2p/tor
+//! zone does not run Dandelion++ at all — it diffuses to its outbound set —
+//! so **no anonymity zone has ever produced a stem observation**, and none
+//! will until the design change §63.6 scopes.
+//!
+//! **An empty tally for such a zone therefore means "no stems", not "no
+//! drops".** The two read identically off [`StemTally`] and mean opposite
+//! things: the first is the mechanism being absent, the second is it running
+//! clean. Nothing consumes these tallies as evidence yet, which is the only
+//! reason this is a labelling note rather than a defect — a consumer that
+//! read zero drops as zone health would be reading an oracle that cannot fire.
 
 use std::collections::HashMap;
 
