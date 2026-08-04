@@ -354,6 +354,13 @@ namespace boost
   template <class Archive>
   inline void serialize(Archive &a, cryptonote::block &b, const boost::serialization::version_type ver)
   {
+    // Class version 1: attestation_root joined the header (ARCHIVAL_CREDIT_WIRE.md
+    // §3, the LMDB VERSION 9 format change). A version-0 archive — a pre-V9
+    // poolstate.bin, alt-block cache, or blocks.dat export — lacks the field and
+    // would misparse from shifted bytes; refuse it loudly instead.
+    if (ver < 1)
+      throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception,
+        "pre-V9 boost block archive (no attestation_root); delete the stale cache or re-export with a current build");
     a & b.major_version;
     a & b.minor_version;
     a & b.timestamp;
@@ -503,3 +510,6 @@ namespace boost
 
 BOOST_CLASS_VERSION(rct::rctSigPrunable, 2)
 BOOST_CLASS_VERSION(rct::rctSig, 2)
+// V1: attestation_root (ARCHIVAL_CREDIT_WIRE.md §3); version-0 archives are
+// refused in serialize() above.
+BOOST_CLASS_VERSION(cryptonote::block, 1)

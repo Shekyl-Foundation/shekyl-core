@@ -6900,7 +6900,13 @@ void wallet2::trim_hashchain()
 }
 //----------------------------------------------------------------------------------------------------
 void wallet2::check_genesis(const crypto::hash& genesis_hash) const {
-  std::string what("Genesis block mismatch. You probably use wallet without testnet (or stagenet) flag with blockchain from test (or stage) network or vice versa");
+  // Two known causes, and the remedy differs: (a) wrong network flag (cache is
+  // from another nettype); (b) the wallet cache predates a block-header format
+  // change that moved the genesis id (e.g. the V9 attestation_root addition,
+  // ARCHIVAL_CREDIT_WIRE.md §3) — then the cache must be rebuilt: delete the
+  // wallet cache file (the one WITHOUT the .keys extension; keys are untouched)
+  // and reopen to re-sync.
+  std::string what("Genesis block mismatch. Either the wallet was opened without the matching --testnet/--stagenet flag, or the wallet cache predates a block-header format change (e.g. V9 attestation_root) — in that case delete the wallet cache file (not the .keys file) and reopen to re-sync");
 
   THROW_WALLET_EXCEPTION_IF(genesis_hash != m_blockchain.genesis(), error::wallet_internal_error, what);
 }

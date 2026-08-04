@@ -2200,6 +2200,14 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     return false;
   }
 
+  // also cheap: the slice-1 credit-wire rule (ARCHIVAL_CREDIT_WIRE.md §3)
+  if (!check_attestation_root(b))
+  {
+    MERROR_VER("Block with id: " << id << std::endl << "has invalid attestation_root: " << b.attestation_root << ", expected the empty-set root " << empty_attestation_root() << " until the credit-wire cutover");
+    bvc.m_verifivation_failed = true;
+    return false;
+  }
+
   //block is not related with head of main chain
   //first of all - look in alternative chains container
   alt_block_data_t prev_data;
@@ -5490,6 +5498,16 @@ bool Blockchain::check_block_timestamp(const block& b, uint64_t& median_ts) cons
   return check_block_timestamp(timestamps, b, median_ts);
 }
 //------------------------------------------------------------------
+bool Blockchain::check_attestation_root(const block& b)
+{
+  // ARCHIVAL_CREDIT_WIRE.md §3: until the credit-wire cutover activates
+  // attestation aggregation, no pass records can exist, so the only valid
+  // commitment is the empty-set root — never null_hash, never arbitrary bytes.
+  // Stateless by construction; the cutover slice replaces this with
+  // recompute-and-compare over the block's pass records.
+  return b.attestation_root == empty_attestation_root();
+}
+//------------------------------------------------------------------
 bool Blockchain::flush_txes_from_pool(const std::vector<crypto::hash> &txids)
 {
   CRITICAL_REGION_LOCAL(m_tx_pool);
@@ -5555,6 +5573,14 @@ leave:
   if (!m_hardfork->check(bl))
   {
     MERROR_VER("Block with id: " << id << std::endl << "has old version: " << (unsigned)bl.major_version << std::endl << "current: " << (unsigned)hf_version);
+    bvc.m_verifivation_failed = true;
+    goto leave;
+  }
+
+  // also cheap: the slice-1 credit-wire rule (ARCHIVAL_CREDIT_WIRE.md §3)
+  if (!check_attestation_root(bl))
+  {
+    MERROR_VER("Block with id: " << id << std::endl << "has invalid attestation_root: " << bl.attestation_root << ", expected the empty-set root " << empty_attestation_root() << " until the credit-wire cutover");
     bvc.m_verifivation_failed = true;
     goto leave;
   }

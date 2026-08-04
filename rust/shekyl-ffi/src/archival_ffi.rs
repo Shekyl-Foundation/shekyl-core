@@ -12,28 +12,28 @@
 use std::io::Cursor;
 
 use shekyl_archival_retention::{
-    as_of_e_served_work, attestation_root, bond_post_block_unique, challenge_fire_height,
+    as_of_e_served_work, bond_post_block_unique, challenge_fire_height,
     challenge_leaf_chunk_bounds, challenge_seal_height, challenge_seal_on_chain,
     claim_window_floor, claimed_epochs_check_and_set, credited_work_milli,
     effective_settlement_epoch_blocks, emission_block_claims_unique, emission_vin_verify,
     emission_vin_verify_auth, emission_vin_verify_backing, emission_vin_verify_claims,
-    epoch_close_compute, epoch_close_due_at_height, epoch_close_height, failure_window_slashable,
-    frozen_segment_count, good_through, holdings_update_add_connect, holdings_update_drop_connect,
-    holdings_update_pop, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
-    rebond_connect, rebond_pop, serve_credit_epoch_ok, settlement_epoch_at_height,
-    settlement_epoch_blocks_overridden, slash_open_interval_to_append, unbond_connect, unbond_pop,
-    verify_bond_post_ct_balance, verify_holdings_update_add, verify_holdings_update_drop,
-    verify_join_market_bond_post, verify_leaf_index, verify_rebond_bond_post, verify_segment_path,
-    verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin,
-    ArchivalRewardEmissionVin, ArchivalServeCreditResponse, BadInterval, BaselineObservation,
-    BondCtBalanceError, BondPostError, BondPostKind, BondTerm, ClaimantBondRecord,
-    ClaimedEpochsError, CreditPair, EmissionEpochSource, EmissionVerifyContext,
-    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError,
-    RebondPopError, RewardCommit, ShardSet, ShardSetError, UnbondConnectError, UnbondPopError,
-    WireError, CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
-    FAILURE_WINDOW_SERVE_BUDGET, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
-    MAX_CLAIM_AGE_W,
+    empty_attestation_root, epoch_close_compute, epoch_close_due_at_height, epoch_close_height,
+    failure_window_slashable, frozen_segment_count, good_through, holdings_update_add_connect,
+    holdings_update_drop_connect, holdings_update_pop, p_canonical_id_from_hybrid_pubkey,
+    prune_below_epoch_at_height, rebond_connect, rebond_pop, serve_credit_epoch_ok,
+    settlement_epoch_at_height, settlement_epoch_blocks_overridden, slash_open_interval_to_append,
+    unbond_connect, unbond_pop, verify_bond_post_ct_balance, verify_holdings_update_add,
+    verify_holdings_update_drop, verify_join_market_bond_post, verify_leaf_index,
+    verify_rebond_bond_post, verify_segment_path, verify_unbond_bond_post,
+    whole_record_last_served, ArchivalBondPostVin, ArchivalRewardEmissionVin,
+    ArchivalServeCreditResponse, BadInterval, BaselineObservation, BondCtBalanceError,
+    BondPostError, BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
+    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
+    EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
+    HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError, RebondPopError,
+    RewardCommit, ShardSet, ShardSetError, UnbondConnectError, UnbondPopError, WireError,
+    CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
+    HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -536,11 +536,7 @@ pub unsafe extern "C" fn shekyl_attestation_root_empty(out_ptr: *mut u8) -> bool
     if out_ptr.is_null() {
         return false;
     }
-    // Empty input has no signatures to canonicalize; the Result is infallible.
-    let root = match attestation_root(&[]) {
-        Ok(r) => r,
-        Err(_) => return false,
-    };
+    let root = empty_attestation_root();
     std::ptr::copy_nonoverlapping(root.as_ptr(), out_ptr, 32);
     true
 }
