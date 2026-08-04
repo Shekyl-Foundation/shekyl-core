@@ -135,6 +135,48 @@ off-by-one the explicit field buys out. Remaining sub-decisions: byte order and
 ML-DSA-65 3309 B + framing, over the block-bound nonce). Residence RESOLVED to
 shape 4.**
 
+**AMENDMENT (2026-08-04) — SUPERSEDES the shape-4 residence below: a `block_header`
+field, not a tx-merkle leaf.** The C++ map surfaced a fact the shape 1/2/3/4
+enumeration never had in view: `curve_tree_root` (`cryptonote_basic.h:843`) is
+already a `crypto::hash` **block-header field**, mined because
+`get_block_hashing_blob` serializes the whole `block_header` into the PoW
+preimage, defaulting to `null_hash`. `attestation_root` is the same object, so it
+becomes a **second `block_header` field alongside `curve_tree_root`**, and the
+tx-merkle-leaf mechanism described in the rest of this section is **superseded**.
+Why the leaf lost once the precedent was in view:
+
+- **The leaf's whole advantage was avoiding a block wire-format change; the map
+  shows it changes the format anyway.** The stored 32 B root must ride *both*
+  block serializers (`cryptonote_basic.h` binary + `cryptonote_boost_serialization.h`)
+  under either residence — that row is identical. The leaf then pays
+  `get_tx_tree_hash` surgery *on top* of the serializer change. Strictly more
+  machinery for the same reach.
+- **The header field deletes two hand-maintained invariants.** The leaf needed
+  *fixed-position* and *defined-empty* enforced inside `get_tx_tree_hash`. A
+  struct field has neither: position is fixed by layout, "empty" is the field's
+  value exactly as `curve_tree_root` already does it. Make-bad-states-
+  unrepresentable prefers the version with no invariant to state.
+- **Live precedent = survives-the-team.** A maintainer who understands
+  `curve_tree_root` understands `attestation_root` with zero new concepts.
+- **Cost:** +32 B per block header, permanent (~8.4 MB/yr at 2-min blocks) — the
+  one real mark against it, and it is on the *size* axis the mission's
+  robust > small order subordinates, versus the leaf's cost being a modification
+  to the merkle-root construction, the most consensus-critical hashing path.
+  Accepted.
+
+Value semantics: the empty-set `attestation_root` is `attestation_root(&[])` (the
+cSHAKE constant pinned in `shekyl-archival-retention`'s KAT), not `null_hash` — the
+root block commits the *valid* empty commitment, exactly as `curve_tree_root`'s
+mined value is the empty Selene root, not its `null_hash` constructor default.
+Everything below about the **record format, nonce, settlement fold, and Half-B
+deletion** stands unchanged; only the root's *residence* moves from a tx-tree leaf
+to a header field. The block-format carrier — field + both serializers + LMDB
+`VERSION` 8→9 + RPC exposure, and **`generate_genesis_block` setting the empty root
+as a pinned constant** so genesis commits it from block 0 — landed as Plan B
+slice 1. Normal blocks compute `attestation_root(records)` at creation once the
+attestation machinery lands; `tx_extra` packing, the FFI verify, and the admission
+recompute-and-compare are the next slice.
+
 **SHAPE RESOLVED → 4 (2026-08-03, after the merkle walk).** The attestation set
 for a block is committed by a single **`attestation_root`** added as one extra
 leaf to the block's tx merkle tree, alongside the tx-hashes; the signatures live
@@ -358,8 +400,15 @@ folds headers to the bit) produce the **identical `serve_credit_bit` state at th
 epoch's settlement**, compared against the actual `m_archival_serve_credit` table
 — "provably the same bit," not "looks right." Written before step 1 lands; it
 supersedes `serve_credit_equivalence_kat_v1.json`, which pins the old path and
-cannot outlive it (`42-serialization-policy`: the persisted-block wire change
-bumps the version constant, CI-enforced).
+cannot outlive it. **Correction (2026-08-04): `42-serialization-policy` and its
+`schema-snapshot.yml` CI cover only `rust/shekyl-engine-state/**` wallet-state
+blocks — NOT the C++ consensus `block` wire or the LMDB store `VERSION`
+(`db_lmdb.cpp:103`). This surface has no automatic version-bump gate.** So the
+credit-wire block-format change bumps `VERSION` **by hand** (done 8→9, with the
+reject-older/`migrate()` resync path) and carries its **own** compensating
+control: the C++↔Rust block-hash differential (`shekyl-wire`'s `coinbase_hash.rs`,
+its daemon-captured genesis vector regenerated with the new field) is the oracle
+the schema-snapshot workflow would have been, hand-placed.
 
 **Read-site walk (the assumption the three-step rests on — done 2026-08-03).** No
 surviving consensus rule reads `serve_credit_bit` intra-epoch. The primitive

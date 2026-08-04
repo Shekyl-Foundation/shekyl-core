@@ -487,7 +487,7 @@ raw bytes; `vec(f)` = `V(len)` then `len ×` f.
 
 ```
 Block            := BlockHeader  Transaction(miner)  V(n_tx)  n_tx×Hash[32]
-BlockHeader      := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32]
+BlockHeader      := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32] attestation_root[32]
 Transaction      := V(version=3)  TxPrefix  Ct        # genesis version=3 (Q12: deliberate keep; V4 = future lattice-only)
 TxPrefix         := V(unlock_time)  vec(Input)  vec(Output)  V(extra_len) extra[extra_len]
 Input            := tag(1) ...        # 00 gen | 01 fcmp | 02 serve_credit | 03 bond_post  (+ deferred 04 reward_emission, membership-only — §2.5; stake_claim shed; bond_post = JoinMarket-only)
@@ -761,7 +761,7 @@ Genesis tags per §2.0. *(The C++ oracle still emits pre-renumber tag values unt
 the gate-(c) flip lands, §5; the captured corpus in `src/tests/vectors/` reflects
 pre-renumber tags until recapture.)*
 
-**9.1 BlockHeader** — `V(major) · V(minor) · V(timestamp) · prev[32] · nonce(u32 LE) · curve_tree_root[32]`; genesis `major=1, minor=0` (§13).
+**9.1 BlockHeader** — `V(major) · V(minor) · V(timestamp) · prev[32] · nonce(u32 LE) · curve_tree_root[32] · attestation_root[32]`; genesis `major=1, minor=0` (§13). (`attestation_root` added by the credit-wire cutover, `ARCHIVAL_CREDIT_WIRE.md` §3; an all-zero `null_hash` until block creation sets the archival root.)
 **9.2 Block** — `BlockHeader · Transaction(miner) · V(n_tx) · n_tx×Hash[32]`.
 **9.3 Transaction** — `V(version=3) · TxPrefix · Ct`.
 **9.4 TxPrefix** — `V(unlock_time) · vec(Input) · vec(Output) · V(extra_len) · extra[extra_len]`.
