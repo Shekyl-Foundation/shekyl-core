@@ -227,6 +227,31 @@ impl StemGraph {
 pub struct DandelionParams {
     /// Time for a stem transaction to traverse one node, including network
     /// latency. Better to overestimate: it scales the embargo directly.
+    ///
+    /// # Quantile policy (§66) — an *effective* scalar, not a per-hop quantile
+    ///
+    /// Set so that the hop contribution to `S(h)` — `Σ_{k=1..h} k·hop_k` under
+    /// the shipped stem-length distribution — reaches its **p90**. It is the
+    /// scalar that reproduces a quantile *of the sum*, **not** the p90 of the
+    /// per-hop marginal.
+    ///
+    /// **Do not set this by parity with [`Self::fluff_return_ms`], which is a
+    /// p90 of its own marginal.** The two differ in draw structure, and the
+    /// difference is the whole policy: `F` is **one** realisation per
+    /// transaction entering every term (the flood returns once), so its
+    /// marginal quantile *is* its contribution's quantile. `hop` is **`h`
+    /// independent** draws entering with weight `k`, and independent draws
+    /// average — the weighted sum concentrates relative to its own marginal.
+    /// Substituting a measured per-hop p90 here over-provisions by **1.35×**
+    /// at clearnet-plausible dispersion and **1.97×** at SPIKE-F-16's 30×
+    /// spread. Safe in direction, unbounded in cost, and §6.7 prices embargo
+    /// lengthening as real.
+    ///
+    /// Consequence for anyone measuring this: the field work must yield a
+    /// **distribution**, not a number. A point estimate cannot be converted
+    /// into this scalar without the spread, and the spread is the dominant
+    /// term. **`175` is not yet such a value** — it is a provenance (§21), and
+    /// the clearnet measurement is owed first (§65.3).
     pub time_between_hop_ms: u32,
     /// Minimum epoch duration in seconds, before jitter.
     pub min_epoch_secs: u32,

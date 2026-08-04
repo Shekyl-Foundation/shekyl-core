@@ -2543,6 +2543,27 @@ observer buy lunch and carry freight.
 > admission, never orders the draw. `ε` disappears; the ossification finding
 > below is moot rather than mitigated.
 
+> **⚠ VIABILITY REFRAMED, 2026-08-04 (§51.3, recorded at §68).** The warm-up
+> relation `obs ≈ 1500·r` was carried here as a quantity to be *measured* —
+> an ambient failure rate the world would eventually disclose. **It has no
+> unknown; it has a free parameter.** Every input is set by us at genesis:
+> block time, `q`, `STEMS`, epoch length, and the connection-management policy
+> that fixes how long a peer relationship lasts. So *"can §12.11 converge?"*
+> is **not a fact awaiting discovery — it is a constraint on our own parameter
+> choices**: pick them so warm-up lands inside the connection lifetime our p2p
+> policy produces, or make **retention** remove the dependency.
+>
+> Two consequences this section did not carry. **(a) §12.11's viability is
+> freeze-sensitive** and was never listed as such: the parameters it
+> constrains are genesis-frozen, so the question must be answered *before*
+> genesis or it becomes a coordinated upgrade — it joins staking default-on in
+> that bucket. **(b) The retention/seam decision comes first.** Retention does
+> not merely substitute for a short connection lifetime, it **decouples
+> §12.11 from p2p connection policy entirely**, because a tally surviving
+> disconnect stops caring how long connections last. If retention lands,
+> F-8's design form is moot; if it does not, F-8's design form inherits a hard
+> constraint from whatever the anti-eclipse posture permits.
+
 §12.10 said "admit on demonstrated propagation, evict on demonstrated dropping."
 This section specifies *what the signal is* and *how selection reads it*, and every
 piece lands on a mechanism already built or fifty years old — no new oracle, no new
@@ -11081,3 +11102,204 @@ The clearnet arm is **not** a prerequisite of the stem arm and must not be
 sequenced behind it: it is a present defect on the shipped configuration, and
 it produces the quantile policy the Tor measurement will need when the stem arm
 reaches it.
+
+## 66. The `hop` quantile policy — and it is *not* parity with `F`
+
+**2026-08-04.** §65.2 established that `hop` states the direction without the
+statistic, and that the deliverable is a quantile plus a measurement, quantile
+first. **Choosing it turns out to reject the obvious answer.**
+
+### 66.1 The question is "a quantile of *what*", and the two constants differ structurally
+
+"Apply `F`'s p90 policy to `hop`" is under-specified, and the ambiguity is not
+pedantic. In
+
+```text
+S(h) = Σ_{k=1..h} ceil((k·hop + F) / τ)
+```
+
+the two inputs enter with **different structure**:
+
+| | `F` (`fluff_return_ms`) | `hop` (`time_between_hop_ms`) |
+| --- | --- | --- |
+| draws per transaction | **one** — the flood returns once, and every stem node observes that same event (RD-1) | **`h` independent** — each hop is its own latency |
+| weight in `S(h)` | 1 in every term ⇒ `Σ F = F·h` | `k` in term `k` ⇒ `Σ k·hop = hop·h(h+1)/2` |
+| leverage at `h = 5` | 5× | **15× — three times `F`'s** |
+
+**So parity is the wrong move, and the reason is the draw count.** `F` is a
+single realisation entering `h` terms, so the p90 of `F`'s marginal *is* the
+p90 of `F`'s contribution — the policy transfers directly. `hop` is `h`
+independent draws, and **independent draws average**: the weighted sum
+concentrates relative to its own marginal, so the p90 of one hop is **not** the
+p90 of `Σ k·hop_k`.
+
+`derive.rs` consumes a **scalar** multiplied by `k`
+(`let slack_ticks = div_ceil(u64::from(h) * hop_ms + return_ms, tick_millis)`),
+which is the per-hop reading applied identically to every hop. Substituting a
+measured per-hop p90 into it therefore compounds a tail that reality averages
+away.
+
+### 66.2 Measured, because the size of the error decides whether it matters
+
+Monte Carlo over `h ~ Geom(q = 0.2)` with log-normal hop latencies, comparing
+the p90 of the realised contribution `Σ k·hop_k` against the p90 of
+*(per-hop p90 applied to all `k`)*:
+
+| hop dispersion | per-hop p90 | p90 of `Σ k·hop_k` | scalar reading | over-provision |
+| --- | --- | --- | --- | --- |
+| 3× spread (clearnet-plausible) | 237 ms | 11 538 ms | 15 628 ms | **1.35×** |
+| 30× spread (SPIKE-F-16) | 2 673 ms | 89 754 ms | 176 415 ms | **1.97×** |
+
+**The naive parity reading errs safe — and by an amount that grows with
+dispersion.** That is the disqualifying property, not the direction: on Tor it
+would nearly **double** the embargo for no stated reason, and "safe" is not a
+licence to pay an unbounded and unnamed cost. §6.7 already priced embargo
+lengthening (the embargo-only path to the exposure target needs ~1050 s at
+~2400 s p90 recovery), so this is a real cost, not a rounding.
+
+### 66.3 The policy, stated so a measurement can contradict it
+
+> **`time_between_hop_ms` is set so that the hop contribution to `S(h)` —
+> `Σ_{k=1..h} k·hop_k` under the shipped stem-length distribution — reaches
+> its p90. It is an *effective* scalar reproducing a quantile of the sum, not
+> a quantile of the per-hop marginal.**
+
+Three properties this has and *"better to overestimate"* does not:
+
+1. **It is falsifiable.** A measured per-hop distribution plus the shipped `q`
+   determines the value; a wrong scalar is a wrong number, not a wrong mood.
+2. **It names the random variable**, so the same words cannot be read two ways
+   1.35–1.97× apart.
+3. **It keeps `F`'s policy intact and explains why they differ** — same p90
+   target, different variable, because the draw structure differs. Parity of
+   *target* rather than parity of *statistic*.
+
+**Consequence for the measurement, and it changes the deliverable:** the field
+work must produce a **distribution**, not a number. A mean or a single p90
+cannot be converted into the effective scalar without the spread, and under
+SPIKE-F-16's 30× dispersion the spread is the dominant term. Any measurement
+plan that reports a point estimate has failed to deliver its input.
+
+### 66.4 What this does *not* settle
+
+It fixes the statistic, not the value. Both transports still owe the
+measurement, and the clearnet arm goes first (§65.3) — now with a second
+reason: **the effective scalar depends on `q`, which is genesis-frozen**, so
+the policy has to be exercised once on the cheap transport before a frozen
+parameter is read off the expensive one.
+
+## 67. The three owed items, re-scoped at source — two shrank and one has a blocking precondition
+
+**2026-08-04.** Grounding the carried items before working them changed the
+size of two and found a stated precondition on the third.
+
+### 67.1 The fixture unit has one consumer, not two — and its blocker is stale
+
+**Both halves of the framing were wrong, in opposite directions.**
+
+**There is no second consumer.** F-11's `DISABLED_` harness is **not on `dev`**.
+The three tests
+(`txpool_stem_probe.DISABLED_an_inbound_stem_resend_promotes_a_stem_held_tx_to_fluff`
+and siblings) exist only on `archive/q11-stemwatch-2026-08-03` and
+`archive/q11-unit0-census-2026-08-03` — they never landed. **And F-11 itself is
+retracted** (§50). So "the fixture unblocks both" describes a coupling that
+does not exist: restoring tests written for a retracted finding is a **separate
+decision needing its own justification**, not a consequence of building the
+fixture.
+
+*(There is a case for restoring them, and it is not F-11's: they characterise
+the txpool's stem→fluff **promotion rule**, which is live behaviour and which
+§63.8 just made load-bearing — `upgrade_relay_method` being monotone upward is
+what makes R-1's coherence branch unreachable. That is an argument for
+characterisation tests of the promotion rule, which is a different test from
+the one F-11 wanted, and it should be argued on its own terms.)*
+
+**And the remaining consumer is not blocked.** `handlers/json.rs`'s note says
+the dual-arm gate test *"needs a real `core_rpc_server*` — a fixture no current
+test builds, and the only reason this is owed rather than done."* **That is no
+longer true.** `core_rpc_server(cr, p2p)` takes a `cryptonote::core&` and a
+`nodetool::node_server<t_cryptonote_protocol_handler<cryptonote::core>>&`, and
+`tests/unit_tests/node_server.cpp` **already builds both patterns**:
+
+- a **real** `cryptonote::core` — `core_ptr(new core_t(nullptr))` followed by
+  `core->init(options, nullptr, nullptr)` (`:802`, and again at `:875`/`:885`);
+- a **real** `nodetool::node_server` with `init()`/`run()`/`deinit()` and a
+  data dir (`:1236`, the F-8b floor test's harness).
+
+They are templated on different cores today (the first pairs the real core with
+a mock `p2p_endpoint_t`; the second pairs the real `node_server` with
+`test_core`), so **the work is composing two in-tree patterns, not building a
+fixture.** `tests/trezor/daemon.h:46` additionally shows the subclass shape
+(`mock_rpc_daemon : public cryptonote::core_rpc_server`) already working.
+
+> **A blocker recorded once is a claim with a timestamp.** This one was true at
+> §55 and false by the time it was carried forward, because `node_server.cpp`
+> grew a real-core fixture in between — for F-8b, an unrelated finding. **Re-run
+> a carried blocker against the tree before scheduling around it**, or the queue
+> preserves the reason rather than the obstacle.
+
+### 67.2 The reverse-parity readouts are blocked on a precondition already stated
+
+§26.3 names it and it is **not** optional:
+
+> *"`FloodParams::peers` defaults to **8** while `P2P_DEFAULT_CONNECTIONS_COUNT
+> = 12`, and under the symmetric construction each node's effective fluff degree
+> is ~**16**. Nothing states whether `peers` means outbound count, total, or a
+> deliberate under-degree. Building the directed variant without settling that
+> would compare directed-degree-`d` against undirected-degree-`2d` —
+> **conflating the rule change with a degree change**."*
+
+**That is F-7's exact error shape, which this arc has already paid for once:**
+F-7 was a degree effect read as a direction effect (§40.1). Producing `F′_directed`
+against an unpinned `peers` would reproduce it on the same parameter, one round
+later. **Pin `peers`'s meaning in `flood.rs` first**; readout 1 is blocked on
+it, and readouts 2 and 3 consume readout 1.
+
+The three readouts, restated so the order is explicit:
+
+1. **`F′_directed`** — the fluff return under outbound-only on clearnet, from a
+   *directed* instrument, at the high quantile the existing policy mandates.
+2. **The embargo re-derived** at that `F′` (through `derive`).
+3. **The §6.6 passive-neighbour leak** at the resulting embargo mean (through
+   `simulate_passive_neighbor_leak`).
+
+Readouts 2 and 3 move in **opposite directions** (§26.3), which is the whole
+reason all three are required: adopting on any one of them is asserting on the
+wrong axis.
+
+### 67.3 Status after re-scoping
+
+| item | was | is |
+| --- | --- | --- |
+| §12.11 rewrite | doc edit, reasoning done | **done** (§68) |
+| fixture unit | blocked, two consumers | **unblocked, one consumer** — compose `node_server.cpp`'s two patterns |
+| F′ reverse-parity | unblocked since §44.5 | **blocked on `FloodParams::peers`** — a one-line pin, then three readouts in order |
+
+## 68. §12.11's rewrite — the ambient rate was never an unknown
+
+**2026-08-04.** §51.3 reframed `obs ≈ 1500·r` from a measurement owed to a
+constraint on genesis-frozen parameters. **§12.11 itself was never updated**,
+so the section that specifies the mechanism still read as though a number were
+coming. Rewritten in place above; recorded here because the change is a
+*status* change, not a wording one.
+
+**What moved.** Three things §12.11 now carries that it did not:
+
+1. **The relation has a free parameter, not an unknown.** Block time, `q`,
+   `STEMS`, epoch length and connection-management policy are all ours. No
+   measurement resolves them; a decision does.
+2. **Viability is freeze-sensitive**, and was not listed as such. Those
+   parameters are genesis-frozen, so *"can §12.11 converge?"* is a
+   pre-genesis question or it is a coordinated upgrade later.
+3. **Retention decides first.** It does not substitute for connection
+   lifetime — it removes the dependency, which is why it reorders the
+   remaining work rather than competing with it.
+
+> **A queued measurement outlives the reason it was queued.** This one sat in
+> the list for several rounds as *"the ambient-rate measurement §12.11 still
+> owes"*, and the entry stayed accurate as a description of §12.11's text long
+> after §51.3 had made the text wrong. **The queue was tracking the section,
+> and the section was not tracking the finding** — which is the same shape as
+> §67.1's stale blocker, one layer up: there, a carried obstacle had been
+> removed by unrelated work; here, a carried question had been dissolved by
+> our own.
