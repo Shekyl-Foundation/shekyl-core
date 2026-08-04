@@ -9971,6 +9971,14 @@ deletion removed the noise flag and left the zone-selection oracle untouched.
 
 ### 59.1 The decision, and why coherence is not a second one
 
+> **DORMANT AS SHIPPED — §63.8.** The coherence half cannot fire today: every
+> anonymity-zone release carries `dandelionpp_fluff`, so a receiver assigns
+> `relay_method::fluff` and `still_stemming` is false on arrival. R-1 as
+> shipped is **the roll alone**; the reasoning below describes the world
+> covert's return creates, and is correct for it. §60.1's 71.4 % and §63.5's
+> stem shortening were both computed against the roll alone and are
+> unaffected.
+
 **A transaction that enters the anonymity zone's stem stays on it until it
 fluffs. Relayed transactions enter with probability `p`; the roll happens
 once, at entry, not per hop.**
@@ -10583,18 +10591,32 @@ A relayed transaction diverted by R-1 arrives at `notify::send_txs` with
 `tx_relay ∈ {stem, forward, local}` and is therefore **diffused to the
 diverting node's outbound Tor set**, terminating its stem at that hop.
 
-Per-hop termination rises from `q = 0.200` to `0.200 + 0.800 × 0.02 = 0.216`,
-so mean stem length falls from 5.00 to 4.63 — **a 7.4 % shortening of the D++
-stem for the 2 % of transactions that are diverted**, borne by a third party's
-transaction rather than by the diverting node.
+Per-hop termination rises from `q` to `q + (1−q)p`, so the shortening of the
+mean stem length is `(1−q)p / (q + (1−q)p)`:
 
-**Graded: real, small, and not obviously worth paying to remove.** The
+| `p` | per-hop termination | mean stem length | shortening |
+| --- | --- | --- | --- |
+| 0 | 0.200 | 5.00 | — |
+| **0.02** (shipped) | 0.216 | 4.63 | **7.4 %** |
+| 0.05 | 0.240 | 4.17 | 16.7 % |
+| 0.10 | 0.280 | 3.57 | 28.6 % |
+| **0.45** (exit (a)) | 0.560 | **1.79** | **64.3 %** |
+
+**Graded: small as shipped, and disqualifying at exit (a)'s `p`.** The cost is
+borne by a third party's transaction rather than by the diverting node. The
 alternative — continuing the stem over Tor — requires the anonymity zone to
-run D++, which is the design change §63.6 scopes and not a fix. Recorded as a
-cost of R-1 that §59 did not price, to be re-weighed against `p` in the
-constants round: **it scales linearly with `p`, so exit (a)'s `p ≈ 45 %` would
-cut mean stem length to 3.1 — a 38 % shortening, which is no longer small.**
-That is a third input the constants round must carry, alongside §62.3's four.
+run D++, which is the design change §63.6 scopes and not a fix.
+
+**The expression saturates rather than scaling**, which matters for how the
+constants round reads it: `(1−q)p / (q + (1−q)p)` is near-linear at `p ≲ 0.05`
+(≈ `4p`) and flattens toward 1, so extrapolating the shipped 7.4 % by a factor
+of 22 gives 38 % where the true figure is 64 %. **Exit (a) at `p ≈ 45 %` cuts
+the mean stem from five hops to 1.79 — it does not merely shorten the stem, it
+very nearly removes it**, and a D++ stem of length 1.79 is not delivering the
+property the arc exists to defend.
+
+That is a third input the constants round must carry, alongside §62.3's four,
+and on present evidence it is the one that rules exit (a) out.
 
 ### 63.6 What this opens, and what it does not
 
@@ -10663,7 +10685,44 @@ relays alike. The flag cannot separate them because it does not vary.
 > "the stem-flagged bucket" was, on the anonymity zone, describing a partition
 > with one side empty.
 
-### 63.8 The audit's own lesson
+### 63.8 R-1's coherence branch is unreachable — half of §59 is not running
+
+**§59 shipped as two changes and describes itself as *"one roll at entry,
+coherence until fluff."* Only the roll is live.** The coherence branch
+(`net_node.inl:2381`, `still_stemming && origin != public_`) cannot fire
+today, and the chain that closes it is four links, each verified:
+
+1. Every anonymity-zone release sets the flag — `levin_notify.cpp:561`,
+   *"Always send with `fluff` flag, even over i2p/tor"* (§63.1).
+2. A receiver reads it first: `cryptonote_protocol_handler.inl:941-948`
+   defaults a non-public arrival to `forward`, then **overrides to `fluff`
+   whenever `arg.dandelionpp_fluff` is set**.
+3. The txpool cannot walk it back: `upgrade_relay_method`
+   (`blockchain_db.cpp:141-155`) is monotone *upward* over
+   `none < local < forward < stem < fluff < block`, so a transaction admitted
+   as `fluff` never returns as `stem` or `forward`.
+4. So a transaction whose `origin` is an anonymity zone always reaches
+   `send_txs` with `tx_relay == fluff` ⇒ `still_stemming == false` ⇒ the
+   coherence branch is skipped and the transaction goes to clearnet.
+
+**It is dormant in exactly §59.8.1's sense, and wakes with the same event.**
+The covert send path passes `make_tx_message(…, false, false)`
+(`levin_notify.cpp:1195`), so with covert on the flag is *clear*, the receiver
+keeps the `forward` default, `still_stemming` holds, and coherence starts
+firing. **§59's description is of the post-§30 world, not the shipped one.**
+
+**Not a defect, and deliberately not "fixed".** The branch is correct for the
+world it will run in, and there is nothing to repair — R-1 as shipped is
+simply the roll alone, which is what §60.1's 71.4 % was computed against and
+what §63.5 priced. What is wrong is only the *description*: "coherence until
+fluff" reads as a live invariant.
+
+It does sharpen §63.5. With coherence dead, a diverted transaction gets
+**one diffusion on the anonymity zone and leaves** — there is no mechanism
+holding it there for a second hop, so the stem shortening is the whole of the
+effect rather than the first term of it.
+
+### 63.9 The audit's own lesson
 
 §59.8.1 predicted that a deletion which makes a path unreachable makes later
 code's incorrectness unobservable. **The audit found the stronger version:

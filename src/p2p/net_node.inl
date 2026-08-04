@@ -2378,6 +2378,19 @@ namespace nodetool
 
     if (origin != enet::zone::invalid)
     {
+      /* Dormant today, and for the same reason as the two paths below (§63.8).
+         Every anonymity-zone release sets `dandelionpp_fluff`
+         (`levin_notify.cpp:561`, "always send with fluff flag, even over
+         i2p/tor"), so a receiver overrides its `forward` default to `fluff`
+         (`cryptonote_protocol_handler.inl:946`) and `upgrade_relay_method` is
+         monotone upward, never walking it back. A transaction whose `origin`
+         is an anonymity zone therefore always arrives here as `fluff` and
+         `still_stemming` is false.
+
+         Correct for the world it wakes into: with covert on, the covert send
+         clears the flag (`levin_notify.cpp:1195`), the receiver keeps
+         `forward`, and coherence starts firing. Until then R-1 is the entry
+         roll alone. */
       if (still_stemming && origin != enet::zone::public_ && m_network_zones.count(origin))
         return send(*m_network_zones.find(origin)); // coherence: no re-roll
 
