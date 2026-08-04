@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`geblock` — deterministic Rust genesis pipeline
+  (`rust/shekyl-genesis-tool`).** Replaces the C++ `genesis_builder`
+  end-to-end: `gen-wallets` (fresh-entropy founder/developer wallet
+  ceremony — BIP-39 for mainnet/stagenet, raw-32 for testnet, 0600 custody
+  files refused inside any git tree), `build` (genesis coinbase hex, same
+  stdout contract as the old tool), `verify` (rebuilds all three networks
+  and byte-compares against the `GENESIS_TX` pins in
+  `src/cryptonote_config.h`, replacing the dead `verify_genesis.py`), and
+  `block-id` (v9-header genesis block id + tx hash). The genesis tx key is
+  now **deterministic** — cSHAKE256 with customization
+  `shekyl/genesis-txkey-v1` over the recipients file — so the pinned
+  genesis is byte-reproducible from committed inputs for the first time;
+  genesis is CT-Null/cleartext/published by design, so the public
+  derivation discloses nothing (`GENESIS_TRANSPARENCY.md` §5). Recipients
+  move in-repo to `config/genesis_recipients.{mainnet,testnet,stagenet}.json`
+  in the final 5 × 20,000 SKL shape on **all** networks (mainnet/stagenet
+  placeholder-keyed until the founder ceremony; the combined single
+  treasury output is retired). Golden KATs pin the derivation → output
+  construction → wire encoding → v9 block hash chain; the config-pin gate
+  test lands `#[ignore]`d until the post-regen re-pin un-ignores it.
+
+### Removed
+
+- **C++ genesis-builder path retired** (rules 15/16/20 — superseded by
+  `geblock`): `cryptonote::build_genesis_coinbase_from_destinations`
+  (`cryptonote_tx_utils.{h,cpp}`; its fresh-txkey draw made every build
+  irreproducible), the `GENESIS_TOOL_SRC_DIR` CMake seam + `genesis-builder`
+  Makefile target (the shekyl-dev `tools/genesis_builder` C++ tool they
+  built is deleted in shekyl-dev), and the out-of-build-graph
+  `shekyl-crypto-pq/examples/gen_genesis_addrs.rs` placeholder generator
+  (its label-derivation continues, documented and testable, as the
+  `placeholder_recipients` test in `shekyl-genesis-tool`).
+
 ## [3.1.0-alpha.7] - 2026-08-03
 
 ### Changed
