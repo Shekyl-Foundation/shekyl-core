@@ -5238,10 +5238,13 @@
     regardless of the longhash algorithm, and the block id is
     `Keccak(header)` — PoW-independent. `mining_parity.cpp`'s
     `genesis_identity_is_pow_independent` freezes the per-net genesis
-    nonce + block id (mainnet `919f8db5…`, cross-checked against the
+    nonce + block id (mainnet `919f8db5…` at the time; the credit-wire
+    `attestation_root` header field, PR #395, later moved every genesis
+    id — mainnet is now `bcdcf5e0…` — still cross-checked against the
     daemon-captured height-0 hash in
     `rust/shekyl-wire/tests/vectors/regtest_coinbase_hashes.json`); the
-    frozen coinbase/block-hash vectors needed no regeneration.
+    frozen coinbase/block-hash vectors needed no regeneration then, and
+    were regenerated with #395.
   - **Deferred to Phase 3c/4** (blocked by the RPC-payment subsystem
     deletion + `wallet2.cpp` touchpoints; tracked in
     [`docs/FOLLOWUPS.md`](FOLLOWUPS.md)): deleting `rx-slow-hash.c` /

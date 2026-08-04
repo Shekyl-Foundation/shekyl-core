@@ -1590,7 +1590,7 @@ mod cancel_tests {
             previous: [0u8; 32],
             nonce: 0,
             curve_tree_root: [0u8; 32],
-            attestation_root: [0u8; 32],
+            attestation_root: shekyl_archival_retention::empty_attestation_root(),
         };
         // Coinbase-shaped miner tx: a sole `gen` input and a `Null` ct (§2.5),
         // no outputs — so the inner per-output loop runs zero iterations and
@@ -1658,7 +1658,7 @@ mod cancel_tests {
             previous: [0u8; 32],
             nonce: 0,
             curve_tree_root: [0u8; 32],
-            attestation_root: [0u8; 32],
+            attestation_root: shekyl_archival_retention::empty_attestation_root(),
         };
         let miner_tx = Transaction {
             prefix: TxPrefix {

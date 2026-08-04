@@ -24,13 +24,12 @@
 //! a hand-copied pin — so C++ `empty_attestation_root()` / constructor default and
 //! Rust agree without a third hex constant.
 //!
-//! Mining address note: `capture_coinbase.py` mines to a local fixture address
-//! in `vectors/regtest_mining_recipients.json` (reproduce via
-//! `cargo test -p shekyl-wire --test emit_regtest_addr -- --ignored --nocapture`),
-//! **not** the genesis recipients in `config/genesis_recipients.*.json`. What
-//! gets mined to is a vector concern; the treasury allocation is a separate,
-//! genesis-scoped pin. h0 still **is** the mainnet genesis (regtest shares
-//! `GENESIS_TX`), so any genesis re-pin requires re-capturing this corpus.
+//! Mining address note: `capture_coinbase.py` mines to a freshly derived
+//! current-format regtest fixture address (`vectors/regtest_mining_recipients.json`),
+//! NOT the genesis recipients — a vector concern, not the treasury allocation; see
+//! `vectors/README.md` for the full rationale. Note h0 **is** the mainnet genesis
+//! (regtest shares `GENESIS_TX`), so any genesis re-pin requires re-capturing this
+//! corpus.
 
 use shekyl_archival_retention::empty_attestation_root;
 use shekyl_wire::Block;

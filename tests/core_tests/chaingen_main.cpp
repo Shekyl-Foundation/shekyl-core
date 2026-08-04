@@ -121,6 +121,7 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_ts_in_past);
     GENERATE_AND_PLAY(gen_block_ts_in_future);
     GENERATE_AND_PLAY(gen_block_invalid_prev_id);
+    GENERATE_AND_PLAY(gen_block_invalid_attestation_root);
     GENERATE_AND_PLAY(gen_block_no_miner_tx);
     GENERATE_AND_PLAY(gen_block_unlock_time_is_low);
     GENERATE_AND_PLAY(gen_block_unlock_time_is_high);

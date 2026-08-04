@@ -373,7 +373,7 @@ mod tests {
             previous: [0u8; 32],
             nonce: 0,
             curve_tree_root: [0u8; 32],
-            attestation_root: [0u8; 32],
+            attestation_root: shekyl_archival_retention::empty_attestation_root(),
         };
         let miner_tx = null_tx(vec![tagged_output([7u8; 32])], vec![[0u8; 32]], None);
         let block = Block {

@@ -12,9 +12,13 @@
 //! `UnexpectedEof`. See `docs/design/GENESIS_TX_WIRE_FORMAT.md` (§9, §11) and
 //! `tests/vectors/README.md`.
 //!
+//! Regenerated for the credit-wire cutover and the five-founder genesis re-pin
+//! (2026-08-04): the `block_header` gained `attestation_root` and `GENESIS_TX`
+//! changed, so all three heights were recaptured.
+//!
 //! Corpus shape: h0 **is** the mainnet genesis (regtest shares `GENESIS_TX`) and
 //! therefore carries five founder outputs; h1/h2 are mined regtest blocks with a
-//! single miner output. Mining targets the local fixture in
+//! single miner output, mined to the local fixture in
 //! `vectors/regtest_mining_recipients.json` (vector isolation — not the genesis
 //! allocation). See `coinbase_hash.rs` and `vectors/README.md`.
 

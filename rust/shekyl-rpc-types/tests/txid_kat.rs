@@ -36,7 +36,7 @@ fn hex32(bytes: &[u8; 32]) -> String {
 /// `get_transaction_hash` output — never recomputed on the Rust side.
 /// Blobs are the miner txs extracted from the matching
 /// `regtest_coinbase_h{0,1}.block` vectors (re-extract with
-/// `cargo test -p shekyl-wire --test extract_rpc_oracle -- --ignored --nocapture`
+/// `cargo test -p shekyl-wire --test emit_miner_tx -- --ignored --nocapture`
 /// after any wire-vector re-capture).
 const ORACLE_CORPUS: [(&[u8], &str); 2] = [
     (
