@@ -10894,6 +10894,13 @@ blocker. It is now concrete: **origin-zone bookkeeping on the txpool entry is
 the precondition**, and it is a persisted-metadata change, so §42's
 version-constant discipline applies.
 
+> **CORRECTED at §65.4: §42 does not apply.** Its `globs` scope it to the
+> *wallet's* persisted Rust blocks (`shekyl-engine-state`, `shekyl-engine-file`);
+> `txpool_tx_meta_t` is daemon-side C++ LMDB. And the field is cheaper than
+> this paragraph implies — `bf_padding: 2` is exactly the width a zone needs,
+> the 192-byte record does not grow, and zero-valued legacy bits decode to
+> `zone::invalid`, which is already the correct "origin unknown" sentinel.
+
 **Honest gate-versus-build verdict:** the *dispatch* is a gate removal (three
 branches, all §18). The *correctness* is a build, and its precondition is the
 txpool's origin-zone field. `:1222` is not the gate; §63.6's blocker is.
@@ -10959,3 +10966,118 @@ owed against today's posture regardless of how item 2 resolves.
 3. **The txpool origin-zone field** (§64.4) — the precondition, and a §42
    surface.
 4. **Item 1, posture-conditional or held** (§64.1) — the maintainer's call.
+
+## 65. `hop` has no quantile policy — and the clearnet half is a present defect
+
+**2026-08-04, maintainer-opened, with §64.4's §42 claim corrected and the
+anchors re-verified.**
+
+### 65.1 The anchors verify; cite by content, because lines drift
+
+The `:936` / `:976` / `:807` anchors did not match the maintainer's checkout.
+**All five verify on `origin/dev` at 541635adc**, and the last commit touching
+`levin_notify.cpp` is `22c14bde4` — before PR #397, which never touched that
+file. The mismatch is a stale checkout, not a disputed fact.
+
+| anchor | content that locates it |
+| --- | --- |
+| `:936` | `if (covert_enabled \|\| zone == epee::net_utils::zone::public_)` |
+| `:974-977` | `void notify::new_out_connection()` + its `covert_enabled` early return |
+| `:807`, `:827` | `make_payload_send_txs(*zone_->p2p, …, zone_->pad_txs, false)` |
+| `:561` | `make_payload_send_txs(*z.p2p, …, z.pad_txs, true)` |
+| `:1222` | `if (zone_->nzone == epee::net_utils::zone::public_)` |
+
+> **A line number is a coordinate in one checkout; the content is the claim.**
+> `params.rs`'s numbers moved in this arc's own PR #397, which is exactly how
+> two readers end up unable to confirm each other. Anchors in this document
+> carry a locating string from here on.
+
+### 65.2 The gap is sharper than "no quantile" — `hop` has the direction without the statistic
+
+Both constants feed `S(h) = Σ ceil((k·hop + F)/τ)` with the same asymmetry, and
+both **acknowledge** it. Only one is instrumented:
+
+| | `fluff_return_ms` (`F`) | `time_between_hop_ms` (`hop`) |
+| --- | --- | --- |
+| asymmetry stated | yes — *"over-estimating lengthens the embargo (safe) while under-estimating shortens it (a privacy loss)"* | yes — *"Better to overestimate: it scales the embargo directly"* |
+| statistic named | **p90** | **none** |
+| measured | **yes**, `3250` at usable degree | **no** — a 2019 comment about a laptop (§21) |
+
+**So `hop` is not missing a policy statement; it is missing the part of a
+policy that can be checked.** *"Better to overestimate"* is a direction with no
+falsifiable content: no value can violate it. *"p90"* is a claim a measurement
+can contradict. **The deliverable is therefore a quantile plus a measurement,
+not a number** — and the quantile is the half that has to be chosen before the
+measurement is worth taking, because it decides what to extract from the
+distribution.
+
+**SPIKE-F-16 makes this acute rather than tidy.** Identical requests to one
+persona spanned 4.49 s → 133.05 s — **30×**. At that dispersion the mean is not
+merely imprecise, it is the wrong statistic, and `S(h)` is *already* a tail
+computation: feeding it a central estimate compounds the error in the
+privacy-losing direction on both transports at once.
+
+### 65.3 The 14 % is a clearnet defect, live now, and independent of the stem round
+
+At the published 300 ms figure the shipped 190 s embargo is **14 % short** —
+and no Tor work is involved. That is `175`'s provenance biting today.
+
+**Stated with its conditional, because it is one:** the defect is real *if* the
+true clearnet hop exceeds 175 ms. Nobody has measured it; 300 ms is a published
+Bitcoin figure, not our network's. **The measurement decides whether this is a
+defect or a confirmation** — which is the point, and why it should not wait
+behind the stem round.
+
+Ordering it first is right for three reasons, and the third is the one that
+matters most:
+
+1. it is **live**, not a consequence of a change that may not happen;
+2. clearnet peer RTT is **cheap** — no onion service, no circuit, no rig;
+3. **it establishes the quantile policy on the easy transport before the
+   heavy-tailed one has to use it.** Choosing a quantile against a 30 %-spread
+   distribution and then applying it to a 30× one is a far safer order than
+   deriving the policy under Tor's dispersion in the first place.
+
+### 65.4 The txpool precondition is cheaper than §64.4 said — and §42 does not apply
+
+**Correcting my own claim.** §64.4 called the origin-zone field *"a
+persisted-metadata change, so §42's version-constant discipline applies."*
+**It does not.** [`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc)
+is scoped by its own `globs` to `rust/shekyl-engine-state/**` and
+`rust/shekyl-engine-file/**` — the **wallet's** persisted Rust blocks.
+`txpool_tx_meta_t` is daemon-side C++ LMDB state and is not governed by it.
+
+And the maintainer's loop closes better than "space is available":
+
+- `txpool_tx_meta_t` carries **`uint8_t bf_padding: 2`** and
+  `uint8_t padding[44]; // till 192 bytes` (`blockchain_db.h:198`, `:206`).
+- A zone field needs **exactly 2 bits** — `public_`, `i2p`, `tor`, and
+  `invalid` are four values. `bf_padding` is the right width, not merely
+  spare room.
+- The record is a fixed 192 bytes, so **the size does not change** and there is
+  no format growth to version.
+- `zone::invalid == 0` is `static_assert`ed at the routing site, so a
+  pre-upgrade record — whose spare bits are zero — decodes to **`invalid`**,
+  which is already the correct *"origin unknown"* sentinel. Legacy entries fall
+  back to the global embargo with no migration step and no ambiguity.
+
+> **The inherited claim was right and its framing was wrong, and both halves
+> hold.** *"The mempool/stempool needs to know the zone a tx originated from"*
+> is a real requirement; *"…to work properly"* read as a capability limit when
+> it was a data-model gap. The gap turns out to be two reserved bits wide with
+> a correct default already defined.
+
+### 65.5 Ordering, revised
+
+```text
+  stem posture (§64)  ──▶  per-zone embargo (txpool zone field, §65.4)  ──▶  eligibility constant
+                                                                              (posture-conditional
+                                                                               until both settle)
+
+  clearnet `hop` quantile + measurement (§65.2, §65.3)  ──▶  runs in parallel, independently
+```
+
+The clearnet arm is **not** a prerequisite of the stem arm and must not be
+sequenced behind it: it is a present defect on the shipped configuration, and
+it produces the quantile policy the Tor measurement will need when the stem arm
+reaches it.
