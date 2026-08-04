@@ -32,7 +32,7 @@ SHEKYLD = os.environ.get("SHEKYLD_BIN", os.path.join(ROOT, "build", "bin", "shek
 # -- --ignored --nocapture`). The genesis treasury recipients live in-repo at
 # config/genesis_recipients.*.json (current post-#327 format), but the mining
 # target here is deliberately a local fixture: what gets mined to is a vector
-# concern, not the treasury allocation.
+# concern, not the treasury allocation. See README.md (this directory).
 # Env: prefer MINING_RECIPIENTS; GENESIS_RECIPIENTS kept as a legacy alias.
 MINING_RECIPIENTS_PATH = os.environ.get(
     "MINING_RECIPIENTS",

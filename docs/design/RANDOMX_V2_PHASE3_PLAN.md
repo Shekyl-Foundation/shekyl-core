@@ -629,11 +629,14 @@ deletion landed in PR #235 (2026-07); `slow-hash.c` remains deferred
   block-id-`202612` fossil removed; vestigial `blob` param dropped.
 - `6ae9c0643` — **genesis identity gate.** §3.2 verified empirically, not
   assumed: per-net `nonce == GENESIS_NONCE` (difficulty-1 invariant) and
-  frozen genesis block ids (mainnet `919f8db5…`, cross-checked against the
+  frozen genesis block ids (mainnet `919f8db5…` at the time; the credit-wire
+  `attestation_root` header field, PR #395, later moved every genesis id —
+  mainnet is now `bcdcf5e0…` — still cross-checked against the
   daemon-captured height-0 `block_hash` in
   `rust/shekyl-wire/tests/vectors/regtest_coinbase_hashes.json`). The
   Rust `coinbase_hash` / `coinbase_roundtrip` frozen vectors needed **no**
-  regeneration — the feared frozen-genesis E2E rework was unnecessary.
+  regeneration then (they were regenerated with #395) — the feared
+  frozen-genesis E2E rework was unnecessary.
 
 **Gate status (§9):** Genesis identity — **met** (`6ae9c0643`). Hole-1
 parity — **wired** (test-regime hardening PR-1, 2026-07: `full-parity`

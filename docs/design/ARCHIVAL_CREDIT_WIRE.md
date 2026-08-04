@@ -175,10 +175,17 @@ it explicitly until pass-record computation lands. Everything below about the
 **record format, nonce, settlement fold, and Half-B deletion** stands unchanged;
 only the root's *residence* is a header field (not a tx-merkle leaf). The
 block-format carrier — field + both serializers + LMDB `VERSION` 8→9 + RPC
-exposure + empty-root default — landed as Plan B slice 1. Normal blocks compute
-`attestation_root(records)` at creation once the attestation machinery lands;
-`tx_extra` packing, the full-record FFI verify, and the admission
-recompute-and-compare are the next slice.
+exposure + empty-root default — landed as Plan B slice 1. The slice-1 rule is
+also **consensus-enforced at block acceptance** (`Blockchain::check_attestation_root`,
+both the main-chain and alt-block paths; `gen_block_invalid_attestation_root`
+core test): until the cutover, no pass records can exist, so the only valid
+header value is the empty-set root — a block carrying `null_hash` or arbitrary
+bytes is rejected, keeping the interim chain free of values the cutover's
+recompute-and-compare would invalidate (and closing the 32-byte miner-controlled
+covert channel). Normal blocks compute `attestation_root(records)` at creation
+once the attestation machinery lands; `tx_extra` packing, the full-record FFI
+verify, and the admission recompute-and-compare (which replaces the stateless
+empty-only rule) are the next slice.
 
 **HISTORICAL (SUPERSEDED 2026-08-04) — former shape-4 leaf design.** The text
 below records the merkle-walk that established *block-level* (non-transaction)

@@ -115,6 +115,11 @@ struct gen_block_no_miner_tx : public gen_block_verification_base<1>
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
+struct gen_block_invalid_attestation_root : public gen_block_verification_base<1>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+
 struct gen_block_unlock_time_is_low : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
