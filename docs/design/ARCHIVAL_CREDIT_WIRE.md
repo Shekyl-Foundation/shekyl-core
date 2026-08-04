@@ -164,22 +164,33 @@ Why the leaf lost once the precedent was in view:
   to the merkle-root construction, the most consensus-critical hashing path.
   Accepted.
 
-Value semantics: the empty-set `attestation_root` is `attestation_root(&[])` (the
-cSHAKE constant pinned in `shekyl-archival-retention`'s KAT), not `null_hash` — the
-root block commits the *valid* empty commitment, exactly as `curve_tree_root`'s
-mined value is the empty Selene root, not its `null_hash` constructor default.
-Everything below about the **record format, nonce, settlement fold, and Half-B
-deletion** stands unchanged; only the root's *residence* moves from a tx-tree leaf
-to a header field. The block-format carrier — field + both serializers + LMDB
-`VERSION` 8→9 + RPC exposure, and **`generate_genesis_block` setting the empty root
-as a pinned constant** so genesis commits it from block 0 — landed as Plan B
-slice 1. Normal blocks compute `attestation_root(records)` at creation once the
-attestation machinery lands; `tx_extra` packing, the FFI verify, and the admission
+Value semantics: the empty-set `attestation_root` is `attestation_root(&[])` (Rust
+`empty_attestation_root()` / C++ `empty_attestation_root()` via
+`shekyl_attestation_root_empty`), **not** `null_hash` — every empty block commits
+the *valid* empty commitment, exactly as `curve_tree_root`'s mined value is the
+empty Selene root, not its `null_hash` constructor default. The C++
+`block_header` constructor **defaults to that empty root** so no construction path
+can emit the dual-empty `null_hash` by accident; `create_block_template` also sets
+it explicitly until pass-record computation lands. Everything below about the
+**record format, nonce, settlement fold, and Half-B deletion** stands unchanged;
+only the root's *residence* is a header field (not a tx-merkle leaf). The
+block-format carrier — field + both serializers + LMDB `VERSION` 8→9 + RPC
+exposure + empty-root default — landed as Plan B slice 1. Normal blocks compute
+`attestation_root(records)` at creation once the attestation machinery lands;
+`tx_extra` packing, the full-record FFI verify, and the admission
 recompute-and-compare are the next slice.
 
-**SHAPE RESOLVED → 4 (2026-08-03, after the merkle walk).** The attestation set
-for a block is committed by a single **`attestation_root`** added as one extra
-leaf to the block's tx merkle tree, alongside the tx-hashes; the signatures live
+**HISTORICAL (SUPERSEDED 2026-08-04) — former shape-4 leaf design.** The text
+below records the merkle-walk that established *block-level* (non-transaction)
+residence and the defined-empty / stored-root consequences. **It is not the
+current residence.** Current residence is the `block_header` field above. Kept as
+design history so the walk's still-valid conclusions (attestations are not
+transactions; root is stored, not recomputed post-prune; `sig_commit` dropped)
+remain citable.
+
+~~**SHAPE RESOLVED → 4 (2026-08-03, after the merkle walk).**~~ The attestation set
+for a block was originally planned as a single **`attestation_root`** extra
+leaf on the block's tx merkle tree, alongside the tx-hashes; the signatures live
 in a height-keyed prunable side table. Walk result (verified at source): the
 merkle change is **contained** — (i) `tree_branch`/`tree_branch_hash` have **zero
 callers** in `src/` (the block tx-tree has no inclusion-proof consumers; the
@@ -191,15 +202,13 @@ nowhere; (ii) every block-hash / PoW path (`get_block_hash`,
 `+2` stays consistent. The leaf goes last (miner_tx stays leaf 0, tx_hashes
 keep 1..n), and mandatory-`k` makes it always present (uniform every block).
 **Refinement the walk forced:** `attestation_root` must be a **stored block
-field** (32 B, serialized next to `tx_hashes`, kept in the never-pruned block
-blob), NOT recomputed from the signatures — `get_tx_tree_hash(b)` is recomputed
-at every verification, and a pruned node (signatures gone) must still recompute
-the block hash. So the root persists post-prune; the signatures drop from the
-side table. It is a block wire-format change (rule 42 version bump) and touches
-`get_tx_tree_hash` + `get_block_hashing_blob` + the block struct — bounded, and
-it never touches the coinbase.
-*Consequences:* `sig_commit` per record is **dropped** — the root now carries
-the signature-set commitment, so the header returns to
+field** (32 B, kept in the never-pruned block blob), NOT recomputed from the
+signatures — a pruned node (signatures gone) must still recompute the block
+hash. So the root persists post-prune; the signatures drop from the side table.
+*(The 2026-08-04 amendment places that stored field on `block_header`, not as a
+tx-merkle leaf — same stored-root property, fewer merkle invariants.)*
+*Consequences that still hold:* `sig_commit` per record is **dropped** — the root
+now carries the signature-set commitment, so the header returns to
 `p_id(32) + shard_id(8) + E(8) + kind(1 bit) ≈ 49 B`, the `kind` bit committed
 via `prefix_hash` (§3.1) and carrying per-record pass/miss post-prune. Concern 1
 (totality) **dissolves** — extra-or-missing signatures change the root, block
@@ -213,9 +222,9 @@ block, dropped after horizon), so the redb-migration template already covers it.
 block-level consensus data, NOT transactions.** Shapes 1–3 forced a
 non-transaction object into transaction machinery — shape 1 in the coinbase (a
 tx), shape 2 as its own txs, shape 3 riding the coinbase's `tx_extra` (a tx
-prefix). Shape 4 is the first where an attestation is not a transaction at all:
-a sibling to the tx set, committed by the same block via its own merkle leaf,
-verified and pruned on its own path. **The transaction set stays pure**
+prefix). Shape 4 (and the header-field amendment) is where an attestation is not
+a transaction at all: block-level data, committed by the block, verified and
+pruned on its own path. **The transaction set stays pure**
 (archival / spend / bond txs), which is the FCMP-purity separation — attestations
 never touch a tx, so they cannot perturb the tx-hash or the output-commitment
 machinery.

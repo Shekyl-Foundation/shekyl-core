@@ -2032,6 +2032,10 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
       static_assert(sizeof(b.curve_tree_root) == root_bytes.size());
       std::memcpy(&b.curve_tree_root, root_bytes.data(), root_bytes.size());
     }
+    // Empty-set attestation root until the next slice computes from pass records.
+    // Explicit (not only the constructor default) so a reused template never
+    // retains a stale value (ARCHIVAL_CREDIT_WIRE.md §3).
+    b.attestation_root = empty_attestation_root();
 
     // Always cacheable now: every template extends the tip (from_block deleted).
     cache_block_template(b, miner_address, ex_nonce, diffic, height, expected_reward, seed_height, seed_hash, pool_cookie);

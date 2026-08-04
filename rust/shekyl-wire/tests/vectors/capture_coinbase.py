@@ -9,7 +9,7 @@ daemon is the genesis hashing oracle (GENESIS_TX_WIRE_FORMAT.md §11); these fee
 the round-trip KAT (`../block.rs` analogue) and the hash KAT
 (`../coinbase_hash.rs`).
 
-Usage: python3 capture_coinbase.py   [SHEKYLD_BIN / GENESIS_RECIPIENTS env override]
+Usage: python3 capture_coinbase.py   [SHEKYLD_BIN / MINING_RECIPIENTS / GENESIS_RECIPIENTS env]
 """
 import json
 import os
@@ -28,12 +28,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 SHEKYLD = os.environ.get("SHEKYLD_BIN", os.path.join(ROOT, "build", "bin", "shekyld"))
 # Default to a freshly-derived current-format regtest address committed beside the
-# vectors (regenerate via `cargo test -p shekyl-crypto-pq --test emit_regtest_addr
+# vectors (regenerate via `cargo test -p shekyl-wire --test emit_regtest_addr
 # -- --ignored --nocapture`). The shekyl-dev genesis treasury addresses are pre-#327
 # stale format (65-byte classical segment, missing the 16-byte ek_bind tag), so
 # get_account_address_from_str rejects them and generateblocks cannot mine to them.
-GENESIS_RECIPIENTS = os.environ.get(
-    "GENESIS_RECIPIENTS", os.path.join(HERE, "regtest_mining_recipients.json"))
+# Env: prefer MINING_RECIPIENTS; GENESIS_RECIPIENTS kept as a legacy alias.
+MINING_RECIPIENTS_PATH = os.environ.get(
+    "MINING_RECIPIENTS",
+    os.environ.get(
+        "GENESIS_RECIPIENTS", os.path.join(HERE, "regtest_mining_recipients.json")))
 N_BLOCKS = 5
 CAPTURE_HEIGHTS = [0, 1, 2]
 
@@ -100,7 +103,7 @@ def start_daemon(workdir, attempts=5):
 
 
 def main():
-    with open(GENESIS_RECIPIENTS) as f:
+    with open(MINING_RECIPIENTS_PATH) as f:
         addr = json.load(f)["recipients"][0]["address"]
     workdir = tempfile.mkdtemp(prefix="cbcap_")
     daemon, url, log = start_daemon(workdir)

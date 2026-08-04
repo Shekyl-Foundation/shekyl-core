@@ -833,6 +833,11 @@ namespace cryptonote
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/
+  // Empty-set archival attestation root: Rust `attestation_root(&[])` via
+  // shekyl_attestation_root_empty. Cached; the sole valid empty commitment —
+  // never null_hash (ARCHIVAL_CREDIT_WIRE.md §3).
+  const crypto::hash& empty_attestation_root();
+
   struct block_header
   {
     uint8_t major_version;
@@ -845,7 +850,8 @@ namespace cryptonote
 
     block_header()
       : major_version(0), minor_version(0), timestamp(0), prev_id(crypto::null_hash),
-        nonce(0), curve_tree_root(crypto::null_hash), attestation_root(crypto::null_hash) {}
+        nonce(0), curve_tree_root(crypto::null_hash),
+        attestation_root(empty_attestation_root()) {}
 
     BEGIN_SERIALIZE()
       VARINT_FIELD(major_version)

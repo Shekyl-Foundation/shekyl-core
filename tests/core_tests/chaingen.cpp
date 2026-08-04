@@ -281,6 +281,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
   blk.timestamp = timestamp;
   blk.prev_id = prev_id;
   shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&blk.curve_tree_root));
+  blk.attestation_root = cryptonote::empty_attestation_root();
 
   blk.tx_hashes.reserve(tx_list.size());
   for (const transaction &tx : tx_list)
@@ -416,6 +417,7 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   blk.timestamp     = actual_params & bf_timestamp ? timestamp : prev_block.timestamp + SHEKYL_DAA_TARGET_SECONDS; // Keep difficulty unchanged
   blk.prev_id       = actual_params & bf_prev_id   ? prev_id   : get_block_hash(prev_block);
   shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&blk.curve_tree_root));
+  blk.attestation_root = cryptonote::empty_attestation_root();
   blk.tx_hashes     = actual_params & bf_tx_hashes ? tx_hashes : std::vector<crypto::hash>();
   // F-H harness conformance: the consensus coinbase output-count cap is 1, and
   // the harness conforms to consensus rather than the cap inflating for the

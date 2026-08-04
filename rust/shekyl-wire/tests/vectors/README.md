@@ -12,7 +12,7 @@ is the genesis wire-format / hashing oracle. Two assertions ride these:
 >
 > **Mining address:** `capture_coinbase.py` mines to a freshly-derived current-format
 > regtest address in `regtest_mining_recipients.json` (reproduce via `cargo test -p
-> shekyl-crypto-pq --test emit_regtest_addr -- --ignored --nocapture`), **not** the
+> shekyl-wire --test emit_regtest_addr -- --ignored --nocapture`), **not** the
 > `shekyl-dev` genesis treasury address. That treasury address is **pre-#327 stale
 > format** — a 65-byte classical segment (`version‖spend‖view`) where today's decoder
 > expects 81 (the 16-byte `ek_bind` tag from #327) — so `get_account_address_from_str`
@@ -20,6 +20,10 @@ is the genesis wire-format / hashing oracle. Two assertions ride these:
 > `GENESIS_TX` was baked from those addresses when they were current, and the daemon
 > parses the pre-baked coinbase, not the address string. Regenerating the canonical
 > genesis recipients is a separate, genesis-scoped concern.
+>
+> **Empty `attestation_root`:** every captured height has no pass records and must
+> carry `empty_attestation_root()` (not `null_hash`). `coinbase_hash.rs` asserts this
+> live against `shekyl-archival-retention`.
 
 - **Round-trip byte-identity** (`../coinbase_roundtrip.rs`): `Block::from_bytes` →
   `Block::serialize` == blob.

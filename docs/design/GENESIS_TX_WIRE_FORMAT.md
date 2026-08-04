@@ -761,7 +761,7 @@ Genesis tags per §2.0. *(The C++ oracle still emits pre-renumber tag values unt
 the gate-(c) flip lands, §5; the captured corpus in `src/tests/vectors/` reflects
 pre-renumber tags until recapture.)*
 
-**9.1 BlockHeader** — `V(major) · V(minor) · V(timestamp) · prev[32] · nonce(u32 LE) · curve_tree_root[32] · attestation_root[32]`; genesis `major=1, minor=0` (§13). (`attestation_root` added by the credit-wire cutover, `ARCHIVAL_CREDIT_WIRE.md` §3; an all-zero `null_hash` until block creation sets the archival root.)
+**9.1 BlockHeader** — `V(major) · V(minor) · V(timestamp) · prev[32] · nonce(u32 LE) · curve_tree_root[32] · attestation_root[32]`; genesis `major=1, minor=0` (§13). (`attestation_root` added by the credit-wire cutover, `ARCHIVAL_CREDIT_WIRE.md` §3; the empty-set root is `attestation_root(&[])` / C++ `empty_attestation_root()` — **not** `null_hash` — and is the constructor default until a block has pass records.)
 **9.2 Block** — `BlockHeader · Transaction(miner) · V(n_tx) · n_tx×Hash[32]`.
 **9.3 Transaction** — `V(version=3) · TxPrefix · Ct`.
 **9.4 TxPrefix** — `V(unlock_time) · vec(Input) · vec(Output) · V(extra_len) · extra[extra_len]`.

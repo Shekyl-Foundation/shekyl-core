@@ -9626,7 +9626,15 @@ void BlockchainLMDB::migrate(const uint32_t oldversion)
   // Monero-era migrate_0_1..migrate_5_6 ladder was unreachable from this guard
   // and has been deleted.)
   if (oldversion < VERSION)
-    throw0(DB_ERROR("Database schema is pre-V9; no pre-genesis migration path exists. Delete the data directory and resync."));
+  {
+    // Message tracks VERSION so the next bump cannot leave a stale "pre-VN".
+#define SHEKYL_DB_VERSION_STRINGIFY_(x) #x
+#define SHEKYL_DB_VERSION_STRINGIFY(x) SHEKYL_DB_VERSION_STRINGIFY_(x)
+    throw0(DB_ERROR("Database schema is pre-V" SHEKYL_DB_VERSION_STRINGIFY(VERSION)
+      "; no pre-genesis migration path exists. Delete the data directory and resync."));
+#undef SHEKYL_DB_VERSION_STRINGIFY
+#undef SHEKYL_DB_VERSION_STRINGIFY_
+  }
 }
 
 }  // namespace cryptonote

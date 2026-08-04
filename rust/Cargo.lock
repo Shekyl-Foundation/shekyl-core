@@ -4499,6 +4499,8 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "serde_json",
+ "shekyl-address",
+ "shekyl-archival-retention",
  "shekyl-bulletproofs",
  "shekyl-consensus",
  "shekyl-crypto-hash",

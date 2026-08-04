@@ -247,17 +247,7 @@ impl Block {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The archival empty attestation root — `attestation_root(&[])`, pinned in
-    /// `shekyl-archival-retention`'s KAT (`ARCHIVAL_CREDIT_WIRE.md` §3). Used here
-    /// as a representative non-null value to prove the header field is live on the
-    /// wire. The C++↔Rust block-hash agreement over it is `coinbase_hash.rs`'s
-    /// daemon KAT; this is the byte-level position/roundtrip check.
-    const EMPTY_ATTESTATION_ROOT: [u8; 32] = [
-        0x32, 0xb1, 0xbc, 0xd9, 0x53, 0x2f, 0x6f, 0x0c, 0xad, 0x78, 0x7e, 0xee, 0xb1, 0x26, 0xc3,
-        0x07, 0xcd, 0xd6, 0xc9, 0x71, 0x2b, 0x91, 0x4f, 0xd6, 0xba, 0x08, 0x7d, 0x6a, 0x36, 0xbb,
-        0x7b, 0xf2,
-    ];
+    use shekyl_archival_retention::empty_attestation_root;
 
     fn header(attestation_root: [u8; 32]) -> BlockHeader {
         BlockHeader {
@@ -273,15 +263,16 @@ mod tests {
 
     #[test]
     fn attestation_root_roundtrips_and_is_the_final_header_field() {
-        let h = header(EMPTY_ATTESTATION_ROOT);
+        let empty = empty_attestation_root();
+        let h = header(empty);
         let mut bytes = Vec::new();
         h.write(&mut bytes).unwrap();
         // It is the LAST 32 bytes of the serialized header (after curve_tree_root),
         // so appending it never shifts the nonce/curve_tree_root offsets.
-        assert_eq!(&bytes[bytes.len() - 32..], &EMPTY_ATTESTATION_ROOT);
+        assert_eq!(&bytes[bytes.len() - 32..], &empty);
         let back = BlockHeader::read(&mut &bytes[..]).unwrap();
         assert_eq!(back, h);
-        assert_eq!(back.attestation_root, EMPTY_ATTESTATION_ROOT);
+        assert_eq!(back.attestation_root, empty);
     }
 
     #[test]
@@ -292,7 +283,7 @@ mod tests {
         let mut a = Vec::new();
         let mut b = Vec::new();
         header([0u8; 32]).write(&mut a).unwrap();
-        header(EMPTY_ATTESTATION_ROOT).write(&mut b).unwrap();
+        header(empty_attestation_root()).write(&mut b).unwrap();
         assert_ne!(a, b);
         assert_eq!(a.len(), b.len());
     }
