@@ -921,6 +921,26 @@ should treat it as a bug.
   This is transport plan §6a's requirement list made concrete and tested; TJ-B's
   real endpoint should inherit the *shape*, not the bytes.
 
+> **Disposition change (2026-08-04, cross-team request).** The relay team asked
+> that the **apparatus be left in place** — it is the shape the owed **Tor
+> hop-latency measurement** needs (now on the critical path for the embargo's
+> per-zone derivation), and building it twice would be waste. So the rig
+> (`serve-only`, the remote-reader harness, the pinned-tor deployment pattern,
+> the derived-onion-key + loopback-serve mechanisms) is **retained, not deleted
+> at teardown** — its rule-15 disposition moves from "disposable debt" to
+> "retained pending a named second consumer." **Reopen-to-delete criterion:** the
+> hop-latency measurement lands its own harness, or the embargo work drops the
+> dependency.
+>
+> **Precision on what actually transfers for hop-latency.** This rig times an
+> *end-to-end 3.33 MB shard fetch* (rendezvous + transfer), which is **not**
+> per-hop or circuit-build RTT. The reusable core for *client-side circuit RTT*
+> is more the **control-port / `CircId` machinery already in `shekyl-tor`** (the
+> DQ-T0.4 `STREAM`-event + attach-time CircID path) than the serve/fetch harness —
+> circuit-build timing is read from control-port `CIRC` events, not from a payload
+> transfer. Point the rig's *deployment shell* at that observable rather than
+> reusing the fetch loop.
+
 ---
 
 ## 14a. SPIKE-F-9 — `.gitignore` silently untracks Cargo's `src/bin/`
@@ -1390,6 +1410,81 @@ open item **TJ-H** so whoever specifies the format meets it there.
     circuit, so at `N > 8` the pin closes it, and the run records circuit failures
     that look like network behaviour but are the harness measuring **its own
     pin**. A tail that appears past `N = 8` is the first thing to suspect.
+
+---
+
+## 21. Cross-domain transfers to the relay layer (flagged by another team, 2026-08-04)
+
+Two of this spike's findings were flagged as transferable to the Dandelion++ /
+relay-privacy work. **Provenance:** the transfers and their ordering consequences
+are the relay team's reasoning (read from commit messages + the design doc, not
+the full measurement reports); the *measurement calibration* below is mine, from
+the runs. The design-side ordering calls (e.g. whether §30's composition moves
+nearer the stem work) are **theirs to make with their context — not ruled here.**
+
+### 21.1 SPIKE-F-1 breaks an independence assumption D++-over-Tor would rest on
+
+**Their reasoning.** Dandelion++ treats the stem successors as *independent*
+observation points — that independence is what makes holding one slot worth `f`
+rather than more. But if the daemon's P2P rides **one tor process**, every
+outbound circuit draws the **same entry-guard set**, so a single entry guard
+observes traffic to **all** successors at once: the node's complete
+**emission timeline** — every stem send, every fluff, timestamped. Content is
+encrypted and post-mixing cannot separate originated from relayed, but the
+*timing* is exposed. That is precisely the recall-1 wire observer Q-11's cover
+traffic exists to deny — and cover is currently deleted (`noise(false)`). So the
+ordering consequence they draw: **D++ over Tor shipped without cover restored
+hands the entry guard a full transaction-emission timeline**, undefended, which
+argues for §30's composition being nearer the stem work than a later phase.
+
+**My calibration (confirms the substrate, and strengthens it).**
+- **The guard-sharing substrate is measured, not assumed.** SPIKE-F-1: two
+  personas behind one tor drew a **complete** 2-guard overlap. SPIKE-F-12
+  establishes *why* structurally: the guard set is a property of the **tor
+  process / `DataDirectory`**, not of the circuit — so it applies to **any**
+  circuit that process builds, client stem-sends included, not only the onion
+  services I measured. The extension to client circuits is sound by that
+  per-process property; I flag it as *inference from a measured mechanism*, not a
+  second measurement.
+- **It is durable, which sharpens the point.** DQ-T0.7 pins the `DataDirectory`
+  **persistent**, so the guard set is **stable across sessions**. The observer is
+  therefore not "an entry guard for one session" but a *small, stable set (2 in my
+  run) for potentially the node's lifetime* — a lifetime emission timeline to
+  whoever holds one of those two slots.
+- **One conditional to keep explicit:** this bites **iff** the daemon's D++ P2P
+  actually rides a single shared tor process. The measurement establishes the
+  consequence *given* that layout; it does not assert the layout.
+
+### 21.2 The independence caution extends to per-peer circuits — as a HYPOTHESIS
+
+**Their reasoning.** "A design that assumes independence between co-hosted
+personas under load is unsupported by anything measured here" transfers to
+per-peer circuits: if the relay layer anywhere assumes congestion/stalling on one
+Tor peer is independent of another, that is unsupported for peers sharing a tor
+process — a stall induced on one circuit may not be isolable, which changes what
+the linkage adversary can do. Worth checking against **Unit 2's perturbation
+model**. They correctly mark this **their hypothesis**, extended from a finding
+this report explicitly marks unmeasurable.
+
+**My calibration (the honesty cuts their way, with one thread of support).**
+- The specific axis — *deliberate* load on one circuit observably affecting
+  another — is the one I marked **UNMEASURABLE-HERE** (§8) and **did not claim
+  either way**. Their hypothesis is correctly labelled as such.
+- The **one adjacent datum**: SPIKE-F-10 measured that co-serving two personas on
+  one tor produced **mutual contention** (`D*` ×1.54). That is weak positive
+  evidence that circuits sharing a tor process are **not fully independent under
+  load** — but it is *co-served onion services at N=2, one run, C-tor, labelled a
+  floor*, **not** the per-peer client-circuit case and **not** the deliberate-stall
+  (perturbation) case. So it nudges the hypothesis from "unsupported" toward
+  "plausible, one shared-process contention datum," and **no further**. The Unit-2
+  perturbation check is the right next step, and it is a measurement, not a
+  deduction from this spike.
+
+### 21.3 Apparatus reuse
+
+Recorded in §14's disposition change: the rig is retained for the owed Tor
+hop-latency measurement, with the precision that the reusable core for *circuit
+RTT* is the control-port/`CircId` machinery, not the shard-fetch loop.
 
 ---
 
