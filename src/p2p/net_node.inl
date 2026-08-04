@@ -2316,8 +2316,17 @@ namespace nodetool
           break; // unknown network
 
         const auto status = network->second.m_notifier.get_status();
-        if (status.has_noise && status.connections_filled)
-          return std::addressof(*network);
+        if (!status.has_noise || !status.connections_filled)
+          continue;
+        /* `require_usable` gates this tier as well as the one below it.
+           Noise-priority says which zone is PREFERRED, not that it can send:
+           a diverted relayed transaction handed to a zone with no outbound
+           connections is lost, and relayed traffic must fall through to
+           clearnet instead (§59.7). Dormant today -- `has_noise` is false
+           everywhere since §41 -- and live the moment covert returns. */
+        if (require_usable && (!network->second.m_connect || !status.has_outgoing))
+          continue;
+        return std::addressof(*network);
       }
 
       for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
@@ -2387,7 +2396,27 @@ namespace nodetool
           shekyl_relay_zone_divert_relayed_tx())
       {
         if (zone_entry* anonymity = select_anonymity(/*require_usable=*/true))
-          return send(*anonymity); // entry: the one roll, shared placement
+        {
+          /* `send` MOVES `txs`, so a failed diverted send would otherwise
+             drop the batch: there is nothing left to hand to clearnet. Keep a
+             copy across the attempt and restore it on failure, so "the roll is
+             eligibility, not a drop commitment" holds for a send error and not
+             only for an unusable zone.
+
+             The copy is paid only on the diverted path -- ~2 % of relayed
+             traffic at the current rate -- and never on the clearnet path
+             below, which keeps the move.
+
+             Dormant today: the reachable failure is the covert
+             fragment-oversize check in `notify::send_txs`, and covert has been
+             off since §41. It goes live with the §30 composition, which is
+             scheduled work -- so this is a latent drop a planned change
+             activates, fixed now rather than left for it to surface. */
+          std::vector<cryptonote::blobdata> fallback = txs;
+          if (const auto placed = send(*anonymity); placed != enet::zone::invalid)
+            return placed;
+          txs = std::move(fallback);
+        }
       }
 
       return send(*m_network_zones.begin()); // relayed → clearnet, and every fluff

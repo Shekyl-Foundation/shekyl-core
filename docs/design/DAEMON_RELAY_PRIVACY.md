@@ -10105,3 +10105,47 @@ paths built for originated traffic, and inherited their assumptions.** The
 unconditional two-zone return and the roll-per-send were both correct for a
 sender deciding about its own transaction, and wrong for a node deciding about
 someone else's.
+
+### 59.8 Two dormant defects that a *scheduled* change would have woken
+
+**2026-08-04.** Two further findings on #389. Both are unreachable today, both
+become reachable at the same moment, and that moment is **planned work** —
+which is what makes them worth fixing now rather than filing.
+
+**A failed diverted send dropped the batch.** `send` **moves** `txs`, so
+returning its result directly meant a failed anonymity send left nothing to
+hand to clearnet. §59.7 established that for relayed traffic *the roll is
+eligibility, not a drop commitment* — but that held only for an **unusable
+zone**, not for a **send error**. Now a copy is kept across the diverted
+attempt and restored on failure. The copy is paid only on the diverted path
+(~2 % of relayed traffic) and never on the clearnet path, which keeps the move.
+
+**The noise-priority tier ignored `require_usable`.** §59.7 added the
+readiness gate to the `size() <= 2` branch and to the second three-zone loop,
+but not to the first — so a three-zone node could hand a diverted transaction
+to a noise-preferred zone with no outbound connections. Noise priority says
+which zone is *preferred*, not that it can send.
+
+### 59.8.1 Why they are the same finding
+
+**Both are dormant behind §41's covert deletion, and both wake with §30's
+composition.**
+
+- The reachable failure in the first is `notify::send_txs`'s
+  **covert fragment-oversize** check — the only `return false` a stem send on
+  an anonymity zone can hit. Covert is off since §41, so it cannot fire.
+- The second gates on `status.has_noise`, which is false everywhere for the
+  same reason.
+
+So the covert channel's return does not merely restore a feature — **it
+activates two latent paths in code written while it was off.** §57–58 spent a
+round on fragment behaviour precisely because that surface is coming back; the
+oversize failure is the same surface, one layer up.
+
+> **The general shape, worth carrying: a deletion that makes a path
+> unreachable does not make code written afterwards correct — it makes the
+> code's *incorrectness* unobservable until the deletion is reversed.** Both
+> defects were introduced after §41 and would have been caught immediately
+> before it. A planned reactivation is therefore a review trigger for
+> everything written in the interval, not just for the mechanism being
+> restored.
