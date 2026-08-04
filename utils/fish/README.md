@@ -10,8 +10,14 @@ binary. The inherited `monero-wallet-cli.fish` was removed rather than renamed
 for that reason — a completion file for a binary that does not exist misleads
 silently, where an absent one does nothing.
 
-**Caveat, stated rather than implied:** these were inherited and the flag lists
-have not been re-verified against the current CLIs. They are a convenience, not
-a spec — if a completion disagrees with `--help`, `--help` is right. Retargeting
-them was chosen over deleting them; auditing every flag was not part of that
-choice.
+**Removed flags are checked; the rest are not.** Every completion here was
+cross-checked against `src/common/removed_flags.cpp`, and the fifteen that
+advertised deliberately-removed flags — the whole `--rpc-ssl-*` family and
+`--rpc-login`, retired under `removed_reason::rpc_tls_auth` — were dropped.
+That registry is authoritative, so this check is cheap to repeat when it grows.
+
+**What is still not verified:** that the *surviving* flags match the current
+CLIs in spelling, arity and meaning. They are a convenience, not a spec — if a
+completion disagrees with `--help`, `--help` is right. Retargeting these was
+chosen over deleting them; a full flag audit was not part of that choice, and
+implying otherwise would be the more expensive error.
