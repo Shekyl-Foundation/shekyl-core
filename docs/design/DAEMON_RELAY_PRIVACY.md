@@ -9919,7 +9919,9 @@ floor" correct today and correct for the wrong reason.** It is origin-
 attributing because of **F-6's routing rule** — anything on that zone is `O`'s
 own — not because of the prefix. Under R-1's mixed eligibility the covert
 channel carries relayed traffic too, and a retained prefix attributes exactly
-like any stem observation: **precision back at `C1 ≈ f`.** The retention
+like any stem observation: **precision back at `C1 ≈ f`.** *(**Re-graded at §60: R-1 as shipped
+reaches ~71 % on the zone and ~83 % on the nil-mapped slot, not the floor —
+the calibration assumed an eligible set 1000× larger than what ships.**)* The retention
 channel does not disappear; it stops being above the floor.
 
 **Two consequences:**
@@ -10149,3 +10151,95 @@ oversize failure is the same surface, one layer up.
 > before it. A planned reactivation is therefore a review trigger for
 > everything written in the interval, not just for the mechanism being
 > restored.
+
+## 60. §57 re-graded after R-1 — and the severity did not drop
+
+**2026-08-04.** §58.3 predicted that R-1 would drop §57's retained-prefix
+channel from origin-attributing to the `C1 ≈ f` floor, and §58.5 ordered R-1
+ahead of the constants round on exactly that basis. **R-1 landed. The
+prediction is false as shipped, and the reason is an eligibility-set
+mismatch nobody caught at the time.**
+
+### 60.1 The calibration and the implementation used different eligible sets
+
+§59.2 justified `p = 2 %` per hop against *"precision ~2.4 % at a
+network-level 1 % and ~0.5 % at 5 %."* **Those figures only reproduce if
+*all relayed traffic* is eligible for diversion.** What shipped diverts
+**pre-fluff traffic only** (`still_stemming` — `stem | forward | local`),
+which at §34's envelope is a different quantity by three orders of
+magnitude:
+
+| eligible set | per node per day |
+| --- | --- |
+| pre-fluff forwards (**shipped**) | ~20 |
+| all relayed, incl. fluff (**calibrated against**) | ~20 000 |
+
+A peer holding a stem slot sees `own + p·eligible`, so precision is
+`own / (own + p·eligible)`:
+
+| `p` | pre-fluff only (shipped) | all relayed (calibrated) |
+| --- | --- | --- |
+| 0.01 | 83.3 % | 0.5 % |
+| **0.02** | **71.4 %** | 0.2 % |
+| 0.05 | 50.0 % | 0.1 % |
+| 0.45 | 10.0 % | ~0 % |
+
+**R-1 as shipped moved the anonymity zone from 100 % own traffic to 71 %.
+That is a real improvement and it is not the floor.**
+
+### 60.2 And the slot that matters is worse than the average
+
+§35.5 established that a node's own transactions all resolve through
+`in_mapping_[nil]` to a **single** successor, while relayed traffic carries
+real sources and spreads across the slots. So the diluting traffic does not
+land where the originations do:
+
+- **nil-mapped slot — carries every origination: 83.3 %** (was 100 %)
+- other slot: no own traffic at all
+
+**The adversary that matters is not the average one.** §35.5 recorded the
+nil-slot concentration as a *positive* — the node learns fastest about the
+peer with precision-1 visibility into its own stream. Here the same
+concentration works against us, and it was not carried across.
+
+### 60.3 What this does to the ordering
+
+**§57's severity is unchanged, so the fragment-rollover work is still a
+privacy fix.** §58.5's reasoning stands but its conclusion inverts: R-1 was
+correctly placed ahead of the constants round, and having run it we now know
+the constants round inherits a severity that is still high rather than one
+that dissolved.
+
+**Two exits, and the constants round has to pick — this is its first real
+input:**
+
+1. **Raise `p`.** Precision `≈ 10 %` needs `p ≈ 45 %` per hop against the
+   pre-fluff set — a different parameter regime, not a tweak, and it diverts
+   nearly half of forwarded stem traffic onto Tor.
+2. **Widen eligibility to include fluff-phase relays.** That is what the
+   calibration assumed, and it reaches the quoted precision at `p ≈ 1–2 %`.
+   It is a **design change, not a bug fix**: it would put ~400 relayed
+   transactions/day on the anonymity zone against ~0.4 today. The exit
+   remains intact — a fluff arriving with an anonymity `origin` is not
+   `still_stemming`, so it goes public on the next hop — but the bandwidth
+   and the F-7 outbound-only fluff rule both need pricing first.
+
+**Neither is chosen here.** What is settled is that §59.2's stated precision
+does not describe what shipped, and the constant's doc comment says so now.
+
+### 60.4 The shape
+
+**A parameter was calibrated against one population and implemented against
+another, and both steps were individually defensible.** Restricting diversion
+to pre-fluff traffic follows directly from *"stays on it until it fluffs"* —
+that sentence is about **coherence**, about a transaction already on the zone,
+and it was read as also defining **eligibility**, about which transactions may
+enter. Those are different questions and the design statement only answered
+one.
+
+> **The check that would have caught it: state the eligible population's
+> *size* next to the rate, not just its definition.** "2 % of relayed
+> transactions" and "2 % of pre-fluff forwards" read almost identically and
+> differ by 1000×. A rate without its denominator's magnitude is not a
+> specification — the same failure §59.2 already documented once for per-hop
+> versus network-level, one level down.

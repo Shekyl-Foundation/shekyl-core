@@ -82,14 +82,33 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// overstates diversion fivefold; reading the network rate as this one
 /// understates it the same way.
 ///
-/// # Why 2 %
+/// # Why 2 %, and what it does NOT achieve
 ///
-/// Precision against the origin falls to ~2.4 % at a network-level 1 % and
-/// ~0.5 % at 5 %, and the bandwidth cost is negligible across that whole
-/// range — the choice is not knife-edge, so it is made generously rather
-/// than tuned. A per-hop 2 % puts the network level near 10 %: an order of
-/// magnitude above the point where precision is already at the C1 floor,
-/// while still diverting only one relayed transaction in fifty at each hop.
+/// **Re-graded at §60 after R-1 landed; the original justification quoted
+/// precision figures that do not describe what ships.** Those figures
+/// (~2.4 % at a network-level 1 %, ~0.5 % at 5 %) were computed against
+/// *all relayed traffic* as the eligible set. What ships diverts
+/// **pre-fluff traffic only** — the `still_stemming` test at the routing
+/// site — which is ~20 transactions per node per day against ~20 000. Three
+/// orders of magnitude.
+///
+/// **Against the shipped eligible set, `p = 2 %` gives ~71 % precision on
+/// the zone as a whole, and ~83 % on the `in_mapping_[nil]` slot that
+/// carries every origination (§35.5, §60.2).** Pre-R-1 those were 100 %. So
+/// this constant buys a real reduction and **not** the `C1 ≈ f` floor §58.3
+/// predicted.
+///
+/// Reaching ~10 % against the pre-fluff set needs `p ≈ 45 %`, which is a
+/// different regime rather than a tweak. The alternative is widening
+/// eligibility to fluff-phase relays — what the original figures assumed —
+/// which is a design change owed a bandwidth and F-7 review, not a constant
+/// change. **§60.3 leaves that choice to the constants round; this value is
+/// the conservative one until it is made.**
+///
+/// **State the eligible population's SIZE beside any rate that reads from
+/// it.** "2 % of relayed transactions" and "2 % of pre-fluff forwards" look
+/// alike and differ by 1000× — the same failure this comment already
+/// documents once for per-hop versus network-level, one level down.
 ///
 /// **Set against an origination rate of one transaction per node per day**
 /// (§34's Monero-like envelope). If that assumption moves, this moves with
