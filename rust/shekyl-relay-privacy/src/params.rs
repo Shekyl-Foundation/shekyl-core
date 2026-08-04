@@ -335,7 +335,28 @@ pub mod inherited {
     /// class, not documentation.
     pub const NOISE_MIN_DELAY_SECS: u32 = 10;
     /// `CRYPTONOTE_NOISE_DELAY_RANGE`, in seconds.
+    ///
+    /// **Must stay non-zero, and the reason is §56 rather than arithmetic.**
+    /// At zero the cadence has no width: `next_send` returns exactly
+    /// `NOISE_MIN_DELAY_SECS` every time, and the covert channel becomes a
+    /// **metronome** — the one shape Q-11 Unit 2 disqualified, at a 1.000
+    /// re-identification rate, because a fixed period is a permanent
+    /// per-stream identifier.
+    ///
+    /// The build fails rather than the daemon degrading, because the failure
+    /// is silent in both places it would land: the daemon would emit a
+    /// perfectly periodic carrier while still calling it jittered, and the
+    /// Unit 2 sweep would run its `BoundedUniform` and `Metronome` arms on the
+    /// *same law under two names* — a reader seeing those columns agree would
+    /// conclude the shapes are equivalent, which is the opposite of what §56
+    /// found.
     pub const NOISE_DELAY_JITTER_SECS: u32 = 5;
+    const _: () = assert!(
+        NOISE_DELAY_JITTER_SECS > 0,
+        "covert cadence jitter must be non-zero: at zero the carrier is a \
+         metronome, which Q-11 Unit 2 (§56) disqualified at a 1.000 \
+         re-identification rate"
+    );
     /// `CRYPTONOTE_NOISE_CHANNELS` — max outbound connections per zone used
     /// for covert sending.
     pub const NOISE_CHANNELS: usize = 2;

@@ -9548,3 +9548,217 @@ fix is an integration test that links the FFI; recorded as owed.
   safe to delete when a constant is a pending derivation's other half.** The
   zero-consumer fact is now recorded at the site, since Q-12's derivation
   needs it.
+
+## 56. Q-11 Unit 2 — the shape, measured; and the metronome is disqualified
+
+**2026-08-03. The charter this session opened on, reached last.** §20.9 set
+the order *adversary → shape → constants*; §23–§28 fixed the adversary and its
+scope rule, §31 fixed the goal as non-enumerability, and this is the shape.
+
+### 56.1 What the instrument measures, and why it is a matching test
+
+New: `conformance::linkage::simulate_cadence_linkage`. `M` covert streams run
+to steady state at independent phases, a blackout of `D` interrupts
+observation, and the observer — given each stream's last pre-blackout emission
+*and the law itself* — tries to say **which post-blackout stream is which**.
+The number that matters is the **advantage over `1/M`**.
+
+**Matching, not prediction, and the distinction decides the question.** "Can
+the observer predict the next emission?" is *yes* for any non-degenerate law
+and says nothing about enumeration. "Can it re-identify the stream?" is the
+assembly step §31 names.
+
+The bounded arm draws through **production** `NoiseCadence::next_send` rather
+than a re-derived copy, so the instrument grades the daemon's law and not its
+own restatement of it.
+
+### 56.2 The result, and it reverses the expected answer
+
+Advantage over chance, 4 000 trials:
+
+| shape | `M`=4, `D`=0 | `M`=16, `D`=0 | `M`=4, `D`=30 s | `M`=4, `D`=300 s |
+| --- | --- | --- | --- | --- |
+| **Metronome** | **+0.750** | **+0.938** | −0.250 † | **+0.750** |
+| Bounded `U` (shipped) | +0.262 | +0.038 | +0.003 | −0.000 |
+| Memoryless | +0.003 | +0.001 | +0.002 | −0.002 |
+
+**The metronome matches at 1.000 — perfect re-identification.** A deterministic
+emitter's phase is a *permanent per-stream identifier*: predict `last + mean`
+and you land exactly on its next emission, forever.
+
+> **§25.3's reading was right about what it claimed and wrong about what it
+> implied.** Loopix licenses no randomness at the sender's link *for
+> count-denial*, and payload-independence does that work — a metronome denies
+> recall completely. But **payload-independence and unlinkability are
+> different properties, and the metronome has the first while maximally
+> lacking the second.** The case for randomising the cadence does not rest on
+> (b)'s subtle phase-tag after all; it rests on the blunt fact that a
+> deterministic carrier is a perfect tracker.
+
+**† The −0.250 at `D` = 30 s is anti-correlation, not safety.** 30 s is exactly
+two 15 s periods, so a `last + mean` prediction is one period early and the
+greedy matcher is *consistently* wrong — which is as much information as being
+consistently right. An observer that knows the blackout length inverts it and
+recovers ~1.0. **The metronome's true advantage is ~perfect at every blackout;
+the dip is my matcher's naivety, and reporting it as a result would have been
+the artifact-as-finding error.**
+
+### 56.3 ~~What is decided, and what this instrument does not decide~~ — **CORRECTED at §56.4**
+
+> **⚠ The null below does not hold. It was a property of the *matcher*, not of
+> the families.** §56.4 replaces it: with an observer that marginalises over
+> how many emissions the blackout hid, **bounded separates from memoryless**
+> and the answer is memoryless. The text is kept because the failure is the
+> lesson.
+
+
+**Decided: the metronome is disqualified.** Not on a marginal channel — on
+perfect linkability at every observation gap tested.
+
+**Not decided: bounded versus memoryless.** They separate only at `D` = 0,
+which is the degenerate case of *uninterrupted* observation, where the
+observer never lost the streams and "matching" is trivial for anything with a
+predictable component. **At every non-zero blackout the two are
+indistinguishable, both at chance.** The shipped `10 s + U[0, 5 s]` is
+therefore *adequate* at this observer's capability, and memoryless is not
+measurably better.
+
+**So the honest Unit 2 output is a disqualification plus a null**, and the
+null is the more useful half: it says the constants round (§20.9's third step)
+inherits no shape constraint from linkability, and Q11-B's `MAX_FRAGMENTS ≤
+epoch/(min_delay+range)` assert **survives in its current form**, because the
+bounded family survives. That was the open question blocking C+noise, and it
+closes in the direction that keeps the existing invariant.
+
+**What would change the answer**: a stronger observer than the scope rule
+admits — one that accumulates across many blackouts rather than matching
+across one — could aggregate the bounded family's small per-window advantage.
+That is a different instrument (sequential, not single-shot) and it is the
+named reopening condition for choosing memoryless over bounded.
+
+### 56.4 The matcher was the weak link — corrected, and the answer flips
+
+**2026-08-03, maintainer.** §56.2's matcher predicts `last + mean` and takes
+the nearest emission. **It only ever tests `k = 1`** — it assumes exactly one
+emission was missed. An observer that knows the blackout duration and the
+family (**both public**) marginalises over `k` instead.
+
+**The tell was already in §56.2 and I did not generalise it.** The metronome's
+apparent −0.250 was rejected there *because a knowledgeable observer inverts it
+and recovers ~1.0*. That is this same insight — a knowledgeable observer beats
+the greedy matcher — **applied to one data point and not to the instrument
+that produced it.**
+
+**Re-run with the matcher upgraded, everything else identical** (`M = 20`,
+1 500 trials, chance = 0.050; the weak matcher is retained in-instrument as a
+control):
+
+| blackout | bounded | memoryless | metronome |
+| --- | --- | --- | --- |
+| 10 s | **0.120** | 0.053 | **1.000** |
+| 20 s | 0.103 | 0.050 | 1.000 |
+| 30 s | 0.087 | 0.050 | 1.000 |
+| 45 s | 0.074 | 0.050 | 1.000 |
+| 60 s | 0.069 | 0.049 | 1.000 |
+| 90 s | 0.062 | 0.048 | 1.000 |
+| 150 s | 0.052 | 0.051 | 1.000 |
+
+*Re-measured after the §56.6 review round; the pre-review figures were
+0.105 / 0.091 / 0.079 / 0.072 / 0.067 / 0.058 / 0.053 on the bounded arm.
+Every correction moved the bounded signal **up**, so the conclusion holds with
+more margin, not less.*
+
+*Weak matcher, same runs: every cell at chance except metronome at 10 s
+(0.200) and **0.000** thereafter — so it did not merely under-report, it
+inverted the metronome result too.*
+
+**Why, and it is analytic rather than empirical.** Bounded support
+concentrates: elapsed over `k` intervals has mean `12.5k` and sd `1.44√k`, so
+the *relative* spread shrinks as `k` grows, `k` becomes identifiable from `Δ`,
+and residual phase is readable within it. The signal decays only when adjacent
+`k`-components blur, near `k ≈ 17` — the ~90 s washout the table shows.
+**Memorylessness kills it exactly**: the time from blackout-end to the next
+emission is `Exp(µ)` independent of everything prior, so `Δ` carries zero
+information about which stream it was. That is not a measurement outcome, it
+is the defining property — D++ §4.4's lemma, the anchor **(b)** was pinned to.
+
+**Magnitude differs from the maintainer's model** (0.105 vs 0.152 at 10 s,
+~1.4×) while direction, decay shape and washout point all reproduce. The two
+differ in the memoryless arm's discretisation (geometric on a 250 ms grid here)
+and in the bounded arm going through production `next_send`. **Recorded rather
+than reconciled** — the mechanism is what carries the decision, and the
+decision is the same at either magnitude.
+
+### 56.5 What this changes
+
+- **§56.3's null is withdrawn.** "Bounded is adequate, memoryless not
+  measurably better" holds **only for a `k = 1` matcher.**
+- **The answer is memoryless.** Bounded carries a real residual channel — 2.1×
+  chance at a 10 s gap, above chance to ~90 s — and memoryless removes it by
+  construction rather than by margin.
+- **Q11-B reopens, and the constants round *does* inherit a shape
+  constraint.** `MAX_FRAGMENTS ≤ epoch/(min_delay+range)` has its **form**
+  invalidated by unbounded support: there is no `max` to divide by. That is
+  precisely the outcome §22.1's family-surviving restatement was written for,
+  so the restatement is now load-bearing rather than precautionary.
+- **The reopening condition I recorded was second-order and the real one was
+  first-order.** I named *sequential accumulation across many blackouts*; the
+  break is **one blackout and a better matcher**.
+- **The metronome disqualification is untouched and strengthened** — 1.000 at
+  every gap under the strong matcher, confirming §56.2's reading of the
+  artifact.
+
+**The generalised lesson, which is the vacuity discipline one level up:** the
+instrument graded production code correctly and modelled an adversary weaker
+than the threat model names. **A green result then measures the observer, not
+the mechanism** — and unlike a vacuous fixture, everything about it looks
+right: real code, real draws, real trials. `MatcherStrength` stays in the
+instrument as a permanent second arm so the next reader can see the result
+move with observer strength rather than trusting one number.
+
+### 56.6 Review round — four real defects, one mis-severity, one wrong claim
+
+**2026-08-03.** Six findings on #390. All six were acted on; two are worth
+recording because the reasoning is not obvious.
+
+**The instrument was measuring the wrong residual.** `blackout_end` was derived
+from `max(last)`, but each stream's *own* warm-up endpoint was recorded as its
+last pre-blackout emission — so for every stream but the latest, the observer
+was handed a `last` it could not have held, with real emissions in between it
+would have seen. Fixed with an explicit common `blackout_start` and a per-stream
+advance to the true last emission before it. **This is a measurement bug, not a
+style one, and it moved the numbers.**
+
+**The strong arm was not computing the strongest assignment.** Best-first greedy
+commits an early pair before seeing a later, better claim on the same emission —
+it can only *understate* matchability, which is precisely how §56.2's null
+arose. Replaced with `O(n³)` Kuhn–Munkres, **verified against a brute-force
+optimum at `n = 5`**, because an *incorrectly* optimal matcher is worse than an
+honestly greedy one: it reports a number nobody can reproduce and carries the
+authority of the word.
+
+**The memoryless arm could emit twice at one instant.** An unshifted geometric
+has a ~2 % atom at zero; the bounded (`min 10 s`) and metronome arms cannot do
+that. Left in, it is an asymmetry *between the arms* the shape comparison would
+have had to explain. Shifted by one grid step, with the table built for
+`mean − 1` so the arms stay matched in rate and differ only in shape.
+
+**One finding's severity was wrong and the defect under it was real.** It was
+reported as a hang — a zero draw stalling the emission loop. It cannot hang:
+the loop redraws each iteration, so `P(stall) = 0`. But the zero-interval atom
+beneath it was the arm asymmetry above, so the fix stands and the severity does
+not.
+
+**Two were performance and they mattered more than performance.** The geometric
+table was rebuilt per draw and the score matrix recomputed inside a sort
+comparator. **Runtime 388 s → 7.6 s.** At six minutes the sweep is something CI
+runs reluctantly and nobody re-runs while thinking; at eight seconds it is a
+thing you can ask questions of.
+
+**And the sweep asserted nothing.** It printed a table and passed unless it
+panicked — the §50.3 class in its plainest form, in the file that *records*
+that lesson. It now pins the three properties the shape decision rests on
+(metronome > 0.95, memoryless within 0.02 of chance, bounded above chance at
+10 s), plus the weak-matcher arm as a property, since the instrument's own
+failure mode is worth a regression test. The table is still printed — it is
+the readout the decision was taken against — but it is no longer the test.

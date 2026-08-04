@@ -29,6 +29,7 @@
 pub mod analysis;
 pub mod flood;
 pub mod grade;
+pub mod linkage;
 pub mod reshape;
 pub mod selection;
 pub mod stem;
