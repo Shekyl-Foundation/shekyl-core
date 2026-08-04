@@ -2,6 +2,7 @@
 //
 // All rights reserved.
 // BSD-3-Clause
+#![allow(clippy::cast_precision_loss)]
 //! F-12: how far does the adopted embargo move with `time_between_hop_ms`?
 //!
 //! `hop` is a **single global** applied to every transport — exactly what
