@@ -366,8 +366,17 @@ surviving consensus rule reads `serve_credit_bit` intra-epoch. The primitive
 `has_archival_serve_credit_bit` has three callers:
 - `blockchain.cpp:5237` — the **old vin's idempotency check** (reject
   double-credit of `(P,s,E)`). Add-time, but on the vin path — **deletes with
-  Half B**; the idempotency is subsumed by the settlement fold being idempotent
-  by construction (one bit per `(P,s,E)`, computed once).
+  Half B**. The dedup does not transfer, and does not need to: under shape 4 two
+  miners in different blocks of epoch `E` can each carry a valid pass-header for
+  the same `(P,s,E)` — different nonces (each binds its own `r`/`cb_out_key`),
+  both real `P`-countersigned reads — and per-block admission cannot see the
+  first to reject the second. Pass-priority makes the settlement fold idempotent
+  over duplicate passes (one bit per `(P,s,E)`, computed once), so the one-bit
+  ledger absorbs them. The dedup **relocates from an admission-time rejection to
+  a settlement-time collapse** — the same admission→settlement relocation as the
+  bit-writer itself. (Double-*payment* is a separate concern the emission layer's
+  claim-uniqueness owns, not this bit; the reward keys off the settled bit, which
+  is already one-per-`(P,s,E)`.)
 - `db_lmdb.cpp:5749` — the slash-candidate fast-path ("an epoch with an
   affirmative pass is not a candidate"), reading `settlement_epoch`'s own bit.
   **Settlement-time.**
