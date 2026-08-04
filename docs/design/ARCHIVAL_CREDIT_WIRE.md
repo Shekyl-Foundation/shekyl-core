@@ -79,10 +79,14 @@ manipulation surface).** Applied hard, they collapse most of a first draft:
 - **The settled three-valued bit is NOT stored** — it is a pure fold over epoch
   `E`'s records (pass-priority, §4), recomputable from chain data, so it is not
   a maintained object at all.
-- **The `transfer_digest` is NOT a field** — the countersignature covers
-  `H(nonce ‖ transfer_digest)`, so the digest lives *inside the signed object*.
-  The witness computes it locally to decide whether to sign; consensus never
-  sees it; it is not on the wire.
+- **There is no `transfer_digest`** — an earlier draft had the countersignature
+  cover `H(nonce ‖ transfer_digest)`, but that is not consensus-verifiable:
+  `transfer_digest` would digest the transferred shard bytes, which are
+  off-chain, so admission could never reconstruct the signed message. The
+  countersignature covers **the nonce alone** (§3.3), and that is *complete*, not
+  a shortcut — `s` (`shard_id`) is already a nonce term, so a content digest
+  would add no binding `s` does not carry. Read-content binding comes from
+  §9.4's topology, not from a signed artifact; nothing of the sort is on the wire.
 - **The nonce is NOT stored** — `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` is recomputable
   at the only two moments anything needs it (admission and any later re-check),
   because `r` (coinbase extra) and `cb_out_key` (coinbase output) are kept-side
