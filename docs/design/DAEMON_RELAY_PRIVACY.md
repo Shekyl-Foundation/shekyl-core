@@ -9638,3 +9638,20 @@ cannot fail is worse than none — it reports safety it never checked.
 
 **Unblocked, not done**: the constants round can now price bandwidth-versus-
 epoch against the post-R-1 severity rather than the inherited one (§58.5).
+
+### 59.6 Dual-stack: one selection, or the oracle survives on the preferred zone
+
+**2026-08-04.** The first landing diverted with `m_network_zones.rbegin()` —
+tor by enum order — while originated traffic kept the size-`>2` loop that
+prefers i2p when usable. On a dual-stack node the mix therefore landed on tor
+and i2p continued to carry this node's originated traffic only: §30.1's
+acceptance criterion failed on the preferred zone.
+
+**The fix is not a second policy.** Originated placement and R-1 divert share
+one `select_anonymity` (noise-filled, else outbound; i2p before tor). The mix
+is only a mix if both classes take that path. When the roll says divert but
+no anonymity zone is usable, relayed traffic falls through to clearnet — the
+roll is eligibility, not a drop commitment, and clearnet was always that
+traffic's home. Originated traffic still fails closed without a usable
+anonymity zone: leaking an origin over clearnet is the first-spy case §30.5
+forbids.

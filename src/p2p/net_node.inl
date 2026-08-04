@@ -2251,8 +2251,9 @@ namespace nodetool
   epee::net_utils::zone node_server<t_payload_net_handler>::send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, const cryptonote::relay_method tx_relay)
   {
     namespace enet = epee::net_utils;
+    using zone_entry = std::pair<const enet::zone, network_zone>;
 
-    const auto send = [&txs, &source, tx_relay] (std::pair<const enet::zone, network_zone>& network)
+    const auto send = [&txs, &source, tx_relay] (zone_entry& network)
     {
       if (network.second.m_notifier.send_txs(std::move(txs), source, tx_relay))
         return network.first;
@@ -2261,6 +2262,49 @@ namespace nodetool
 
     if (m_network_zones.empty())
       return enet::zone::invalid;
+
+    /* Anonymity-zone selection — one function for originated traffic and for
+       R-1 divert. The mix is only a mix if both classes land on the same zone:
+       a divert path that always took rbegin() (tor) while dual-stack origins
+       preferred i2p would leave i2p carrying originated traffic only — F-6's
+       oracle, still, on the preferred zone (§30.1 / §59.6).
+
+       Order is pinned: public_ < i2p < tor. With one anonymity zone, rbegin()
+       is that zone. With both, i2p wins when usable (noise-filled, else
+       outbound), then tor. m_network_zones is a sorted map. */
+    static_assert(std::is_same<std::underlying_type<enet::zone>::type, std::uint8_t>{}, "expected uint8_t zone");
+    static_assert(unsigned(enet::zone::invalid) == 0, "invalid expected to be 0");
+    static_assert(unsigned(enet::zone::public_) == 1, "public_ expected to be 1");
+    static_assert(unsigned(enet::zone::i2p) == 2, "i2p expected to be 2");
+    static_assert(unsigned(enet::zone::tor) == 3, "tor expected to be 3");
+
+    const auto select_anonymity = [this]() -> zone_entry*
+    {
+      if (m_network_zones.size() <= 2)
+        return std::addressof(*m_network_zones.rbegin()); // public alone, or the one anonymity zone
+
+      for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
+      {
+        if (enet::zone::tor < network->first)
+          break; // unknown network
+
+        const auto status = network->second.m_notifier.get_status();
+        if (status.has_noise && status.connections_filled)
+          return std::addressof(*network);
+      }
+
+      for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
+      {
+        if (enet::zone::tor < network->first)
+          break; // unknown network
+
+        const auto status = network->second.m_notifier.get_status();
+        if (network->second.m_connect && status.has_outgoing)
+          return std::addressof(*network);
+      }
+
+      return nullptr;
+    };
 
     /* R-1 mixed eligibility (§59). The inherited rule sent every RELAYED
        transaction to clearnet and every ORIGINATED one to the anonymity zone,
@@ -2272,7 +2316,8 @@ namespace nodetool
 
        1. A relayed transaction still stemming is diverted onto the anonymity
           zone with probability p (Rust owns the rate; this asks for a
-          verdict).
+          verdict). Placement uses select_anonymity — same zone originated
+          traffic would take — so the preferred zone receives the mix.
        2. A transaction that ARRIVED over an anonymity zone and is still
           stemming stays on it — no re-roll. Rolling per hop would return it
           to clearnet after one step, leaving the zone carrying originated
@@ -2282,7 +2327,14 @@ namespace nodetool
        `tx_relay` is the exit. Once a transaction fluffs it leaves the zone
        and goes public — this line is what carries an anonymity-originated
        transaction to the clearnet network at all, and swallowing it into
-       coherence would strand those transactions in the anonymity subgraph. */
+       coherence would strand those transactions in the anonymity subgraph.
+
+       If the roll says divert but no anonymity zone is currently usable,
+       fall through to clearnet: the roll is eligibility, not a drop
+       commitment. Relayed traffic's home was always clearnet; originated
+       traffic (below) still fails closed when anonymity cannot take it —
+       leaking an origin over clearnet is the first-spy case this arc exists
+       to prevent (§30.5). */
     const bool still_stemming =
       tx_relay == cryptonote::relay_method::stem ||
       tx_relay == cryptonote::relay_method::forward ||
@@ -2295,44 +2347,16 @@ namespace nodetool
 
       if (still_stemming && m_network_zones.size() > 1 &&
           shekyl_relay_zone_divert_relayed_tx())
-        return send(*m_network_zones.rbegin()); // entry: the one roll
+      {
+        if (zone_entry* anonymity = select_anonymity())
+          return send(*anonymity); // entry: the one roll, shared placement
+      }
 
       return send(*m_network_zones.begin()); // relayed → clearnet, and every fluff
     }
 
-    if (m_network_zones.size() <= 2)
-      return send(*m_network_zones.rbegin()); // see static asserts below; sends over anonymity network iff enabled
-
-    /* These checks are to ensure that i2p is highest priority if multiple
-       zones are selected. Make sure to update logic if the values cannot be
-       in the same relative order. `m_network_zones` must be sorted map too. */
-    static_assert(std::is_same<std::underlying_type<enet::zone>::type, std::uint8_t>{}, "expected uint8_t zone");
-    static_assert(unsigned(enet::zone::invalid) == 0, "invalid expected to be 0");
-    static_assert(unsigned(enet::zone::public_) == 1, "public_ expected to be 1");
-    static_assert(unsigned(enet::zone::i2p) == 2, "i2p expected to be 2");
-    static_assert(unsigned(enet::zone::tor) == 3, "tor expected to be 3");
-
-    // check for anonymity networks with noise and connections
-    for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
-    {
-      if (enet::zone::tor < network->first)
-        break; // unknown network
-
-      const auto status = network->second.m_notifier.get_status();
-      if (status.has_noise && status.connections_filled)
-        return send(*network);
-    }
-
-    // use the anonymity network with outbound support
-    for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
-    {
-      if (enet::zone::tor < network->first)
-        break; // unknown network
-
-      const auto status = network->second.m_notifier.get_status();
-      if (network->second.m_connect && status.has_outgoing)
-        return send(*network);
-    }
+    if (zone_entry* anonymity = select_anonymity())
+      return send(*anonymity);
 
     MWARNING("Unable to send " << txs.size() << " transaction(s): anonymity networks had no outgoing connections");
     return enet::zone::invalid;
