@@ -42,6 +42,7 @@
 #include <boost/serialization/split_free.hpp>
 #include <boost/version.hpp>
 #include <optional>
+#include <stdexcept>
 #include <variant>
 
 // Use Boost's own std::variant serialization when available (Boost >= 1.78)
@@ -268,13 +269,14 @@ namespace boost
     {
       a & x.bond_spend_pk;
       if (x.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
-        throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception,
-          "archival bond-post bond_spend_pk length not canonical");
+        // std::runtime_error, not archive_exception(other_exception, ...): the
+        // latter's what() is "unknown derived exception" — the message never
+        // reaches a log. Only code-agnostic broad catches consume these paths.
+        throw std::runtime_error("archival bond-post bond_spend_pk length not canonical");
     }
     else if (!x.bond_spend_pk.empty())
     {
-      throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception,
-        "bond_spend_pk is JoinMarket-coupled");
+      throw std::runtime_error("bond_spend_pk is JoinMarket-coupled");
     }
     a & x.holdings;
     a & x.bonded_total_atomic;
@@ -356,11 +358,13 @@ namespace boost
   {
     // Class version 1: attestation_root joined the header (ARCHIVAL_CREDIT_WIRE.md
     // §3, the LMDB VERSION 9 format change). A version-0 archive — a pre-V9
-    // poolstate.bin, alt-block cache, or blocks.dat export — lacks the field and
-    // would misparse from shifted bytes; refuse it loudly instead.
+    // poolstate.bin or alt-block cache — lacks the field and would misparse from
+    // shifted bytes; refuse it loudly instead. unsupported_class_version is the
+    // one code whose what() renders the custom text (as "class version <text>");
+    // other_exception swallows it into "unknown derived exception".
     if (ver < 1)
-      throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception,
-        "pre-V9 boost block archive (no attestation_root); delete the stale cache or re-export with a current build");
+      throw boost::archive::archive_exception(boost::archive::archive_exception::unsupported_class_version,
+        "is pre-V9 (block header lacks attestation_root); delete the stale cache or re-export with a current build");
     a & b.major_version;
     a & b.minor_version;
     a & b.timestamp;
@@ -441,7 +445,7 @@ namespace boost
       return;
     }
     if (x.type != rct::CTTypeFcmpPlusPlusPqc)
-      throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
+      throw std::runtime_error("Unsupported rct type"); // not archive_exception(other_exception): its what() drops the message
     a & x.enc_amounts;
     a & x.enc_labels;
     serializeOutPk(a, x.outPk, ver);
@@ -468,7 +472,7 @@ namespace boost
       return;
     }
     if (x.type != rct::CTTypeFcmpPlusPlusPqc)
-      throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
+      throw std::runtime_error("Unsupported rct type"); // not archive_exception(other_exception): its what() drops the message
     a & x.enc_amounts;
     a & x.enc_labels;
     serializeOutPk(a, x.outPk, ver);
