@@ -25,6 +25,12 @@
 //! consensus-verifiable, and §9.4's topology binding already carries the
 //! read-happened property (the bytes traverse `P`'s link by path position, no
 //! artifact from `P`). Built to the nonce; the doc's §3 line wants correcting.
+//!
+//! Nonce-only is also *complete*, not merely necessary: the shard is named by
+//! `s` (`shard_id`) which is already a nonce term, so appending any on-chain
+//! shard-content commitment (`R_k`) would add no binding power `s` does not
+//! already carry. There is nothing a `transfer_digest` could bind that the
+//! nonce does not.
 
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
@@ -33,6 +39,7 @@ use shekyl_crypto_pq::CryptoError;
 
 use crate::attestation::AttestationKind;
 use crate::hash::cshake256_32;
+use crate::id::p_canonical_id_from_hybrid_pubkey;
 
 /// cSHAKE customization for the block-bound challenge nonce (§3, copy-freeride
 /// repair: the `cb_out_key` term binds the attestation to *this* block's
@@ -135,32 +142,61 @@ pub fn attestation_nonce(
     cshake256_32(ATTESTATION_NONCE_CUSTOMIZATION, &input)
 }
 
-/// `attestation_root` over the block's ordered pass-signatures (§3.2) — the
-/// value stored in the block field and mined over as a merkle leaf.
+/// `attestation_root` over the block's pass-records (§3.2) — the value stored in
+/// the block field and mined over as a merkle leaf.
 ///
-/// A flat cSHAKE over the count prefix and each signature's authoritative
-/// fixed-length canonical encoding ([`HybridSignature::to_canonical_bytes`]).
-/// Reusing the crate's own framing — rather than re-inventing a length-prefix —
-/// means a malformed (wrong-length) signature is a loud [`CryptoError`], not a
-/// silent truncation. **Defined-empty** (§3.2 invariant): an empty set hashes to
-/// the customization over the bare count prefix, a fixed constant, so the leaf
-/// is never omitted and the count never desyncs. (A binary merkle could replace
-/// this if per-record signature pruning is ever wanted; the flat root is
-/// sufficient for set commitment today.)
-pub fn attestation_root(signatures: &[HybridSignature]) -> Result<[u8; 32], CryptoError> {
-    let mut input = Vec::with_capacity(8 + signatures.len() * HybridSignature::CANONICAL_LEN);
-    input.extend_from_slice(&(signatures.len() as u64).to_le_bytes());
-    for sig in signatures {
-        input.extend_from_slice(&sig.to_canonical_bytes()?);
+/// Each record contributes `header_canonical ‖ signature_canonical`, so the root
+/// commits the header↔signature **pairing** — not just the signatures, and not
+/// in an unstated positional order. Records are **sorted by these canonical
+/// bytes** before hashing, giving one defined order that every producer and
+/// every re-validating node (reading the signatures back from the pruned side
+/// table) reproduces identically; a caller-supplied order would be an unstated
+/// obligation whose violation forks consensus. Each signature is in its
+/// authoritative fixed-length canonical encoding
+/// ([`HybridSignature::to_canonical_bytes`]), so a malformed (wrong-length)
+/// signature is a loud [`CryptoError`], not a silent truncation.
+///
+/// **Defined-empty** (§3.2 invariant): an empty set hashes to the customization
+/// over the bare count prefix, a fixed constant, so the leaf is never omitted
+/// and the count never desyncs. (A binary merkle could replace this if per-record
+/// signature pruning is ever wanted; the flat root is sufficient for set
+/// commitment today.)
+pub fn attestation_root(
+    records: &[(AttestationHeader, HybridSignature)],
+) -> Result<[u8; 32], CryptoError> {
+    const RECORD_LEN: usize = ATTESTATION_HEADER_LEN + HybridSignature::CANONICAL_LEN;
+    let mut record_bytes: Vec<[u8; RECORD_LEN]> = Vec::with_capacity(records.len());
+    for (header, sig) in records {
+        let mut rec = [0u8; RECORD_LEN];
+        rec[..ATTESTATION_HEADER_LEN].copy_from_slice(&header.to_canonical_bytes());
+        rec[ATTESTATION_HEADER_LEN..].copy_from_slice(&sig.to_canonical_bytes()?);
+        record_bytes.push(rec);
+    }
+    record_bytes.sort_unstable();
+
+    let mut input = Vec::with_capacity(8 + records.len() * RECORD_LEN);
+    input.extend_from_slice(&(records.len() as u64).to_le_bytes());
+    for rec in &record_bytes {
+        input.extend_from_slice(rec);
     }
     Ok(cshake256_32(ATTESTATION_ROOT_CUSTOMIZATION, &input))
 }
 
 /// Verify one **pass** record's countersignature at admission (§3.3 step b).
 ///
-/// Recompute the nonce and check it is `P`'s valid hybrid countersignature.
-/// (Signed message = the nonce; see the module note on the doc's §3/§3.3
-/// inconsistency.) A miss record has no signature and is not passed here.
+/// Two bindings, both self-contained here so no correctness rides on the caller:
+///
+/// 1. **`p_id` binds the key.** The header's `p_id` must be *this pubkey's*
+///    canonical id ([`p_canonical_id_from_hybrid_pubkey`]) — otherwise any key
+///    could countersign an attestation naming a different principal, and a
+///    caller that mis-pairs a registry pubkey with a foreign header would not be
+///    caught. One hash makes the binding structural.
+/// 2. **The signature covers the nonce.** Recompute
+///    `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` and check `P`'s hybrid countersignature
+///    over it. (Signed message = the nonce; see the module note on the doc's
+///    §3/§3.3 inconsistency.)
+///
+/// A miss record has no signature and is not passed here.
 #[must_use]
 pub fn verify_pass_countersignature(
     r: &[u8; 32],
@@ -169,6 +205,14 @@ pub fn verify_pass_countersignature(
     header: &AttestationHeader,
     signature: &HybridSignature,
 ) -> bool {
+    // Binding 1: the header's p_id must be this pubkey's canonical id.
+    let Ok(pubkey_bytes) = p_pubkey.to_canonical_bytes() else {
+        return false;
+    };
+    if p_canonical_id_from_hybrid_pubkey(&pubkey_bytes).as_bytes() != &header.p_id {
+        return false;
+    }
+    // Binding 2: P's countersignature over the block-bound nonce.
     let nonce = attestation_nonce(
         r,
         cb_out_key,
@@ -199,6 +243,13 @@ mod tests {
             settlement_epoch: 1000,
             kind,
         }
+    }
+
+    /// This pubkey's canonical id — the value the header's `p_id` must equal for
+    /// `verify_pass_countersignature`'s binding-1 to hold.
+    fn p_id_of(pubkey: &HybridPublicKey) -> [u8; 32] {
+        let bytes = pubkey.to_canonical_bytes().expect("canonical pubkey");
+        *p_canonical_id_from_hybrid_pubkey(&bytes).as_bytes()
     }
 
     #[test]
@@ -239,7 +290,13 @@ mod tests {
     fn a_valid_countersignature_verifies_and_a_wrong_key_or_term_fails() {
         let (pubkey, secret) = keypair();
         let (r, cb) = ([11u8; 32], [22u8; 32]);
-        let h = header(AttestationKind::Pass);
+        // Binding 1 requires the header's p_id to be this key's canonical id.
+        let h = AttestationHeader {
+            p_id: p_id_of(&pubkey),
+            shard_id: 42,
+            settlement_epoch: 1000,
+            kind: AttestationKind::Pass,
+        };
         let nonce = attestation_nonce(&r, &cb, &h.p_id, h.shard_id, h.settlement_epoch);
         let sig = HybridEd25519MlDsa
             .sign(&secret, &nonce)
@@ -256,16 +313,43 @@ mod tests {
         assert!(!verify_pass_countersignature(
             &r, &[99; 32], &pubkey, &h, &sig
         ));
-        // Nor a different pair.
+        // Nor a different (shard, epoch) term in the header.
         let mut other = h;
         other.shard_id = 43;
         assert!(!verify_pass_countersignature(
             &r, &cb, &pubkey, &other, &sig
         ));
+
+        // Binding 1 in isolation: a header whose p_id is NOT this key's id fails
+        // even when the signature covers that header's own nonce — a key cannot
+        // countersign for a principal it is not.
+        let foreign_id = AttestationHeader {
+            p_id: [0xAB; 32],
+            shard_id: h.shard_id,
+            settlement_epoch: h.settlement_epoch,
+            kind: AttestationKind::Pass,
+        };
+        let foreign_nonce = attestation_nonce(
+            &r,
+            &cb,
+            &foreign_id.p_id,
+            foreign_id.shard_id,
+            foreign_id.settlement_epoch,
+        );
+        let sig_over_foreign = HybridEd25519MlDsa
+            .sign(&secret, &foreign_nonce)
+            .expect("sign foreign nonce");
+        assert!(!verify_pass_countersignature(
+            &r,
+            &cb,
+            &pubkey,
+            &foreign_id,
+            &sig_over_foreign
+        ));
     }
 
     #[test]
-    fn attestation_root_is_defined_empty_and_set_sensitive() {
+    fn attestation_root_is_defined_empty_order_independent_and_pairing_committed() {
         // Defined-empty (§3.2 invariant): the empty set has a fixed root, never
         // omitted, so the merkle leaf and count never desync.
         let empty = attestation_root(&[]).unwrap();
@@ -274,11 +358,25 @@ mod tests {
         let (_pk, sk) = keypair();
         let s1 = HybridEd25519MlDsa.sign(&sk, b"a").unwrap();
         let s2 = HybridEd25519MlDsa.sign(&sk, b"b").unwrap();
-        // A non-empty set differs from empty, and order/content matter.
-        assert_ne!(attestation_root(std::slice::from_ref(&s1)).unwrap(), empty);
-        assert_ne!(
-            attestation_root(&[s1.clone(), s2.clone()]).unwrap(),
-            attestation_root(&[s2, s1]).unwrap()
-        );
+        let h1 = header(AttestationKind::Pass);
+        let mut h2 = h1;
+        h2.shard_id = 43;
+
+        // A non-empty set differs from empty.
+        assert_ne!(attestation_root(&[(h1, s1.clone())]).unwrap(), empty);
+
+        // ORDER-INDEPENDENT: the internal sort yields one canonical order, so the
+        // two input orders produce the same root. This is the consensus-determinism
+        // property — every re-validating node reproduces it without an unstated
+        // ordering obligation.
+        let ab = attestation_root(&[(h1, s1.clone()), (h2, s2.clone())]).unwrap();
+        let ba = attestation_root(&[(h2, s2.clone()), (h1, s1.clone())]).unwrap();
+        assert_eq!(ab, ba);
+
+        // PAIRING IS COMMITTED: swapping which signature rides which header
+        // changes the root — the header↔signature binding is inside the
+        // commitment, not merely positional.
+        let swapped = attestation_root(&[(h1, s2), (h2, s1)]).unwrap();
+        assert_ne!(ab, swapped);
     }
 }
