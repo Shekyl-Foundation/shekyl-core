@@ -114,6 +114,13 @@ fn log_density_k(shape: CadenceShape, delta_ms: f64, k: u32, mean_ms: f64) -> f6
             if delta_ms < kf * lo || delta_ms > kf * hi {
                 return f64::NEG_INFINITY;
             }
+            // `hi > lo` is guaranteed by the non-zero-jitter invariant asserted
+            // at `NOISE_DELAY_JITTER_SECS`, so `sd > 0` and neither the
+            // division nor `ln` below can degenerate. That invariant is
+            // enforced where the constant lives rather than defended here:
+            // at zero jitter this arm would not merely divide by zero, it
+            // would silently *become* the metronome arm and the sweep would
+            // compare a law with itself.
             let sd = (hi - lo) / 12.0_f64.sqrt() * kf.sqrt();
             let z = (delta_ms - kf * mean_ms) / sd;
             -0.5 * z * z - sd.ln()
