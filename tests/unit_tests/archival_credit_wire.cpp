@@ -40,6 +40,9 @@
 #include "crypto/crypto.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
+#include "cryptonote_basic/tx_extra.h"
+#include "cryptonote_config.h"
 #include "serialization/binary_archive.h"
 
 // ARCHIVAL_CREDIT_WIRE.md §3: empty is attestation_root(&[]), never null_hash.
@@ -95,4 +98,48 @@ TEST(archival_credit_wire, block_boost_archive_round_trips_attestation_root)
 
   ASSERT_EQ(bl2.timestamp, bl.timestamp);
   ASSERT_EQ(bl2.attestation_root, bl.attestation_root);
+}
+
+// Phase 1 wire: the coinbase tx_extra attestation carrier round-trips, and
+// sort_tx_extra handles the new tag (the pick<> exhaustiveness trap at
+// format_utils.cpp — a missing case makes every coinbase carrying it fail to sort).
+TEST(archival_credit_wire, tx_extra_attestation_round_trips_and_sorts)
+{
+  // 3 canonical headers (ARCHIVAL_ATTESTATION_HEADER_BYTES each), distinct per record.
+  std::string blob;
+  for (uint8_t i = 0; i < 3; ++i)
+    blob.append(config::ARCHIVAL_ATTESTATION_HEADER_BYTES, static_cast<char>(0x10 + i));
+  ASSERT_EQ(blob.size(), 3 * config::ARCHIVAL_ATTESTATION_HEADER_BYTES);
+
+  // A mixed extra (pubkey + attestation) so the sort has to order the new tag.
+  std::vector<uint8_t> extra;
+  crypto::public_key pk;
+  memset(&pk, 0x22, sizeof(pk));
+  ASSERT_TRUE(cryptonote::add_tx_pub_key_to_extra(extra, pk));
+  ASSERT_TRUE(cryptonote::add_archival_attestation_to_tx_extra(extra, blob));
+
+  // parse recognizes the new field.
+  std::vector<cryptonote::tx_extra_field> fields;
+  ASSERT_TRUE(cryptonote::parse_tx_extra(extra, fields));
+
+  // get round-trips the blob byte-identically.
+  std::string got;
+  ASSERT_TRUE(cryptonote::get_archival_attestation_from_extra(extra, got));
+  ASSERT_EQ(got, blob);
+
+  // sort must NOT hit "someone forgot to add a case", and the sorted extra still
+  // round-trips the blob.
+  std::vector<uint8_t> sorted;
+  ASSERT_TRUE(cryptonote::sort_tx_extra(extra, sorted));
+  std::string got_sorted;
+  ASSERT_TRUE(cryptonote::get_archival_attestation_from_extra(sorted, got_sorted));
+  ASSERT_EQ(got_sorted, blob);
+}
+
+// The header length matches the Rust canonical record; the record cap is pinned.
+TEST(archival_credit_wire, attestation_cap_constants)
+{
+  static_assert(config::ARCHIVAL_ATTESTATION_HEADER_BYTES == 49,
+                "must match shekyl-archival-retention ATTESTATION_HEADER_LEN");
+  ASSERT_EQ(config::ARCHIVAL_MAX_ATTESTATION_RECORDS, 256u);
 }

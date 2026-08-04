@@ -492,6 +492,7 @@ namespace cryptonote
     if (!pick<tx_extra_multisig_migration>(nar, tx_extra_fields, TX_EXTRA_TAG_MULTISIG_MIGRATION)) return false;
     if (!pick<tx_extra_pqc_view_tag_hints>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS)) return false;
     if (!pick<tx_extra_pqc_spend_auth_pubkeys>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS)) return false;
+    if (!pick<tx_extra_archival_attestation>(nar, tx_extra_fields, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION)) return false;
     if (!pick<tx_extra_padding>(nar, tx_extra_fields, TX_EXTRA_TAG_PADDING)) return false;
 
     // if not empty, someone added a new type and did not add a case above
@@ -612,6 +613,37 @@ namespace cryptonote
     std::string s = oss.str();
     tx_extra.reserve(s.size());
     std::copy(s.begin(), s.end(), std::back_inserter(tx_extra));
+    return true;
+  }
+  //---------------------------------------------------------------
+  bool add_archival_attestation_to_tx_extra(std::vector<uint8_t>& tx_extra, const std::string& attestation_blob)
+  {
+    // Serialize through the tx_extra variant so the tag + length-prefixed blob are
+    // emitted canonically (matching parse_tx_extra / sort_tx_extra). `attestation_blob`
+    // is the concatenation of k canonical ARCHIVAL_ATTESTATION_HEADER_BYTES-byte records
+    // (shekyl-archival-retention's AttestationHeader). The k ≤ MAX_ATTESTATION_RECORDS +
+    // multiple-of-header-length bounds are a consensus rule enforced at miner-tx
+    // admission, not here.
+    tx_extra_field field = tx_extra_archival_attestation{attestation_blob};
+    std::ostringstream oss;
+    binary_archive<true> ar(oss);
+    if (!::do_serialize(ar, field))
+      return false;
+    const std::string s = oss.str();
+    tx_extra.insert(tx_extra.end(), s.begin(), s.end());
+    return true;
+  }
+  //---------------------------------------------------------------
+  bool get_archival_attestation_from_extra(const std::vector<uint8_t>& tx_extra, std::string& attestation_blob)
+  {
+    std::vector<tx_extra_field> tx_extra_fields;
+    parse_tx_extra(tx_extra, tx_extra_fields);
+
+    tx_extra_archival_attestation field;
+    if (!find_tx_extra_field_by_type(tx_extra_fields, field))
+      return false;
+
+    attestation_blob = field.blob;
     return true;
   }
   //---------------------------------------------------------------

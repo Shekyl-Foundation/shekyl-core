@@ -355,6 +355,16 @@ namespace config
   constexpr size_t ARCHIVAL_MAX_PATH_LAYERS_PER_KIND = 64;
   constexpr size_t ARCHIVAL_MAX_BRANCH_SCALARS = 256;
   constexpr size_t ARCHIVAL_MAX_HOLDINGS_SHARDS = 4096;
+  // Archival credit-wire attestation (ARCHIVAL_CREDIT_WIRE.md §3): the coinbase
+  // tx_extra carries per-record kept headers (p_id·s·E·kind), each
+  // ATTESTATION_HEADER_BYTES; this length matches
+  // shekyl-archival-retention::attestation_wire (ATTESTATION_HEADER_LEN = 49).
+  // MAX_ATTESTATION_RECORDS is the genesis-frozen consensus cap on the attestation
+  // carrier — the coinbase has no other tx_extra size check on the connect/validate
+  // path — bounding per-block admission cost (one hybrid-signature verify per pass
+  // record) and the coinbase extra size (256 × 49 B ≈ 12.5 KiB).
+  constexpr size_t ARCHIVAL_ATTESTATION_HEADER_BYTES = 49;
+  constexpr size_t ARCHIVAL_MAX_ATTESTATION_RECORDS = 256;
   // Archival reward-emission vin transport cap (C-1; REWARD_EMISSION_VIN_PLAN.md
   // PR-E2 shim). The C++ side carries the Rust canonical encoding as an opaque
   // blob; the real structural bounds live in emission_wire.rs. This cap only
