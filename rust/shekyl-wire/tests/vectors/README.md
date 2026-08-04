@@ -13,13 +13,12 @@ is the genesis wire-format / hashing oracle. Two assertions ride these:
 > **Mining address:** `capture_coinbase.py` mines to a freshly-derived current-format
 > regtest address in `regtest_mining_recipients.json` (reproduce via `cargo test -p
 > shekyl-wire --test emit_regtest_addr -- --ignored --nocapture`), **not** the
-> `shekyl-dev` genesis treasury address. That treasury address is **pre-#327 stale
-> format** — a 65-byte classical segment (`version‖spend‖view`) where today's decoder
-> expects 81 (the 16-byte `ek_bind` tag from #327) — so `get_account_address_from_str`
-> rejects it and `generateblocks` cannot mine to it. Genesis itself is unaffected:
-> `GENESIS_TX` was baked from those addresses when they were current, and the daemon
-> parses the pre-baked coinbase, not the address string. Regenerating the canonical
-> genesis recipients is a separate, genesis-scoped concern.
+> genesis treasury recipients. Those now live in-repo at
+> `config/genesis_recipients.*.json` (current post-#327 format, built by `geblock`),
+> but the mining target stays a local fixture on purpose: what gets mined to is a
+> vector concern, not the treasury allocation. Note h0 **is** the mainnet genesis
+> (regtest shares `GENESIS_TX`), so any genesis re-pin requires re-capturing these
+> vectors — see `shekyl-dev/docs/GENESIS_WALKTHROUGH.md` §5.
 >
 > **Empty `attestation_root`:** every captured height has no pass records and must
 > carry `empty_attestation_root()` (not `null_hash`). `coinbase_hash.rs` asserts this
