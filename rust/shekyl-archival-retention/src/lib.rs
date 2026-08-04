@@ -27,6 +27,7 @@
 
 pub mod admission;
 pub mod attestation;
+pub mod attestation_wire;
 pub mod bond_connect;
 pub mod bond_ct_balance;
 pub mod bond_duration;
@@ -59,6 +60,12 @@ pub use admission::{
     admission_code_cstr, admission_code_static_str, check_admission, check_admission_of,
     credited_work_at_admission, parent_state_shards_from_gather, AdmissionError, AdmissionShard,
     ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
+};
+pub use attestation::{settle_epoch, AttestationKind, EpochSettlement};
+pub use attestation_wire::{
+    attestation_nonce, attestation_root, verify_pass_countersignature, AttestationHeader,
+    AttestationHeaderError, ATTESTATION_HEADER_LEN, ATTESTATION_NONCE_CUSTOMIZATION,
+    ATTESTATION_ROOT_CUSTOMIZATION,
 };
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,
