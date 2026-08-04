@@ -1623,6 +1623,21 @@ namespace cryptonote
     bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b) const { uint64_t median_ts; return check_block_timestamp(timestamps, b, median_ts); }
 
     /**
+     * @brief checks a block's attestation_root against the credit-wire slice-1 rule
+     *
+     * Until the credit-wire cutover activates attestation aggregation, the only
+     * valid attestation_root is the empty-set root — `attestation_root(&[])`,
+     * never `null_hash`, never arbitrary bytes (ARCHIVAL_CREDIT_WIRE.md §3).
+     * The rule is stateless in this slice; the cutover slice replaces it with
+     * recompute-and-compare over the block's pass records.
+     *
+     * @param b the block to be checked
+     *
+     * @return true if the block's attestation_root is valid, otherwise false
+     */
+    static bool check_attestation_root(const block& b);
+
+    /**
      * @brief finish an alternate chain's timestamp window from the main chain
      *
      * for an alternate chain, get the timestamps from the main chain to complete

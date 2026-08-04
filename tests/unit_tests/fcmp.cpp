@@ -365,35 +365,8 @@ TEST(fcmp, curve_tree_root_in_block_header)
   ASSERT_EQ(hdr2.curve_tree_root, test_root);
 }
 
-// ARCHIVAL_CREDIT_WIRE.md §3: empty is attestation_root(&[]), never null_hash.
-TEST(fcmp, attestation_root_defaults_to_empty_set_root)
-{
-  cryptonote::block_header hdr;
-  ASSERT_EQ(hdr.attestation_root, cryptonote::empty_attestation_root());
-  ASSERT_NE(hdr.attestation_root, crypto::null_hash);
-
-  crypto::hash test_root;
-  memset(&test_root, 0xAD, sizeof(test_root));
-  hdr.attestation_root = test_root;
-
-  std::string blob;
-  {
-    std::ostringstream oss;
-    binary_archive<true> ar(oss);
-    ASSERT_TRUE(do_serialize(ar, hdr));
-    blob = oss.str();
-  }
-
-  cryptonote::block_header hdr2;
-  {
-    binary_archive<false> ar({reinterpret_cast<const uint8_t*>(blob.data()), blob.size()});
-    ASSERT_TRUE(do_serialize(ar, hdr2));
-  }
-  ASSERT_EQ(hdr2.attestation_root, test_root);
-  // Final field on the wire: last 32 bytes of the serialized header.
-  ASSERT_GE(blob.size(), sizeof(crypto::hash));
-  ASSERT_EQ(0, memcmp(blob.data() + blob.size() - sizeof(crypto::hash), &test_root, sizeof(test_root)));
-}
+// (The attestation_root default/serialization test lives in
+// archival_credit_wire.cpp — it is credit-wire, not FCMP, coverage.)
 
 TEST(fcmp, fcmp_pp_proof_empty_rejected_by_verifier)
 {

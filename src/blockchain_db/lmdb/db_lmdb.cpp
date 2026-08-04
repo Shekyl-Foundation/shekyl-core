@@ -102,11 +102,11 @@ using namespace crypto;
 // Nodes with pre-V8 data dirs must delete and resync.
 // V9: block header gains `attestation_root` (ARCHIVAL_CREDIT_WIRE.md §3), so
 // the persisted block blob in `blocks` grows 32 bytes; a pre-V9 blob has no
-// attestation_root and the V9 parser cannot read it. Delete and resync. NOTE:
-// this guard covers the LMDB store only. The block also has a boost serializer
-// (cryptonote_boost_serialization.h, the alt-block / txpool caches) with no
-// version gate, so a stale `poolstate.bin` / alt-block cache from a pre-V9 build
-// misparses silently — clear those alongside the data dir.
+// attestation_root and the V9 parser cannot read it. Delete and resync. The
+// block's boost serializer (cryptonote_boost_serialization.h, the alt-block /
+// txpool caches and blocks.dat exports) enforces the same boundary via
+// BOOST_CLASS_VERSION(cryptonote::block, 1): a pre-V9 archive is refused
+// loudly, not misparsed.
 #define VERSION 9
 
 namespace
@@ -9628,12 +9628,8 @@ void BlockchainLMDB::migrate(const uint32_t oldversion)
   if (oldversion < VERSION)
   {
     // Message tracks VERSION so the next bump cannot leave a stale "pre-VN".
-#define SHEKYL_DB_VERSION_STRINGIFY_(x) #x
-#define SHEKYL_DB_VERSION_STRINGIFY(x) SHEKYL_DB_VERSION_STRINGIFY_(x)
-    throw0(DB_ERROR("Database schema is pre-V" SHEKYL_DB_VERSION_STRINGIFY(VERSION)
-      "; no pre-genesis migration path exists. Delete the data directory and resync."));
-#undef SHEKYL_DB_VERSION_STRINGIFY
-#undef SHEKYL_DB_VERSION_STRINGIFY_
+    throw0(DB_ERROR(("Database schema is pre-V" + std::to_string(VERSION)
+      + "; no pre-genesis migration path exists. Delete the data directory and resync.").c_str()));
   }
 }
 

@@ -14,8 +14,8 @@
 //!
 //! Regenerated for the credit-wire cutover (2026-08-04): the `block_header` gained
 //! `attestation_root`, so all three heights were recaptured. h1/h2 are mined to a
-//! freshly derived current-format regtest address (the genesis treasury address is
-//! pre-#327 stale format) — see `coinbase_hash.rs` for the full rationale.
+//! freshly derived current-format regtest fixture address, not the genesis
+//! treasury — see `coinbase_hash.rs` for the full rationale.
 
 use shekyl_wire::Block;
 

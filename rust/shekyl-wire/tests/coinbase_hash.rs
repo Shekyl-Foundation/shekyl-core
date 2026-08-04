@@ -26,17 +26,10 @@
 //! a hand-copied pin — so C++ `empty_attestation_root()` / constructor default and
 //! Rust agree without a third hex constant.
 //!
-//! Mining address note: `capture_coinbase.py` mines to a **freshly derived
-//! current-format** regtest address (`vectors/regtest_mining_recipients.json`,
-//! reproducible via `cargo test -p shekyl-wire --test emit_regtest_addr --
-//! --ignored --nocapture`), NOT the genesis treasury address in `shekyl-dev`.
-//! The latter is a **pre-#327 stale format** — its classical segment is 65 bytes
-//! (`version‖spend‖view`) where the current decoder expects 81 (the 16-byte
-//! `ek_bind` tag from #327), so `get_account_address_from_str` rejects it and
-//! `generateblocks` could not mine. (The genesis block itself is unaffected:
-//! `GENESIS_TX` was baked from those addresses when they were current, and the
-//! daemon parses the pre-baked coinbase, not the address.) Regenerating the
-//! canonical genesis recipients is a separate, genesis-scoped concern.
+//! Mining address note: `capture_coinbase.py` mines to a freshly derived
+//! current-format regtest fixture address (`vectors/regtest_mining_recipients.json`),
+//! NOT the genesis treasury — a vector concern, not the treasury allocation; see
+//! `vectors/README.md` for the full rationale.
 
 use shekyl_archival_retention::empty_attestation_root;
 use shekyl_wire::Block;

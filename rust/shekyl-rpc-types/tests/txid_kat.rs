@@ -41,7 +41,7 @@ const ORACLE_CORPUS: [(&[u8], &str); 2] = [
     ),
     (
         include_bytes!("vectors/regtest_coinbase_h1.tx"),
-        "6eb4e78a369270447c1a4416bcebc0fd7bf1b9b8de1976962ad87313c8adc52e",
+        "0486ab93c946fb80c81e3e47a5d62409384eb008e59dd15ba02583de753c1da6",
     ),
 ];
 

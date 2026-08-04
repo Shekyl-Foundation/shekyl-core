@@ -148,6 +148,22 @@ bool gen_block_invalid_prev_id::check_block_verification_context(const cryptonot
     return !bvc.m_marked_as_orphaned && bvc.m_added_to_main_chain && !bvc.m_verifivation_failed;
 }
 
+bool gen_block_invalid_attestation_root::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  // ARCHIVAL_CREDIT_WIRE.md §3: null_hash is the banned dual-empty; slice-1
+  // consensus accepts only empty_attestation_root() until the cutover.
+  block blk_1;
+  generator.construct_block_manually(blk_1, blk_0, miner_account);
+  blk_1.attestation_root = crypto::null_hash;
+  events.push_back(blk_1);
+
+  DO_CALLBACK(events, "check_block_purged");
+
+  return true;
+}
+
 bool gen_block_no_miner_tx::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
