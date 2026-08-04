@@ -169,26 +169,119 @@ pub struct LinkageSummary {
 }
 
 /// Draw one inter-emission interval under `shape`.
-fn interval<R: RelayRng + ?Sized>(shape: CadenceShape, rng: &mut R, mean_ms: u64) -> Millis {
+///
+/// The geometric table is built **once per run** and passed in: constructing
+/// it per draw is `O(mean)` each time and dominated the instrument's runtime.
+///
+/// **The memoryless arm is shifted by one grid step.** An unshifted geometric
+/// has a ~2 % atom at zero, which would let that arm emit twice at the same
+/// instant — something the bounded (`min 10 s`) and metronome arms cannot do.
+/// That is an asymmetry *between the arms*, not a property of memorylessness,
+/// and it would show up as a difference the shape question would then have to
+/// explain. The table is built for `mean − 1` so the shift leaves the mean
+/// where it belongs, keeping the arms matched in rate and differing only in
+/// shape — which is the whole point of the comparison.
+fn interval<R: RelayRng + ?Sized>(
+    shape: CadenceShape,
+    rng: &mut R,
+    mean_ms: u64,
+    table: Option<&crate::geometric::GeometricTable>,
+) -> Millis {
     match shape {
         CadenceShape::Metronome => mean_ms,
         // Production path: the instrument must not re-derive the law it is
         // grading, or it measures its own copy (the shim-oracle failure).
         CadenceShape::BoundedUniform => NoiseCadence::inherited().next_send(0, rng),
         CadenceShape::Memoryless => {
-            // Geometric on a 250 ms grid keeps the table small while leaving
-            // the residual elapsed-independent, which is the property under
-            // test. Mean matched to `mean_ms`.
-            const GRID_MS: u64 = 250;
-            let table = crate::geometric::GeometricTable::new(
-                u32::try_from(mean_ms / GRID_MS).unwrap_or(1).max(1),
-            );
-            table.draw(rng) * GRID_MS
+            let t = table.expect("memoryless arm requires its table");
+            (t.draw(rng) + 1) * MEMORYLESS_GRID_MS
         }
     }
 }
 
-/// Can an observer re-identify `streams` covert channels across a blackout?
+/// Grid for the memoryless arm. Fine enough that discretisation does not
+/// blunt the residual, coarse enough to keep the table small.
+const MEMORYLESS_GRID_MS: u64 = 250;
+
+/// Maximum-weight assignment, so the "strong observer" arm actually computes
+/// the best global matching rather than a greedy approximation.
+///
+/// **This is not a refinement, it is the difference between grading the
+/// mechanism and grading the matcher.** A greedy best-first assignment can
+/// only *understate* matchability — it commits an early pair before seeing a
+/// later, better claim on the same emission — and understating is exactly how
+/// §56.2 reported a null that was a property of its observer. An instrument
+/// whose docstring claims the strongest admissible observer has to compute
+/// one.
+///
+/// `O(n³)` Kuhn–Munkres with potentials, minimising `-score`. Verified
+/// against brute force at `n = 5` in this module's tests, because an
+/// *incorrectly* optimal matcher is worse than an honestly greedy one.
+fn max_weight_assignment(score: &[Vec<f64>]) -> Vec<usize> {
+    let n = score.len();
+    let inf = f64::INFINITY;
+    let mut u = vec![0.0_f64; n + 1];
+    let mut v = vec![0.0_f64; n + 1];
+    let mut p = vec![0_usize; n + 1];
+    let mut way = vec![0_usize; n + 1];
+
+    for i in 1..=n {
+        p[0] = i;
+        let mut j0 = 0_usize;
+        let mut minv = vec![inf; n + 1];
+        let mut used = vec![false; n + 1];
+        loop {
+            used[j0] = true;
+            let i0 = p[j0];
+            let mut delta = inf;
+            let mut j1 = 0_usize;
+            for j in 1..=n {
+                if used[j] {
+                    continue;
+                }
+                let cur = -score[i0 - 1][j - 1] - u[i0] - v[j];
+                if cur < minv[j] {
+                    minv[j] = cur;
+                    way[j] = j0;
+                }
+                if minv[j] < delta {
+                    delta = minv[j];
+                    j1 = j;
+                }
+            }
+            for j in 0..=n {
+                if used[j] {
+                    u[p[j]] += delta;
+                    v[j] -= delta;
+                } else {
+                    minv[j] -= delta;
+                }
+            }
+            j0 = j1;
+            if p[j0] == 0 {
+                break;
+            }
+        }
+        loop {
+            let j1 = way[j0];
+            p[j0] = p[j1];
+            j0 = j1;
+            if j0 == 0 {
+                break;
+            }
+        }
+    }
+
+    let mut assign = vec![0_usize; n];
+    for j in 1..=n {
+        if p[j] != 0 {
+            assign[p[j] - 1] = j - 1;
+        }
+    }
+    assign
+}
+
+/// Can an observer re-identify/// Can an observer re-identify `streams` covert channels across a blackout?
 ///
 /// Each trial: run every stream to steady state, blackout for `blackout_ms`,
 /// then record each stream's **first emission after the blackout**. The
@@ -222,63 +315,84 @@ pub fn simulate_cadence_linkage<R: RelayRng + ?Sized>(
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let k_max = ((blackout_ms / mean_ms) as u32 + 8).max(4);
 
+    // Built once, not per draw.
+    let table = (shape == CadenceShape::Memoryless).then(|| {
+        crate::geometric::GeometricTable::new(
+            u32::try_from(mean_ms / MEMORYLESS_GRID_MS)
+                .unwrap_or(2)
+                .saturating_sub(1)
+                .max(1),
+        )
+    });
+
     let mut correct = 0_usize;
     let mut total = 0_usize;
 
     for _ in 0..trials {
-        // Warm each stream to a steady state, staggered so phases differ —
+        // Warm each stream to steady state, staggered so phases differ —
         // otherwise every stream shares one phase and the test is vacuous by
         // construction rather than by the law.
-        let mut last: Vec<Millis> = Vec::with_capacity(streams);
-        for s in 0..streams {
-            let mut t = (s as u64 * mean_ms) / streams as u64; // stagger
-            for _ in 0..8 {
-                t += interval(shape, rng, mean_ms);
-            }
-            last.push(t);
-        }
-        let blackout_end = last.iter().copied().max().unwrap_or(0) + blackout_ms;
-
-        // First emission after the blackout, per stream.
-        let mut first_after: Vec<Millis> = Vec::with_capacity(streams);
-        for &l in &last {
-            let mut t = l;
-            while t <= blackout_end {
-                t += interval(shape, rng, mean_ms);
-            }
-            first_after.push(t);
-        }
-
-        // Score every (pre, post) pair, then assign globally best-first. The
-        // per-`i` greedy the first version used is itself an observer
-        // weakness — it commits stream 0's match before seeing stream 1's
-        // better claim on the same emission.
-        #[allow(clippy::cast_precision_loss)]
-        let score = |i: usize, j: usize| -> f64 {
-            let delta = first_after[j].saturating_sub(last[i]) as f64;
-            match matcher {
-                MatcherStrength::NearestPredicted => -(delta - mean_ms as f64).abs(),
-                MatcherStrength::MarginalizedOverK => {
-                    log_likelihood(shape, delta, mean_ms as f64, k_max)
-                }
-            }
-        };
-        let mut pairs: Vec<(usize, usize)> = (0..streams)
-            .flat_map(|i| (0..streams).map(move |j| (i, j)))
+        let mut t: Vec<Millis> = (0..streams)
+            .map(|s| (s as u64 * mean_ms) / streams as u64)
             .collect();
-        pairs.sort_by(|&(ai, aj), &(bi, bj)| {
-            score(bi, bj)
-                .partial_cmp(&score(ai, aj))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let mut pre_taken = vec![false; streams];
-        let mut post_taken = vec![false; streams];
-        for (i, j) in pairs {
-            if pre_taken[i] || post_taken[j] {
-                continue;
+        for slot in &mut t {
+            for _ in 0..8 {
+                *slot += interval(shape, rng, mean_ms, table.as_ref());
             }
-            pre_taken[i] = true;
-            post_taken[j] = true;
+        }
+
+        // **One common blackout start for every stream.** Deriving it from
+        // `max(last)` and then treating each stream's warm-up endpoint as its
+        // last pre-blackout emission was wrong: the earlier streams go on
+        // emitting up to the blackout, and the observer would have seen those.
+        // Recording a stale `last` handed the matcher a residual no observer
+        // could hold, distorting exactly the quantity under measurement.
+        let blackout_start = t.iter().copied().max().unwrap_or(0) + mean_ms;
+        let blackout_end = blackout_start + blackout_ms;
+
+        let mut last: Vec<Millis> = Vec::with_capacity(streams);
+        let mut first_after: Vec<Millis> = Vec::with_capacity(streams);
+        for slot in &mut t {
+            // Advance to the true last emission at or before the blackout.
+            let mut prev = *slot;
+            while *slot <= blackout_start {
+                prev = *slot;
+                *slot += interval(shape, rng, mean_ms, table.as_ref());
+            }
+            last.push(prev);
+            // Then to the first emission after the blackout ends.
+            while *slot <= blackout_end {
+                *slot += interval(shape, rng, mean_ms, table.as_ref());
+            }
+            first_after.push(*slot);
+        }
+
+        // Score every (pre, post) pair ONCE into a matrix — recomputing inside
+        // a comparator called O(n² log n) times dominated the runtime — then
+        // assign optimally.
+        #[allow(clippy::cast_precision_loss)]
+        let matrix: Vec<Vec<f64>> = (0..streams)
+            .map(|i| {
+                (0..streams)
+                    .map(|j| {
+                        let delta = first_after[j].saturating_sub(last[i]) as f64;
+                        match matcher {
+                            MatcherStrength::NearestPredicted => -(delta - mean_ms as f64).abs(),
+                            MatcherStrength::MarginalizedOverK => {
+                                let l = log_likelihood(shape, delta, mean_ms as f64, k_max);
+                                if l.is_finite() {
+                                    l
+                                } else {
+                                    -1.0e18
+                                }
+                            }
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+
+        for (i, j) in max_weight_assignment(&matrix).into_iter().enumerate() {
             if i == j {
                 correct += 1;
             }
@@ -294,5 +408,84 @@ pub fn simulate_cadence_linkage<R: RelayRng + ?Sized>(
         match_rate,
         chance,
         advantage: match_rate - chance,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rng::SplitMix64;
+
+    /// The assignment really is optimal — checked against brute force.
+    ///
+    /// **An incorrectly "optimal" matcher is worse than an honestly greedy
+    /// one**: it would report a number nobody could reproduce and carry the
+    /// authority of the word. So the algorithm is verified against an
+    /// independent exhaustive oracle rather than trusted for being standard.
+    #[test]
+    fn the_assignment_matches_brute_force_optimum() {
+        fn brute(score: &[Vec<f64>]) -> f64 {
+            let n = score.len();
+            let mut idx: Vec<usize> = (0..n).collect();
+            let mut best = f64::NEG_INFINITY;
+            // Heap's algorithm over all n! permutations.
+            fn go(k: usize, idx: &mut Vec<usize>, score: &[Vec<f64>], best: &mut f64) {
+                if k == 1 {
+                    let s: f64 = idx.iter().enumerate().map(|(i, &j)| score[i][j]).sum();
+                    if s > *best {
+                        *best = s;
+                    }
+                    return;
+                }
+                for i in 0..k {
+                    go(k - 1, idx, score, best);
+                    if k.is_multiple_of(2) {
+                        idx.swap(i, k - 1);
+                    } else {
+                        idx.swap(0, k - 1);
+                    }
+                }
+            }
+            go(n, &mut idx, score, &mut best);
+            best
+        }
+
+        let mut rng = SplitMix64::new(0xA55);
+        for _ in 0..40 {
+            const N: usize = 5;
+            #[allow(clippy::cast_precision_loss)]
+            let m: Vec<Vec<f64>> = (0..N)
+                .map(|_| {
+                    (0..N)
+                        .map(|_| (rng.next_u64() % 1_000) as f64 / 10.0)
+                        .collect()
+                })
+                .collect();
+            let got: f64 = max_weight_assignment(&m)
+                .into_iter()
+                .enumerate()
+                .map(|(i, j)| m[i][j])
+                .sum();
+            let want = brute(&m);
+            assert!(
+                (got - want).abs() < 1e-9,
+                "assignment {got} is not the optimum {want}"
+            );
+        }
+    }
+
+    /// The memoryless arm never emits twice at one instant.
+    ///
+    /// An unshifted geometric has a ~2 % atom at zero, which the bounded and
+    /// metronome arms cannot produce. Left in, that is an asymmetry *between
+    /// the arms* which the shape comparison would then have to explain away.
+    #[test]
+    fn the_memoryless_arm_draws_no_zero_interval() {
+        let table = crate::geometric::GeometricTable::new(49);
+        let mut rng = SplitMix64::new(0x2E80);
+        for _ in 0..200_000 {
+            let d = interval(CadenceShape::Memoryless, &mut rng, 12_500, Some(&table));
+            assert!(d > 0, "zero-length interval: two emissions at one instant");
+        }
     }
 }

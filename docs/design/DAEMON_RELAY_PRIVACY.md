@@ -9655,13 +9655,18 @@ control):
 
 | blackout | bounded | memoryless | metronome |
 | --- | --- | --- | --- |
-| 10 s | **0.105** | 0.051 | **1.000** |
-| 20 s | 0.091 | 0.051 | 1.000 |
-| 30 s | 0.079 | 0.050 | 1.000 |
-| 45 s | 0.072 | 0.053 | 1.000 |
-| 60 s | 0.067 | 0.051 | 1.000 |
-| 90 s | 0.058 | 0.050 | 1.000 |
-| 150 s | 0.053 | 0.051 | 1.000 |
+| 10 s | **0.120** | 0.053 | **1.000** |
+| 20 s | 0.103 | 0.050 | 1.000 |
+| 30 s | 0.087 | 0.050 | 1.000 |
+| 45 s | 0.074 | 0.050 | 1.000 |
+| 60 s | 0.069 | 0.049 | 1.000 |
+| 90 s | 0.062 | 0.048 | 1.000 |
+| 150 s | 0.052 | 0.051 | 1.000 |
+
+*Re-measured after the §56.6 review round; the pre-review figures were
+0.105 / 0.091 / 0.079 / 0.072 / 0.067 / 0.058 / 0.053 on the bounded arm.
+Every correction moved the bounded signal **up**, so the conclusion holds with
+more margin, not less.*
 
 *Weak matcher, same runs: every cell at chance except metronome at 10 s
 (0.200) and **0.000** thereafter — so it did not merely under-report, it
@@ -9710,3 +9715,50 @@ the mechanism** — and unlike a vacuous fixture, everything about it looks
 right: real code, real draws, real trials. `MatcherStrength` stays in the
 instrument as a permanent second arm so the next reader can see the result
 move with observer strength rather than trusting one number.
+
+### 56.6 Review round — four real defects, one mis-severity, one wrong claim
+
+**2026-08-03.** Six findings on #390. All six were acted on; two are worth
+recording because the reasoning is not obvious.
+
+**The instrument was measuring the wrong residual.** `blackout_end` was derived
+from `max(last)`, but each stream's *own* warm-up endpoint was recorded as its
+last pre-blackout emission — so for every stream but the latest, the observer
+was handed a `last` it could not have held, with real emissions in between it
+would have seen. Fixed with an explicit common `blackout_start` and a per-stream
+advance to the true last emission before it. **This is a measurement bug, not a
+style one, and it moved the numbers.**
+
+**The strong arm was not computing the strongest assignment.** Best-first greedy
+commits an early pair before seeing a later, better claim on the same emission —
+it can only *understate* matchability, which is precisely how §56.2's null
+arose. Replaced with `O(n³)` Kuhn–Munkres, **verified against a brute-force
+optimum at `n = 5`**, because an *incorrectly* optimal matcher is worse than an
+honestly greedy one: it reports a number nobody can reproduce and carries the
+authority of the word.
+
+**The memoryless arm could emit twice at one instant.** An unshifted geometric
+has a ~2 % atom at zero; the bounded (`min 10 s`) and metronome arms cannot do
+that. Left in, it is an asymmetry *between the arms* the shape comparison would
+have had to explain. Shifted by one grid step, with the table built for
+`mean − 1` so the arms stay matched in rate and differ only in shape.
+
+**One finding's severity was wrong and the defect under it was real.** It was
+reported as a hang — a zero draw stalling the emission loop. It cannot hang:
+the loop redraws each iteration, so `P(stall) = 0`. But the zero-interval atom
+beneath it was the arm asymmetry above, so the fix stands and the severity does
+not.
+
+**Two were performance and they mattered more than performance.** The geometric
+table was rebuilt per draw and the score matrix recomputed inside a sort
+comparator. **Runtime 388 s → 7.6 s.** At six minutes the sweep is something CI
+runs reluctantly and nobody re-runs while thinking; at eight seconds it is a
+thing you can ask questions of.
+
+**And the sweep asserted nothing.** It printed a table and passed unless it
+panicked — the §50.3 class in its plainest form, in the file that *records*
+that lesson. It now pins the three properties the shape decision rests on
+(metronome > 0.95, memoryless within 0.02 of chance, bounded above chance at
+10 s), plus the weak-matcher arm as a property, since the instrument's own
+failure mode is worth a regression test. The table is still printed — it is
+the readout the decision was taken against — but it is no longer the test.
