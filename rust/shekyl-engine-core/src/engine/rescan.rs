@@ -499,6 +499,32 @@ mod start_rescan_integration_tests {
         500
     }
 
+    /// Block until the single-flight slot is free, bounded so a regression
+    /// fails the suite instead of hanging it.
+    ///
+    /// `RefreshHandle::join` resolving is **not** the same event as the slot
+    /// being released: the producer fires the completion oneshot from inside
+    /// `run_refresh_task`, and its `SlotGuard` drops later, as that function
+    /// returns. Any test that starts a second scan after joining a first has
+    /// to wait for the guard, or it races the task's own teardown — the same
+    /// discipline the `start_refresh` fixtures follow.
+    async fn await_slot_release<D>(arc: &Arc<RwLock<Engine<SoloSigner, D>>>)
+    where
+        D: crate::engine::traits::DaemonEngine,
+    {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            tokio::task::yield_now().await;
+            if !arc.read().await.refresh_slot.is_claimed() {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() <= deadline,
+                "single-flight slot still claimed 10s after the producer completed"
+            );
+        }
+    }
+
     /// The daemon preflight refuses before anything destructive runs: an
     /// unreachable daemon leaves the wallet exactly as it was, and releases
     /// the single-flight slot for the retry.
@@ -615,6 +641,7 @@ mod start_rescan_integration_tests {
             .join()
             .await
             .expect("initial refresh completes over the synthetic chain");
+        await_slot_release(&arc).await;
         let synced_before = arc.read().await.ledger.synced_height();
         assert_eq!(synced_before, 5, "synthetic chain syncs to its tip");
 
@@ -695,19 +722,9 @@ mod start_rescan_integration_tests {
             "rescan must lose the shared slot to a running refresh, got {rescan:?}"
         );
 
+        // Cleanup: drop the handle so the producer wakes on cancel and frees
+        // the slot before the test ends.
         drop(refresh);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            tokio::task::yield_now().await;
-            let g = arc.read().await;
-            if !g.refresh_slot.is_claimed() {
-                break;
-            }
-            drop(g);
-            assert!(
-                std::time::Instant::now() <= deadline,
-                "producer task did not exit within 5s of handle drop"
-            );
-        }
+        await_slot_release(&arc).await;
     }
 }
