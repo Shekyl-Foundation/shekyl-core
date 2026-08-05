@@ -5882,6 +5882,12 @@ leave:
 #endif
     {
       // If this tx came from the mempool and is FCMP++, the proof was already
+      // LOAD-BEARING FOR THE EMBARGO, not only for throughput: `hop` is
+      // defined (DAEMON_RELAY_PRIVACY.md §71) as receive-to-forward including
+      // verification, and only the POOL-ADMISSION path pays it. Removing this
+      // skip would put a full membership verification inside the block path
+      // too and change what `hop` measures -- re-derive the embargo (§72.1)
+      // before touching it.
       // verified during pool admission.  Skip the expensive shekyl_fcmp_verify
       // FFI call but still run all structural checks (referenceBlock, depth,
       // key images, PQC auth).

@@ -11834,6 +11834,15 @@ not in the bench as a dimension.** Benching it would bake in an assumed depth
 and report the product as a measurement. A quiet two-node rig sees depth 1 and
 would silently report the floor.
 
+**And the multiplier is not `N`.** Every transaction in the batch waits for the
+verifications *ahead of it*, so the batch's transactions pay `1, 2, … N` — the
+mean position, **`(N+1)/2` under uniform arrival**, not `N` and not `1`.
+Written out because a bare *"multiplier"* invites both misreadings: `N`
+over-provisions, `1` under-provisions, and only the second is in the
+privacy-losing direction. `N` is the right figure for the **worst-placed**
+transaction, which is a different question from the distribution's centre and
+should be named as such wherever it is used.
+
 ### 72.5 Preconditions recorded before the number, because they decide it
 
 The policy is *"better to overestimate"* realised as a high quantile, and
@@ -11857,6 +11866,20 @@ unreproducible and an artifact indistinguishable from a property:
   Pi reads *slower*, which is the safe direction and therefore the dangerous
   one: it makes an artifact look like a property. **Throttle state must be
   reported beside the result, or the result states that it could not be.**
+- **Storage — and it is not what was assumed.** `skl-pi` has **no NVMe**
+  (`/dev/nvme*` absent). Root is the **SD card** (`/dev/mmcblk0p2`). The
+  attached USB device is a **WD easystore 2648 / WD10SDRW-11A0XS0, 931 GB,
+  `rotational = 1`** — a *spinning* 2.5" disk, not solid state — and it is
+  **unmounted**, formatted **exFAT**. So the alternative to SD is *worse* for
+  this workload, not better: a rotational disk on a filesystem without the
+  POSIX semantics LMDB expects.
+  **Scope, so this is not over-applied:** the *verification floor* is pure
+  compute and touches no storage, so the immediate bench is unaffected. But
+  pool insertion (`add_new_tx` → `m_mempool.add_tx`) happens **before**
+  `relay_transactions`, so it *is* inside `hop` by §71's definition — which
+  means the eventual end-to-end forward-to-forward measurement on this box
+  would be measuring SD-card write behaviour as part of `hop`, and would
+  otherwise surface as unexplained tail dispersion.
 - **Toolchain, because it is codegen and codegen is the number.** The Pi now
   carries `rustc 1.97.1` and `gcc 15.2.0`; `cmake` and `clang` are absent. Our
   lint gate pins `+1.94.0`, so **the two arms must be built on the same
