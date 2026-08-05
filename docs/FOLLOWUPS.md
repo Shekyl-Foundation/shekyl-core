@@ -1236,6 +1236,25 @@ sustainability is unaffected by the recalibration.
   deliberately separate (opposed threat models). No shared redb-helpers
   crate. **Target: V3.0** (with DRS-E3 / curve client).
 
+- **`BlockchainLMDB::reset()` drops an INCOMPLETE table set — stale consensus
+  state after an in-place wipe (added 2026-08-04, from credit-wire PR-B2 3dee50259).**
+  `reset()` (`src/blockchain_db/lmdb/db_lmdb.cpp`), reached by
+  `Blockchain::reset_and_set_genesis_block`, does an IN-PLACE wipe (drops tables,
+  keeps the env) but its `mdb_drop` list enumerates only the core block/tx/output
+  tables. It omits **every Shekyl-added table**: the whole curve-tree family
+  (`m_curve_tree_roots`/`leaves`/`layers`/`meta`/`checkpoints`, `m_output_to_leaf`,
+  `m_leaf_to_output`, the pending-tree tables) and the archival family
+  (`m_archival_bond`/`segment`/`budget`). Because a re-added block re-uses heights
+  and hashes, a surviving row at a re-used key is read as *that* block's state —
+  an **actively wrong `curve_tree_root` (consensus)** and wrong archival state, not
+  merely an orphan. PR-B2 fixed only the two credit-wire witness tables it owned
+  (`m_archival_attestation_witness` + `m_archival_alt_attestation_witness`) and
+  left an in-code note at the `reset()` site. Closing it needs per-table reset
+  semantics (which tables blanket-drop safely vs. need re-seeding), and the fix
+  should confirm which production/CLI flows actually reach `reset_and_set_genesis_block`
+  with a non-empty chain. Its own unit. **Target: V3.0** (pre-genesis:
+  consensus-state correctness on chain reset).
+
 - **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with
   reopen (d).** The sliding-window m-of-n itself is **BUILT** (PR #368,
   `shekyl-archival-retention/src/failure_window.rs`; `FAILURE_WINDOW_M/N`
