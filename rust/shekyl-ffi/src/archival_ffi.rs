@@ -5433,6 +5433,22 @@ mod attestation_verify_tests {
         );
     }
 
+    /// The reject half of interim-equivalence. The interim `check_attestation_root` rejects a block
+    /// whose mined `attestation_root != empty_attestation_root()`. Over the empty (pre-cutover)
+    /// block shape the new verify recomputes `attestation_root(&[]) == empty_attestation_root()`
+    /// (identical by construction) and must reject a non-empty mined root the same way. With the
+    /// accept case above, this reproduces the interim EXACTLY on the empty shape — the claim that
+    /// licenses deleting it (distinct from the populated KAT that licenses the verify).
+    #[test]
+    fn empty_block_nonempty_root_is_root_mismatch() {
+        let mut wrong = empty_attestation_root();
+        wrong[0] ^= 0x01;
+        assert_eq!(
+            call(wrong, 1, &[], &[], &[]),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH
+        );
+    }
+
     #[test]
     fn wrong_mined_root_is_root_mismatch() {
         let (pubkey, p_id, sk) = real_p();
