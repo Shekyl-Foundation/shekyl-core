@@ -72,6 +72,14 @@ namespace levin
   };
 #pragma pack(pop)
 
+  // The on-wire header size. Every other Levin wire constant is a literal a
+  // grep gate can compare against the Rust port
+  // (rust/shekyl-levin/src/header.rs); this one is only ever `sizeof`, so
+  // without a literal to anchor, a change to the struct above would drift
+  // silently past `scripts/ci/check_levin_constant_parity.sh`. Do not delete
+  // or relax: the gate reads this number.
+  static_assert(sizeof(bucket_head2) == 33, "Levin bucket header must stay 33 bytes on the wire");
+
 
 constexpr const std::chrono::milliseconds LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED{0};
 #define LEVIN_INITIAL_MAX_PACKET_SIZE  256*1024      // 256 KiB before handshake

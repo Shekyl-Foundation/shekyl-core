@@ -75,6 +75,13 @@ members = [
     # See docs/design/DAEMON_RELAY_PRIVACY.md §18.
     "shekyl-relay",
 
+    # Levin p2p framing layer (bucket header, fragments, noise, zstd flag
+    # path) — the byte-exact Rust skeleton of docs/LEVIN_PROTOCOL.md, KAT'd
+    # against the C++ epee::levin oracle. Framing only: no portable_storage,
+    # no sockets, no daemon wiring; inert until the scheduled p2p cutover
+    # (IMPLEMENTATION_INDEX.md LV row).
+    "shekyl-levin",
+
     "shekyl-archival-retention",
     "shekyl-engine-rpc",
 

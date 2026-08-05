@@ -59,6 +59,35 @@
 
 ### Added
 
+- **`shekyl-levin` — Rust Levin framing crate (LV-1), inert until wired.**
+  The byte-exact Rust skeleton of `docs/LEVIN_PROTOCOL.md`: the 33-byte
+  bucket header, notification/request/response builders, noise and
+  noise-shaped fragmentation, the zstd `COMPRESSED` path (feature-gated,
+  `HAVE_ZSTD` parity), and an incremental `BucketReader` mirroring the C++
+  `handle_recv` state machine (signature early-reject, 256 KiB / 100 MB
+  packet limits, fragment reassembly, message classification). Byte
+  identity is pinned by KATs mirroring the `tests/unit_tests/levin.cpp`
+  gtests assertion for assertion, and by a CI gate
+  (`ci/levin-constant-parity`) that fails the build when any hand-copied
+  wire constant stops matching its C++ definition — including
+  `HEADER_SIZE`, anchored by a new `static_assert(sizeof(bucket_head2) ==
+  33)` in `levin_base.h`. The reader is feed/pull (`feed` buffers,
+  `next_message` parses one bucket), matching the oracle's dispatch-inside-
+  the-parse-loop shape: at most one decoded payload is live at a time, and
+  a delivered message survives a later bucket in the same read being
+  malformed. Divergences from the C++ are enumerated **once**, in the crate
+  docs (`rust/shekyl-levin/src/lib.rs`); every other mention points there
+  rather than restating the list. Framing only — no portable_storage, no
+  sockets, no daemon wiring; the C++ p2p path stays live until the
+  scheduled cutover (`IMPLEMENTATION_INDEX.md` LV row; FOLLOWUPS "Levin p2p
+  migration" carries LV-2/LV-3). New optional dependency: `zstd` 0.13 —
+  compatibility with C++ peers comes from the zstd *frame format*, not from
+  a shared library: `zstd-sys` compiles its own vendored libzstd unless its
+  non-default `pkg-config` feature is enabled, while the C++ links the
+  system one. Choosing between them is an LV-3 item (see the manifest
+  comment and the FOLLOWUPS entry) — it needs a link graph that does not
+  exist while the crate is in no staticlib.
+
 - **Phase 4c wallet RPC rescan** (`Engine::start_rescan` +
   `rescan_blockchain`). Named Engine API that rebuilds the wallet's
   transaction history from the chain, starting at the wallet's scan floor.

@@ -8961,6 +8961,83 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
+- **Levin p2p migration — LV-2 payload codec and LV-3 connection-path
+  cutover.** LV-1 (the `rust/shekyl-levin` framing crate: bucket header,
+  builders, noise/fragmentation, zstd flag path, incremental reader, KAT'd
+  byte-identical against the C++ gtests) landed 2026-08-05, deliberately
+  inert — the scoping decision was "exact, fully-tested skeleton now;
+  cutover scheduled for the future" (shekyl-levin plan, 2026-08-05; index
+  row `LV-1…LV-N`). The remaining work is **rejected-now with named
+  reopening criteria** (rule 21):
+
+  - **LV-2 — epee portable_storage payload codec + command schemas.** The
+    framing crate carries payloads as opaque bytes; speaking live
+    handshake/timed-sync/notify bodies needs the portable_storage binary
+    codec plus the ~25 KV maps in `src/p2p/p2p_protocol_defs.h` and
+    `src/cryptonote_protocol/cryptonote_protocol_defs.h`. Build-or-vendor
+    is an open rule-17/rule-10 decision — Cuprate's `epee-encoding` exists
+    but is vendoring-only (`DAEMON_RELAY_PRIVACY.md` §8). Reopens when
+    either (a) the p2p migration track is scheduled, or (b) any Rust
+    component needs live Levin command interop with the C++ node (e.g. a
+    relay readout that would otherwise add a third entry to the index's
+    relay-layer C++ dependency inventory).
+  - **LV-3 — connection-path cutover.** Replace the C++ Levin read/write
+    path at the `levin_notify.cpp` / `net_node.inl` seam with the Rust
+    crate. Cost basis: the index's "Relay layer → C++ dependency
+    inventory" (two dependencies, containment not entanglement). This is a
+    planned migration activity per rule 20 (own design doc, own review
+    cycle, own PR) — reopens only when that track is opened; the
+    re-evaluation shape is a design round against the inventory.
+
+    Two decisions are **named here rather than deferred silently**, because
+    both are undecidable until LV-3 creates the thing they are about:
+
+    - **libzstd link strategy.** `zstd-sys` `cc`-compiles a vendored
+      libzstd unless its non-default `pkg-config` feature is enabled; the
+      C++ build links the system library (`CMakeLists.txt`
+      `pkg_check_modules` / `find_library`, then `-DHAVE_ZSTD`). The moment
+      `shekyl-levin` is folded into a staticlib the daemon links, that
+      binary carries two libzstd implementations with colliding `ZSTD_*`
+      symbols, and `zstd-sys`'s `links = "zstd"` key conflicts with any
+      other crate claiming it. Blocker: `shekyl-levin` is in no staticlib
+      today, so there is no link graph to decide against — enabling
+      `pkg-config` now would add a system-libzstd build requirement to
+      every Rust CI job for a crate that is inert. Recorded in
+      `rust/shekyl-levin/Cargo.toml` at the dependency itself.
+    - **Post-inflate limit interop window.** `BucketReader` bounds a
+      decompressed payload by `min(packet limit, per-command limit)`, which
+      the C++ declares but never re-checks after inflating. `COMPRESSED` is
+      only ever set on `NOTIFY_NEW_TRANSACTIONS`, whose effective limit is
+      100 MB, while `DECOMPRESSED_MAX_SIZE` is 128 MiB — so a relay batch
+      inflating into that ~34 MB gap is accepted by a C++ receiver and
+      rejected by the Rust one. Nothing bounds the uncompressed batch on the
+      sender side, so it is reachable in principle (order 670 weight-limit
+      transactions in one batch), though not observed. Blocker: deciding
+      between "confirm unreachable in real traffic" and "widen the bound to
+      `DECOMPRESSED_MAX_SIZE` for this one command" needs a mixed C++/Rust
+      network to measure against, which cannot exist while the crate is
+      unwired. Enforcing the declared limit is the pre-cutover default
+      because the alternative is an unbounded memory-exhaustion surface (a
+      few KB of frame forcing a 128 MiB allocation per connection). Stated
+      in full in the crate's divergence census, entry 4.
+    - **Handshake coupling of the packet-size limit.** The framing crate
+      cannot detect handshake completion — it does not decode command
+      bodies — so `BucketReader::complete_handshake` is the caller's
+      obligation, made hard to misuse (a fresh reader is pinned at 256 KiB
+      and there is no general setter) but not enforceable from inside. The
+      cutover layer, which *does* see the handshake command and
+      `handshake_complete()`, must call it at exactly the three points the
+      C++ raises `m_max_packet_size`
+      (`levin_protocol_handler_async.h:564`, `:661`, `:699`) and nowhere
+      else. Calling it early exposes an unauthenticated peer to the 100 MB
+      limit; never calling it stalls chain sync on the first >256 KiB
+      block notification.
+
+  **Target: V3.2+** (rides the daemon Rust-forward track alongside the
+  wallet_rpc_server cutover bucket). Not V3.0-gating: genesis ships on the
+  C++ p2p path per `DAEMON_REDB_STORE.md` ("P2P and levin remain C++ at
+  genesis").
+
 - **Daemon PQC phase-1 payload assembly duplicates
   `shekyl_wire::Transaction::pqc_signing_payload_hashes` — route through a
   `shekyl_*` FFI entry point and delete the C++ copy.** Surfaced 2026-07-05

@@ -24,6 +24,16 @@ PQC note:
 > protocol, that portion is a work-in-progress. Please take the time to do it
 > if interested in learning about Shekyl p2p traffic!
 
+Implementations: the live daemon path is C++ (`contrib/epee/include/net/levin_*`,
+`contrib/epee/src/levin_*`). A byte-identical Rust framing implementation
+lives at `rust/shekyl-levin` (LV-1, KAT'd against the C++ unit tests, with
+`ci/levin-constant-parity` guarding the shared wire constants); it is
+deliberately unwired until the scheduled p2p cutover. Where it is
+deliberately stricter than the C++, the authoritative list is the crate's
+own docs (`rust/shekyl-levin/src/lib.rs`) — kept in one place on purpose.
+See also `docs/design/IMPLEMENTATION_INDEX.md` (LV row) and the
+`docs/FOLLOWUPS.md` "Levin p2p migration" entry.
+
 
 ## Header
 This header is sent for every Shekyl p2p message.
