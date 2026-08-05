@@ -38,6 +38,23 @@
 //! **Storage.** Pool insertion is inside `hop` but not inside this term; it is
 //! measured with the end-to-end arm, where the substrate matters (§72.5).
 //!
+//! # A named landmine: FCMP++ *does* support batch verification
+//!
+//! `fcmps/src/lib.rs` exposes `verify` taking `&mut BatchVerifier<C::C1>` /
+//! `<C::C2>` — *"This only queues the FCMP for batch verification"* — so the
+//! proof system permits verifying many transactions together, and the marginal
+//! cost of doing so is far below the serial sum.
+//!
+//! **`handle_incoming_tx` does not use it.** It is a per-transaction loop, so
+//! the implementation verifies serially and `hop` measures the implementation,
+//! not the system's potential. This bench is therefore correct as written.
+//!
+//! **But adopting batching would change `hop`'s batch term from `(N+1)/2 ×
+//! verify` to something near-flat, and it is a pure throughput win that looks
+//! unrelated to relay privacy.** Whoever takes it must re-derive the embargo;
+//! recorded here because the natural reviewer of that change is looking at
+//! mempool throughput and has no reason to think about §71.
+//!
 //! # Reading the output
 //!
 //! The result is a **surface over `(n_in, n_out)`**, not a scalar. Collapsing
