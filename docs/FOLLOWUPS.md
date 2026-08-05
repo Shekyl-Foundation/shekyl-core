@@ -8961,6 +8961,39 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
+- **Levin p2p migration — LV-2 payload codec and LV-3 connection-path
+  cutover.** LV-1 (the `rust/shekyl-levin` framing crate: bucket header,
+  builders, noise/fragmentation, zstd flag path, incremental reader, KAT'd
+  byte-identical against the C++ gtests) landed 2026-08-05, deliberately
+  inert — the scoping decision was "exact, fully-tested skeleton now;
+  cutover scheduled for the future" (shekyl-levin plan, 2026-08-05; index
+  row `LV-1…LV-N`). The remaining work is **rejected-now with named
+  reopening criteria** (rule 21):
+
+  - **LV-2 — epee portable_storage payload codec + command schemas.** The
+    framing crate carries payloads as opaque bytes; speaking live
+    handshake/timed-sync/notify bodies needs the portable_storage binary
+    codec plus the ~25 KV maps in `src/p2p/p2p_protocol_defs.h` and
+    `src/cryptonote_protocol/cryptonote_protocol_defs.h`. Build-or-vendor
+    is an open rule-17/rule-10 decision — Cuprate's `epee-encoding` exists
+    but is vendoring-only (`DAEMON_RELAY_PRIVACY.md` §8). Reopens when
+    either (a) the p2p migration track is scheduled, or (b) any Rust
+    component needs live Levin command interop with the C++ node (e.g. a
+    relay readout that would otherwise add a third entry to the index's
+    relay-layer C++ dependency inventory).
+  - **LV-3 — connection-path cutover.** Replace the C++ Levin read/write
+    path at the `levin_notify.cpp` / `net_node.inl` seam with the Rust
+    crate. Cost basis: the index's "Relay layer → C++ dependency
+    inventory" (two dependencies, containment not entanglement). This is a
+    planned migration activity per rule 20 (own design doc, own review
+    cycle, own PR) — reopens only when that track is opened; the
+    re-evaluation shape is a design round against the inventory.
+
+  **Target: V3.2+** (rides the daemon Rust-forward track alongside the
+  wallet_rpc_server cutover bucket). Not V3.0-gating: genesis ships on the
+  C++ p2p path per `DAEMON_REDB_STORE.md` ("P2P and levin remain C++ at
+  genesis").
+
 - **Daemon PQC phase-1 payload assembly duplicates
   `shekyl_wire::Transaction::pqc_signing_payload_hashes` — route through a
   `shekyl_*` FFI entry point and delete the C++ copy.** Surfaced 2026-07-05

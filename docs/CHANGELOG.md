@@ -45,6 +45,21 @@
 
 ### Added
 
+- **`shekyl-levin` — Rust Levin framing crate (LV-1), inert until wired.**
+  The byte-exact Rust skeleton of `docs/LEVIN_PROTOCOL.md`: the 33-byte
+  bucket header, notification/request/response builders, noise and
+  noise-shaped fragmentation, the zstd `COMPRESSED` path (feature-gated,
+  `HAVE_ZSTD` parity), and an incremental `BucketReader` mirroring the C++
+  `handle_recv` state machine (signature early-reject, 256 KiB / 100 MB
+  packet limits, fragment reassembly, message classification). Byte
+  identity is pinned by KATs mirroring the `tests/unit_tests/levin.cpp`
+  gtests assertion for assertion; two read-side divergences (both strictly
+  tighter than the C++) are documented in the crate README. Framing only —
+  no portable_storage, no sockets, no daemon wiring; the C++ p2p path stays
+  live until the scheduled cutover (`IMPLEMENTATION_INDEX.md` LV row;
+  FOLLOWUPS "Levin p2p migration" carries LV-2/LV-3). New optional
+  dependency: `zstd` 0.13 (same libzstd the C++ side links).
+
 - **Phase 4c wallet RPC rescan** (`Engine::start_rescan` +
   `rescan_blockchain`). Named Engine API that rebuilds the wallet's
   transaction history from the chain, starting at the wallet's scan floor.
