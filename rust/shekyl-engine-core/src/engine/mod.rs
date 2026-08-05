@@ -336,6 +336,8 @@ pub mod refresh;
 /// all tests are `#[ignore]`d and require `SHEKYLD_BIN`.
 #[cfg(test)]
 mod regtest_e2e;
+/// Full-wallet rescan: reset scan-derived ledger state (Phase 4c).
+pub(crate) mod rescan;
 pub(crate) mod scan_floor;
 pub(crate) mod sealing_keys;
 pub(crate) mod sign_bridge;

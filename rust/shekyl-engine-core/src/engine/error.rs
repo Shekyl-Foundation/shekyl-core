@@ -406,6 +406,23 @@ pub enum RefreshError {
         /// escalation for a deterministically-corrupt store (O3-sub) is CT-5d.
         recoverable_by_respawn: bool,
     },
+
+    /// [`Engine::start_rescan`](super::Engine::start_rescan) refused because
+    /// one or more pending-tx reservations are still held. Rescan would
+    /// clear the transfer set under those reservations; callers must
+    /// submit or discard first (same discipline as `persist_for_close`).
+    #[error("cannot rescan with {count} outstanding pending transaction(s)")]
+    OutstandingPendingTx {
+        /// Number of consumer-held + in-flight reservations.
+        count: usize,
+    },
+
+    /// Rescan reset cleared scan-derived state but failed to persist the
+    /// emptied ledger before the scan producer started. The in-memory
+    /// ledger is already reset; a reopen may restore the pre-rescan tip
+    /// from disk — callers should retry `start_rescan` or reopen carefully.
+    #[error("rescan reset persistence failed: {0}")]
+    RescanPersist(String),
 }
 
 // --- Ledger ----------------------------------------------------------------

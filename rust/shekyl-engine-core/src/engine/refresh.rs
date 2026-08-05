@@ -1477,6 +1477,119 @@ impl<
             opts,
         })
     }
+
+    /// Full rescan from `sync_state.restore_from_height`.
+    ///
+    /// Named Engine API for OpenAPI `rescan_blockchain` (Phase 4c /
+    /// FOLLOWUPS Phase 4b rescan item). Resets scan-derived ledger state
+    /// (preserving retained `tx_keys`, payment-request invoices, restore
+    /// height, and staking config), rolls the curve-tree tip back to
+    /// genesis, persists the reset, then runs the same producer as
+    /// [`Self::start_refresh`] under the shared `refresh_slot`
+    /// (`AlreadyRunning` → RPC `-29200`).
+    ///
+    /// # Errors
+    ///
+    /// - [`RefreshError::AlreadyRunning`] — refresh/rescan already in flight.
+    /// - [`RefreshError::OutstandingPendingTx`] — discard/submit first.
+    /// - [`RefreshError::CurveTreeIngest`] — tree rollback failed.
+    /// - [`RefreshError::RescanPersist`] — durable save of the reset failed.
+    ///
+    /// Scan-path errors surface via [`RefreshHandle::join`], same as refresh.
+    pub async fn start_rescan(
+        self_arc: std::sync::Arc<tokio::sync::RwLock<Self>>,
+        opts: RefreshOptions,
+    ) -> Result<RefreshHandle, RefreshError>
+    where
+        S: EngineSignerKind + Send + Sync + 'static,
+        Self: Send + Sync,
+    {
+        let (slot, outstanding) = {
+            let engine = self_arc.read().await;
+            (
+                engine.refresh_slot.clone(),
+                engine.outstanding_pending_txs(),
+            )
+        };
+        let slot_guard = slot.try_claim().ok_or(RefreshError::AlreadyRunning)?;
+        if outstanding > 0 {
+            return Err(RefreshError::OutstandingPendingTx { count: outstanding });
+        }
+
+        // Roll the curve tree back before clearing the ledger tip so a
+        // failed rollback leaves the pre-rescan ledger intact.
+        {
+            let engine = self_arc.read().await;
+            if let Ok(Some(_)) = engine.curve_tree.ingested_tip_height().await {
+                engine
+                    .curve_tree
+                    .rollback_to_fork(shekyl_curve_tree::BlockHeight(0))
+                    .await
+                    .map_err(|e| RefreshError::CurveTreeIngest {
+                        context: "rescan curve-tree rollback_to_fork(0)",
+                        recoverable_by_respawn: matches!(
+                            e,
+                            super::curve_tree_actor::CurveTreeHandleError::Unavailable
+                        ),
+                    })?;
+            }
+        }
+
+        // Clear scan-derived state + persist under a brief exclusive
+        // engine write (ledger interior lock + sync save via
+        // `drive_persistence` — do not `.await` while holding
+        // `std::sync::RwLock` guards; that would make this future !Send).
+        {
+            let engine = self_arc.write().await;
+            {
+                let mut guard = engine.ledger.write();
+                let state = &mut *guard;
+                super::rescan::reset_scan_derived_state(&mut state.ledger, &mut state.indexes);
+            }
+            let ledger_guard = engine.ledger.read();
+            if let Err(e) =
+                super::lifecycle::drive_persistence(super::traits::PersistenceEngine::save_state(
+                    &engine.persistence,
+                    engine.state_wrap_key(),
+                    &ledger_guard.ledger,
+                ))
+            {
+                return Err(RefreshError::RescanPersist(e.to_string()));
+            }
+        }
+
+        let synced_height = {
+            let engine = self_arc.read().await;
+            engine.ledger.synced_height()
+        };
+        let (progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::phase_only(
+            synced_height,
+            0,
+            0,
+            RefreshPhase::Scanning,
+        ));
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        let cancel_token = CancellationToken::new();
+
+        let task_arc = self_arc.clone();
+        let task_cancel = cancel_token.clone();
+        let producer_join = tokio::spawn(run_refresh_task(
+            task_arc,
+            opts.clone(),
+            task_cancel,
+            progress_tx,
+            completion_tx,
+            slot_guard,
+        ));
+
+        Ok(RefreshHandle {
+            completion_rx: Some(completion_rx),
+            cancel_token,
+            progress_rx,
+            producer_join,
+            opts,
+        })
+    }
 }
 
 // `L = LocalLedger` specialization for the synchronous refresh entry
