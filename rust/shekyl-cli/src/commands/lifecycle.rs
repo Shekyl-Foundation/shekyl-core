@@ -198,9 +198,11 @@ pub fn cmd_refresh(rpc: &RpcSession) {
 
 /// `rescan_blockchain` error codes that are refusals raised **before** the
 /// wallet's scan state is reset (`docs/api/wallet_rpc.yaml`): wallet not
-/// open, refresh in progress, daemon unreachable (the rescan preflights it),
-/// and rescan blocked by in-flight transactions. Anything else arrives after
-/// the reset is durable, and the user needs to be told that.
+/// open, refresh in progress, daemon unreachable (the rescan preflights it —
+/// `-29201` on this method means untouched; mid-scan daemon failure is
+/// `-29203`), and rescan blocked by in-flight transactions. Anything else
+/// — including `-29203 RESCAN_INCOMPLETE` — arrives after the reset is
+/// durable, and the user needs to be told that.
 const RESCAN_PRE_RESET_REFUSALS: [i64; 4] = [-29001, -29200, -29201, -29202];
 
 /// Full rescan from the wallet's scan floor (`rescan_blockchain`).

@@ -65,10 +65,18 @@ pub enum WalletRpcErrorCode {
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200,
     /// Refresh / rescan / proofs: daemon RPC failed.
+    ///
+    /// For `rescan_blockchain` only the **preflight** refusal uses this code
+    /// (wallet untouched). A scan that fails *after* the reset is durable
+    /// emits [`Self::RescanIncomplete`] instead — same daemon class of
+    /// failure, opposite durability claim.
     DaemonUnreachable = -29201,
     /// Rescan: refused — transactions in flight whose spend record a chain
     /// replay cannot rebuild. A resolvable state conflict, not a bad request.
     RescanBlocked = -29202,
+    /// Rescan: the reset persisted, then the producer failed before the
+    /// ledger was rebuilt. History is empty until a rescan finishes; retry.
+    RescanIncomplete = -29203,
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300,
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -157,6 +165,13 @@ pub enum WalletRpcError {
         /// Server-side counts (`error.data.detail`) — no amounts, no txids.
         detail: String,
     },
+    /// Rescan reset is durable but the subsequent scan failed. History is
+    /// empty until a rescan finishes; the wallet is re-runnable.
+    #[error(
+        "rescan reset completed but the scan failed; history is empty until a \
+         rescan finishes — retry once the problem is resolved"
+    )]
+    RescanIncomplete,
     /// Build: address parse / network check failed.
     #[error("invalid recipient")]
     InvalidRecipient,
@@ -247,6 +262,7 @@ impl WalletRpcError {
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
             Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
             Self::RescanBlocked { .. } => WalletRpcErrorCode::RescanBlocked,
+            Self::RescanIncomplete => WalletRpcErrorCode::RescanIncomplete,
             Self::InvalidRecipient => WalletRpcErrorCode::InvalidRecipient,
             Self::InsufficientFunds => WalletRpcErrorCode::InsufficientFunds,
             Self::FeeEstimationFailed => WalletRpcErrorCode::FeeEstimationFailed,
@@ -290,6 +306,40 @@ impl WalletRpcError {
         let data = serde_json::to_value(verdict)
             .unwrap_or_else(|_| json!({ "verdict": "rejected", "cause": "unrecognized" }));
         Self::SubmitRejected { data }
+    }
+
+    /// Map a producer failure that arrives **after** `start_rescan` returned
+    /// a handle — i.e. after the reset is durable.
+    ///
+    /// Must not emit [`WalletRpcErrorCode::DaemonUnreachable`]: that code's
+    /// rescan contract is "wallet untouched" (daemon preflight). A mid-scan
+    /// daemon drop is the same *class* of failure and the opposite durability
+    /// claim — clients that branch on `-29201` (CLI included) would otherwise
+    /// tell the user nothing changed while history sits at zero.
+    pub(crate) fn from_rescan_scan_failure(err: RefreshError) -> Self {
+        match &err {
+            // Retryable producer failures: reset held, scan did not finish.
+            RefreshError::Io(io) => {
+                tracing::warn!(detail = %io, "rescan scan failed after durable reset");
+                Self::RescanIncomplete
+            }
+            RefreshError::Cancelled
+            | RefreshError::MalformedScanResult { .. }
+            | RefreshError::CurveTreeIngest { .. } => {
+                tracing::warn!(?err, "rescan scan failed after durable reset");
+                Self::RescanIncomplete
+            }
+            // Should be unreachable on the join path (raised only by
+            // `start_rescan` before the producer spawns), but if they appear
+            // keep their pre-reset codes rather than inventing a third story.
+            RefreshError::AlreadyRunning
+            | RefreshError::RescanBlocked { .. }
+            | RefreshError::RescanPersist(_) => err.into(),
+            other => {
+                tracing::warn!(?other, "rescan scan failed after durable reset (internal)");
+                internal_detail("rescan scan failed after reset", format!("{other:?}"))
+            }
+        }
     }
 }
 
@@ -349,24 +399,28 @@ impl From<RefreshError> for WalletRpcError {
                     "{reservations} reservation(s), {unconfirmed} unconfirmed transaction(s)"
                 ),
             },
+            // Past the point of no return for the in-memory ledger; durable
+            // save may have failed. Category-only message — `detail` can
+            // carry a local filesystem path (rule 30 / `message()` contract).
             RefreshError::RescanPersist(detail) => {
-                Self::InternalError(format!("rescan reset persistence failed: {detail}"))
+                internal_detail("rescan reset persistence failed", detail)
             }
             RefreshError::Io(IoError::Daemon { .. })
             | RefreshError::Io(IoError::Scanner { .. }) => Self::DaemonUnreachable,
             RefreshError::Io(other) => internal_detail("refresh I/O error", other),
-            RefreshError::ConcurrentMutation { wallet, result } => Self::InternalError(format!(
-                "refresh concurrent mutation: wallet={wallet}, result={result}"
-            )),
+            RefreshError::ConcurrentMutation { wallet, result } => internal_detail(
+                "refresh concurrent mutation",
+                format!("wallet={wallet}, result={result}"),
+            ),
             RefreshError::MalformedScanResult { reason } => {
-                Self::InternalError(format!("malformed scan result: {reason}"))
+                internal_detail("malformed scan result", reason)
             }
             RefreshError::Cancelled => Self::InternalError("refresh cancelled".into()),
             RefreshError::InternalInvariantViolation { context } => {
-                Self::InternalError(format!("refresh invariant: {context}"))
+                internal_detail("refresh invariant", context)
             }
             RefreshError::CurveTreeIngest { context, .. } => {
-                Self::InternalError(format!("curve-tree ingest: {context}"))
+                internal_detail("curve-tree ingest", context)
             }
         }
     }
@@ -559,6 +613,36 @@ mod tests {
         })
         .into();
         assert_eq!(err.code(), WalletRpcErrorCode::DaemonUnreachable);
+    }
+
+    /// Join-path failures after a durable reset must not reuse `-29201`:
+    /// that code's rescan contract is "wallet untouched" (preflight only).
+    #[test]
+    fn post_reset_daemon_io_is_rescan_incomplete_not_unreachable() {
+        let err = WalletRpcError::from_rescan_scan_failure(RefreshError::Io(IoError::Daemon {
+            detail: "/tmp/wallet.keys connection refused".into(),
+        }));
+        assert_eq!(err.code(), WalletRpcErrorCode::RescanIncomplete);
+        assert!(
+            !err.message().contains("/tmp"),
+            "post-reset scan failure must not echo local paths: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn rescan_persist_is_category_only() {
+        let err: WalletRpcError =
+            RefreshError::RescanPersist("/home/user/.shekyl/wallet.keys: ENOSPC".into()).into();
+        assert_eq!(err.code(), WalletRpcErrorCode::InternalError);
+        assert_eq!(
+            err.message(),
+            "internal error: rescan reset persistence failed"
+        );
+        assert!(
+            !err.message().contains("/home"),
+            "persist failure must not leak filesystem paths"
+        );
     }
 
     #[test]

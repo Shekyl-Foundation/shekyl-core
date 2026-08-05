@@ -44,7 +44,9 @@ pub(crate) async fn refresh(
 /// anything — refresh in flight (`-29200`), daemon unreachable (`-29201`),
 /// in-flight transactions whose spend record a replay cannot rebuild
 /// (`-29202`) — so a client that sees any of those knows the wallet is
-/// untouched. Errors from `join()` arrive after the reset is durable.
+/// untouched. Errors from `join()` arrive after the reset is durable and
+/// map to `-29203 RESCAN_INCOMPLETE`, never `-29201` (same daemon class,
+/// opposite durability claim).
 pub(crate) async fn rescan_blockchain(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
@@ -55,7 +57,10 @@ pub(crate) async fn rescan_blockchain(
 
     let opts = RefreshOptions::default();
     let handle = Engine::start_rescan(engine.clone(), opts).await?;
-    let summary = handle.join().await?;
+    let summary = handle
+        .join()
+        .await
+        .map_err(WalletRpcError::from_rescan_scan_failure)?;
     let synced_height = engine.read().await.ledger().ledger.height();
     // OpenAPI `RescanBlockchainResult` omits `reorg_fork_height`.
     let result = rescan_result(&summary, synced_height);

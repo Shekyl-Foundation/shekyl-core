@@ -15,7 +15,9 @@
   (`-29200`), a daemon preflight (`-29201`), and a new `-29202`
   `RESCAN_BLOCKED` for in-flight transactions whose spend record a chain
   replay cannot rebuild — checked atomically with the reset, so a
-  concurrently-built transaction cannot slip through. `shekyl-wallet-rpc`
+  concurrently-built transaction cannot slip through. Mid-scan failures
+  after the reset is durable return `-29203 RESCAN_INCOMPLETE` (not
+  `-29201`, whose rescan contract is "wallet untouched"). `shekyl-wallet-rpc`
   dispatches `rescan_blockchain`; CLI `rescan` is un-stubbed and reports
   whether a failure left the wallet reset. Closes FOLLOWUPS Phase 4b rescan
   / WI-RPC-2b `rescan` deferrals; opens the `abandon_tx` follow-up that

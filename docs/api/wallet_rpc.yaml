@@ -321,6 +321,7 @@ components:
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29202   # RESCAN_BLOCKED
+        - -29203   # RESCAN_INCOMPLETE
         - -29300   # PROOF_MALFORMED
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
@@ -362,10 +363,11 @@ components:
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs: daemon RPC
                                           failed (proof methods dial the
                                           daemon for tx bodies / spent-set
-                                          queries; rescan preflights the
-                                          daemon before it resets anything,
-                                          so this code means the wallet was
-                                          left untouched)
+                                          queries; for rescan this code is
+                                          reserved to the *preflight*
+                                          refusal — wallet untouched. A
+                                          mid-scan daemon drop after the
+                                          reset is durable is -29203)
           -29202 RESCAN_BLOCKED           rescan: refused — reservations
                                           and/or unconfirmed submitted
                                           transactions hold spend records a
@@ -375,6 +377,13 @@ components:
                                           pending transactions, wait for
                                           confirmations, retry. Nothing was
                                           reset (data: {"detail": "..."})
+          -29203 RESCAN_INCOMPLETE        rescan: reset persisted, then the
+                                          producer failed before the ledger
+                                          was rebuilt. History is empty
+                                          until a rescan finishes; retry.
+                                          Distinct from -29201 so clients
+                                          that branch on "untouched" do not
+                                          lie after a mid-scan failure
           -29300 PROOF_MALFORMED          check_*: proof string failed
                                           Bech32m decode, carried the wrong
                                           HRP, its wire framing did not
@@ -919,8 +928,8 @@ components:
         touching the wallet when the daemon is unreachable (-29201) or when
         in-flight transactions hold spend records a replay cannot rebuild
         (-29202). Past those refusals the reset is durable before scanning
-        begins: a scan that then fails leaves the wallet emptied and the
-        rescan re-runnable.
+        begins: a scan that then fails leaves the wallet emptied and
+        returns -29203 RESCAN_INCOMPLETE (re-runnable; not -29201).
 
     RescanBlockchainResult:
       type: object
