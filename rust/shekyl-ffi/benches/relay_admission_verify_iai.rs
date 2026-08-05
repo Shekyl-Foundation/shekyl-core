@@ -48,12 +48,12 @@ use gungraun::{library_benchmark, library_benchmark_group, main};
 #[path = "relay_admission_fixture.rs"]
 mod relay_admission_fixture;
 
-use relay_admission_fixture::{admission_verify, build_fixture, AdmissionFixture};
+use relay_admission_fixture::{admission_verify, build_fixture, AdmissionFixture, ChunkLayout};
 
 // The gate's fixed shape: one input, two outputs.
 fn modal_shape() -> AdmissionFixture {
     // Depth 2: the gate must sit at a shape production actually presents.
-    build_fixture(1, 2, 2)
+    build_fixture(1, 2, 2, ChunkLayout::Shared)
 }
 
 // Setup is excluded from the measured region: `prove` is orders of magnitude

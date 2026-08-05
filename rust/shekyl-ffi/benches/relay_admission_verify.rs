@@ -74,7 +74,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 #[path = "relay_admission_fixture.rs"]
 mod relay_admission_fixture;
 
-use relay_admission_fixture::{admission_verify, build_fixture, ADMISSION_OK};
+use relay_admission_fixture::{admission_verify, build_fixture, ChunkLayout, ADMISSION_OK};
 
 fn bench_admission(c: &mut Criterion) {
     let mut group = c.benchmark_group("relay_admission_verify");
@@ -86,10 +86,19 @@ fn bench_admission(c: &mut Criterion) {
     // yields depth >= 2). Depth 1 is retained as the sub-production floor the
     // first sweep measured, so the pair gives the per-layer slope — the term
     // that grows monotonically with the chain and has no code change to gate on.
-    for tree_depth in [1u8, 2] {
+    for (tree_depth, layout, tag) in [
+        (1u8, ChunkLayout::Shared, "d1"),
+        (2u8, ChunkLayout::Shared, "d2"),
+        // §76.1's owed measurement: production spends are scattered, so each
+        // input walks its OWN path. `f`'s per-input term is built from this
+        // marginal, so the layout must be measured rather than assumed. At
+        // n_in = 1 the two layouts are identical by construction, which makes
+        // that cell a built-in control on the comparison.
+        (2u8, ChunkLayout::Spread, "d2spread"),
+    ] {
         for n_in in [1usize, 2, 4] {
-            for n_out in [2usize, 16] {
-                let fixture = build_fixture(n_in, n_out, tree_depth);
+            for n_out in [2usize] {
+                let fixture = build_fixture(n_in, n_out, tree_depth, layout);
 
                 // Self-witnessing: a fixture that does not verify would make every
                 // timing below a measurement of the rejection path.
@@ -97,12 +106,12 @@ fn bench_admission(c: &mut Criterion) {
                 assert_eq!(
                     rc, ADMISSION_OK,
                     "fixture must VERIFY, or the bench times the reject path \
-                 (depth={tree_depth}, n_in={n_in}, n_out={n_out})"
+                 ({tag}, n_in={n_in}, n_out={n_out})"
                 );
 
                 group.throughput(Throughput::Elements(n_in as u64));
                 group.bench_with_input(
-                    BenchmarkId::from_parameter(format!("d{tree_depth}_in{n_in}_out{n_out}")),
+                    BenchmarkId::from_parameter(format!("{tag}_in{n_in}_out{n_out}")),
                     &fixture,
                     |b, f| b.iter(|| admission_verify(f, n_in, n_out)),
                 );

@@ -57,7 +57,33 @@ pub struct AdmissionFixture {
 /// tree that admits `n_in` inputs, which keeps the sweep measuring **input
 /// count** rather than tree depth — a second axis that would otherwise ride
 /// along and produce F-7's confound (§69.2).
-pub fn build_fixture(n_in: usize, n_out: usize, tree_depth: u8) -> AdmissionFixture {
+/// How the spent outputs sit in the curve tree.
+///
+/// **This is the fixture caveat §76.1 flagged, made measurable.** The input
+/// axis was first swept with every input in ONE leaf chunk — the right control
+/// for isolating input count from tree depth, but not what production
+/// presents: real spends are scattered, so each lands in its own chunk with
+/// its own path. Since `f`'s per-input term is built from this marginal, the
+/// layout has to be measured rather than assumed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ChunkLayout {
+    /// All inputs adjacent in one leaf chunk — the §72 control.
+    Shared,
+    /// One input per leaf chunk, `n` siblings at the Helios layer — production
+    /// topology for unrelated spends.
+    Spread,
+}
+
+pub fn build_fixture(
+    n_in: usize,
+    n_out: usize,
+    tree_depth: u8,
+    layout: ChunkLayout,
+) -> AdmissionFixture {
+    assert!(
+        layout == ChunkLayout::Shared || tree_depth == 2,
+        "Spread needs the Helios layer to hold the sibling chunks; depth 1 has none"
+    );
     assert!(
         (1..=2).contains(&tree_depth),
         "fixture supports depth 1 (sub-production) and 2 (production minimum)"
@@ -93,62 +119,93 @@ pub fn build_fixture(n_in: usize, n_out: usize, tree_depth: u8) -> AdmissionFixt
         h_pqcs.push(h);
     }
 
-    // Root over the whole chunk: four scalars per output, in leaf order.
-    let mut terms = Vec::with_capacity(4 * n_in);
-    for idx in 0..n_in {
-        terms.push((
-            <EdwardsPoint as DivisorCurve>::to_xy(os[idx]).unwrap().0,
-            generators[4 * idx],
-        ));
-        terms.push((
-            <EdwardsPoint as DivisorCurve>::to_xy(is[idx]).unwrap().0,
-            generators[4 * idx + 1],
-        ));
-        terms.push((
-            <EdwardsPoint as DivisorCurve>::to_xy(cs[idx]).unwrap().0,
-            generators[4 * idx + 2],
-        ));
-        terms.push((h_pqcs[idx], generators[4 * idx + 3]));
-    }
-    let leaf_selene: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT + multiexp_vartime(&terms);
+    // Per-layout leaf construction.
+    //
+    // Shared: one chunk holding all `n_in` outputs, so the root is a single
+    // multiexp over `4 * n_in` leaf scalars and every input's path is the same.
+    //
+    // Spread: `n_in` chunks of one output each, so the Helios layer carries
+    // `n_in` siblings and each input walks a distinct path — the arrangement a
+    // wallet spending unrelated outputs actually produces.
+    let leaf_selene_for = |idxs: &[usize]| -> <Selene as Ciphersuite>::G {
+        let mut terms = Vec::with_capacity(4 * idxs.len());
+        for (slot, &idx) in idxs.iter().enumerate() {
+            terms.push((
+                <EdwardsPoint as DivisorCurve>::to_xy(os[idx]).unwrap().0,
+                generators[4 * slot],
+            ));
+            terms.push((
+                <EdwardsPoint as DivisorCurve>::to_xy(is[idx]).unwrap().0,
+                generators[4 * slot + 1],
+            ));
+            terms.push((
+                <EdwardsPoint as DivisorCurve>::to_xy(cs[idx]).unwrap().0,
+                generators[4 * slot + 2],
+            ));
+            terms.push((h_pqcs[idx], generators[4 * slot + 3]));
+        }
+        *SELENE_HASH_INIT + multiexp_vartime(&terms)
+    };
+
+    let all: Vec<usize> = (0..n_in).collect();
 
     // Depth 1 roots at the leaf layer, which PRODUCTION NEVER DOES:
     // `tree.rs` states a non-empty tree yields depth >= 2, because a single
     // layer-0 node is promoted into a layer-1 Helios root rather than returned
     // bare. Depth 1 is kept only as the sub-production floor the first sweep
     // measured; depth 2 is the shallowest tree a live chain can present.
-    let (tree_root, c2_branch_layers) = if tree_depth == 1 {
-        (leaf_selene.to_bytes(), Vec::new())
+    let (tree_root, c2_siblings, per_input_chunk): ([u8; 32], Vec<[u8; 32]>, Vec<Vec<usize>>) =
+        if tree_depth == 1 {
+            (
+                leaf_selene_for(&all).to_bytes(),
+                Vec::new(),
+                vec![all.clone(); n_in],
+            )
+        } else {
+            let chunks: Vec<Vec<usize>> = match layout {
+                ChunkLayout::Shared => vec![all.clone()],
+                ChunkLayout::Spread => all.iter().map(|&i| vec![i]).collect(),
+            };
+            let children: Vec<[u8; 32]> = chunks
+                .iter()
+                .map(|c| {
+                    selene_point_to_helios_scalar(&leaf_selene_for(c).to_bytes())
+                        .expect("selene->helios conversion")
+                })
+                .collect();
+            let root = hash_grow_helios(&helios_hash_init(), 0, &[0u8; 32], &children)
+                .expect("consensus root over the Helios chunk");
+            let owner: Vec<Vec<usize>> = match layout {
+                ChunkLayout::Shared => vec![all.clone(); n_in],
+                ChunkLayout::Spread => all.iter().map(|&i| vec![i]).collect(),
+            };
+            (root, children, owner)
+        };
+    let c2_branch_layers = if c2_siblings.is_empty() {
+        Vec::new()
     } else {
-        let helios_child = selene_point_to_helios_scalar(&leaf_selene.to_bytes())
-            .expect("selene->helios conversion");
-        let root = hash_grow_helios(&helios_hash_init(), 0, &[0u8; 32], &[helios_child])
-            .expect("narrow consensus root");
-        (
-            root,
-            vec![BranchLayer {
-                siblings: vec![helios_child],
-            }],
-        )
+        vec![BranchLayer {
+            siblings: c2_siblings,
+        }]
     };
 
-    let chunk_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])> = (0..n_in)
-        .map(|i| (os[i].to_bytes(), is[i].to_bytes(), cs[i].to_bytes()))
-        .collect();
-    let chunk_h_pqc: Vec<[u8; 32]> = h_pqcs.iter().map(PrimeField::to_repr).collect();
+    let all_h_pqc: Vec<[u8; 32]> = h_pqcs.iter().map(PrimeField::to_repr).collect();
 
     let inputs: Vec<ProveInput> = (0..n_in)
         .map(|i| ProveInput {
             output_key: os[i].to_bytes(),
             key_image_gen: is[i].to_bytes(),
             commitment: cs[i].to_bytes(),
-            h_pqc: PqcLeafScalar(chunk_h_pqc[i]),
+            h_pqc: PqcLeafScalar(all_h_pqc[i]),
             spend_key_x: xs[i].to_repr(),
             spend_key_y: ys[i].to_repr(),
             commitment_mask: Scalar::random(&mut OsRng).to_repr(),
             pseudo_out_blind: Scalar::random(&mut OsRng).to_repr(),
-            leaf_chunk_outputs: chunk_outputs.clone(),
-            leaf_chunk_h_pqc: chunk_h_pqc.clone(),
+            leaf_chunk_outputs: per_input_chunk[i]
+                .iter()
+                .map(|&j| (os[j].to_bytes(), is[j].to_bytes(), cs[j].to_bytes()))
+                .collect(),
+            leaf_chunk_h_pqc: per_input_chunk[i].iter().map(|&j| all_h_pqc[j]).collect(),
             c1_branch_layers: vec![],
             c2_branch_layers: c2_branch_layers.clone(),
         })
@@ -168,7 +225,7 @@ pub fn build_fixture(n_in: usize, n_out: usize, tree_depth: u8) -> AdmissionFixt
     }
 
     let mut pqc_hashes_flat = Vec::with_capacity(32 * n_in);
-    for h in &chunk_h_pqc {
+    for h in &all_h_pqc {
         pqc_hashes_flat.extend_from_slice(h);
     }
 

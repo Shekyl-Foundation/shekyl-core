@@ -12527,3 +12527,81 @@ Then:
 > it is filled rather than after.
 
 
+
+## 79. The curve — the chunk-layout caveat closes as a null, and `f` is fittable
+
+**2026-08-05.** §76.1's owed measurement, taken before the constants round
+rather than carried into it as a caveat. The input axis was first swept with
+every input in **one leaf chunk** (§72's control, isolating input count from
+tree depth); production spends are scattered, so each input walks its **own**
+path. Since `f`'s per-input term is built from that marginal, the layout had to
+be measured.
+
+### 79.1 The result is a null, and it is controlled
+
+x86, depth 2, 2 outputs:
+
+| `n_in` | shared chunk | spread chunks | delta |
+| --- | --- | --- | --- |
+| 1 | 23.86 ms | 24.06 ms | **+0.19** |
+| 2 | 28.09 ms | 27.88 ms | −0.22 |
+| 4 | 41.52 ms | 41.70 ms | +0.18 |
+
+**`n_in = 1` is identical by construction** — one input is one chunk under
+either layout — so its **+0.19 ms** delta *is* the noise floor of this
+comparison, measured rather than assumed. The `n_in = 2` and `n_in = 4` deltas
+(−0.22, +0.18) are the same magnitude and opposite in sign.
+
+> **Chunk layout does not measurably affect verification cost.** The
+> shared-chunk marginal *is* the production marginal, so §72's control did not
+> distort the axis it was controlling for. **The caveat closes, and `f`'s
+> per-input term can be fitted from the surface already measured.**
+
+*Why this is a real null and not an absence of evidence: the comparison carries
+its own scale. Without the `n_in = 1` cell, "the deltas are small" would be an
+assertion about an unquantified noise floor — the vacuity §50.3 names. With it,
+"small" has a number to be small against.*
+
+### 79.2 `f`'s first-order form
+
+Least squares through `n_in ∈ {1, 2, 4}`, x86, depth 2:
+
+```text
+f(n_in)  ≈  17.15 ms  +  6.00 ms × n_in        (residuals +0.71, −1.06, +0.35)
+```
+
+At the Pi arm's measured 5.56× — the machine §78 says the constant derives
+from until a spec is stated:
+
+```text
+f_spec(n_in)  ≈  95 ms  +  33.4 ms × n_in
+```
+
+**Two properties of this fit worth carrying, and one warning:**
+
+- **The fixed term dominates at modal shape** — ~17 of 23.9 ms on x86, ~74 %.
+  That is why §74.1's shape-weighted scalar sat within 10 % of the modal cell,
+  and it stays true only while the per-input term is small relative to it.
+- **The per-input marginal is superlinear over the range** (+4.23 ms for input
+  2, +6.71 ms each for inputs 3–4), so a **linear fit under-predicts the
+  tail** — residuals are already ±1 ms at `n_in ≤ 4`. **A linear `f` is the
+  wrong functional form for the axis §75 cares about**, because the tail is
+  exactly where the sorting lives. The fit above is a first-order summary, not
+  the specification.
+- **It is depth-conditioned.** Adding the per-layer term (§73.4, multiplying
+  with inputs) is what makes `f` complete, and §78.2's schedule re-measures it
+  on the spec machine as the tree grows.
+
+### 79.3 What the constants round now has
+
+| input | status |
+| --- | --- |
+| minimum supported spec | **open — a decision** (§78.3 item 1) |
+| chunk layout | **closed — null** (§79.1) |
+| `f`'s per-input term | **measured**, superlinear; needs a form beyond linear (§79.2) |
+| `f`'s per-layer term | measured (§73.4), multiplies with inputs |
+| transit, scheduling | small relative to 127 ms, not gating (§74.1) |
+| depth re-derivation points | computed (§72) |
+| batch-depth volume trigger | computed, ~300k tx/day (§74.1) |
+
+**One decision and one functional-form choice.** Everything else is measured.
