@@ -6633,6 +6633,36 @@ sustainability is unaffected by the recalibration.
   V3.0 pre-genesis.** Closed when single-sig decode rejects a Bech32-checksum
   address string and the per-segment tests land.
 
+- **Credit-wire cutover has two preconditions the Phase-2 verify cannot satisfy
+  itself** (added 2026-08-05, credit-wire CW-3 shim). Phase 2 landed
+  `Blockchain::verify_block_attestation` (recompute-and-compare + per-pass
+  countersignature) at both admission sites, replacing the interim
+  empty-root check. Two things must land in the cutover PR (Phase 5) *before*
+  producers emit populated blocks, and neither is visible to the empty-witness
+  gates that pass pre-cutover:
+  1. **Miner-local witness wiring.** `handle_block_found`
+     ([`cryptonote_core.cpp`](../src/cryptonote_core/cryptonote_core.cpp), the
+     `add_new_block(b, bvc)` call) routes a freshly-mined block through the
+     **2-arg, witness-less** `add_new_block`, so its attestation witness never
+     reaches the verify. Pre-cutover harmless (locally-mined blocks are
+     empty-root); post-cutover the node would `MALFORMED_WITNESS`-reject its own
+     populated blocks. A hard guard in the 2-arg `add_new_block` already turns
+     the drop into an immediate failure (a non-empty `attestation_root` at the
+     witness-less entry aborts the add), so a forgotten wiring is loud, not
+     silent. Fix: route `handle_block_found` through the 3-arg `add_new_block`
+     with the mined block's witness once the miner-side aggregation exists.
+  2. **Signature leg behind PoW.** Both call sites sit in the "cheap test" slot
+     *before* PoW verification. Post-cutover the verify does up to
+     `ARCHIVAL_MAX_ATTESTATION_RECORDS` hybrid ML-DSA checks there; an attacker
+     who picks garbage signatures can compute the matching `attestation_root`
+     (the root commits the signature bytes), so `ROOT_MISMATCH` does not
+     short-circuit for an attacker who controls the root — that is free
+     asymmetric work with no PoW spent. Zero cost pre-cutover (empty witnesses).
+     Fix: move the signature-verifying leg after PoW, or justify the placement
+     explicitly, at cutover. **Target: V3.0 pre-genesis** (both gate the
+     credit-wire cutover). Closed when the cutover PR wires the miner witness
+     and orders the signature leg behind PoW.
+
 ---
 
 ## V3.1 — audit response and stressnet gates

@@ -2230,10 +2230,12 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     return false;
   }
 
-  // also cheap: the slice-1 credit-wire rule (ARCHIVAL_CREDIT_WIRE.md §3)
-  if (!check_attestation_root(b))
+  // the credit-wire attestation verify (ARCHIVAL_CREDIT_WIRE.md §3-§4). Cheap pre-cutover (empty
+  // witness -> empty-set root recompute); post-cutover it does up to one hybrid-signature verify per
+  // pass record, so the signature leg must sit behind PoW before population turns on (Phase-5
+  // ordering constraint, see FOLLOWUPS). verify_block_attestation logs the specific verdict code.
+  if (!verify_block_attestation(b, connect.attestation_witness))
   {
-    MERROR_VER("Block with id: " << id << std::endl << "has invalid attestation_root: " << b.attestation_root << ", expected the empty-set root " << empty_attestation_root() << " until the credit-wire cutover");
     bvc.m_verifivation_failed = true;
     return false;
   }
@@ -5554,14 +5556,84 @@ bool Blockchain::check_block_timestamp(const block& b, uint64_t& median_ts) cons
   return check_block_timestamp(timestamps, b, median_ts);
 }
 //------------------------------------------------------------------
-bool Blockchain::check_attestation_root(const block& b)
+bool Blockchain::verify_block_attestation(const block& b, const blobdata& witness)
 {
-  // ARCHIVAL_CREDIT_WIRE.md §3: until the credit-wire cutover activates
-  // attestation aggregation, no pass records can exist, so the only valid
-  // commitment is the empty-set root — never null_hash, never arbitrary bytes.
-  // Stateless by construction; the cutover slice replaces this with
-  // recompute-and-compare over the block's pass records.
-  return b.attestation_root == empty_attestation_root();
+  // ARCHIVAL_CREDIT_WIRE.md §3-§4: recompute-and-compare the block's attestation_root and verify
+  // every pass record's P-countersignature. ALL logic is in Rust (shekyl_archival_verify_attestation);
+  // this only marshals -- reads the header blob from the coinbase tx_extra, names the pass p_ids
+  // (step 1), reads each bond's hybrid pubkey from LMDB by those keys, reads the coinbase output key,
+  // hands the raw bytes across, and obeys the verdict. It parses nothing structural and decides
+  // nothing (rule 20). Pre-cutover no block carries pass records, so this reduces to the interim's
+  // attestation_root == empty_attestation_root() on every real block.
+  const crypto::hash id = get_block_hash(b);
+
+  // 1. Header blob from the coinbase tx_extra. get_archival_attestation_from_extra collapses "field
+  //    absent" and "malformed extra" to false; both are safe as empty headers, because empty headers
+  //    make Rust recompute the empty-set root -- they can only push the verdict toward reject, never
+  //    toward a passing populated verify.
+  std::string headers;
+  if (!get_archival_attestation_from_extra(b.miner_tx.extra, headers))
+    headers.clear();
+
+  // 2. Step 1: name the distinct pass p_ids so we know which bonds to read. Zero authority -- step 2
+  //    re-derives the authoritative set and rejects any coverage mismatch (ERR_PUBKEY_SET_MISMATCH).
+  uint8_t pass_ids[config::ARCHIVAL_MAX_ATTESTATION_RECORDS][32];
+  size_t pass_id_count = 0;
+  const uint8_t step1 = shekyl_archival_attestation_pass_p_ids(
+    headers.empty() ? nullptr : reinterpret_cast<const uint8_t*>(headers.data()), headers.size(),
+    pass_ids, config::ARCHIVAL_MAX_ATTESTATION_RECORDS, &pass_id_count);
+  if (step1 != SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK)
+  {
+    MERROR_VER("Block with id: " << id << " has malformed attestation headers (step-1 verdict "
+      << (unsigned)step1 << ")");
+    return false;
+  }
+
+  // 3. Read each distinct bond's hybrid pubkey. Fill ALL pubkey buffers first, THEN build the pairs
+  //    array -- taking .data() while the vector still grows would dangle earlier pointers on realloc.
+  //    A missing bond leaves the buffer empty (pubkey_len == 0), which Rust reads as the bond-absent
+  //    marker (ERR_BOND_ABSENT for that pass), never a bad-signature verdict.
+  std::vector<std::vector<uint8_t>> pubkeys(pass_id_count);
+  for (size_t i = 0; i < pass_id_count; ++i)
+  {
+    crypto::hash p_id;
+    std::memcpy(p_id.data, pass_ids[i], 32);
+    m_db->get_archival_bond_hybrid_pubkey(p_id, pubkeys[i]);
+  }
+  std::vector<shekyl_archival_pid_pubkey> pairs(pass_id_count);
+  for (size_t i = 0; i < pass_id_count; ++i)
+  {
+    std::memcpy(pairs[i].p_id, pass_ids[i], 32);
+    pairs[i].pubkey_ptr = pubkeys[i].empty() ? nullptr : pubkeys[i].data();
+    pairs[i].pubkey_len = pubkeys[i].size();
+  }
+
+  // 4. Assemble the ctx. cb_out_key is the coinbase vout[0] output key the nonce binds (consensus
+  //    rule); a block with no coinbase output or a non-key output is unreadable -- flag it so Rust
+  //    returns ERR_CBKEY_UNREADABLE rather than verifying against garbage.
+  shekyl_archival_attestation_verify_ctx ctx{};
+  std::memcpy(ctx.attestation_root, b.attestation_root.data, 32);
+  crypto::public_key cb_out_key;
+  if (!b.miner_tx.vout.empty() && get_output_public_key(b.miner_tx.vout[0], cb_out_key))
+  {
+    std::memcpy(ctx.cb_out_key, cb_out_key.data, 32);
+    ctx.cb_out_key_readable = 1;
+  }
+  ctx.headers_ptr = headers.empty() ? nullptr : reinterpret_cast<const uint8_t*>(headers.data());
+  ctx.headers_len = headers.size();
+  ctx.pairs_ptr = pairs.empty() ? nullptr : pairs.data();
+  ctx.pairs_len = pairs.size();
+
+  // 5. Step 2: the atomic verify. Any non-OK is a block-validity failure.
+  const uint8_t verdict = shekyl_archival_verify_attestation(
+    witness.empty() ? nullptr : reinterpret_cast<const uint8_t*>(witness.data()), witness.size(), &ctx);
+  if (verdict != SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK)
+  {
+    MERROR_VER("Block with id: " << id << " failed attestation verify (verdict "
+      << (unsigned)verdict << ")");
+    return false;
+  }
+  return true;
 }
 //------------------------------------------------------------------
 bool Blockchain::flush_txes_from_pool(const std::vector<crypto::hash> &txids)
@@ -5634,10 +5706,12 @@ leave:
     goto leave;
   }
 
-  // also cheap: the slice-1 credit-wire rule (ARCHIVAL_CREDIT_WIRE.md §3)
-  if (!check_attestation_root(bl))
+  // the credit-wire attestation verify (ARCHIVAL_CREDIT_WIRE.md §3-§4). Cheap pre-cutover (empty
+  // witness -> empty-set root recompute); post-cutover it does up to one hybrid-signature verify per
+  // pass record, so the signature leg must sit behind PoW before population turns on (Phase-5
+  // ordering constraint, see FOLLOWUPS). verify_block_attestation logs the specific verdict code.
+  if (!verify_block_attestation(bl, connect.attestation_witness))
   {
-    MERROR_VER("Block with id: " << id << std::endl << "has invalid attestation_root: " << bl.attestation_root << ", expected the empty-set root " << empty_attestation_root() << " until the credit-wire cutover");
     bvc.m_verifivation_failed = true;
     goto leave;
   }
@@ -6484,6 +6558,17 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
 //------------------------------------------------------------------
 bool Blockchain::add_new_block(const block& bl_, block_verification_context& bvc)
 {
+  // Witness-less entry: only genesis and (pre-cutover) locally-mined empty-root blocks reach here;
+  // p2p and reorg blocks carry their attestation witness through the 3-arg overload. A non-empty
+  // attestation_root at this entry means a caller dropped the witness -- the miner-local
+  // handle_block_found path (cryptonote_core.cpp) is the known one, and it MUST be rewired to the
+  // 3-arg add_new_block before the credit-wire cutover activates population (FOLLOWUPS.md /
+  // ARCHIVAL_CREDIT_WIRE.md §3). Until then this guard turns that drop into an immediate, un-missable
+  // failure instead of a silent MALFORMED_WITNESS self-reject inside verify_block_attestation. Safe
+  // as a hard guard: the witness-less entry is local-only, never reachable from untrusted p2p input.
+  CHECK_AND_ASSERT_MES(bl_.attestation_root == empty_attestation_root(), false,
+    "add_new_block: witness-less entry reached with a non-empty attestation_root; the caller must "
+    "plumb the block's attestation witness through the 3-arg add_new_block (credit-wire cutover wiring)");
   block_connect_supplement connect{};
   return add_new_block(bl_, bvc, connect);
 }

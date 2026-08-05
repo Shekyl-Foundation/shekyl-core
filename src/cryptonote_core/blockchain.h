@@ -1655,19 +1655,29 @@ namespace cryptonote
     bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b) const { uint64_t median_ts; return check_block_timestamp(timestamps, b, median_ts); }
 
     /**
-     * @brief checks a block's attestation_root against the credit-wire slice-1 rule
+     * @brief verifies a block's archival attestation (ARCHIVAL_CREDIT_WIRE.md §3-§4)
      *
-     * Until the credit-wire cutover activates attestation aggregation, the only
-     * valid attestation_root is the empty-set root — `attestation_root(&[])`,
-     * never `null_hash`, never arbitrary bytes (ARCHIVAL_CREDIT_WIRE.md §3).
-     * The rule is stateless in this slice; the cutover slice replaces it with
-     * recompute-and-compare over the block's pass records.
+     * Recompute-and-compare the block's `attestation_root` and verify every pass
+     * record's P-countersignature. ALL logic is in Rust
+     * (`shekyl_archival_verify_attestation`); this member only marshals — it reads
+     * the header blob from the coinbase `tx_extra`, names the pass p_ids (step 1),
+     * reads each bond's hybrid pubkey from LMDB by those keys, reads the coinbase
+     * output key, hands the raw bytes across, and obeys the verdict. It parses
+     * nothing structural and decides nothing (rule 20), so it needs `m_db` and is
+     * not static.
+     *
+     * Pre-cutover no block carries pass records, so over every real block this
+     * reduces to the interim's `attestation_root == empty_attestation_root()`; the
+     * populated path is proven by the across-FFI KAT and turns on for producers at
+     * the cutover.
      *
      * @param b the block to be checked
+     * @param witness the block's opaque attestation-witness blob
+     *   (`connect.attestation_witness`); empty is the zero-record set
      *
-     * @return true if the block's attestation_root is valid, otherwise false
+     * @return true iff the Rust verdict is OK, otherwise false
      */
-    static bool check_attestation_root(const block& b);
+    bool verify_block_attestation(const block& b, const blobdata& witness);
 
     /**
      * @brief finish an alternate chain's timestamp window from the main chain
