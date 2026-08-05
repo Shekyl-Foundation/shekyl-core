@@ -11984,10 +11984,75 @@ outputs), five further layers over the chain's life put the modal shape at
 **~160 ms of verification** — approaching the whole current budget from one
 term, with no code change to trigger a review.
 
-### 73.5 What this does not settle
+### 73.5 The disposition — a privacy defect now, a liveness cost to fix
+
+**"The wrong order" reads alarming without the disposition, so state it
+precisely.** The harm and the remedy sit on different axes:
+
+- **Today's defect is privacy.** An under-estimated `hop` shortens the embargo
+  *relative to true travel time*, so transactions are preempted and self-fluff
+  before their stem completes — §21's asymmetry, in its losing direction.
+- **The fix costs liveness, not privacy.** A correctly re-derived `hop` simply
+  makes the embargo longer, and §6.7 prices that as **recovery latency** —
+  slower black-hole recovery, not exposure.
+
+> **The shipped embargo is wrong in the privacy-losing direction, and
+> correcting it is paid for in liveness.** The same trade this arc has taken
+> twice already (RD-4's 31 → 144 s, F-7's 144 → 190 s), on the same side of the
+> priority order.
+
+### 73.6 §15's block-interval property does not constrain the answer — it forbids the question
+
+A re-derived `hop` several times larger pushes the embargo past 240 s, so it
+would cross **two** block intervals where 190 s crosses one. §15 checked that
+crossing twice, so it is reasonable to ask whether the constants round is bound
+by it. **It is not, and §15.6 forecloses exactly this move:**
+
+> *"**Do NOT** add a block-time term that pulls the embargo down. The derivation
+> stays block-time-**unaware**; it answers to survival and only survival. …
+> Block time is not a term of this derivation at any level, binding or not."*
+
+It names the temptation directly: *"Shortening the embargo now to slide back
+under 120 s re-commits the exact sin this whole arc undid."* The 39 s was the
+`log10`-for-`ln` error that merely *happened* to sit under a block interval — a
+number **wrong for privacy and incidentally comfortable for integration**.
+Treating a two-interval crossing as a constraint would rebuild precisely that.
+
+**What is owed sits at the integration layer, and one arm of it is a genuine
+re-run.** §15 located the real teeth in `MIN_RELAY_TIME` (300 s) and
+mempool-lifetime headroom, not block time. At an embargo several times 190 s,
+recovery p90 grows into that 300 s window — so **the cascade check must be
+re-run by the constants round**, while the block-interval crossing is a
+consequence to record rather than a bound to respect.
+
+### 73.7 What this does not settle
 
 The **shape distribution** and **batch depth** remain free parameters (§72.3,
 §72.4), so the effective scalar is not yet derivable — this fixes the surface,
-not the constant. And the embargo re-derivation at a corrected `hop` is a
+not the constant.
+
+**Batch depth is promoted by this measurement from caveat to dominant term.**
+At 22 ms it was a refinement; at 127 ms it is the largest remaining quantity.
+Every transaction in an arriving batch is verified before *any* is forwarded,
+so a batch of 10 puts the last transaction at **~1.27 s of verification alone**
+— an order of magnitude above the entire current `hop` budget. Depth is set by
+network load, which is exactly what a quiet two-node rig cannot observe and
+what no pre-genesis measurement can fix.
+
+**Which inverts §72.4's batch-verification disposition.** `fcmps` exposes
+`verify(&mut BatchVerifier<…>)` — *"this only queues the FCMP for batch
+verification"* — recorded there as a landmine: a throughput win that would
+silently invalidate the derivation. **At 127 ms serial that reading is
+backwards.** Batching amortises the multi-exponentiation across the batch,
+collapsing `N × 127 ms` toward `127 ms + small·N`. That is not an optimisation
+to guard against — **it is plausibly what keeps `hop` bounded under load at
+all.**
+
+The disposition therefore changes from *"do not take this without re-deriving"*
+to **"evaluate this as the fix"**. The obligation to re-derive is unchanged;
+the two phrasings simply send the next reader in opposite directions, and the
+second is the correct one.
+
+And the embargo re-derivation at a corrected `hop` is a
 separate act with a real liveness cost (§6.7), which is the constants round's
 to take, not this measurement's.

@@ -49,11 +49,18 @@
 //! the implementation verifies serially and `hop` measures the implementation,
 //! not the system's potential. This bench is therefore correct as written.
 //!
-//! **But adopting batching would change `hop`'s batch term from `(N+1)/2 ×
-//! verify` to something near-flat, and it is a pure throughput win that looks
-//! unrelated to relay privacy.** Whoever takes it must re-derive the embargo;
-//! recorded here because the natural reviewer of that change is looking at
-//! mempool throughput and has no reason to think about §71.
+//! **Evaluate it as the fix, not only as a hazard.** At the measured serial
+//! cost — 127 ms per transaction on the arm the constant derives from (§73) —
+//! a batch of 10 puts the last transaction at ~1.27 s of verification, an
+//! order above the whole current `hop` budget. Batching amortises the
+//! multi-exponentiation, collapsing `N × 127 ms` toward `127 ms + small·N`, so
+//! it is plausibly what keeps `hop` bounded under load rather than a throughput
+//! nicety.
+//!
+//! Either way it **changes `hop`'s batch term and obliges a re-derivation**.
+//! Recorded here because the natural reviewer of that change is looking at
+//! mempool throughput and has no reason to open §71 — but the note must not
+//! read as "don't", because on present numbers the answer may well be "must".
 //!
 //! # Reading the output
 //!
