@@ -1666,8 +1666,13 @@ namespace cryptonote
      * nothing structural and decides nothing (rule 20), so it needs `m_db` and is
      * not static.
      *
-     * Pre-cutover no block carries pass records, so over every real block this
-     * reduces to the interim's `attestation_root == empty_attestation_root()`; the
+     * Pre-cutover no block carries pass records, so on every VALID block (empty
+     * witness, well-formed coinbase) this matches the interim's
+     * `attestation_root == empty_attestation_root()`. It is strictly stricter on two
+     * malformed shapes the interim deferred to later validation: unsolicited witness
+     * bytes on an empty-root block (`MALFORMED_WITNESS`) and an unreadable coinbase
+     * `vout[0]` (`CBKEY_UNREADABLE`, which `prevalidate_miner_transaction` rejects
+     * anyway). Both are already-invalid, so no valid block's verdict changes. The
      * populated path is proven by the across-FFI KAT and turns on for producers at
      * the cutover.
      *

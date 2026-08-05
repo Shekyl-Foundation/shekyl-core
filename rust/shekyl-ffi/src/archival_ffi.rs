@@ -5601,6 +5601,13 @@ mod attestation_verify_tests {
         );
     }
 
+    /// The second (and last) deliberate divergence from the interim, on the same empty shape. The
+    /// interim never reads the coinbase, so it accepts an empty-root block whose `vout[0]` is
+    /// unreadable and leaves the rejection to `prevalidate_miner_transaction`; the verify checks the
+    /// C++-supplied cb-key-readable flag up front and rejects with CBKEY_UNREADABLE. Like the witness
+    /// divergence this only fires on an already-invalid block (a valid coinbase always has a readable
+    /// key `vout[0]`), so no valid block's verdict changes -- the verify is merely strictly stricter,
+    /// failing fast where the interim deferred.
     #[test]
     fn unreadable_coinbase_key_is_cbkey_unreadable() {
         assert_eq!(

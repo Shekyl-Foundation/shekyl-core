@@ -5563,8 +5563,11 @@ bool Blockchain::verify_block_attestation(const block& b, const blobdata& witnes
   // this only marshals -- reads the header blob from the coinbase tx_extra, names the pass p_ids
   // (step 1), reads each bond's hybrid pubkey from LMDB by those keys, reads the coinbase output key,
   // hands the raw bytes across, and obeys the verdict. It parses nothing structural and decides
-  // nothing (rule 20). Pre-cutover no block carries pass records, so this reduces to the interim's
-  // attestation_root == empty_attestation_root() on every real block.
+  // nothing (rule 20). Pre-cutover no block carries pass records, so on every VALID block (empty
+  // witness, well-formed coinbase) this matches the interim's attestation_root ==
+  // empty_attestation_root(); it is strictly stricter only on already-invalid shapes (unsolicited
+  // witness bytes, or an unreadable coinbase vout[0] that prevalidate_miner_transaction rejects
+  // anyway), so no valid block's verdict changes.
   const crypto::hash id = get_block_hash(b);
 
   // 1. Header blob from the coinbase tx_extra. get_archival_attestation_from_extra collapses "field

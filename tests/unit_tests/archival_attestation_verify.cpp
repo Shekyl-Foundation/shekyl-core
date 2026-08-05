@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
 
 namespace
@@ -148,10 +149,10 @@ TEST(archival_attestation_verify, empty_shape_across_ffi)
 TEST(archival_attestation_verify, step1_names_the_pinned_pass_pid)
 {
   const std::vector<uint8_t> headers = from_hex(KAT_HEADERS);
-  uint8_t out[256][32];
+  uint8_t out[config::ARCHIVAL_MAX_ATTESTATION_RECORDS][32];
   size_t n = 0;
   const uint8_t code = shekyl_archival_attestation_pass_p_ids(
-    headers.data(), headers.size(), out, 256, &n);
+    headers.data(), headers.size(), out, config::ARCHIVAL_MAX_ATTESTATION_RECORDS, &n);
   EXPECT_EQ(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
   ASSERT_EQ(n, 1u);
   const std::vector<uint8_t> p_id = from_hex(KAT_P_ID);
