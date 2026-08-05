@@ -9,6 +9,7 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_relay_privacy::params::P2P_DEFAULT_OUT_PEERS;
 use shekyl_relay_privacy::SplitMix64;
 
 /// **§12 W3 residual — the δ a `ρ` decision is actually taken against (Round-3
@@ -16,15 +17,16 @@ use shekyl_relay_privacy::SplitMix64;
 /// *both* of the origin's outbound stem slots (`out_mapping_`). Grounded as an
 /// OUTBOUND-occupancy channel (peer selection, the costly direction), not the
 /// inbound diffusion reach `simulate_transport_observation` measures — importing
-/// that reach would measure a phantom. `D_out = 12` (`P2P_DEFAULT_CONNECTIONS_COUNT`).
+/// that reach would measure a phantom. `D_out` is `P2P_DEFAULT_OUT_PEERS`, consumed
+/// from the Rust owner rather than re-typed (§70).
 #[test]
 fn two_slot_occupancy_is_the_reshape_residual() {
     use shekyl_relay_privacy::conformance::simulate_two_slot_occupancy;
 
-    const D_OUT: usize = 12; // P2P_DEFAULT_CONNECTIONS_COUNT, cryptonote_config.h:134
+    const D_OUT: usize = P2P_DEFAULT_OUT_PEERS as usize;
     let trials = 1_000_000;
 
-    println!("\nW3 residual: P(adversary holds BOTH outbound stem slots), D_out=12");
+    println!("\nW3 residual: P(adversary holds BOTH outbound stem slots), D_out={D_OUT}");
     println!(
         "{:>8} {:>6} {:>12} {:>14} {:>16}",
         "g", "a", "both (W3)", ">=1 slot", "indep (a/D)^2"
@@ -113,13 +115,13 @@ fn two_slot_occupancy_is_the_reshape_residual() {
 fn epoch_layering_pinning_amplifies_direct_successor_exposure() {
     use shekyl_relay_privacy::conformance::simulate_epoch_layering;
 
-    const D_OUT: usize = 12; // P2P_DEFAULT_CONNECTIONS_COUNT
+    const D_OUT: usize = P2P_DEFAULT_OUT_PEERS as usize;
     const M: usize = 30; // ~5 h of 10-min epochs
     let trials = 200_000;
 
     // Single adversary peer (a=1): the advisor's scenario. Pool successor ~1/12 of
     // epochs; pinned to K ~1/K — amplified by D/K.
-    println!("\nQ1 layering: single adversary peer (a=1), M={M} epochs, D_out=12");
+    println!("\nQ1 layering: single adversary peer (a=1), M={M} epochs, D_out={D_OUT}");
     println!(
         "{:>6} {:>10} {:>14} {:>16} {:>12}",
         "set", "a/set", "P(id direct)", "distinct succ", "amp vs pool"
@@ -260,7 +262,7 @@ fn epsilon_greedy_pure_preference_ossifies_to_two_peers() {
 fn induced_churn_compounds_today_and_saturates_under_a_frozen_set() {
     use shekyl_relay_privacy::conformance::simulate_induced_churn_exposure;
 
-    const D_OUT: usize = 12; // P2P_DEFAULT_CONNECTIONS_COUNT
+    const D_OUT: usize = P2P_DEFAULT_OUT_PEERS as usize;
     const STEMS: usize = 2; // CRYPTONOTE_DANDELIONPP_STEMS
     const G: f64 = 0.10; // baseline outbound share
     let trials = 200_000;

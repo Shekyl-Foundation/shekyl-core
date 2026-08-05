@@ -171,7 +171,12 @@
 #define P2P_LOCAL_WHITE_PEERLIST_LIMIT                  1000
 #define P2P_LOCAL_GRAY_PEERLIST_LIMIT                   5000
 
-#define P2P_DEFAULT_CONNECTIONS_COUNT                   12
+// P2P_DEFAULT_CONNECTIONS_COUNT is gone: the default outbound connection count
+// is Rust-owned and reached through `shekyl_p2p_default_out_peers()`
+// (`shekyl/shekyl_ffi.h`). Every relay-privacy measurement simulates the
+// deployed out-degree, so a value C++ could move on its own left those
+// instruments free to describe a network the daemon no longer runs -- F-7's
+// failure mode one layer down. See DAEMON_RELAY_PRIVACY.md §70.
 #define P2P_DEFAULT_HANDSHAKE_INTERVAL                  60           //secondes
 #define P2P_DEFAULT_PACKET_MAX_SIZE                     50000000     //50000000 bytes maximum packet size
 #define P2P_DEFAULT_PEERS_IN_HANDSHAKE                  250

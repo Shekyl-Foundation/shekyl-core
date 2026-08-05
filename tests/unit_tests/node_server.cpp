@@ -1309,13 +1309,16 @@ TEST(node_server, tx_proxy_outbound_floor_refuses_underprovisioned_counts)
   ASSERT_EQ(1u, at_floor->size());
   EXPECT_EQ(12, at_floor->front().max_connections);
 
-  // Omitted count: the default (-1 -> P2P_DEFAULT_CONNECTIONS_COUNT) resolves
+  // Omitted count: the default (-1 -> shekyl_p2p_default_out_peers()) resolves
   // at or above the floor — today they are EQUAL (12), so "above by
   // construction" would be false — and must keep parsing. The relation is
   // asserted, not assumed: if the floor ever rises past the default, the
   // default configuration itself becomes under-provisioned and this is the
-  // test that says so.
-  EXPECT_LE(floor_value, P2P_DEFAULT_CONNECTIONS_COUNT)
+  // test that says so. Both sides are now Rust-owned constants reached through
+  // the FFI, so this is the one place their *relation* is checked at all.
+  const std::int64_t default_out_peers =
+    static_cast<std::int64_t>(shekyl_p2p_default_out_peers());
+  EXPECT_LE(floor_value, default_out_peers)
     << "the default outbound count must satisfy the floor the embargo derivation assumes";
   const auto omitted = parse("tor,127.0.0.1:9050");
   ASSERT_TRUE(omitted.has_value());
