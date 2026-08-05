@@ -125,7 +125,7 @@ bool BootstrapFile::initialize_file(uint64_t first_block, uint64_t last_block)
   *m_raw_data_file << blob;
 
   bootstrap::file_info bfi;
-  bfi.major_version = 1;
+  bfi.major_version = bootstrap::BOOTSTRAP_MAJOR_VERSION;
   bfi.minor_version = bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS;
   bfi.header_size = header_size;
 

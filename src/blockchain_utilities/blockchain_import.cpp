@@ -281,11 +281,25 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
   // chunk cannot parse as the current block_package in any case — but the reason has
   // to be legible: importing it would otherwise mean a chain whose every block is
   // permanently witness-less, which only surfaces after the cutover.
-  if (major_version != 0 && minor_version < bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS)
+  //
+  // The gate covers EVERY major, including 0. An earlier form excluded major 0,
+  // which left the one hole it was written to close: a v0 chunk is a
+  // `block_package_1`, which has no witness field at all, so it would have
+  // imported to exactly the permanently witness-less chain this refuses. Major 0
+  // is Monero-era anyway — Shekyl is v3-from-genesis with no Monero chain history
+  // (rule 60), its block serializer cannot parse a Monero block blob, and
+  // BootstrapFile::initialize_file has only ever written major 1 — so the v0
+  // reader is gone with this check rather than kept as a second thing to
+  // remember.
+  if (major_version != bootstrap::BOOTSTRAP_MAJOR_VERSION
+      || minor_version < bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS)
   {
     MFATAL("bootstrap file is v" << unsigned(major_version) << "." << unsigned(minor_version)
-      << ", which predates the attestation-witness field (v" << unsigned(major_version) << "."
-      << unsigned(bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS) << "). Re-export it with this build.");
+      << ", which this build cannot import. Expected v"
+      << unsigned(bootstrap::BOOTSTRAP_MAJOR_VERSION) << "."
+      << unsigned(bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS)
+      << " or later — earlier files predate the attestation-witness field. "
+         "Re-export it with this build.");
     return false;
   }
 
@@ -407,23 +421,10 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
     try
     {
       str1.assign(buffer_block, chunk_size);
+      // One chunk shape: the version gate above already refused everything that is
+      // not v1.BOOTSTRAP_MINOR_VERSION_WITNESS-or-later.
       bootstrap::block_package bp;
-      bool res;
-      if (major_version == 0)
-      {
-        bootstrap::block_package_1 bp1;
-        res = ::serialization::parse_binary(str1, bp1);
-        if (res)
-        {
-          bp.block = std::move(bp1.block);
-          bp.txs = std::move(bp1.txs);
-          bp.block_weight = bp1.block_weight;
-          bp.cumulative_difficulty = bp1.cumulative_difficulty;
-          bp.coins_generated = bp1.coins_generated;
-        }
-      }
-      else
-        res = ::serialization::parse_binary(str1, bp);
+      bool res = ::serialization::parse_binary(str1, bp);
       if (!res)
         throw std::runtime_error("Error in deserialization of chunk");
 

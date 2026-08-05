@@ -39,6 +39,12 @@ namespace cryptonote
   namespace bootstrap
   {
 
+    // The only bootstrap major version Shekyl reads or writes. The Monero-era
+    // major 0 (`block_package_1`, no witness field) is not supported: Shekyl is
+    // v3-from-genesis with no Monero chain history (rule 60), so its block
+    // serializer cannot parse a major-0 chunk's block blob in the first place.
+    constexpr uint8_t BOOTSTRAP_MAJOR_VERSION = 1;
+
     // Minor version at which a chunk started carrying the credit-wire attestation
     // witness. A file below this is refused on import: the field is trailing, so
     // parsing an older chunk with the current block_package would fail mid-record
@@ -72,23 +78,6 @@ namespace cryptonote
         VARINT_FIELD(block_first);
         VARINT_FIELD(block_last);
         VARINT_FIELD(block_last_pos);
-      END_SERIALIZE()
-    };
-
-    struct block_package_1
-    {
-      cryptonote::block block;
-      std::vector<transaction> txs;
-      size_t block_weight;
-      uint64_t cumulative_difficulty;
-      uint64_t coins_generated;
-
-      BEGIN_SERIALIZE()
-        FIELD(block)
-        FIELD(txs)
-        VARINT_FIELD(block_weight)
-        VARINT_FIELD(cumulative_difficulty)
-        VARINT_FIELD(coins_generated)
       END_SERIALIZE()
     };
 
