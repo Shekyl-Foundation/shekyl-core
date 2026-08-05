@@ -35,6 +35,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kameo::actor::Spawn as _;
+use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
 use shekyl_p_transport::{PTorClient, PTransportError, RequestErrorKind, TorSocksEndpoint};
 use shekyl_tor::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId};
 use shekyl_tor::control::{BootstrapReadiness, BootstrapState, Command, EventSink, TorControl};
@@ -57,6 +58,27 @@ pub const FETCH_CEILING: Duration = Duration::from_secs(180);
 /// Descriptor upload to the HSDirs plus a client's fetch of it takes tens of
 /// seconds on a cold service; this bounds the wait rather than assuming it.
 pub const PUBLISH_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The apparatus's **pinned** derivation seed — the harness takes no seed from
+/// its caller, by design.
+///
+/// SPIKE-F-4 relocated the onion-key derivation onto the *production* GF-9 path
+/// ([`derive_onion_identity`] → `shekyl_crypto_pq::archival_p::derive_p_hs_id_seed`).
+/// A consequence the old spike-local label used to mask: feeding a real wallet's
+/// `master_seed_64` here would now serve at the persona's **actual production
+/// `.onion`** — the co-activation Model D forbids (`BOND_CONSTRUCTION.md:667`,
+/// one persona on the wire per wallet). The apparatus is *retained* (rule 15) for
+/// the owed Tor hop-latency measurement, so it will be run again; pinning the
+/// seed makes "never point this at a wallet" an enforced invariant rather than
+/// operator discipline. Distinct personas come from the `p_slot` sweep, not from
+/// distinct seeds, so parameterizing the seed bought nothing the sweep does not.
+///
+/// Kept **private**: it is the harness's internal fixed context, not public API —
+/// a `publish = false` spike must not invite external coupling to a test seed. The
+/// derivation network/format are pinned alongside it at the one call site
+/// (`Mainnet`/`Bip39`; the `.onion` value is irrelevant to a latency measurement,
+/// so any fixed context works, and this one matches the KAT's slot-0 vector).
+const APPARATUS_PINNED_SEED: [u8; 64] = [0x11u8; 64];
 
 /// A persona serving a shard over its own onion.
 pub struct Persona {
@@ -182,14 +204,12 @@ impl Apparatus {
     pub async fn bring_up(
         tor_binary: std::path::PathBuf,
         data_dir: std::path::PathBuf,
-        master_seed: &[u8; 64],
         persona_count: u32,
         payload: Arc<Vec<u8>>,
     ) -> Result<Self, ApparatusError> {
         Self::bring_up_with_pow(
             tor_binary,
             data_dir,
-            master_seed,
             persona_count,
             payload,
             OnionPow::Disabled,
@@ -207,7 +227,6 @@ impl Apparatus {
     pub async fn bring_up_with_pow(
         tor_binary: std::path::PathBuf,
         data_dir: std::path::PathBuf,
-        master_seed: &[u8; 64],
         persona_count: u32,
         payload: Arc<Vec<u8>>,
         pow: OnionPow,
@@ -245,7 +264,15 @@ impl Apparatus {
         let mut personas = Vec::new();
         for slot in 0..persona_count {
             let slot = PSlot::from_raw(slot);
-            let identity = derive_onion_identity(master_seed, slot);
+            // One pinned derivation context (see `APPARATUS_PINNED_SEED`): the
+            // fixed test seed under mainnet/bip39. Explicit here, not hidden in
+            // the derivation.
+            let identity = derive_onion_identity(
+                &APPARATUS_PINNED_SEED,
+                DerivationNetwork::Mainnet,
+                SeedFormat::Bip39,
+                slot,
+            );
             let service_id = identity.service_id().clone();
             let endpoint = ServeEndpoint::bind(Arc::clone(&payload))
                 .await

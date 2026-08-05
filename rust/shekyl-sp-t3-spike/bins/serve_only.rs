@@ -85,12 +85,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("pow: {pow:?}");
 
     let dir = tempfile::tempdir()?;
-    let seed = [0x11u8; 64];
     eprintln!("bringing up 1 persona (conformant shape) behind one tor...");
     let app = Apparatus::bring_up_with_pow(
         tor,
         dir.path().join("tor-data"),
-        &seed,
         1,
         Arc::new(fixture.bytes().to_vec()),
         pow,

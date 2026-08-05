@@ -26,8 +26,6 @@
 use std::sync::Arc;
 
 use shekyl_sp_t3_spike::harness::{cold_client_id, warm_client_id, Apparatus};
-use shekyl_sp_t3_spike::onion_key::derive_onion_identity;
-use shekyl_types::PSlot;
 
 /// The pinned tor binary. **Hard-fails** rather than skipping, so a
 /// misconfigured integration lane is loud instead of silently passing by not
@@ -37,8 +35,6 @@ fn tor_binary() -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .expect("SHEKYL_SPIKE_TOR must point at the pinned Tor Expert Bundle binary")
 }
-
-const SEED: [u8; 64] = [0x27u8; 64];
 
 #[tokio::test]
 #[ignore = "requires the pinned Tor binary via SHEKYL_SPIKE_TOR (bootstraps, publishes onions, network)"]
@@ -52,26 +48,21 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
     let app = Apparatus::bring_up(
         tor_binary(),
         dir.path().join("tor-data"),
-        &SEED,
         2,
         Arc::new(payload.clone()),
     )
     .await
     .expect("apparatus comes up");
 
-    // The published addresses must be the derived ones. This is the D2 encoding
-    // claim asserted end-to-end: tor derived the same v3 address from the
-    // expanded key that this crate derived from the seed, so the RFC 8032
-    // expansion and the address construction are both right.
-    for slot in 0..2u32 {
-        let expected = derive_onion_identity(&SEED, PSlot::from_raw(slot));
-        assert_eq!(
-            app.personas[slot as usize].service_id(),
-            expected.service_id(),
-            "persona {slot}'s published .onion must be the derived one"
-        );
-    }
-    // And the two personas must not share an address.
+    // The D2 encoding claim — tor publishes the v3 address the derivation
+    // predicts — is enforced inside `bring_up` itself: it derives each persona's
+    // service id and fail-stops if tor's published id differs (`harness.rs`, the
+    // `published != service_id` guard). Reaching this point means every persona's
+    // published `.onion` already matched its derived one; re-deriving here against
+    // the same pure function would only restate that, so it is not repeated.
+    //
+    // What is still worth asserting is that the two personas do not share an
+    // address — distinct slots must publish distinct onions.
     assert_ne!(
         app.personas[0].service_id(),
         app.personas[1].service_id(),

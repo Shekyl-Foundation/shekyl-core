@@ -9,16 +9,15 @@ description = "DISPOSABLE measurement spike: PD-F-2 Tor-borne shard-fetch disper
 publish = false
 
 [dependencies]
-# The v3 onion key is an ed25519 key: the derivation produces a seed, expands it
-# per RFC 8032 §5.1.5, and needs the *public* half to check the service id tor
-# returns against one derived independently. Both crates are already workspace-
-# locked and are the same ones `shekyl-crypto-pq` uses for every other ed25519
-# key, so this adds no supply-chain edge.
-curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "precomputed-tables"] }
+# The v3 onion key is an ed25519 key: `derive_p_hs_id_seed` (below) produces the
+# seed, this crate expands it per RFC 8032 §5.1.5, and needs the *public* half to
+# check the service id tor returns against one derived independently. Same
+# `ed25519-dalek` `shekyl-crypto-pq` uses for every other ed25519 key, so this
+# adds no supply-chain edge.
 ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"] }
-# cSHAKE256 for the spike-local key derivation's domain separation, and SHA3-256
-# for the v3 onion-address checksum (rend-spec-v3 §6). Same `sha3` the archival
-# crates already carry.
+# SHA3-256 for the v3 onion-address checksum (rend-spec-v3 §6). Same `sha3` the
+# archival crates already carry. (The former spike-local cSHAKE256 derivation was
+# retired by SPIKE-F-4; only the checksum use remains.)
 sha3 = { version = "0.10", default-features = false }
 # RFC 8032 seed expansion is SHA-512.
 sha2 = { version = "0.10", default-features = false }
@@ -40,8 +39,9 @@ kameo = { workspace = true }
 shekyl-p-transport = { path = "../shekyl-p-transport" }
 # `PCanonicalId` / `PSlot` — the persona identity the derivation binds to.
 shekyl-types = { path = "../shekyl-types" }
-# `p_canonical_id_from_hybrid_pubkey`, for the domain-separation negative control.
-shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `derive_p_hs_id_seed` (+ `DerivationNetwork` / `SeedFormat`) — the production
+# GF-9 HS-identity seed the onion encoding consumes (SPIKE-F-4 relocation).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # `construct_leaf` — the shard fixture must be the leaf bytes a persona archives,
 # not the compressed points the RPC returns (see src/bin/extract_shard.rs).
 shekyl-fcmp = { path = "../shekyl-fcmp" }

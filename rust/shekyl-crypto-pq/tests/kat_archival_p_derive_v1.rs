@@ -24,8 +24,8 @@ use serde::Deserialize;
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{
     derive_archival_p_keys, derive_p_account_sign_seed, derive_p_bond_spend_ed_seed,
-    derive_p_bond_spend_ml_dsa_seed, derive_p_kem_d_z, derive_p_ml_dsa_seed, derive_p_spend_wide,
-    derive_p_view_wide, ArchivalPKeys,
+    derive_p_bond_spend_ml_dsa_seed, derive_p_hs_id_seed, derive_p_kem_d_z, derive_p_ml_dsa_seed,
+    derive_p_spend_wide, derive_p_view_wide, ArchivalPKeys,
 };
 use shekyl_crypto_pq::archival_p_freeze::archival_p_derive_manifest_self_check;
 
@@ -91,6 +91,9 @@ struct Tier1Vector {
     p_slot: u32,
     #[serde(default)]
     p_slot_b: Option<u32>,
+    /// Second network for `*_network_separation` kinds (varies only `net`).
+    #[serde(default)]
+    network_b: Option<String>,
     expected: Tier1Expected,
 }
 
@@ -179,7 +182,11 @@ fn run_tier1(v: &Tier1Vector) {
             let exp = v.expected.out_hex.as_deref().expect("out_hex");
             assert_eq!(hex::encode(out.as_slice()), exp, "{}", v.id);
         }
-        "account_sign_seed" | "ml_dsa_seed" | "bond_spend_ed_seed" | "bond_spend_ml_dsa_seed" => {
+        "account_sign_seed"
+        | "ml_dsa_seed"
+        | "bond_spend_ed_seed"
+        | "bond_spend_ml_dsa_seed"
+        | "hs_id_seed" => {
             let out = match v.kind.as_str() {
                 "account_sign_seed" => derive_p_account_sign_seed(&master, net, fmt, v.p_slot),
                 "ml_dsa_seed" => derive_p_ml_dsa_seed(&master, net, fmt, v.p_slot),
@@ -187,10 +194,74 @@ fn run_tier1(v: &Tier1Vector) {
                 "bond_spend_ml_dsa_seed" => {
                     derive_p_bond_spend_ml_dsa_seed(&master, net, fmt, v.p_slot)
                 }
+                "hs_id_seed" => derive_p_hs_id_seed(&master, net, fmt, v.p_slot),
                 _ => unreachable!(),
             };
             let exp = v.expected.out_hex.as_deref().expect("out_hex");
             assert_eq!(hex::encode(out.as_slice()), exp, "{}", v.id);
+        }
+        "hs_id_pubkey" => {
+            // The GF-9 serving key's Ed25519 PUBLIC key is the v3 `.onion`
+            // address's public key. Pinning it (not just the seed) closes the
+            // cross-arch gap that matters: a divergent bit here leaves an ARM
+            // user's persona unreachable at its advertised `.onion`. The
+            // seed→pubkey step is RFC 8032 keygen, exactly what tor applies.
+            let seed = derive_p_hs_id_seed(&master, net, fmt, v.p_slot);
+            let pk = ed25519_dalek::SigningKey::from_bytes(&seed)
+                .verifying_key()
+                .to_bytes();
+            let exp = v.expected.out_hex.as_deref().expect("out_hex");
+            assert_eq!(hex::encode(pk), exp, "{}", v.id);
+        }
+        "hs_id_label_separation" => {
+            // GF-9 serving seed vs identity account-sign seed: two L=32 Ed25519
+            // seeds under the same (seed, net, fmt, slot) must differ, or the
+            // serving `.onion` key would collide with the on-chain identity key.
+            // `out_a` = hs-id, `out_b` = account-sign (the pair this id names).
+            let hs = derive_p_hs_id_seed(&master, net, fmt, v.p_slot);
+            let acct = derive_p_account_sign_seed(&master, net, fmt, v.p_slot);
+            let a_hex = hex::encode(hs.as_slice());
+            let b_hex = hex::encode(acct.as_slice());
+            assert_eq!(
+                a_hex,
+                v.expected.out_a_hex.as_deref().expect("out_a_hex"),
+                "{} a",
+                v.id
+            );
+            assert_eq!(
+                b_hex,
+                v.expected.out_b_hex.as_deref().expect("out_b_hex"),
+                "{} b",
+                v.id
+            );
+            assert_ne!(a_hex, b_hex, "{} labels must differ", v.id);
+        }
+        "hs_id_network_separation" => {
+            // GF-9 serving identity is **network-scoped** like every sibling
+            // label (salt = salt_for(net, fmt)). Same seed, format, and slot under
+            // two different networks MUST yield different HS keys — otherwise one
+            // wallet would serve at the *same* `.onion` on mainnet and testnet,
+            // linking the two personas. This is **un-regenerate-around-able**: it
+            // asserts inequality on a live computation, so dropping `net` from the
+            // derivation fails here even if the frozen corpus is rebuilt.
+            let net_b = parse_network(v.network_b.as_deref().expect("network_b"));
+            let a = derive_p_hs_id_seed(&master, net, fmt, v.p_slot);
+            let b = derive_p_hs_id_seed(&master, net_b, fmt, v.p_slot);
+            let a_hex = hex::encode(a.as_slice());
+            let b_hex = hex::encode(b.as_slice());
+            assert_eq!(
+                a_hex,
+                v.expected.out_a_hex.as_deref().expect("out_a_hex"),
+                "{} a",
+                v.id
+            );
+            assert_eq!(
+                b_hex,
+                v.expected.out_b_hex.as_deref().expect("out_b_hex"),
+                "{} b",
+                v.id
+            );
+            assert_ne!(a_hex, b_hex, "{} networks must differ", v.id);
         }
         "slot_separation" => {
             // Same inputs, two p_slots: identity keys must differ.
@@ -372,6 +443,31 @@ fn build_tier1_vectors() -> Vec<serde_json::Value> {
     let mldsa = derive_p_ml_dsa_seed(m, net, fmt, 0);
     let bond_ed = derive_p_bond_spend_ed_seed(m, net, fmt, 0);
     let bond_ml = derive_p_bond_spend_ml_dsa_seed(m, net, fmt, 0);
+    let hs_id = derive_p_hs_id_seed(m, net, fmt, 0);
+    let hs_id_pk = ed25519_dalek::SigningKey::from_bytes(&hs_id)
+        .verifying_key()
+        .to_bytes();
+
+    // Non-Mainnet HS-identity coverage. `hs_id` is network-scoped like every
+    // sibling (salt = salt_for(net, fmt)), but it is *not* an `ArchivalPKeys`
+    // field, so Tier-2's cross-network matrix does not reach it — these rows pin
+    // the network/format-varying behavior of the label whose production consumer
+    // (the forthcoming 2d-2 SP-T3 serving path) passes the wallet's real
+    // (net, fmt); today only the disposable SP-T3 spike exercises it, and it
+    // hardcodes Mainnet/Bip39. Matrix mirrors Tier-2: (testnet, raw32, MASTER_44,
+    // slot 0) and (stagenet, bip39, MASTER_33, slot 3).
+    let hs_id_tn =
+        derive_p_hs_id_seed(&MASTER_44, DerivationNetwork::Testnet, SeedFormat::Raw32, 0);
+    let hs_id_tn_pk = ed25519_dalek::SigningKey::from_bytes(&hs_id_tn)
+        .verifying_key()
+        .to_bytes();
+    let hs_id_sn = derive_p_hs_id_seed(m, DerivationNetwork::Stagenet, SeedFormat::Bip39, 3);
+    let hs_id_sn_pk = ed25519_dalek::SigningKey::from_bytes(&hs_id_sn)
+        .verifying_key()
+        .to_bytes();
+    // Network-separation pair: same seed/format/slot, mainnet vs testnet. `a` is
+    // the mainnet `hs_id` above; `b` varies only the network.
+    let hs_id_net_b = derive_p_hs_id_seed(m, DerivationNetwork::Testnet, fmt, 0);
 
     let slot0 = derive_archival_p_keys(m, net, fmt, 0).unwrap();
     let slot7 = derive_archival_p_keys(m, net, fmt, 7).unwrap();
@@ -384,6 +480,18 @@ fn build_tier1_vectors() -> Vec<serde_json::Value> {
             "expected": { "out_hex": hex::encode(out) }
         })
     };
+
+    // Same shape as `mk_intermediate` but with explicit (master, network, format)
+    // — for the non-Mainnet `hs_id` rows.
+    let mk_net =
+        |id: &str, kind: &str, master: &[u8], net_s: &str, fmt_s: &str, slot: u32, out: &[u8]| {
+            serde_json::json!({
+                "id": id, "kind": kind,
+                "master_seed_hex": hex::encode(master), "network": net_s, "seed_format": fmt_s,
+                "p_slot": slot,
+                "expected": { "out_hex": hex::encode(out) }
+            })
+        };
 
     vec![
         mk_intermediate(
@@ -423,6 +531,72 @@ fn build_tier1_vectors() -> Vec<serde_json::Value> {
             0,
             bond_ml.as_slice(),
         ),
+        mk_intermediate(
+            "hs_id_seed_mainnet_bip39_slot0",
+            "hs_id_seed",
+            0,
+            hs_id.as_slice(),
+        ),
+        mk_intermediate(
+            "hs_id_pubkey_mainnet_bip39_slot0",
+            "hs_id_pubkey",
+            0,
+            &hs_id_pk,
+        ),
+        mk_net(
+            "hs_id_seed_testnet_raw32_slot0",
+            "hs_id_seed",
+            &MASTER_44,
+            "testnet",
+            "raw32",
+            0,
+            hs_id_tn.as_slice(),
+        ),
+        mk_net(
+            "hs_id_pubkey_testnet_raw32_slot0",
+            "hs_id_pubkey",
+            &MASTER_44,
+            "testnet",
+            "raw32",
+            0,
+            &hs_id_tn_pk,
+        ),
+        mk_net(
+            "hs_id_seed_stagenet_bip39_slot3",
+            "hs_id_seed",
+            m,
+            "stagenet",
+            "bip39",
+            3,
+            hs_id_sn.as_slice(),
+        ),
+        mk_net(
+            "hs_id_pubkey_stagenet_bip39_slot3",
+            "hs_id_pubkey",
+            m,
+            "stagenet",
+            "bip39",
+            3,
+            &hs_id_sn_pk,
+        ),
+        serde_json::json!({
+            "id": "hs_id_network_separation_mainnet_vs_testnet", "kind": "hs_id_network_separation",
+            "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",
+            "network_b": "testnet", "p_slot": 0,
+            "expected": {
+                "out_a_hex": hex::encode(hs_id.as_slice()),
+                "out_b_hex": hex::encode(hs_id_net_b.as_slice())
+            }
+        }),
+        serde_json::json!({
+            "id": "hs_id_label_separation_hs_id_vs_account_sign", "kind": "hs_id_label_separation",
+            "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",
+            "p_slot": 0,
+            "expected": {
+                "out_a_hex": hex::encode(hs_id.as_slice()),
+                "out_b_hex": hex::encode(acct.as_slice())
+            }
+        }),
         serde_json::json!({
             "id": "slot_separation_slot0_vs_slot7", "kind": "slot_separation",
             "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",

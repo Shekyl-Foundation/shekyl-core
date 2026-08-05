@@ -6,17 +6,18 @@
   per-tx-type verifier contract resolved, GF-2 dual-scan enforcement made architectural, reviewer
   sign-off (§9.8), post-sign-off refinements C-1/C-2/C-3 folded in. **Lone carry discharged:** the
   `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152 — verified at source:
-  [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) carries all seven §9.3 labels
-  incl. the `bond_spend_*` pair; [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs)).
+  [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) carries all eight §9.3 labels
+  incl. the `bond_spend_*` pair and the GF-9 `hs_id` label (SPIKE-F-4, §10.13);
+  [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs)).
   **C-1 dependency discharged:** the emission vin-layer ML-DSA equality check **landed** (PR #277,
   `dev` `13c368707`; `emission_verify.rs`) — quantum spend-authority no longer classical-only.
 - **Round 2 closed (2026-07-11)** — network + transport (§10). All §10.10 exit dispositions
   ratified against the round's defense-in-depth bar (§10.0); closure disposition + carried items
-  with rule-21 criteria at §10.13. **One carry is a not-yet-frozen crypto surface:** the GF-9
-  seed-derived HS-identity HKDF label is *pinned as a disposition* (§10.7) but is **not yet in the
-  derivation/KAT** (verified at source — absent from `archival_p.rs`), and §10.7's proposed label
-  string uses dot separators against §9.3's hyphen convention; §10.13 carries it armed with the
-  normalization flag so it cannot freeze wrong.
+  with rule-21 criteria at §10.13. **The one crypto-surface carry has landed (SPIKE-F-4,
+  2026-08-05):** the GF-9 seed-derived HS-identity HKDF label — normalized to the hyphen convention
+  as `shekyl-archival-p-hs-id-ed25519-v1` (`ARCHIVAL_P_HS_ID_INFO`, `L=32`) — is now in the
+  derivation and the `ARCHIVAL_P_DERIVE_V1` KAT, which pins the seed **and** its derived ed25519 HS
+  public key across arches. §10.7 / §10.13 updated to landed.
 - **Round 3 designed + adversarial pass run (2026-07-11)** — timing + rotation + `W`/epoch-length
   (§11). **GF-10** pinned as a *mechanism + structural window + a-priori advantage claim* (§11.3–11.5);
   numeric width **routed to the R4/GF-4 CB-3 joint grade**, not graded standalone (per-axis-multiplication
@@ -475,8 +476,8 @@ carried; R2 the same).
 | Round | Focus | Exit criterion |
 |-------|-------|----------------|
 | **0** | Scaffold + invariant frame + consumer map | **Done** |
-| **1** | HKDF/`P_id` wire + crypto layer hooks | **Closed (2026-06-13)** — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off (§9.8). **Carry discharged (2026-07-11 reconciliation):** `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152; `archival_p.rs` + `kat_archival_p_derive_v1.rs`, seven §9.3 labels incl. `bond_spend_*` verified at source). C-1 emission vin ML-DSA equality check **landed** (#277). §7 checklist reconciled to landed state. |
-| **2** | Network + transport (L16 → production shape) | **Closed (2026-07-11) — §10; closure disposition §10.13.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (all dispositioned):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport (GF-5, §10.5); ~~Arti HS-hosting capability confirmed, at-source pin carried (GF-12, §10.3)~~ **— RETIRED 2026-08-03 (maintainer ruling): Arti is not the path; the Tor Expert Bundle is consumed as an external hash-pinned process, so the at-source Arti pin has no consumer**; `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); HS key lifecycle `p_slot`-bound + seed-derived (GF-9, §10.7). **Exit dispositions (§10.11, passes 1–4):** bonded-verifier challenges, broadcast announce, `P`↔principal circuit/guard isolation (§10.9), pure-rendezvous + I2P-closed. **Carries (§10.13, rule-21):** at-source Arti pin → transport PR; dummy/frag tuned ratio → testnet; **GF-9 HS-id HKDF label → §9.3 amendment (armed: not yet in derivation; dot-vs-hyphen format flag)**; announce↔anchor + cadence timing → R3. Transport code partial-landed (2d-2: SP-T1 #204/#209, SP-T4a #254 — inert). |
+| **1** | HKDF/`P_id` wire + crypto layer hooks | **Closed (2026-06-13)** — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off (§9.8). **Carry discharged (2026-07-11 reconciliation):** `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152; `archival_p.rs` + `kat_archival_p_derive_v1.rs`, eight §9.3 labels incl. `bond_spend_*` and the GF-9 `hs_id` label (SPIKE-F-4) verified at source). C-1 emission vin ML-DSA equality check **landed** (#277). §7 checklist reconciled to landed state. |
+| **2** | Network + transport (L16 → production shape) | **Closed (2026-07-11) — §10; closure disposition §10.13.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (all dispositioned):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport (GF-5, §10.5); ~~Arti HS-hosting capability confirmed, at-source pin carried (GF-12, §10.3)~~ **— RETIRED 2026-08-03 (maintainer ruling): Arti is not the path; the Tor Expert Bundle is consumed as an external hash-pinned process, so the at-source Arti pin has no consumer**; `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); HS key lifecycle `p_slot`-bound + seed-derived (GF-9, §10.7). **Exit dispositions (§10.11, passes 1–4):** bonded-verifier challenges, broadcast announce, `P`↔principal circuit/guard isolation (§10.9), pure-rendezvous + I2P-closed. **Carries (§10.13, rule-21):** at-source Arti pin → transport PR; dummy/frag tuned ratio → testnet; ~~GF-9 HS-id HKDF label → §9.3 amendment (armed: not yet in derivation; dot-vs-hyphen format flag)~~ **— LANDED 2026-08-05 (SPIKE-F-4): `shekyl-archival-p-hs-id-ed25519-v1` in the §9.3 table + KAT**; announce↔anchor + cadence timing → R3. Transport code partial-landed (2d-2: SP-T1 #204/#209, SP-T4a #254 — inert). |
 | **3** | Timing + rotation + `W` / epoch-length joint pin | **Designed + adversarial pass run (2026-07-11) — §11; closes on the R4/GF-4 joint grade (§11.7).** **GF-10** pinned as *mechanism + structural window* (uniform-independent claim-broadcast-height draw via audited `bounded_uniform`; floor = `h_close + reorg_depth(720)`, ceiling = `(E_oldest+W)·SEB − submit_guard`; a-priori `S_min ≥ SEB`); **numeric width routed to R4/GF-4 CB-3 joint grade** (not standalone — per-axis error avoided). Draw + scheduler **unbuilt** (verified) → pinned pre-code, M1-armed. Rotation leg ratified (T-A1 timeline non-channel; network leg §10.7/§10.9); R2 timing hand-forwards resolved (announce↔anchor = entry standoff; emission-cadence = GF-10). Adversarial pass (§11.8) found no break — four findings folded as re-pins, one retraction (max-age misread). Two frame/pass assumptions overturned at source (epoch-crossing §11.4; max-age semantics §11.8). UPDATE 2026-07-16 (§12.9 decision 3): the R4 joint grade **dissolved by axis attrition** — GF-10's width now grades **standalone** against the §11.5 pre-committed advantage claim (mechanism-class, method note 3); R3 closes when that grade runs. |
 | **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built; verdict ⛔ WITHDRAWN in full 2026-07-23** (was: graded PROVISIONAL-PASS, `r = 1.86`, local-daemon — the entry-seam channel graded was never on the chain; the instrument is fail-closed (`GF7_FAIL_CLOSED`) and the surviving entry-seam channel is GF4b-2's funding-input count; WI-4 §13.1 banner) (standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) sealing form: first PASS withdrawn 2026-07-18 (§19.9.1), hardened re-run graded PASS 2026-07-19 (§19.9.2), seal-input status withdrawn same day on scope review (WI-4 §19.10 — premise design-foreclosed; instrument retained as dispersal tripwire)) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the rebond/unbond FSM landed (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Rebond`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. UPDATE 2026-07-16: derivation committed + reviewed (rounds 1–3, sentinel + frozen rule); **`draw_exit_gap` BUILT** against the sentinel with the F-D6 anchor derived (`release_cooldown_anchor_height`) — F-W5 `N_t` re-derivation, sweep, and Phase 7.7 seal remain. UPDATE 2026-07-16 (later): round-4 premise audit RATIFIED deletion-with-tripwire (F-D4 §15.4 — the timing channel's observable is phantom, F-W7/F-W8; the seal obligation is removed, the sentinel never shipped a value); F-W9 bounded the repetition premise (F-D4 §16). **R4 decision round run + RATIFIED (§12.9):** exit seam **re-homed** to the principal↔user crossing (WI-4 §18.13); joint grade **dissolved by four-axis attrition** (ratification added the fourth row: **F-W10 — output-count phantom**, the drain is not an identifiable transaction under FCMP++; §2.4's CryptoNote-lineage pin retired, method note 5); §16.4 funding default **accepted** (F-D2-class); deletion PR scoped (`exit.rs` wholesale; F-D6 + consensus predicate out of scope). Re-formed close: F-D1 + F-D2 (incl. funding default) + deletion PR + F-D5 §14.4 disposition. UPDATE 2026-07-17: the **deletion PR landed** at decision 5's scope — close condition (iii) satisfied; remaining: F-D1, F-D2 (incl. funding default), F-D5 §14.4 disposition. UPDATE 2026-07-17 (later): **F-D5's "→ §14.4" was dangling** (WI-4 §14.4 is the closed partition arm, no economics agenda) — close condition (iv) re-worded by dated amendment (§12.9): the **F-D5 disposition round** (charter at §12.7) runs a **structural-derivation attempt first** (grid width from reward-curve structure, X-3-shaped, mechanism-class) — width derives ⇒ grid ships at genesis + S-2 grades the residual; width doesn't ⇒ **no grid at genesis** (genesis-frozen consequence named, pass-4 banding rejection reconciled); the lifetime-aggregate band registers as an R5 S-2 ledger row either way. UPDATE 2026-07-17 (same day): **the F-D5 disposition round RAN — width does not derive, NO GRID at genesis** (harm survives F-D1 — the grid targeted §18.12's drain-all floor — but the derivation fails at three source-anchored population entry points: `r_market` inside `scarcity_milli`, the `budget(E)/Σwork(E)` value spacing, and reachable-collision ≠ delivered cover; the grid's cost side is derivable, its benefit side is not; §12.7 OUTCOME). Close condition (iv) **discharged**; R4 open on **F-D1 + F-D2 only**. UPDATE 2026-07-17 (later): **F-D1 BUILT** (`drain_orchestrator`/`drain_amount`/`drain_select`; (a)+strip; M1 arm proven-to-bite then armed as `fd1_arm_*` tests; §12.3 build note) and **F-D2 core-side surface LANDED** (aggregate-only `DrainBalance`/`drain_balance`, scalar-only `plan_drain`; §12.4 build note) — `plan_drain` lands as a correctly-carved planner with **no data source and no consumer yet**. **F-D2's remaining half is NOT a pending UI default and NOT gated on RPC** (the GUI links the engine in-process, not via a wallet-RPC server): it is a whole **unbuilt `P`-value-out (drain-send) subsystem** in `shekyl-gui-wallet` — a `P`-scan data source feeding the planner + a drain tx assemble→sign→broadcast path + the round-number/random-split default (incl. the §16.4 funding default; §12.4 reconciliation amendment 2026-07-19) on top (§12.4 build note). **R4 open on that subsystem.** |
 | **5** | Cross-layer adversarial pass | **Planned.** Soundness-depth sign-off for Stage 3. Build the S-2 fused exposure ledger (first) + the S-3 exit/value-seam adversary sim (§10.12), then sign off. **Registered S-2 ledger rows so far:** the lifetime-aggregate (drain-all) band at the §18.13 crossing (from the F-D5 disposition round, 2026-07-17 — per-observer, off-chain, graded against measured post-genesis exposure; §12.7 OUTCOME); R5 also inherits F-W9's finite domain and the §16.3 re-formed cross-persona job (linking-key search, pre-registered as code). |
@@ -609,8 +610,9 @@ below); it is not optional and is part of every row's derivation.
 `L` is **pinned per output** in the table below (it is not a free parameter). Two
 representations are in play and the distinction is load-bearing (see the **scalar-vs-seed**
 note below): `64` for the **wide-reduce-to-scalar** paths (Ed25519 *address* spend/view and
-ML-KEM `d_z`) and `32` for the **deterministic-seed** paths (ML-DSA-65 keygen seed and the two
-Ed25519 hybrid-half RFC 8032 seeds). This matches
+ML-KEM `d_z`) and `32` for the **deterministic-seed** paths (the ML-DSA-65 keygen seeds, the two
+Ed25519 hybrid-half RFC 8032 seeds, and the standalone GF-9 HS-identity Ed25519 seed — the **one
+non-hybrid key in the bundle**, see the *non-hybrid HS-identity row* note below). This matches
 [`account.rs`](../../rust/shekyl-crypto-pq/src/account.rs) (`L=64` wide-reduce → address
 scalars) and [`derivation.rs`](../../rust/shekyl-crypto-pq/src/derivation.rs)
 (`L=32` → `keygen_from_seed(seed: &[u8; 32])` for ML-DSA, and `L=32` `ed25519_pqc_seed` →
@@ -625,6 +627,19 @@ scalars) and [`derivation.rs`](../../rust/shekyl-crypto-pq/src/derivation.rs)
 | `ml_dsa_seed` | `shekyl-archival-p-ml-dsa-65-v1` | 32 | `keygen_from_seed` → ML-DSA-65 half of `hybrid_sign_pk` (ChaCha20Rng seeded) |
 | `bond_spend_ed_seed` | `shekyl-archival-p-bond-spend-ed25519-v1` | 32 | `SigningKey::from_bytes` (RFC 8032 seed) → Ed25519 half of `bond_spend_pk` (GF-1; gate-4 §4.1) |
 | `bond_spend_ml_dsa_seed` | `shekyl-archival-p-bond-spend-ml-dsa-65-v1` | 32 | `keygen_from_seed` → ML-DSA-65 half of `bond_spend_pk` (GF-1) |
+| `hs_id_seed` | `shekyl-archival-p-hs-id-ed25519-v1` | 32 | `SigningKey::from_bytes` (RFC 8032 seed) → **standalone** Ed25519 v3 onion (HS) identity; `.onion` = base32(pubkey ‖ SHA3-256 checksum ‖ ver), rend-spec-v3 §6 (GF-9, §10.7; consumed by the **forthcoming** 2d-2 SP-T3 serving path via `ADD_ONION ED25519-V3` — today only the disposable SP-T3 spike) |
+
+**Non-hybrid HS-identity row (GF-9 — the one exception to hybrid-from-genesis).** `hs_id_seed` is
+the **only** key in the persona bundle that is Ed25519-*only*, not a hybrid pair. This is not a
+weakening of the mission's *"hybrid PQC ships from genesis"* precondition — it is inherent to the
+layer: a Tor **v3 onion service identity is Ed25519-only by rend-spec-v3**, and Shekyl consumes the
+Tor Expert Bundle as an external hash-pinned process (§10.3, GF-12 retired 2026-08-03), so no hybrid
+option exists at this boundary. The blast radius is bounded and named: a quantum adversary who
+recovers this key can **impersonate the persona's `.onion`** (serve forged shards, or deny service
+at the advertised address) — a *reachability/DoS* compromise of one serving endpoint. It **cannot**
+debit the bond (that is `bond_spend_pk`, hybrid) and **cannot** forge `P`'s identity (that is
+`hybrid_sign_pk` / `hybrid_bond_id`, hybrid). The key is `p_slot`-bound, seed-derived, and never at
+rest (§10.7), so the exposure window is one persona's serving life, and rotation is structural.
 
 **Scalar-vs-seed resolution (2026-06-17, genesis-frozen).** The hybrid signing scheme
 `HybridEd25519MlDsa` ([`signature.rs`](../../rust/shekyl-crypto-pq/src/signature.rs)) is
@@ -905,11 +920,17 @@ belt, but the vin ML-DSA check must land before any quantum spend-authority clai
 | Artifact | Current | Reopen when | Re-evaluation |
 |----------|---------|-------------|---------------|
 | HKDF info labels `…-v1` | §9.3 table | V4 lattice-only migration specifies successor primitives | New labels `…-v2`; new KAT suite; hybrid `scheme_id` coexistence per [`VERSIONING.md`](../VERSIONING.md) |
+| `shekyl-archival-p-hs-id-ed25519-v1` (GF-9 HS identity) | §9.3 table / §10.7 | Tor ships a post-quantum v3 onion identity **and** Shekyl adopts it | **No hybrid `scheme_id` coexistence path** — this row is Ed25519-*only* because rend-spec-v3 is, so the successor is not a `…-v2` label but a change of Tor's HS-identity primitive, outside Shekyl's control. Until then the row stays classical by necessity (blast radius bounded to `.onion` reachability, §9.3 non-hybrid note). **The `.onion` is never committed to the on-chain bond record** (reachability is announced/broadcast, not consensus — verified: no onion/`hs_id` field in `shekyl-wire` or `bond_wire`), so this label change is **wallet-local, not a consensus event: no bond-record migration, no fork** — unlike the `shekyl/archival-p-id-v1` row below, whose re-eval requires a bond-record migration doc. |
 | `shekyl/archival-p-id-v1` | §9.5 | `HybridPublicKey` canonical encoding changes | New customization string; bond-record migration doc |
 | `scheme_id = 1` on `P` spends | §9.6 | `scheme_id = 3` (lattice threshold) ships for archival spends | PHASE_2B + emission leg amendment; multisig `P` (V3.1) may precede |
 
 **Not a reopening criterion:** "uncertainty about long-term PQC posture" — that is why V3 is
-hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
+hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch. The GF-9 `hs_id`
+row above is not that hatch: it is a **Tor transport identity**, not a `P` money or on-chain
+identity key. Every key that authorizes value or asserts `P`'s identity (spend/view, ML-KEM,
+`hybrid_sign_pk`, `bond_spend_pk`) is hybrid; the one Ed25519-only key protects `.onion`
+reachability and is classical solely because rend-spec-v3 leaves no alternative (§9.3 non-hybrid
+note).
 
 ### 9.8 Round 1 exit checklist
 
@@ -923,8 +944,8 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
       **and `bond_spend_pk`** — the §9.3 `shekyl-archival-p-bond-spend-*` labels, GF-1). **Landed**
       (Bond-PR 0 #152): [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs).
 - [x] `shekyl-crypto-pq::archival_p` implementation + unit tests. **Landed:**
-      [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (seven §9.3 labels present,
-      verified at source 2026-07-11).
+      [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (eight §9.3 labels present,
+      verified at source 2026-07-11; the GF-9 `hs_id` label added by SPIKE-F-4, 2026-08-05).
 
 **Carried dependencies — DISCHARGED (confirm-at-source status, 2026-07-11):**
 
@@ -1190,17 +1211,22 @@ identity. Two failure modes:
 2. **Rotating mid-life → breaks reachability:** peers hold `P`'s `.onion` as the bond-record
    reachability field; it must be **stable within a single `P`'s life.**
 
-**Disposition (proposed):**
+**Disposition (LANDED 2026-08-05, SPIKE-F-4):**
 
 - The HS identity key is **bound to `p_slot`** (§9.2): **stable within a `P`'s life, rotates
   with `P`.** On rotation, `P` stands up a **new HS under a new key**, migrates the reachability
   field, and retires `P_old`'s `.onion` on the same schedule as `P_old`'s keys.
-- **Derive the HS ed25519 identity from `master_seed`+`p_slot`** (a §9.3-style HKDF label, e.g.
-  `b"shekyl.archival.p.hs_id.v1"`), injected via `launch_onion_service_with_hsid` (§10.3)
-  rather than Arti-autogenerated. **Why:** the `.onion` becomes **deterministic +
-  seed-recoverable** (survives device loss; fits wallet recovery) and **provably `p_slot`-scoped**
-  (rotation is structural, not operational discipline). This **adds an HKDF label to §9.3 → it
-  must be in the `ARCHIVAL_P_DERIVE_V1` KAT.**
+- **Derive the HS ed25519 identity from `master_seed`+`p_slot`** via the §9.3 HKDF label
+  **`shekyl-archival-p-hs-id-ed25519-v1`** (`ARCHIVAL_P_HS_ID_INFO`, `L=32`, `derive_p_hs_id_seed`)
+  — normalized to the hyphen convention from this section's original dotted proposal
+  (`shekyl.archival.p.hs_id.v1`) per the §10.13 carry — injected via `ADD_ONION ED25519-V3`
+  (`shekyl-tor`'s control port) rather than tor-autogenerated. *(The §10.3 Arti
+  `launch_onion_service_with_hsid` key-injection shape is retired with GF-12, 2026-08-03; the
+  C-tor Expert Bundle takes the expanded blob over the same control command.)* **Why:** the `.onion`
+  becomes **deterministic + seed-recoverable** (survives device loss; fits wallet recovery) and
+  **provably `p_slot`-scoped** (rotation is structural, not operational discipline). The label is
+  in the `ARCHIVAL_P_DERIVE_V1` KAT, which pins both the seed and the derived ed25519 HS public key
+  cross-arch (§9.3 table).
 - **Honest residual:** the live HS private key is a **long-term secret resident on the serving
   device**; its compromise links `P`'s *location* (not the principal, but `P`'s box). This is
   the **irreducible serving-side residual** — named, not mitigated away.
@@ -1302,14 +1328,15 @@ with the principal-linkage gap still open under a different name.
       per `P`-tx type) + dummy/fragmentation **policy shape** decided (§10.6); tuned ratio **carried
       to testnet replay** (§10.13). Structural pin is §10.9 circuit/guard isolation (burst shape is
       orthogonal to origin-dilution).
-- [~] **GF-9** — HS identity key **`p_slot`-bound + seed-derived** disposition **pinned** (§10.7),
+- [x] **GF-9** — HS identity key **`p_slot`-bound + seed-derived** disposition **pinned** (§10.7),
       serving-side key-compromise residual **named**. **The "new HKDF label added to §9.3 +
-      `ARCHIVAL_P_DERIVE_V1` KAT" is a carry, not done** — verified at source, the label is absent
-      from [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (seven §9.3 labels, no
-      `hs_id`). Carried armed at §10.13 with the **dot-vs-hyphen format flag** (§10.7's proposed
-      `shekyl.archival.p.hs_id.v1` violates §9.3's hyphen convention and its non-prefix-free
-      safety argument — normalize before freezing). Disposition closes R2; the label-freeze is a
-      §9.3 amendment.
+      `ARCHIVAL_P_DERIVE_V1` KAT" LANDED 2026-08-05 (SPIKE-F-4)** — verified at source, the label
+      is present in [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) as
+      `shekyl-archival-p-hs-id-ed25519-v1` (`ARCHIVAL_P_HS_ID_INFO`, the eighth §9.3 label),
+      **normalized to the hyphen convention** from §10.7's original dotted proposal
+      (`shekyl.archival.p.hs_id.v1`) per the §10.13 armed carry. The KAT pins the seed and the
+      derived ed25519 HS public key cross-arch. Disposition closed R2; the label-freeze was its own
+      §9.3 amendment, now discharged.
 - [x] **GF-12** — embed-Arti fork **decided conditional on the at-source pin**
       (version/feature/MSRV/`with_hsid` API; §10.3); external-daemon reversion clause recorded.
 - [x] **Forks 1+4 / §10.9** — `P`↔principal **client/circuit isolation** pinned (independent
@@ -1656,7 +1683,7 @@ disposition is not coverage of its implementation.
 
 | Carry | Home | Completion / reopen criterion |
 |-------|------|-------------------------------|
-| **GF-9 HS-id HKDF label** — seed-derived `p_slot`-bound `.onion` identity | **§9.3 amendment + `ARCHIVAL_P_DERIVE_V1` KAT** | **Armed:** label absent from `archival_p.rs` at close (verified). Pin the label into the §9.3 table (L=32 seed → ed25519 HS identity, consumer `launch_onion_service_with_hsid`) **normalized to the hyphen convention** — §10.7's `shekyl.archival.p.hs_id.v1` (dots) must become `shekyl-archival-p-hs-id-*-v1` before it enters the KAT, or the §9.3 non-prefix-free safety argument does not cover it. Freezing the label is a deliberate crypto-surface act, not a side effect — do it as its own pin. |
+| **GF-9 HS-id HKDF label** — seed-derived `p_slot`-bound `.onion` identity | **§9.3 amendment + `ARCHIVAL_P_DERIVE_V1` KAT** | ~~**Armed:** label absent from `archival_p.rs` at close (verified). Pin the label into the §9.3 table (L=32 seed → ed25519 HS identity, consumer `launch_onion_service_with_hsid`) **normalized to the hyphen convention** — §10.7's `shekyl.archival.p.hs_id.v1` (dots) must become `shekyl-archival-p-hs-id-*-v1` before it enters the KAT.~~ **— LANDED 2026-08-05 (SPIKE-F-4):** the label is in the §9.3 table + KAT as **`shekyl-archival-p-hs-id-ed25519-v1`** (`ARCHIVAL_P_HS_ID_INFO`, L=32, the eighth label), hyphen-normalized; the KAT pins the seed **and** the derived ed25519 HS public key cross-arch, and both freeze pins rotated in-version. The crypto-surface freeze was done as its own pin. |
 | **At-source Arti pin** — exact version/feature/MSRV/`with_hsid` API shape | Transport PR (§10.3) | Embed-Arti fork holds; external-daemon-over-SOCKS reversion clause fires iff the at-source check fails. |
 | **Dummy/fragmentation tuned ratio** | Testnet replay (§10.6) | Measure-then-tune: the real-to-dummy ratio that makes `P` bursts indistinguishable from ambient large-v3; honest cost/coverage residual. **Instrument proviso (method note 3, 2026-07-16):** the `P`-burst side is mechanism (software-generated, testnet-faithful); the **ambient large-v3 distribution must be observed from the live Tor network** — real external-world data that exists independent of Shekyl's economics — never synthesized by the replay itself, or the ratio is tuned against the load generator. |
 | ~~**§10.9 isolation enforcement mechanism** (Arti config vs. policy)~~ **— CLOSED 2026-08-03 (maintainer ruling): Arti is not the path; `TRANSPORT_PLAN` accepts the shared guard set as the §7 residual and forecloses splitting instances. No enforcement mechanism is owed.** The **S-6 key-locality** provisioning half remains carried. | Transport PR + PHASE_2B engines | Independent guard sets + restore-flow non-co-activation must be *structural*, and the serving box gets only the `P`-subtree (never the master seed). Reopen if a host-level compromise model is added. |
@@ -3026,6 +3053,30 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
 
 ## Revision history
 
+- **2026-08-05 (SPIKE-F-4 — the R2 GF-9 HS-id HKDF-label carry LANDED):** discharged the one
+  crypto-surface carry left open at R2 close (§10.13). The seed-derived `p_slot`-bound HS-identity
+  Ed25519 key is now a real §9.3 label — `shekyl-archival-p-hs-id-ed25519-v1`
+  (`ARCHIVAL_P_HS_ID_INFO`, `L=32`, `derive_p_hs_id_seed`), the **eighth** label — normalized to
+  the hyphen convention from §10.7's original dotted `shekyl.archival.p.hs_id.v1` per the armed
+  carry's format flag. The `ARCHIVAL_P_DERIVE_V1` KAT was amended (Tier-1 9→17 vectors) to pin the
+  seed **and** the derived ed25519 HS public key cross-arch (an ARM divergence would leave a
+  persona unreachable at its advertised `.onion`) across networks (mainnet/testnet/stagenet), plus
+  an `hs_id_network_separation` vector that pins the label as **network-scoped** like its siblings
+  (a network-agnostic `.onion` would link a wallet's personas across networks) — asserted live, so
+  it survives corpus regeneration. Both freeze pins (the KAT `vectors_sha256`
+  self-check and `archival_p_freeze`'s corpus hash) rotated **in-version** — a deliberate corpus
+  amendment, not a derivation-version bump. Flipped §10.7 (proposed→landed), the §10.13 carry row,
+  the §7 exit-checklist GF-9 box (`[~]`→`[x]`), and the header/§7-table label counts (seven→eight).
+  Added the §9.3 *non-hybrid HS-identity row* note + a §9.7 V4 reversion row: `hs_id` is the one
+  Ed25519-only key in the bundle — inherent to rend-spec-v3, blast radius bounded to `.onion`
+  reachability (cannot debit the bond or forge `P`'s identity), no hybrid `scheme_id` coexistence
+  path at V4. **Code:** relocated the derivation out of the retained SP-T3 measurement spike (which
+  had carried a deliberately-non-inheritable spike-local cSHAKE256 duplicate); the spike's onion
+  encoding now consumes the production seed, its harness owns a **pinned** test seed and takes none
+  from callers (a structural fix — post-relocation, feeding a real wallet seed would serve at the
+  persona's actual production `.onion`, the co-activation Model D forbids); the
+  canonical-id↔HS-id domain-separation invariant moved to `shekyl-archival-retention`'s tests,
+  where it does not die with the spike. Docs + code.
 - **2026-07-17 (F-D5 disposition round RAN — width does not derive; NO GRID at genesis;
   close condition (iv) discharged):** executed in the ratified order and the halves
   resolved oppositely — the harm survives F-D1 in one sentence (the grid protects §18.12's

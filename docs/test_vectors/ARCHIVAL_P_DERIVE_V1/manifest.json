@@ -14,7 +14,7 @@
   "derivation_version": "v1",
   "fips203_pin": "=0.4.3",
   "regeneration_command": "cargo test -p shekyl-crypto-pq kat_regenerate_archival_p_derive_v1 -- --ignored --nocapture",
-  "tier1_count": 9,
+  "tier1_count": 17,
   "tier2_count": 4,
-  "vectors_sha256_hex": "91dbd5725069b29cbcce0f0fc74fe713fd36e2ba030901e63734cbebcd584cdd"
+  "vectors_sha256_hex": "7b863aa66b2ab36996a13395b0853aeb16e30de00b7702056ae1d4ec68742ca5"
 }
