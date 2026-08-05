@@ -57,11 +57,15 @@
 //! - `build → Result<PendingTx, SendError>` — build-time validation
 //!   vocabulary (insufficient funds, no spendable outputs, selector
 //!   contract violation per F4).
-//! - `submit → Result<TxHash, SubmitError>` — submit-time outcome
-//!   vocabulary discriminating `TerminalErrorKind` (drops from
-//!   `in_flight` on resolution) vs. `AmbiguousErrorKind` (R9
-//!   daemon-side-authority preserved; rid stays `in_flight`) vs.
-//!   `SnapshotInvalidated` (segment-2h F1 lazy R5 disposition).
+//! - `submit → Result<SubmitOutcome, SubmitError>` — submit-time
+//!   outcome: success is the identity-bearing
+//!   [`SubmitOutcome`](crate::engine::pending::SubmitOutcome)
+//!   (`Accepted` / `AlreadyInPool` / `AlreadyInChain { height }`, all
+//!   sharing the §2.5 lock disposition); errors discriminate
+//!   `TerminalErrorKind` (drops from `in_flight` on resolution) vs.
+//!   `AmbiguousErrorKind` (R9 daemon-side-authority preserved; rid
+//!   stays `in_flight`) vs. `SnapshotInvalidated` (segment-2h F1 lazy
+//!   R5 disposition).
 //! - `discard → Result<(), PendingTxError>` — F2 ownership-boundary
 //!   discrimination (`DiscardBlockedPendingDaemonAck` vs.
 //!   `ReservationNotFound`).

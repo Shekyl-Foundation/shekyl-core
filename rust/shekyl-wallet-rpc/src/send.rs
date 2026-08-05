@@ -104,7 +104,11 @@ pub(crate) async fn submit_pending_tx(
     })?;
 
     let shared = require_open_engine(tenants).await?;
-    let mut engine = shared.write().await;
+    // Same interior-mutability insight as build (W-B review): submit
+    // mutates under `LocalPendingTx`'s own state lock and awaits the
+    // daemon under that implementor — exclusive Engine borrow only
+    // stalled concurrent read RPCs for the network round-trip.
+    let engine = shared.read().await;
     let outcome = engine.submit_pending_tx_async(id, seen_gen).await?;
     let result = submit_pending_tx_result(&outcome);
     serde_json::to_value(result)
@@ -119,7 +123,9 @@ pub(crate) async fn discard_pending_tx(
     let id = parse_reservation_id(&p.pending_tx_id)?;
 
     let shared = require_open_engine(tenants).await?;
-    let mut engine = shared.write().await;
+    // Discard is a short pending-tx state mutation under interior
+    // mutability; exclusive Engine borrow is not required.
+    let engine = shared.read().await;
     // Engine maps unknown handles to Ok(()) (idempotent discard).
     engine.discard_pending_tx(id)?;
     let result = DiscardPendingTxResult {};

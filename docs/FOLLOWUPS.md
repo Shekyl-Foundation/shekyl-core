@@ -14225,8 +14225,9 @@ reference.
 Retained for citation in review; each links to the canonical record.
 
 - **Phase 4b `build_pending_tx` write-lock stall (resolved 2026-08-04,
-  `feat/w4b-submit-verdict`, W-B step 1).** The FOLLOWUP's premise was
-  wrong at source: `PendingTxEngine::build` (`traits/pending_tx.rs`) and
+  `feat/w4b-submit-verdict`, W-B step 1; submit/discard extended same
+  PR review).** The FOLLOWUP's premise was wrong at source:
+  `PendingTxEngine::build` (`traits/pending_tx.rs`) and
   `LocalPendingTx::build` (`transfer/trait_impl.rs`) take `&self`; only
   the `Engine::build_pending_tx{,_async}` delegators demanded
   `&mut self`, and the `Arc<RwLock<Engine>>` seam inherited that. Fixed
@@ -14235,16 +14236,19 @@ Retained for citation in review; each links to the canonical record.
   (`tokio::sync::Semaphore`, 1 permit) acquired at the top of `build` —
   engine-owned so every embedder (wallet-rpc, the in-process GUI)
   inherits the serialization, preserving today's network observable
-  (one `AssembleTx` at a time). `send::build_pending_tx` now holds
-  `read()`, so `get_balance` / `get_height` / `get_transfers` no longer
-  stall behind a build; `refresh` (a writer) still drains the in-flight
-  build's read guard — the same build-vs-refresh serialization as
-  before, tracked as the assemble-then-commit question on the
-  permit-stays-1 entry (V3.0 queue). Serialization is pinned by
+  (one `AssembleTx` at a time). Review extension applied the same
+  interior-mutability insight to `Engine::submit_pending_tx{,_async}`
+  and `discard_pending_tx` (`&self`; trait was already `&self`), so
+  `send::{build,submit,discard}_pending_tx` all hold `read()` and
+  concurrent reads proceed during build and the daemon submit
+  round-trip. `refresh` (a writer) still drains in-flight read guards —
+  the same reader-vs-refresh serialization as before, tracked as the
+  assemble-then-commit question on the permit-stays-1 entry (V3.0
+  queue). Serialization is pinned by
   `concurrent_builds_serialize_on_the_build_permit` (deterministic
   noop-waker drive, no sleeps; proven-to-bite at permit=2), and the
-  `&self` relaxation is compile-coupled to `send.rs`'s read-guard call.
-  Canonical: `transfer/engine.rs` (`build_permit`),
+  `&self` relaxation is compile-coupled to `send.rs`'s read-guard call
+  sites. Canonical: `transfer/engine.rs` (`build_permit`),
   `transfer/trait_impl.rs` (acquire), `shekyl-wallet-rpc/src/send.rs`.
 
 - **Phase 4b `submit_pending_tx` verdict flattening (resolved 2026-08-04,

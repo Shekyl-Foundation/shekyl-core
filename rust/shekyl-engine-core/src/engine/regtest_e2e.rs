@@ -768,7 +768,10 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     let mut pending = None;
     for _ in 0..MAX_MINE_BATCHES {
         let attempt = {
-            let g = arc.write().await;
+            // Build/submit take `&self` — use a read guard so the harness
+            // matches production wallet-RPC locking and cannot mask
+            // exclusive-lock regressions.
+            let g = arc.read().await;
             g.build_pending_tx_async(&request).await
         };
         match attempt {
@@ -803,7 +806,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     // Submit to the live daemon. Ok == the daemon's consensus verify ACCEPTED the spend
     // (FCMP++ proof + PQC auths + CT balance + wire format). This is the §1.1 proof.
     let tx_hash = {
-        let mut g = arc.write().await;
+        let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the FCMP++ spend (consensus verify)")
@@ -1000,7 +1003,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     let mut pending = None;
     for _ in 0..MAX_MINE_BATCHES {
         let attempt = {
-            let g = arc.write().await;
+            let g = arc.read().await;
             g.build_pending_tx_async(&request).await
         };
         match attempt {
@@ -1028,7 +1031,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     );
 
     let tx_hash = {
-        let mut g = arc.write().await;
+        let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the FCMP++ spend over a depth-3 tree (consensus verify)")
@@ -1313,7 +1316,7 @@ async fn transfer_to(
     let mut pending = None;
     for _ in 0..max_batches {
         let attempt = {
-            let g = arc.write().await;
+            let g = arc.read().await;
             g.build_pending_tx_async(&request).await
         };
         match attempt {
@@ -1330,7 +1333,7 @@ async fn transfer_to(
     }
     let pending = pending.expect("transfer must build once reference-spendable");
     let tx_hash = {
-        let mut g = arc.write().await;
+        let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the transfer (consensus verify)")
@@ -2736,7 +2739,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     let mut built = None;
     for _ in 0..24 {
         let attempt = {
-            let g = fixture.arc.write().await;
+            let g = fixture.arc.read().await;
             g.build_pending_tx_async(&request).await
         };
         match attempt {
@@ -2754,7 +2757,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     let built = built.expect("transfer must build once reference-spendable");
     let transfer_bytes = built.tx_bytes.clone();
     {
-        let mut g = fixture.arc.write().await;
+        let g = fixture.arc.read().await;
         g.submit_pending_tx_async(built.id, built.content_gen)
             .await
             .expect("daemon must accept the transfer (consensus verify)");

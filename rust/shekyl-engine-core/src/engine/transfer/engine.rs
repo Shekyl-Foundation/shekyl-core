@@ -415,13 +415,18 @@ where
     /// stays refresh-written (`docs/FOLLOWUPS.md` "`AlreadyInChain` submit
     /// verdict", closed with the disposition split; reshaped to F40 with
     /// the `height` carve-out).
+    /// Kind-blind like [`Self::finalize_submit_accept`]: places the F14
+    /// lock and enqueues the release-path side effects, then returns
+    /// the (unchanged) `tx_hash`. The caller constructs the public
+    /// [`SubmitOutcome::AlreadyInChain`] from `tx_hash` + `height` so
+    /// both success finalizers share the same return shape.
     pub(super) fn finalize_submit_already_in_chain(
         &self,
         state: &mut PendingTxState,
         id: ReservationId,
         tx_hash: TxHash,
         height: u64,
-    ) -> SubmitOutcome {
+    ) -> TxHash {
         let selected_indices: Vec<OutputId> = state
             .output_locks
             .iter()
@@ -498,10 +503,7 @@ where
             },
         );
 
-        SubmitOutcome::AlreadyInChain {
-            hash: tx_hash,
-            height,
-        }
+        tx_hash
     }
 
     /// Drain the F40 targeted re-scan queue (decision 3), returning the
@@ -1738,7 +1740,9 @@ where
                         Ok(kind.into_outcome(hash))
                     }
                     Ok(SubmitSuccess::AlreadyInChain { hash, height }) => {
-                        Ok(self.finalize_submit_already_in_chain(&mut state, id, hash, height))
+                        let hash =
+                            self.finalize_submit_already_in_chain(&mut state, id, hash, height);
+                        Ok(SubmitOutcome::AlreadyInChain { hash, height })
                     }
                     Err(SubmitterError::RejectedTerminal { kind }) => {
                         Err(self.finalize_submit_terminal(&mut state, id, kind))
@@ -1792,16 +1796,17 @@ where
         // `AlreadyInChain` places it too (F40 — no selectable-input window
         // in either height case), baselined at the claimed confirming
         // height, which routes the release path. Refresh remains the
-        // settlement authority in both arms.
+        // settlement authority in both arms. Both finalizers are kind-
+        // blind and return only `TxHash`; the public `SubmitOutcome` is
+        // constructed here after disposition completes.
         Ok(match success {
             SubmitSuccess::Broadcast { hash, kind } => {
-                // Disposition first (kind-blind finalizer), then the outcome
-                // projection from the inform-only kind.
                 let hash = self.finalize_submit_accept(&mut state, id, hash);
                 kind.into_outcome(hash)
             }
             SubmitSuccess::AlreadyInChain { hash, height } => {
-                self.finalize_submit_already_in_chain(&mut state, id, hash, height)
+                let hash = self.finalize_submit_already_in_chain(&mut state, id, hash, height);
+                SubmitOutcome::AlreadyInChain { hash, height }
             }
         })
     }

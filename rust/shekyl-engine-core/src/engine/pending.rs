@@ -862,9 +862,15 @@ where
     let mut pinned = pin!(future);
     match pinned.as_mut().poll(&mut cx) {
         Poll::Ready(val) => val,
+        // Production `LocalPendingTx::build` awaits FCMP++ assembly and
+        // parks on the engine-owned build permit when another build is
+        // in flight — both are legitimate `Poll::Pending` reasons that
+        // the sync wrapper cannot drive. Callers on an async runtime
+        // must use `build_pending_tx_async`.
         Poll::Pending => Err(SendError::CannotSign {
-            reason:
-                "sync Engine::build_pending_tx requires an immediately-ready PendingTxEngine future",
+            reason: "sync Engine::build_pending_tx requires an immediately-ready \
+                     PendingTxEngine future (async assembly or build-permit \
+                     contention — use build_pending_tx_async)",
         }),
     }
 }
@@ -924,8 +930,12 @@ impl<
     /// Success is the identity-bearing [`SubmitOutcome`] — fresh accept,
     /// pool-resident duplicate, or the daemon's already-in-chain claim
     /// with its claimed height (all sharing the §2.5 lock disposition).
+    ///
+    /// `&self` (same interior-mutability insight as build, W-B review):
+    /// submit mutates only under the implementor's own state lock and
+    /// awaits the daemon RPC without needing an exclusive Engine borrow.
     pub fn submit_pending_tx(
-        &mut self,
+        &self,
         id: ReservationId,
         seen_gen: u64,
     ) -> Result<SubmitOutcome, SubmitError> {
@@ -954,8 +964,13 @@ impl<
 
     /// Async counterpart to [`Self::submit_pending_tx`] — the production submit
     /// awaits the daemon RPC. See [`Self::build_pending_tx_async`].
+    ///
+    /// `&self`: the daemon round-trip is implementor-owned interior
+    /// mutability, so embedders may hold a shared Engine borrow across
+    /// submit (wallet-RPC uses a read guard) without stalling concurrent
+    /// read RPCs for the duration of the network call.
     pub async fn submit_pending_tx_async(
-        &mut self,
+        &self,
         id: ReservationId,
         seen_gen: u64,
     ) -> Result<SubmitOutcome, SubmitError> {
@@ -967,7 +982,10 @@ impl<
     /// Orchestration always passes [`DiscardReason::ConsumerExplicit`].
     /// Unknown handles are idempotent: [`PendingTxError::ReservationNotFound`]
     /// from the engine maps to `Ok(())` per cross-cutting lock 4.
-    pub fn discard_pending_tx(&mut self, id: ReservationId) -> Result<(), PendingTxError> {
+    ///
+    /// `&self`: discard is a short state-lock mutation on the pending-tx
+    /// implementor; no exclusive Engine borrow is required.
+    pub fn discard_pending_tx(&self, id: ReservationId) -> Result<(), PendingTxError> {
         match self.pending.discard(id, DiscardReason::ConsumerExplicit) {
             Ok(()) | Err(PendingTxError::ReservationNotFound { .. }) => Ok(()),
             Err(err) => Err(err),
