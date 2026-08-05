@@ -44,6 +44,7 @@
 #include "cryptonote_basic/tx_extra.h"
 #include "cryptonote_config.h"
 #include "serialization/binary_archive.h"
+#include "shekyl/shekyl_ffi.h"
 
 // ARCHIVAL_CREDIT_WIRE.md §3: empty is attestation_root(&[]), never null_hash.
 TEST(archival_credit_wire, attestation_root_defaults_to_empty_set_root)
@@ -142,4 +143,22 @@ TEST(archival_credit_wire, attestation_cap_constants)
   static_assert(config::ARCHIVAL_ATTESTATION_HEADER_BYTES == 49,
                 "must match shekyl-archival-retention ATTESTATION_HEADER_LEN");
   ASSERT_EQ(config::ARCHIVAL_MAX_ATTESTATION_RECORDS, 256u);
+}
+
+// 1b-iv cross-language gate. The block-hash differential is structurally blind to the attestation
+// witness (it is not in the block blob), so the real check on this surface is that C++ config
+// agrees with the Rust authority exposed via FFI. Constant equality catches C++-side drift from
+// the genesis-frozen Rust values; the >= catches a coarse cap that would reject what Rust admits.
+TEST(archival_credit_wire, attestation_constants_match_rust_ffi_authority)
+{
+  EXPECT_EQ(static_cast<uint64_t>(config::ARCHIVAL_MAX_ATTESTATION_RECORDS),
+            shekyl_archival_max_attestation_records());
+  EXPECT_EQ(static_cast<uint64_t>(config::ARCHIVAL_ATTESTATION_HEADER_BYTES),
+            shekyl_archival_attestation_header_bytes());
+  // LOAD-BEARING direction: the coarse C++ transport cap must OVER-BOUND Rust's exact maximum
+  // (cpp_cap >= rust_exact_max). Reversed, C++ would reject on the wire a witness Rust admits — a
+  // consensus split. Asserted against the Rust exact max, not a C++ mirror of it.
+  EXPECT_GE(static_cast<uint64_t>(config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES),
+            shekyl_archival_attestation_witness_max_bytes())
+      << "the coarse C++ witness cap must never reject a witness Rust admits";
 }

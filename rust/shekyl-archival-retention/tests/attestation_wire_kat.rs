@@ -21,7 +21,9 @@
 //! then paste the printed hexes into the constants below.
 
 use shekyl_archival_retention::{
-    attestation_nonce, attestation_root, AttestationHeader, AttestationKind, PassRecord,
+    attestation_nonce, attestation_root, AttestationHeader, AttestationKind,
+    BlockAttestationWitness, PassRecord, WitnessError, ATTESTATION_HEADER_LEN,
+    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES,
 };
 use shekyl_crypto_pq::signature::{
     HybridSignature, HYBRID_SCHEME_ID_ED25519_ML_DSA_65, HYBRID_SIG_VERSION,
@@ -153,6 +155,114 @@ fn empty_root_matches_pin() {
 #[test]
 fn two_record_root_matches_pin() {
     assert_eq!(hex::encode(two_record_root()), ROOT_TWO_EXPECT_HEX);
+}
+
+// Genesis-frozen consensus values, pinned as literals (a change is a deliberate
+// consensus edit, so it must move this tripwire). These are the Rust authority the
+// FFI exposes and C++ `config::` asserts equality/bound against (1b-iv gate).
+#[test]
+fn attestation_constants_are_pinned() {
+    assert_eq!(MAX_ATTESTATION_RECORDS, 256);
+    assert_eq!(ATTESTATION_HEADER_LEN, 49);
+    // Exact witness maximum = 40 (r + count) + 256 × HybridSignature::CANONICAL_LEN. Pinned to the
+    // literal so a signature-size change surfaces here rather than silently in the coarse C++ cap.
+    assert_eq!(MAX_ATTESTATION_WITNESS_BYTES, 866_600);
+}
+
+// ---- Witness (r ‖ count ‖ pass signatures) canonical-encoding vectors ----
+//
+// The block-hash differential is structurally blind to the witness (it rides no
+// hashed field), so this is the freeze for the transport encoding. `count` is
+// DERIVED on encode (pass_signatures.len()) and VALIDATED on decode
+// (LengthMismatch) — there is no redundant stored count field, so no bad state to
+// represent; a maintainer must not add one. Fixed `r` + the deterministic
+// dummy_sig_pair make every byte a pinned function of the operands, so the
+// structural asserts below ARE the byte pin (and name which field drifted), with
+// no lockstep encoder/regenerator hazard.
+const WITNESS_R: [u8; 32] = [0x5A; 32];
+
+fn witness_two_sig() -> BlockAttestationWitness {
+    let (sa, sb) = dummy_sig_pair();
+    BlockAttestationWitness {
+        r: WITNESS_R,
+        pass_signatures: vec![sa, sb],
+    }
+}
+
+#[test]
+fn witness_canonical_encoding_is_pinned_by_structure() {
+    let bytes = witness_two_sig().to_canonical_bytes().unwrap();
+    let sig_len = HybridSignature::CANONICAL_LEN;
+    let (sa, sb) = dummy_sig_pair();
+
+    // Structure asserted against the operands directly (not via to_canonical_bytes),
+    // so an encoder bug — wrong r offset, big-endian count, wrong sig order — fails here.
+    assert_eq!(&bytes[0..32], &WITNESS_R, "r must be the 32-byte prefix");
+    assert_eq!(
+        u64::from_le_bytes(bytes[32..40].try_into().unwrap()),
+        2,
+        "count is a u64 little-endian prefix"
+    );
+    assert_eq!(
+        bytes.len(),
+        40 + 2 * sig_len,
+        "exact r + count + 2 signatures"
+    );
+    assert_eq!(
+        &bytes[40..40 + sig_len],
+        &sa.to_canonical_bytes().unwrap()[..],
+        "first signature placed immediately after the framing"
+    );
+    assert_eq!(
+        &bytes[40 + sig_len..],
+        &sb.to_canonical_bytes().unwrap()[..],
+        "second signature follows, in order"
+    );
+
+    // Round-trips back to the same witness.
+    assert_eq!(
+        BlockAttestationWitness::from_canonical_bytes(&bytes).unwrap(),
+        witness_two_sig()
+    );
+}
+
+#[test]
+fn witness_decode_rejects_corruption_of_the_pin() {
+    let good = witness_two_sig().to_canonical_bytes().unwrap();
+    let sig_len = HybridSignature::CANONICAL_LEN;
+
+    // (1) Flip one byte of r: decodes, but to a DIFFERENT witness — r is bound.
+    let mut r_flip = good.clone();
+    r_flip[0] ^= 0x01;
+    assert_ne!(
+        BlockAttestationWitness::from_canonical_bytes(&r_flip).unwrap(),
+        witness_two_sig(),
+        "a flipped r must not decode to the pinned witness"
+    );
+
+    // (2) Bump the count field without adding a signature: the derive-on-encode /
+    // validate-on-decode guard rejects the disagreement loudly.
+    let mut count_bump = good.clone();
+    count_bump[32..40].copy_from_slice(&3u64.to_le_bytes());
+    assert!(
+        matches!(
+            BlockAttestationWitness::from_canonical_bytes(&count_bump),
+            Err(WitnessError::LengthMismatch { .. })
+        ),
+        "count disagreeing with the signature-array length must be LengthMismatch"
+    );
+
+    // (3) Swap the two signature blocks: decodes to reversed order (!= original), so
+    // signature ORDER (the pairing input) is bound, not just the set.
+    let mut swapped = good.clone();
+    let (_, sigs) = swapped.split_at_mut(40);
+    let (a, b) = sigs.split_at_mut(sig_len);
+    a.swap_with_slice(b);
+    assert_ne!(
+        BlockAttestationWitness::from_canonical_bytes(&swapped).unwrap(),
+        witness_two_sig(),
+        "swapping the two signatures must change the decoded witness"
+    );
 }
 
 #[test]

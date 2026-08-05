@@ -62,6 +62,17 @@ pub const ATTESTATION_HEADER_LEN: usize = 32 + 8 + 8 + 1;
 /// unbounded reservation before the length is validated.
 pub const MAX_ATTESTATION_RECORDS: usize = 256;
 
+/// The EXACT maximum canonical byte length of a [`BlockAttestationWitness`]:
+/// `r(32) ‖ count(8) ‖ MAX_ATTESTATION_RECORDS × HybridSignature`. This is the
+/// authority the C++ transport cap must respect: the coarse
+/// `config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` must **over-bound** this value
+/// (`cpp_cap ≥ this`), never under-bound it — a C++ cap below this maximum would
+/// reject on the wire a witness that Rust admits, i.e. a consensus split. The
+/// direction is gated cross-language by the FFI bound test; this const is the
+/// single Rust-side authority for that check.
+pub const MAX_ATTESTATION_WITNESS_BYTES: usize =
+    40 + MAX_ATTESTATION_RECORDS * HybridSignature::CANONICAL_LEN;
+
 /// Fixed nonce preimage length: `r(32) ‖ cb_out_key(32) ‖ p_id(32) ‖ s(8) ‖ E(8)`.
 const NONCE_INPUT_LEN: usize = 32 + 32 + 32 + 8 + 8;
 
