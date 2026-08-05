@@ -12,7 +12,7 @@
 use std::io::Cursor;
 
 use shekyl_archival_retention::{
-    as_of_e_served_work, bond_post_block_unique, challenge_fire_height,
+    as_of_e_served_work, attestation_root, bond_post_block_unique, challenge_fire_height,
     challenge_leaf_chunk_bounds, challenge_seal_height, challenge_seal_on_chain,
     claim_window_floor, claimed_epochs_check_and_set, credited_work_milli,
     effective_settlement_epoch_blocks, emission_block_claims_unique, emission_vin_verify,
@@ -20,21 +20,22 @@ use shekyl_archival_retention::{
     empty_attestation_root, epoch_close_compute, epoch_close_due_at_height, epoch_close_height,
     failure_window_slashable, frozen_segment_count, good_through, holdings_update_add_connect,
     holdings_update_drop_connect, holdings_update_pop, p_canonical_id_from_hybrid_pubkey,
-    prune_below_epoch_at_height, rebond_connect, rebond_pop, serve_credit_epoch_ok,
-    settlement_epoch_at_height, settlement_epoch_blocks_overridden, slash_open_interval_to_append,
-    unbond_connect, unbond_pop, verify_bond_post_ct_balance, verify_holdings_update_add,
-    verify_holdings_update_drop, verify_join_market_bond_post, verify_leaf_index,
-    verify_rebond_bond_post, verify_segment_path, verify_unbond_bond_post,
-    whole_record_last_served, ArchivalBondPostVin, ArchivalRewardEmissionVin,
-    ArchivalServeCreditResponse, BadInterval, BaselineObservation, BondCtBalanceError,
-    BondPostError, BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
-    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
-    EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
-    HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError, RebondPopError,
-    RewardCommit, ShardSet, ShardSetError, UnbondConnectError, UnbondPopError, WireError,
-    ATTESTATION_HEADER_LEN, CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
-    FAILURE_WINDOW_SERVE_BUDGET, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_ATTESTATION_RECORDS,
-    MAX_ATTESTATION_WITNESS_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
+    pass_records_from_headers_and_witness, prune_below_epoch_at_height, rebond_connect, rebond_pop,
+    serve_credit_epoch_ok, settlement_epoch_at_height, settlement_epoch_blocks_overridden,
+    slash_open_interval_to_append, unbond_connect, unbond_pop, verify_bond_post_ct_balance,
+    verify_holdings_update_add, verify_holdings_update_drop, verify_join_market_bond_post,
+    verify_leaf_index, verify_pass_countersignature, verify_rebond_bond_post, verify_segment_path,
+    verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin,
+    ArchivalRewardEmissionVin, ArchivalServeCreditResponse, AttestationHeader, BadInterval,
+    BaselineObservation, BlockAttestationWitness, BondCtBalanceError, BondPostError, BondPostKind,
+    BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair, EmissionEpochSource,
+    EmissionVerifyContext, EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    HoldingsDescriptor, HoldingsKind, HoldingsUpdateConnectError, HoldingsUpdatePopError,
+    RebondConnectError, RebondPopError, RewardCommit, ShardSet, ShardSetError, UnbondConnectError,
+    UnbondPopError, WireError, ATTESTATION_HEADER_LEN, CHALLENGE_RESOLUTION_BLOCKS,
+    FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET, HYBRID_PUBKEY_CANONICAL_BYTES,
+    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -721,6 +722,220 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
     }
 
     SHEKYL_ARCHIVAL_VERIFY_OK
+}
+
+// ── Credit-wire attestation admission verify (Phase 2, ARCHIVAL_CREDIT_WIRE.md §3–§4) ──
+//
+// The consensus recompute-and-compare that replaces #398's interim `check_attestation_root`
+// (which asserted `b.attestation_root == empty_attestation_root()`). ALL logic is here in Rust
+// (rule 20, daemon clause): C++ reads LMDB by keys step-1 names, fills the ctx with raw bytes,
+// and obeys the verdict — it parses nothing and decides nothing. Byte-identity of the recomputed
+// root is by construction (this calls the same `attestation_root` the producer did), not by two
+// implementations matching; the residual risk is marshaling, and each verdict code below makes a
+// marshaling failure a distinct, self-describing reject rather than a silent misdiagnosis.
+
+/// Success — the block's attestation set verifies against the mined `attestation_root`.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK: u8 = 0;
+/// A required pointer was null.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR: u8 = 1;
+/// The witness bytes did not decode (too short, count over cap, length mismatch, malformed
+/// signature) OR the witness signature count did not match the block's pass headers.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS: u8 = 2;
+/// The kept-header blob was not a whole number of 49-byte records, or a record's kind byte was
+/// neither miss nor pass.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS: u8 = 3;
+/// The header-record count exceeds `MAX_ATTESTATION_RECORDS` — checked FIRST, before any
+/// per-record parse work proportional to the count.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED: u8 = 4;
+/// The recomputed `attestation_root` does not equal the mined header field. Signatures are NOT
+/// evaluated at this point — the marshaling-drift diagnostic (look at the header blob / cb_out_key
+/// C++ passed), distinct from a genuine signature failure.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH: u8 = 5;
+/// A pass record's countersignature genuinely failed, or its `p_id` is not the supplied pubkey's
+/// canonical id — a forgery signal, distinct from a marshaling slip.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID: u8 = 6;
+/// A pass record names a `p_id` with no bond record (C++ passed the empty-pubkey marker).
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT: u8 = 7;
+/// C++ could not read the coinbase `vout[0]` output pubkey the nonce binds.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE: u8 = 8;
+/// The `(p_id, pubkey)` pairs do not correspond EXACTLY to the parsed pass-`p_id` set (a pair with
+/// no pass record, a pass `p_id` with no pair, or a duplicate pair `p_id`) — a C++/Rust parse
+/// disagreement between step-1 and step-2.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH: u8 = 9;
+/// A pair's pubkey length is neither 0 (bond-absent) nor `HYBRID_PUBKEY_CANONICAL_BYTES` — a
+/// truncated/oversized buffer, NOT diagnosed as a bad signature.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY: u8 = 10;
+
+/// One `(p_id, hybrid pubkey)` pair C++ resolved for a distinct pass `p_id` that step-1 named.
+/// `pubkey_len == 0` is the bond-absent marker; `== HYBRID_PUBKEY_CANONICAL_BYTES` is a key; any
+/// other length is `..._ERR_MALFORMED_PUBKEY`. The pubkey is a property of `P`, so ONE pair serves
+/// every pass record with this `p_id`.
+#[repr(C)]
+pub struct ShekylArchivalPidPubkey {
+    pub p_id: [u8; 32],
+    pub pubkey_ptr: *const u8,
+    pub pubkey_len: usize,
+}
+
+/// Consensus context for [`shekyl_archival_verify_attestation`], filled by C++ after its LMDB
+/// reads. `cb_out_key` is the coinbase `vout[0]` output pubkey the nonce binds (consensus rule:
+/// the attestation binds `vout[0]`, not an arbitrary output); `cb_out_key_readable == 0` means C++
+/// could not read it (→ `..._ERR_CBKEY_UNREADABLE`, never garbage). `headers` is the RAW
+/// 49-byte-record `tx_extra` blob — Rust splits and parses it (untrusted input, rule 20 #3).
+#[repr(C)]
+pub struct ShekylArchivalAttestationVerifyCtx {
+    pub attestation_root: [u8; 32],
+    pub cb_out_key: [u8; 32],
+    pub cb_out_key_readable: u8,
+    pub headers_ptr: *const u8,
+    pub headers_len: usize,
+    pub pairs_ptr: *const ShekylArchivalPidPubkey,
+    pub pairs_len: usize,
+}
+
+/// Verify a block's attestation set against its mined `attestation_root` (Phase 2 admission).
+///
+/// `witness` is the opaque `r ‖ count ‖ pass-signatures` blob (`connect.attestation_witness`); an
+/// empty blob is the zero-record set (the pre-cutover state). Returns a
+/// `SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_*` code; C++ rejects on any non-`OK`.
+///
+/// # Safety
+/// `ctx_ptr` must be valid; `witness_ptr` and the ctx's `headers`/`pairs` (and each pair's
+/// `pubkey`) must each point to `len` valid bytes, or be null iff the corresponding `len == 0`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_verify_attestation(
+    witness_ptr: *const u8,
+    witness_len: usize,
+    ctx_ptr: *const ShekylArchivalAttestationVerifyCtx,
+) -> u8 {
+    if ctx_ptr.is_null() || (witness_ptr.is_null() && witness_len != 0) {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
+    }
+    let ctx = unsafe { &*ctx_ptr };
+
+    // C++ never improvises the unreadable-coinbase verdict.
+    if ctx.cb_out_key_readable == 0 {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE;
+    }
+
+    // 1. Header blob: cap FIRST (structural, before per-record work), then parse ONCE. The parsed
+    //    records are carried through coverage / recompute / countersig — never re-parsed.
+    let headers: &[u8] = if ctx.headers_len == 0 {
+        &[]
+    } else if ctx.headers_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
+    } else {
+        unsafe { std::slice::from_raw_parts(ctx.headers_ptr, ctx.headers_len) }
+    };
+    if !headers.len().is_multiple_of(ATTESTATION_HEADER_LEN) {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS;
+    }
+    if headers.len() / ATTESTATION_HEADER_LEN > MAX_ATTESTATION_RECORDS {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED;
+    }
+    let mut parsed_headers = Vec::with_capacity(headers.len() / ATTESTATION_HEADER_LEN);
+    for chunk in headers.chunks_exact(ATTESTATION_HEADER_LEN) {
+        match AttestationHeader::from_canonical_bytes(chunk) {
+            Ok(h) => parsed_headers.push(h),
+            Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS,
+        }
+    }
+
+    // 2. Witness. An empty blob is the zero-signature set (r unused with no pass records); any
+    //    non-empty blob must decode exactly.
+    let witness = if witness_len == 0 {
+        BlockAttestationWitness {
+            r: [0u8; 32],
+            pass_signatures: Vec::new(),
+        }
+    } else {
+        let witness_bytes = unsafe { std::slice::from_raw_parts(witness_ptr, witness_len) };
+        match BlockAttestationWitness::from_canonical_bytes(witness_bytes) {
+            Ok(w) => w,
+            Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS,
+        }
+    };
+
+    // 3. Pair pass headers (tx_extra order) with the witness signatures. A count mismatch is a
+    //    malformed witness for this block. Parsed ONCE above — carried through below.
+    let records = match pass_records_from_headers_and_witness(&parsed_headers, &witness) {
+        Ok(r) => r,
+        Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS,
+    };
+
+    // 4. Validate + collect the (p_id, pubkey) pairs; reject a duplicate pair p_id. `None` is the
+    //    bond-absent marker; a wrong pubkey length is malformed, never a bad-signature verdict.
+    let pairs: &[ShekylArchivalPidPubkey] = if ctx.pairs_len == 0 {
+        &[]
+    } else if ctx.pairs_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
+    } else {
+        unsafe { std::slice::from_raw_parts(ctx.pairs_ptr, ctx.pairs_len) }
+    };
+    let mut resolved: Vec<([u8; 32], Option<HybridPublicKey>)> = Vec::with_capacity(pairs.len());
+    for pair in pairs {
+        if resolved.iter().any(|(pid, _)| *pid == pair.p_id) {
+            return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH; // duplicate pair p_id
+        }
+        let pk = if pair.pubkey_len == 0 {
+            None // bond-absent marker
+        } else if pair.pubkey_len == HYBRID_PUBKEY_CANONICAL_BYTES {
+            if pair.pubkey_ptr.is_null() {
+                return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
+            }
+            let bytes = unsafe { std::slice::from_raw_parts(pair.pubkey_ptr, pair.pubkey_len) };
+            match HybridPublicKey::from_canonical_bytes(bytes) {
+                Ok(k) => Some(k),
+                Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY,
+            }
+        } else {
+            return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY;
+        };
+        resolved.push((pair.p_id, pk));
+    }
+
+    // 5. Coverage: the pair set must equal the parsed pass-p_id set EXACTLY (one pair per distinct
+    //    p_id serves every record with that p_id). Every pair names a pass record, and every pass
+    //    record has a pair. With duplicate pairs already rejected, these two subset checks give
+    //    set-equality and close the step-1/step-2 independent-parse gap.
+    if resolved
+        .iter()
+        .any(|(pid, _)| !records.iter().any(|r| r.p_id == *pid))
+    {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH; // a pair with no pass record
+    }
+    if records
+        .iter()
+        .any(|r| !resolved.iter().any(|(pid, _)| *pid == r.p_id))
+    {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH; // a pass p_id with no pair
+    }
+
+    // 6. Recompute the root and compare — signatures NOT evaluated here (marshaling-drift gate).
+    //    `attestation_root` cannot fail over signatures that already decoded from the witness.
+    let recomputed = match attestation_root(&records) {
+        Ok(root) => root,
+        Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS,
+    };
+    if recomputed != ctx.attestation_root {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH;
+    }
+
+    // 7. Per-pass countersignature — only after the root agrees.
+    for record in &records {
+        let (_, pk) = resolved
+            .iter()
+            .find(|(pid, _)| *pid == record.p_id)
+            .expect("coverage guarantees a pair for every pass p_id");
+        let Some(pk) = pk else {
+            return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT;
+        };
+        if !verify_pass_countersignature(&witness.r, &ctx.cb_out_key, pk, record) {
+            return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID;
+        }
+    }
+
+    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
 }
 
 fn map_bond_post_error(err: BondPostError) -> u8 {
@@ -4999,5 +5214,288 @@ mod tests {
             }),
             SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED
         );
+    }
+}
+
+#[cfg(test)]
+mod attestation_verify_tests {
+    use super::*;
+    use shekyl_archival_retention::{attestation_nonce, AttestationKind, PassRecord};
+    use shekyl_crypto_pq::signature::HybridSecretKey;
+
+    const SHARD: u64 = 42;
+    const EPOCH: u64 = 1000;
+    const R: [u8; 32] = [7u8; 32];
+    const CB: [u8; 32] = [9u8; 32];
+
+    struct Scenario {
+        witness: Vec<u8>,
+        headers: Vec<u8>,
+        pubkey: Vec<u8>,
+        p_id: [u8; 32],
+        root: [u8; 32],
+    }
+
+    fn real_p() -> (Vec<u8>, [u8; 32], HybridSecretKey) {
+        let (pk, sk) = HybridEd25519MlDsa.keypair_generate().expect("keypair");
+        let pubkey = pk.to_canonical_bytes().expect("pk bytes");
+        let p_id = *p_canonical_id_from_hybrid_pubkey(&pubkey).as_bytes();
+        (pubkey, p_id, sk)
+    }
+
+    /// A one-pass-record block whose record is signed by `signing_sk` but claims
+    /// `claimed_p_id` / `claimed_pubkey`. Signer == claimed P → valid; a different key → the root
+    /// still recomputes (it commits the sig bytes) but the countersig fails against P's key.
+    fn one_pass(
+        signing_sk: &HybridSecretKey,
+        claimed_p_id: [u8; 32],
+        claimed_pubkey: Vec<u8>,
+    ) -> Scenario {
+        let nonce = attestation_nonce(&R, &CB, &claimed_p_id, SHARD, EPOCH);
+        let sig = HybridEd25519MlDsa.sign(signing_sk, &nonce).expect("sign");
+        let record = PassRecord {
+            p_id: claimed_p_id,
+            shard_id: SHARD,
+            settlement_epoch: EPOCH,
+            signature: sig.clone(),
+        };
+        let header = AttestationHeader {
+            p_id: claimed_p_id,
+            shard_id: SHARD,
+            settlement_epoch: EPOCH,
+            kind: AttestationKind::Pass,
+        };
+        Scenario {
+            witness: BlockAttestationWitness {
+                r: R,
+                pass_signatures: vec![sig],
+            }
+            .to_canonical_bytes()
+            .expect("witness bytes"),
+            headers: header.to_canonical_bytes().to_vec(),
+            pubkey: claimed_pubkey,
+            p_id: claimed_p_id,
+            root: attestation_root(std::slice::from_ref(&record)).expect("root"),
+        }
+    }
+
+    fn pair(p_id: [u8; 32], pubkey: &[u8]) -> ShekylArchivalPidPubkey {
+        ShekylArchivalPidPubkey {
+            p_id,
+            pubkey_ptr: if pubkey.is_empty() {
+                std::ptr::null()
+            } else {
+                pubkey.as_ptr()
+            },
+            pubkey_len: pubkey.len(),
+        }
+    }
+
+    /// FFI verify over explicit bytes/pairs so each test perturbs one field. All slices are kept
+    /// alive by the caller for the duration of the call.
+    fn call(
+        root: [u8; 32],
+        cb_readable: u8,
+        headers: &[u8],
+        witness: &[u8],
+        pairs: &[ShekylArchivalPidPubkey],
+    ) -> u8 {
+        let ctx = ShekylArchivalAttestationVerifyCtx {
+            attestation_root: root,
+            cb_out_key: CB,
+            cb_out_key_readable: cb_readable,
+            headers_ptr: if headers.is_empty() {
+                std::ptr::null()
+            } else {
+                headers.as_ptr()
+            },
+            headers_len: headers.len(),
+            pairs_ptr: if pairs.is_empty() {
+                std::ptr::null()
+            } else {
+                pairs.as_ptr()
+            },
+            pairs_len: pairs.len(),
+        };
+        unsafe {
+            shekyl_archival_verify_attestation(
+                if witness.is_empty() {
+                    std::ptr::null()
+                } else {
+                    witness.as_ptr()
+                },
+                witness.len(),
+                &raw const ctx,
+            )
+        }
+    }
+
+    #[test]
+    fn valid_block_verifies() {
+        let (pubkey, p_id, sk) = real_p();
+        let s = one_pass(&sk, p_id, pubkey);
+        let pairs = [pair(s.p_id, &s.pubkey)];
+        assert_eq!(
+            call(s.root, 1, &s.headers, &s.witness, &pairs),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
+        );
+    }
+
+    #[test]
+    fn empty_block_verifies_against_empty_root() {
+        // No headers, empty witness, no pairs — the pre-cutover state, reproduced.
+        assert_eq!(
+            call(empty_attestation_root(), 1, &[], &[], &[]),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
+        );
+    }
+
+    #[test]
+    fn wrong_mined_root_is_root_mismatch() {
+        let (pubkey, p_id, sk) = real_p();
+        let s = one_pass(&sk, p_id, pubkey);
+        let pairs = [pair(s.p_id, &s.pubkey)];
+        let mut wrong = s.root;
+        wrong[0] ^= 0x01;
+        assert_eq!(
+            call(wrong, 1, &s.headers, &s.witness, &pairs),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH
+        );
+    }
+
+    #[test]
+    fn forged_signature_is_countersig_invalid() {
+        let (pubkey, p_id, _sk) = real_p();
+        let (_other_pk, other_sk) = HybridEd25519MlDsa.keypair_generate().unwrap();
+        // Signed by other_sk, claims real P: root recomputes (same sig bytes), countersig fails.
+        let s = one_pass(&other_sk, p_id, pubkey);
+        let pairs = [pair(s.p_id, &s.pubkey)];
+        assert_eq!(
+            call(s.root, 1, &s.headers, &s.witness, &pairs),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID
+        );
+    }
+
+    #[test]
+    fn missing_bond_is_bond_absent() {
+        let (pubkey, p_id, sk) = real_p();
+        let s = one_pass(&sk, p_id, pubkey);
+        let pairs = [pair(s.p_id, &[])]; // empty pubkey == bond-absent marker
+        assert_eq!(
+            call(s.root, 1, &s.headers, &s.witness, &pairs),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT
+        );
+    }
+
+    #[test]
+    fn wrong_pubkey_length_is_malformed_pubkey() {
+        let (pubkey, p_id, sk) = real_p();
+        let s = one_pass(&sk, p_id, pubkey);
+        let short = vec![0u8; 10]; // neither 0 nor HYBRID_PUBKEY_CANONICAL_BYTES
+        let pairs = [pair(s.p_id, &short)];
+        assert_eq!(
+            call(s.root, 1, &s.headers, &s.witness, &pairs),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY
+        );
+    }
+
+    #[test]
+    fn extra_pair_is_set_mismatch() {
+        let (pubkey, p_id, sk) = real_p();
+        let s = one_pass(&sk, p_id, pubkey);
+        let pairs = [pair(s.p_id, &s.pubkey), pair([0xEE; 32], &s.pubkey)]; // extra pair, no pass record
+        assert_eq!(
+            call(s.root, 1, &s.headers, &s.witness, &pairs),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH
+        );
+    }
+
+    #[test]
+    fn missing_pair_is_set_mismatch() {
+        let (pubkey, p_id, sk) = real_p();
+        let s = one_pass(&sk, p_id, pubkey);
+        assert_eq!(
+            call(s.root, 1, &s.headers, &s.witness, &[]),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH
+        );
+    }
+
+    #[test]
+    fn duplicate_pair_is_set_mismatch() {
+        let (pubkey, p_id, sk) = real_p();
+        let s = one_pass(&sk, p_id, pubkey);
+        let pairs = [pair(s.p_id, &s.pubkey), pair(s.p_id, &s.pubkey)]; // same p_id twice
+        assert_eq!(
+            call(s.root, 1, &s.headers, &s.witness, &pairs),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH
+        );
+    }
+
+    #[test]
+    fn header_count_over_cap_is_cap_exceeded() {
+        let big = vec![0u8; (MAX_ATTESTATION_RECORDS + 1) * ATTESTATION_HEADER_LEN];
+        assert_eq!(
+            call(empty_attestation_root(), 1, &big, &[], &[]),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED
+        );
+    }
+
+    #[test]
+    fn non_multiple_header_blob_is_malformed_headers() {
+        let bad = vec![0u8; ATTESTATION_HEADER_LEN + 1];
+        assert_eq!(
+            call(empty_attestation_root(), 1, &bad, &[], &[]),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS
+        );
+    }
+
+    #[test]
+    fn bad_kind_byte_is_malformed_headers() {
+        let mut hdr = vec![0u8; ATTESTATION_HEADER_LEN];
+        hdr[ATTESTATION_HEADER_LEN - 1] = 2; // kind neither miss(0) nor pass(1)
+        assert_eq!(
+            call(empty_attestation_root(), 1, &hdr, &[], &[]),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS
+        );
+    }
+
+    #[test]
+    fn truncated_witness_is_malformed_witness() {
+        let (pubkey, p_id, sk) = real_p();
+        let s = one_pass(&sk, p_id, pubkey);
+        let pairs = [pair(s.p_id, &s.pubkey)];
+        let short = &s.witness[..s.witness.len() - 1];
+        assert_eq!(
+            call(s.root, 1, &s.headers, short, &pairs),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS
+        );
+    }
+
+    #[test]
+    fn sig_count_not_matching_pass_headers_is_malformed_witness() {
+        // One pass header, empty witness (0 sigs) → pairing count mismatch (before recompute).
+        let (pubkey, p_id, sk) = real_p();
+        let s = one_pass(&sk, p_id, pubkey);
+        let pairs = [pair(s.p_id, &s.pubkey)];
+        assert_eq!(
+            call(s.root, 1, &s.headers, &[], &pairs),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS
+        );
+    }
+
+    #[test]
+    fn unreadable_coinbase_key_is_cbkey_unreadable() {
+        assert_eq!(
+            call(empty_attestation_root(), 0, &[], &[], &[]),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE
+        );
+    }
+
+    #[test]
+    fn null_ctx_is_null_ptr() {
+        let w = [0u8; 40];
+        let r =
+            unsafe { shekyl_archival_verify_attestation(w.as_ptr(), w.len(), std::ptr::null()) };
+        assert_eq!(r, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR);
     }
 }
