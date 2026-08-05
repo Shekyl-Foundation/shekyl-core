@@ -3044,7 +3044,18 @@ where "reshape dominates" could still be wrong.
 
 ---
 
-## 15. The block-time seam — the embargo crossed a consensus timescale the derivation wasn't watching (Round 3)
+## 15. The block-time seam
+
+> **⚠ Under D the embargo is a FAMILY, not a value (§76, §78).** This section
+> reads throughout as though there is one number crossing one block interval.
+> **The disposition is unchanged** — §15.2's clean path is keyed on pool
+> residency rather than duration (§77.1), and §15.6 forbids block time as a
+> term at any level — but *"crosses exactly one block interval"* is an
+> **observation about where 190 s landed**, never an invariant. Do not read it
+> as a constraint the constants round must satisfy. What D actually moves is
+> §15.3's recovery distribution, and it moves it in the direction the priority
+> order accepts: a liveness cost sorted by shape, in place of a privacy cost
+> sorted by shape. — the embargo crossed a consensus timescale the derivation wasn't watching (Round 3)
 
 The 39 s pattern, turned on our own number: a value that satisfies the one
 constraint someone was watching (preemption probability) sitting near a boundary
@@ -11862,26 +11873,10 @@ unreproducible and an artifact indistinguishable from a property:
   on this work, and 32- vs 64-bit matters for the arithmetic.
 - **Governor was `ondemand`** — must be `performance` for the run, or the
   figure carries scheduler variance.
-- **Throttle state.** A throttled Pi reads *slower*, which is the safe
-  direction and therefore the dangerous one: it makes an artifact look like a
-  property. **Throttle state must be reported beside the result, or the result
-  states that it could not be.**
-
-  *Corrected 2026-08-05: `vcgencmd get_throttled` was first recorded here as
-  unreadable because `/dev/vcio` was **absent**. It is not — it is
-  `crw------- root:root`, mode 0600, and Ubuntu 26.04 on Pi does not ship the
-  udev rule that gives the `video` group access. `vcgencmd`'s error text
-  (*"Try creating a device file with: sudo mknod …"*) reads as absence and was
-  taken at face value; `mknod` returns `EEXIST`. **A tool's suggested remedy is
-  not a diagnosis** — the fix is a udev rule or a scoped sudoers entry, not a
-  device node.*
-
-  **And a root-free proxy exists**, which is what the run actually carries:
-  `/sys/class/thermal/thermal_zone0/temp`. The Pi 4 soft-throttles at 80 °C and
-  hard-throttles at 85 °C, so sampling temperature across the sweep bounds
-  thermal throttling directly. Measured **69 °C under sustained compile load** —
-  the heaviest work the box sees — so the margin is ~11 °C before the first
-  threshold.
+- **`vcgencmd get_throttled` is unreadable** (`/dev/vcio` absent). A throttled
+  Pi reads *slower*, which is the safe direction and therefore the dangerous
+  one: it makes an artifact look like a property. **Throttle state must be
+  reported beside the result, or the result states that it could not be.**
 - **Storage — and it is not what was assumed.** `skl-pi` has **no NVMe**
   (`/dev/nvme*` absent). Root is the **SD card** (`/dev/mmcblk0p2`). The
   attached USB device is a **WD easystore 2648 / WD10SDRW-11A0XS0, 931 GB,
@@ -11935,3 +11930,1266 @@ The Pi has 8 GB and 48 GB free; its toolchain is installing.
 **Not yet measured. What §72 fixes is the shape of the measurement**, which is
 the half that decides whether the number means anything — and which, taken
 after the bench, would have arrived as a retraction.
+
+## 73. The Pi arm — 127 ms, and §65's conditional is resolved against us
+
+**2026-08-05.** The arm the constant derives from (§72.5: the quantile is over
+the node population, so the slow end sets the value and the fast machine is the
+sanity check). Both preconditions closed rather than assumed.
+
+### 73.1 Conditions, recorded because they decide the number
+
+- **Governor `performance`, verified on all four cores** at launch, not set and
+  trusted.
+- **Not thermally throttled — measured, not inferred.** A 10 s sampler across
+  the whole sweep: 37 samples, min 65.7 °C, mean 72.9 °C, **max 77.9 °C**
+  against the Pi 4's 80 °C soft-throttle threshold. It came within 2.1 °C, so
+  this was worth measuring rather than asserting.
+- Pi 4 Model B Rev 1.4, Cortex-A72, aarch64 64-bit, 8 GB; **`+1.94.0` on both
+  arms**, so the ratio is hardware and not compiler.
+
+### 73.2 The surface, and the ratio is flat
+
+| cell | x86 | Pi | ratio |
+| --- | --- | --- | --- |
+| d2 · 1-in / 2-out | 23.62 ms | **127.31 ms** | 5.39× |
+| d2 · 1-in / 16-out | 24.45 ms | 131.04 ms | 5.36× |
+| d2 · 2-in / 2-out | 27.58 ms | 151.28 ms | 5.48× |
+| d2 · 4-in / 2-out | 41.29 ms | 230.59 ms | 5.58× |
+| d2 · 4-in / 16-out | 41.33 ms | 234.42 ms | 5.67× |
+
+**Ratio 5.36–5.75× across every cell, mean 5.56×.** Its flatness is the
+result's own control: a throttled or governor-limited run would skew the later
+cells, and the depth-1 block (5.51–5.75×) and depth-2 block (5.36–5.67×) agree.
+
+**And the flat ratio confirms the ML-DSA retraction empirically.** With lattice
+arithmetic on the path, AVX2-vs-NEON would have produced a wide and
+shape-dependent spread. EC and hashing work gives a constant factor — which is
+what a path carrying **no** ML-DSA-65 predicts (§72.2).
+
+### 73.3 §65's conditional is resolved, and not marginally
+
+§65 recorded the 14 % shortfall as conditional on the true clearnet hop
+exceeding 175 ms. **It does, by a margin that changes the character of the
+finding:**
+
+> **127 ms of verification alone, on the arm the policy derives from, against a
+> 175 ms budget that must also contain transit and scheduling. Verification is
+> ~73 % of the entire `hop` assumption before a single byte moves.**
+
+Add §21's own ~50 ms ocean-crossing transit and the modal shape is already
+**~177 ms** — over budget on the two terms we can name, with scheduling and
+the `(N+1)/2` batch multiplier still unaccounted.
+
+`175` is not an under-estimate to be nudged. **It is the wrong order for the
+work the term now contains**, and it was set when that work was a Monero-era
+ring-signature check.
+
+### 73.4 The growth is worse on this arm, and still monotonic
+
+Per-layer depth slope on the Pi: **+6.59 ms at 1 input, +9.78 at 2, +20.39 at
+4** — the same multiply-with-inputs shape as x86, scaled by the same ~5.5×.
+
+At §72's capacity schedule (38 / 1,444 / 25,992 / 987,696 / 17.8M / 675M
+outputs), five further layers over the chain's life put the modal shape at
+**~160 ms of verification** — approaching the whole current budget from one
+term, with no code change to trigger a review.
+
+### 73.5 The disposition — a privacy defect now, a liveness cost to fix
+
+**"The wrong order" reads alarming without the disposition, so state it
+precisely.** The harm and the remedy sit on different axes:
+
+- **Today's defect is privacy.** An under-estimated `hop` shortens the embargo
+  *relative to true travel time*, so transactions are preempted and self-fluff
+  before their stem completes — §21's asymmetry, in its losing direction.
+- **The fix costs liveness, not privacy.** A correctly re-derived `hop` simply
+  makes the embargo longer, and §6.7 prices that as **recovery latency** —
+  slower black-hole recovery, not exposure.
+
+> **The shipped embargo is wrong in the privacy-losing direction, and
+> correcting it is paid for in liveness.** The same trade this arc has taken
+> twice already (RD-4's 31 → 144 s, F-7's 144 → 190 s), on the same side of the
+> priority order.
+
+### 73.6 §15's block-interval property does not constrain the answer — it forbids the question
+
+A re-derived `hop` several times larger pushes the embargo past 240 s, so it
+would cross **two** block intervals where 190 s crosses one. §15 checked that
+crossing twice, so it is reasonable to ask whether the constants round is bound
+by it. **It is not, and §15.6 forecloses exactly this move:**
+
+> *"**Do NOT** add a block-time term that pulls the embargo down. The derivation
+> stays block-time-**unaware**; it answers to survival and only survival. …
+> Block time is not a term of this derivation at any level, binding or not."*
+
+It names the temptation directly: *"Shortening the embargo now to slide back
+under 120 s re-commits the exact sin this whole arc undid."* The 39 s was the
+`log10`-for-`ln` error that merely *happened* to sit under a block interval — a
+number **wrong for privacy and incidentally comfortable for integration**.
+Treating a two-interval crossing as a constraint would rebuild precisely that.
+
+**What is owed sits at the integration layer.** *(The "genuine re-run" below is
+**withdrawn at §77.3**: §15.4 had already cleared `MIN_RELAY_TIME`, which
+governs an already-fluffed transaction rather than an embargoed one.)* §15 located the real teeth in `MIN_RELAY_TIME` (300 s) and
+mempool-lifetime headroom, not block time. At an embargo several times 190 s,
+recovery p90 grows into that 300 s window — so **the cascade check must be
+re-run by the constants round**, while the block-interval crossing is a
+consequence to record rather than a bound to respect.
+
+### 73.7 What this does not settle
+
+The **shape distribution** and **batch depth** remain free parameters (§72.3,
+§72.4), so the effective scalar is not yet derivable — this fixes the surface,
+not the constant.
+
+**Batch depth is promoted by this measurement from caveat to dominant term.**
+At 22 ms it was a refinement; at 127 ms it is the largest remaining quantity.
+Every transaction in an arriving batch is verified before *any* is forwarded,
+so a batch of 10 puts the last transaction at **~1.27 s of verification alone**
+— an order of magnitude above the entire current `hop` budget. Depth is set by
+network load, which is exactly what a quiet two-node rig cannot observe and
+what no pre-genesis measurement can fix.
+
+**Which inverts §72.4's batch-verification disposition.** `fcmps` exposes
+`verify(&mut BatchVerifier<…>)` — *"this only queues the FCMP for batch
+verification"* — recorded there as a landmine: a throughput win that would
+silently invalidate the derivation. **At 127 ms serial that reading is
+backwards.** Batching amortises the multi-exponentiation across the batch,
+collapsing `N × 127 ms` toward `127 ms + small·N`. That is not an optimisation
+to guard against — **it is plausibly what keeps `hop` bounded under load at
+all.**
+
+The disposition therefore changes from *"do not take this without re-deriving"*
+to **"evaluate this as the fix"**. The obligation to re-derive is unchanged;
+the two phrasings simply send the next reader in opposite directions, and the
+second is the correct one.
+
+And the embargo re-derivation at a corrected `hop` is a
+separate act with a real liveness cost (§6.7), which is the constants round's
+to take, not this measurement's.
+
+## 74. What 127 ms means operationally — and initial sync has a path
+
+**2026-08-05, maintainer, with two self-corrections computed rather than
+asserted, and the sync question checked at source.**
+
+### 74.1 Two corrections that shrink the finding
+
+**"Batch depth is the dominant term" — withdrawn; utilisation was never
+computed.** At 127 ms per transaction a Pi serves ~680k tx/day:
+
+| network volume | Pi utilisation | mean queue wait |
+| --- | --- | --- |
+| 20 000 tx/day (Monero-like) | 2.9 % | 3.8 ms |
+| 100 000 | 14.7 % | 21.9 ms |
+| 300 000 | 44.1 % | 100 ms |
+| 500 000 | 73.5 % | 352 ms |
+
+**Queueing is negligible at present-day volume and becomes a real term above
+~300k tx/day.** So batch depth is a *scaling* concern with a **computable
+trigger**, not a live one — which is a better object than either earlier
+reading (§72.4's caveat or §73.7's "dominant").
+
+**"175 is the wrong order" — overstated.** On the Pi arm, `transit + verify`:
+
+| shape | `hop` |
+| --- | --- |
+| modal 1-in, depth 2 | 177 ms |
+| modal, +5 layers | 210 ms |
+| 4-in, depth 2 | 281 ms |
+| 4-in, +5 layers | 383 ms |
+
+**175 is almost exactly the modal value on today's slowest hardware.** That is
+not a magnitude error — it is a **statistic-class error**, which is precisely
+what §65 named: `hop` states a *direction* and no *statistic*, so a central
+estimate sits where the policy demands a tail one. **The operational claim is
+that the constant needs to roughly double, not move an order.**
+
+### 74.2 Initial sync: the fast path exists and is compiled in
+
+The concern: historical transactions arriving in blocks were never in this
+node's pool, so `can_skip_fcmp = found_tx_in_pool && …` is **false** for them
+and the block path pays full verification. At 127 ms, one year at 20k tx/day
+(~7.3M transactions) is ~11 days of pure verification on a Pi.
+
+**Checked, and there is a path.** The skip at `blockchain.cpp` sits inside
+`#if defined(PER_BLOCK_CHECKPOINT) / if (!fast_check)`, and:
+
+- `PER_BLOCK_CHECKPOINT` is **enabled by default** —
+  `CMakeLists.txt:471` sets it and `:474` adds `-DPER_BLOCK_CHECKPOINT`;
+- `fast_check` is set when the block's height is covered by
+  `m_blocks_hash_check` and its hash matches the pre-validated entry
+  (`blockchain.cpp:5629-5648`);
+- when `fast_check` holds, the **entire** input-check block is skipped —
+  `check_tx_inputs`, and with it FCMP verification, never runs.
+
+**So the 11-day figure is the worst case — the un-checkpointed one.** The
+mitigation is inherited, present and on by default.
+
+**What it is contingent on, and this is a pre-genesis decision rather than a
+code gap:** the skip covers only heights present in `m_blocks_hash_check`.
+Shekyl is v3-from-genesis with no history, so whether a given sync benefits
+depends on whether we ship a pre-validated hash set and how far it reaches —
+**a shipping decision nobody has taken.** Until it is, *"run a node on a Pi"*
+should be qualified for initial sync, though **not** for steady-state relaying.
+
+### 74.3 Pruned — the Pi is a derivation floor, not a deployment story
+
+**§74.3 as first written inflated a derivation input into an operational
+envelope. Corrected here rather than edited away.**
+
+**What the Pi arm is for:** the policy provisions `hop` at a high quantile over
+the **node population**, and the Pi bounds the slow end. **Whether anyone runs
+one at volume is beside the point** — it establishes what the constant has to
+cover so that whoever *is* slowest is not systematically preempted. That is a
+derivation input, and it was the whole reason §72.5 named the population a
+policy decision.
+
+Three claims hung on it, and two do not survive:
+
+- **Throughput ceiling — withdrawn.** *"A prerequisite for Pi viability at
+  300k tx/day"* describes a scenario nobody is in: a network at that volume has
+  hardware to match, and 300k on x86 is 23.6 ms serial at ~8 % utilisation.
+  Pi-bound throughput is not a situation real deployments reach.
+- **Initial sync — withdrawn from this document.** It is an operator-experience
+  question about whether Pi-class nodes can *bootstrap*, not a relay-privacy
+  one. It surfaced here by accident. §74.2's source finding stands and is worth
+  passing to whoever owns node onboarding — **the fast path exists, is enabled
+  by default, and its reach is an unmade shipping decision** — but carrying it
+  here would be this arc keeping someone else's item.
+- **Large-input transactions are under-provisioned — this survives, and it is
+  the real output.** 383 ms against a 175 ms constant at 4 inputs and chain
+  age, on the arm the policy derives from. **A privacy penalty correlated with
+  wallet composition**: consolidations and wallets spending many small outputs
+  draw embargoes provisioned for a fraction of their true travel time, so they
+  preempt and self-fluff more often. No adversary required, and **invisible to
+  the affected user**, who cannot see that their transaction shape bought them
+  a shorter embargo.
+
+**And the batch verifier returns to being a throughput optimisation.** Its
+disposition has now moved three times — landmine (§72.4), then "evaluate it as
+the fix" (§73.7), now neither — as the numbers underneath it changed. **The
+part that never moved is the only part to keep: taking it changes `hop`'s batch
+term and obliges a re-derivation.** That is the durable hook; the rest was
+successive readings of a utilisation figure nobody had computed.
+
+> **The practical output of the Pi arm is one number for the constants round
+> and one structural finding — not an operational envelope.**
+
+### 74.4 The operational statement that *is* supported
+
+Narrower than §74.3's first version, and worth stating because it is the
+reassuring direction:
+
+**At startup-scale volume, anyone can run a relay node — a Raspberry Pi 4
+included.** At ~20k tx/day the Pi sits at 2.9 % utilisation with ~3.8 ms mean
+queue wait, and the flat 5.4× ratio means low-end hardware degrades
+**predictably rather than falling off a cliff**. Any general-purpose laptop is
+far inside the envelope.
+
+Two honest limits on that sentence:
+
+1. It is about **steady-state relaying**. Initial-sync bootstrap is the
+   separate question §74.3 hands off.
+2. **A Pi 4 is a *choice* of floor, not a measured minimum.** Nothing here
+   establishes it as the slowest hardware anyone will use, and a Pi 5 is
+   expected faster but is unmeasured. §72.5's point stands: **which hardware is
+   in the population is a decision**, and this arm bounds a floor it did not
+   also justify.
+
+### 74.5 What the numbers support
+
+*(Superseded in part by §74.3 — the throughput-ceiling and batch-verifier
+bullets below were the inflated reading; kept so the correction has something
+to point at.)*
+
+- **A Pi is a viable relay node.** ~680k tx/day ceiling against a network
+  running ~20k, and the flat 5.4× ratio means low-end hardware degrades
+  **predictably rather than falling off a cliff**.
+- **The privacy cost lands on large-input transactions.** 383 ms against a
+  175 ms constant at the far end: consolidations and wallets spending many
+  small outputs draw embargoes provisioned for a fraction of their real travel
+  time, so they preempt and self-fluff more often. **No adversary needed, and
+  invisible to the affected user.**
+- **The batch verifier is a scaling prerequisite tied to a volume threshold** —
+  not needed at 20k tx/day, and what keeps a Pi viable at 300k+. That is the
+  disposition to record: neither §72.4's landmine nor a nice-to-have, but a
+  **named prerequisite with a trigger**.
+- **The constant has a scheduled decay.** Five tree layers add 33 ms at modal
+  shape and 102 ms at 4 inputs, with no code change to trigger review, and the
+  re-derivation points are computable today from §72's 38 / 1,444 / 25,992 /
+  987,696 / 17.8M / 675M capacities.
+
+## 75. The quantile is what keeps privacy from tracking hardware
+
+**2026-08-05, maintainer.** The closing principle of the verification-floor
+arm, and the reason to derive from the slow end that does not depend on anyone
+running a Pi at volume.
+
+### 75.1 The barrier question, answered positively
+
+**Can someone run a node on hardware they already own, without it being
+second-class?** From this measurement: **yes, comfortably.** ~2.9 % utilisation
+at realistic volume, and the flat 5.4× ratio means low-end hardware **degrades
+predictably rather than hitting a cliff**.
+
+That is a **design property worth protecting**, not a constraint to work
+around — and stating it positively is the point, because the next paragraph is
+about the one way it could be lost quietly.
+
+### 75.2 The large-input finding is the barrier reappearing as a privacy asymmetry
+
+§74.3 kept the under-provisioning of large-input transactions as "the real
+output". **It is not a performance problem.** Read against §75.1 it is the
+barrier returning in a form nobody would look for:
+
+> **If `hop` is provisioned at the modal case, the Pi operator's transactions
+> preempt more often than the laptop operator's. Same protocol, worse
+> anonymity, determined by hardware.**
+
+A two-tier privacy outcome, arriving through **a constant** rather than a
+feature, a setting, or a fee — which is precisely why it would survive review.
+Nobody proposes it; it falls out of picking a central statistic where the
+policy asked for a tail one (§65, §74.1's statistic-class diagnosis).
+
+**And it collides with the mission directly.**
+[`00-mission`](../../.cursor/rules/00-mission.mdc) §2: *"Every user gets the
+same anonymity guarantees **by default** — privacy is never a setting."*
+Anonymity that correlates with the operator's hardware is not the same
+guarantee for everyone; it is a setting whose value is chosen by what the user
+could afford, and one they cannot see, cannot measure, and did not choose.
+
+### 75.3 Why the high quantile is the fix, and what it costs
+
+Provisioning at the high quantile over the node population **removes the
+correlation**: everyone gets the embargo the **slowest honest node** needs, so
+anonymity stops tracking hardware.
+
+The cost is recovery latency, which §6.7 prices — and the shape of that cost is
+the argument:
+
+| | who pays | shape |
+| --- | --- | --- |
+| modal provisioning | slow-hardware operators only | **sorted** — by hardware, invisibly |
+| high-quantile provisioning | everyone | **uniform** — a shared cost |
+
+**A shared cost rather than a sorted one.** That is the same trade the arc has
+taken at RD-4 and F-7 (§73.5), now with the reason stated at the level that
+generalises: **the quantile is not a safety margin, it is the mechanism that
+makes the guarantee uniform.**
+
+### 75.4 What the Pi arm therefore delivers
+
+**One input to the constants round, and one principle:**
+
+> **Derive `hop` from the slow end because a central statistic makes anonymity
+> correlate with hardware — not because anyone is expected to run a Pi at
+> volume.**
+
+The second half is the durable part. It survives any change in who runs what,
+and it is the answer to a future reader who observes that Pi-class relays are
+rare and proposes re-deriving against typical hardware: **that proposal is a
+privacy regression wearing an efficiency argument**, and §75.2 is why.
+
+## 76. Option E collapses — intra-transaction batching is already implemented
+
+**2026-08-05.** E was to be resolved first because it sets how expensive D is,
+and it is a source read rather than a bench run: **`shekyl_fcmp::proof::verify`
+already batch-verifies a transaction's inputs.**
+
+```rust
+let mut ed_verifier = multiexp::BatchVerifier::new(num_inputs);
+let mut c1_verifier = generalized_bulletproofs::Generators::batch_verifier();
+let mut c2_verifier = generalized_bulletproofs::Generators::batch_verifier();
+```
+
+All of a transaction's inputs are queued into shared verifiers and discharged
+together. **So the measured per-input marginal is already the batched
+marginal**, and E offers nothing further *within* a transaction — the
+optimisation it proposed is the code that produced the numbers.
+
+### 76.1 And the marginal is increasing, not sublinear
+
+| arm | input 2 | inputs 3–4 (each) | trend |
+| --- | --- | --- | --- |
+| x86 | 3.96 ms | 6.86 ms | **1.73× — increasing** |
+| Pi | 23.97 ms | 39.66 ms | **1.65× — increasing** |
+
+E hoped batching would make the per-input cost *sublinear*. With batching
+already applied it is **super**linear over the benched range, which is the
+opposite direction. **E cannot flatten the axis because the axis is already
+flattened as far as this implementation flattens it.**
+
+> **Caveat, and it bounds the claim.** The fixture places all `n` inputs in
+> **one leaf chunk** (§72's control, to isolate input count from tree depth).
+> Production inputs are typically spread across chunks with distinct paths.
+> Whether a shared chunk flatters or penalises the input axis is **unmeasured**,
+> so the *shape* of the marginal is established on this fixture, not on
+> production topology. The direction — that batching is already in force — is
+> a source fact and does not depend on the fixture.
+
+### 76.2 What this does to the option set
+
+- **E — closed.** Already implemented. Not an available lever.
+- **C — demoted from required to optional.** It was needed because D's cost
+  looked unbounded. It still bounds the axis, but see below.
+- **D — carries the range, and is less alarming than "unbounded" suggests.**
+
+**The premise correction that reopened D is the important one, and it holds:**
+shape is already public. `vin.size()` is in the clear at the relay layer, so
+deriving the embargo from it **leaks nothing new**, every stem node computes
+the same value from the same public data with no coordination, and the draw
+stays memoryless — only the mean moves.
+
+**And D is self-matching, which is why unboundedness is tolerable.** A
+100-input consolidation at ~2.4 s of verification per hop *genuinely travels
+that slowly*. D gives it an embargo matched to its real travel time; it does
+not over-provision everyone else to cover it, and it does not under-provision
+it. The quantity grows without bound only because the *work* does — which is
+the honest relationship, and precisely what §75 asked for: **uniform in effect,
+at cost proportional to work actually done.**
+
+That is the difference between D and B. B covers a tail by making everyone pay
+for it and still leaves the far tail sorted. **D removes the sorting rather
+than paying to hide it.**
+
+### 76.3 The residue
+
+D does not need C, but C changes what D costs the network: without an input
+cap, a single consolidation can hold a stem slot for seconds. That is a
+liveness and capacity question rather than a privacy one, and it is the
+constants round's to weigh — **not a precondition for D being correct.**
+
+Two axes still need tracking rather than quantiling (§75's sorting test):
+**tree depth** and **batch depth** are common-mode — everyone runs the same
+depth at a given moment, and load is shared — so they take a **scheduled
+re-derivation** and a **volume trigger** respectively, not a statistic.
+
+## 77. §15 classified — descriptive and a soft preference, not load-bearing. D is unconstrained.
+
+**2026-08-05.** The open item that could have changed D's status. Resolved by
+reading §15's substance rather than its assertion, and the answer is the
+permissive one.
+
+### 77.1 The correctness property is structural, not temporal
+
+**§15.2 is the decisive subsection, and it does not depend on duration at
+all:**
+
+> *"A mined tx is dropped from the pool via `remove_txpool_tx`
+> ([blockchain.cpp:7053](../../src/cryptonote_core/blockchain.cpp#L7053), the
+> block-connect path), and the embargo lives in that pool entry's
+> `meta.last_relayed_time`, which `get_relayable_transactions` only reads for
+> pool-resident txes — so a mined tx **cannot** fire a stale embargo."*
+
+**The safety property is "the pool entry is dropped on mining", not "the
+embargo is shorter than a block interval."** An embargo may outlive
+arbitrarily many block intervals with no correctness consequence, because the
+thing it keys on is gone the moment the transaction is mined. §15.2's own
+framing — *"the margin is wide, not close"* — describes comfort, not a bound.
+
+### 77.2 What block time actually touches
+
+§15.4 already dispositions the neighbours: FTL (540 s) bounds block
+**timestamps**, not recovery; `MIN_RELAY_TIME` (300 s) governs re-broadcast of
+an **already-fluffed** transaction, a different state from the embargo. Its
+conclusion: *"The only consensus timescale this seam actually touches is block
+time (120 s), for **'which block does recovery make'**."*
+
+**That is recovery latency** — a performance quantity, borne only by
+black-holed transactions, already priced by §6.7 and distributed rather than
+cliff-shaped per §15.3.
+
+**Verdict: §15 is descriptive plus a soft preference. It is not load-bearing.**
+And §15.6 independently forbids treating it as a constraint (*"Block time is
+not a term of this derivation at any level, binding or not"*).
+
+**So D is unconstrained by §15, and C stays optional** — an input cap remains a
+liveness and capacity question, not a precondition for D's correctness.
+
+### 77.3 Correcting §73.6 — the cascade check is not owed
+
+§73.6 said the `MIN_RELAY_TIME` cascade check *"must be re-run by the constants
+round"* because recovery p90 grows into the 300 s window. **That was wrong, and
+§15.4 had already dispositioned it:** `MIN_RELAY_TIME` governs an
+already-fluffed transaction. During the embargo the transaction is
+stem-governed — a different state — so there is no race to re-run. I reached
+for the one neighbour §15 had explicitly cleared.
+
+### 77.4 D must use a global shape function, never local measurement
+
+**Pinned before D is specified, because the natural-looking implementation is
+the wrong one.**
+
+Deriving the embargo from *the node's own observed verification cost* is the
+obvious reading of "shape-aware", and it is a **§75 regression in a new
+place**: the embargo duration would become a **hardware fingerprint**, and the
+Pi operator's timers would differ from the laptop operator's on identical
+transactions — reintroducing exactly the sorting §75 removed, one layer down.
+
+**D is `embargo_mean = f(shape)`, where `f` is built from globally-fixed
+constants provisioned at the slow-hardware quantile.** Hardware keeps its
+quantile; shape becomes a parameter. **Every node computes the same value for
+the same transaction because they all use the same table — not because they all
+measure the same thing.**
+
+> **Local measurement is forbidden by construction, not by convention.** `f`
+> takes shape and returns a duration; it has no input through which a local
+> timing could enter — the same shape of enforcement §15.6 used to keep block
+> time out of the derivation (*"a term a future re-derivation re-evaluates is
+> one block time could eventually be permitted to move the embargo through"*).
+> Anything that measures locally has to add a parameter, which is a visible,
+> reviewable act.
+
+## 78. The last unbounded axis is hardware — and its answer is a stated minimum spec
+
+**2026-08-05, maintainer.** D closed shape. **`hop`'s hardware term is now the
+open one, and it has shape's old problem: "the slow-hardware quantile" over a
+population of `n = 2`.**
+
+An x86 point and a Pi 4 point are **a ratio, not a distribution**. And the Pi 4
+is not the floor of the plausible population — a Pi 3, an older ARM SBC, a
+cheap VPS all sit below it. **§75 strictly applied points at provisioning for
+the slowest hardware anyone might run, which is unbounded exactly as the input
+axis was.**
+
+### 78.1 This axis has an answer shape the shape axis did not
+
+**A stated minimum supported spec.** It converts an unbounded *measurement*
+into a bounded *policy decision*.
+
+**And it is compatible with mission §2 rather than in tension with it.** §75's
+harm was that the sorting was **invisible and unchosen**. A published minimum —
+*"the anonymity guarantee is provisioned for Pi 4-class hardware"* — makes it
+**visible and chosen**:
+
+- **at or above spec**, everyone gets the same guarantee — the uniformity §75
+  requires;
+- **below spec**, the operator knows they are outside it, rather than silently
+  receiving worse anonymity they cannot see, measure, or attribute.
+
+*"Every user gets the same anonymity guarantees by default"* is satisfied by a
+stated default. It is not satisfied by an unstated one that happens to track
+what the user could afford.
+
+**It is an entry statement, not an exclusion.** Naming a Pi 4 as the supported
+floor tells someone their existing hardware **qualifies** — which is §75.1's
+barrier answer stated as policy instead of left as a measurement.
+
+**And it makes the derivation tractable:** one hardware measurement, at the
+spec machine, which we already have.
+
+### 78.2 Two consequences of choosing a spec, both worth naming now
+
+**It is freeze-coupled.** The embargo is a network-wide constant, so raising
+the minimum spec later *shortens* the embargo — a change every node must adopt
+together. **The spec is therefore genesis-frozen in the same sense staking
+default-on is** (the genesis-freeze bucket): not literally unchangeable, but
+changeable only by coordinated upgrade, which §75's rule
+([`75-system-autonomy`](../../.cursor/rules/75-system-autonomy.mdc)) exists to
+minimise. **Choosing it low costs latency forever; choosing it high sorts
+anonymity forever.** That asymmetry belongs in the decision.
+
+**It names a machine, not a number — and the number moves under it.** Tree
+depth grows monotonically (§72, §73.4), so *"Pi 4-class"* at genesis is not
+*"Pi 4-class"* at depth 7: the same spec machine costs **~127 ms today and
+~160 ms at five layers deeper** for the modal shape. **The spec fixes the
+machine; the scheduled re-derivations (§73.4) re-measure on it.** Stating the
+spec as a machine rather than a millisecond figure is what makes that
+schedule coherent — otherwise the re-derivation has nothing to re-measure
+*against*.
+
+### 78.3 The constants round's order
+
+**First, and it is a decision rather than a measurement:**
+
+1. **State the minimum supported spec.** It is the last unbounded axis and
+   every numeric item below depends on it.
+
+Then:
+
+2. **`f`'s functional form** from the bench surface — fixed cost, per-input
+   (superlinear over the measured range, §76.1), per-layer multiplying with
+   inputs (§73.4).
+3. **Transit and scheduling** — both now small relative to 127 ms and no
+   longer gating.
+4. **The scheduled depth re-derivations** at 1,444 / 25,992 / 987,696 / 17.8M /
+   675M outputs (§72's capacity schedule).
+5. **The batch-depth volume trigger** (~300k tx/day, §74.1).
+
+> **Item 1 is the one that gets answered implicitly if nobody asks it —
+> by whatever machine someone happened to bench on.** That is this arc's most
+> repeated failure in one line: `175` from a 2019 laptop comment, `peers = 8`
+> from Bitcoin's 2015 server graph, `F` from an `EveryPeer` instrument at
+> degree 8. **Each was a real measurement standing in for a decision nobody
+> made.** The minimum spec is the same slot, still open, and now visible before
+> it is filled rather than after.
+
+
+
+## 79. The curve — the chunk-layout caveat closes as a null, and `f` is fittable
+
+**2026-08-05.** §76.1's owed measurement, taken before the constants round
+rather than carried into it as a caveat. The input axis was first swept with
+every input in **one leaf chunk** (§72's control, isolating input count from
+tree depth); production spends are scattered, so each input walks its **own**
+path. Since `f`'s per-input term is built from that marginal, the layout had to
+be measured.
+
+### 79.1 The result is a null, and it is controlled
+
+x86, depth 2, 2 outputs:
+
+| `n_in` | shared chunk | spread chunks | delta |
+| --- | --- | --- | --- |
+| 1 | 23.86 ms | 24.06 ms | **+0.19** |
+| 2 | 28.09 ms | 27.88 ms | −0.22 |
+| 4 | 41.52 ms | 41.70 ms | +0.18 |
+
+**`n_in = 1` is identical by construction** — one input is one chunk under
+either layout — so its **+0.19 ms** delta *is* the noise floor of this
+comparison, measured rather than assumed. The `n_in = 2` and `n_in = 4` deltas
+(−0.22, +0.18) are the same magnitude and opposite in sign.
+
+> **Chunk layout does not measurably affect verification cost.** The
+> shared-chunk marginal *is* the production marginal, so §72's control did not
+> distort the axis it was controlling for. **The caveat closes, and `f`'s
+> per-input term can be fitted from the surface already measured.**
+
+*Why this is a real null and not an absence of evidence: the comparison carries
+its own scale. Without the `n_in = 1` cell, "the deltas are small" would be an
+assertion about an unquantified noise floor — the vacuity §50.3 names. With it,
+"small" has a number to be small against.*
+
+### 79.2 `f`'s first-order form
+
+Least squares through `n_in ∈ {1, 2, 4}`, x86, depth 2:
+
+```text
+f(n_in)  ≈  17.15 ms  +  6.00 ms × n_in        (residuals +0.71, −1.06, +0.35)
+```
+
+At the Pi arm's measured 5.56× — the machine §78 says the constant derives
+from until a spec is stated:
+
+```text
+f_spec(n_in)  ≈  95 ms  +  33.4 ms × n_in
+```
+
+**Two properties of this fit worth carrying, and one warning:**
+
+- **The fixed term dominates at modal shape** — ~17 of 23.9 ms on x86, ~74 %.
+  That is why §74.1's shape-weighted scalar sat within 10 % of the modal cell,
+  and it stays true only while the per-input term is small relative to it.
+- **The per-input marginal is superlinear over the range** (+4.23 ms for input
+  2, +6.71 ms each for inputs 3–4), so a **linear fit under-predicts the
+  tail** — residuals are already ±1 ms at `n_in ≤ 4`. **A linear `f` is the
+  wrong functional form for the axis §75 cares about**, because the tail is
+  exactly where the sorting lives. The fit above is a first-order summary, not
+  the specification.
+- **It is depth-conditioned.** Adding the per-layer term (§73.4, multiplying
+  with inputs) is what makes `f` complete, and §78.2's schedule re-measures it
+  on the spec machine as the tree grows.
+
+### 79.3 What the constants round now has
+
+| input | status |
+| --- | --- |
+| minimum supported spec | **open — a decision** (§78.3 item 1) |
+| chunk layout | **closed — null** (§79.1) |
+| `f`'s per-input term | **measured**, superlinear; needs a form beyond linear (§79.2) |
+| `f`'s per-layer term | measured (§73.4), multiplies with inputs |
+| transit, scheduling | small relative to 127 ms, not gating (§74.1) |
+| depth re-derivation points | computed (§72) |
+| batch-depth volume trigger | computed, ~300k tx/day (§74.1) |
+
+**One decision and one functional-form choice.** Everything else is measured.
+
+## 80. Decided — D adopted, Pi 4 is the stated floor, `f` is a table
+
+**2026-08-05, maintainer decisions. The round collapses to a build.**
+
+### 80.1 The input axis was never unbounded — three arguments retire
+
+`FCMP_MAX_INPUTS_PER_TX = 8` (`cryptonote_config.h:253`, *"bounds proof
+generation time and tx size"*), enforced at **three** layers: consensus
+(`blockchain.cpp:3517`), the verify FFI, and `proof::verify` itself. So:
+
+- **"Range max isn't viable, it's unbounded"** — retired. Eight points, all
+  measured; the surface *is* the specification.
+- **"Measure to n = 8/16/32 to determine the form"** — retired. No form to
+  determine, and no cache-boundary question at 32 because 32 is unreachable.
+- **"C is optional"** — retired. C was never open. It is shipped, with its
+  rationale in the `#define`.
+
+> **The pattern, named because it is the fourth instance: we read what the code
+> *does* and not what it *forbids*.** Verification-path reads found the cost;
+> nobody read the admission bounds. **Grounding a mechanism means reading its
+> limits as well as its behaviour** — a bound is a fact about the design, not
+> an absence of one.
+
+### 80.2 Two dominance results, and they price the decisions
+
+- **`F` dominates `hop`.** 3250 ms against 73–328 ms, so a **5.6× hardware
+  difference moves the embargo 13 %.** The spec decision is cheap.
+- **The cap bounds the tail at 8.** §75's sorting is real, **closed, and
+  small**: at Pi 4 spec a scalar leaves **56 s** uncovered across the whole
+  legal shape domain.
+
+So D-vs-B stopped being a principled question and became a priced one.
+
+### 80.3 D adopted — for decoupling, not for the 56 s
+
+**The decisive argument is not the magnitude.** Under scalar-at-8,
+`MAX_INPUTS` is **coupled to the embargo**, which is network-wide: raising the
+cap to 16 would re-derive the scalar at 16 and lengthen the embargo for
+*every* transaction including 1-input ones — **a coordinated change to a
+privacy constant, triggered by a capacity decision with no privacy content.**
+
+**That is Q11-A's shape exactly** — one parameter silently driving a second
+mechanism — and Unit 0 was spent removing it from `FORWARD_DELAY`. Choosing
+scalar-at-8 would create the same coupling **prospectively**.
+
+Under D, raising the cap **adds rows to a table**. Existing shapes' embargoes
+do not move, and the cap becomes what it should be: **a capacity bound, not a
+privacy parameter wearing a capacity label.**
+
+**And D is cheaper, not merely more correct.** Over-provisioning is the policy
+default *because it covers unmeasured variance* — you round up when you do not
+know the value. **Here we know it**: 129 ms at 1 input, 409 ms at 8, both
+measured. Provisioning the 1-input case at the 8-input value is not caution,
+it is **paying ~57 s of recovery latency on every transaction for nothing.**
+
+### 80.4 Pi 4 is the minimum supported spec — and its status has changed
+
+**Decided.** It was always the floor; that is why the hardware exists.
+
+**What changed is why it is the spec.** It was *"the low-end machine we have"*;
+it is now **"the machine the guarantee is provisioned to."** At or above it,
+uniform anonymity; below it, **preemption rises silently**. That makes the
+floor **load-bearing for the privacy guarantee**, not a bench convenience — and
+it belongs stated where §75's principle lives, because the next person to ask
+why the embargo is what it is needs the answer to be a decision rather than an
+accident of available hardware.
+
+*(Whether that statement also belongs in `00-mission` or a `.cursor/rule` is a
+rules change and not this document's to make — flagged, not taken.)*
+
+**The §78.3 trap now has a number.** A future reader observes Pi-class relays
+are rare and proposes re-deriving against typical hardware: that proposal is
+worth about **21 s** of recovery latency and **reintroduces hardware-sorted
+anonymity** to buy it. §75.4 was written against that reader; it is stronger
+with the price attached.
+
+### 80.5 `f` is a table, over two closed axes
+
+**A lookup, never a fit.** The domain is closed, so a formula would invite the
+extrapolation that does not apply — **a table cannot be evaluated at 9.** If
+`MAX_INPUTS` rises, adding rows is a **visible, reviewable act**; re-evaluating
+a polynomial is not. Same device as `f` refusing a timing parameter (§77.4) and
+§15.6 refusing a block-time term.
+
+**Two closed axes, not one:** `f(n_in, depth_tier)` — **8 inputs × 6 capacity
+tiers = 48 cells**, all enumerable, no fitting anywhere. The scheduled depth
+re-derivations then become *"measure the next column"*, which is a far better
+defined task than *"re-derive the constant"*.
+
+**The output axis stays excluded, with its measurement as the justification**
+rather than as an omission: ~0.07 ms per output (§72.3, §73.2), which cannot
+move the constant.
+
+### 80.6 The 5.56× ratio is now an invariant, not a curiosity
+
+Flat across every cell (5.36–5.75). **Pin it beside the table as the sanity
+check for every future re-measurement:** if a depth-tier re-derivation on the
+Pi returns a ratio far from 5.56 against the x86 arm, **something changed in
+the workload rather than in the tree.** Cheap, already measured, and it turns
+each scheduled re-derivation into a checkable act instead of a trusted one.
+
+### 80.7 What remains — a build, and one measurement
+
+| item | status |
+| --- | --- |
+| minimum spec | **decided — Pi 4** |
+| shape axis | **decided — D, table over `n_in ∈ 1..=8`** |
+| depth axis | closed at 6 tiers; **columns 3–7 unmeasured** |
+| output axis | excluded, with the 0.07 ms justification |
+| transit | **the one measurable input left**; the sweep shows it moves the absolute, not the ranking |
+| operator distribution | **moot** — it existed only to justify choosing a floor |
+
+**The fixture reaches depth 2 today.** Tiers 3–7 need `c1_branch_layers` (the
+Selene layer above Helios) — a fixture extension, not a new instrument, and the
+depth-2 work established the pattern.
+
+## 81. Two flags on the depth columns, and the schedule is not what §80.5 said
+
+**2026-08-05, maintainer.** Both concern the 48-cell table's unmeasured half.
+
+### 81.1 The 5.56× invariant needs both arms per tier, or it validates nothing
+
+§80.6 pinned the ratio as the sanity check for future re-derivations. **It only
+works if each depth tier gets both arms.** Measuring depth 3–7 on the Pi alone
+yields 40 cells with **no invariant to check them against**.
+
+**And flatness on one axis does not transfer to another.** The ratio is flat
+across *inputs* (5.36–5.75); depth is a different axis. **Deeper trees mean
+larger working sets, and the two machines have very different cache
+hierarchies**, so the ratio may well drift with depth.
+
+**Either outcome is worth having:**
+
+- **it drifts** → a real finding about *where the cost lives* — memory
+  hierarchy rather than arithmetic — which changes what the Pi arm is
+  measuring;
+- **it holds** → the check §80.6 wanted, now earned rather than assumed.
+
+The x86 arm is fast, so this is cheap. **Measure both columns per tier.**
+*(This is [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+rule 3 in its first application: cross-machine ratios are measured, never
+assumed.)*
+
+### 81.2 Depth 3–7 are projections, not measurements — label them at the value
+
+**The fixture synthesizes deep trees under genesis-era conditions.** The real
+depth-5 tree arrives years out, with different data volumes, different memory
+pressure, possibly different storage. **So those columns are projections.**
+
+They must be **labelled as such at the table**, or a future reader treats a
+synthesized depth-5 number as measured and **skips the re-measurement the
+schedule exists to trigger** — which is `175`'s failure exactly: a plausible
+number standing where a measurement belongs. **The difference is that here we
+would know it, and can say so at the value.**
+*(Rule 4 of [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc).)*
+
+### 81.3 Which corrects what the schedule is for
+
+§80.5 said the scheduled depth re-derivations become *"measure the next
+column."* **They do not.** The next column will already exist, as a projection.
+
+> **The schedule is: re-measure on the spec machine against the *actual* tree,
+> with the synthesized column as the prior.**
+
+That is a better-defined task than either *"re-derive the constant"* or *"look
+up the next column"* — it names the machine, the object, and what the existing
+number is for. And it makes the projection useful rather than dangerous: a
+prior to be confirmed or refuted, with a visible act either way.
+
+### 81.4 The floor is now a rule
+
+Per the maintainer: **not mission text — its own rule**, so it can move if the
+device landscape does (*"if we ever need to switch to our quantum computer
+mobile devices"*).
+
+Landed as
+[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc),
+carrying the floor itself, why it is a decision rather than a benchmark note,
+the four rules §81.1–81.2 generalise, and the **asymmetry that governs moving
+it**: too low is an error with a feedback channel, too high is one nothing
+reports — **so err toward the slower device, because that is the error the
+system can notice.**
+
+## 82. The depth surface — chain age is a *shape* multiplier, and D gets more valuable with time
+
+**2026-08-05.** All 7 depth tiers built and swept on x86. **Every fixture from
+depth 1 to 7 verifies**, so the projections are real proofs rather than
+timings of a reject path.
+
+**Depths 3–7 are PROJECTIONS** (§81.2) — synthesized trees under genesis-era
+conditions, labelled at the fixture as well as here.
+
+### 82.1 The surface
+
+x86, `n_out = 2`, milliseconds:
+
+| depth | 1-in | 2-in | 4-in | 8-in |
+| --- | --- | --- | --- | --- |
+| 2 (genesis) | 24.0 | 28.4 | 42.3 | 72.4 |
+| 3 | 24.9 | 35.5 | 58.3 | 100.7 |
+| 4 | 24.3 | 35.5 | 61.6 | 115.0 |
+| 5 | 25.5 | 37.3 | 65.7 | 116.2 |
+| 6 | 25.6 | 41.8 | 75.2 | 134.6 |
+| 7 (675M outputs) | 26.0 | 42.3 | 75.8 | 138.1 |
+
+### 82.2 The finding: depth growth is almost entirely a large-input phenomenon
+
+Per-layer slope, depth 2 → 7:
+
+| shape | genesis | depth 7 | over 5 layers | per layer |
+| --- | --- | --- | --- | --- |
+| **1-in (modal)** | 24.0 | 26.0 | **+2.0 ms** | **+0.40** |
+| 2-in | 28.4 | 42.3 | +14.0 ms | +2.80 |
+| 4-in | 42.3 | 75.8 | +33.5 ms | +6.70 |
+| **8-in** | 72.4 | 138.1 | **+65.7 ms** | **+13.13** |
+
+**The modal transaction barely notices the tree growing — 2 ms across the
+chain's entire life. The 8-input transaction nearly doubles.** Depth is not a
+common-mode term after all: it is a *multiplier on the shape term*, and §75's
+own sorting axis is what it multiplies.
+
+### 82.3 Which means the sorting *widens* with chain age
+
+| | 1-in | 8-in | spread | ratio |
+| --- | --- | --- | --- | --- |
+| depth 2 (genesis) | 24.0 | 72.4 | 48.4 ms | **3.02×** |
+| depth 7 | 26.0 | 138.1 | 112.1 ms | **5.32×** |
+
+**The tail-to-modal ratio grows from 3.0× to 5.3× over the chain's life**, with
+no code change and nothing to trigger a review.
+
+> **This retroactively strengthens the D decision, on evidence that did not
+> exist when it was taken.** §80.3 adopted D for *decoupling*, and priced the
+> alternative at "~57 s of recovery latency on every transaction for nothing."
+> **That price was the genesis-era one.** Under scalar-at-8 the over-provision
+> is paid against a tail that more than doubles while the modal case stays
+> flat — so the scalar gets **monotonically worse** for exactly the
+> transactions that are the overwhelming majority.
+>
+> **D is the only option here whose cost does not grow with the chain**, because
+> a table row is indexed by the shape that actually pays.
+
+### 82.4 And §75's common-mode classification was wrong on depth
+
+§75 sorted the four axes and put depth in *"common-mode — everyone runs the same
+depth at a given moment"*, needing tracking rather than quantiling. **True of
+the depth value; false of the depth cost.** Everyone runs depth 7, but depth 7
+costs a 1-input sender 2 ms more and an 8-input sender 66 ms more.
+
+**Depth is common-mode in the parameter and sorted in the effect** — which is
+why it belongs in the table as an axis rather than in the schedule as a
+correction, and it is the reason `f(n_in, depth_tier)` is two-dimensional
+rather than a scalar with a scheduled bump.
+
+### 82.5 Owed
+
+**The Pi columns.** Rule 3 of
+[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc):
+cross-machine ratios are measured, never assumed. The 5.56× invariant was
+established on the *input* axis; §81.1 flagged that it may drift with depth
+because deeper trees mean larger working sets against very different cache
+hierarchies. **§82.2 makes that question sharper rather than softer** — the
+per-layer cost is now known to concentrate in the large-input cells, which are
+exactly the ones with the biggest working sets. Until the Pi arm runs, the
+table has 48 x86 cells and no invariant to check them against.
+
+## 83. The schedule is itself a §75 surface — so the table must refuse, not clamp
+
+**2026-08-05, maintainer, with the pricing carried through chain life.**
+
+### 83.1 D's advantage widens; the modal embargo is effectively constant
+
+| | genesis (d2) | depth 7 | change |
+| --- | --- | --- | --- |
+| scalar-at-8's over-provision of the modal case | **55 s** | **126 s** | +71 s |
+| D's modal row | 191 s | 194 s | **+3 s** |
+
+*(Hop inputs verified against the measured surface: Pi-spec modal hop is
+183 ms at genesis and 194 ms at depth 7; the 8-input hop goes 453 → 818 ms.)*
+
+**D is not "57 s better" — it is 55 s better now, 126 s better later, and the
+gap only widens.**
+
+**And the modal embargo is effectively a constant: 3 s of drift across the
+entire depth range.** That bounds what the re-derivation schedule is *for*.
+Not *"the embargo drifts"* — **the tail rows drift.** For the overwhelming
+majority of transactions the depth axis is inert.
+
+### 83.2 Which makes a forgotten re-derivation a §75 regression
+
+**If a depth tier passes and the table is not extended, the stale row is wrong
+only for large-input senders. The modal user notices nothing.**
+
+So a missed schedule item **reintroduces exactly the sorting D was built to
+remove** — invisible, unattributable, and falling on the same population.
+The schedule is not an accuracy chore; **it is a privacy surface**, and this
+arc's standing answer applies: **do not rely on remembering.**
+
+### 83.3 The requirement: refuse an unpopulated tier, never clamp
+
+> **`f(n_in, depth_tier)` must return an error for a depth tier the table does
+> not cover. It must not clamp to the last populated row.**
+
+- **Clamping is the silent-stale-row path**, and it fails in the
+  **privacy-losing** direction: the tail gets an embargo derived for a shallower
+  tree than it is actually traversing.
+- **Refusing turns tree growth past the table's edge into a loud, immediate
+  condition.** Tree depth is knowable at runtime, so the check costs nothing.
+
+**Same device as `f` refusing a parameter for local timing (§77.4) and
+`derive.rs` refusing a block-time term (§15.6): the mistake requires a visible
+edit rather than vigilance.**
+
+> **And it gives the schedule teeth it otherwise would not have. A dated note
+> in a design document is a hope; a table that stops answering is a deadline.**
+
+*(This is [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+rule 4 with an enforcement mechanism: a projection is a prior to be confirmed,
+and refusing past the edge is what makes the confirmation happen rather than
+be assumed.)*
+
+### 83.4 The axis lesson generalises past depth
+
+**"Common-mode in the parameter, sorted in the effect"** is the sharper
+formulation of §82.4, and it is not about trees.
+
+**The trap is available anywhere a shared quantity has heterogeneous cost.**
+The parameter looks uniform — everyone runs the same tree depth, the same
+protocol version, the same block interval — so it gets classified as needing
+*tracking* rather than *covering*, and **the sorting hides in the second
+derivative**: not in who holds the parameter, but in what holding it costs
+each participant.
+
+**The test to carry:** when an axis is dismissed as common-mode, ask whether
+its *cost* is common-mode too. Depth passed the first check and failed the
+second by a factor of 33 (2 ms against 66 ms across the same five layers).
+
+## 84. Pre-registered: what the Pi depth columns would mean, before they exist
+
+**2026-08-05, maintainer, written while the sweep builds.** *This arc is
+0-for-N on prose surviving its own measurement, so the interpretation is fixed
+before the numbers can shape it.*
+
+### 84.1 The prediction, and what each outcome means
+
+**Mechanism under test:** the per-layer cost is *"each input walks its own tree
+path"* — i.e. **work**.
+
+| outcome | reading |
+| --- | --- |
+| **Pi/x86 ratio stays flat across depth** | Confirms the mechanism: same operations, slower machine. §80.6's invariant is **earned**, and every future re-derivation becomes checkable against it. |
+| **Ratio RISES with depth in the high-input cells** | **Not work — the memory hierarchy.** The Pi is spilling a working set the x86 holds. That is a finding about *where the cost lives*, and it changes what the Pi arm measures. |
+
+**Where to look: the 8-input, depth-7 cell** — the biggest working set, and so
+the biggest divergence if there is one.
+
+**Recording this now is the whole point.** With the prediction fixed, the
+result is either a confirmation or a finding. Without it, whatever comes back
+gets rationalised after the fact — which is the failure this section exists to
+foreclose, and which the arc has already paid for repeatedly.
+
+### 84.2 The shortcut to pre-empt, before anyone reaches for it
+
+> **The Pi table is the specification. The x86 columns are diagnostic only —
+> they exist to detect a workload change, not to derive anything.**
+
+**The natural future move is:** a depth tier passes, someone re-measures on
+x86 because it is faster and easier, and scales by 5.56.
+
+**That would be a measurement standing in for a spec value** — the exact slot
+that produced `175` (a 2019 laptop comment), `peers = 8` (Bitcoin's 2015 server
+graph), `F` (an `EveryPeer` instrument at degree 8), and the minimum-spec
+question itself. **Four instances, one shape.**
+
+**So: the Pi column is derived from measurement on the spec machine, and never
+by scaling.** Same form as refusing an unpopulated tier (§83.3), one level up —
+the shortcut has to be a visible edit rather than a convenience.
+
+*(If §84.1 returns the drift outcome, this line stops being precautionary and
+becomes load-bearing: a ratio that varies with depth cannot be used to scale
+*at all*, and anyone who tried would produce a spec value that is wrong in the
+privacy-losing direction precisely where the sorting lives.)*
+
+## 85. The Pi depth columns — the prediction resolves to the flat branch
+
+**2026-08-05.** §84.1's test, run as written.
+
+### 85.1 Conditions, both closed by measurement
+
+- **Verify-check exit 0** — every depth fixture on aarch64 produced a real
+  proof, so no cell is a timing of the reject path.
+- **Thermal max 69.6 °C** across 225 samples against the 80 °C soft-throttle —
+  **10.4 °C of margin**, against the previous run's 2.1 °C, because
+  `performance` was pinned from the start rather than ramping under `ondemand`.
+- Governor verified `performance` on all four cores at launch; `+1.94.0` on
+  both arms.
+
+### 85.2 The result: flat, and earned rather than merely consistent
+
+| depth | 1-in ratio | 8-in ratio |
+| --- | --- | --- |
+| 2 | 5.19× | 5.51× |
+| 4 | 5.47× | 5.51× |
+| 7 | **5.52×** | **5.73×** |
+
+The **8-input depth-7 watch cell** — biggest working set, where a cache spill
+would show — lands at **5.73×**, inside the 5.36–5.75 band the *input* axis
+established. Total drift is **+6.3 %** (1-in) and **+4.0 %** (8-in), and the
+spreads (0.36, 0.23) are *narrower* than the input axis's own 0.39.
+
+> **The strongest form of the result is the ordering: the control drifted
+> MORE than the watch cell.** A cache spill in the 8-input depth-7 cell would
+> have reversed that. **§80.6's invariant is earned**, and rule 76.4 stays
+> precautionary rather than becoming load-bearing.
+
+**And the arc's first clean pre-registration.** Both branches of §84.1 were
+written before the numbers existed, and the result went to the one that reads
+*less* interestingly. Recorded as such, because the value of pre-registration
+is only visible when it costs you the better story.
+
+### 85.3 The Pi surface confirms §82's shape at spec scale
+
+| | genesis (d2) | depth 7 | per layer |
+| --- | --- | --- | --- |
+| 1-in | 124.5 ms | 143.3 ms | **+3.76** |
+| 8-in | 399.2 ms | 791.9 ms | **+78.53** |
+
+**Sorting on the spec machine goes 3.21× → 5.53× over chain life.** An 8-input
+transaction at depth 7 costs **792 ms of verification per hop** on the machine
+the guarantee is provisioned to.
+
+### 85.4 Second-order: the *marginal* ratio is not 5.56×
+
+The totals hide it. Per-layer:
+
+| | x86/layer | Pi/layer | marginal ratio |
+| --- | --- | --- | --- |
+| 8-in | +13.13 ms | +78.53 ms | **5.98×** |
+| 1-in | +0.40 ms | +3.76 ms | *(9.4× — x86 term at the noise floor, **not interpretable**)* |
+
+**The 8-input figure is reliable** (both terms far above noise) and sits
+**outside** the 5.36–5.75 band the totals establish — +7.5 % over the average.
+**It does not touch the prediction**, which was about total-cost divergence and
+found none. What it says is that **the depth-walking work is slightly more
+Pi-unfavourable than the average workload.**
+
+### 85.5 Which sharpens rule 76.4 exactly where the schedule operates
+
+Rule 76.4 forbids scaling a **value**. **The schedule's actual future move is
+to scale an *increment*:** *"tier 5 passed, measure the delta on x86, add
+5.56×."*
+
+**That would under-provision the tail rows by ~7.5 %** — same population, same
+direction, same invisibility as everything else this arc has caught.
+
+> **And the totals being flat is precisely what makes the increment shortcut
+> look safe.** The reassuring result is the one that sets the trap.
+
+Rule 76.4 amended to read **values *and* increments**.
+
+### 85.6 The capture was lossy, and it gets the jig treatment
+
+The remote script piped the sweep through `tail -200`, truncating the
+early-depth cells from the log. Criterion's `estimates.json` rescued the run —
+same data, complete — but **a pipeline that silently discards rather than fails
+is the `;` class again**, and a run that also lost criterion's state would have
+needed a full re-run on a machine that takes ~14 minutes just to build.
+
+Fixed the same way: `scripts/remote-bench.sh` captures full output to a file
+and tails the **file** for display, so the artifact is never the thing being
+truncated.
+
+## 86. Transit is a refinement, not a gate — said out loud so it stops reading as one
+
+**2026-08-05, maintainer.** Transit has been carried as *"the one measurable
+input left"*, which overstates it. Checked before anyone books a round for it.
+
+### 86.1 Three reasons it is not owed
+
+**It does not sort.** Transit is a property of the *path between two nodes* —
+not of the sender's hardware, nor of the transaction's shape. Run §83.4's test
+on it — *does this axis cost every participant the same?* — and it is the one
+term in `hop` that **passes**. So it cannot reintroduce the sorting D and the
+Pi floor were built to remove.
+
+> **Worth noting what that means about the test itself: it clears axes as well
+> as convicting them.** A check that only ever finds problems is a worry, not
+> an instrument. This is its first acquittal, and it is what makes it usable
+> rather than paranoid.
+
+**It is dominated at the tail.** At the 8-input depth-7 cell verification is
+**792 ms** against a transit term of ~50. A **4× error in transit** moves that
+hop by ~19 %, and the embargo by far less, since `F` still dominates `S(h)`.
+
+**Its residual bite is on the modal row** — 183 ms hop, where transit is ~27 %
+of the term. That is the row the whole chain's traffic sits on, so it is not
+nothing. **But it is a single scalar affecting one number, not a surface.**
+
+### 86.2 Status, stated rather than left on a list
+
+> **The table can ship with the assumed 50 ms recorded as an assumption at the
+> site** (it already is, in `spec_decision_matrix.rs`), **and transit measured
+> whenever convenient.**
+
+**Saying that explicitly is worth more than leaving it owed**, because an item
+that sits on a list long enough **starts to look like a blocker** — and this
+arc has now **twice** found a carried blocker that unrelated work had already
+removed (§67.1's fixture, §77.3's cascade check). A third would be a pattern
+about the list rather than about the work.
+
+**If it is measured, the same discipline applies:** it needs a **quantile, not
+a mean**, and it carries the same asymmetry `F` names and `hop` originally did
+not — **under-estimating shortens the embargo**, which is the privacy-losing
+direction (§65, §66).
+
+### 86.3 Handoff — back to the critical path
+
+**The verification-floor arm is complete on its own terms.** What it hands the
+stem-over-Tor round:
+
+| | state |
+| --- | --- |
+| `hop`'s definition | fixed (§71): receive-to-forward, transit + verification + scheduling, identical on both transports |
+| the verification surface | measured on both arms, 48 cells, invariant earned (§85) |
+| minimum spec | decided — Pi 4, and now a rule (§78, `76-device-provisioning-floor`) |
+| shape handling | D adopted, table not fit, refuses past its edge (§80, §83) |
+| per-zone embargo precondition | scoped to **two reserved bits** with a safe default (§65.4) |
+| the three gates | identified (§64.2) |
+| §30's composition, the eligibility constant | both waiting on the round |
+
+**The hop excursion was a prerequisite, and it is discharged**: the round can
+re-measure `hop` per transport with the definition already fixed, rather than
+discovering mid-round that the two arms were measuring different quantities.
+
+## 87. The guards must defend themselves — a spec for D's implementation
+
+**2026-08-05, maintainer.** §83.3 and rule 76.4 are currently *explained*. **A
+comment explaining a guard is a hope.** Both can be made structural, and the
+spec belongs here before the table is built.
+
+### 87.1 Refuse-don't-clamp gets a permanent negative control
+
+Not `test_refuses_unpopulated_tier` — **a test named for the harm**:
+
+```rust
+#[test]
+fn clamping_would_underprovision_the_tail() { … }
+```
+
+**It fails the moment someone converts the refusal into a fallback.** The
+difference is what it costs to remove: a reviewer who thinks the refusal is
+brittle must **delete a test whose name states the consequence**, which is a
+different act from relaxing a `panic!`.
+
+### 87.2 Rule 76.4 becomes structural rather than a rule
+
+**Give each table cell a provenance field** — `measured_on: Pi4 | X86` — and
+**assert that every cell on the spec path is `Pi4`.**
+
+Then filling a tier by scaling from the x86 arm **does not fail review, it
+fails a test.** The clause stops depending on anyone having read it.
+
+**And it is cheap, because provenance is a field worth recording anyway:** the
+x86 columns are explicitly diagnostic (§84.2), so the table already needs to
+say which arm each number came from. The assertion is one line on top of a
+field that earns its place independently.
+
+*Same move as `f` refusing a timing parameter (§77.4): the shortcut requires a
+visible edit to a thing that names its own purpose.*
+
+### 87.3 Comments name the harm, not the rule
+
+- *"Refuses past its edge"* — **invites a reviewer to ask why.**
+- *"A clamped row gives large-input senders an embargo derived for a shallower
+  tree than they are traversing, invisibly"* — **answers it before it is
+  asked.**
+
+The second survives a reviewer who was not in the conversation that produced
+it, which is the only test a comment has to pass.
+
+### 87.4 And keep the acquittal beside the test
+
+§86.1: transit **passes** §83.4's sorting test. **A check that only ever
+convicts is a worry, not an instrument** — the first thing anyone asks of a new
+test is whether it can come back clean. Transit is the evidence that this one
+discriminates rather than flags, and it belongs recorded next to the test
+itself rather than only in the round that found it.
