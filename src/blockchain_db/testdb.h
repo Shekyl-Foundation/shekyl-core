@@ -234,6 +234,9 @@ public:
   virtual void store_archival_attestation_witness_at_height(uint64_t, const cryptonote::blobdata&) override {}
   virtual cryptonote::blobdata get_archival_attestation_witness_at_height(uint64_t) const override { return {}; }
   virtual void remove_archival_attestation_witness_at_height(uint64_t) override {}
+  virtual void store_archival_alt_attestation_witness(const crypto::hash&, const cryptonote::blobdata&) override {}
+  virtual cryptonote::blobdata get_archival_alt_attestation_witness(const crypto::hash&) const override { return {}; }
+  virtual void remove_archival_alt_attestation_witness(const crypto::hash&) override {}
 
   virtual void save_curve_tree_checkpoint(uint64_t) override {}
   virtual bool get_curve_tree_checkpoint(uint64_t, std::vector<uint8_t>&) const override { return false; }

@@ -2570,6 +2570,38 @@ public:
    */
   virtual void remove_archival_attestation_witness_at_height(uint64_t block_height) = 0;
 
+  // ─── Alt-chain attestation witness (prunable, reorg-survival) ─────────────
+  // The height-keyed table above lives only for the main chain and is DELETED at
+  // pop. To survive a reorg, an alt-block's witness is stashed here keyed by BLOCK
+  // HASH (alt blocks are not height-canonical), alongside add_alt_block. On
+  // reorg-connect the witness is read back and injected into the promoting block's
+  // pool_supplement; its lifetime is tied to the alt block (removed by
+  // remove_alt_block / drop_alt_blocks). Opaque bytes at this layer, like above.
+
+  /**
+   * @brief store an alt block's attestation witness keyed by block hash.
+   *
+   * Called from handle_alternative_block alongside add_alt_block, in the same
+   * write txn. Not called for an empty witness (stores no row).
+   */
+  virtual void store_archival_alt_attestation_witness(const crypto::hash& blkid, const blobdata& witness) = 0;
+
+  /**
+   * @brief retrieve the attestation witness stashed for an alt block.
+   *
+   * @return the witness blob, or empty if no row exists (an alt block with an
+   *   empty attestation set, or one added before this table existed).
+   */
+  virtual blobdata get_archival_alt_attestation_witness(const crypto::hash& blkid) const = 0;
+
+  /**
+   * @brief remove the stashed attestation witness for an alt block.
+   *
+   * Tolerant of a missing key. Invoked implicitly by remove_alt_block /
+   * drop_alt_blocks so the witness never outlives its alt block.
+   */
+  virtual void remove_archival_alt_attestation_witness(const crypto::hash& blkid) = 0;
+
   // ─── FCMP++ Curve Tree Checkpoints & Pruning ─────────────────────────────
 
   /**

@@ -1523,10 +1523,13 @@ namespace cryptonote
      *
      * @param original_chain the chain to switch back to
      * @param rollback_height the height to revert to before appending the original chain
+     * @param popped_witnesses credit-wire attestation witnesses stashed (by block hash) before
+     *   the blocks were popped, re-supplied so each restored block carries its witness (PR-B2)
      *
      * @return false if something goes wrong with reverting (very bad), otherwise true
      */
-    bool rollback_blockchain_switching(std::list<block>& original_chain, uint64_t rollback_height);
+    bool rollback_blockchain_switching(std::list<block>& original_chain, uint64_t rollback_height,
+      const std::unordered_map<crypto::hash, blobdata>& popped_witnesses);
 
     /**
      * @brief gets recent block weights for median calculation

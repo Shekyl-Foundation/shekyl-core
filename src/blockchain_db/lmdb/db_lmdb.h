@@ -600,6 +600,9 @@ private:
   virtual void store_archival_attestation_witness_at_height(uint64_t block_height, const blobdata& witness) override;
   virtual blobdata get_archival_attestation_witness_at_height(uint64_t block_height) const override;
   virtual void remove_archival_attestation_witness_at_height(uint64_t block_height) override;
+  virtual void store_archival_alt_attestation_witness(const crypto::hash& blkid, const blobdata& witness) override;
+  virtual blobdata get_archival_alt_attestation_witness(const crypto::hash& blkid) const override;
+  virtual void remove_archival_alt_attestation_witness(const crypto::hash& blkid) override;
 
   virtual void save_curve_tree_checkpoint(uint64_t block_height) override;
   virtual bool get_curve_tree_checkpoint(uint64_t block_height, std::vector<uint8_t>& checkpoint_data) const override;
@@ -868,6 +871,7 @@ private:
   MDB_dbi m_archival_budget_accrual;  // BE(height) -> BE(staker_inflow) (redirected write, §3.1)
   MDB_dbi m_archival_budget;          // BE(E) -> BE(budget) frozen at close (§3.2)
   MDB_dbi m_archival_attestation_witness; // height [8B native, INTEGERKEY] -> prunable admission witness blob (r||pass-sigs; ARCHIVAL_CREDIT_WIRE.md §3.2/§4, transport B2 — never in the block blob)
+  MDB_dbi m_archival_alt_attestation_witness; // block hash [32B, compare_hash32] -> prunable alt-chain admission witness blob (reorg-survival counterpart to m_archival_attestation_witness; ARCHIVAL_CREDIT_WIRE.md §3, transport B2)
 
   MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]
   MDB_dbi m_pending_tree_drain;       // BE(block_height)||BE(output) [16B] -> maturity[8]||leaf[128] [136B]
