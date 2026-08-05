@@ -49,9 +49,14 @@ their existing hardware qualifies.
 3. **Cross-machine ratios are measured, never assumed.** A ratio established on
    one axis does not transfer to another — different axes stress different
    parts of the memory hierarchy.
-4. **Values for the floor device are measured ON it, never scaled to it.** A
-   measurement on a faster machine multiplied by a known ratio is a
-   *diagnostic*, not a spec value. Faster machines exist in the harness to
+4. **Values AND INCREMENTS for the floor device are measured ON it, never
+   scaled to it.** A measurement on a faster machine multiplied by a known
+   ratio is a *diagnostic*, not a spec value — and this covers deltas, not just
+   absolutes. *Measured instance: cross-machine ratios on totals sat in a
+   5.36–5.75 band while the per-layer **marginal** ratio was 5.98× — so scaling
+   an increment by the totals' ratio under-provisions by ~7.5 %, on the tail
+   rows, invisibly. **A flat total is exactly what makes the increment shortcut
+   look safe.*** Faster machines exist in the harness to
    detect workload changes; the moment one is used to *derive* a provisioned
    number, a convenient measurement has been substituted for the decision — the
    shape that produced every inherited constant this project has had to

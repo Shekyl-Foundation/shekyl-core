@@ -12988,3 +12988,92 @@ the shortcut has to be a visible edit rather than a convenience.
 becomes load-bearing: a ratio that varies with depth cannot be used to scale
 *at all*, and anyone who tried would produce a spec value that is wrong in the
 privacy-losing direction precisely where the sorting lives.)*
+
+## 85. The Pi depth columns — the prediction resolves to the flat branch
+
+**2026-08-05.** §84.1's test, run as written.
+
+### 85.1 Conditions, both closed by measurement
+
+- **Verify-check exit 0** — every depth fixture on aarch64 produced a real
+  proof, so no cell is a timing of the reject path.
+- **Thermal max 69.6 °C** across 225 samples against the 80 °C soft-throttle —
+  **10.4 °C of margin**, against the previous run's 2.1 °C, because
+  `performance` was pinned from the start rather than ramping under `ondemand`.
+- Governor verified `performance` on all four cores at launch; `+1.94.0` on
+  both arms.
+
+### 85.2 The result: flat, and earned rather than merely consistent
+
+| depth | 1-in ratio | 8-in ratio |
+| --- | --- | --- |
+| 2 | 5.19× | 5.51× |
+| 4 | 5.47× | 5.51× |
+| 7 | **5.52×** | **5.73×** |
+
+The **8-input depth-7 watch cell** — biggest working set, where a cache spill
+would show — lands at **5.73×**, inside the 5.36–5.75 band the *input* axis
+established. Total drift is **+6.3 %** (1-in) and **+4.0 %** (8-in), and the
+spreads (0.36, 0.23) are *narrower* than the input axis's own 0.39.
+
+> **The strongest form of the result is the ordering: the control drifted
+> MORE than the watch cell.** A cache spill in the 8-input depth-7 cell would
+> have reversed that. **§80.6's invariant is earned**, and rule 76.4 stays
+> precautionary rather than becoming load-bearing.
+
+**And the arc's first clean pre-registration.** Both branches of §84.1 were
+written before the numbers existed, and the result went to the one that reads
+*less* interestingly. Recorded as such, because the value of pre-registration
+is only visible when it costs you the better story.
+
+### 85.3 The Pi surface confirms §82's shape at spec scale
+
+| | genesis (d2) | depth 7 | per layer |
+| --- | --- | --- | --- |
+| 1-in | 124.5 ms | 143.3 ms | **+3.76** |
+| 8-in | 399.2 ms | 791.9 ms | **+78.53** |
+
+**Sorting on the spec machine goes 3.21× → 5.53× over chain life.** An 8-input
+transaction at depth 7 costs **792 ms of verification per hop** on the machine
+the guarantee is provisioned to.
+
+### 85.4 Second-order: the *marginal* ratio is not 5.56×
+
+The totals hide it. Per-layer:
+
+| | x86/layer | Pi/layer | marginal ratio |
+| --- | --- | --- | --- |
+| 8-in | +13.13 ms | +78.53 ms | **5.98×** |
+| 1-in | +0.40 ms | +3.76 ms | *(9.4× — x86 term at the noise floor, **not interpretable**)* |
+
+**The 8-input figure is reliable** (both terms far above noise) and sits
+**outside** the 5.36–5.75 band the totals establish — +7.5 % over the average.
+**It does not touch the prediction**, which was about total-cost divergence and
+found none. What it says is that **the depth-walking work is slightly more
+Pi-unfavourable than the average workload.**
+
+### 85.5 Which sharpens rule 76.4 exactly where the schedule operates
+
+Rule 76.4 forbids scaling a **value**. **The schedule's actual future move is
+to scale an *increment*:** *"tier 5 passed, measure the delta on x86, add
+5.56×."*
+
+**That would under-provision the tail rows by ~7.5 %** — same population, same
+direction, same invisibility as everything else this arc has caught.
+
+> **And the totals being flat is precisely what makes the increment shortcut
+> look safe.** The reassuring result is the one that sets the trap.
+
+Rule 76.4 amended to read **values *and* increments**.
+
+### 85.6 The capture was lossy, and it gets the jig treatment
+
+The remote script piped the sweep through `tail -200`, truncating the
+early-depth cells from the log. Criterion's `estimates.json` rescued the run —
+same data, complete — but **a pipeline that silently discards rather than fails
+is the `;` class again**, and a run that also lost criterion's state would have
+needed a full re-run on a machine that takes ~14 minutes just to build.
+
+Fixed the same way: `scripts/remote-bench.sh` captures full output to a file
+and tails the **file** for display, so the artifact is never the thing being
+truncated.
