@@ -136,9 +136,11 @@ pub const ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO: &[u8] = b"shekyl-archival-p-bond-sp
 /// `hs_id_network_separation` vector pins it un-regenerate-around-ably. **Hyphen-
 /// normalized** from §10.7's proposed `shekyl.archival.p.hs_id.v1` (dots) per the
 /// §10.13 carry — the dotted form is outside §9.3's hyphen-convention
-/// non-prefix-free safety family. Consumer: the serving path
-/// (`launch_onion_service_with_hsid`) expands this seed to tor's `ED25519-V3`
-/// expanded-private key; `crypto-pq` owns only the seed.
+/// non-prefix-free safety family. Consumer: the serving path expands this seed to
+/// tor's `ED25519-V3` expanded-private key and hands it to tor via `ADD_ONION`
+/// (`shekyl-tor`'s `control::onion`); `crypto-pq` owns only the seed. That
+/// production path is **forthcoming** (2d-2 SP-T3); today only the disposable
+/// SP-T3 spike exercises it.
 pub const ARCHIVAL_P_HS_ID_INFO: &[u8] = b"shekyl-archival-p-hs-id-ed25519-v1";
 
 /// Single-byte separator between the info label and the little-endian `p_slot`.
@@ -282,10 +284,11 @@ pub fn derive_p_bond_spend_ml_dsa_seed(
 /// `p_slot`-bound and seed-derived (`ARCHIVAL_FIREWALL_GATE6.md` §10.7), so the
 /// persona's `.onion` rotates with the slot. **Serving-only, and deliberately
 /// *not* an [`ArchivalPKeys`] field** — §9.4's persona bundle carries no HS key,
-/// its consumer is the serving path (`launch_onion_service_with_hsid`), which
-/// calls this on demand and expands the seed to tor's `ED25519-V3`
-/// expanded-private key. Not persisted; rederived from `(master_seed, net, fmt,
-/// p_slot)` on each serve, exactly like the other secrets.
+/// its consumer is the (forthcoming, 2d-2 SP-T3) serving path, which calls this on
+/// demand and expands the seed to tor's `ED25519-V3` expanded-private key for
+/// `ADD_ONION`; today only the disposable SP-T3 spike does so. Not persisted;
+/// rederived from `(master_seed, net, fmt, p_slot)` on each serve, exactly like
+/// the other secrets.
 ///
 /// The derived Ed25519 **public** key (`SigningKey::from_bytes(seed)
 /// .verifying_key()`) is the v3 onion address's public key; the

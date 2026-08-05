@@ -451,10 +451,11 @@ fn build_tier1_vectors() -> Vec<serde_json::Value> {
     // Non-Mainnet HS-identity coverage. `hs_id` is network-scoped like every
     // sibling (salt = salt_for(net, fmt)), but it is *not* an `ArchivalPKeys`
     // field, so Tier-2's cross-network matrix does not reach it — these rows pin
-    // the network/format-varying behavior of the label whose one production
-    // consumer (`launch_onion_service_with_hsid`) passes the wallet's real
-    // (net, fmt). Matrix mirrors Tier-2: (testnet, raw32, MASTER_44, slot 0) and
-    // (stagenet, bip39, MASTER_33, slot 3).
+    // the network/format-varying behavior of the label whose production consumer
+    // (the forthcoming 2d-2 SP-T3 serving path) passes the wallet's real
+    // (net, fmt); today only the disposable SP-T3 spike exercises it, and it
+    // hardcodes Mainnet/Bip39. Matrix mirrors Tier-2: (testnet, raw32, MASTER_44,
+    // slot 0) and (stagenet, bip39, MASTER_33, slot 3).
     let hs_id_tn =
         derive_p_hs_id_seed(&MASTER_44, DerivationNetwork::Testnet, SeedFormat::Raw32, 0);
     let hs_id_tn_pk = ed25519_dalek::SigningKey::from_bytes(&hs_id_tn)
