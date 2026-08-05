@@ -37,6 +37,12 @@ use std::sync::Arc;
 use tracing::warn;
 
 /// JSON-RPC methods that require unrestricted access.
+///
+/// The daemon's **second** restricted gate. `/json_rpc` itself is served on
+/// both listeners (it is the wallet's main surface), so unlike the REST route
+/// table the gate here cannot be listener selection — it is per-method, inside
+/// the handler. Same privacy fact, different mechanism, and it needs its own
+/// witness: see [`method_is_gated`].
 const RESTRICTED_METHODS: &[&str] = &[
     "calc_pow",
     "generateblocks",
@@ -53,6 +59,16 @@ const RESTRICTED_METHODS: &[&str] = &[
     "flush_cache",
 ];
 
+/// Whether this listener must refuse this JSON-RPC method.
+///
+/// Pure, and the single place the per-method gate is decided — so a test can
+/// call the same function [`handle`] calls, with both arms, without building
+/// an `AppState` (which links `core_rpc_ffi_*`). Deleting the `restricted &&`
+/// here fails [`admin_methods_are_refused_only_on_the_restricted_listener`].
+fn method_is_gated(restricted: bool, method: &str) -> bool {
+    restricted && RESTRICTED_METHODS.contains(&method)
+}
+
 pub async fn handle(
     State(state): State<Arc<AppState>>,
     Json(request): Json<JsonRpcRequest>,
@@ -60,7 +76,7 @@ pub async fn handle(
     let id = request.id.clone();
     let method = request.method.clone();
 
-    if state.restricted && RESTRICTED_METHODS.contains(&method.as_str()) {
+    if method_is_gated(state.restricted, &method) {
         return (
             StatusCode::FORBIDDEN,
             Json(JsonRpcResponse::error(
@@ -137,6 +153,84 @@ pub async fn handle(
                 StatusCode::OK,
                 Json(JsonRpcResponse::error(id, -32603, "Internal error".into())),
             )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The admin JSON-RPC surface, restated independently of
+    /// `RESTRICTED_METHODS`.
+    ///
+    /// Same discipline as the REST route table's specification: an oracle that
+    /// iterates `RESTRICTED_METHODS` re-states whatever that list says and so
+    /// stays green when a method is dropped from it — which is the edit that
+    /// exposes `get_connections` (this node's live peer set) and the ban/mining
+    /// controls to unauthenticated callers on the public listener.
+    const SPECIFIED_ADMIN_METHODS: &[&str] = &[
+        "calc_pow",
+        "generateblocks",
+        "get_connections",
+        "set_bans",
+        "get_bans",
+        "banned",
+        "flush_txpool",
+        "get_coinbase_tx_sum",
+        "get_alternate_chains",
+        "relay_tx",
+        "sync_info",
+        "prune_blockchain",
+        "flush_cache",
+    ];
+
+    /// Dual-armed, because *refused when restricted* alone passes for a method
+    /// that is refused everywhere — including one that does not exist.
+    #[test]
+    fn admin_methods_are_refused_only_on_the_restricted_listener() {
+        for method in SPECIFIED_ADMIN_METHODS {
+            assert!(
+                method_is_gated(true, method),
+                "{method} is specified admin-only but the public listener \
+                 serves it"
+            );
+            assert!(
+                !method_is_gated(false, method),
+                "{method} is refused on the admin listener too — the gate is \
+                 not the restricted flag"
+            );
+        }
+    }
+
+    /// The gate names exactly the specified methods: one dropped from
+    /// `RESTRICTED_METHODS` is caught above, one added without review here.
+    #[test]
+    fn restricted_method_list_matches_the_specification() {
+        let mut gated: Vec<&str> = RESTRICTED_METHODS.to_vec();
+        let mut specified: Vec<&str> = SPECIFIED_ADMIN_METHODS.to_vec();
+        gated.sort_unstable();
+        specified.sort_unstable();
+        assert_eq!(
+            gated, specified,
+            "the restricted JSON-RPC method list diverged from the \
+             specification above; change both in the same commit"
+        );
+    }
+
+    /// Control: the wallet's ordinary traffic is never gated, so the
+    /// assertions above are about *these* methods and not about a gate that
+    /// refuses everything.
+    #[test]
+    fn wallet_facing_methods_are_never_gated() {
+        for method in [
+            "get_info",
+            "get_block",
+            "get_block_count",
+            "get_fee_estimate",
+        ] {
+            assert!(!method_is_gated(true, method), "{method}");
+            assert!(!method_is_gated(false, method), "{method}");
         }
     }
 }

@@ -115,14 +115,20 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 //
 // Two handler-free path lists encode *which listener* serves a path. One pure
 // function ([`served_paths`]) applies the restricted gate. One total match
-// ([`handler_for`]) binds *what runs*. [`build_router`] only iterates
-// `served_paths` — so gate tests call the same function the router uses, and
-// moving a path between listeners is a list edit, not a handler-table edit.
+// ([`handler_for`]) binds *what runs*. [`assemble`] registers the first with
+// the second, and [`build_router`] is `assemble` plus layers — so the gate
+// tests build the shipping router with a dummy handler and assert selection by
+// *serving requests*, not by re-reading a const.
 //
 // Handlers stay out of the lists (and out of anything a unit test calls)
 // because naming a handler pulls `core_rpc_ffi_*` into the link set; lib tests
-// build no daemon image. Residue: a path listed with no `handler_for` arm
-// panics at daemon start. Not unit-tested — such a test must name a handler.
+// build no daemon image. `assemble`'s generic handler parameter is what keeps
+// that true while still letting a test route the real table.
+//
+// The tests assert against a specification written out separately (§70): an
+// oracle that iterates these lists cannot fail when they change. Residue: a
+// path listed with no `handler_for` arm panics at daemon start — not
+// unit-tested, because such a test must name a handler.
 // ---------------------------------------------------------------------------
 
 /// Paths registered on **both** listeners — JSON and binary alike.
@@ -130,7 +136,7 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 /// Handler-free so tests can read it without linking `core_rpc_ffi_*`.
 /// Combined with [`UNRESTRICTED_ONLY_JSON_PATHS`] via [`served_paths`];
 /// [`build_router`] iterates that, not this list alone.
-pub const ALWAYS_REGISTERED_PATHS: &[&str] = &[
+pub(crate) const ALWAYS_REGISTERED_PATHS: &[&str] = &[
     "/json_rpc",
     // JSON REST (with aliases) -- GET + POST to match epee behaviour
     "/get_height",
@@ -168,7 +174,7 @@ pub const ALWAYS_REGISTERED_PATHS: &[&str] = &[
 /// whatever links it, and `cargo test -p shekyl-daemon-rpc` builds no daemon
 /// image. [`served_paths`] is the single place the `restricted` gate is
 /// applied; tests call it, [`build_router`] iterates it.
-pub const UNRESTRICTED_ONLY_JSON_PATHS: &[&str] = &[
+pub(crate) const UNRESTRICTED_ONLY_JSON_PATHS: &[&str] = &[
     // §55: anonymity graph — peer set is the sensitive part.
     "/get_stem_tallies",
     "/start_mining",
@@ -193,7 +199,7 @@ pub const UNRESTRICTED_ONLY_JSON_PATHS: &[&str] = &[
 /// **Single source of the restricted gate.** [`build_router`] iterates this;
 /// gate tests call this. Do not re-encode the gate as set algebra over the
 /// two consts — deleting the gate here must fail the tests that call here.
-pub fn served_paths(restricted: bool) -> impl Iterator<Item = &'static str> {
+pub(crate) fn served_paths(restricted: bool) -> impl Iterator<Item = &'static str> {
     let admin: &[&str] = if restricted {
         &[]
     } else {
@@ -270,16 +276,38 @@ fn handler_for(path: &str) -> MethodRouter<Arc<AppState>> {
     }
 }
 
+/// The routed-but-unlayered router for one listener.
+///
+/// Generic over the handler binding **so tests can build the real router**.
+/// [`build_router`] passes [`handler_for`]; the gate tests pass a dummy
+/// handler, which keeps `core_rpc_ffi_*` out of the test link set while still
+/// exercising the thing that ships: `Router::route` over [`served_paths`].
+/// Route selection is then asserted by *serving requests* rather than by
+/// re-reading a const — and axum's duplicate-path panic fires here as a test
+/// failure instead of at daemon start.
+fn assemble<S, F>(restricted: bool, handler: F) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+    F: Fn(&'static str) -> MethodRouter<S>,
+{
+    let mut router = Router::new();
+    for path in served_paths(restricted) {
+        router = router.route(path, handler(path));
+    }
+    router
+}
+
 /// Build the Axum router. `cors_origins` empty ⇒ default-deny CORS.
 ///
-/// Routes come only from [`served_paths`]; handlers only from [`handler_for`].
+/// Routes come only from [`served_paths`] (via [`assemble`]); handlers only
+/// from [`handler_for`].
+///
+/// **Residue, deliberately named:** `state.restricted` is the one expression
+/// no lib test reaches — building an [`AppState`] needs a [`CoreRpc`], which
+/// links the FFI. Everything downstream of that boolean is covered by
+/// [`assemble`]'s tests; the boolean itself is covered only by review.
 pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
-    let mut router = Router::new();
-    for path in served_paths(state.restricted) {
-        router = router.route(path, handler_for(path));
-    }
-
-    router
+    assemble(state.restricted, handler_for)
         .layer(RequestBodyLimitLayer::new(state.body_limit()))
         .layer(cors_layer(cors_origins))
         .with_state(state)
@@ -386,8 +414,110 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::routing::get;
-    use http::Request;
+    use http::{Request, StatusCode};
+    use std::collections::BTreeSet;
     use tower::ServiceExt;
+
+    // -----------------------------------------------------------------------
+    // The specification, restated independently of the code that builds it.
+    //
+    // **The duplication below is deliberate and must not be "de-duplicated".**
+    // An oracle derived from `ALWAYS_REGISTERED_PATHS` /
+    // `UNRESTRICTED_ONLY_JSON_PATHS` re-states whatever those lists happen to
+    // say, so it cannot fail when they change — which is precisely how the
+    // const-membership check §69 deleted managed to pass under the edit it
+    // existed to catch, and how a loop over the admin list still misses a path
+    // *moved out* of it. These two arrays are the contract: which paths the
+    // daemon serves, and which of them never reach the public listener.
+    // Changing the route table must therefore change this table too, in a diff
+    // a reviewer reads and a maintainer must justify.
+    // -----------------------------------------------------------------------
+
+    /// Paths that must be served on **both** listeners.
+    const SPECIFIED_ALWAYS_PATHS: &[&str] = &[
+        "/json_rpc",
+        "/get_height",
+        "/getheight",
+        "/get_transactions",
+        "/gettransactions",
+        "/get_alt_blocks_hashes",
+        "/is_key_image_spent",
+        "/submit_transaction",
+        "/get_public_nodes",
+        "/get_transaction_pool",
+        "/get_transaction_pool_hashes.bin",
+        "/get_transaction_pool_hashes",
+        "/get_transaction_pool_stats",
+        "/get_info",
+        "/getinfo",
+        "/get_limit",
+        "/get_blocks.bin",
+        "/getblocks.bin",
+        "/get_blocks_by_height.bin",
+        "/getblocks_by_height.bin",
+        "/get_hashes.bin",
+        "/gethashes.bin",
+        "/get_o_indexes.bin",
+    ];
+
+    /// Paths that must **never** be served on the restricted (public)
+    /// listener. §55: `/get_stem_tallies` is the anonymity graph; the rest are
+    /// node administration (mine, ban, shut down, roll back).
+    const SPECIFIED_ADMIN_ONLY_PATHS: &[&str] = &[
+        "/get_stem_tallies",
+        "/start_mining",
+        "/stop_mining",
+        "/mining_status",
+        "/save_bc",
+        "/get_peer_list",
+        "/set_log_hash_rate",
+        "/set_log_level",
+        "/set_log_categories",
+        "/set_bootstrap_daemon",
+        "/stop_daemon",
+        "/get_net_stats",
+        "/set_limit",
+        "/out_peers",
+        "/in_peers",
+        "/pop_blocks",
+    ];
+
+    /// The served surface equals the specification, path for path.
+    ///
+    /// One assertion covers four drift directions the per-path arms cannot:
+    /// a path **dropped** from a list (registered nowhere, 404 at runtime with
+    /// a clean startup log), a path **added** without review, a path
+    /// **migrated** between listeners, and a **duplicate** — which axum turns
+    /// into a panic before the daemon binds.
+    #[test]
+    fn route_table_matches_the_specification() {
+        let served: Vec<&str> = served_paths(false).collect();
+        let unique: BTreeSet<&str> = served.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            served.len(),
+            "duplicate path in the route table: axum panics on a repeated \
+             route, so this aborts the daemon at startup"
+        );
+
+        let specified: BTreeSet<&str> = SPECIFIED_ALWAYS_PATHS
+            .iter()
+            .chain(SPECIFIED_ADMIN_ONLY_PATHS)
+            .copied()
+            .collect();
+        assert_eq!(
+            unique, specified,
+            "served surface diverged from the specification above; if the \
+             change is intended, change the specification in the same commit"
+        );
+
+        let public: BTreeSet<&str> = served_paths(true).collect();
+        let specified_public: BTreeSet<&str> = SPECIFIED_ALWAYS_PATHS.iter().copied().collect();
+        assert_eq!(
+            public, specified_public,
+            "restricted (public) listener diverged from the specification"
+        );
+    }
 
     /// Deleted decoy surface must not reappear on *either* listener.
     ///
@@ -438,24 +568,112 @@ mod tests {
 
     /// Every admin-only path is selected only when unrestricted.
     ///
-    /// Generalisation of the stem-tallies arms: also catches a path listed in
-    /// both consts (would be served publicly *and* look gated).
+    /// Driven by [`SPECIFIED_ADMIN_ONLY_PATHS`], **not** by
+    /// `UNRESTRICTED_ONLY_JSON_PATHS`: a loop over the production list stops
+    /// visiting a path the moment that path is moved onto the always-list, so
+    /// it catches duplication (a path in *both* lists) while staying silent
+    /// through migration — the edit that actually exposes `/stop_daemon` to
+    /// unauthenticated remote callers.
     #[test]
     fn admin_paths_are_absent_from_the_restricted_listener() {
-        for path in UNRESTRICTED_ONLY_JSON_PATHS {
+        for path in SPECIFIED_ADMIN_ONLY_PATHS {
             assert!(
                 served_paths(false).any(|p| p == *path),
-                "{path} is listed admin-only but is not selected when unrestricted"
+                "{path} is specified admin-only but is not selected when unrestricted"
             );
             assert!(
                 served_paths(true).all(|p| p != *path),
                 "{path} is admin-only but is selected on the restricted listener"
             );
-            assert!(
-                !ALWAYS_REGISTERED_PATHS.contains(path),
-                "{path} is admin-only but is also in ALWAYS_REGISTERED_PATHS"
+        }
+    }
+
+    /// A router with the real route table and dummy handlers.
+    ///
+    /// This is [`build_router`]'s own assembly — the same [`assemble`] call
+    /// over the same [`served_paths`] — with only the handler binding swapped,
+    /// because naming a real handler pulls `core_rpc_ffi_*` into the test link
+    /// set. Both methods are bound so an unrouted path answers 404 rather than
+    /// 405; a 405 read as "absent" would be a vacuous pass.
+    fn probe_router(restricted: bool) -> Router {
+        assemble(restricted, |_| {
+            get(|| async { "ok" }).post(|| async { "ok" })
+        })
+    }
+
+    async fn probe(restricted: bool, path: &str) -> StatusCode {
+        probe_router(restricted)
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    /// The gate, asserted on the router that ships rather than on the list it
+    /// is built from.
+    ///
+    /// [`served_paths`] returning the right strings is necessary but not
+    /// sufficient: this exercises `Router::route` over those strings, so a
+    /// registration that silently fails to bind is caught too. Dual-armed —
+    /// the unrestricted 200 is what makes the restricted 404 mean **gated**
+    /// rather than **misspelled**.
+    #[tokio::test]
+    async fn assembled_router_gates_the_anonymity_graph() {
+        assert_eq!(
+            probe(false, "/get_stem_tallies").await,
+            StatusCode::OK,
+            "unrestricted arm: the anonymity-graph readout must be routed, \
+             or the restricted arm proves nothing"
+        );
+        assert_eq!(
+            probe(true, "/get_stem_tallies").await,
+            StatusCode::NOT_FOUND,
+            "restricted arm: the anonymity graph must never reach the public \
+             listener (§55)"
+        );
+        // Control: the restricted router is a real, populated router.
+        assert_eq!(probe(true, "/get_info").await, StatusCode::OK);
+        assert_eq!(probe(false, "/get_info").await, StatusCode::OK);
+    }
+
+    /// Every specified path is reachable on the listener that owns it, and
+    /// every admin path 404s on the public one — checked by serving requests.
+    #[tokio::test]
+    async fn assembled_router_serves_exactly_the_specified_surface() {
+        for path in SPECIFIED_ALWAYS_PATHS {
+            assert_eq!(
+                probe(true, path).await,
+                StatusCode::OK,
+                "{path} is specified for both listeners but is not routed on \
+                 the restricted one"
+            );
+            assert_eq!(probe(false, path).await, StatusCode::OK, "{path}");
+        }
+        for path in SPECIFIED_ADMIN_ONLY_PATHS {
+            assert_eq!(
+                probe(false, path).await,
+                StatusCode::OK,
+                "{path} is specified admin-only but is not routed on the \
+                 unrestricted listener"
+            );
+            assert_eq!(
+                probe(true, path).await,
+                StatusCode::NOT_FOUND,
+                "{path} is admin-only but the public listener routes it"
             );
         }
+        assert_eq!(
+            probe(false, "/get_output_distribution.bin").await,
+            StatusCode::NOT_FOUND,
+            "control: an unspecified path must 404, or the OK assertions above \
+             are vacuous"
+        );
     }
 
     #[tokio::test]

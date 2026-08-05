@@ -193,7 +193,7 @@ json_handler!(pop_blocks, "/pop_blocks");
 /// **Admin-only (unrestricted listener), and the reason belongs here rather
 /// than in the route table.** In daemon RPC terms: `restricted` is the
 /// *public* limited listener; this route is selected only when
-/// `!restricted` via [`crate::server::served_paths`]. This endpoint *is* the
+/// `!restricted` via `server::served_paths`. This endpoint *is* the
 /// anonymity graph: which peers this node stems to, and how each has
 /// behaved. Sharma Appendix B spends 50–100 probes per node to reconstruct
 /// exactly that, so serving it on the public listener hands over — for free
@@ -207,16 +207,19 @@ json_handler!(pop_blocks, "/pop_blocks");
 /// `cooldown`, and a rate would pick the accumulator's memory policy for
 /// them.
 ///
-/// # The gate lives in the route table (§69)
+/// # The gate lives in the route table (§69, §70)
 ///
-/// Path membership in
-/// [`crate::server::UNRESTRICTED_ONLY_JSON_PATHS`] is the privacy fact;
-/// [`crate::server::served_paths`] applies `restricted`;
-/// [`crate::server::build_router`] iterates only that function. Gate unit
-/// tests call `served_paths` — the same selector the router uses — with both
-/// arms (unrestricted ⇒ present, restricted ⇒ absent). A daemon fixture is
-/// not owed: the property is pure route-table selection, and naming this
-/// handler from a test would pull `core_rpc_ffi_*` into the lib test binary.
+/// Path membership in `server::UNRESTRICTED_ONLY_JSON_PATHS` is the privacy
+/// fact; `server::served_paths` applies `restricted`; `server::assemble`
+/// registers exactly that, and [`crate::server::build_router`] is
+/// `assemble` plus layers. The gate is asserted **on the assembled router**:
+/// a dummy-handler build of the real table answers 200 for this path when
+/// unrestricted and 404 when restricted, and the specification the assertions
+/// run against is written out independently of the route table, so a path
+/// *moved* between listeners fails rather than silently changing the oracle.
+/// A daemon fixture is not owed: the property is route-table selection, and
+/// naming this handler from a test would pull `core_rpc_ffi_*` into the lib
+/// test binary.
 pub async fn get_stem_tallies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let core = state.core.clone();
     match tokio::task::spawn_blocking(move || core.stem_tallies())
