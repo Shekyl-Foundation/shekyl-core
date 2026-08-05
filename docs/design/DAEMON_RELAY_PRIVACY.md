@@ -12208,3 +12208,74 @@ to point at.)*
   shape and 102 ms at 4 inputs, with no code change to trigger review, and the
   re-derivation points are computable today from §72's 38 / 1,444 / 25,992 /
   987,696 / 17.8M / 675M capacities.
+
+## 75. The quantile is what keeps privacy from tracking hardware
+
+**2026-08-05, maintainer.** The closing principle of the verification-floor
+arm, and the reason to derive from the slow end that does not depend on anyone
+running a Pi at volume.
+
+### 75.1 The barrier question, answered positively
+
+**Can someone run a node on hardware they already own, without it being
+second-class?** From this measurement: **yes, comfortably.** ~2.9 % utilisation
+at realistic volume, and the flat 5.4× ratio means low-end hardware **degrades
+predictably rather than hitting a cliff**.
+
+That is a **design property worth protecting**, not a constraint to work
+around — and stating it positively is the point, because the next paragraph is
+about the one way it could be lost quietly.
+
+### 75.2 The large-input finding is the barrier reappearing as a privacy asymmetry
+
+§74.3 kept the under-provisioning of large-input transactions as "the real
+output". **It is not a performance problem.** Read against §75.1 it is the
+barrier returning in a form nobody would look for:
+
+> **If `hop` is provisioned at the modal case, the Pi operator's transactions
+> preempt more often than the laptop operator's. Same protocol, worse
+> anonymity, determined by hardware.**
+
+A two-tier privacy outcome, arriving through **a constant** rather than a
+feature, a setting, or a fee — which is precisely why it would survive review.
+Nobody proposes it; it falls out of picking a central statistic where the
+policy asked for a tail one (§65, §74.1's statistic-class diagnosis).
+
+**And it collides with the mission directly.**
+[`00-mission`](../../.cursor/rules/00-mission.mdc) §2: *"Every user gets the
+same anonymity guarantees **by default** — privacy is never a setting."*
+Anonymity that correlates with the operator's hardware is not the same
+guarantee for everyone; it is a setting whose value is chosen by what the user
+could afford, and one they cannot see, cannot measure, and did not choose.
+
+### 75.3 Why the high quantile is the fix, and what it costs
+
+Provisioning at the high quantile over the node population **removes the
+correlation**: everyone gets the embargo the **slowest honest node** needs, so
+anonymity stops tracking hardware.
+
+The cost is recovery latency, which §6.7 prices — and the shape of that cost is
+the argument:
+
+| | who pays | shape |
+| --- | --- | --- |
+| modal provisioning | slow-hardware operators only | **sorted** — by hardware, invisibly |
+| high-quantile provisioning | everyone | **uniform** — a shared cost |
+
+**A shared cost rather than a sorted one.** That is the same trade the arc has
+taken at RD-4 and F-7 (§73.5), now with the reason stated at the level that
+generalises: **the quantile is not a safety margin, it is the mechanism that
+makes the guarantee uniform.**
+
+### 75.4 What the Pi arm therefore delivers
+
+**One input to the constants round, and one principle:**
+
+> **Derive `hop` from the slow end because a central statistic makes anonymity
+> correlate with hardware — not because anyone is expected to run a Pi at
+> volume.**
+
+The second half is the durable part. It survives any change in who runs what,
+and it is the answer to a future reader who observes that Pi-class relays are
+rare and proposes re-deriving against typical hardware: **that proposal is a
+privacy regression wearing an efficiency argument**, and §75.2 is why.
