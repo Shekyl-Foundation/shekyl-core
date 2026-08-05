@@ -4121,9 +4121,11 @@ name = "shekyl-ffi"
 version = "3.1.0"
 dependencies = [
  "ciphersuite",
+ "criterion",
  "curve25519-dalek",
  "dalek-ff-group 0.5.0",
  "ec-divisors",
+ "gungraun",
  "helioselene",
  "hex",
  "libc",
