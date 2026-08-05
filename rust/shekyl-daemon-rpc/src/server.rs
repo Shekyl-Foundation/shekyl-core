@@ -613,12 +613,11 @@ mod tests {
     // The specification, restated independently of the code that builds it.
     //
     // **The duplication below is deliberate and must not be "de-duplicated".**
-    // An oracle derived from `ALWAYS_REGISTERED_PATHS` /
-    // `UNRESTRICTED_ONLY_JSON_PATHS` re-states whatever those lists happen to
-    // say, so it cannot fail when they change — which is precisely how the
-    // const-membership check §69 deleted managed to pass under the edit it
-    // existed to catch, and how a loop over the admin list still misses a path
-    // *moved out* of it. These two arrays are the contract: which paths the
+    // An oracle derived from `ROUTES` re-states whatever that table happens to
+    // say, so it cannot fail when the table changes — which is precisely how
+    // the const-membership check §69 deleted managed to pass under the edit it
+    // existed to catch, and how a loop over the admin rows still misses a path
+    // *moved out* of them. These two arrays are the contract: which paths the
     // daemon serves, and which of them never reach the public listener.
     // Changing the route table must therefore change this table too, in a diff
     // a reviewer reads and a maintainer must justify.
@@ -712,9 +711,9 @@ mod tests {
 
     /// Deleted decoy surface must not reappear on *either* listener.
     ///
-    /// Assert against [`served_paths`] (the full served surface), not only
-    /// `ALWAYS_REGISTERED_PATHS` — absence from the always-list alone would
-    /// still pass if the route landed on the admin list.
+    /// Assert against [`served_paths`] (the full served surface), not only the
+    /// `Visibility::Always` rows — absence from those alone would still pass
+    /// if the route landed on an admin row.
     #[test]
     fn output_distribution_bin_not_registered() {
         assert!(
@@ -759,12 +758,11 @@ mod tests {
 
     /// Every admin-only path is selected only when unrestricted.
     ///
-    /// Driven by [`SPECIFIED_ADMIN_ONLY_PATHS`], **not** by
-    /// `UNRESTRICTED_ONLY_JSON_PATHS`: a loop over the production list stops
-    /// visiting a path the moment that path is moved onto the always-list, so
-    /// it catches duplication (a path in *both* lists) while staying silent
-    /// through migration — the edit that actually exposes `/stop_daemon` to
-    /// unauthenticated remote callers.
+    /// Driven by [`SPECIFIED_ADMIN_ONLY_PATHS`], **not** by the
+    /// `Visibility::AdminOnly` rows of [`ROUTES`]: a loop over the production
+    /// table stops visiting a path the moment that row's visibility flips, so
+    /// it would stay silent through exactly the edit that exposes
+    /// `/stop_daemon` to unauthenticated remote callers.
     #[test]
     fn admin_paths_are_absent_from_the_restricted_listener() {
         for path in SPECIFIED_ADMIN_ONLY_PATHS {
