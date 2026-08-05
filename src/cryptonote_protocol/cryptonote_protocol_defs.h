@@ -135,6 +135,12 @@ namespace cryptonote
     blobdata block;
     uint64_t block_weight;
     std::vector<tx_blob_entry> txs;
+    // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2): the
+    // opaque Rust-canonical witness bytes for this block, committed by the mined
+    // attestation_root header field and stored in a prunable side table. Carried
+    // independently of `pruned` (a block's witness has nothing to do with its tx
+    // pruning), absent-and-empty on old peers. Never interpreted here.
+    blobdata attestation_witness;
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE_OPT(pruned, false)
       KV_SERIALIZE(block)
@@ -160,6 +166,7 @@ namespace cryptonote
           for (auto &e: txs) self.txs.push_back({std::move(e), crypto::null_hash});
         }
       }
+      KV_SERIALIZE_OPT(attestation_witness, blobdata{})
     END_KV_SERIALIZE_MAP()
 
     block_complete_entry(): pruned(false), block_weight(0) {}

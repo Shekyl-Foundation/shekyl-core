@@ -1027,6 +1027,10 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::b
 
   INSERT_INTO_JSON_OBJECT(dest, block, blk.block);
   INSERT_INTO_JSON_OBJECT(dest, transactions, blk.txs);
+  // NB: the credit-wire attestation_witness field is intentionally NOT serialized here. This
+  // JSON codec is an introspection-only surface with no block-ingestion consumer, and it does
+  // not round-trip block_complete_entry today; the witness travels the consensus path over the
+  // epee KV codec (cryptonote_protocol_defs.h) instead. See PR-B2 / ARCHIVAL_CREDIT_WIRE.md §3.
 
   dest.EndObject();
 }

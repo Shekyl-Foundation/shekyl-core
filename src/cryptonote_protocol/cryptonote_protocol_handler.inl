@@ -91,9 +91,14 @@ namespace cryptonote
     const std::vector<cryptonote::tx_blob_entry>& tx_entries,
     const CryptoHashContainer& blk_tx_hashes,
     const bool allow_pruned,
+    const cryptonote::blobdata& attestation_witness,
     cryptonote::pool_supplement& pool_supplement)
   {
     pool_supplement.nic_verified_hf_version = 0;
+    // The single point where the credit-wire attestation witness (opaque bytes) enters the
+    // pool supplement; both the fluffy path and make_full_pool_supplement_from_block_entry
+    // funnel through here, so there is exactly one assignment site to keep in sync.
+    pool_supplement.attestation_witness = attestation_witness;
 
     if (tx_entries.size() > blk_tx_hashes.size())
     {
@@ -179,7 +184,7 @@ namespace cryptonote
 
     // We set `allow_pruned` equal to whether this block entry is pruned since the pruned flag
     // should be checked anyways by the time we deserialize transactions
-    return make_pool_supplement_from_block_entry(blk_entry.txs, blk_tx_hashes, blk_entry.pruned, pool_supplement);
+    return make_pool_supplement_from_block_entry(blk_entry.txs, blk_tx_hashes, blk_entry.pruned, blk_entry.attestation_witness, pool_supplement);
   }
 
 
@@ -664,8 +669,20 @@ namespace cryptonote
     // directly to core::handle_single_incoming_block() -> Blockchain::add_block(), which means we
     // can skip the mempool for faster block propagation. Later in the function, we will erase all
     // transactions from the relayed block.
+    // Coarse-bound the credit-wire attestation witness before it is copied into the pool
+    // supplement and carried toward the prunable side table (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2).
+    // This guards against a peer forcing an oversized opaque-blob allocation/write ahead of the
+    // Rust decoder; exact structural validation happens at admission, not here.
+    if (arg.b.attestation_witness.size() > config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES)
+    {
+      LOG_ERROR_CCONTEXT("fluffy block " << new_block_hash << " carries an oversized attestation "
+        "witness (" << arg.b.attestation_witness.size() << " B), dropping connection");
+      drop_connection(context, false, false);
+      return 1;
+    }
+
     pool_supplement extra_block_txs;
-    if (!make_pool_supplement_from_block_entry(arg.b.txs, blk_txids_set, /*allow_pruned=*/false, extra_block_txs))
+    if (!make_pool_supplement_from_block_entry(arg.b.txs, blk_txids_set, /*allow_pruned=*/false, arg.b.attestation_witness, extra_block_txs))
     {
       LOG_ERROR_CCONTEXT
       (
@@ -1208,6 +1225,19 @@ namespace cryptonote
       {
         LOG_ERROR_CCONTEXT("sent wrong NOTIFY_RESPONSE_GET_OBJECTS: block with id=" << epee::string_tools::pod_to_hex(get_blob_hash(arg.blocks[i].block))
           << ", tx_hashes.size()=" << b.tx_hashes.size() << " mismatch with block_complete_entry.m_txs.size()=" << arg.blocks[i].txs.size() << ", dropping connection");
+        drop_connection(context, false, false);
+        ++m_sync_bad_spans_downloaded;
+        return 1;
+      }
+
+      // Coarse-bound the credit-wire attestation witness here, in the validation loop, BEFORE the
+      // span is buffered into m_block_queue (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2). Checking it at
+      // queue-drain time would let a peer park oversized opaque blobs in RAM first; exact
+      // structural validation is the Rust decoder's job at admission, not this guard.
+      if (arg.blocks[i].attestation_witness.size() > config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES)
+      {
+        LOG_ERROR_CCONTEXT("sent NOTIFY_RESPONSE_GET_OBJECTS with an oversized attestation witness ("
+          << arg.blocks[i].attestation_witness.size() << " B), dropping connection");
         drop_connection(context, false, false);
         ++m_sync_bad_spans_downloaded;
         return 1;

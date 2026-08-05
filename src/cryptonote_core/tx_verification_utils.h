@@ -64,6 +64,14 @@ struct pool_supplement
     // If non-zero, then consider all the txs' non-input consensus (NIC) rules verified for this
     // hard fork. User: If you add an unverified transaction to txs_by_txid, set this field to zero!
     mutable std::uint8_t nic_verified_hf_version = 0;
+    // Per-block credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2). Opaque
+    // Rust-canonical bytes (r ‖ count ‖ pass signatures) carried alongside the block from the
+    // wire block_complete_entry to add_block's prunable side table. This is NOT tx data: it is
+    // never interpreted here (decoded/verified only in Rust) and does not participate in NIC
+    // verification. Empty on every non-p2p entry point (local mine, importer, reorg replay
+    // through the 2-arg handlers) until the transport is populated; that absence is the correct
+    // "no witness supplied" signal to add_block, which then writes no side-table row.
+    blobdata attestation_witness;
 };
 
 /**

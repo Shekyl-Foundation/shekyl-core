@@ -6207,11 +6207,13 @@ leave:
     {
       uint64_t long_term_block_weight = get_next_long_term_block_weight(block_weight);
       cryptonote::blobdata bd = cryptonote::block_to_blob(bl);
-      // Attestation witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): empty until the
-      // cutover. Interim blocks carry the empty attestation set, and the p2p/RPC
-      // transport that supplies a real witness (from the relay sidecar or the
-      // template cache) lands with the cutover; an empty witness stores no row.
-      new_height = m_db->add_block(std::make_pair(std::move(bl), std::move(bd)), block_weight, long_term_block_weight, cumulative_difficulty, already_generated_coins, archival_budget_accrual, cryptonote::blobdata{}, txs);
+      // Attestation witness (ARCHIVAL_CREDIT_WIRE.md §3): supplied by the p2p
+      // transport through the pool supplement (block_complete_entry → make_pool_
+      // supplement_from_block_entry → here). Empty on every non-p2p path — local
+      // mine, importer, and reorg replay through the 2-arg handlers — and until the
+      // Phase 2/3 template writer populates it. An empty witness stores no side-
+      // table row (db_lmdb store_archival_attestation_witness_at_height skips empty).
+      new_height = m_db->add_block(std::make_pair(std::move(bl), std::move(bd)), block_weight, long_term_block_weight, cumulative_difficulty, already_generated_coins, archival_budget_accrual, extra_block_txs.attestation_witness, txs);
     }
     catch (const KEY_IMAGE_EXISTS& e)
     {
