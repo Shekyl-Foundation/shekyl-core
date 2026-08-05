@@ -768,7 +768,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     let mut pending = None;
     for _ in 0..MAX_MINE_BATCHES {
         let attempt = {
-            let mut g = arc.write().await;
+            let g = arc.write().await;
             g.build_pending_tx_async(&request).await
         };
         match attempt {
@@ -1000,7 +1000,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     let mut pending = None;
     for _ in 0..MAX_MINE_BATCHES {
         let attempt = {
-            let mut g = arc.write().await;
+            let g = arc.write().await;
             g.build_pending_tx_async(&request).await
         };
         match attempt {
@@ -1313,7 +1313,7 @@ async fn transfer_to(
     let mut pending = None;
     for _ in 0..max_batches {
         let attempt = {
-            let mut g = arc.write().await;
+            let g = arc.write().await;
             g.build_pending_tx_async(&request).await
         };
         match attempt {
@@ -2736,7 +2736,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     let mut built = None;
     for _ in 0..24 {
         let attempt = {
-            let mut g = fixture.arc.write().await;
+            let g = fixture.arc.write().await;
             g.build_pending_tx_async(&request).await
         };
         match attempt {

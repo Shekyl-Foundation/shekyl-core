@@ -167,6 +167,17 @@ where
     /// Engine state guarded by [`Mutex`] for interior mutability;
     /// see [`PendingTxState`] rustdoc.
     pub(crate) state: Mutex<PendingTxState>,
+    /// Build-serialization permit (W-B step 1, `docs/FOLLOWUPS.md`
+    /// "build concurrency permit stays 1"): exactly one `build` runs at
+    /// a time, **engine-owned** so every embedder — wallet-rpc under a
+    /// read lock, the in-process GUI — inherits the serialization now
+    /// that `Engine::build_pending_tx{,_async}` take `&self`. This
+    /// preserves the pre-relaxation network observable: one
+    /// `AssembleTx` membership round-trip against the segment layer at
+    /// a time. Raising the count is a rule-21 reopen gated on
+    /// anonymized segment fetch (correlated-burst observable) — never a
+    /// throughput tweak.
+    pub(crate) build_permit: tokio::sync::Semaphore,
     /// Test-only: overrides the Phase 1 daemon stub on the next
     /// `submit` after `SubmitAttempted` (PR 5 C7 R9 per-error-class
     /// coverage). FIFO not required — one slot consumed per submit.
@@ -1933,6 +1944,7 @@ where
             ttl,
             network,
             state,
+            build_permit: tokio::sync::Semaphore::new(1),
             #[cfg(any(test, feature = "test-helpers"))]
             submit_daemon_outcome: Mutex::new(None),
         }

@@ -79,7 +79,14 @@ pub(crate) async fn build_pending_tx(
     };
 
     let shared = require_open_engine(tenants).await?;
-    let mut engine = shared.write().await;
+    // W-B step 1: build runs under a *read* lock — the slow FCMP++
+    // assembly lives inside `LocalPendingTx`'s interior mutability behind
+    // an engine-owned permit of one (network observable unchanged:
+    // serialized `AssembleTx`), so concurrent read RPCs (`get_balance`,
+    // `get_height`, `get_transfers`) are no longer stalled behind a
+    // build. Writers (`refresh`) wait for this read guard to drain,
+    // exactly as they wait for any reader.
+    let engine = shared.read().await;
     let pending = engine.build_pending_tx_async(&request).await?;
     let result = pending_tx_result(&pending);
     serde_json::to_value(result)

@@ -35,7 +35,7 @@ use crate::engine::error::{
     TerminalErrorKind,
 };
 use crate::engine::fee_estimator::DaemonFeeEstimator;
-use crate::engine::fee_snapshot::FixedFeeSnapshotSource;
+use crate::engine::fee_snapshot::{FeeSnapshotSource, FixedFeeSnapshotSource};
 use crate::engine::key_actor::KeyEngineHandle;
 use crate::engine::local_keys::LocalKeys;
 use crate::engine::network::Network;
@@ -494,11 +494,29 @@ async fn funded_ledger_and_tree(
 }
 
 fn test_pending_tx_with_tree(ledger: Arc<LocalLedger>, tree: CurveTreeHandle) -> TestPendingTx {
+    test_pending_tx_with_tree_and_fee_source(ledger, tree, test_fee_snapshot_source())
+}
+
+/// [`test_pending_tx_with_tree`] with a caller-supplied fee-snapshot
+/// source — the seam the build-permit serialization pin uses to park a
+/// build *inside* its body at a deterministic suspension point.
+fn test_pending_tx_with_tree_and_fee_source<FS: FeeSnapshotSource>(
+    ledger: Arc<LocalLedger>,
+    tree: CurveTreeHandle,
+    fee_snapshot_source: FS,
+) -> LocalPendingTx<
+    LocalSigner,
+    WalletGreedyOutputSelector,
+    DaemonFeeEstimator,
+    FS,
+    TestTransactionSubmitter,
+    LocalLedger,
+> {
     LocalPendingTx::new(
         Arc::new(LocalSigner::new(test_signer_handle())),
         WalletGreedyOutputSelector,
         DaemonFeeEstimator,
-        test_fee_snapshot_source(),
+        fee_snapshot_source,
         test_submitter(),
         ledger,
         Some(tree),
@@ -1543,6 +1561,100 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
             );
         }
     }
+}
+
+/// Fee-snapshot source that parks inside `fetch` until gate permits
+/// arrive — a controllable, deterministic suspension point *inside* the
+/// build body for the build-permit serialization pin. `entered` counts
+/// how many builds reached the body.
+#[derive(Clone)]
+struct GatedFeeSnapshotSource {
+    entered: Arc<std::sync::atomic::AtomicUsize>,
+    gate: Arc<tokio::sync::Semaphore>,
+}
+
+impl FeeSnapshotSource for GatedFeeSnapshotSource {
+    async fn fetch(
+        &self,
+    ) -> Result<crate::engine::traits::FeeEstimates, crate::engine::error::FeeEstimatorError> {
+        self.entered
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.gate
+            .acquire()
+            .await
+            .expect("test gate semaphore is never closed")
+            .forget();
+        Ok(test_fee_estimates())
+    }
+}
+
+/// W-B step 1: concurrent `build` calls serialize on the engine-owned
+/// build permit. The second build must not enter the build body (its
+/// fee-snapshot fetch) while the first is parked inside the body —
+/// without the permit, `build` takes `&self` and two callers interleave
+/// freely the moment the embedder stops holding an exclusive Engine
+/// borrow, emitting the correlated `AssembleTx` burst the permit
+/// exists to forbid (the observable wallet-rpc's read-lock relaxation
+/// must not create).
+///
+/// Deterministic by construction: build B is driven with a noop-waker
+/// poll loop, never a sleep — with the permit it parks at the acquire
+/// before the body; without it the entered-counter reaches 2 on B's
+/// first poll.
+#[tokio::test]
+async fn concurrent_builds_serialize_on_the_build_permit() {
+    use std::future::Future;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (ledger, _tree_dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let entered = Arc::new(AtomicUsize::new(0));
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let pending = Arc::new(test_pending_tx_with_tree_and_fee_source(
+        Arc::clone(&ledger),
+        tree,
+        GatedFeeSnapshotSource {
+            entered: Arc::clone(&entered),
+            gate: Arc::clone(&gate),
+        },
+    ));
+
+    // Build A: spawned, holds the build permit, parks inside `fetch`.
+    let a = tokio::spawn({
+        let pending = Arc::clone(&pending);
+        async move { pending.build(standard_request(7_000)).await }
+    });
+    while entered.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    // Build B: driven manually with a noop waker. It must stay pending
+    // at the permit acquire and never reach the build body.
+    let mut b = std::pin::pin!(pending.build(standard_request(7_000)));
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    for _ in 0..16 {
+        assert!(
+            b.as_mut().poll(&mut cx).is_pending(),
+            "build B must not complete while A holds the build permit"
+        );
+    }
+    assert_eq!(
+        entered.load(Ordering::SeqCst),
+        1,
+        "build B entered the build body while build A held the permit"
+    );
+
+    // Release the gate for both fetches: A completes and drops the
+    // permit, then B acquires it, runs, and completes. Both reserve
+    // disjoint inputs (P6 output locks, untouched by the permit).
+    gate.add_permits(2);
+    let built_a = a
+        .await
+        .expect("build A task joins")
+        .expect("build A succeeds");
+    let built_b = b.await.expect("build B succeeds after the permit frees");
+    assert_ne!(built_a.id, built_b.id, "two distinct reservations");
+    assert_eq!(pending.outstanding(), 2);
 }
 
 /// PR 2c-1 — the real-tree closing milestone for archival bond-post

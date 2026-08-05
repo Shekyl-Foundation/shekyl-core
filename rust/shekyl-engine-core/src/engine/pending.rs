@@ -905,7 +905,13 @@ impl<
     }
 
     /// Build a [`PendingTx`] via [`PendingTxEngine::build`].
-    pub fn build_pending_tx(&mut self, request: &TxRequest) -> Result<PendingTx, SendError> {
+    ///
+    /// `&self` (W-B step 1): build's mutation runs under the
+    /// implementor's interior mutability, and the production
+    /// `LocalPendingTx` serializes builds on an engine-owned permit of
+    /// one — so embedders may call this through a shared borrow (e.g. a
+    /// `RwLock` read guard) without changing the network observable.
+    pub fn build_pending_tx(&self, request: &TxRequest) -> Result<PendingTx, SendError> {
         poll_immediate_build(self.pending.build(request.clone()))
     }
 
@@ -934,8 +940,13 @@ impl<
     /// immediate-ready contract ([`poll_immediate_build`]) cannot drive it and
     /// returns `CannotSign`. Callers already on an async runtime use this method
     /// (the "async `Engine` methods" pairing the sync wrapper's doc anticipates).
+    /// `&self` (W-B step 1): the slow FCMP++ membership assembly inside
+    /// build no longer needs the embedder's exclusive Engine borrow —
+    /// read RPCs proceed while a build runs. Serialization of the build
+    /// itself (and its `AssembleTx` network observable) is owned by the
+    /// production implementor's permit of one, not by the borrow.
     pub async fn build_pending_tx_async(
-        &mut self,
+        &self,
         request: &TxRequest,
     ) -> Result<PendingTx, SendError> {
         self.pending.build(request.clone()).await

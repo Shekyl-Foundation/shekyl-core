@@ -1664,20 +1664,29 @@ sustainability is unaffected by the recalibration.
   distinct "not yet available" signal if clients depend on the filter.
   *Target: V3.0 / Phase 4b–4c.*
 
-- **Phase 4b: `build_pending_tx` holds the Engine write lock across FCMP++
-  assembly, stalling read RPCs** (added 2026-07-09). `Engine::build_pending_tx_async`
-  takes `&mut self`, so `send::build_pending_tx` holds `SharedEngine::write()`
-  across the curve-tree actor's `AssembleTx` (real, potentially slow async
-  I/O). While a build runs, every concurrent read RPC (`get_balance`,
-  `get_height`, `get_transfers`) blocks on `read()`, and `refresh` cannot
-  proceed — contradicting the `tenant.rs` note that reads share the Engine
-  under a read lock. The `Arc<RwLock<Engine>>` seam cannot fix this from the
-  RPC layer while build needs `&mut self`. **Reopening criterion:** Engine
-  splits the slow membership-path assembly out of the exclusive-borrow window
-  (interior mutability for the reservation commit, or an assemble-then-commit
-  API). **Re-evaluation shape:** narrow the write-lock hold in
-  `send::build_pending_tx` to the commit step once Engine exposes it.
-  *Target: V3.0 / Phase 4b–4c.*
+- **Phase 4b: build concurrency permit stays 1 — raising it is a rule-21
+  reopen gated on anonymized segment fetch** (added 2026-08-04, W-B step 1;
+  supersedes "`build_pending_tx` holds the Engine write lock", resolved same
+  day — see the audit trail. The stall was real, the premise was not:
+  `PendingTxEngine::build` and its `LocalPendingTx` impl have taken `&self`
+  since CT-5c; only the `Engine` delegators demanded `&mut self`). With the
+  delegators relaxed and builds serialized on the engine-owned
+  `LocalPendingTx::build_permit` (one permit), read RPCs proceed during a
+  build and the network observable is unchanged — one `AssembleTx`
+  membership round-trip against the segment layer at a time. N>1 permits
+  would emit a **correlated burst of segment fetches** the (not yet
+  anonymized) segment server can count — concurrent-spend count and rough
+  input cardinality; privacy > performance says that observable is not
+  created until priced. The resource axis also opens at N>1: concurrent
+  builds reserve disjoint input sets, and the R8 TTL reclaim is a
+  mitigation, not a bound. **Reopening criterion:** the "Anonymized
+  (Tor/I2P) routing for non-forward segment fetch" item (this file) lands,
+  AND the reservation-exhaustion bound is designed. **Re-evaluation
+  shape:** raise the permit behind a priced decision naming the burst
+  observable; refresh-vs-build concurrency (a writer still drains the
+  build's read guard — the same serialization as before step 1) is a
+  separate assemble-then-commit design question, not a permit tweak.
+  *Target: V3.0 disposition stable; reopen substrate-anchored per above.*
 
 - **GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in`
   single-structured-output funding must land before genesis** (added
@@ -14214,6 +14223,29 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **Phase 4b `build_pending_tx` write-lock stall (resolved 2026-08-04,
+  `feat/w4b-submit-verdict`, W-B step 1).** The FOLLOWUP's premise was
+  wrong at source: `PendingTxEngine::build` (`traits/pending_tx.rs`) and
+  `LocalPendingTx::build` (`transfer/trait_impl.rs`) take `&self`; only
+  the `Engine::build_pending_tx{,_async}` delegators demanded
+  `&mut self`, and the `Arc<RwLock<Engine>>` seam inherited that. Fixed
+  by relaxing the delegators to `&self` and serializing builds on the
+  engine-owned `LocalPendingTx::build_permit`
+  (`tokio::sync::Semaphore`, 1 permit) acquired at the top of `build` —
+  engine-owned so every embedder (wallet-rpc, the in-process GUI)
+  inherits the serialization, preserving today's network observable
+  (one `AssembleTx` at a time). `send::build_pending_tx` now holds
+  `read()`, so `get_balance` / `get_height` / `get_transfers` no longer
+  stall behind a build; `refresh` (a writer) still drains the in-flight
+  build's read guard — the same build-vs-refresh serialization as
+  before, tracked as the assemble-then-commit question on the
+  permit-stays-1 entry (V3.0 queue). Serialization is pinned by
+  `concurrent_builds_serialize_on_the_build_permit` (deterministic
+  noop-waker drive, no sleeps; proven-to-bite at permit=2), and the
+  `&self` relaxation is compile-coupled to `send.rs`'s read-guard call.
+  Canonical: `transfer/engine.rs` (`build_permit`),
+  `transfer/trait_impl.rs` (acquire), `shekyl-wallet-rpc/src/send.rs`.
 
 - **Phase 4b `submit_pending_tx` verdict flattening (resolved 2026-08-04,
   `feat/w4b-submit-verdict`).** `Engine::submit_pending_tx{,_async}` now

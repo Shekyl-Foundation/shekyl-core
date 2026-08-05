@@ -51,6 +51,19 @@
   (its label-derivation continues, documented and testable, as the
   `placeholder_recipients` test in `shekyl-genesis-tool`).
 
+### Fixed
+
+- **`build_pending_tx` no longer stalls read RPCs.** The slow FCMP++
+  membership assembly ran under the wallet-RPC process's exclusive
+  Engine lock, so `get_balance` / `get_height` / `get_transfers` blocked
+  for the whole build. `Engine::build_pending_tx{,_async}` now take
+  `&self` and the build runs under a read lock, serialized by an
+  engine-owned permit of one inside the engine — the network observable
+  is unchanged (one membership-assembly round-trip at a time; raising
+  the permit is an explicitly gated future decision, not a tuning
+  knob). `refresh` still waits for an in-flight build to finish, as
+  before.
+
 ## [3.1.0-alpha.7] - 2026-08-03
 
 ### Changed

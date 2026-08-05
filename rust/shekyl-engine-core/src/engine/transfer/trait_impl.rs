@@ -117,6 +117,21 @@ where
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
     async fn build(&self, request: TxRequest) -> Result<PendingTx, SendError> {
+        // W-B step 1: serialize the whole build on the engine-owned
+        // permit — held across selection, the `AssembleTx` round-trip,
+        // and the consumer-held commit, then released on return (or on
+        // drop, if the caller cancels while parked here). One build at a
+        // time regardless of how many shared borrows the embedder hands
+        // out, so relaxing the Engine surface to `&self` changed no
+        // network observable. The permit is never closed; the error arm
+        // honors the trait's no-panic contract anyway.
+        let _build_permit =
+            self.build_permit
+                .acquire()
+                .await
+                .map_err(|_| SendError::CannotSign {
+                    reason: "build permit closed",
+                })?;
         if request.recipients.is_empty() {
             let err = SendError::InvalidRecipient {
                 reason: "TxRequest must carry at least one recipient",
