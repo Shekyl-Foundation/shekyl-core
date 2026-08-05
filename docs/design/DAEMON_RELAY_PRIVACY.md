@@ -11919,3 +11919,75 @@ The Pi has 8 GB and 48 GB free; its toolchain is installing.
 **Not yet measured. What §72 fixes is the shape of the measurement**, which is
 the half that decides whether the number means anything — and which, taken
 after the bench, would have arrived as a retraction.
+
+## 73. The Pi arm — 127 ms, and §65's conditional is resolved against us
+
+**2026-08-05.** The arm the constant derives from (§72.5: the quantile is over
+the node population, so the slow end sets the value and the fast machine is the
+sanity check). Both preconditions closed rather than assumed.
+
+### 73.1 Conditions, recorded because they decide the number
+
+- **Governor `performance`, verified on all four cores** at launch, not set and
+  trusted.
+- **Not thermally throttled — measured, not inferred.** A 10 s sampler across
+  the whole sweep: 37 samples, min 65.7 °C, mean 72.9 °C, **max 77.9 °C**
+  against the Pi 4's 80 °C soft-throttle threshold. It came within 2.1 °C, so
+  this was worth measuring rather than asserting.
+- Pi 4 Model B Rev 1.4, Cortex-A72, aarch64 64-bit, 8 GB; **`+1.94.0` on both
+  arms**, so the ratio is hardware and not compiler.
+
+### 73.2 The surface, and the ratio is flat
+
+| cell | x86 | Pi | ratio |
+| --- | --- | --- | --- |
+| d2 · 1-in / 2-out | 23.62 ms | **127.31 ms** | 5.39× |
+| d2 · 1-in / 16-out | 24.45 ms | 131.04 ms | 5.36× |
+| d2 · 2-in / 2-out | 27.58 ms | 151.28 ms | 5.48× |
+| d2 · 4-in / 2-out | 41.29 ms | 230.59 ms | 5.58× |
+| d2 · 4-in / 16-out | 41.33 ms | 234.42 ms | 5.67× |
+
+**Ratio 5.36–5.75× across every cell, mean 5.56×.** Its flatness is the
+result's own control: a throttled or governor-limited run would skew the later
+cells, and the depth-1 block (5.51–5.75×) and depth-2 block (5.36–5.67×) agree.
+
+**And the flat ratio confirms the ML-DSA retraction empirically.** With lattice
+arithmetic on the path, AVX2-vs-NEON would have produced a wide and
+shape-dependent spread. EC and hashing work gives a constant factor — which is
+what a path carrying **no** ML-DSA-65 predicts (§72.2).
+
+### 73.3 §65's conditional is resolved, and not marginally
+
+§65 recorded the 14 % shortfall as conditional on the true clearnet hop
+exceeding 175 ms. **It does, by a margin that changes the character of the
+finding:**
+
+> **127 ms of verification alone, on the arm the policy derives from, against a
+> 175 ms budget that must also contain transit and scheduling. Verification is
+> ~73 % of the entire `hop` assumption before a single byte moves.**
+
+Add §21's own ~50 ms ocean-crossing transit and the modal shape is already
+**~177 ms** — over budget on the two terms we can name, with scheduling and
+the `(N+1)/2` batch multiplier still unaccounted.
+
+`175` is not an under-estimate to be nudged. **It is the wrong order for the
+work the term now contains**, and it was set when that work was a Monero-era
+ring-signature check.
+
+### 73.4 The growth is worse on this arm, and still monotonic
+
+Per-layer depth slope on the Pi: **+6.59 ms at 1 input, +9.78 at 2, +20.39 at
+4** — the same multiply-with-inputs shape as x86, scaled by the same ~5.5×.
+
+At §72's capacity schedule (38 / 1,444 / 25,992 / 987,696 / 17.8M / 675M
+outputs), five further layers over the chain's life put the modal shape at
+**~160 ms of verification** — approaching the whole current budget from one
+term, with no code change to trigger a review.
+
+### 73.5 What this does not settle
+
+The **shape distribution** and **batch depth** remain free parameters (§72.3,
+§72.4), so the effective scalar is not yet derivable — this fixes the surface,
+not the constant. And the embargo re-derivation at a corrected `hop` is a
+separate act with a real liveness cost (§6.7), which is the constants round's
+to take, not this measurement's.
