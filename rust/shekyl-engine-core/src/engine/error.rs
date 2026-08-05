@@ -406,6 +406,52 @@ pub enum RefreshError {
         /// escalation for a deterministically-corrupt store (O3-sub) is CT-5d.
         recoverable_by_respawn: bool,
     },
+
+    /// [`Engine::start_rescan`](super::Engine::start_rescan) refused: the
+    /// wallet holds transaction state that a chain replay cannot rebuild,
+    /// and the rescan would erase the only record of it.
+    ///
+    /// Both counts name the same hazard from two directions. A **reservation**
+    /// (consumer-held or in-flight) is anchored to transfer rows the reset
+    /// clears, so submitting it afterwards would fail against a ledger that
+    /// no longer contains its inputs. An **unconfirmed submitted** tx
+    /// (`sync_state.pending_tx_hashes`) is worse: its inputs' `spent` /
+    /// `awaiting_confirmation` marking lives *only* in the transfer set, and
+    /// replaying confirmed blocks cannot re-derive a spend that is still in
+    /// the mempool — those inputs would come back apparently unspent, be
+    /// re-selected by the next build, and broadcast a second transaction
+    /// spending them. That is a privacy event before it is an accounting
+    /// one: two transactions provably spending the same input self-link the
+    /// wallet's activity (§7.1), which no refusal-avoidance convenience
+    /// outranks.
+    ///
+    /// Resolution is to let the in-flight work settle — submit or discard
+    /// reservations, wait out confirmations — then retry. A wallet stuck
+    /// behind a submitted transaction that never confirms and never gets
+    /// mined needs an explicit abandon surface; that is tracked in
+    /// `docs/FOLLOWUPS.md` with its blocker, not smuggled in here as a
+    /// silently-permissive guard.
+    #[error(
+        "cannot rescan while transactions are in flight ({reservations} reservation(s), \
+         {unconfirmed} unconfirmed)"
+    )]
+    RescanBlocked {
+        /// Consumer-held + in-flight pending-tx reservations.
+        reservations: usize,
+        /// Submitted txids with no chain reference yet
+        /// (`sync_state.pending_tx_hashes`).
+        unconfirmed: usize,
+    },
+
+    /// Rescan emptied scan-derived state in memory but failed to persist the
+    /// reset before the scan producer started. Unlike the other
+    /// `start_rescan` refusals this one is *past* the point of no return:
+    /// the in-memory ledger is already reset while the durable copy may
+    /// still hold the pre-rescan tip. Retry `start_rescan` once the
+    /// persistence fault clears; do not treat the wallet as authoritative
+    /// until a rescan completes.
+    #[error("rescan reset persistence failed: {0}")]
+    RescanPersist(String),
 }
 
 // --- Ledger ----------------------------------------------------------------

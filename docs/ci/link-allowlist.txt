@@ -13,7 +13,6 @@ shekyl-mobile-wallet/ # sibling repository; unresolvable in a single-repo checko
 docs/design/WALLET_REWRITE_PLAN.md:rust/shekyl-staking/ # planned crate layout; staking later absorbed into shekyl-consensus
 docs/design/WALLET_REWRITE_PLAN.md:rust/shekyl-wallet-prefs/ # planned crate; landed as shekyl-engine-prefs
 docs/design/WALLET_REWRITE_PLAN.md:rust/shekyl-ffi/src/wallet_ledger_ffi.rs # planned file; the FFI landed under different module names
-docs/design/WALLET_REWRITE_PLAN.md:docs/WALLET_RPC_README.md # planned deliverable, not yet created
 docs/design/IMPLEMENTATION_INDEX.md:X.md # template placeholder in the how-to-register prose
 docs/CHANGELOG.md:src/... # prose placeholder describing a path pattern
 docs/CHANGELOG.md:rust/... # prose placeholder describing a path pattern

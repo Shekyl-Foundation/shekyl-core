@@ -221,6 +221,7 @@ impl<
             rewind_matched_payment_requests_after_reorg(
                 &mut state.ledger.bookkeeping.payment_requests,
                 &state.ledger.ledger,
+                state.ledger.ledger.height(),
             );
         }
 

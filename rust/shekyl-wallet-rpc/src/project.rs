@@ -15,8 +15,8 @@ use shekyl_units::AtomicUnits;
 
 use crate::params::parse_hex32;
 use crate::types::{
-    BuildPendingTxResult, GetBalanceResult, RefreshResult, SubmitPendingTxResult,
-    SubmitVerdictView, TransferDirection, TransferState, TransferView,
+    BuildPendingTxResult, GetBalanceResult, RefreshResult, RescanBlockchainResult,
+    SubmitPendingTxResult, SubmitVerdictView, TransferDirection, TransferState, TransferView,
 };
 
 /// Decimal string for OpenAPI `AtomicUnits`.
@@ -117,6 +117,15 @@ pub fn refresh_result(summary: &RefreshSummary, synced_height: u64) -> RefreshRe
             .reorg
             .as_ref()
             .map(|r| i64::try_from(r.fork_height).unwrap_or(i64::MAX)),
+    }
+}
+
+/// Project a rescan summary — OpenAPI omits `reorg_fork_height`.
+pub fn rescan_result(summary: &RefreshSummary, synced_height: u64) -> RescanBlockchainResult {
+    RescanBlockchainResult {
+        blocks_processed: i64::try_from(summary.blocks_processed).unwrap_or(i64::MAX),
+        transfers_detected: i64::try_from(summary.transfers_detected).unwrap_or(i64::MAX),
+        synced_height: i64::try_from(synced_height).unwrap_or(i64::MAX),
     }
 }
 

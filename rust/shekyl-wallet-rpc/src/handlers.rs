@@ -5,8 +5,7 @@
 
 //! JSON-RPC method dispatch.
 //!
-//! Phase 4b: `get_version`, lifecycle, read queries, `refresh`, and
-//! send lifecycle. `rescan_blockchain` stays `-32601`.
+//! Phase 4b + WI-RPC-1/2a/3 + Phase 4c `rescan_blockchain`.
 
 use serde_json::Value;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
@@ -34,8 +33,6 @@ pub async fn dispatch(
     // Single routing table: method name → leaf handler. Keeping this the only
     // place method names are matched avoids the drift a per-module second
     // dispatch would invite (a new method silently 404ing on a missed arm).
-    // `rescan_blockchain` stays `-32601` (RESERVED) until Engine grows a
-    // rescan API — it falls through to the `MethodNotFound` arm.
     match method {
         "get_version" => get_version(params),
         "create_wallet" => lifecycle::create_wallet(tenants, params, kdf).await,
@@ -49,6 +46,7 @@ pub async fn dispatch(
         "get_transfer_by_id" => queries::get_transfer_by_id(tenants, params).await,
         "get_height" => queries::get_height(tenants, params).await,
         "refresh" => sync::refresh(tenants, params).await,
+        "rescan_blockchain" => sync::rescan_blockchain(tenants, params).await,
         "build_pending_tx" => send::build_pending_tx(tenants, params).await,
         "stake" => lifecycle::stake(tenants, params).await,
         "submit_pending_tx" => send::submit_pending_tx(tenants, params).await,
@@ -163,7 +161,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unimplemented_specified_method_is_method_not_found() {
+    async fn rescan_without_open_wallet_is_wallet_not_open() {
         let tenants = test_tenants();
         let err = dispatch(
             &tenants,
@@ -173,6 +171,19 @@ mod tests {
         )
         .await
         .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
+    }
+
+    /// A SPECIFIED-but-unimplemented method still falls through to
+    /// `MethodNotFound`. Kept alongside the rescan case above: routing
+    /// `rescan_blockchain` must not blur the line between "designed but not
+    /// built" (`-32601`) and "built, but the call is refused".
+    #[tokio::test]
+    async fn unimplemented_specified_method_is_method_not_found() {
+        let tenants = test_tenants();
+        let err = dispatch(&tenants, "sign_message", &json!({}), KdfParams::default())
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
     }
 

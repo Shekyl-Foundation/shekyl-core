@@ -19,8 +19,8 @@ pinned in `../txid_kat.rs`. Provenance chain:
    daemon's `get_transaction_hash`, which is the §3.4 txid-authority
    equivalence (`docs/design/DAEMON_SUBMIT_VERDICT.md`).
 
-Regenerate in three steps — all three artifacts move together; none is
-hand-derived:
+**A genesis / wire-vector re-pin is atomic or it is a lie.** Regenerate in
+three steps — all three artifacts move together; none is hand-derived:
 
 1. `capture_coinbase.py` (rewrites the shekyl-wire `*.block` vectors and
    `regtest_coinbase_hashes.json`);
