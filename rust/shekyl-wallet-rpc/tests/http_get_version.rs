@@ -193,7 +193,7 @@ async fn get_version_omitted_params() {
 }
 
 #[tokio::test]
-async fn method_not_found_for_unimplemented_specified() {
+async fn rescan_without_wallet_is_wallet_not_open() {
     let (status, json) = post_json(
         AuthConfig::Disabled,
         json!({
@@ -206,7 +206,8 @@ async fn method_not_found_for_unimplemented_specified() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(json.get("result").is_none());
-    assert_eq!(json["error"]["code"], -32601);
+    // OpenAPI-specified method; no open wallet → wallet-not-open, not -32601.
+    assert_eq!(json["error"]["code"], -29001);
 }
 
 #[tokio::test]

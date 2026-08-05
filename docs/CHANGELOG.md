@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Phase 4c wallet RPC rescan** (`Engine::start_rescan` +
+  `rescan_blockchain`). Named Engine API resets scan-derived ledger state
+  from `restore_from_height` (preserves retained `tx_keys`, payment-request
+  invoices, restore height, staking config), rolls the curve tree back,
+  persists, then reuses the refresh producer under the shared single-flight
+  slot. `shekyl-wallet-rpc` dispatches `rescan_blockchain`; CLI `rescan`
+  is un-stubbed. Closes FOLLOWUPS Phase 4b rescan / WI-RPC-2b `rescan`
+  deferrals. Phase 4b quality gaps (OUTGOING filter, build write-lock,
+  submit verdict enrichment) remain Engine-gated.
+
 - **`geblock` — deterministic Rust genesis pipeline
   (`rust/shekyl-genesis-tool`).** Replaces the C++ `genesis_builder`
   end-to-end: `gen-wallets` (exactly five fresh-entropy founder/developer

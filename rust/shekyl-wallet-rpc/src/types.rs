@@ -338,6 +338,21 @@ pub struct RefreshResult {
     pub reorg_fork_height: Option<i64>,
 }
 
+/// `rescan_blockchain` result (OpenAPI `RescanBlockchainResult`).
+///
+/// Same counters as [`RefreshResult`] but **without** `reorg_fork_height` —
+/// a full rescan rebuilds from the restore height rather than rewinding a
+/// fork tip.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RescanBlockchainResult {
+    /// Heights scanned this call.
+    pub blocks_processed: i64,
+    /// Detected transfers ingested this call.
+    pub transfers_detected: i64,
+    /// Wallet synced height after the rescan.
+    pub synced_height: i64,
+}
+
 /// `build_pending_tx` result (OpenAPI `BuildPendingTxResult`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BuildPendingTxResult {

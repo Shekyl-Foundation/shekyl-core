@@ -193,6 +193,37 @@ pub fn cmd_refresh(rpc: &RpcSession) {
     }
 }
 
+/// Full rescan from the wallet's restore height (`rescan_blockchain`).
+///
+/// The `hard` flag is accepted for CLI familiarity with wallet2-era
+/// `rescan_bc hard`; both soft and hard map to the same named Engine
+/// rescan (there is no soft/partial rescan surface).
+pub fn cmd_rescan(rpc: &RpcSession, _hard: bool) {
+    if !require_open(rpc) {
+        return;
+    }
+    println!("Rescanning from restore height...");
+    match rpc.call("rescan_blockchain", json!({})) {
+        Ok(val) => {
+            let blocks = val
+                .get("blocks_processed")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let detected = val
+                .get("transfers_detected")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let height = val
+                .get("synced_height")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            println!("Rescan complete: {blocks} blocks processed, {detected} transfers detected.");
+            println!("Wallet height: {height}");
+        }
+        Err(e) => rpc.report("Rescan failed", &e),
+    }
+}
+
 pub fn cmd_status(rpc: &RpcSession) {
     if !require_open(rpc) {
         return;

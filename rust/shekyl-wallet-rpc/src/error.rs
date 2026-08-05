@@ -319,6 +319,12 @@ impl From<RefreshError> for WalletRpcError {
     fn from(err: RefreshError) -> Self {
         match err {
             RefreshError::AlreadyRunning => Self::RefreshInProgress,
+            RefreshError::OutstandingPendingTx { count } => Self::InvalidParams(format!(
+                "cannot rescan with {count} outstanding pending transaction(s); submit or discard first"
+            )),
+            RefreshError::RescanPersist(detail) => {
+                Self::InternalError(format!("rescan reset persistence failed: {detail}"))
+            }
             RefreshError::Io(IoError::Daemon { .. })
             | RefreshError::Io(IoError::Scanner { .. }) => Self::DaemonUnreachable,
             RefreshError::Io(other) => internal_detail("refresh I/O error", other),
