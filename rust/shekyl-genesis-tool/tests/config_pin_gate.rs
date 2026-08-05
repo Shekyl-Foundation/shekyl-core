@@ -4,17 +4,17 @@
 // BSD-3-Clause
 
 //! The config-pin CI gate: the committed recipients files must (a) always be
-//! valid, and (b) — from the Phase B regen onward — rebuild byte-for-byte
-//! into the `GENESIS_TX` pins in `src/cryptonote_config.h`.
+//! valid, and (b) rebuild byte-for-byte into the `GENESIS_TX` pins in
+//! `src/cryptonote_config.h`.
 //!
 //! (b) is what the deterministic tx key exists for: the pinned genesis is
 //! reproducible from committed inputs, so drift between the recipients
 //! files and the pins is a CI failure instead of a silent lie.
 //!
-//! The **parser** itself is always gated (see
-//! [`config_pins_parse_from_real_header`]): a region-model break that made
-//! `geblock verify` unable to find pins would otherwise only surface when
-//! the ignored byte-compare is un-ignored.
+//! The **parser** is gated separately (see
+//! [`config_pins_parse_from_real_header`]) so a region-model break — which
+//! would make `geblock verify` unable to find the pins at all — fails with a
+//! parser diagnostic rather than as a confusing byte-compare miss.
 
 use shekyl_address::Network;
 use shekyl_genesis_tool::config_pin::{load_config_pins, verify_networks};
@@ -45,8 +45,8 @@ fn recipients_files_are_valid() {
 ///
 /// This is the load-bearing check that the pin scraper still understands
 /// the header (east-const house style, namespace regions, config_t fields
-/// excluded). Byte-compare against the rebuilt genesis is a separate,
-/// Phase-B-gated test below.
+/// excluded). Byte-compare against the rebuilt genesis is a separate test
+/// below ([`genesis_hex_matches_config_pin`]).
 #[test]
 fn config_pins_parse_from_real_header() {
     let path = repo_root().join("src/cryptonote_config.h");
@@ -97,12 +97,11 @@ fn config_pins_parse_from_real_header() {
     );
 }
 
-/// The byte-compare gate. Ignored until the Phase B regen replaces the
-/// placeholder recipients and re-pins `GENESIS_TX`: until then
-/// `cryptonote_config.h` still holds the pre-regen genesis built by the
-/// retired fresh-txkey C++ tool, which nothing can reproduce.
+/// The byte-compare gate: rebuilding every network from the committed
+/// recipients files must reproduce the `GENESIS_TX` pins byte for byte. A
+/// drift between the recipients files and the pins — in either direction —
+/// fails CI instead of shipping a genesis nobody can reproduce.
 #[test]
-#[ignore = "un-ignore at the Phase B regen: config.h still pins the pre-regen genesis"]
 fn genesis_hex_matches_config_pin() {
     let root = repo_root();
     let outcomes = verify_networks(&root.join("src/cryptonote_config.h"), &root.join("config"))
