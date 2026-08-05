@@ -236,7 +236,7 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
   if (!std::filesystem::exists(fs_import_file_path, ec))
   {
     MFATAL("bootstrap file not found: " << fs_import_file_path);
-    return false;
+    return 2;
   }
 
   uint64_t block_first;
@@ -253,7 +253,7 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
 
   if (total_source_blocks+block_first-1 <= start_height)
   {
-    return false;
+    return 0; // nothing to import: no blocks beyond the current height — a no-op success, not an error
   }
 
   std::cout << ENDL;
@@ -268,7 +268,7 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
   if (import_file.fail())
   {
     MFATAL("import_file.open() fail");
-    return false;
+    return 2;
   }
 
   // 4 byte magic + (currently) 1024 byte header structures
@@ -300,7 +300,7 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
       << unsigned(bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS)
       << " or later — earlier files predate the attestation-witness field. "
          "Re-export it with this build.");
-    return false;
+    return 2;
   }
 
   std::string str1;
