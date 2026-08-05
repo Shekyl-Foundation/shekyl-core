@@ -22,5 +22,10 @@ thiserror = { workspace = true }
 # Optional: only pulled in by the `zstd` feature above.
 zstd = { version = "0.13", optional = true }
 
+[dev-dependencies]
+# Round-trip property tests (rule 50): builder → chunked reader → same
+# message, over arbitrary payloads, commands, and chunk boundaries.
+proptest = "1"
+
 [lints]
 workspace = true

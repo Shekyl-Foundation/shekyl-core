@@ -13,10 +13,14 @@
 //! Mirrored behaviors:
 //!
 //! - early connection-fatal signature check as soon as 8 bytes arrive;
-//! - per-header payload-length check against the packet-size limit (256 KiB
-//!   before the handshake, raised to 100 MB after — the caller flips this
-//!   with [`BucketReader::set_max_packet_size`], as the C++ does on
-//!   handshake completion);
+//! - per-header payload-length check against
+//!   `min(packet limit, per-command limit)`: the packet limit is 256 KiB
+//!   before the handshake and 100 MB after (the caller flips this with
+//!   [`BucketReader::set_max_packet_size`], as the C++ does on handshake
+//!   completion); the per-command half mirrors the C++
+//!   `connection_context::get_max_bytes` hook and is installed with
+//!   [`BucketReader::set_max_bytes_for_command`] (the daemon's command
+//!   table is cutover-layer policy, not framing);
 //! - total buffered-bytes cap (cache + fragment buffer) against that limit;
 //! - noise/fragment class = header with **neither** `Q` nor `S` set: `B|E`
 //!   is a dummy (discarded), `B` restarts reassembly, `E` completes it and
@@ -87,6 +91,13 @@ pub struct BucketReader {
     fragment: Vec<u8>,
     state: State,
     max_packet_size: u64,
+    max_bytes_for_command: fn(u32) -> u64,
+}
+
+/// Default per-command limit: no per-command cap (the C++
+/// `get_max_bytes` returns `size_t` max for unknown commands).
+fn unlimited(_command: u32) -> u64 {
+    u64::MAX
 }
 
 impl Default for BucketReader {
@@ -105,6 +116,7 @@ impl BucketReader {
             fragment: Vec::new(),
             state: State::Head,
             max_packet_size: INITIAL_MAX_PACKET_SIZE,
+            max_bytes_for_command: unlimited,
         }
     }
 
@@ -112,6 +124,21 @@ impl BucketReader {
     /// [`crate::DEFAULT_MAX_PACKET_SIZE`] once the p2p handshake completes.
     pub fn set_max_packet_size(&mut self, limit: u64) {
         self.max_packet_size = limit;
+    }
+
+    /// Install a per-command payload-size limit, mirroring the C++
+    /// `connection_context::get_max_bytes(command)` hook: a header's
+    /// `length` is checked against `min(packet limit, hook(command))`.
+    /// The command table itself is daemon policy and lives with the future
+    /// cutover layer; the default hook imposes no per-command cap.
+    pub fn set_max_bytes_for_command(&mut self, hook: fn(u32) -> u64) {
+        self.max_bytes_for_command = hook;
+    }
+
+    /// The limit in force for one command's payload.
+    fn limit_for(&self, command: u32) -> u64 {
+        self.max_packet_size
+            .min((self.max_bytes_for_command)(command))
     }
 
     /// Feed received bytes; returns every message completed by them.
@@ -149,10 +176,11 @@ impl BucketReader {
                         .try_into()
                         .expect("static header slice");
                     let head = BucketHead::read(header_bytes)?;
-                    if head.payload_len > self.max_packet_size {
+                    let limit = self.limit_for(head.command);
+                    if head.payload_len > limit {
                         return Err(Error::OversizePacket {
                             claimed: head.payload_len,
-                            limit: self.max_packet_size,
+                            limit,
                         });
                     }
                     self.cache.drain(..HEADER_SIZE);
@@ -209,10 +237,11 @@ impl BucketReader {
                 .expect("static header slice");
             // Divergence 1: signature verified (C++ memcpys unchecked).
             let inner = BucketHead::read(header_bytes)?;
-            if inner.payload_len > self.max_packet_size {
+            let limit = self.limit_for(inner.command);
+            if inner.payload_len > limit {
                 return Err(Error::OversizePacket {
                     claimed: inner.payload_len,
-                    limit: self.max_packet_size,
+                    limit,
                 });
             }
             let available =

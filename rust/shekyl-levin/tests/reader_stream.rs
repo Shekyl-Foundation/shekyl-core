@@ -184,6 +184,97 @@ fn truncated_fragment_reassembly_rejected() {
     );
 }
 
+#[test]
+fn per_command_limit_caps_below_packet_limit() {
+    // Mirrors connection_context::get_max_bytes: ping (1003) caps at 4096.
+    fn table(command: u32) -> u64 {
+        if command == 1003 {
+            4096
+        } else {
+            u64::MAX
+        }
+    }
+
+    let mut reader = BucketReader::new();
+    reader.set_max_bytes_for_command(table);
+
+    // 5000-byte ping claim: under the 256 KiB packet limit, over the
+    // command's own cap — rejected on the header, as in the C++.
+    let message = invoke(1003, &vec![0u8; 5000]);
+    assert_eq!(
+        reader.advance(&message[..HEADER_SIZE]),
+        Err(Error::OversizePacket {
+            claimed: 5000,
+            limit: 4096,
+        })
+    );
+
+    // The same size on an uncapped command passes.
+    let mut reader = BucketReader::new();
+    reader.set_max_bytes_for_command(table);
+    let got = reader.advance(&invoke(9999, &vec![0u8; 5000])).unwrap();
+    assert_eq!(got.len(), 1);
+}
+
+#[test]
+fn end_without_begin_reassembles_from_empty_buffer() {
+    // The C++ never requires a BEGIN: an END-flagged fragment appends to
+    // whatever the fragment buffer holds (possibly nothing) and completes.
+    // A lone END fragment whose body is a complete inner message delivers.
+    let inner = notify(2002, b"lone-end");
+    let mut head = shekyl_levin::BucketHead::make(
+        0,
+        u64::try_from(inner.len()).unwrap(),
+        shekyl_levin::Flags::END,
+        false,
+    );
+    head.return_code = 0;
+    let mut stream = head.write().to_vec();
+    stream.extend_from_slice(&inner);
+
+    let got = BucketReader::new().advance(&stream).unwrap();
+    assert_eq!(
+        got,
+        vec![Received::Notification {
+            command: 2002,
+            payload: b"lone-end".to_vec(),
+        }]
+    );
+}
+
+#[test]
+fn response_flag_without_version_one_is_not_a_response() {
+    // The C++ classifies as response only when the peer's protocol version
+    // is LEVIN_PROTOCOL_VER_1; otherwise expect_response decides.
+    let mut message = response(1001, -4, b"rsp");
+    // Overwrite the protocol-version field (bytes 29..33) with 0.
+    message[29..33].copy_from_slice(&0u32.to_le_bytes());
+
+    let got = BucketReader::new().advance(&message).unwrap();
+    assert_eq!(
+        got,
+        vec![Received::Notification {
+            command: 1001,
+            payload: b"rsp".to_vec(),
+        }]
+    );
+}
+
+#[cfg(feature = "zstd")]
+#[test]
+fn compressed_dummy_is_discarded_without_decompression() {
+    // The noise check precedes the COMPRESSED check in handle_recv, so a
+    // dummy with a garbage "compressed" body is discarded, not an error.
+    let mut dummy = noise_notify(256).unwrap();
+    // Set the COMPRESSED bit on the flags field (bytes 25..29) — body stays
+    // zeros, which is not a valid zstd frame.
+    let flags = u32::from_le_bytes(dummy[25..29].try_into().unwrap()) | 0x10;
+    dummy[25..29].copy_from_slice(&flags.to_le_bytes());
+
+    let got = BucketReader::new().advance(&dummy).unwrap();
+    assert!(got.is_empty());
+}
+
 #[cfg(feature = "zstd")]
 #[test]
 fn compressed_bucket_inflates_before_delivery() {

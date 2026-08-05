@@ -18,11 +18,15 @@ implementation:
 - an incremental stream reader (`BucketReader`) mirroring the
   `async_protocol_handler::handle_recv` state machine: partial reads,
   signature early-reject, packet-size limits (256 KiB pre-handshake / 100 MB
-  post), noise discard, fragment reassembly, decompression, and message
-  classification.
+  post), a pluggable per-command size-limit hook (the C++
+  `connection_context::get_max_bytes` seam — the daemon's command table
+  itself is cutover-layer policy), noise discard, fragment reassembly,
+  decompression, and message classification.
 
 Byte-identity is pinned by KATs (`tests/oracle_kats.rs`) mirroring the C++
-gtests in `tests/unit_tests/levin.cpp` assertion for assertion.
+gtests in `tests/unit_tests/levin.cpp` assertion for assertion; round-trip
+property tests (`tests/properties.rs`) cover arbitrary payloads, commands,
+chunk boundaries, and noise sizes.
 
 ## What this crate is not
 
