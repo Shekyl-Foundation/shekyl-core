@@ -26,7 +26,10 @@ use rand_core::OsRng;
 use shekyl_curve_generators::{SELENE_HASH_INIT, T};
 use shekyl_fcmp::leaf::PqcLeafScalar;
 use shekyl_fcmp::proof::{prove, BranchLayer, ProveInput};
-use shekyl_fcmp::tree::{hash_grow_helios, helios_hash_init, selene_point_to_helios_scalar};
+use shekyl_fcmp::tree::{
+    hash_grow_helios, hash_grow_selene, helios_hash_init, helios_point_to_selene_scalar,
+    selene_hash_init, selene_point_to_helios_scalar,
+};
 use shekyl_fcmp_proofs::SELENE_FCMP_GENERATORS;
 
 use shekyl_ffi::ct_balance_ffi::shekyl_check_commitment_masks;
@@ -81,12 +84,14 @@ pub fn build_fixture(
     layout: ChunkLayout,
 ) -> AdmissionFixture {
     assert!(
-        layout == ChunkLayout::Shared || tree_depth == 2,
+        layout == ChunkLayout::Shared || tree_depth >= 2,
         "Spread needs the Helios layer to hold the sibling chunks; depth 1 has none"
     );
     assert!(
-        (1..=2).contains(&tree_depth),
-        "fixture supports depth 1 (sub-production) and 2 (production minimum)"
+        (1..=7).contains(&tree_depth),
+        "depth 1 is sub-production; 2 is the production minimum; 3..=7 are the \
+         capacity tiers (§72) and are PROJECTIONS -- synthesized trees under \
+         genesis-era conditions, not measurements of a tree that exists"
     );
     let signable_tx_hash = [0xABu8; 32];
 
@@ -154,39 +159,75 @@ pub fn build_fixture(
     // layer-0 node is promoted into a layer-1 Helios root rather than returned
     // bare. Depth 1 is kept only as the sub-production floor the first sweep
     // measured; depth 2 is the shallowest tree a live chain can present.
-    let (tree_root, c2_siblings, per_input_chunk): ([u8; 32], Vec<[u8; 32]>, Vec<Vec<usize>>) =
-        if tree_depth == 1 {
-            (
-                leaf_selene_for(&all).to_bytes(),
-                Vec::new(),
-                vec![all.clone(); n_in],
-            )
-        } else {
-            let chunks: Vec<Vec<usize>> = match layout {
-                ChunkLayout::Shared => vec![all.clone()],
-                ChunkLayout::Spread => all.iter().map(|&i| vec![i]).collect(),
-            };
-            let children: Vec<[u8; 32]> = chunks
-                .iter()
-                .map(|c| {
-                    selene_point_to_helios_scalar(&leaf_selene_for(c).to_bytes())
-                        .expect("selene->helios conversion")
-                })
-                .collect();
-            let root = hash_grow_helios(&helios_hash_init(), 0, &[0u8; 32], &children)
-                .expect("consensus root over the Helios chunk");
-            let owner: Vec<Vec<usize>> = match layout {
-                ChunkLayout::Shared => vec![all.clone(); n_in],
-                ChunkLayout::Spread => all.iter().map(|&i| vec![i]).collect(),
-            };
-            (root, children, owner)
-        };
-    let c2_branch_layers = if c2_siblings.is_empty() {
-        Vec::new()
+    // Walk the alternating tree to `tree_depth`. `tree.rs`: layer 0 is the
+    // Selene leaf, odd layers are Helios over the x-coords of the Selene points
+    // below, even layers > 0 are Selene over the x-coords of the Helios points
+    // below. Each layer above the leaf contributes a 1-wide branch chunk on its
+    // own curve, which is what `prove` walks.
+    //
+    // Depths 3..=7 are PROJECTIONS: they synthesize the capacity tiers (§72)
+    // under genesis-era conditions rather than measuring a tree that exists.
+    // Labelled here as well as at the table (§81.2) so the number carries its
+    // status wherever it is read.
+    let (tree_root, c1_layers, c2_layers, per_input_chunk): (
+        [u8; 32],
+        Vec<BranchLayer>,
+        Vec<BranchLayer>,
+        Vec<Vec<usize>>,
+    ) = if tree_depth == 1 {
+        (
+            leaf_selene_for(&all).to_bytes(),
+            Vec::new(),
+            Vec::new(),
+            vec![all.clone(); n_in],
+        )
     } else {
-        vec![BranchLayer {
-            siblings: c2_siblings,
-        }]
+        let chunks: Vec<Vec<usize>> = match layout {
+            ChunkLayout::Shared => vec![all.clone()],
+            ChunkLayout::Spread => all.iter().map(|&i| vec![i]).collect(),
+        };
+        let owner: Vec<Vec<usize>> = match layout {
+            ChunkLayout::Shared => vec![all.clone(); n_in],
+            ChunkLayout::Spread => all.iter().map(|&i| vec![i]).collect(),
+        };
+
+        // Layer 1 (Helios) over the leaf chunk(s).
+        let l1_children: Vec<[u8; 32]> = chunks
+            .iter()
+            .map(|c| {
+                selene_point_to_helios_scalar(&leaf_selene_for(c).to_bytes())
+                    .expect("selene->helios conversion")
+            })
+            .collect();
+        let mut point = hash_grow_helios(&helios_hash_init(), 0, &[0u8; 32], &l1_children)
+            .expect("layer-1 Helios node");
+        let mut c1: Vec<BranchLayer> = Vec::new();
+        let mut c2: Vec<BranchLayer> = vec![BranchLayer {
+            siblings: l1_children,
+        }];
+
+        // Layers 2..tree_depth-1, alternating Selene / Helios.
+        for layer in 2..tree_depth {
+            if layer % 2 == 0 {
+                let child =
+                    helios_point_to_selene_scalar(&point).expect("helios->selene conversion");
+                point = hash_grow_selene(&selene_hash_init(), 0, &[0u8; 32], &[child])
+                    .expect("Selene node");
+                c1.push(BranchLayer {
+                    siblings: vec![child],
+                });
+            } else {
+                let child =
+                    selene_point_to_helios_scalar(&point).expect("selene->helios conversion");
+                point = hash_grow_helios(&helios_hash_init(), 0, &[0u8; 32], &[child])
+                    .expect("Helios node");
+                c2.push(BranchLayer {
+                    siblings: vec![child],
+                });
+            }
+        }
+
+        (point, c1, c2, owner)
     };
 
     let all_h_pqc: Vec<[u8; 32]> = h_pqcs.iter().map(PrimeField::to_repr).collect();
@@ -206,8 +247,8 @@ pub fn build_fixture(
                 .map(|&j| (os[j].to_bytes(), is[j].to_bytes(), cs[j].to_bytes()))
                 .collect(),
             leaf_chunk_h_pqc: per_input_chunk[i].iter().map(|&j| all_h_pqc[j]).collect(),
-            c1_branch_layers: vec![],
-            c2_branch_layers: c2_branch_layers.clone(),
+            c1_branch_layers: c1_layers.clone(),
+            c2_branch_layers: c2_layers.clone(),
         })
         .collect();
 

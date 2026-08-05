@@ -12788,3 +12788,86 @@ the four rules §81.1–81.2 generalise, and the **asymmetry that governs moving
 it**: too low is an error with a feedback channel, too high is one nothing
 reports — **so err toward the slower device, because that is the error the
 system can notice.**
+
+## 82. The depth surface — chain age is a *shape* multiplier, and D gets more valuable with time
+
+**2026-08-05.** All 7 depth tiers built and swept on x86. **Every fixture from
+depth 1 to 7 verifies**, so the projections are real proofs rather than
+timings of a reject path.
+
+**Depths 3–7 are PROJECTIONS** (§81.2) — synthesized trees under genesis-era
+conditions, labelled at the fixture as well as here.
+
+### 82.1 The surface
+
+x86, `n_out = 2`, milliseconds:
+
+| depth | 1-in | 2-in | 4-in | 8-in |
+| --- | --- | --- | --- | --- |
+| 2 (genesis) | 24.0 | 28.4 | 42.3 | 72.4 |
+| 3 | 24.9 | 35.5 | 58.3 | 100.7 |
+| 4 | 24.3 | 35.5 | 61.6 | 115.0 |
+| 5 | 25.5 | 37.3 | 65.7 | 116.2 |
+| 6 | 25.6 | 41.8 | 75.2 | 134.6 |
+| 7 (675M outputs) | 26.0 | 42.3 | 75.8 | 138.1 |
+
+### 82.2 The finding: depth growth is almost entirely a large-input phenomenon
+
+Per-layer slope, depth 2 → 7:
+
+| shape | genesis | depth 7 | over 5 layers | per layer |
+| --- | --- | --- | --- | --- |
+| **1-in (modal)** | 24.0 | 26.0 | **+2.0 ms** | **+0.40** |
+| 2-in | 28.4 | 42.3 | +14.0 ms | +2.80 |
+| 4-in | 42.3 | 75.8 | +33.5 ms | +6.70 |
+| **8-in** | 72.4 | 138.1 | **+65.7 ms** | **+13.13** |
+
+**The modal transaction barely notices the tree growing — 2 ms across the
+chain's entire life. The 8-input transaction nearly doubles.** Depth is not a
+common-mode term after all: it is a *multiplier on the shape term*, and §75's
+own sorting axis is what it multiplies.
+
+### 82.3 Which means the sorting *widens* with chain age
+
+| | 1-in | 8-in | spread | ratio |
+| --- | --- | --- | --- | --- |
+| depth 2 (genesis) | 24.0 | 72.4 | 48.4 ms | **3.02×** |
+| depth 7 | 26.0 | 138.1 | 112.1 ms | **5.32×** |
+
+**The tail-to-modal ratio grows from 3.0× to 5.3× over the chain's life**, with
+no code change and nothing to trigger a review.
+
+> **This retroactively strengthens the D decision, on evidence that did not
+> exist when it was taken.** §80.3 adopted D for *decoupling*, and priced the
+> alternative at "~57 s of recovery latency on every transaction for nothing."
+> **That price was the genesis-era one.** Under scalar-at-8 the over-provision
+> is paid against a tail that more than doubles while the modal case stays
+> flat — so the scalar gets **monotonically worse** for exactly the
+> transactions that are the overwhelming majority.
+>
+> **D is the only option here whose cost does not grow with the chain**, because
+> a table row is indexed by the shape that actually pays.
+
+### 82.4 And §75's common-mode classification was wrong on depth
+
+§75 sorted the four axes and put depth in *"common-mode — everyone runs the same
+depth at a given moment"*, needing tracking rather than quantiling. **True of
+the depth value; false of the depth cost.** Everyone runs depth 7, but depth 7
+costs a 1-input sender 2 ms more and an 8-input sender 66 ms more.
+
+**Depth is common-mode in the parameter and sorted in the effect** — which is
+why it belongs in the table as an axis rather than in the schedule as a
+correction, and it is the reason `f(n_in, depth_tier)` is two-dimensional
+rather than a scalar with a scheduled bump.
+
+### 82.5 Owed
+
+**The Pi columns.** Rule 3 of
+[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc):
+cross-machine ratios are measured, never assumed. The 5.56× invariant was
+established on the *input* axis; §81.1 flagged that it may drift with depth
+because deeper trees mean larger working sets against very different cache
+hierarchies. **§82.2 makes that question sharper rather than softer** — the
+per-layer cost is now known to concentrate in the large-input cells, which are
+exactly the ones with the biggest working sets. Until the Pi arm runs, the
+table has 48 x86 cells and no invariant to check them against.

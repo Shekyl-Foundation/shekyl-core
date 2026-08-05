@@ -95,6 +95,14 @@ fn bench_admission(c: &mut Criterion) {
         // n_in = 1 the two layouts are identical by construction, which makes
         // that cell a built-in control on the comparison.
         (2u8, ChunkLayout::Spread, "d2spread"),
+        // Capacity tiers (§72): depth 3..=7 cover 1,444 / 25,992 / 987,696 /
+        // 17.8M / 675M outputs. PROJECTIONS, not measurements (§81.2) --
+        // synthesized trees under genesis-era conditions.
+        (3u8, ChunkLayout::Spread, "d3proj"),
+        (4u8, ChunkLayout::Spread, "d4proj"),
+        (5u8, ChunkLayout::Spread, "d5proj"),
+        (6u8, ChunkLayout::Spread, "d6proj"),
+        (7u8, ChunkLayout::Spread, "d7proj"),
     ] {
         // Outputs are pinned at the modal 2: §72.3 measured that axis at
         // ~0.07 ms each, which cannot move the constant, and holding it fixed
