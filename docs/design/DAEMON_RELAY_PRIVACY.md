@@ -12056,3 +12056,87 @@ second is the correct one.
 And the embargo re-derivation at a corrected `hop` is a
 separate act with a real liveness cost (§6.7), which is the constants round's
 to take, not this measurement's.
+
+## 74. What 127 ms means operationally — and initial sync has a path
+
+**2026-08-05, maintainer, with two self-corrections computed rather than
+asserted, and the sync question checked at source.**
+
+### 74.1 Two corrections that shrink the finding
+
+**"Batch depth is the dominant term" — withdrawn; utilisation was never
+computed.** At 127 ms per transaction a Pi serves ~680k tx/day:
+
+| network volume | Pi utilisation | mean queue wait |
+| --- | --- | --- |
+| 20 000 tx/day (Monero-like) | 2.9 % | 3.8 ms |
+| 100 000 | 14.7 % | 21.9 ms |
+| 300 000 | 44.1 % | 100 ms |
+| 500 000 | 73.5 % | 352 ms |
+
+**Queueing is negligible at present-day volume and becomes a real term above
+~300k tx/day.** So batch depth is a *scaling* concern with a **computable
+trigger**, not a live one — which is a better object than either earlier
+reading (§72.4's caveat or §73.7's "dominant").
+
+**"175 is the wrong order" — overstated.** On the Pi arm, `transit + verify`:
+
+| shape | `hop` |
+| --- | --- |
+| modal 1-in, depth 2 | 177 ms |
+| modal, +5 layers | 210 ms |
+| 4-in, depth 2 | 281 ms |
+| 4-in, +5 layers | 383 ms |
+
+**175 is almost exactly the modal value on today's slowest hardware.** That is
+not a magnitude error — it is a **statistic-class error**, which is precisely
+what §65 named: `hop` states a *direction* and no *statistic*, so a central
+estimate sits where the policy demands a tail one. **The operational claim is
+that the constant needs to roughly double, not move an order.**
+
+### 74.2 Initial sync: the fast path exists and is compiled in
+
+The concern: historical transactions arriving in blocks were never in this
+node's pool, so `can_skip_fcmp = found_tx_in_pool && …` is **false** for them
+and the block path pays full verification. At 127 ms, one year at 20k tx/day
+(~7.3M transactions) is ~11 days of pure verification on a Pi.
+
+**Checked, and there is a path.** The skip at `blockchain.cpp` sits inside
+`#if defined(PER_BLOCK_CHECKPOINT) / if (!fast_check)`, and:
+
+- `PER_BLOCK_CHECKPOINT` is **enabled by default** —
+  `CMakeLists.txt:471` sets it and `:474` adds `-DPER_BLOCK_CHECKPOINT`;
+- `fast_check` is set when the block's height is covered by
+  `m_blocks_hash_check` and its hash matches the pre-validated entry
+  (`blockchain.cpp:5629-5648`);
+- when `fast_check` holds, the **entire** input-check block is skipped —
+  `check_tx_inputs`, and with it FCMP verification, never runs.
+
+**So the 11-day figure is the worst case — the un-checkpointed one.** The
+mitigation is inherited, present and on by default.
+
+**What it is contingent on, and this is a pre-genesis decision rather than a
+code gap:** the skip covers only heights present in `m_blocks_hash_check`.
+Shekyl is v3-from-genesis with no history, so whether a given sync benefits
+depends on whether we ship a pre-validated hash set and how far it reaches —
+**a shipping decision nobody has taken.** Until it is, *"run a node on a Pi"*
+should be qualified for initial sync, though **not** for steady-state relaying.
+
+### 74.3 What the numbers support
+
+- **A Pi is a viable relay node.** ~680k tx/day ceiling against a network
+  running ~20k, and the flat 5.4× ratio means low-end hardware degrades
+  **predictably rather than falling off a cliff**.
+- **The privacy cost lands on large-input transactions.** 383 ms against a
+  175 ms constant at the far end: consolidations and wallets spending many
+  small outputs draw embargoes provisioned for a fraction of their real travel
+  time, so they preempt and self-fluff more often. **No adversary needed, and
+  invisible to the affected user.**
+- **The batch verifier is a scaling prerequisite tied to a volume threshold** —
+  not needed at 20k tx/day, and what keeps a Pi viable at 300k+. That is the
+  disposition to record: neither §72.4's landmine nor a nice-to-have, but a
+  **named prerequisite with a trigger**.
+- **The constant has a scheduled decay.** Five tree layers add 33 ms at modal
+  shape and 102 ms at 4 inputs, with no code change to trigger review, and the
+  re-derivation points are computable today from §72's 38 / 1,444 / 25,992 /
+  987,696 / 17.8M / 675M capacities.
