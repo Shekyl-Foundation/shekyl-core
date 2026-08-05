@@ -13077,3 +13077,65 @@ needed a full re-run on a machine that takes ~14 minutes just to build.
 Fixed the same way: `scripts/remote-bench.sh` captures full output to a file
 and tails the **file** for display, so the artifact is never the thing being
 truncated.
+
+## 86. Transit is a refinement, not a gate — said out loud so it stops reading as one
+
+**2026-08-05, maintainer.** Transit has been carried as *"the one measurable
+input left"*, which overstates it. Checked before anyone books a round for it.
+
+### 86.1 Three reasons it is not owed
+
+**It does not sort.** Transit is a property of the *path between two nodes* —
+not of the sender's hardware, nor of the transaction's shape. Run §83.4's test
+on it — *does this axis cost every participant the same?* — and it is the one
+term in `hop` that **passes**. So it cannot reintroduce the sorting D and the
+Pi floor were built to remove.
+
+> **Worth noting what that means about the test itself: it clears axes as well
+> as convicting them.** A check that only ever finds problems is a worry, not
+> an instrument. This is its first acquittal, and it is what makes it usable
+> rather than paranoid.
+
+**It is dominated at the tail.** At the 8-input depth-7 cell verification is
+**792 ms** against a transit term of ~50. A **4× error in transit** moves that
+hop by ~19 %, and the embargo by far less, since `F` still dominates `S(h)`.
+
+**Its residual bite is on the modal row** — 183 ms hop, where transit is ~27 %
+of the term. That is the row the whole chain's traffic sits on, so it is not
+nothing. **But it is a single scalar affecting one number, not a surface.**
+
+### 86.2 Status, stated rather than left on a list
+
+> **The table can ship with the assumed 50 ms recorded as an assumption at the
+> site** (it already is, in `spec_decision_matrix.rs`), **and transit measured
+> whenever convenient.**
+
+**Saying that explicitly is worth more than leaving it owed**, because an item
+that sits on a list long enough **starts to look like a blocker** — and this
+arc has now **twice** found a carried blocker that unrelated work had already
+removed (§67.1's fixture, §77.3's cascade check). A third would be a pattern
+about the list rather than about the work.
+
+**If it is measured, the same discipline applies:** it needs a **quantile, not
+a mean**, and it carries the same asymmetry `F` names and `hop` originally did
+not — **under-estimating shortens the embargo**, which is the privacy-losing
+direction (§65, §66).
+
+### 86.3 Handoff — back to the critical path
+
+**The verification-floor arm is complete on its own terms.** What it hands the
+stem-over-Tor round:
+
+| | state |
+| --- | --- |
+| `hop`'s definition | fixed (§71): receive-to-forward, transit + verification + scheduling, identical on both transports |
+| the verification surface | measured on both arms, 48 cells, invariant earned (§85) |
+| minimum spec | decided — Pi 4, and now a rule (§78, `76-device-provisioning-floor`) |
+| shape handling | D adopted, table not fit, refuses past its edge (§80, §83) |
+| per-zone embargo precondition | scoped to **two reserved bits** with a safe default (§65.4) |
+| the three gates | identified (§64.2) |
+| §30's composition, the eligibility constant | both waiting on the round |
+
+**The hop excursion was a prerequisite, and it is discharged**: the round can
+re-measure `hop` per transport with the definition already fixed, rather than
+discovering mid-round that the two arms were measuring different quantities.
