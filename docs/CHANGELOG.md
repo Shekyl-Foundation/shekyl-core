@@ -4,6 +4,20 @@
 
 ### Changed
 
+- **`blocks.dat` bootstrap files now carry the credit-wire attestation
+  witness, and older files are refused.** `bootstrap::block_package` gained an
+  `attestation_witness` field, written by `blockchain_export` and threaded
+  through `blockchain_import`'s verifying connect. Without it a bootstrapped
+  node held no witness for any imported block: it could serve none to its IBD
+  peers and, after the credit-wire cutover, could not re-drive their admission.
+
+  **Operator impact:** the bootstrap header minor version moves 1.0 → 1.1, and
+  `blockchain_import` now refuses a file below 1.1 with an explicit
+  "re-export it with this build" message rather than importing a permanently
+  witness-less chain. Re-run `blockchain_export` to regenerate any existing
+  `blocks.dat`.
+
+
 - **Genesis regenerated: the final five-founder allocation on every network,
   and the pins are now reproducible.** All three `GENESIS_TX` strings in
   `src/cryptonote_config.h` are re-pinned from freshly generated production

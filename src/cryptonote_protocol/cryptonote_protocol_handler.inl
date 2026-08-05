@@ -672,7 +672,20 @@ namespace cryptonote
     // transactions from the relayed block.
     // The credit-wire attestation witness is bounded by block_complete_entry's own
     // KV codec (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2), so an oversized blob
-    // never deserializes into `arg` and no check belongs here.
+    // never deserializes into `arg` and no check belongs here. Do not re-add one: it
+    // would be unreachable by construction, and an unreachable guard reads like a
+    // live one to the next maintainer.
+    //
+    // The trade this makes, deliberately: a codec refusal on a NOTIFICATION is
+    // discarded by the levin layer (levin_protocol_handler_async.h drops the notify
+    // return value), so the sender is not dropped the way the old call-site check
+    // dropped it — it only gets an epee-level "Failed to load in_struct" log and a
+    // message that accomplishes nothing. That is the same treatment
+    // txin_archival_reward_emission's in-codec bound already gives, the peer's
+    // resource use is still bounded by levin's own max packet size, and a peer that
+    // stalls a sync this way is collected by the existing request-timeout path.
+    // Unbypassable beats loud here; a bound only some ingresses check is the defect
+    // this replaced.
     block_connect_supplement connect;
     if (!make_block_connect_supplement_from_block_entry(arg.b.txs, blk_txids_set, /*allow_pruned=*/false, arg.b.attestation_witness, connect))
     {
