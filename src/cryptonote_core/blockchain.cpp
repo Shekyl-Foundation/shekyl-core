@@ -6854,6 +6854,12 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
     {
       bytes += tx_blob.blob.size();
     }
+    // Count the credit-wire attestation witness here too: it rides the batch write into the
+    // prunable side table and sits in m_block_queue RAM, so both m_bytes_to_sync (the byte-based
+    // DB-sync trigger) and batch_start's bound must include it — matching the span accounting in
+    // the NOTIFY_RESPONSE_GET_OBJECTS handler. Omitting it lets a witness-carrying span exceed the
+    // memory bound the batch believes it is under.
+    bytes += entry.attestation_witness.size();
     total_txs += entry.txs.size();
   }
   m_bytes_to_sync += bytes;
