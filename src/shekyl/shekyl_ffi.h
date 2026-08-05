@@ -1873,6 +1873,20 @@ struct shekyl_archival_attestation_verify_ctx {
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH 9
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY   10
 
+/// Step 1: name the distinct pass p_ids in a block's attestation headers, so C++ knows which
+/// archival-bond pubkeys to read before it can build the ctx pairs above. Parses the same raw
+/// tx_extra header blob, keeps kind==Pass, writes the distinct p_ids to `out` (up to out_cap slots)
+/// and the count to *out_len (0 on any error). Zero authority — step 2 re-derives the authoritative
+/// set from the same blob and rejects any coverage mismatch, so this cannot cause a silent
+/// wrong-key read. Emits only {OK, ERR_NULL_PTR, ERR_MALFORMED_HEADERS, ERR_CAP_EXCEEDED} from the
+/// family above; size `out` at config::ARCHIVAL_MAX_ATTESTATION_RECORDS so overflow cannot occur.
+uint8_t shekyl_archival_attestation_pass_p_ids(
+    const uint8_t* headers_ptr,
+    size_t headers_len,
+    uint8_t (*out_ptr)[32],
+    size_t out_cap,
+    size_t* out_len);
+
 /// Verify a block's attestation set against its mined attestation_root. `witness` is the opaque
 /// `r || count || pass-signatures` blob (connect.attestation_witness); an empty blob is the
 /// zero-record set. Returns a SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_* code; reject on any non-OK.

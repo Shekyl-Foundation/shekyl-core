@@ -26,16 +26,16 @@ use shekyl_archival_retention::{
     verify_holdings_update_add, verify_holdings_update_drop, verify_join_market_bond_post,
     verify_leaf_index, verify_pass_countersignature, verify_rebond_bond_post, verify_segment_path,
     verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin,
-    ArchivalRewardEmissionVin, ArchivalServeCreditResponse, AttestationHeader, BadInterval,
-    BaselineObservation, BlockAttestationWitness, BondCtBalanceError, BondPostError, BondPostKind,
-    BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair, EmissionEpochSource,
-    EmissionVerifyContext, EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
-    HoldingsDescriptor, HoldingsKind, HoldingsUpdateConnectError, HoldingsUpdatePopError,
-    RebondConnectError, RebondPopError, RewardCommit, ShardSet, ShardSetError, UnbondConnectError,
-    UnbondPopError, WireError, ATTESTATION_HEADER_LEN, CHALLENGE_RESOLUTION_BLOCKS,
-    FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET, HYBRID_PUBKEY_CANONICAL_BYTES,
-    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
-    MAX_CLAIM_AGE_W,
+    ArchivalRewardEmissionVin, ArchivalServeCreditResponse, AttestationHeader, AttestationKind,
+    BadInterval, BaselineObservation, BlockAttestationWitness, BondCtBalanceError, BondPostError,
+    BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
+    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
+    EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
+    HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError, RebondPopError,
+    RewardCommit, ShardSet, ShardSetError, UnbondConnectError, UnbondPopError, WireError,
+    ATTESTATION_HEADER_LEN, CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
+    FAILURE_WINDOW_SERVE_BUDGET, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_ATTESTATION_RECORDS,
+    MAX_ATTESTATION_WITNESS_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -935,6 +935,89 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
         }
     }
 
+    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
+}
+
+/// Name the distinct pass `p_id`s in a block's attestation headers (Phase 2 admission, step 1).
+///
+/// The C++ shim calls this to learn *which* archival-bond pubkeys it must read from LMDB before it
+/// can build the [`ShekylArchivalAttestationVerifyCtx`] pairs for
+/// [`shekyl_archival_verify_attestation`]. It parses the same `tx_extra` header blob (49-byte
+/// [`AttestationHeader`] records), keeps only `kind = Pass` (a miss carries no countersignature, so
+/// no bond to read), and writes the **distinct** pass `p_id`s to `out` (dedup order unspecified).
+///
+/// This step has **zero authority**: it decides no block validity. If it under- or over-reports,
+/// step 2 re-derives the authoritative pass-`p_id` set from the *same* headers and rejects the
+/// coverage mismatch (`ERR_PUBKEY_SET_MISMATCH`) — a loud verdict, never a silent wrong-key read.
+/// It emits only the `{OK, ERR_NULL_PTR, ERR_MALFORMED_HEADERS, ERR_CAP_EXCEEDED}` subset of the
+/// shared verdict family; the caller sizes `out` at `MAX_ATTESTATION_RECORDS`, so the same cap-first
+/// bound that step 2 applies makes an output overflow structurally impossible (still guarded).
+/// `*out_len` is written on every non-null-`out_len` return (0 on error).
+///
+/// # Safety
+/// `out_len` must be a valid `*mut usize`. `out_ptr` must point to `out_cap` writable `[u8; 32]`
+/// slots (or be null iff no pass record is found). `headers_ptr` must point to `headers_len` valid
+/// bytes, or be null iff `headers_len == 0`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_attestation_pass_p_ids(
+    headers_ptr: *const u8,
+    headers_len: usize,
+    out_ptr: *mut [u8; 32],
+    out_cap: usize,
+    out_len: *mut usize,
+) -> u8 {
+    if out_len.is_null() {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
+    }
+    unsafe {
+        *out_len = 0; // defined even on the error returns below
+    }
+
+    // Same cap-first / multiple-of / parse discipline as step 2, so the two agree on what "malformed
+    // headers" and "too many records" mean over the identical blob.
+    let headers: &[u8] = if headers_len == 0 {
+        &[]
+    } else if headers_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
+    } else {
+        unsafe { std::slice::from_raw_parts(headers_ptr, headers_len) }
+    };
+    if !headers.len().is_multiple_of(ATTESTATION_HEADER_LEN) {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS;
+    }
+    if headers.len() / ATTESTATION_HEADER_LEN > MAX_ATTESTATION_RECORDS {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED;
+    }
+
+    let mut distinct: Vec<[u8; 32]> = Vec::new();
+    for chunk in headers.chunks_exact(ATTESTATION_HEADER_LEN) {
+        let header = match AttestationHeader::from_canonical_bytes(chunk) {
+            Ok(h) => h,
+            Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS,
+        };
+        if header.kind != AttestationKind::Pass {
+            continue; // miss records have no countersignature — no bond to read
+        }
+        if !distinct.contains(&header.p_id) {
+            distinct.push(header.p_id);
+        }
+    }
+
+    // Belt-and-suspenders: cap-first already bounds records ≤ MAX_ATTESTATION_RECORDS and the caller
+    // sizes `out` there, so this cannot fire unless C++ under-sized the buffer.
+    if distinct.len() > out_cap {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED;
+    }
+    if !distinct.is_empty() {
+        if out_ptr.is_null() {
+            return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
+        }
+        let out = unsafe { std::slice::from_raw_parts_mut(out_ptr, distinct.len()) };
+        out.copy_from_slice(&distinct);
+    }
+    unsafe {
+        *out_len = distinct.len();
+    }
     SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
 }
 
@@ -5518,5 +5601,161 @@ mod attestation_verify_tests {
             9
         );
         assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY, 10);
+    }
+
+    // ---- step 1: shekyl_archival_attestation_pass_p_ids -------------------------------------
+
+    fn hdr_bytes(p_id: [u8; 32], kind: AttestationKind) -> Vec<u8> {
+        AttestationHeader {
+            p_id,
+            shard_id: SHARD,
+            settlement_epoch: EPOCH,
+            kind,
+        }
+        .to_canonical_bytes()
+        .to_vec()
+    }
+
+    /// Drive step 1 over a header blob with a caller `out_cap`; returns the verdict and (on `OK`)
+    /// the written p_ids. `out` is physically `MAX_ATTESTATION_RECORDS` so a small `out_cap` tests
+    /// the buffer-bound, not the physical size.
+    fn pass_ids(headers: &[u8], out_cap: usize) -> (u8, Vec<[u8; 32]>) {
+        let mut out = vec![[0u8; 32]; MAX_ATTESTATION_RECORDS];
+        let mut n = 0usize;
+        let code = unsafe {
+            shekyl_archival_attestation_pass_p_ids(
+                if headers.is_empty() {
+                    std::ptr::null()
+                } else {
+                    headers.as_ptr()
+                },
+                headers.len(),
+                out.as_mut_ptr(),
+                out_cap,
+                &raw mut n,
+            )
+        };
+        let got = if code == SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK {
+            out[..n].to_vec()
+        } else {
+            Vec::new()
+        };
+        (code, got)
+    }
+
+    #[test]
+    fn pass_ids_empty_is_ok_empty() {
+        let (code, ids) = pass_ids(&[], MAX_ATTESTATION_RECORDS);
+        assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn pass_ids_excludes_miss_and_dedups() {
+        let a = [1u8; 32];
+        let b = [2u8; 32];
+        let mut blob = hdr_bytes(a, AttestationKind::Pass);
+        blob.extend(hdr_bytes(b, AttestationKind::Miss)); // miss: no bond to read
+        blob.extend(hdr_bytes(a, AttestationKind::Pass)); // duplicate p_id
+        let (code, ids) = pass_ids(&blob, MAX_ATTESTATION_RECORDS);
+        assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+        assert_eq!(ids, vec![a]);
+    }
+
+    #[test]
+    fn pass_ids_returns_all_distinct_pass() {
+        let a = [1u8; 32];
+        let c = [3u8; 32];
+        let mut blob = hdr_bytes(a, AttestationKind::Pass);
+        blob.extend(hdr_bytes(c, AttestationKind::Pass));
+        let (code, ids) = pass_ids(&blob, MAX_ATTESTATION_RECORDS);
+        assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&a) && ids.contains(&c));
+    }
+
+    #[test]
+    fn pass_ids_not_multiple_is_malformed() {
+        let (code, _) = pass_ids(&[0u8; ATTESTATION_HEADER_LEN + 1], MAX_ATTESTATION_RECORDS);
+        assert_eq!(
+            code,
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS
+        );
+    }
+
+    #[test]
+    fn pass_ids_bad_kind_byte_is_malformed() {
+        let mut blob = vec![0u8; ATTESTATION_HEADER_LEN];
+        blob[ATTESTATION_HEADER_LEN - 1] = 2; // kind neither miss(0) nor pass(1)
+        let (code, _) = pass_ids(&blob, MAX_ATTESTATION_RECORDS);
+        assert_eq!(
+            code,
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS
+        );
+    }
+
+    #[test]
+    fn pass_ids_over_max_records_is_cap_exceeded() {
+        let blob = vec![0u8; (MAX_ATTESTATION_RECORDS + 1) * ATTESTATION_HEADER_LEN];
+        let (code, _) = pass_ids(&blob, MAX_ATTESTATION_RECORDS);
+        assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED);
+    }
+
+    #[test]
+    fn pass_ids_output_too_small_is_cap_exceeded() {
+        let a = [1u8; 32];
+        let c = [3u8; 32];
+        let mut blob = hdr_bytes(a, AttestationKind::Pass);
+        blob.extend(hdr_bytes(c, AttestationKind::Pass));
+        let (code, _) = pass_ids(&blob, 1); // two distinct, buffer bound of 1
+        assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED);
+    }
+
+    #[test]
+    fn pass_ids_null_out_len_is_null_ptr() {
+        let code = unsafe {
+            shekyl_archival_attestation_pass_p_ids(
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn pass_ids_null_headers_nonzero_len_is_null_ptr() {
+        let mut out = [[0u8; 32]; 4];
+        let mut n = 0usize;
+        let code = unsafe {
+            shekyl_archival_attestation_pass_p_ids(
+                std::ptr::null(),
+                ATTESTATION_HEADER_LEN,
+                out.as_mut_ptr(),
+                out.len(),
+                &raw mut n,
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR);
+        assert_eq!(n, 0);
+    }
+
+    /// The step-1/step-2 contract: the p_ids step 1 names are EXACTLY the pairs step 2 requires.
+    /// Build the ctx from step 1's output and step 2 must verify `OK` — the pairs-not-positional
+    /// coverage agreement, end to end across both FFI halves.
+    #[test]
+    fn pass_ids_feeds_step2_coverage() {
+        let (pubkey, p_id, sk) = real_p();
+        let s = one_pass(&sk, p_id, pubkey);
+        let (code, ids) = pass_ids(&s.headers, MAX_ATTESTATION_RECORDS);
+        assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+        assert_eq!(ids, vec![s.p_id]);
+        let pairs: Vec<_> = ids.iter().map(|id| pair(*id, &s.pubkey)).collect();
+        assert_eq!(
+            call(s.root, 1, &s.headers, &s.witness, &pairs),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
+        );
     }
 }
