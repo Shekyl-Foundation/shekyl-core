@@ -311,33 +311,38 @@ impl WalletRpcError {
     /// Map a producer failure that arrives **after** `start_rescan` returned
     /// a handle — i.e. after the reset is durable.
     ///
-    /// Must not emit [`WalletRpcErrorCode::DaemonUnreachable`]: that code's
-    /// rescan contract is "wallet untouched" (daemon preflight). A mid-scan
-    /// daemon drop is the same *class* of failure and the opposite durability
-    /// claim — clients that branch on `-29201` (CLI included) would otherwise
-    /// tell the user nothing changed while history sits at zero.
+    /// The durability claim is the load-bearing axis, not the failure class:
+    /// `-29201` means "wallet untouched" (preflight only); every join-path
+    /// failure means history is empty until a rescan finishes, so they all
+    /// emit [`WalletRpcErrorCode::RescanIncomplete`]. Mapping only Io /
+    /// Cancelled / Malformed / CurveTree and leaving ConcurrentMutation /
+    /// InternalInvariantViolation to `-32603` was the same bug class as
+    /// reusing `-29201` — clients that branch on the durability code would
+    /// miss an incomplete rescan. Exhaustive match (no catch-all): a new
+    /// [`RefreshError`] variant fails to compile here until its durability
+    /// claim is named.
     pub(crate) fn from_rescan_scan_failure(err: RefreshError) -> Self {
         match &err {
-            // Retryable producer failures: reset held, scan did not finish.
+            // Start-only refusals — unreachable on the join path. Preserve
+            // their codes if they appear rather than inventing a third story.
+            RefreshError::AlreadyRunning
+            | RefreshError::RescanBlocked { .. }
+            | RefreshError::RescanPersist(_) => err.into(),
+
+            // Every producer failure after a durable reset: one wire code so
+            // durability-branching clients cannot miss a subclass. Detail
+            // stays server-side (`message()` contract / rule 30).
             RefreshError::Io(io) => {
                 tracing::warn!(detail = %io, "rescan scan failed after durable reset");
                 Self::RescanIncomplete
             }
             RefreshError::Cancelled
             | RefreshError::MalformedScanResult { .. }
-            | RefreshError::CurveTreeIngest { .. } => {
+            | RefreshError::CurveTreeIngest { .. }
+            | RefreshError::ConcurrentMutation { .. }
+            | RefreshError::InternalInvariantViolation { .. } => {
                 tracing::warn!(?err, "rescan scan failed after durable reset");
                 Self::RescanIncomplete
-            }
-            // Should be unreachable on the join path (raised only by
-            // `start_rescan` before the producer spawns), but if they appear
-            // keep their pre-reset codes rather than inventing a third story.
-            RefreshError::AlreadyRunning
-            | RefreshError::RescanBlocked { .. }
-            | RefreshError::RescanPersist(_) => err.into(),
-            other => {
-                tracing::warn!(?other, "rescan scan failed after durable reset (internal)");
-                internal_detail("rescan scan failed after reset", format!("{other:?}"))
             }
         }
     }
@@ -628,6 +633,41 @@ mod tests {
             "post-reset scan failure must not echo local paths: {}",
             err.message()
         );
+    }
+
+    /// Durability is the axis, not the failure subclass: ConcurrentMutation
+    /// and InternalInvariantViolation after a durable reset are still
+    /// `-29203`, never the catch-all `-32603`.
+    #[test]
+    fn post_reset_producer_failures_are_all_rescan_incomplete() {
+        let cases = [
+            RefreshError::Cancelled,
+            RefreshError::MalformedScanResult {
+                reason: "test malformed",
+            },
+            RefreshError::ConcurrentMutation {
+                wallet: 1,
+                result: 2,
+            },
+            RefreshError::InternalInvariantViolation {
+                context: "test invariant",
+            },
+            RefreshError::CurveTreeIngest {
+                context: "test ingest",
+                recoverable_by_respawn: false,
+            },
+            RefreshError::Io(IoError::Scanner {
+                detail: "scan budget exhausted".into(),
+            }),
+        ];
+        for err in cases {
+            let mapped = WalletRpcError::from_rescan_scan_failure(err);
+            assert_eq!(
+                mapped.code(),
+                WalletRpcErrorCode::RescanIncomplete,
+                "expected -29203 for {mapped:?}"
+            );
+        }
     }
 
     #[test]

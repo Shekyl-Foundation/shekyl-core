@@ -379,11 +379,18 @@ components:
                                           reset (data: {"detail": "..."})
           -29203 RESCAN_INCOMPLETE        rescan: reset persisted, then the
                                           producer failed before the ledger
-                                          was rebuilt. History is empty
-                                          until a rescan finishes; retry.
-                                          Distinct from -29201 so clients
-                                          that branch on "untouched" do not
-                                          lie after a mid-scan failure
+                                          was rebuilt (any join-path
+                                          RefreshError — Io, cancel,
+                                          malformed scan, concurrent
+                                          mutation, invariant, curve-tree
+                                          ingest). History is empty until a
+                                          rescan finishes; retry. Distinct
+                                          from -29201 so clients that branch
+                                          on "untouched" do not lie after a
+                                          mid-scan failure; distinct from
+                                          -32603 so durability-branching
+                                          clients do not miss non-Io
+                                          producer failures
           -29300 PROOF_MALFORMED          check_*: proof string failed
                                           Bech32m decode, carried the wrong
                                           HRP, its wire framing did not
@@ -928,8 +935,9 @@ components:
         touching the wallet when the daemon is unreachable (-29201) or when
         in-flight transactions hold spend records a replay cannot rebuild
         (-29202). Past those refusals the reset is durable before scanning
-        begins: a scan that then fails leaves the wallet emptied and
-        returns -29203 RESCAN_INCOMPLETE (re-runnable; not -29201).
+        begins: a scan that then fails (any producer failure on join)
+        leaves the wallet emptied and returns -29203 RESCAN_INCOMPLETE
+        (re-runnable; not -29201, and not a generic -32603).
 
     RescanBlockchainResult:
       type: object

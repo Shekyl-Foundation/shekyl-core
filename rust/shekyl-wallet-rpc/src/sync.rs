@@ -45,8 +45,9 @@ pub(crate) async fn refresh(
 /// in-flight transactions whose spend record a replay cannot rebuild
 /// (`-29202`) — so a client that sees any of those knows the wallet is
 /// untouched. Errors from `join()` arrive after the reset is durable and
-/// map to `-29203 RESCAN_INCOMPLETE`, never `-29201` (same daemon class,
-/// opposite durability claim).
+/// map to `-29203 RESCAN_INCOMPLETE` for every producer failure class —
+/// never `-29201` (untouched) and never a catch-all `-32603` that would
+/// hide the durability claim from clients that only handle `-29203`.
 pub(crate) async fn rescan_blockchain(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
