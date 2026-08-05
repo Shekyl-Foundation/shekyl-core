@@ -5793,4 +5793,27 @@ mod attestation_verify_tests {
             SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
         );
     }
+
+    /// Emits a frozen valid one-pass vector for the cross-language C++ KAT
+    /// (tests/unit_tests/archival_attestation_verify.cpp), which feeds these exact bytes back through
+    /// the C-side structs and asserts the same verdicts — the check that the C++ `#[repr(C)]` mirrors
+    /// marshal identically to the Rust definitions. `#[ignore]`d because it asserts nothing; it is a
+    /// generator. The C++ vectors are a captured snapshot (the keypair is random); regenerate and
+    /// re-paste only if the genesis-frozen wire format changes:
+    ///   cargo test -p shekyl-ffi emit_attestation_verify_kat -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn emit_attestation_verify_kat() {
+        fn hex(b: &[u8]) -> String {
+            b.iter().map(|x| format!("{x:02x}")).collect()
+        }
+        let (pubkey, p_id, sk) = real_p();
+        let s = one_pass(&sk, p_id, pubkey);
+        println!("KAT head* = {}", hex(&s.headers));
+        println!("KAT witn* = {}", hex(&s.witness));
+        println!("KAT pubk* = {}", hex(&s.pubkey));
+        println!("KAT p_id* = {}", hex(&s.p_id));
+        println!("KAT root* = {}", hex(&s.root));
+        println!("KAT cbky* = {}", hex(&CB));
+    }
 }
