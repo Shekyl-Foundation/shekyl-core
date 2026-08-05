@@ -12279,3 +12279,77 @@ The second half is the durable part. It survives any change in who runs what,
 and it is the answer to a future reader who observes that Pi-class relays are
 rare and proposes re-deriving against typical hardware: **that proposal is a
 privacy regression wearing an efficiency argument**, and §75.2 is why.
+
+## 76. Option E collapses — intra-transaction batching is already implemented
+
+**2026-08-05.** E was to be resolved first because it sets how expensive D is,
+and it is a source read rather than a bench run: **`shekyl_fcmp::proof::verify`
+already batch-verifies a transaction's inputs.**
+
+```rust
+let mut ed_verifier = multiexp::BatchVerifier::new(num_inputs);
+let mut c1_verifier = generalized_bulletproofs::Generators::batch_verifier();
+let mut c2_verifier = generalized_bulletproofs::Generators::batch_verifier();
+```
+
+All of a transaction's inputs are queued into shared verifiers and discharged
+together. **So the measured per-input marginal is already the batched
+marginal**, and E offers nothing further *within* a transaction — the
+optimisation it proposed is the code that produced the numbers.
+
+### 76.1 And the marginal is increasing, not sublinear
+
+| arm | input 2 | inputs 3–4 (each) | trend |
+| --- | --- | --- | --- |
+| x86 | 3.96 ms | 6.86 ms | **1.73× — increasing** |
+| Pi | 23.97 ms | 39.66 ms | **1.65× — increasing** |
+
+E hoped batching would make the per-input cost *sublinear*. With batching
+already applied it is **super**linear over the benched range, which is the
+opposite direction. **E cannot flatten the axis because the axis is already
+flattened as far as this implementation flattens it.**
+
+> **Caveat, and it bounds the claim.** The fixture places all `n` inputs in
+> **one leaf chunk** (§72's control, to isolate input count from tree depth).
+> Production inputs are typically spread across chunks with distinct paths.
+> Whether a shared chunk flatters or penalises the input axis is **unmeasured**,
+> so the *shape* of the marginal is established on this fixture, not on
+> production topology. The direction — that batching is already in force — is
+> a source fact and does not depend on the fixture.
+
+### 76.2 What this does to the option set
+
+- **E — closed.** Already implemented. Not an available lever.
+- **C — demoted from required to optional.** It was needed because D's cost
+  looked unbounded. It still bounds the axis, but see below.
+- **D — carries the range, and is less alarming than "unbounded" suggests.**
+
+**The premise correction that reopened D is the important one, and it holds:**
+shape is already public. `vin.size()` is in the clear at the relay layer, so
+deriving the embargo from it **leaks nothing new**, every stem node computes
+the same value from the same public data with no coordination, and the draw
+stays memoryless — only the mean moves.
+
+**And D is self-matching, which is why unboundedness is tolerable.** A
+100-input consolidation at ~2.4 s of verification per hop *genuinely travels
+that slowly*. D gives it an embargo matched to its real travel time; it does
+not over-provision everyone else to cover it, and it does not under-provision
+it. The quantity grows without bound only because the *work* does — which is
+the honest relationship, and precisely what §75 asked for: **uniform in effect,
+at cost proportional to work actually done.**
+
+That is the difference between D and B. B covers a tail by making everyone pay
+for it and still leaves the far tail sorted. **D removes the sorting rather
+than paying to hide it.**
+
+### 76.3 The residue
+
+D does not need C, but C changes what D costs the network: without an input
+cap, a single consolidation can hold a stem slot for seconds. That is a
+liveness and capacity question rather than a privacy one, and it is the
+constants round's to weigh — **not a precondition for D being correct.**
+
+Two axes still need tracking rather than quantiling (§75's sorting test):
+**tree depth** and **batch depth** are common-mode — everyone runs the same
+depth at a given moment, and load is shared — so they take a **scheduled
+re-derivation** and a **volume trigger** respectively, not a statistic.
