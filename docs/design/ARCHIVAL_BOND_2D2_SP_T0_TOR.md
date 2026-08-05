@@ -306,8 +306,11 @@ envelope (Argon2id + AEAD over `.wallet`/`.wallet.keys`) an external process can
 **Reopening criteria (`21`):** (a) reopen to **ephemeral** if a C6/target-specific forensic review
 judges the on-disk guard identity to outweigh the malicious-guard-draw cost for a supported
 platform; (b) reopen the **at-rest** half if the stack gains a wallet-controlled encrypted mount
-facility — or if the §10 **arti** anchor ever fires, since an in-process tor's guard state could
-then live inside the wallet's own encrypted store (a second, independent benefit of that anchor).
+facility — ~~or if the §10 **arti** anchor ever fires, since an in-process tor's guard state could
+then live inside the wallet's own encrypted store (a second, independent benefit of that anchor)~~
+**(the arti half of this criterion is RETIRED, 2026-08-03 maintainer ruling: Arti is not the path —
+the Tor Expert Bundle is consumed as an external hash-pinned process — so that trigger cannot
+fire. The encrypted-mount half of (b) stands.)**
 (Cross-ref §7 in the transport plan.)
 
 ---
@@ -316,10 +319,29 @@ then live inside the wallet's own encrypted store (a second, independent benefit
 
 | SP | Deliverable | Notes |
 | --- | --- | --- |
-| **SP-T0a** | **Control-port client** (DQ-T0.2) — the minimal client + KATs against a real Tor (auth, bootstrap, `STREAM`, **and `ADD_ONION`/`DEL_ONION` for SP-T3**). | The keystone; buildable against a *system* Tor before bundling. The rule-17 call (scoped over the whole consumer set) lives here. |
+| **SP-T0a** | **Control-port client** (DQ-T0.2) — the minimal client + KATs against a real Tor (auth, bootstrap, `STREAM`). **`ADD_ONION`/`DEL_ONION` were *scoped* here but not built here** — see the correction note below. | The keystone; buildable against a *system* Tor before bundling. The rule-17 call (scoped over the whole consumer set) lives here. |
 | **SP-T0b** | **Lifecycle** (DQ-T0.1/.3/.6) — managed child, bootstrap gate, shutdown, failure→backoff; exposes the SOCKS endpoint to SP-T1/SP-T2. *As built, split into `TorControl` (per-incarnation actor, DQ-T0.1/.3) + the `TorService` supervisor (DQ-T0.6/§3c).* | Develops against a system Tor. |
 | **SP-T0c** | **Packaging** (DQ-T0.5) — Guix + hash-pin the **Tor Expert Bundle**; bundled-binary discovery/launch; **add the watch/bump/re-verify line to `docs/RELEASE_CHECKLIST.md`** (DoD, not just the bundle). | The ship step. |
 | **SP-T1-measured** | **Circuit-ID disjointness test** (DQ-T0.4) — over SP-T0a+b; closes the SP-T1 keystone. | Integration job. **Gated on SP-T0 alone — not #205** (§5). |
+
+> **Correction (2026-08-03, SP-T3 spike).** The SP-T0a row previously read
+> *"…auth, bootstrap, `STREAM`, **and `ADD_ONION`/`DEL_ONION` for SP-T3**"*,
+> which described the onion surface as delivered. **It was not.** At
+> `dev@146c7a9`, `control::actor::Command` had exactly two variants — `GetInfo`
+> and `SetEvents` — and the enum's own doc said so explicitly: *"`ADD_ONION`/
+> `DEL_ONION` (the SP-T3 onion surface) are intentionally not here yet."* No
+> `ADD_ONION` KAT against a real Tor existed either. The row is corrected above
+> to say *scoped*, which is what actually happened.
+>
+> What SP-T0a **did** deliver on this axis is the property that made the later
+> build cheap: the enum extends without reshaping the actor. The onion surface
+> landed in `control::onion` on the `spike/sp-t3-serving-skeleton` branch as two
+> further `Command` variants, exactly as that doc predicted.
+>
+> The §"Revision history" entry dated 2026-06-28 is **not** affected: it says the
+> rule-17 *dependency call* was "scoped over the whole consumer set including
+> SP-T3's `ADD_ONION`", which is a statement about the decision's scope, not
+> about delivered code, and it is accurate as written.
 
 ### 3a. SP-T0a actor boundary — type obligations for the integration half
 
@@ -594,8 +616,13 @@ serving-layer miss accounting (transport plan §5/§6) — both consume the post
   raw isolation key (so Shekyl owns `derive_socks_user`) **and** raw `STREAM`/CircID (so DQ-T0.4 is
   performable); `tor-interface`'s opaque `CircuitToken` is a *false door* that satisfies neither (see
   DQ-T0.2's reopen). Verify in source, not docs.
-- **embedded Arti** (the §10 anchor) — unchanged, on its real trigger (SOCKS-isolation unenforceable);
-  DQ-T0.4 is the detector for that trigger.
+- ~~**embedded Arti** (the §10 anchor) — unchanged, on its real trigger (SOCKS-isolation
+  unenforceable); DQ-T0.4 is the detector for that trigger.~~ **RETIRED as a *remedy*, 2026-08-03
+  (maintainer ruling): Arti is not the path — the Tor Expert Bundle is consumed as an external
+  hash-pinned process. Note the asymmetry deliberately: the *trigger* remains real (if SOCKS
+  isolation ever became unenforceable, that would still matter, and DQ-T0.4 remains its detector),
+  but the *named remedy* is gone and no replacement is specified here. Should the trigger fire,
+  the remedy is an open question for that round — it is not "embed Arti".**
 - **packaging targets** — the per-target Guix / hash-pin split is a detail to work at SP-T0c.
 
 ## Revision history
