@@ -174,6 +174,19 @@ mod tests {
         assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
     }
 
+    /// A SPECIFIED-but-unimplemented method still falls through to
+    /// `MethodNotFound`. Kept alongside the rescan case above: routing
+    /// `rescan_blockchain` must not blur the line between "designed but not
+    /// built" (`-32601`) and "built, but the call is refused".
+    #[tokio::test]
+    async fn unimplemented_specified_method_is_method_not_found() {
+        let tenants = test_tenants();
+        let err = dispatch(&tenants, "sign_message", &json!({}), KdfParams::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
+    }
+
     #[tokio::test]
     async fn send_without_open_wallet_is_wallet_not_open() {
         let tenants = test_tenants();

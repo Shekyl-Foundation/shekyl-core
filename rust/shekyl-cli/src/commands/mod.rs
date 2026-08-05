@@ -34,7 +34,8 @@ Wallet lifecycle:
   restore <filename> <seed...>        Restore wallet from mnemonic seed
   password                            Change wallet password
   refresh                             Sync with the daemon
-  rescan [hard]                       Full rescan from restore height
+  rescan                              Rebuild transaction history from the
+                                      chain (\"hard\" accepted; same rescan)
   status                              Show wallet and daemon sync heights
 
 Address and balance:

@@ -341,8 +341,14 @@ pub struct RefreshResult {
 /// `rescan_blockchain` result (OpenAPI `RescanBlockchainResult`).
 ///
 /// Same counters as [`RefreshResult`] but **without** `reorg_fork_height` —
-/// a full rescan rebuilds from the restore height rather than rewinding a
-/// fork tip.
+/// a full rescan rebuilds from the wallet's scan floor rather than rewinding
+/// a fork tip, so there is no fork to report.
+///
+/// Deliberately a distinct type rather than a reuse of [`RefreshResult`]
+/// (whose `reorg_fork_height` is `skip_serializing_if`, so today the two
+/// serialize identically). The contract declares two schemas; mirroring them
+/// one-to-one is what keeps a future change to one from silently rewriting
+/// the other's wire shape.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RescanBlockchainResult {
     /// Heights scanned this call.

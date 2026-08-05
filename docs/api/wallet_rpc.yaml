@@ -320,6 +320,7 @@ components:
         - -29107   # SUBMIT_AMBIGUOUS
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
+        - -29202   # RESCAN_BLOCKED
         - -29300   # PROOF_MALFORMED
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
@@ -361,7 +362,19 @@ components:
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs: daemon RPC
                                           failed (proof methods dial the
                                           daemon for tx bodies / spent-set
-                                          queries)
+                                          queries; rescan preflights the
+                                          daemon before it resets anything,
+                                          so this code means the wallet was
+                                          left untouched)
+          -29202 RESCAN_BLOCKED           rescan: refused — reservations
+                                          and/or unconfirmed submitted
+                                          transactions hold spend records a
+                                          chain replay cannot rebuild. A
+                                          resolvable state conflict, NOT a
+                                          bad request: submit or discard
+                                          pending transactions, wait for
+                                          confirmations, retry. Nothing was
+                                          reset (data: {"detail": "..."})
           -29300 PROOF_MALFORMED          check_*: proof string failed
                                           Bech32m decode, carried the wrong
                                           HRP, its wire framing did not
@@ -895,8 +908,19 @@ components:
     RescanBlockchainParams:
       type: object
       description: >
-        Full rescan from the wallet's restore height. Destroys and rebuilds
-        scan-derived state; accounting facts are re-derived from chain data.
+        No parameters. Full rescan from the wallet's scan floor
+        (`restore_from_height`, raised by any configured `skip_to_height` /
+        `refresh_from_block_height`). Destroys and rebuilds scan-derived
+        state; accounting facts are re-derived from chain data, while
+        user-authored records (retained tx keys, notes, payment-request rows,
+        address book) and durable staking bond records survive.
+
+        Shares the refresh single-flight slot (-29200). Refuses before
+        touching the wallet when the daemon is unreachable (-29201) or when
+        in-flight transactions hold spend records a replay cannot rebuild
+        (-29202). Past those refusals the reset is durable before scanning
+        begins: a scan that then fails leaves the wallet emptied and the
+        rescan re-runnable.
 
     RescanBlockchainResult:
       type: object

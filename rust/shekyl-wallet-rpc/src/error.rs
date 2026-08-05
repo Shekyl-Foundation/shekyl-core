@@ -66,6 +66,9 @@ pub enum WalletRpcErrorCode {
     RefreshInProgress = -29200,
     /// Refresh / rescan / proofs: daemon RPC failed.
     DaemonUnreachable = -29201,
+    /// Rescan: refused — transactions in flight whose spend record a chain
+    /// replay cannot rebuild. A resolvable state conflict, not a bad request.
+    RescanBlocked = -29202,
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300,
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -143,6 +146,17 @@ pub enum WalletRpcError {
     /// Refresh already in flight (single-flight).
     #[error("refresh already running")]
     RefreshInProgress,
+    /// Rescan refused: in-flight transactions whose spend record a chain
+    /// replay cannot rebuild. Transient and client-resolvable — submit or
+    /// discard reservations, wait for confirmations, then retry.
+    #[error(
+        "cannot rescan while transactions are in flight: {detail}; \
+         submit or discard pending transactions, wait for confirmations, then retry"
+    )]
+    RescanBlocked {
+        /// Server-side counts (`error.data.detail`) — no amounts, no txids.
+        detail: String,
+    },
     /// Build: address parse / network check failed.
     #[error("invalid recipient")]
     InvalidRecipient,
@@ -232,6 +246,7 @@ impl WalletRpcError {
             Self::CapabilityForbids { .. } => WalletRpcErrorCode::CapabilityForbids,
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
             Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
+            Self::RescanBlocked { .. } => WalletRpcErrorCode::RescanBlocked,
             Self::InvalidRecipient => WalletRpcErrorCode::InvalidRecipient,
             Self::InsufficientFunds => WalletRpcErrorCode::InsufficientFunds,
             Self::FeeEstimationFailed => WalletRpcErrorCode::FeeEstimationFailed,
@@ -263,7 +278,9 @@ impl WalletRpcError {
             Self::CapabilityForbids { capability } => Some(json!({ "capability": capability })),
             Self::ContentGenMismatch { content_gen } => Some(json!({ "content_gen": content_gen })),
             Self::SubmitRejected { data } => Some(data.clone()),
-            Self::StakeNotReady { detail } => Some(json!({ "detail": detail })),
+            Self::StakeNotReady { detail } | Self::RescanBlocked { detail } => {
+                Some(json!({ "detail": detail }))
+            }
             _ => None,
         }
     }
@@ -319,9 +336,19 @@ impl From<RefreshError> for WalletRpcError {
     fn from(err: RefreshError) -> Self {
         match err {
             RefreshError::AlreadyRunning => Self::RefreshInProgress,
-            RefreshError::OutstandingPendingTx { count } => Self::InvalidParams(format!(
-                "cannot rescan with {count} outstanding pending transaction(s); submit or discard first"
-            )),
+            // A state conflict, not a malformed request: `rescan_blockchain`
+            // takes an empty params object, so the params were by definition
+            // correct. `-32602` here would tell an automated client its
+            // request shape is permanently wrong when the truth is "retry
+            // once the in-flight transactions settle".
+            RefreshError::RescanBlocked {
+                reservations,
+                unconfirmed,
+            } => Self::RescanBlocked {
+                detail: format!(
+                    "{reservations} reservation(s), {unconfirmed} unconfirmed transaction(s)"
+                ),
+            },
             RefreshError::RescanPersist(detail) => {
                 Self::InternalError(format!("rescan reset persistence failed: {detail}"))
             }

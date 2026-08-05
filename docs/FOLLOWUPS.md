@@ -1637,12 +1637,44 @@ sustainability is unaffected by the recalibration.
 
 - **Phase 4b: `rescan_blockchain` needs an Engine rescan API** —
   **CLOSED 2026-08-04 (Phase 4c, `feat/wallet-rpc-phase-4c-rescan`)**.
-  Engine grew `reset_scan_derived_state` + `start_rescan` (shared
-  `refresh_slot`; preserves `tx_keys` / payment-request invoices /
-  `restore_from_height`; clears transfers/tip/pool/bonded_slots hint;
-  rolls curve tree to height 0; persists then runs the refresh producer).
+  Engine grew `reset_scan_derived_state` + `start_rescan`
+  (`engine/rescan.rs`, over the shared single-flight slot now carved out
+  as `engine/refresh_slot.rs`). The reset preserves everything a chain
+  replay cannot re-derive — `tx_keys`, payment-request rows,
+  `restore_from_height`, and the durable `bonded_slots` bond record — and
+  clears the whole `LedgerBlock` plus the runtime indexes, `scan_completed`
+  and `scanned_pool_txs`. The chain-global curve tree is left alone (it
+  holds no wallet data, and rolling it back would force a genesis-onward
+  re-ingest). Refusals are hoisted ahead of the destructive step: daemon
+  preflight, then an in-flight-transaction guard atomic with the wipe.
   `shekyl-wallet-rpc` `rescan_blockchain` and CLI `rescan` are live.
   *Was target: V3.0 / Phase 4b.*
+
+- **Phase 4c: no way to abandon an unconfirmed submitted transaction, so a
+  never-mined tx can wedge `rescan`** (added 2026-08-04). `start_rescan`
+  refuses with `RescanBlocked` (`-29202`) while
+  `sync_state.pending_tx_hashes` is non-empty, because the inputs' spend
+  marking lives only in the transfer set the reset clears and a replay of
+  *confirmed* blocks cannot rebuild a spend that is still in the mempool —
+  those inputs would come back apparently unspent and be re-selected, and
+  two transactions provably spending one input self-link the wallet
+  (§7.1). The refusal is correct; its escape is missing. A tx that is
+  broadcast, dropped from every mempool, and never mined keeps its
+  `pending_tx_hashes` entry indefinitely (`reconcile_tx_key_retention`
+  retires an entry only against a *chain* reference), so that wallet can
+  never rescan again. **Named blocker:** an abandon surface is its own
+  contract decision, not a flag — it must prove non-exposure before
+  dropping the record (a daemon pool query is evidence, not proof, under
+  re-broadcast), and it must not delete the retained `TxSecretKey` while
+  exposure could still be live, which is exactly the I-2 ordering the
+  WI-RPC-3 retention design pins. Doing it wrong deletes proof material
+  for a transaction that later confirms. **Reopening criterion:** the
+  daemon exposes a pool-membership query with a stated staleness bound,
+  *or* the retention design gains a "presumed-dead, keys retained" state
+  that is safe to enter without one. **Re-evaluation shape:** an explicit
+  `abandon_tx` Engine API + RPC method in the `-291xx` send band, with a
+  crash-ordering test against the drop-then-confirm window; `start_rescan`
+  keeps refusing until the user runs it. *Target: V3.0 / Phase 4d.*
 
 - **Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing
   history surface lands** (added 2026-07-09; **Phase 4c disclosure

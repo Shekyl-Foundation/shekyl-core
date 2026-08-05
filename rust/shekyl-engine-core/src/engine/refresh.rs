@@ -53,6 +53,12 @@ use super::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 use super::Engine;
 use crate::scan::ScanResult;
 
+// The single-flight primitive lives in its own module now that
+// `start_refresh` and `start_rescan` both claim it; re-exported here so
+// existing `refresh::RefreshSlot` paths (notably `Engine`'s field type in
+// `engine/mod.rs`) keep resolving.
+pub(crate) use super::refresh_slot::{RefreshSlot, SlotGuard};
+
 /// Read-only snapshot of the wallet ledger taken at the start of a
 /// refresh.
 ///
@@ -718,95 +724,6 @@ impl Drop for RefreshHandle {
     }
 }
 
-// ── Single-flight slot ─────────────────────────────────────────────
-//
-// The slot is a per-Engine `Arc<AtomicBool>` kept on the engine
-// struct. `start_refresh` claims the flag (CAS false → true) under
-// a brief read borrow of the engine; if the CAS fails, another
-// refresh is in flight and the call returns
-// `RefreshError::AlreadyRunning`. The producer task holds a
-// `SlotGuard` for the duration of the refresh; dropping the guard
-// releases the flag (RAII).
-//
-// Independent of the engine's cross-cutting RwLock — the slot is
-// its own atomic, so `start_refresh` does not need a write borrow
-// of `Engine<S>` to claim it. This keeps the slot-claim path lock-
-// free against the producer task's per-attempt read/write borrows.
-
-/// Per-engine single-flight slot for [`Engine::start_refresh`].
-///
-/// Cloneable; the slot itself is reference-counted, so cloning a
-/// `RefreshSlot` produces another handle to the same underlying
-/// flag. The engine struct owns one; the producer task's
-/// [`SlotGuard`] holds another for its lifetime.
-#[derive(Clone, Debug)]
-pub(crate) struct RefreshSlot {
-    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl RefreshSlot {
-    /// Build a fresh slot in the released state. Called once at
-    /// `Engine::assemble` time.
-    pub(crate) fn new() -> Self {
-        Self {
-            flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        }
-    }
-
-    /// Attempt to claim the slot. Returns `Some(SlotGuard)` on
-    /// success (the slot is now held; `Drop` will release it).
-    /// Returns `None` if the slot is already held by another
-    /// refresh task.
-    ///
-    /// Implemented as a single CAS (Acquire on success, Relaxed on
-    /// failure) so claim and release pair across threads without
-    /// needing a stronger fence.
-    pub(crate) fn try_claim(&self) -> Option<SlotGuard> {
-        match self.flag.compare_exchange(
-            false,
-            true,
-            std::sync::atomic::Ordering::Acquire,
-            std::sync::atomic::Ordering::Relaxed,
-        ) {
-            Ok(_) => Some(SlotGuard {
-                flag: self.flag.clone(),
-            }),
-            Err(_) => None,
-        }
-    }
-
-    /// Read the slot's current state without claiming it. Used by
-    /// the redacted `Debug` impl on `Engine<S>` to surface "is a
-    /// refresh in flight" without taking a guard.
-    pub(crate) fn is_claimed(&self) -> bool {
-        self.flag.load(std::sync::atomic::Ordering::Relaxed)
-    }
-}
-
-/// RAII guard for the [`RefreshSlot`] flag. Held by the producer
-/// task; dropping it releases the flag.
-///
-/// Deliberately not `Clone`: the guard's whole purpose is to
-/// uniquely own the claim, so cloning it would defeat single-
-/// flight enforcement. The producer task receives the guard from
-/// [`Engine::start_refresh`] and holds it through `run_refresh_task`'s
-/// full lifetime; the `Drop` releases the slot whether the task
-/// returned successfully, errored, or was cancelled.
-#[derive(Debug)]
-pub(crate) struct SlotGuard {
-    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl Drop for SlotGuard {
-    fn drop(&mut self) {
-        // Release: pair with `Acquire` on the matching `try_claim`.
-        // Idempotent — if the slot was double-released somehow, the
-        // store is a no-op (the second release would still write
-        // `false` to a flag that's already `false`).
-        self.flag.store(false, std::sync::atomic::Ordering::Release);
-    }
-}
-
 // Static asserts: trait bounds the Branch 2 surface depends on.
 // Failure here means a downstream type lost its Send/Sync/Clone
 // invariant; surface the violation at the engine-core build rather
@@ -1432,6 +1349,42 @@ impl<
         };
         let slot_guard = slot.try_claim().ok_or(RefreshError::AlreadyRunning)?;
 
+        Ok(Self::spawn_refresh_producer(
+            self_arc,
+            opts,
+            slot_guard,
+            synced_height,
+        ))
+    }
+
+    /// Spawn the refresh producer task and assemble its [`RefreshHandle`].
+    ///
+    /// Shared by [`Self::start_refresh`] and
+    /// [`Engine::start_rescan`](Self::start_rescan): both run the **same**
+    /// producer over the **same** single-flight slot, so the tail of the two
+    /// entry points is one implementation rather than two that drift. Only
+    /// the state each hands the producer differs — rescan empties the
+    /// scan-derived ledger first (see `engine/rescan.rs`).
+    ///
+    /// Takes the already-claimed [`SlotGuard`] by value: the guard moves into
+    /// the spawned task and releases the slot when the task winds down, so a
+    /// caller cannot claim the slot and then forget to spawn.
+    ///
+    /// `synced_height` seeds the progress watch channel with the wallet
+    /// baseline that [`RefreshProgress::height`]'s contract promises ("on
+    /// initial publish this is `synced_height` itself"), so a caller that
+    /// reads `progress().borrow()` before the producer's first per-attempt
+    /// update sees a real baseline rather than a misleading `0`.
+    pub(super) fn spawn_refresh_producer(
+        self_arc: std::sync::Arc<tokio::sync::RwLock<Self>>,
+        opts: RefreshOptions,
+        slot_guard: SlotGuard,
+        synced_height: u64,
+    ) -> RefreshHandle
+    where
+        S: EngineSignerKind + Send + Sync + 'static,
+        Self: Send + Sync,
+    {
         // Channels:
         // - `progress`: watch (latest-only); seeded with the
         //   wallet's current `synced_height` so the first
@@ -1453,15 +1406,16 @@ impl<
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         let cancel_token = CancellationToken::new();
 
-        let task_arc = self_arc.clone();
         let task_cancel = cancel_token.clone();
-        // `progress_tx` moves into the task — the producer is the
-        // sole `Sender`. The handle keeps only a `Receiver` clone;
-        // when the task exits, its `Sender` drops, and downstream
-        // `Receiver::changed().await` returns `Err(_)` to signal
-        // "no more progress."
+        // `self_arc` and `progress_tx` both move into the task. The producer
+        // is the sole progress `Sender`; the handle keeps only a `Receiver`,
+        // so when the task exits its `Sender` drops and downstream
+        // `Receiver::changed().await` returns `Err(_)` to signal "no more
+        // progress." Taking the arc by value (rather than cloning a borrow)
+        // makes the handoff explicit: after this call the caller has no
+        // engine reference left to accidentally use.
         let producer_join = tokio::spawn(run_refresh_task(
-            task_arc,
+            self_arc,
             opts.clone(),
             task_cancel,
             progress_tx,
@@ -1469,126 +1423,13 @@ impl<
             slot_guard,
         ));
 
-        Ok(RefreshHandle {
+        RefreshHandle {
             completion_rx: Some(completion_rx),
             cancel_token,
             progress_rx,
             producer_join,
             opts,
-        })
-    }
-
-    /// Full rescan from `sync_state.restore_from_height`.
-    ///
-    /// Named Engine API for OpenAPI `rescan_blockchain` (Phase 4c /
-    /// FOLLOWUPS Phase 4b rescan item). Resets scan-derived ledger state
-    /// (preserving retained `tx_keys`, payment-request invoices, restore
-    /// height, and staking config), rolls the curve-tree tip back to
-    /// genesis, persists the reset, then runs the same producer as
-    /// [`Self::start_refresh`] under the shared `refresh_slot`
-    /// (`AlreadyRunning` → RPC `-29200`).
-    ///
-    /// # Errors
-    ///
-    /// - [`RefreshError::AlreadyRunning`] — refresh/rescan already in flight.
-    /// - [`RefreshError::OutstandingPendingTx`] — discard/submit first.
-    /// - [`RefreshError::CurveTreeIngest`] — tree rollback failed.
-    /// - [`RefreshError::RescanPersist`] — durable save of the reset failed.
-    ///
-    /// Scan-path errors surface via [`RefreshHandle::join`], same as refresh.
-    pub async fn start_rescan(
-        self_arc: std::sync::Arc<tokio::sync::RwLock<Self>>,
-        opts: RefreshOptions,
-    ) -> Result<RefreshHandle, RefreshError>
-    where
-        S: EngineSignerKind + Send + Sync + 'static,
-        Self: Send + Sync,
-    {
-        let (slot, outstanding) = {
-            let engine = self_arc.read().await;
-            (
-                engine.refresh_slot.clone(),
-                engine.outstanding_pending_txs(),
-            )
-        };
-        let slot_guard = slot.try_claim().ok_or(RefreshError::AlreadyRunning)?;
-        if outstanding > 0 {
-            return Err(RefreshError::OutstandingPendingTx { count: outstanding });
         }
-
-        // Roll the curve tree back before clearing the ledger tip so a
-        // failed rollback leaves the pre-rescan ledger intact.
-        {
-            let engine = self_arc.read().await;
-            if let Ok(Some(_)) = engine.curve_tree.ingested_tip_height().await {
-                engine
-                    .curve_tree
-                    .rollback_to_fork(shekyl_curve_tree::BlockHeight(0))
-                    .await
-                    .map_err(|e| RefreshError::CurveTreeIngest {
-                        context: "rescan curve-tree rollback_to_fork(0)",
-                        recoverable_by_respawn: matches!(
-                            e,
-                            super::curve_tree_actor::CurveTreeHandleError::Unavailable
-                        ),
-                    })?;
-            }
-        }
-
-        // Clear scan-derived state + persist under a brief exclusive
-        // engine write (ledger interior lock + sync save via
-        // `drive_persistence` — do not `.await` while holding
-        // `std::sync::RwLock` guards; that would make this future !Send).
-        {
-            let engine = self_arc.write().await;
-            {
-                let mut guard = engine.ledger.write();
-                let state = &mut *guard;
-                super::rescan::reset_scan_derived_state(&mut state.ledger, &mut state.indexes);
-            }
-            let ledger_guard = engine.ledger.read();
-            if let Err(e) =
-                super::lifecycle::drive_persistence(super::traits::PersistenceEngine::save_state(
-                    &engine.persistence,
-                    engine.state_wrap_key(),
-                    &ledger_guard.ledger,
-                ))
-            {
-                return Err(RefreshError::RescanPersist(e.to_string()));
-            }
-        }
-
-        let synced_height = {
-            let engine = self_arc.read().await;
-            engine.ledger.synced_height()
-        };
-        let (progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::phase_only(
-            synced_height,
-            0,
-            0,
-            RefreshPhase::Scanning,
-        ));
-        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
-        let cancel_token = CancellationToken::new();
-
-        let task_arc = self_arc.clone();
-        let task_cancel = cancel_token.clone();
-        let producer_join = tokio::spawn(run_refresh_task(
-            task_arc,
-            opts.clone(),
-            task_cancel,
-            progress_tx,
-            completion_tx,
-            slot_guard,
-        ));
-
-        Ok(RefreshHandle {
-            completion_rx: Some(completion_rx),
-            cancel_token,
-            progress_rx,
-            producer_join,
-            opts,
-        })
     }
 }
 
@@ -2837,73 +2678,6 @@ mod refresh_handle_tests {
             last.blocks_total, 200,
             "blocks_total preserved across the transition"
         );
-    }
-}
-
-#[cfg(test)]
-mod refresh_slot_tests {
-    //! Unit tests for [`RefreshSlot`] — the single-flight
-    //! primitive [`Engine::start_refresh`] uses to gate concurrent
-    //! refreshes.
-    //!
-    //! These tests exercise the slot in isolation; concurrent
-    //! `start_refresh` against a real `Engine<S>` (the integration
-    //! surface that surfaces `RefreshError::AlreadyRunning`) is
-    //! covered by commit 6.
-    use super::RefreshSlot;
-
-    /// Fresh slot is unclaimed; `try_claim` succeeds and returns
-    /// a guard.
-    #[test]
-    fn claim_succeeds_when_unheld() {
-        let slot = RefreshSlot::new();
-        assert!(!slot.is_claimed());
-        let guard = slot.try_claim().expect("fresh slot is claimable");
-        assert!(slot.is_claimed());
-        drop(guard);
-    }
-
-    /// A second `try_claim` returns `None` while the first guard
-    /// is alive. This is the surface that surfaces
-    /// `RefreshError::AlreadyRunning` at the `start_refresh`
-    /// layer.
-    #[test]
-    fn claim_fails_when_held() {
-        let slot = RefreshSlot::new();
-        let _guard = slot.try_claim().expect("first claim succeeds");
-        assert!(slot.try_claim().is_none(), "second claim fails");
-        assert!(slot.is_claimed());
-    }
-
-    /// Dropping the guard releases the slot; a subsequent claim
-    /// then succeeds. This is the contract that makes the
-    /// `_slot_guard` discipline in `run_refresh_task` self-
-    /// healing across success / error / cancellation exits.
-    #[test]
-    fn release_on_guard_drop() {
-        let slot = RefreshSlot::new();
-        {
-            let _guard = slot.try_claim().expect("first claim succeeds");
-            assert!(slot.is_claimed());
-        }
-        assert!(!slot.is_claimed(), "guard drop released the flag");
-        let _second = slot
-            .try_claim()
-            .expect("slot reclaimable after first guard dropped");
-    }
-
-    /// Cloning the slot returns another handle to the same flag —
-    /// so the engine's stored slot and the producer task's clone
-    /// observe the same state. This is the property that makes
-    /// the slot-claim path lock-free against the producer's read/
-    /// write borrows of the engine.
-    #[test]
-    fn clone_shares_underlying_flag() {
-        let slot_a = RefreshSlot::new();
-        let slot_b = slot_a.clone();
-        let _guard = slot_a.try_claim().expect("first claim succeeds");
-        assert!(slot_b.is_claimed(), "clone observes the same flag");
-        assert!(slot_b.try_claim().is_none(), "clone cannot re-claim");
     }
 }
 

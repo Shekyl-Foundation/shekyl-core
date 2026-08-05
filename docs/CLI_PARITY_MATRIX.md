@@ -39,7 +39,7 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 > refuses to print the seed to a non-TTY (pipe/redirect/log) rather than leak
 > it — so the `seed`-safety row's guarantee now holds on every path.
 
-## Parity matrix (19 covered, 13 planned, 49 out of scope)
+## Parity matrix (24 covered, 6 planned, 51 out of scope)
 
 | # | simplewallet command | shekyl-cli equivalent | Status | Notes |
 |---|---|---|---|---|
@@ -71,7 +71,7 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 26 | `sign_transfer` | RESERVED | Planned | Gated on the Phase 2d offline cold-signing workflow (with `describe_transfer`, `submit_transfer`, `transfer --do-not-relay`) |
 | 27 | `submit_transfer` | RESERVED | Planned | As row 26 |
 | 28 | `password` | `password` | Covered | Native `change_password` flow, old-first |
-| 29 | `rescan_bc` | Done | Landed | Phase 4c: CLI `rescan` → `rescan_blockchain` via `Engine::start_rescan` |
+| 29 | `rescan_bc` | `rescan` | Covered | Native `rescan_blockchain` via `Engine::start_rescan` (Phase 4c). `hard` is accepted for wallet2 muscle memory and reported as equivalent — Shekyl has one rescan, which already rebuilds every scan-derived fact |
 | 30 | `refresh` | `refresh` | Covered | Native `refresh` |
 | 31 | `save` | `save` | Covered | Informative: state persists crash-atomically after every operation; nothing to save |
 | 32 | `status` | `status` | Covered | Native wallet + daemon sync heights |

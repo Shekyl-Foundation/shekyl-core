@@ -5,14 +5,22 @@
 ### Added
 
 - **Phase 4c wallet RPC rescan** (`Engine::start_rescan` +
-  `rescan_blockchain`). Named Engine API resets scan-derived ledger state
-  from `restore_from_height` (preserves retained `tx_keys`, payment-request
-  invoices, restore height, staking config), rolls the curve tree back,
-  persists, then reuses the refresh producer under the shared single-flight
-  slot. `shekyl-wallet-rpc` dispatches `rescan_blockchain`; CLI `rescan`
-  is un-stubbed. Closes FOLLOWUPS Phase 4b rescan / WI-RPC-2b `rescan`
-  deferrals. Phase 4b quality gaps (OUTGOING filter, build write-lock,
-  submit verdict enrichment) remain Engine-gated.
+  `rescan_blockchain`). Named Engine API that rebuilds the wallet's
+  transaction history from the chain, starting at the wallet's scan floor.
+  Everything a replay cannot re-derive survives — retained `tx_keys`, notes,
+  payment-request rows, restore height, and the durable staking bond record;
+  everything scan-derived is rebuilt. The chain-global curve tree is left
+  untouched (it holds no wallet data). Every refusal is raised *before* the
+  destructive step: the single-flight slot it shares with `refresh`
+  (`-29200`), a daemon preflight (`-29201`), and a new `-29202`
+  `RESCAN_BLOCKED` for in-flight transactions whose spend record a chain
+  replay cannot rebuild — checked atomically with the reset, so a
+  concurrently-built transaction cannot slip through. `shekyl-wallet-rpc`
+  dispatches `rescan_blockchain`; CLI `rescan` is un-stubbed and reports
+  whether a failure left the wallet reset. Closes FOLLOWUPS Phase 4b rescan
+  / WI-RPC-2b `rescan` deferrals; opens the `abandon_tx` follow-up that
+  `-29202` needs as an escape hatch. Phase 4b quality gaps (OUTGOING filter,
+  build write-lock, submit verdict enrichment) remain Engine-gated.
 
 - **`geblock` — deterministic Rust genesis pipeline
   (`rust/shekyl-genesis-tool`).** Replaces the C++ `genesis_builder`

@@ -37,6 +37,14 @@ pub(crate) async fn refresh(
         .map_err(|e| WalletRpcError::InternalError(format!("serialize refresh: {e}")))
 }
 
+/// `rescan_blockchain`: rebuild the wallet's history from the chain.
+///
+/// Destructive by contract, so the refusals matter as much as the happy
+/// path. `Engine::start_rescan` raises all of them *before* it resets
+/// anything — refresh in flight (`-29200`), daemon unreachable (`-29201`),
+/// in-flight transactions whose spend record a replay cannot rebuild
+/// (`-29202`) — so a client that sees any of those knows the wallet is
+/// untouched. Errors from `join()` arrive after the reset is durable.
 pub(crate) async fn rescan_blockchain(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,

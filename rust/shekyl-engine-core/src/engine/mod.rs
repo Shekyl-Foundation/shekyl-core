@@ -331,6 +331,8 @@ pub(crate) mod proof_bridge;
 pub mod proofs;
 pub(crate) mod pscan;
 pub mod refresh;
+/// Per-engine single-flight slot shared by `start_refresh` / `start_rescan`.
+pub(crate) mod refresh_slot;
 /// Track-2 end-to-end FAKECHAIN regtest (C++↔Rust FCMP++ verify parity). Spawns
 /// a real `shekyld --regtest` and drives the production [`Engine`] against it;
 /// all tests are `#[ignore]`d and require `SHEKYLD_BIN`.
