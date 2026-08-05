@@ -14,6 +14,12 @@ members = [
     "shekyl-crypto-hash",
     "shekyl-consensus",
 
+    # DISPOSABLE measurement spike (SP-T3 / PD-F-2): the Tor-borne shard-fetch
+    # dispersion harness. Named `-spike` on purpose -- nothing in it is canonical
+    # and it must be deleted or fully rewritten before TJ-B (rule 15: debt,
+    # labelled at birth). See docs/design/SP_T3_SKELETON_MEASUREMENT.md.
+    "shekyl-sp-t3-spike",
+
     # Canonical genesis block/tx binary wire-format serializer — the clean,
     # Shekyl-owned replacement for the vendored shekyl-oxide block/tx/ct modules
     # (docs/design/GENESIS_TX_WIRE_FORMAT.md, Decision 1 / §4).
