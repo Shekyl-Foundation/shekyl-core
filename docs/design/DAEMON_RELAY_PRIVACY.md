@@ -12871,3 +12871,74 @@ hierarchies. **§82.2 makes that question sharper rather than softer** — the
 per-layer cost is now known to concentrate in the large-input cells, which are
 exactly the ones with the biggest working sets. Until the Pi arm runs, the
 table has 48 x86 cells and no invariant to check them against.
+
+## 83. The schedule is itself a §75 surface — so the table must refuse, not clamp
+
+**2026-08-05, maintainer, with the pricing carried through chain life.**
+
+### 83.1 D's advantage widens; the modal embargo is effectively constant
+
+| | genesis (d2) | depth 7 | change |
+| --- | --- | --- | --- |
+| scalar-at-8's over-provision of the modal case | **55 s** | **126 s** | +71 s |
+| D's modal row | 191 s | 194 s | **+3 s** |
+
+*(Hop inputs verified against the measured surface: Pi-spec modal hop is
+183 ms at genesis and 194 ms at depth 7; the 8-input hop goes 453 → 818 ms.)*
+
+**D is not "57 s better" — it is 55 s better now, 126 s better later, and the
+gap only widens.**
+
+**And the modal embargo is effectively a constant: 3 s of drift across the
+entire depth range.** That bounds what the re-derivation schedule is *for*.
+Not *"the embargo drifts"* — **the tail rows drift.** For the overwhelming
+majority of transactions the depth axis is inert.
+
+### 83.2 Which makes a forgotten re-derivation a §75 regression
+
+**If a depth tier passes and the table is not extended, the stale row is wrong
+only for large-input senders. The modal user notices nothing.**
+
+So a missed schedule item **reintroduces exactly the sorting D was built to
+remove** — invisible, unattributable, and falling on the same population.
+The schedule is not an accuracy chore; **it is a privacy surface**, and this
+arc's standing answer applies: **do not rely on remembering.**
+
+### 83.3 The requirement: refuse an unpopulated tier, never clamp
+
+> **`f(n_in, depth_tier)` must return an error for a depth tier the table does
+> not cover. It must not clamp to the last populated row.**
+
+- **Clamping is the silent-stale-row path**, and it fails in the
+  **privacy-losing** direction: the tail gets an embargo derived for a shallower
+  tree than it is actually traversing.
+- **Refusing turns tree growth past the table's edge into a loud, immediate
+  condition.** Tree depth is knowable at runtime, so the check costs nothing.
+
+**Same device as `f` refusing a parameter for local timing (§77.4) and
+`derive.rs` refusing a block-time term (§15.6): the mistake requires a visible
+edit rather than vigilance.**
+
+> **And it gives the schedule teeth it otherwise would not have. A dated note
+> in a design document is a hope; a table that stops answering is a deadline.**
+
+*(This is [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+rule 4 with an enforcement mechanism: a projection is a prior to be confirmed,
+and refusing past the edge is what makes the confirmation happen rather than
+be assumed.)*
+
+### 83.4 The axis lesson generalises past depth
+
+**"Common-mode in the parameter, sorted in the effect"** is the sharper
+formulation of §82.4, and it is not about trees.
+
+**The trap is available anywhere a shared quantity has heterogeneous cost.**
+The parameter looks uniform — everyone runs the same tree depth, the same
+protocol version, the same block interval — so it gets classified as needing
+*tracking* rather than *covering*, and **the sorting hides in the second
+derivative**: not in who holds the parameter, but in what holding it costs
+each participant.
+
+**The test to carry:** when an axis is dismissed as common-mode, ask whether
+its *cost* is common-mode too. Depth passed the first check and failed the
+second by a factor of 33 (2 ms against 66 ms across the same five layers).
