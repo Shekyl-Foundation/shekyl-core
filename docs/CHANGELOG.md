@@ -53,8 +53,9 @@
   `handle_recv` state machine (signature early-reject, 256 KiB / 100 MB
   packet limits, fragment reassembly, message classification). Byte
   identity is pinned by KATs mirroring the `tests/unit_tests/levin.cpp`
-  gtests assertion for assertion; two read-side divergences (both strictly
-  tighter than the C++) are documented in the crate README. Framing only —
+  gtests assertion for assertion; three read-side divergences (inner
+  signature verify, inner-length trim, logical-header response
+  classification) are documented in the crate README. Framing only —
   no portable_storage, no sockets, no daemon wiring; the C++ p2p path stays
   live until the scheduled cutover (`IMPLEMENTATION_INDEX.md` LV row;
   FOLLOWUPS "Levin p2p migration" carries LV-2/LV-3). New optional

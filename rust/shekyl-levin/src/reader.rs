@@ -31,24 +31,39 @@
 //!   cleared (an error without the `zstd` feature — `HAVE_ZSTD`-off parity);
 //! - classification: `S` + protocol version 1 → [`Received::Response`];
 //!   otherwise `Expect Response` non-zero → [`Received::Request`], zero →
-//!   [`Received::Notification`].
+//!   [`Received::Notification`]. The version checked is the **logical
+//!   message header** (outer for ordinary buckets; inner after fragment
+//!   reassembly) — see divergence 3 below.
 //!
-//! Two **documented divergences** from the C++, both strictly tighter (no
-//! conforming sender trips them, and `make_fragmented_notify` output always
-//! passes):
+//! Three **documented divergences** from the C++, all equivalent for every
+//! conforming sender (and for every packet `make_fragmented_notify` emits):
 //!
 //! 1. the reassembled inner header's *signature* is verified; the C++
 //!    `memcpy`s it without checking;
 //! 2. the inner header's `length` must fit the reassembled bytes, and the
 //!    delivered payload is trimmed to exactly that length; the C++ forwards
 //!    the fragment zero-padding to the command handler and relies on the
-//!    payload parser ignoring trailing bytes.
+//!    payload parser ignoring trailing bytes;
+//! 3. response classification uses the **logical message's**
+//!    `protocol_version` (the inner header after reassembly). The C++
+//!    sticky `m_oponent_protocol_ver` is refreshed only on outer-header
+//!    parse, so a crafted fragment train can disagree with this crate on
+//!    whether a reassembled bucket is a response. Conforming fragment
+//!    outer headers always carry version 1, and the protocol's fragment
+//!    emitters only produce notifications — so no live peer is affected.
+//!    Classifying the delivered header is the simpler, intentional model.
 
 use crate::compress::decompress_payload;
 use crate::error::Error;
 use crate::header::{
     signature_matches, BucketHead, Flags, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE, PROTOCOL_VERSION_1,
 };
+
+/// Reclaim the consumed prefix of the receive buffer once it exceeds this
+/// many bytes. Matches the `shekyl-tor` control-framer discipline: advance a
+/// cursor instead of front-draining per message, compact occasionally so a
+/// burst of complete buckets is O(n) rather than O(n²).
+const COMPACT_THRESHOLD: usize = 4 * 1024;
 
 /// A complete message delivered by [`BucketReader::advance`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,7 +102,13 @@ enum State {
 
 /// Incremental Levin demultiplexer for one connection.
 pub struct BucketReader {
+    /// Socket bytes yet to be fully consumed, plus any already-consumed
+    /// prefix not yet reclaimed by [`Self::compact`].
     cache: Vec<u8>,
+    /// Start of the unconsumed region in [`Self::cache`]. Advanced past each
+    /// completed header/body instead of front-draining (see module docs /
+    /// `COMPACT_THRESHOLD`).
+    read_pos: usize,
     fragment: Vec<u8>,
     state: State,
     max_packet_size: u64,
@@ -113,6 +134,7 @@ impl BucketReader {
     pub fn new() -> BucketReader {
         BucketReader {
             cache: Vec::new(),
+            read_pos: 0,
             fragment: Vec::new(),
             state: State::Head,
             max_packet_size: INITIAL_MAX_PACKET_SIZE,
@@ -141,6 +163,34 @@ impl BucketReader {
             .min((self.max_bytes_for_command)(command))
     }
 
+    /// Bytes still waiting to be parsed.
+    fn pending(&self) -> &[u8] {
+        &self.cache[self.read_pos..]
+    }
+
+    /// Buffered size counted toward the packet-size cap (pending cache +
+    /// fragment reassembly buffer). Consumed-but-not-yet-compacted prefix
+    /// is not charged — it is already accounted for by completed messages.
+    fn buffered_bytes(&self) -> u64 {
+        let pending = self.cache.len() - self.read_pos;
+        u64::try_from(pending + self.fragment.len()).expect("buffer lengths fit in u64")
+    }
+
+    /// Reclaim `cache[..read_pos]` when fully consumed or past
+    /// [`COMPACT_THRESHOLD`], so a steady stream stays O(n).
+    fn compact(&mut self) {
+        if self.read_pos == 0 {
+            return;
+        }
+        if self.read_pos >= self.cache.len() {
+            self.cache.clear();
+            self.read_pos = 0;
+        } else if self.read_pos >= COMPACT_THRESHOLD {
+            self.cache.drain(..self.read_pos);
+            self.read_pos = 0;
+        }
+    }
+
     /// Feed received bytes; returns every message completed by them.
     ///
     /// # Errors
@@ -148,9 +198,9 @@ impl BucketReader {
     /// Any [`Error`] is connection-fatal (mirroring `handle_recv` returning
     /// `false`); the reader must be discarded along with the connection.
     pub fn advance(&mut self, bytes: &[u8]) -> Result<Vec<Received>, Error> {
-        // Total buffered-bytes cap, exactly the C++ subtraction shape.
-        let buffered = u64::try_from(self.cache.len() + self.fragment.len())
-            .expect("buffer lengths fit in u64");
+        // Total buffered-bytes cap, exactly the C++ subtraction shape —
+        // applied to unconsumed cache + fragment buffer.
+        let buffered = self.buffered_bytes();
         let incoming = u64::try_from(bytes.len()).expect("slice length fits in u64");
         if incoming > self.max_packet_size.saturating_sub(buffered) {
             return Err(Error::BufferLimit {
@@ -164,15 +214,16 @@ impl BucketReader {
         loop {
             match self.state {
                 State::Head => {
-                    if self.cache.len() < HEADER_SIZE {
+                    let pending = self.pending();
+                    if pending.len() < HEADER_SIZE {
                         // Early reject: a wrong signature is fatal as soon as
                         // the first 8 bytes are visible.
-                        if self.cache.len() >= 8 && !signature_matches(&self.cache) {
+                        if pending.len() >= 8 && !signature_matches(pending) {
                             return Err(Error::BadSignature);
                         }
                         break;
                     }
-                    let header_bytes: &[u8; HEADER_SIZE] = self.cache[..HEADER_SIZE]
+                    let header_bytes: &[u8; HEADER_SIZE] = pending[..HEADER_SIZE]
                         .try_into()
                         .expect("static header slice");
                     let head = BucketHead::read(header_bytes)?;
@@ -183,24 +234,30 @@ impl BucketReader {
                             limit,
                         });
                     }
-                    self.cache.drain(..HEADER_SIZE);
+                    self.read_pos += HEADER_SIZE;
                     self.state = State::Body(head);
                 }
                 State::Body(head) => {
                     let need = usize::try_from(head.payload_len)
                         .expect("payload_len bounded by max_packet_size");
-                    if self.cache.len() < need {
+                    if self.pending().len() < need {
                         break;
                     }
-                    let body: Vec<u8> = self.cache.drain(..need).collect();
+                    // Owned body: copy out of the cursor window, then advance.
+                    // A split_off/replace would move the tail; with a cursor the
+                    // tail stays put and we only allocate the payload once.
+                    let body = self.pending()[..need].to_vec();
+                    self.read_pos += need;
                     self.state = State::Head;
-                    if let Some(message) = self.finish_bucket(&head, body)? {
+                    self.compact();
+                    if let Some(message) = self.finish_bucket(head, body)? {
                         received.push(message);
                     }
                 }
             }
         }
 
+        self.compact();
         Ok(received)
     }
 
@@ -208,84 +265,112 @@ impl BucketReader {
     /// non-final fragments.
     fn finish_bucket(
         &mut self,
-        head: &BucketHead,
+        head: BucketHead,
         body: Vec<u8>,
     ) -> Result<Option<Received>, Error> {
-        let (head, payload) = if head.flags.intersects(Flags::REQUEST.union(Flags::RESPONSE)) {
-            (*head, body)
+        let (mut head, payload) = if head.flags.intersects(Flags::REQUEST.union(Flags::RESPONSE)) {
+            (head, body)
         } else {
-            // Noise / fragment class.
-            if head.flags.contains(Flags::BEGIN.union(Flags::END)) {
-                return Ok(None); // dummy message: discard
+            match self.absorb_noise_or_fragment(&head, &body)? {
+                Some(inner) => inner,
+                None => return Ok(None),
             }
-            if head.flags.contains(Flags::BEGIN) {
-                self.fragment.clear();
-            }
-            self.fragment.extend_from_slice(&body);
-            if !head.flags.contains(Flags::END) {
-                return Ok(None); // more fragments to come
-            }
-
-            // Final fragment: the reassembled bytes must open with an inner
-            // Levin header for a non-fragment message.
-            let assembled = std::mem::take(&mut self.fragment);
-            if assembled.len() < HEADER_SIZE {
-                return Err(Error::FragmentTooSmall);
-            }
-            let header_bytes: &[u8; HEADER_SIZE] = assembled[..HEADER_SIZE]
-                .try_into()
-                .expect("static header slice");
-            // Divergence 1: signature verified (C++ memcpys unchecked).
-            let inner = BucketHead::read(header_bytes)?;
-            let limit = self.limit_for(inner.command);
-            if inner.payload_len > limit {
-                return Err(Error::OversizePacket {
-                    claimed: inner.payload_len,
-                    limit,
-                });
-            }
-            let available =
-                u64::try_from(assembled.len() - HEADER_SIZE).expect("buffer length fits in u64");
-            // Divergence 2: the inner length must fit, and the payload is
-            // trimmed to it (C++ forwards the zero padding).
-            if inner.payload_len > available {
-                return Err(Error::InnerLengthTruncated {
-                    claimed: inner.payload_len,
-                    available,
-                });
-            }
-            let end = HEADER_SIZE
-                + usize::try_from(inner.payload_len).expect("bounded by max_packet_size");
-            (inner, assembled[HEADER_SIZE..end].to_vec())
         };
 
-        // COMPRESSED: inflate before delivery, clear the flag.
+        // COMPRESSED: inflate before delivery, clear the flag (C++ unsets
+        // LEVIN_PACKET_COMPRESSED on m_current_head after a successful inflate;
+        // Received does not expose flags, but the local head stays consistent
+        // with the oracle and the doc comment).
         let payload = if head.flags.contains(Flags::COMPRESSED) {
-            decompress_payload(&payload)?
+            let inflated = decompress_payload(&payload)?;
+            head.flags = head.flags.difference(Flags::COMPRESSED);
+            inflated
         } else {
             payload
         };
 
-        // Classification, mirroring `is_response` + `m_have_to_return_data`.
-        let message = if head.protocol_version == PROTOCOL_VERSION_1
-            && head.flags.contains(Flags::RESPONSE)
-        {
-            Received::Response {
-                command: head.command,
-                return_code: head.return_code,
-                payload,
-            }
-        } else if head.expect_response {
-            Received::Request {
-                command: head.command,
-                payload,
-            }
-        } else {
-            Received::Notification {
-                command: head.command,
-                payload,
-            }
-        };
-        Ok(Some(message))
+        Ok(Some(classify(&head, payload)))
+    }
+
+    /// Noise / fragment class handler. `None` = dummy or non-final fragment
+    /// (nothing to deliver yet). `Some` = a complete logical message ready
+    /// for decompression + classification.
+    fn absorb_noise_or_fragment(
+        &mut self,
+        head: &BucketHead,
+        body: &[u8],
+    ) -> Result<Option<(BucketHead, Vec<u8>)>, Error> {
+        if head.flags.contains(Flags::BEGIN.union(Flags::END)) {
+            return Ok(None); // dummy message: discard
+        }
+        if head.flags.contains(Flags::BEGIN) {
+            self.fragment.clear();
+        }
+        self.fragment.extend_from_slice(body);
+        if !head.flags.contains(Flags::END) {
+            return Ok(None); // more fragments to come
+        }
+
+        let assembled = std::mem::take(&mut self.fragment);
+        Ok(Some(self.take_reassembled_inner(&assembled)?))
+    }
+
+    /// Parse the logical message out of a completed fragment train.
+    ///
+    /// Divergences 1 and 2 live here: signature verified; length must fit
+    /// and the payload is trimmed to it.
+    fn take_reassembled_inner(&self, assembled: &[u8]) -> Result<(BucketHead, Vec<u8>), Error> {
+        if assembled.len() < HEADER_SIZE {
+            return Err(Error::FragmentTooSmall);
+        }
+        let header_bytes: &[u8; HEADER_SIZE] = assembled[..HEADER_SIZE]
+            .try_into()
+            .expect("static header slice");
+        // Divergence 1: signature verified (C++ memcpys unchecked).
+        let inner = BucketHead::read(header_bytes)?;
+        let limit = self.limit_for(inner.command);
+        if inner.payload_len > limit {
+            return Err(Error::OversizePacket {
+                claimed: inner.payload_len,
+                limit,
+            });
+        }
+        let available =
+            u64::try_from(assembled.len() - HEADER_SIZE).expect("buffer length fits in u64");
+        // Divergence 2: the inner length must fit, and the payload is
+        // trimmed to it (C++ forwards the zero padding).
+        if inner.payload_len > available {
+            return Err(Error::InnerLengthTruncated {
+                claimed: inner.payload_len,
+                available,
+            });
+        }
+        let end =
+            HEADER_SIZE + usize::try_from(inner.payload_len).expect("bounded by max_packet_size");
+        Ok((inner, assembled[HEADER_SIZE..end].to_vec()))
+    }
+}
+
+/// Classify a fully-parsed, decompressed logical message.
+///
+/// Divergence 3: version is taken from this header (the delivered logical
+/// message), not from a sticky outer-header field.
+fn classify(head: &BucketHead, payload: Vec<u8>) -> Received {
+    if head.protocol_version == PROTOCOL_VERSION_1 && head.flags.contains(Flags::RESPONSE) {
+        Received::Response {
+            command: head.command,
+            return_code: head.return_code,
+            payload,
+        }
+    } else if head.expect_response {
+        Received::Request {
+            command: head.command,
+            payload,
+        }
+    } else {
+        Received::Notification {
+            command: head.command,
+            payload,
+        }
     }
 }

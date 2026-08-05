@@ -184,6 +184,120 @@ fn truncated_fragment_reassembly_rejected() {
     );
 }
 
+/// Divergence 1 pin: a reassembled inner header with a bad signature is
+/// connection-fatal (C++ memcpys the bytes unchecked and would proceed).
+#[test]
+fn reassembled_inner_bad_signature_rejected() {
+    let mut bad_inner = notify(2002, b"x");
+    bad_inner[0] = 0xFF; // corrupt the signature of the logical message
+    let mut head = shekyl_levin::BucketHead::make(
+        0,
+        u64::try_from(bad_inner.len()).unwrap(),
+        shekyl_levin::Flags::END,
+        false,
+    );
+    head.return_code = 0;
+    let mut stream = head.write().to_vec();
+    stream.extend_from_slice(&bad_inner);
+
+    assert_eq!(
+        BucketReader::new().advance(&stream),
+        Err(Error::BadSignature)
+    );
+}
+
+/// Divergence 2 pin: inner `length` past the reassembled body is fatal
+/// (C++ would forward a short buffer to the handler).
+#[test]
+fn reassembled_inner_length_past_body_rejected() {
+    // Inner header claims 100 payload bytes, but the fragment body only
+    // carries the 33-byte header (available = 0 after the inner header).
+    let mut inner_head =
+        shekyl_levin::BucketHead::make(2002, 100, shekyl_levin::Flags::REQUEST, false);
+    inner_head.return_code = 0;
+    let inner = inner_head.write().to_vec(); // no payload bytes after it
+    let mut outer = shekyl_levin::BucketHead::make(
+        0,
+        u64::try_from(inner.len()).unwrap(),
+        shekyl_levin::Flags::END,
+        false,
+    );
+    outer.return_code = 0;
+    let mut stream = outer.write().to_vec();
+    stream.extend_from_slice(&inner);
+
+    assert_eq!(
+        BucketReader::new().advance(&stream),
+        Err(Error::InnerLengthTruncated {
+            claimed: 100,
+            available: 0,
+        })
+    );
+}
+
+/// Divergence 2 pin: when the inner length is short of the fragment body,
+/// the delivered payload is trimmed to that length (padding dropped).
+#[test]
+fn reassembled_inner_payload_trimmed_to_declared_length() {
+    let real = b"trimmed";
+    let mut inner = notify(2002, real);
+    // Append 9 zero-padding bytes the outer fragment will carry, but keep
+    // the inner header's length at the real payload size.
+    inner.extend_from_slice(&[0u8; 9]);
+    // Overwrite the outer framing: END fragment whose body is the padded
+    // inner notification. The inner header still claims `real.len()`.
+    let mut outer = shekyl_levin::BucketHead::make(
+        0,
+        u64::try_from(inner.len()).unwrap(),
+        shekyl_levin::Flags::END,
+        false,
+    );
+    outer.return_code = 0;
+    let mut stream = outer.write().to_vec();
+    stream.extend_from_slice(&inner);
+
+    let got = BucketReader::new().advance(&stream).unwrap();
+    assert_eq!(
+        got,
+        vec![Received::Notification {
+            command: 2002,
+            payload: real.to_vec(),
+        }]
+    );
+}
+
+/// Divergence 3 pin: after reassembly, classification uses the *inner*
+/// protocol version (logical message), not a sticky outer-header field.
+/// Outer fragment headers always carry version 1 from the builders; a
+/// crafted inner with version 0 + RESPONSE is a notification here.
+#[test]
+fn reassembled_response_classifies_by_inner_protocol_version() {
+    let mut inner = response(1001, -4, b"rsp");
+    // Overwrite the inner protocol-version field (bytes 29..33) with 0.
+    inner[29..33].copy_from_slice(&0u32.to_le_bytes());
+
+    let mut outer = shekyl_levin::BucketHead::make(
+        0,
+        u64::try_from(inner.len()).unwrap(),
+        shekyl_levin::Flags::END,
+        false,
+    );
+    outer.return_code = 0;
+    // Outer still carries PROTOCOL_VERSION_1 (BucketHead::make default).
+    let mut stream = outer.write().to_vec();
+    stream.extend_from_slice(&inner);
+
+    let got = BucketReader::new().advance(&stream).unwrap();
+    assert_eq!(
+        got,
+        vec![Received::Notification {
+            command: 1001,
+            payload: b"rsp".to_vec(),
+        }],
+        "inner ver=0 must not classify as Response even though outer is ver=1"
+    );
+}
+
 #[test]
 fn per_command_limit_caps_below_packet_limit() {
     // Mirrors connection_context::get_max_bytes: ping (1003) caps at 4096.

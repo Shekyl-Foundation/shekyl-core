@@ -43,14 +43,22 @@ chunk boundaries, and noise sizes.
 
 ## Documented divergences from the C++ oracle
 
-Both are read-side and strictly tighter — no conforming sender trips them,
-and `make_fragmented_notify` output always passes:
+All three are read-side. Divergences 1–2 are strictly tighter (no conforming
+sender trips them). Divergence 3 is a deliberate model cleanup that agrees
+with the C++ on every conforming packet (including all
+`make_fragmented_notify` output):
 
 1. the reassembled inner fragment header's **signature is verified**; the
    C++ `memcpy`s it without checking;
 2. the inner header's `length` must fit the reassembled bytes and the
    delivered payload is **trimmed to that length**; the C++ forwards the
    fragment zero-padding to the command handler and relies on the payload
-   parser ignoring trailing bytes.
+   parser ignoring trailing bytes;
+3. **response classification** uses the logical message header's
+   `protocol_version` (inner after reassembly). The C++ sticky
+   `m_oponent_protocol_ver` is only refreshed on outer-header parse, so a
+   crafted fragment train can disagree on whether a reassembled bucket is
+   a response. Conforming outer fragment headers always carry version 1,
+   and the protocol's fragment emitters only produce notifications.
 
 Emit-side output is byte-identical, no divergences.

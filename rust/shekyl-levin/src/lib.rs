@@ -35,9 +35,9 @@
 //! read-side state machine in
 //! `contrib/epee/include/net/levin_protocol_handler_async.h`
 //! (`handle_recv`). The tests mirror the `tests/unit_tests/levin.cpp`
-//! gtest expectations byte for byte. Two **documented divergences**, both
-//! strictly safer than the C++ (they reject nothing a conforming sender
-//! emits): see [`reader`] module docs.
+//! gtest expectations byte for byte. Three **documented divergences**
+//! (inner-signature verify, inner-length trim, logical-header response
+//! classification) — see [`reader`] module docs.
 
 mod compress;
 mod error;
