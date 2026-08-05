@@ -129,12 +129,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("shard fixture: {payload_len} bytes");
 
     let dir = tempfile::tempdir()?;
-    let seed = [0x11u8; 64];
     println!("bringing up 2 personas behind one tor (this includes a bootstrap)...");
     let app = Apparatus::bring_up(
         tor,
         dir.path().join("tor-data"),
-        &seed,
         2,
         Arc::new(fixture.bytes().to_vec()),
     )

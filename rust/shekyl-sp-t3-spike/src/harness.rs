@@ -58,6 +58,21 @@ pub const FETCH_CEILING: Duration = Duration::from_secs(180);
 /// seconds on a cold service; this bounds the wait rather than assuming it.
 pub const PUBLISH_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// The apparatus's **pinned** derivation seed — the harness takes no seed from
+/// its caller, by design.
+///
+/// SPIKE-F-4 relocated the onion-key derivation onto the *production* GF-9 path
+/// ([`derive_onion_identity`] → `shekyl_crypto_pq::archival_p::derive_p_hs_id_seed`).
+/// A consequence the old spike-local label used to mask: feeding a real wallet's
+/// `master_seed_64` here would now serve at the persona's **actual production
+/// `.onion`** — the co-activation Model D forbids (`BOND_CONSTRUCTION.md:667`,
+/// one persona on the wire per wallet). The apparatus is *retained* (rule 15) for
+/// the owed Tor hop-latency measurement, so it will be run again; pinning the
+/// seed makes "never point this at a wallet" an enforced invariant rather than
+/// operator discipline. Distinct personas come from the `p_slot` sweep, not from
+/// distinct seeds, so parameterizing the seed bought nothing the sweep does not.
+pub const APPARATUS_PINNED_SEED: [u8; 64] = [0x11u8; 64];
+
 /// A persona serving a shard over its own onion.
 pub struct Persona {
     /// The persona's slot.
@@ -182,14 +197,12 @@ impl Apparatus {
     pub async fn bring_up(
         tor_binary: std::path::PathBuf,
         data_dir: std::path::PathBuf,
-        master_seed: &[u8; 64],
         persona_count: u32,
         payload: Arc<Vec<u8>>,
     ) -> Result<Self, ApparatusError> {
         Self::bring_up_with_pow(
             tor_binary,
             data_dir,
-            master_seed,
             persona_count,
             payload,
             OnionPow::Disabled,
@@ -207,7 +220,6 @@ impl Apparatus {
     pub async fn bring_up_with_pow(
         tor_binary: std::path::PathBuf,
         data_dir: std::path::PathBuf,
-        master_seed: &[u8; 64],
         persona_count: u32,
         payload: Arc<Vec<u8>>,
         pow: OnionPow,
@@ -245,7 +257,7 @@ impl Apparatus {
         let mut personas = Vec::new();
         for slot in 0..persona_count {
             let slot = PSlot::from_raw(slot);
-            let identity = derive_onion_identity(master_seed, slot);
+            let identity = derive_onion_identity(&APPARATUS_PINNED_SEED, slot);
             let service_id = identity.service_id().clone();
             let endpoint = ServeEndpoint::bind(Arc::clone(&payload))
                 .await

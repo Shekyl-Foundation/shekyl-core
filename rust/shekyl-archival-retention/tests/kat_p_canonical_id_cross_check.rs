@@ -17,9 +17,13 @@
 //! A deliberate derivation-version bump that regenerates that corpus must update
 //! these constants in lockstep; that lockstep is exactly the tripwire.
 
-use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
+use shekyl_archival_retention::id::{
+    p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION,
+};
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
-use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
+use shekyl_crypto_pq::archival_p::{
+    derive_archival_p_keys, derive_p_hs_id_seed, ARCHIVAL_P_HS_ID_INFO,
+};
 
 /// `(master_byte, network, seed_format, p_slot, expected_p_canonical_id_hex)`,
 /// copied from the crypto-pq KAT Tier-2 corpus.
@@ -74,4 +78,51 @@ fn id_rs_reproduces_the_kat_pinned_p_canonical_id() {
              id.rs cSHAKE diverged from the crypto-pq KAT pin"
         );
     }
+}
+
+/// Domain separation between the **public, on-chain** `P_canonical_id` and the
+/// persona's **serving** GF-9 HS-identity seed.
+///
+/// This invariant moved here from `shekyl-sp-t3-spike::onion_key` when SPIKE-F-4
+/// relocated the onion-key derivation onto the production path: the property is
+/// now about two production constructions (`P_CANONICAL_ID_CUSTOMIZATION` in this
+/// crate, `ARCHIVAL_P_HS_ID_INFO` in `crypto-pq`), so it belongs where both are
+/// visible and the crate is not disposable — not in a spike that may be deleted.
+///
+/// The requirement is one-directional: an observer holding `P_canonical_id`
+/// (public, appears on chain) must get **no** path to the serving onion key. The
+/// copy-paste failure that would couple them is a shared domain separator; the
+/// two are also produced by different primitives (HKDF-SHA-512 vs cSHAKE256),
+/// but the separator distinctness is the assertable guard.
+#[test]
+fn hs_id_seed_is_domain_separated_from_p_canonical_id() {
+    // The two domain separators must differ, and neither may be a prefix of the
+    // other (the §9.3 non-prefix-free safety family the hyphen convention keeps).
+    assert_ne!(
+        ARCHIVAL_P_HS_ID_INFO, P_CANONICAL_ID_CUSTOMIZATION,
+        "the HS-id HKDF label must not equal the canonical-id cSHAKE customization"
+    );
+    assert!(
+        !ARCHIVAL_P_HS_ID_INFO.starts_with(P_CANONICAL_ID_CUSTOMIZATION)
+            && !P_CANONICAL_ID_CUSTOMIZATION.starts_with(ARCHIVAL_P_HS_ID_INFO),
+        "neither separator may be a prefix of the other"
+    );
+
+    // And end-to-end on a concrete persona: the derived HS seed and the derived
+    // canonical id are distinct 32-byte values. A shared separator (the failure
+    // this guards) would have collapsed the two maps.
+    let master = [0x33u8; MASTER_SEED_BYTES];
+    let hs_id = derive_p_hs_id_seed(&master, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0);
+    let keys = derive_archival_p_keys(&master, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
+        .expect("derive_archival_p_keys for domain-separation check");
+    let bond_bytes = keys
+        .hybrid_bond_id()
+        .to_canonical_bytes()
+        .expect("hybrid_bond_id canonical bytes");
+    let pid = p_canonical_id_from_hybrid_pubkey(&bond_bytes);
+    assert_ne!(
+        &hs_id[..],
+        pid.as_bytes(),
+        "the serving HS seed must not equal the public canonical id"
+    );
 }

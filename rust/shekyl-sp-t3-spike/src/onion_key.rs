@@ -53,50 +53,40 @@
 //! unreachable at the address the persona advertises. So the clamp is applied to
 //! raw bytes here (`expand_seed`) and never round-tripped through a `Scalar`.
 //!
-//! # SPIKE-F: this derivation is in the wrong crate, and that is not fixable here
+//! # SPIKE-F-4: the seed derivation now lives where it belongs; this is encoding
 //!
-//! The charter specified a cSHAKE256 domain separator "in the shape of
-//! `id.rs`'s `P_CANONICAL_ID_CUSTOMIZATION`", which is what this module does.
-//! **But that shape belongs to a *public-id* derivation, and this is a *secret*
-//! derivation from the master seed** — and `shekyl_crypto_pq::archival_p` states
-//! it is *"the **single source of truth** for how a Shekyl archival staking
-//! persona (`P`) derives its keys from a wallet's `master_seed_64`"*, using
-//! HKDF-SHA-512 with versioned info labels (`ARCHIVAL_P_*_INFO`), frozen and
+//! This module originally carried a *second*, spike-local cSHAKE256 derivation
+//! from the master seed, deliberately labelled `-spike-` so its keys could never
+//! be silently inherited by production. That was a stopgap: the master-seed →
+//! persona-key map is owned by `shekyl_crypto_pq::archival_p`, *"the **single
+//! source of truth** for how a Shekyl archival staking persona (`P`) derives its
+//! keys"*, HKDF-SHA-512 under versioned `ARCHIVAL_P_*_INFO` labels, frozen and
 //! KAT-pinned under `ARCHIVAL_P_DERIVE_V1`.
 //!
-//! A production onion key therefore belongs there, as one more
-//! `ARCHIVAL_P_ONION_INFO` label yielding a 32-byte seed — not here under a
-//! second, differently-constructed path from the same master seed. It is **not**
-//! done here because that is an additive change to a genesis-frozen, cross-arch
-//! KAT-pinned derivation module, which is a design round of its own and is
-//! outside this charter's file list.
+//! SPIKE-F-4 executed the gate-6 §10.13 carry: the GF-9 HS-identity seed is now
+//! [`derive_p_hs_id_seed`] (label `ARCHIVAL_P_HS_ID_INFO`, `L=32`), an
+//! `ARCHIVAL_P_DERIVE_V1` amendment with regenerated cross-arch KAT vectors that
+//! pin both the seed **and** the derived ed25519 public key. The spike-local
+//! duplicate is deleted, and [`derive_onion_identity`] now *consumes* the
+//! production seed.
 //!
-//! **Reopen criteria (rule 21):** this module is deleted, and the derivation
-//! moves to `archival_p.rs` as a new `L=32` info label plus an `ArchivalPKeys`
-//! field, when *either* SP-T3 proper begins implementation *or* any consumer
-//! outside this spike needs a persona onion key — whichever comes first. The
-//! re-evaluation shape is an `ARCHIVAL_P_DERIVE_V1` amendment round: new label,
-//! regenerated KAT vectors under `docs/test_vectors/ARCHIVAL_P_DERIVE_V1/`, and
-//! the `aarch64` qemu lane green. Until then, no non-spike code may call this.
+//! What remains here is the **v3-onion encoding**: RFC 8032 seed expansion to
+//! tor's `ED25519-V3` blob (`expand_seed`) and the rend-spec-v3 §6 `.onion`
+//! address construction (`service_id_from_pubkey`). That is transport surface,
+//! not key derivation — in production it belongs in `shekyl-tor` alongside the
+//! rest of the control-port machinery, not in `crypto-pq`. It stays in this
+//! disposable spike because no non-spike consumer needs it yet (the serving path
+//! is 2d-2 SP-T3 proper), and the retained apparatus (rule 15, for the owed Tor
+//! hop-latency measurement) exercises it end-to-end against a real tor.
 
 use ed25519_dalek::VerifyingKey;
 use sha2::{Digest as _, Sha512};
-use sha3::digest::core_api::CoreWrapper;
-use sha3::digest::{ExtendableOutput, Update, XofReader};
-use sha3::{CShake256, CShake256Core, Sha3_256};
+use sha3::Sha3_256;
+use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+use shekyl_crypto_pq::archival_p::derive_p_hs_id_seed;
 use shekyl_tor::control::onion::{OnionKey, ServiceId, ONION_KEY_BYTES};
 use shekyl_types::PSlot;
 use zeroize::Zeroizing;
-
-/// cSHAKE256 customization for the spike's onion-key derivation.
-///
-/// Distinct from every existing separator — in particular from
-/// `shekyl/archival-p-id-v1` (`shekyl_archival_retention::id`), which derives the
-/// *public* `P_canonical_id`. The `-spike-` infix is deliberate and is part of the
-/// label, not decoration: it guarantees that if this construction ever reaches
-/// production by accident, the keys it produced are trivially distinguishable
-/// from the canonical ones and cannot be silently inherited.
-pub const ONION_KEY_CUSTOMIZATION: &[u8] = b"shekyl/archival-p-onion-spike-v0";
 
 /// Version byte of a v3 onion address (rend-spec-v3 §6).
 const ONION_ADDRESS_VERSION: u8 = 0x03;
@@ -143,28 +133,25 @@ impl std::fmt::Debug for OnionIdentity {
 
 /// Derive persona `p_slot`'s onion identity from the wallet master seed.
 ///
-/// `seed32 = cSHAKE256(master_seed_64 ‖ p_slot_le32, cust = ONION_KEY_CUSTOMIZATION)`,
-/// then RFC 8032 expansion to the `ED25519-V3` blob.
-///
-/// The `p_slot` is folded in as **little-endian `u32`**, matching
-/// `archival_p.rs`'s frozen `info = LABEL ‖ 0x00 ‖ p_slot.to_le_bytes()` byte
-/// order, so a future move into that module (see the module doc's reopen
-/// criteria) is a label change rather than a re-encoding.
+/// The 32-byte seed is the **production** GF-9 HS-identity seed
+/// ([`derive_p_hs_id_seed`], label `ARCHIVAL_P_HS_ID_INFO`, frozen under
+/// `ARCHIVAL_P_DERIVE_V1`), expanded here per RFC 8032 to tor's `ED25519-V3`
+/// blob. `net`/`fmt` are pinned to `Mainnet`/`Bip39`: the apparatus derives
+/// against one fixed context, and slot 0 reproduces the KAT's `hs_id_pubkey`
+/// vector — so [`derive_onion_identity`] is now the same map the frozen corpus
+/// pins, and the live `onion_key_matches_tors_service_id` check validates that
+/// production derivation against a real tor rather than a spike-local construction.
 ///
 /// Every intermediate is `Zeroizing`; the only value that outlives the call is
 /// the [`OnionKey`], which wipes on drop.
 #[must_use]
 pub fn derive_onion_identity(master_seed_64: &[u8; 64], p_slot: PSlot) -> OnionIdentity {
-    let mut input = Zeroizing::new(Vec::with_capacity(68));
-    input.extend_from_slice(master_seed_64);
-    input.extend_from_slice(&p_slot.to_raw().to_le_bytes());
-
-    let core = CShake256Core::new(ONION_KEY_CUSTOMIZATION);
-    let mut hasher: CShake256 = CoreWrapper::from_core(core);
-    hasher.update(&input);
-    let mut reader = hasher.finalize_xof();
-    let mut seed = Zeroizing::new([0u8; 32]);
-    reader.read(seed.as_mut());
+    let seed = derive_p_hs_id_seed(
+        master_seed_64,
+        DerivationNetwork::Mainnet,
+        SeedFormat::Bip39,
+        p_slot.to_raw(),
+    );
 
     let expanded = expand_seed(&seed);
     let verifying = verifying_key_from_seed(&seed);
@@ -262,7 +249,6 @@ fn base32_lower(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 
     const SEED: [u8; 64] = [0x5au8; 64];
 
@@ -334,36 +320,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn onion_key_is_not_derivable_from_the_canonical_id() {
-        // Domain separation, asserted as a *property* rather than by eyeballing
-        // two different label strings: feeding the canonical-id construction and
-        // the onion construction the same bytes must not converge.
-        //
-        // The real requirement is one-directional — an observer holding
-        // `P_canonical_id` (which is public, and appears on chain) must not be
-        // able to reach the onion key. The strongest thing testable at this level
-        // is that the two derivations are unrelated maps of the same input, which
-        // a shared or copy-pasted customization string would break.
-        let pid = p_canonical_id_from_hybrid_pubkey(&SEED);
-        let onion = derive_onion_identity(&SEED, PSlot::from_raw(0));
-        assert_ne!(
-            pid.as_bytes()[..],
-            onion.service_id().as_str().as_bytes()[..32],
-            "the canonical id must not be the onion address"
-        );
-        // And the separators themselves must differ, which is what makes the
-        // above hold for *every* input rather than for this one.
-        assert_ne!(
-            ONION_KEY_CUSTOMIZATION,
-            shekyl_archival_retention::id::P_CANONICAL_ID_CUSTOMIZATION
-        );
-        assert!(
-            ONION_KEY_CUSTOMIZATION.starts_with(b"shekyl/archival-p-onion-spike"),
-            "the label must name itself as spike-only so its keys can never be \
-             silently inherited by production"
-        );
-    }
+    // Domain separation between the public on-chain `P_canonical_id` and the
+    // serving onion key is now a *production* invariant (both labels live in
+    // `shekyl-crypto-pq` / `shekyl-archival-retention`), so it is asserted where
+    // both are visible and the crate is not disposable:
+    // `shekyl-archival-retention`'s `kat_p_canonical_id_cross_check` test
+    // (`hs_id_seed_is_domain_separated_from_p_canonical_id`). It does not belong
+    // in a spike that may be deleted.
 
     #[test]
     fn service_id_is_a_wellformed_v3_address() {

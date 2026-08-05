@@ -38,9 +38,12 @@
 //!   │  account_sign_seed (L=32) ─ SigningKey::from_bytes ─┐                                  │
 //!   │  ml_dsa_seed       (L=32) ─ keygen_from_seed ───────┴─→ hybrid_sign_pk/sk (= bond_id) │
 //!   │                                                                                       │
-//!   └─── Debit authority (GF-1, seed consumers) ──────────────────────────────────────────┤
-//!      bond_spend_ed_seed     (L=32) ─ SigningKey::from_bytes ─┐                             │
-//!      bond_spend_ml_dsa_seed (L=32) ─ keygen_from_seed ───────┴─→ bond_spend_pk/sk         │
+//!   ├─── Debit authority (GF-1, seed consumers) ──────────────────────────────────────────┤
+//!   │  bond_spend_ed_seed     (L=32) ─ SigningKey::from_bytes ─┐                             │
+//!   │  bond_spend_ml_dsa_seed (L=32) ─ keygen_from_seed ───────┴─→ bond_spend_pk/sk         │
+//!   │                                                                                       │
+//!   └─── Serving identity (GF-9, seed consumer — not an ArchivalPKeys field) ───────────────┘
+//!      hs_id_seed             (L=32) ─ SigningKey::from_bytes ─→ ed25519 pk → v3 .onion (serve)
 //! ```
 //!
 //! # Scalar-vs-seed (the byte that gates this primitive)
@@ -121,6 +124,22 @@ pub const ARCHIVAL_P_BOND_SPEND_ED_INFO: &[u8] = b"shekyl-archival-p-bond-spend-
 
 /// HKDF info-label for the GF-1 `bond_spend` ML-DSA-65 hybrid half (`L=32`, keygen seed).
 pub const ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO: &[u8] = b"shekyl-archival-p-bond-spend-ml-dsa-65-v1";
+
+/// HKDF info-label for `P`'s **serving-side v3 onion (HS) identity** Ed25519 half
+/// (`L=32`, RFC 8032 seed) — GF-9 (`ARCHIVAL_FIREWALL_GATE6.md` §10.7 / §10.13).
+///
+/// The `.onion` is `p_slot`-bound and seed-derived, so it rotates with the persona
+/// and never bridges a rotation. Like every sibling label it is **network-scoped**
+/// (`salt = salt_for(net, fmt)`): the same wallet serves at *different* `.onion`s on
+/// mainnet vs testnet/stagenet, so a persona's serving identity never links across
+/// networks. That is a deliberate, frozen choice — not incidental — and the KAT's
+/// `hs_id_network_separation` vector pins it un-regenerate-around-ably. **Hyphen-
+/// normalized** from §10.7's proposed `shekyl.archival.p.hs_id.v1` (dots) per the
+/// §10.13 carry — the dotted form is outside §9.3's hyphen-convention
+/// non-prefix-free safety family. Consumer: the serving path
+/// (`launch_onion_service_with_hsid`) expands this seed to tor's `ED25519-V3`
+/// expanded-private key; `crypto-pq` owns only the seed.
+pub const ARCHIVAL_P_HS_ID_INFO: &[u8] = b"shekyl-archival-p-hs-id-ed25519-v1";
 
 /// Single-byte separator between the info label and the little-endian `p_slot`.
 /// Frozen into the wire from genesis (`ARCHIVAL_FIREWALL_GATE6.md` §9.3).
@@ -256,6 +275,31 @@ pub fn derive_p_bond_spend_ml_dsa_seed(
         ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO,
         p_slot,
     )
+}
+
+/// `P` serving-side v3 onion (HS) identity Ed25519 RFC 8032 seed (32 B) — GF-9.
+///
+/// `p_slot`-bound and seed-derived (`ARCHIVAL_FIREWALL_GATE6.md` §10.7), so the
+/// persona's `.onion` rotates with the slot. **Serving-only, and deliberately
+/// *not* an [`ArchivalPKeys`] field** — §9.4's persona bundle carries no HS key,
+/// its consumer is the serving path (`launch_onion_service_with_hsid`), which
+/// calls this on demand and expands the seed to tor's `ED25519-V3`
+/// expanded-private key. Not persisted; rederived from `(master_seed, net, fmt,
+/// p_slot)` on each serve, exactly like the other secrets.
+///
+/// The derived Ed25519 **public** key (`SigningKey::from_bytes(seed)
+/// .verifying_key()`) is the v3 onion address's public key; the
+/// `ARCHIVAL_P_DERIVE_V1` KAT pins both the seed and that public key, since a
+/// cross-arch divergence there would leave an ARM user's persona unreachable at
+/// its advertised `.onion`.
+#[must_use]
+pub fn derive_p_hs_id_seed(
+    master_seed: &[u8; MASTER_SEED_BYTES],
+    net: DerivationNetwork,
+    fmt: SeedFormat,
+    p_slot: u32,
+) -> Zeroizing<[u8; 32]> {
+    p_expand_32(master_seed, net, fmt, ARCHIVAL_P_HS_ID_INFO, p_slot)
 }
 
 // --- hybrid keypair assembly -------------------------------------------------
@@ -527,6 +571,16 @@ mod tests {
             account.as_slice(),
             perturbed.as_slice(),
             "a 1-byte label change must change the seed"
+        );
+
+        // GF-9 serving key is a distinct label from the identity account-sign seed:
+        // the two L=32 Ed25519 seeds under the same (seed, net, fmt, slot) must
+        // differ, or the serving `.onion` would leak the on-chain identity key.
+        let hs_id = derive_p_hs_id_seed(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0);
+        assert_ne!(
+            account.as_slice(),
+            hs_id.as_slice(),
+            "hs-id serving seed must differ from the identity account-sign seed"
         );
     }
 

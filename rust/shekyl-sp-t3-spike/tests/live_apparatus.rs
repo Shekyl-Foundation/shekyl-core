@@ -25,7 +25,9 @@
 
 use std::sync::Arc;
 
-use shekyl_sp_t3_spike::harness::{cold_client_id, warm_client_id, Apparatus};
+use shekyl_sp_t3_spike::harness::{
+    cold_client_id, warm_client_id, Apparatus, APPARATUS_PINNED_SEED,
+};
 use shekyl_sp_t3_spike::onion_key::derive_onion_identity;
 use shekyl_types::PSlot;
 
@@ -37,8 +39,6 @@ fn tor_binary() -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .expect("SHEKYL_SPIKE_TOR must point at the pinned Tor Expert Bundle binary")
 }
-
-const SEED: [u8; 64] = [0x27u8; 64];
 
 #[tokio::test]
 #[ignore = "requires the pinned Tor binary via SHEKYL_SPIKE_TOR (bootstraps, publishes onions, network)"]
@@ -52,7 +52,6 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
     let app = Apparatus::bring_up(
         tor_binary(),
         dir.path().join("tor-data"),
-        &SEED,
         2,
         Arc::new(payload.clone()),
     )
@@ -64,7 +63,7 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
     // expanded key that this crate derived from the seed, so the RFC 8032
     // expansion and the address construction are both right.
     for slot in 0..2u32 {
-        let expected = derive_onion_identity(&SEED, PSlot::from_raw(slot));
+        let expected = derive_onion_identity(&APPARATUS_PINNED_SEED, PSlot::from_raw(slot));
         assert_eq!(
             app.personas[slot as usize].service_id(),
             expected.service_id(),

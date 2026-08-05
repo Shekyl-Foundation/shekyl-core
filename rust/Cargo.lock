@@ -4382,12 +4382,11 @@ dependencies = [
 name = "shekyl-sp-t3-spike"
 version = "3.1.0"
 dependencies = [
- "curve25519-dalek",
  "ed25519-dalek",
  "kameo",
  "sha2",
  "sha3",
- "shekyl-archival-retention",
+ "shekyl-crypto-pq",
  "shekyl-fcmp",
  "shekyl-p-transport",
  "shekyl-tor",
