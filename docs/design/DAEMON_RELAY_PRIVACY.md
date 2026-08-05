@@ -12018,8 +12018,9 @@ under 120 s re-commits the exact sin this whole arc undid."* The 39 s was the
 number **wrong for privacy and incidentally comfortable for integration**.
 Treating a two-interval crossing as a constraint would rebuild precisely that.
 
-**What is owed sits at the integration layer, and one arm of it is a genuine
-re-run.** §15 located the real teeth in `MIN_RELAY_TIME` (300 s) and
+**What is owed sits at the integration layer.** *(The "genuine re-run" below is
+**withdrawn at §77.3**: §15.4 had already cleared `MIN_RELAY_TIME`, which
+governs an already-fluffed transaction rather than an embargoed one.)* §15 located the real teeth in `MIN_RELAY_TIME` (300 s) and
 mempool-lifetime headroom, not block time. At an embargo several times 190 s,
 recovery p90 grows into that 300 s window — so **the cascade check must be
 re-run by the constants round**, while the block-interval crossing is a
@@ -12353,3 +12354,79 @@ Two axes still need tracking rather than quantiling (§75's sorting test):
 **tree depth** and **batch depth** are common-mode — everyone runs the same
 depth at a given moment, and load is shared — so they take a **scheduled
 re-derivation** and a **volume trigger** respectively, not a statistic.
+
+## 77. §15 classified — descriptive and a soft preference, not load-bearing. D is unconstrained.
+
+**2026-08-05.** The open item that could have changed D's status. Resolved by
+reading §15's substance rather than its assertion, and the answer is the
+permissive one.
+
+### 77.1 The correctness property is structural, not temporal
+
+**§15.2 is the decisive subsection, and it does not depend on duration at
+all:**
+
+> *"A mined tx is dropped from the pool via `remove_txpool_tx`
+> ([blockchain.cpp:7053](../../src/cryptonote_core/blockchain.cpp#L7053), the
+> block-connect path), and the embargo lives in that pool entry's
+> `meta.last_relayed_time`, which `get_relayable_transactions` only reads for
+> pool-resident txes — so a mined tx **cannot** fire a stale embargo."*
+
+**The safety property is "the pool entry is dropped on mining", not "the
+embargo is shorter than a block interval."** An embargo may outlive
+arbitrarily many block intervals with no correctness consequence, because the
+thing it keys on is gone the moment the transaction is mined. §15.2's own
+framing — *"the margin is wide, not close"* — describes comfort, not a bound.
+
+### 77.2 What block time actually touches
+
+§15.4 already dispositions the neighbours: FTL (540 s) bounds block
+**timestamps**, not recovery; `MIN_RELAY_TIME` (300 s) governs re-broadcast of
+an **already-fluffed** transaction, a different state from the embargo. Its
+conclusion: *"The only consensus timescale this seam actually touches is block
+time (120 s), for **'which block does recovery make'**."*
+
+**That is recovery latency** — a performance quantity, borne only by
+black-holed transactions, already priced by §6.7 and distributed rather than
+cliff-shaped per §15.3.
+
+**Verdict: §15 is descriptive plus a soft preference. It is not load-bearing.**
+And §15.6 independently forbids treating it as a constraint (*"Block time is
+not a term of this derivation at any level, binding or not"*).
+
+**So D is unconstrained by §15, and C stays optional** — an input cap remains a
+liveness and capacity question, not a precondition for D's correctness.
+
+### 77.3 Correcting §73.6 — the cascade check is not owed
+
+§73.6 said the `MIN_RELAY_TIME` cascade check *"must be re-run by the constants
+round"* because recovery p90 grows into the 300 s window. **That was wrong, and
+§15.4 had already dispositioned it:** `MIN_RELAY_TIME` governs an
+already-fluffed transaction. During the embargo the transaction is
+stem-governed — a different state — so there is no race to re-run. I reached
+for the one neighbour §15 had explicitly cleared.
+
+### 77.4 D must use a global shape function, never local measurement
+
+**Pinned before D is specified, because the natural-looking implementation is
+the wrong one.**
+
+Deriving the embargo from *the node's own observed verification cost* is the
+obvious reading of "shape-aware", and it is a **§75 regression in a new
+place**: the embargo duration would become a **hardware fingerprint**, and the
+Pi operator's timers would differ from the laptop operator's on identical
+transactions — reintroducing exactly the sorting §75 removed, one layer down.
+
+**D is `embargo_mean = f(shape)`, where `f` is built from globally-fixed
+constants provisioned at the slow-hardware quantile.** Hardware keeps its
+quantile; shape becomes a parameter. **Every node computes the same value for
+the same transaction because they all use the same table — not because they all
+measure the same thing.**
+
+> **Local measurement is forbidden by construction, not by convention.** `f`
+> takes shape and returns a duration; it has no input through which a local
+> timing could enter — the same shape of enforcement §15.6 used to keep block
+> time out of the derivation (*"a term a future re-derivation re-evaluates is
+> one block time could eventually be permitted to move the embargo through"*).
+> Anything that measures locally has to add a parameter, which is a visible,
+> reviewable act.
