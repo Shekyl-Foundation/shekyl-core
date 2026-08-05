@@ -131,27 +131,27 @@ impl std::fmt::Debug for OnionIdentity {
     }
 }
 
-/// Derive persona `p_slot`'s onion identity from the wallet master seed.
+/// Derive persona `p_slot`'s onion identity from a wallet master seed under an
+/// explicit derivation context.
 ///
 /// The 32-byte seed is the **production** GF-9 HS-identity seed
 /// ([`derive_p_hs_id_seed`], label `ARCHIVAL_P_HS_ID_INFO`, frozen under
-/// `ARCHIVAL_P_DERIVE_V1`), expanded here per RFC 8032 to tor's `ED25519-V3`
-/// blob. `net`/`fmt` are pinned to `Mainnet`/`Bip39`: the apparatus derives
-/// against one fixed context, and slot 0 reproduces the KAT's `hs_id_pubkey`
-/// vector — so [`derive_onion_identity`] is now the same map the frozen corpus
-/// pins, and the live `onion_key_matches_tors_service_id` check validates that
-/// production derivation against a real tor rather than a spike-local construction.
+/// `ARCHIVAL_P_DERIVE_V1`), which this function expands per RFC 8032 to tor's
+/// `ED25519-V3` blob. `net`/`fmt` select the derivation context exactly as the
+/// production path does — the caller chooses, nothing is hidden — so any given
+/// `(seed, net, fmt, p_slot)` reproduces the KAT's `hs_id_pubkey` vector. (The
+/// apparatus pins one context; see `Apparatus::bring_up_with_pow`.)
 ///
 /// Every intermediate is `Zeroizing`; the only value that outlives the call is
 /// the [`OnionKey`], which wipes on drop.
 #[must_use]
-pub fn derive_onion_identity(master_seed_64: &[u8; 64], p_slot: PSlot) -> OnionIdentity {
-    let seed = derive_p_hs_id_seed(
-        master_seed_64,
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        p_slot.to_raw(),
-    );
+pub fn derive_onion_identity(
+    master_seed_64: &[u8; 64],
+    net: DerivationNetwork,
+    fmt: SeedFormat,
+    p_slot: PSlot,
+) -> OnionIdentity {
+    let seed = derive_p_hs_id_seed(master_seed_64, net, fmt, p_slot.to_raw());
 
     let expanded = expand_seed(&seed);
     let verifying = verifying_key_from_seed(&seed);
@@ -252,6 +252,18 @@ mod tests {
 
     const SEED: [u8; 64] = [0x5au8; 64];
 
+    /// Derive under one fixed context so these unit tests exercise the encoding
+    /// and slot/seed binding without repeating `(net, fmt)` at every call. The
+    /// context choice is irrelevant to what they assert.
+    fn identity(seed: &[u8; 64], slot: u32) -> OnionIdentity {
+        derive_onion_identity(
+            seed,
+            DerivationNetwork::Mainnet,
+            SeedFormat::Bip39,
+            PSlot::from_raw(slot),
+        )
+    }
+
     #[test]
     fn base32_matches_rfc4648_vectors() {
         // RFC 4648 §10, lowercased and unpadded — the address alphabet. A drift
@@ -286,9 +298,9 @@ mod tests {
     fn derivation_is_deterministic_and_slot_bound() {
         // Stable across calls (the "persist without storing" property: a restart
         // reproduces the same .onion) and distinct per slot (the persona binding).
-        let a = derive_onion_identity(&SEED, PSlot::from_raw(0));
-        let a2 = derive_onion_identity(&SEED, PSlot::from_raw(0));
-        let b = derive_onion_identity(&SEED, PSlot::from_raw(1));
+        let a = identity(&SEED, 0);
+        let a2 = identity(&SEED, 0);
+        let b = identity(&SEED, 1);
         assert_eq!(a.service_id(), a2.service_id());
         assert_ne!(a.service_id(), b.service_id());
     }
@@ -298,8 +310,8 @@ mod tests {
         // A different wallet must not land on the same persona address.
         let other = [0x5bu8; 64];
         assert_ne!(
-            derive_onion_identity(&SEED, PSlot::from_raw(3)).service_id(),
-            derive_onion_identity(&other, PSlot::from_raw(3)).service_id()
+            identity(&SEED, 3).service_id(),
+            identity(&other, 3).service_id()
         );
     }
 
@@ -312,7 +324,7 @@ mod tests {
         use std::collections::HashSet;
         let mut seen = HashSet::new();
         for slot in 0..512u32 {
-            let id = derive_onion_identity(&SEED, PSlot::from_raw(slot));
+            let id = identity(&SEED, slot);
             assert!(
                 seen.insert(id.service_id().as_str().to_owned()),
                 "slot {slot} collided"
@@ -330,7 +342,7 @@ mod tests {
 
     #[test]
     fn service_id_is_a_wellformed_v3_address() {
-        let id = derive_onion_identity(&SEED, PSlot::from_raw(7));
+        let id = identity(&SEED, 7);
         let s = id.service_id().as_str();
         assert_eq!(s.len(), 56);
         assert!(s
@@ -343,7 +355,7 @@ mod tests {
 
     #[test]
     fn identity_debug_redacts() {
-        let id = derive_onion_identity(&SEED, PSlot::from_raw(2));
+        let id = identity(&SEED, 2);
         let rendered = format!("{id:?}");
         assert!(!rendered.contains(id.service_id().as_str()));
         assert!(rendered.contains("<redacted>"));
