@@ -100,7 +100,15 @@ fn bench_admission(c: &mut Criterion) {
         // ~0.07 ms each, which cannot move the constant, and holding it fixed
         // keeps this sweep on the axis §79 is about.
         let n_out = 2usize;
-        for n_in in [1usize, 2, 4] {
+        // EXHAUSTIVE over the consensus domain. `FCMP_MAX_INPUTS_PER_TX = 8`
+        // (`cryptonote_config.h:253`) and `shekyl_fcmp::MAX_INPUTS = 8` agree,
+        // and the cap is enforced at three layers: consensus
+        // (`blockchain.cpp:3517`), the verify FFI, and `proof::verify` itself.
+        //
+        // So there is no functional form to choose and nothing to extrapolate:
+        // the domain has EIGHT points, and measuring all of them makes the
+        // surface itself the specification (§80).
+        for n_in in 1usize..=8 {
             {
                 let fixture = build_fixture(n_in, n_out, tree_depth, layout);
 

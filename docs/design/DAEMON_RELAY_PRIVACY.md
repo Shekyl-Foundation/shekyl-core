@@ -12605,3 +12605,119 @@ f_spec(n_in)  ≈  95 ms  +  33.4 ms × n_in
 | batch-depth volume trigger | computed, ~300k tx/day (§74.1) |
 
 **One decision and one functional-form choice.** Everything else is measured.
+
+## 80. Decided — D adopted, Pi 4 is the stated floor, `f` is a table
+
+**2026-08-05, maintainer decisions. The round collapses to a build.**
+
+### 80.1 The input axis was never unbounded — three arguments retire
+
+`FCMP_MAX_INPUTS_PER_TX = 8` (`cryptonote_config.h:253`, *"bounds proof
+generation time and tx size"*), enforced at **three** layers: consensus
+(`blockchain.cpp:3517`), the verify FFI, and `proof::verify` itself. So:
+
+- **"Range max isn't viable, it's unbounded"** — retired. Eight points, all
+  measured; the surface *is* the specification.
+- **"Measure to n = 8/16/32 to determine the form"** — retired. No form to
+  determine, and no cache-boundary question at 32 because 32 is unreachable.
+- **"C is optional"** — retired. C was never open. It is shipped, with its
+  rationale in the `#define`.
+
+> **The pattern, named because it is the fourth instance: we read what the code
+> *does* and not what it *forbids*.** Verification-path reads found the cost;
+> nobody read the admission bounds. **Grounding a mechanism means reading its
+> limits as well as its behaviour** — a bound is a fact about the design, not
+> an absence of one.
+
+### 80.2 Two dominance results, and they price the decisions
+
+- **`F` dominates `hop`.** 3250 ms against 73–328 ms, so a **5.6× hardware
+  difference moves the embargo 13 %.** The spec decision is cheap.
+- **The cap bounds the tail at 8.** §75's sorting is real, **closed, and
+  small**: at Pi 4 spec a scalar leaves **56 s** uncovered across the whole
+  legal shape domain.
+
+So D-vs-B stopped being a principled question and became a priced one.
+
+### 80.3 D adopted — for decoupling, not for the 56 s
+
+**The decisive argument is not the magnitude.** Under scalar-at-8,
+`MAX_INPUTS` is **coupled to the embargo**, which is network-wide: raising the
+cap to 16 would re-derive the scalar at 16 and lengthen the embargo for
+*every* transaction including 1-input ones — **a coordinated change to a
+privacy constant, triggered by a capacity decision with no privacy content.**
+
+**That is Q11-A's shape exactly** — one parameter silently driving a second
+mechanism — and Unit 0 was spent removing it from `FORWARD_DELAY`. Choosing
+scalar-at-8 would create the same coupling **prospectively**.
+
+Under D, raising the cap **adds rows to a table**. Existing shapes' embargoes
+do not move, and the cap becomes what it should be: **a capacity bound, not a
+privacy parameter wearing a capacity label.**
+
+**And D is cheaper, not merely more correct.** Over-provisioning is the policy
+default *because it covers unmeasured variance* — you round up when you do not
+know the value. **Here we know it**: 129 ms at 1 input, 409 ms at 8, both
+measured. Provisioning the 1-input case at the 8-input value is not caution,
+it is **paying ~57 s of recovery latency on every transaction for nothing.**
+
+### 80.4 Pi 4 is the minimum supported spec — and its status has changed
+
+**Decided.** It was always the floor; that is why the hardware exists.
+
+**What changed is why it is the spec.** It was *"the low-end machine we have"*;
+it is now **"the machine the guarantee is provisioned to."** At or above it,
+uniform anonymity; below it, **preemption rises silently**. That makes the
+floor **load-bearing for the privacy guarantee**, not a bench convenience — and
+it belongs stated where §75's principle lives, because the next person to ask
+why the embargo is what it is needs the answer to be a decision rather than an
+accident of available hardware.
+
+*(Whether that statement also belongs in `00-mission` or a `.cursor/rule` is a
+rules change and not this document's to make — flagged, not taken.)*
+
+**The §78.3 trap now has a number.** A future reader observes Pi-class relays
+are rare and proposes re-deriving against typical hardware: that proposal is
+worth about **21 s** of recovery latency and **reintroduces hardware-sorted
+anonymity** to buy it. §75.4 was written against that reader; it is stronger
+with the price attached.
+
+### 80.5 `f` is a table, over two closed axes
+
+**A lookup, never a fit.** The domain is closed, so a formula would invite the
+extrapolation that does not apply — **a table cannot be evaluated at 9.** If
+`MAX_INPUTS` rises, adding rows is a **visible, reviewable act**; re-evaluating
+a polynomial is not. Same device as `f` refusing a timing parameter (§77.4) and
+§15.6 refusing a block-time term.
+
+**Two closed axes, not one:** `f(n_in, depth_tier)` — **8 inputs × 6 capacity
+tiers = 48 cells**, all enumerable, no fitting anywhere. The scheduled depth
+re-derivations then become *"measure the next column"*, which is a far better
+defined task than *"re-derive the constant"*.
+
+**The output axis stays excluded, with its measurement as the justification**
+rather than as an omission: ~0.07 ms per output (§72.3, §73.2), which cannot
+move the constant.
+
+### 80.6 The 5.56× ratio is now an invariant, not a curiosity
+
+Flat across every cell (5.36–5.75). **Pin it beside the table as the sanity
+check for every future re-measurement:** if a depth-tier re-derivation on the
+Pi returns a ratio far from 5.56 against the x86 arm, **something changed in
+the workload rather than in the tree.** Cheap, already measured, and it turns
+each scheduled re-derivation into a checkable act instead of a trusted one.
+
+### 80.7 What remains — a build, and one measurement
+
+| item | status |
+| --- | --- |
+| minimum spec | **decided — Pi 4** |
+| shape axis | **decided — D, table over `n_in ∈ 1..=8`** |
+| depth axis | closed at 6 tiers; **columns 3–7 unmeasured** |
+| output axis | excluded, with the 0.07 ms justification |
+| transit | **the one measurable input left**; the sweep shows it moves the absolute, not the ranking |
+| operator distribution | **moot** — it existed only to justify choosing a floor |
+
+**The fixture reaches depth 2 today.** Tiers 3–7 need `c1_branch_layers` (the
+Selene layer above Helios) — a fixture extension, not a new instrument, and the
+depth-2 work established the pattern.
