@@ -11857,6 +11857,12 @@ unreproducible and an artifact indistinguishable from a property:
   Pi reads *slower*, which is the safe direction and therefore the dangerous
   one: it makes an artifact look like a property. **Throttle state must be
   reported beside the result, or the result states that it could not be.**
+- **Toolchain, because it is codegen and codegen is the number.** The Pi now
+  carries `rustc 1.97.1` and `gcc 15.2.0`; `cmake` and `clang` are absent. Our
+  lint gate pins `+1.94.0`, so **the two arms must be built on the same
+  compiler or the ratio measures the compiler as well as the hardware** — the
+  `peers`-pin discipline (§69.2) applied to the build rather than the model:
+  hold everything but the one manipulated variable.
 
 **Why two real points rather than one plus a scaling factor.** FCMP++
 verification is elliptic-curve work and is SIMD-sensitive, so a laptop's AVX2
