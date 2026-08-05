@@ -120,6 +120,19 @@ enum class relay_category : uint8_t
 
 bool matches_category(relay_method method, relay_category category) noexcept;
 
+/**
+ * @brief LMDB height key for a block's attestation witness.
+ *
+ * Mirrors `store_curve_tree_root_at_height`: keyed at the post-add chain height
+ * (`block_index + 1`), not the block's 0-based index. Every read/write site that
+ * starts from a 0-based block index MUST go through this helper so the +1
+ * cannot drift between add / serve / reorg paths.
+ */
+inline uint64_t archival_attestation_witness_key(uint64_t block_index) noexcept
+{
+  return block_index + 1;
+}
+
 #pragma pack(push, 1)
 
 /**
@@ -2540,10 +2553,11 @@ public:
 
   // ─── Credit-wire attestation witness (prunable, admission-only) ───────────
   // The per-block `r` + pass-signature witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4,
-  // transport B2): height-keyed, mined-commitment lives in the block header's
-  // attestation_root (not the blob), stored here alongside the block add so it
-  // rides pop_block's atomic txn, and pruned after horizon. Opaque bytes at this
-  // layer; the per-record decode and countersignature verify live in Rust.
+  // transport B2): height-keyed on main, hash-keyed when detached (alt / mid-reorg).
+  // Mined commitment lives in the block header's attestation_root (not the blob).
+  // pop_block MOVES height→hash so reorg survival is a DB property of pop — callers
+  // do not stash in memory. add_block writes height and clears the hash-keyed copy.
+  // Pruned after horizon. Opaque bytes at this layer; decode/verify live in Rust.
 
   /**
    * @brief store a block's attestation witness keyed by block height.
@@ -2564,19 +2578,16 @@ public:
   /**
    * @brief remove the stored attestation witness for a given height.
    *
-   * Called during pop_block (keyed to mirror remove_curve_tree_root_at_height);
-   * tolerant of a missing key (the row exists only for blocks that carried a
-   * non-empty witness).
+   * Tolerant of a missing key. pop_block prefers move-to-hash over bare delete
+   * when a non-empty witness is present; this remains for prune and tests.
    */
   virtual void remove_archival_attestation_witness_at_height(uint64_t block_height) = 0;
 
-  // ─── Alt-chain attestation witness (prunable, reorg-survival) ─────────────
-  // The height-keyed table above lives only for the main chain and is DELETED at
-  // pop. To survive a reorg, an alt-block's witness is stashed here keyed by BLOCK
-  // HASH (alt blocks are not height-canonical), alongside add_alt_block. On
-  // reorg-connect the witness is read back and injected into the promoting block's
-  // pool_supplement; its lifetime is tied to the alt block (removed by
-  // remove_alt_block / drop_alt_blocks). Opaque bytes at this layer, like above.
+  // ─── Detached / alt-chain attestation witness (hash-keyed) ────────────────
+  // Hash-keyed counterpart to the height-keyed main table. Holds witnesses for
+  // (a) alt blocks and (b) blocks mid-reorg after pop_block moves them off main.
+  // Cleared by add_block (when the block returns to main), remove_alt_block,
+  // drop_alt_blocks, or explicit discard of disconnected-chain blocks.
 
   /**
    * @brief store an alt block's attestation witness keyed by block hash.

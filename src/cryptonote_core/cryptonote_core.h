@@ -150,7 +150,7 @@ namespace cryptonote
      bool handle_single_incoming_block(const blobdata& block_blob,
       const block *b,
       block_verification_context& bvc,
-      pool_supplement& extra_block_txs,
+      block_connect_supplement& connect,
       bool update_miner_blocktemplate = true);
 
      /**
@@ -180,7 +180,7 @@ namespace cryptonote
        bool update_miner_blocktemplate = true);
 
      bool handle_incoming_block(const blobdata& block_blob, const block *b,
-       block_verification_context& bvc, pool_supplement& extra_block_txs,
+       block_verification_context& bvc, block_connect_supplement& connect,
        bool update_miner_blocktemplate = true);
 
      /**
@@ -971,7 +971,7 @@ namespace cryptonote
       * @note see Blockchain::add_new_block
       */
      bool add_new_block(const block& b, block_verification_context& bvc,
-       pool_supplement& extra_block_txs);
+       block_connect_supplement& connect);
 
      /**
       * @brief load any core state stored on disk

@@ -637,7 +637,11 @@ namespace cryptonote
   bool get_archival_attestation_from_extra(const std::vector<uint8_t>& tx_extra, std::string& attestation_blob)
   {
     std::vector<tx_extra_field> tx_extra_fields;
-    parse_tx_extra(tx_extra, tx_extra_fields);
+    // Propagate parse failure explicitly: a malformed extra must not be
+    // confused with "field absent" (which also returns false, but only after a
+    // successful parse that simply lacks the tag).
+    if (!parse_tx_extra(tx_extra, tx_extra_fields))
+      return false;
 
     tx_extra_archival_attestation field;
     if (!find_tx_extra_field_by_type(tx_extra_fields, field))

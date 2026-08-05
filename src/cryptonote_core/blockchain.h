@@ -373,14 +373,14 @@ namespace cryptonote
      *
      * @param bl_ the block to be added
      * @param bvc metadata about the block addition's success/failure
-     * @param extra_block_txs txs belonging to this block that may not be in the mempool
+     * @param connect pool txs + block-level admission data (attestation witness)
      *
      * @return true on successful addition to the blockchain, else false
      */
     bool add_new_block(const block& bl_, block_verification_context& bvc);
 
     bool add_new_block(const block& bl_, block_verification_context& bvc,
-      pool_supplement& extra_block_txs);
+      block_connect_supplement& connect);
 
     /**
      * @brief clears the blockchain and starts a new one
@@ -1409,12 +1409,12 @@ namespace cryptonote
      * @param bl the block to be added
      * @param id the hash of the block
      * @param bvc metadata concerning the block's validity
-     * @param extra_block_txs txs belonging to this block that may not be in the mempool
+     * @param connect pool txs + block-level admission data (attestation witness)
      *
      * @return true if the block was added successfully, otherwise false
      */
     bool handle_block_to_main_chain(const block& bl, const crypto::hash& id,
-      block_verification_context& bvc, pool_supplement& extra_block_txs);
+      block_verification_context& bvc, block_connect_supplement& connect);
 
     /**
      * @brief validate and add a new block to an alternate blockchain
@@ -1426,12 +1426,12 @@ namespace cryptonote
      * @param b the block to be added
      * @param id the hash of the block
      * @param bvc metadata concerning the block's validity
-     * @param extra_block_txs txs belonging to this block that may not be in the mempool
+     * @param connect pool txs + block-level admission data (attestation witness)
      *
      * @return true if the block was added successfully, otherwise false
      */
     bool handle_alternative_block(const block& b, const crypto::hash& id,
-      block_verification_context& bvc, pool_supplement& extra_block_txs);
+      block_verification_context& bvc, block_connect_supplement& connect);
 
     /**
      * @brief builds a list of blocks connecting a block to the main chain
@@ -1523,13 +1523,10 @@ namespace cryptonote
      *
      * @param original_chain the chain to switch back to
      * @param rollback_height the height to revert to before appending the original chain
-     * @param popped_witnesses credit-wire attestation witnesses stashed (by block hash) before
-     *   the blocks were popped, re-supplied so each restored block carries its witness (PR-B2)
      *
      * @return false if something goes wrong with reverting (very bad), otherwise true
      */
-    bool rollback_blockchain_switching(std::list<block>& original_chain, uint64_t rollback_height,
-      const std::unordered_map<crypto::hash, blobdata>& popped_witnesses);
+    bool rollback_blockchain_switching(std::list<block>& original_chain, uint64_t rollback_height);
 
     /**
      * @brief gets recent block weights for median calculation

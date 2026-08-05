@@ -543,13 +543,18 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
 
   // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): the
   // prunable admission bytes (r + pass signatures) ride this same write txn,
-  // keyed at `prev_height + 1` — the SAME height store_curve_tree_root_at_height
-  // uses above, so pop_block's remove (which uses the popped block's height, the
-  // matching half of that proven pair) reverses exactly this row. An empty
-  // witness (interim blocks, all-miss blocks) writes no row: the absent key
-  // reads as "no witness" (the accrual row's skip-when-empty convention).
+  // keyed via archival_attestation_witness_key(prev_height) — the SAME height
+  // store_curve_tree_root_at_height uses above. pop_block MOVES the row to the
+  // hash-keyed table (reorg survival is a DB property of pop). An empty witness
+  // (interim / all-miss) writes no row: absent key reads as "no witness".
+  // Clearing the hash-keyed copy here means a promote/restore leaves no
+  // detached duplicate once the block is back on main.
   if (!attestation_witness.empty())
-    store_archival_attestation_witness_at_height(prev_height + 1, attestation_witness);
+  {
+    store_archival_attestation_witness_at_height(
+      archival_attestation_witness_key(prev_height), attestation_witness);
+    remove_archival_alt_attestation_witness(blk_hash);
+  }
 
   // call out to subclass implementation to add the block & metadata
   time1 = epee::misc_utils::get_tick_count();
@@ -652,12 +657,18 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
 
   const uint64_t block_height = removed_block_height;
 
-  // Reverse the credit-wire attestation witness written in add_block. Keyed at
-  // `block_height` — the matching half of store_archival_attestation_witness_at_
-  // height's `prev_height + 1` pair (identical to the curve-tree root pairing) —
-  // and tolerant of a missing key (the row exists only for blocks that carried a
-  // non-empty witness). Same write txn as the pop.
-  remove_archival_attestation_witness_at_height(block_height);
+  // Credit-wire reorg survival: MOVE the height-keyed witness to the hash-keyed
+  // detached table rather than deleting it. Keyed at `block_height` (the matching
+  // half of archival_attestation_witness_key(prev_height) on add). Callers no
+  // longer stash witnesses in memory across switch_to_alternative_blockchain —
+  // promote / demote / rollback restore all look up by block hash. Same write
+  // txn as the pop. Empty/missing is a no-op (tolerant remove).
+  {
+    blobdata detached = get_archival_attestation_witness_at_height(block_height);
+    if (!detached.empty())
+      store_archival_alt_attestation_witness(get_block_hash(blk), detached);
+    remove_archival_attestation_witness_at_height(block_height);
+  }
 
   for (const auto& h : boost::adaptors::reverse(blk.tx_hashes))
   {

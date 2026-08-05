@@ -23,7 +23,7 @@
 use shekyl_archival_retention::{
     attestation_nonce, attestation_root, AttestationHeader, AttestationKind,
     BlockAttestationWitness, PassRecord, WitnessError, ATTESTATION_HEADER_LEN,
-    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES,
+    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES, WITNESS_PREFIX_LEN,
 };
 use shekyl_crypto_pq::signature::{
     HybridSignature, HYBRID_SCHEME_ID_ED25519_ML_DSA_65, HYBRID_SIG_VERSION,
@@ -164,8 +164,10 @@ fn two_record_root_matches_pin() {
 fn attestation_constants_are_pinned() {
     assert_eq!(MAX_ATTESTATION_RECORDS, 256);
     assert_eq!(ATTESTATION_HEADER_LEN, 49);
-    // Exact witness maximum = 40 (r + count) + 256 × HybridSignature::CANONICAL_LEN. Pinned to the
-    // literal so a signature-size change surfaces here rather than silently in the coarse C++ cap.
+    // Exact witness maximum = WITNESS_PREFIX_LEN + 256 × HybridSignature::CANONICAL_LEN.
+    // Pinned to the literal so a signature-size change surfaces here rather than
+    // silently in the coarse C++ cap.
+    assert_eq!(WITNESS_PREFIX_LEN, 40);
     assert_eq!(MAX_ATTESTATION_WITNESS_BYTES, 866_600);
 }
 
@@ -199,22 +201,22 @@ fn witness_canonical_encoding_is_pinned_by_structure() {
     // so an encoder bug — wrong r offset, big-endian count, wrong sig order — fails here.
     assert_eq!(&bytes[0..32], &WITNESS_R, "r must be the 32-byte prefix");
     assert_eq!(
-        u64::from_le_bytes(bytes[32..40].try_into().unwrap()),
+        u64::from_le_bytes(bytes[32..WITNESS_PREFIX_LEN].try_into().unwrap()),
         2,
         "count is a u64 little-endian prefix"
     );
     assert_eq!(
         bytes.len(),
-        40 + 2 * sig_len,
+        WITNESS_PREFIX_LEN + 2 * sig_len,
         "exact r + count + 2 signatures"
     );
     assert_eq!(
-        &bytes[40..40 + sig_len],
+        &bytes[WITNESS_PREFIX_LEN..WITNESS_PREFIX_LEN + sig_len],
         &sa.to_canonical_bytes().unwrap()[..],
         "first signature placed immediately after the framing"
     );
     assert_eq!(
-        &bytes[40 + sig_len..],
+        &bytes[WITNESS_PREFIX_LEN + sig_len..],
         &sb.to_canonical_bytes().unwrap()[..],
         "second signature follows, in order"
     );
@@ -243,7 +245,7 @@ fn witness_decode_rejects_corruption_of_the_pin() {
     // (2) Bump the count field without adding a signature: the derive-on-encode /
     // validate-on-decode guard rejects the disagreement loudly.
     let mut count_bump = good.clone();
-    count_bump[32..40].copy_from_slice(&3u64.to_le_bytes());
+    count_bump[32..WITNESS_PREFIX_LEN].copy_from_slice(&3u64.to_le_bytes());
     assert!(
         matches!(
             BlockAttestationWitness::from_canonical_bytes(&count_bump),
@@ -255,7 +257,7 @@ fn witness_decode_rejects_corruption_of_the_pin() {
     // (3) Swap the two signature blocks: decodes to reversed order (!= original), so
     // signature ORDER (the pairing input) is bound, not just the set.
     let mut swapped = good.clone();
-    let (_, sigs) = swapped.split_at_mut(40);
+    let (_, sigs) = swapped.split_at_mut(WITNESS_PREFIX_LEN);
     let (a, b) = sigs.split_at_mut(sig_len);
     a.swap_with_slice(b);
     assert_ne!(

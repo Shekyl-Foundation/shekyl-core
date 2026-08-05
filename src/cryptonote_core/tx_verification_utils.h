@@ -54,7 +54,10 @@ uint64_t get_transaction_weight_limit(uint8_t hf_version);
 bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv);
 
 /**
- * @brief Used to provide transaction info that skips the mempool to block handling code 
+ * @brief Used to provide transaction info that skips the mempool to block handling code.
+ *
+ * Tx-only. Block-level admission data (credit-wire attestation witness) rides
+ * [`block_connect_supplement`], not this type.
  */
 struct pool_supplement
 {
@@ -64,13 +67,23 @@ struct pool_supplement
     // If non-zero, then consider all the txs' non-input consensus (NIC) rules verified for this
     // hard fork. User: If you add an unverified transaction to txs_by_txid, set this field to zero!
     mutable std::uint8_t nic_verified_hf_version = 0;
-    // Per-block credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2). Opaque
-    // Rust-canonical bytes (r ‖ count ‖ pass signatures) carried alongside the block from the
-    // wire block_complete_entry to add_block's prunable side table. This is NOT tx data: it is
-    // never interpreted here (decoded/verified only in Rust) and does not participate in NIC
-    // verification. Empty on every non-p2p entry point (local mine, importer, reorg replay
-    // through the 2-arg handlers) until the transport is populated; that absence is the correct
-    // "no witness supplied" signal to add_block, which then writes no side-table row.
+};
+
+/**
+ * @brief Block-level data that rides the connect path alongside the block itself.
+ *
+ * Separates the tx pool supplement from block-level admission data so
+ * `pool_supplement` stays tx-shaped. Both the p2p transport and reorg re-supply
+ * thread this single object into `handle_block_to_main_chain` /
+ * `handle_alternative_block`.
+ */
+struct block_connect_supplement
+{
+    pool_supplement pool;
+    // Per-block credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2).
+    // Opaque Rust-canonical bytes (r ‖ count ‖ pass signatures). Empty until the
+    // transport populates it; empty means "no witness supplied" and stores no
+    // side-table row on main-chain add.
     blobdata attestation_witness;
 };
 

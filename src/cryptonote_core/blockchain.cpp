@@ -1329,8 +1329,7 @@ std::vector<time_t> Blockchain::get_last_block_timestamps(unsigned int blocks) c
 // This function removes blocks from the blockchain until it gets to the
 // position where the blockchain switch started and then re-adds the blocks
 // that had been removed.
-bool Blockchain::rollback_blockchain_switching(std::list<block>& original_chain, uint64_t rollback_height,
-  const std::unordered_map<crypto::hash, blobdata>& popped_witnesses)
+bool Blockchain::rollback_blockchain_switching(std::list<block>& original_chain, uint64_t rollback_height)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
@@ -1345,9 +1344,16 @@ bool Blockchain::rollback_blockchain_switching(std::list<block>& original_chain,
   m_reset_timestamps_and_difficulties_height = true;
 
   // remove blocks from blockchain until we get back to where we should be.
+  // pop_block MOVES each main-chain witness to the hash-keyed table, so the
+  // restore loop below can re-supply it by block hash without an in-memory stash.
+  // When original_chain is empty (checkpoint rollback), the popped blocks are
+  // discarded — drop their detached witnesses so they do not orphan.
+  const bool discard_popped = original_chain.empty();
   while (m_db->height() != rollback_height)
   {
-    pop_block_from_blockchain();
+    block b = pop_block_from_blockchain();
+    if (discard_popped)
+      m_db->remove_archival_alt_attestation_witness(get_block_hash(b));
   }
   CHECK_AND_ASSERT_THROW_MES(update_next_cumulative_weight_limit(), "Error updating next cumulative weight limit");
 
@@ -1358,14 +1364,11 @@ bool Blockchain::rollback_blockchain_switching(std::list<block>& original_chain,
   for (auto& bl : original_chain)
   {
     block_verification_context bvc = {};
-    // Credit-wire (PR-B2): re-supply the stashed witness (deleted from the main table when this
-    // block was popped in switch_to_alternative_blockchain) so the restored block carries it back.
     const crypto::hash restore_id = get_block_hash(bl);
-    pool_supplement ps{};
-    const auto stashed = popped_witnesses.find(restore_id);
-    if (stashed != popped_witnesses.end())
-      ps.attestation_witness = stashed->second;
-    bool r = handle_block_to_main_chain(bl, restore_id, bvc, ps);
+    block_connect_supplement connect{};
+    // DB-owned reorg survival: pop moved the witness to the hash-keyed table.
+    connect.attestation_witness = m_db->get_archival_alt_attestation_witness(restore_id);
+    bool r = handle_block_to_main_chain(bl, restore_id, bvc, connect);
     CHECK_AND_ASSERT_MES(r && bvc.m_added_to_main_chain, false, "PANIC! failed to add (again) block while chain switching during the rollback!");
   }
 
@@ -1399,24 +1402,14 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
     return false;
   }
 
-  // pop blocks from the blockchain until the top block is the parent
-  // of the front block of the alt chain.
-  // Credit-wire (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2): pop_block DELETES each block's height-keyed
-  // attestation witness, so read and STASH it (keyed by block hash) BEFORE the pop. The stash
-  // re-supplies the witness when these ex-main blocks are re-added — as alternates below, or back
-  // to the main chain by rollback_blockchain_switching on failure.
+  // pop blocks from the blockchain until the top block is the parent of the
+  // front block of the alt chain. pop_block MOVES each height-keyed attestation
+  // witness to the hash-keyed detached table (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2)
+  // — reorg survival is a DB property of pop, not an in-memory stash here.
   std::list<block> disconnected_chain;
-  std::unordered_map<crypto::hash, blobdata> popped_witnesses;
   while (m_db->top_block_hash() != alt_chain.front().bl.prev_id)
   {
-    const uint64_t top_height = m_db->height() - 1;
-    // add_block keys the witness at block_height + 1 (mirroring the curve-tree root), so the top
-    // block's witness lives at top_height + 1 — the exact key pop_block_from_blockchain will
-    // delete. Read it here, BEFORE that delete.
-    blobdata popped_witness = m_db->get_archival_attestation_witness_at_height(top_height + 1);
     block b = pop_block_from_blockchain();
-    if (!popped_witness.empty())
-      popped_witnesses[get_block_hash(b)] = std::move(popped_witness);
     disconnected_chain.push_front(b);
   }
   CHECK_AND_ASSERT_THROW_MES(update_next_cumulative_weight_limit(), "Error updating next cumulative weight limit");
@@ -1429,13 +1422,13 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
     const auto &bei = *alt_ch_iter;
     block_verification_context bvc = {};
 
-    // add block to main chain. Credit-wire (PR-B2): the alt block's attestation witness was
-    // stashed by add_alt_block keyed by block hash; read it back and inject it through the pool
-    // supplement so add_block re-writes it to the main height-keyed table on promotion.
+    // Promote: witness already lives in the hash-keyed table (stashed when the
+    // alt was added, or by a prior pop). Read it and pass through connect so
+    // add_block re-writes the height-keyed row and clears the hash-keyed copy.
     const crypto::hash promoted_id = get_block_hash(bei.bl);
-    pool_supplement promoted_ps{};
-    promoted_ps.attestation_witness = m_db->get_archival_alt_attestation_witness(promoted_id);
-    bool r = handle_block_to_main_chain(bei.bl, promoted_id, bvc, promoted_ps);
+    block_connect_supplement promoted{};
+    promoted.attestation_witness = m_db->get_archival_alt_attestation_witness(promoted_id);
+    bool r = handle_block_to_main_chain(bei.bl, promoted_id, bvc, promoted);
 
     // if adding block to main chain failed, rollback to previous state and
     // return false
@@ -1446,7 +1439,7 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
       // rollback_blockchain_switching should be moved to two different
       // functions: rollback and apply_chain, but for now we pretend it is
       // just the latter (because the rollback was done above).
-      rollback_blockchain_switching(disconnected_chain, split_height, popped_witnesses);
+      rollback_blockchain_switching(disconnected_chain, split_height);
 
       const crypto::hash blkid = cryptonote::get_block_hash(bei.bl);
       m_db->remove_alt_block(blkid);
@@ -1466,18 +1459,15 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
   const size_t discarded_blocks = disconnected_chain.size();
   if(!discard_disconnected_chain)
   {
-    //pushing old chain as alternative chain
+    //pushing old chain as alternative chain. Witnesses already sit in the
+    // hash-keyed table from the pop above; handle_alternative_block with an
+    // empty witness leaves them in place (store is skip-when-empty).
     for (auto& old_ch_ent : disconnected_chain)
     {
       block_verification_context bvc = {};
-      pool_supplement ps{};
+      block_connect_supplement connect{};
       const crypto::hash old_id = get_block_hash(old_ch_ent);
-      // Credit-wire (PR-B2): re-supply the stashed witness so handle_alternative_block re-stores
-      // it into the alt table — this ex-main block keeps its witness as an alternate.
-      const auto stashed = popped_witnesses.find(old_id);
-      if (stashed != popped_witnesses.end())
-        ps.attestation_witness = stashed->second;
-      bool r = handle_alternative_block(old_ch_ent, old_id, bvc, ps);
+      bool r = handle_alternative_block(old_ch_ent, old_id, bvc, connect);
       if(!r)
       {
         MERROR("Failed to push ex-main chain blocks to alternative chain ");
@@ -1485,6 +1475,13 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
         // think this is bad enough to warrant that.
       }
     }
+  }
+  else
+  {
+    // Discarded: drop the hash-keyed witnesses pop parked for these blocks so
+    // they do not orphan forever.
+    for (const auto& b : disconnected_chain)
+      m_db->remove_archival_alt_attestation_witness(get_block_hash(b));
   }
 
   //removing alt_chain entries from alternative chains container
@@ -2198,9 +2195,10 @@ bool Blockchain::build_alt_chain(const crypto::hash &prev_id, std::list<block_ex
 // if so.  If not, we need to hang on to the block in case it becomes part of
 // a long forked chain eventually.
 bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id,
-  block_verification_context& bvc, pool_supplement& extra_block_txs)
+  block_verification_context& bvc, block_connect_supplement& connect)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
+  pool_supplement& extra_block_txs = connect.pool;
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
   m_timestamps_and_difficulties_height = 0;
   m_reset_timestamps_and_difficulties_height = true;
@@ -2427,11 +2425,11 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     m_db->add_alt_block(id, data, cryptonote::block_to_blob(bei.bl));
     // Stash this alt block's credit-wire attestation witness (if any) keyed by block hash so it
     // survives a reorg-connect back to the main chain (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2). Empty
-    // on every path until the transport populates extra_block_txs (skip-when-empty, mirroring the
-    // height-keyed add_block convention). Tied to the alt block: remove_alt_block/drop_alt_blocks
-    // clean it up.
-    if (!extra_block_txs.attestation_witness.empty())
-      m_db->store_archival_alt_attestation_witness(id, extra_block_txs.attestation_witness);
+    // until the transport populates connect.attestation_witness (skip-when-empty). Demoted blocks
+    // already have a hash-keyed row from pop_block's move — re-storing is unnecessary when empty.
+    // Tied to the alt block: remove_alt_block/drop_alt_blocks clean it up.
+    if (!connect.attestation_witness.empty())
+      m_db->store_archival_alt_attestation_witness(id, connect.attestation_witness);
     alt_chain.push_back(bei);
 
     // FIXME: is it even possible for a checkpoint to show up not on the main chain?
@@ -2573,13 +2571,12 @@ bool Blockchain::handle_get_objects(NOTIFY_REQUEST_GET_OBJECTS::request& arg, NO
       e.block_weight = m_db->get_block_weight(m_db->get_block_height(arg.blocks[i]));
 
     // Attach the credit-wire attestation witness for this block from the prunable side table
-    // (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2). add_block keys the witness at block_height + 1
-    // (mirroring the curve-tree root: store_..._at_height(prev_height + 1)), so the read key is
-    // get_block_height(bl.second) + 1 — NOT the block's own height. Attach-if-present: the read
-    // returns empty for a pre-horizon (pruned) or interim/all-miss block, and an empty witness is
-    // simply omitted on the wire by KV_SERIALIZE_OPT — never an error. Whether a syncing node may
+    // (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2). Key via archival_attestation_witness_key so the
+    // height+1 convention cannot drift from add_block. Attach-if-present: empty for pruned /
+    // interim / all-miss — omitted on the wire by KV_SERIALIZE_OPT. Whether a syncing node may
     // accept a witness-pruned block is a Phase 2 admission decision, not here.
-    e.attestation_witness = m_db->get_archival_attestation_witness_at_height(get_block_height(bl.second) + 1);
+    e.attestation_witness = m_db->get_archival_attestation_witness_at_height(
+      archival_attestation_witness_key(get_block_height(bl.second)));
   }
 
   return true;
@@ -3180,8 +3177,8 @@ bool Blockchain::handle_block_to_main_chain(const block& bl, block_verification_
 {
     LOG_PRINT_L3("Blockchain::" << __func__);
     crypto::hash id = get_block_hash(bl);
-    pool_supplement ps{};
-    return handle_block_to_main_chain(bl, id, bvc, ps);
+    block_connect_supplement connect{};
+    return handle_block_to_main_chain(bl, id, bvc, connect);
 }
 //------------------------------------------------------------------
 size_t Blockchain::get_total_transactions() const
@@ -5581,9 +5578,10 @@ bool Blockchain::flush_txes_from_pool(const std::vector<crypto::hash> &txids)
 //      transaction mem_pool, then pass the block and transactions to
 //      m_db->add_block()
 bool Blockchain::handle_block_to_main_chain(const block& bl, const crypto::hash& id,
-  block_verification_context& bvc, pool_supplement& extra_block_txs)
+  block_verification_context& bvc, block_connect_supplement& connect)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
+  pool_supplement& extra_block_txs = connect.pool;
 
   TIME_MEASURE_START(block_processing_time);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
@@ -6254,13 +6252,11 @@ leave:
     {
       uint64_t long_term_block_weight = get_next_long_term_block_weight(block_weight);
       cryptonote::blobdata bd = cryptonote::block_to_blob(bl);
-      // Attestation witness (ARCHIVAL_CREDIT_WIRE.md §3): supplied by the p2p
-      // transport through the pool supplement (block_complete_entry → make_pool_
-      // supplement_from_block_entry → here). Empty on every non-p2p path — local
-      // mine, importer, and reorg replay through the 2-arg handlers — and until the
-      // Phase 2/3 template writer populates it. An empty witness stores no side-
-      // table row (db_lmdb store_archival_attestation_witness_at_height skips empty).
-      new_height = m_db->add_block(std::make_pair(std::move(bl), std::move(bd)), block_weight, long_term_block_weight, cumulative_difficulty, already_generated_coins, archival_budget_accrual, extra_block_txs.attestation_witness, txs);
+      // Attestation witness (ARCHIVAL_CREDIT_WIRE.md §3): supplied via
+      // block_connect_supplement (p2p transport, verifying import, reorg
+      // re-supply). Empty on local mine and until the Phase 2/3 template writer
+      // populates it. Empty stores no height-keyed row.
+      new_height = m_db->add_block(std::make_pair(std::move(bl), std::move(bd)), block_weight, long_term_block_weight, cumulative_difficulty, already_generated_coins, archival_budget_accrual, connect.attestation_witness, txs);
     }
     catch (const KEY_IMAGE_EXISTS& e)
     {
@@ -6470,12 +6466,12 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
 //------------------------------------------------------------------
 bool Blockchain::add_new_block(const block& bl_, block_verification_context& bvc)
 {
-  pool_supplement ps{};
-  return add_new_block(bl_, bvc, ps);
+  block_connect_supplement connect{};
+  return add_new_block(bl_, bvc, connect);
 }
 //------------------------------------------------------------------
 bool Blockchain::add_new_block(const block& bl, block_verification_context& bvc,
-  pool_supplement& extra_block_txs)
+  block_connect_supplement& connect)
 {
   try
   {
@@ -6498,12 +6494,12 @@ bool Blockchain::add_new_block(const block& bl, block_verification_context& bvc,
     //chain switching or wrong block
     bvc.m_added_to_main_chain = false;
     rtxn_guard.stop();
-    return handle_alternative_block(bl, id, bvc, extra_block_txs);
+    return handle_alternative_block(bl, id, bvc, connect);
     //never relay alternative blocks
   }
 
   rtxn_guard.stop();
-  return handle_block_to_main_chain(bl, id, bvc, extra_block_txs);
+  return handle_block_to_main_chain(bl, id, bvc, connect);
 
   }
   catch (const std::exception &e)
@@ -6537,7 +6533,7 @@ void Blockchain::check_against_checkpoints(const checkpoints& points)
       // roll back to a couple of blocks before the checkpoint
       LOG_ERROR("Local blockchain failed to pass a checkpoint, rolling back!");
       std::list<block> empty;
-      rollback_blockchain_switching(empty, pt.first - 2, {});
+      rollback_blockchain_switching(empty, pt.first - 2);
     }
   }
   if (stop_batch)

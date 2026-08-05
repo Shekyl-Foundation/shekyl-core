@@ -389,6 +389,14 @@ namespace config
   static_assert(ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES >=
                   32 + 8 + ARCHIVAL_MAX_ATTESTATION_RECORDS * PQC_HYBRID_SINGLE_SIG_LEN,
                 "ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES must over-bound the canonical witness maximum");
+  // Coarse transport-cap predicate shared by every p2p / import ingress that
+  // buffers an opaque attestation-witness blob (fluffy handoff, get_objects
+  // response loop, verifying import). Exact structural validation is the Rust
+  // decoder's job at admission — this only bounds allocation.
+  constexpr bool archival_attestation_witness_within_transport_cap(size_t n) noexcept
+  {
+    return n <= ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES;
+  }
   // Archival reward-emission vin transport cap (C-1; REWARD_EMISSION_VIN_PLAN.md
   // PR-E2 shim). The C++ side carries the Rust canonical encoding as an opaque
   // blob; the real structural bounds live in emission_wire.rs. This cap only

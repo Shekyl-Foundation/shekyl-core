@@ -1288,9 +1288,9 @@ namespace cryptonote
   }
   //-----------------------------------------------------------------------------------------------
   bool core::add_new_block(const block& b, block_verification_context& bvc,
-    pool_supplement& extra_block_txs)
+    block_connect_supplement& connect)
   {
-    return m_blockchain_storage.add_new_block(b, bvc, extra_block_txs);
+    return m_blockchain_storage.add_new_block(b, bvc, connect);
   }
   //-----------------------------------------------------------------------------------------------
   bool core::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks)
@@ -1320,13 +1320,13 @@ namespace cryptonote
   bool core::handle_incoming_block(const blobdata& block_blob, const block *b,
     block_verification_context& bvc, bool update_miner_blocktemplate)
   {
-    pool_supplement ps{};
-    return handle_incoming_block(block_blob, b, bvc, ps, update_miner_blocktemplate);
+    block_connect_supplement connect{};
+    return handle_incoming_block(block_blob, b, bvc, connect, update_miner_blocktemplate);
   }
 
   //-----------------------------------------------------------------------------------------------
   bool core::handle_incoming_block(const blobdata& block_blob, const block *b,
-    block_verification_context& bvc, pool_supplement& extra_block_txs, bool update_miner_blocktemplate)
+    block_verification_context& bvc, block_connect_supplement& connect, bool update_miner_blocktemplate)
   {
     TRY_ENTRY();
 
@@ -1353,7 +1353,7 @@ namespace cryptonote
       }
       b = &lb;
     }
-    add_new_block(*b, bvc, extra_block_txs);
+    add_new_block(*b, bvc, connect);
     if(update_miner_blocktemplate && bvc.m_added_to_main_chain)
        update_miner_block_template();
     return true;
@@ -1364,7 +1364,7 @@ namespace cryptonote
   bool core::handle_single_incoming_block(const blobdata& block_blob,
     const block *b,
     block_verification_context& bvc,
-    pool_supplement& extra_block_txs,
+    block_connect_supplement& connect,
     bool update_miner_blocktemplate)
   {
     // Note: this estimate can be quite far off since fluffy blocks won't contain all their
@@ -1375,7 +1375,7 @@ namespace cryptonote
     // saving each block, then it doesn't matter either way: cleanup_handle_incoming_blocks()
     // always triggers a sync.
     size_t block_total_bytes = block_blob.size();
-    for (const auto &t : extra_block_txs.txs_by_txid)
+    for (const auto &t : connect.pool.txs_by_txid)
       block_total_bytes += t.second.second.size();
 
     CRITICAL_REGION_LOCAL(m_incoming_tx_lock);
@@ -1390,7 +1390,7 @@ namespace cryptonote
     return handle_incoming_block(block_blob,
       b,
       bvc,
-      extra_block_txs,
+      connect,
       update_miner_blocktemplate);
   }
   //-----------------------------------------------------------------------------------------------

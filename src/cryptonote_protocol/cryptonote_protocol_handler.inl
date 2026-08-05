@@ -87,22 +87,22 @@
 namespace cryptonote
 {
   template <class CryptoHashContainer>
-  inline bool make_pool_supplement_from_block_entry(
+  inline bool make_block_connect_supplement_from_block_entry(
     const std::vector<cryptonote::tx_blob_entry>& tx_entries,
     const CryptoHashContainer& blk_tx_hashes,
     const bool allow_pruned,
     const cryptonote::blobdata& attestation_witness,
-    cryptonote::pool_supplement& pool_supplement)
+    cryptonote::block_connect_supplement& connect)
   {
-    pool_supplement.nic_verified_hf_version = 0;
-    // The single point where the credit-wire attestation witness (opaque bytes) enters the
-    // pool supplement; both the fluffy path and make_full_pool_supplement_from_block_entry
-    // funnel through here, so there is exactly one assignment site to keep in sync.
-    pool_supplement.attestation_witness = attestation_witness;
+    connect.pool.nic_verified_hf_version = 0;
+    // Single assignment site for the credit-wire attestation witness (opaque
+    // bytes). Block-level data lives on block_connect_supplement, not on the
+    // tx-shaped pool_supplement. Fluffy + full paths funnel through here.
+    connect.attestation_witness = attestation_witness;
 
     if (tx_entries.size() > blk_tx_hashes.size())
     {
-      MERROR("Failed to make pool supplement: Too many transaction blobs!");
+      MERROR("Failed to make block connect supplement: Too many transaction blobs!");
       return false;
     }
 
@@ -147,15 +147,15 @@ namespace cryptonote
         return false;
       }
 
-      pool_supplement.txs_by_txid.emplace(tx_hash, std::make_pair(std::move(tx), tx_entry.blob));
+      connect.pool.txs_by_txid.emplace(tx_hash, std::make_pair(std::move(tx), tx_entry.blob));
     }
 
     return true;
   }
 
-  inline bool make_full_pool_supplement_from_block_entry(
+  inline bool make_full_block_connect_supplement_from_block_entry(
     const cryptonote::block_complete_entry& blk_entry,
-    cryptonote::pool_supplement& pool_supplement)
+    cryptonote::block_connect_supplement& connect)
   {
     cryptonote::block blk;
     if (!cryptonote::parse_and_validate_block_from_blob(blk_entry.block, blk))
@@ -184,7 +184,8 @@ namespace cryptonote
 
     // We set `allow_pruned` equal to whether this block entry is pruned since the pruned flag
     // should be checked anyways by the time we deserialize transactions
-    return make_pool_supplement_from_block_entry(blk_entry.txs, blk_tx_hashes, blk_entry.pruned, blk_entry.attestation_witness, pool_supplement);
+    return make_block_connect_supplement_from_block_entry(
+      blk_entry.txs, blk_tx_hashes, blk_entry.pruned, blk_entry.attestation_witness, connect);
   }
 
 
@@ -669,11 +670,10 @@ namespace cryptonote
     // directly to core::handle_single_incoming_block() -> Blockchain::add_block(), which means we
     // can skip the mempool for faster block propagation. Later in the function, we will erase all
     // transactions from the relayed block.
-    // Coarse-bound the credit-wire attestation witness before it is copied into the pool
-    // supplement and carried toward the prunable side table (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2).
-    // This guards against a peer forcing an oversized opaque-blob allocation/write ahead of the
-    // Rust decoder; exact structural validation happens at admission, not here.
-    if (arg.b.attestation_witness.size() > config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES)
+    // Coarse-bound the credit-wire attestation witness before it is copied into the
+    // connect supplement (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2). Guards against a peer
+    // forcing an oversized opaque-blob allocation/write ahead of the Rust decoder.
+    if (!config::archival_attestation_witness_within_transport_cap(arg.b.attestation_witness.size()))
     {
       LOG_ERROR_CCONTEXT("fluffy block " << new_block_hash << " carries an oversized attestation "
         "witness (" << arg.b.attestation_witness.size() << " B), dropping connection");
@@ -681,8 +681,8 @@ namespace cryptonote
       return 1;
     }
 
-    pool_supplement extra_block_txs;
-    if (!make_pool_supplement_from_block_entry(arg.b.txs, blk_txids_set, /*allow_pruned=*/false, arg.b.attestation_witness, extra_block_txs))
+    block_connect_supplement connect;
+    if (!make_block_connect_supplement_from_block_entry(arg.b.txs, blk_txids_set, /*allow_pruned=*/false, arg.b.attestation_witness, connect))
     {
       LOG_ERROR_CCONTEXT
       (
@@ -699,7 +699,7 @@ namespace cryptonote
     const bool handle_block_res = m_core.handle_single_incoming_block(arg.b.block,
       &new_block,
       bvc,
-      extra_block_txs);
+      connect);
 
     // handle result of attempted block add
     if (!handle_block_res || bvc.m_verifivation_failed)
@@ -1234,7 +1234,7 @@ namespace cryptonote
       // span is buffered into m_block_queue (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2). Checking it at
       // queue-drain time would let a peer park oversized opaque blobs in RAM first; exact
       // structural validation is the Rust decoder's job at admission, not this guard.
-      if (arg.blocks[i].attestation_witness.size() > config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES)
+      if (!config::archival_attestation_witness_within_transport_cap(arg.blocks[i].attestation_witness.size()))
       {
         LOG_ERROR_CCONTEXT("sent NOTIFY_RESPONSE_GET_OBJECTS with an oversized attestation witness ("
           << arg.blocks[i].attestation_witness.size() << " B), dropping connection");
@@ -1544,8 +1544,8 @@ namespace cryptonote
             TIME_MEASURE_START(transactions_process_time);
             num_txs += block_entry.txs.size();
 
-            pool_supplement block_txs;
-            if (!make_full_pool_supplement_from_block_entry(block_entry, block_txs))
+            block_connect_supplement connect;
+            if (!make_full_block_connect_supplement_from_block_entry(block_entry, connect))
             {
                 drop_connections(span_origin);
                 if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
@@ -1576,7 +1576,7 @@ namespace cryptonote
             m_core.handle_incoming_block(block_entry.block,
               pblocks.empty() ? NULL : &pblocks[blockidx],
               bvc,
-              block_txs,
+              connect,
               false); // <--- process block
 
             if(bvc.m_verifivation_failed)

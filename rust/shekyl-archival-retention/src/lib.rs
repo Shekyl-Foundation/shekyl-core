@@ -73,7 +73,7 @@ pub use attestation_wire::{
     pass_records_from_headers_and_witness, verify_pass_countersignature, AttestationHeader,
     AttestationHeaderError, BlockAttestationWitness, PassRecord, WitnessError, WitnessPairingError,
     ATTESTATION_HEADER_LEN, ATTESTATION_NONCE_CUSTOMIZATION, ATTESTATION_ROOT_CUSTOMIZATION,
-    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES,
+    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES, WITNESS_PREFIX_LEN,
 };
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,

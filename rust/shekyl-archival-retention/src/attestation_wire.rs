@@ -62,6 +62,9 @@ pub const ATTESTATION_HEADER_LEN: usize = 32 + 8 + 8 + 1;
 /// unbounded reservation before the length is validated.
 pub const MAX_ATTESTATION_RECORDS: usize = 256;
 
+/// Fixed framing prefix of a canonical witness: `r(32) ‖ count_le(8)`.
+pub const WITNESS_PREFIX_LEN: usize = 32 + 8;
+
 /// The EXACT maximum canonical byte length of a [`BlockAttestationWitness`]:
 /// `r(32) ‖ count(8) ‖ MAX_ATTESTATION_RECORDS × HybridSignature`. This is the
 /// authority the C++ transport cap must respect: the coarse
@@ -71,7 +74,7 @@ pub const MAX_ATTESTATION_RECORDS: usize = 256;
 /// direction is gated cross-language by the FFI bound test; this const is the
 /// single Rust-side authority for that check.
 pub const MAX_ATTESTATION_WITNESS_BYTES: usize =
-    40 + MAX_ATTESTATION_RECORDS * HybridSignature::CANONICAL_LEN;
+    WITNESS_PREFIX_LEN + MAX_ATTESTATION_RECORDS * HybridSignature::CANONICAL_LEN;
 
 /// Fixed nonce preimage length: `r(32) ‖ cb_out_key(32) ‖ p_id(32) ‖ s(8) ‖ E(8)`.
 const NONCE_INPUT_LEN: usize = 32 + 32 + 32 + 8 + 8;
@@ -310,26 +313,30 @@ impl PartialEq for BlockAttestationWitness {
 }
 impl Eq for BlockAttestationWitness {}
 
-/// A witness blob failed to decode, or declared a record count out of range.
+/// A witness blob failed to decode/encode, or declared a record count out of range.
 #[derive(Debug, thiserror::Error)]
 pub enum WitnessError {
-    /// Shorter than the fixed `r(32) ‖ count(8)` = 40-byte prefix.
-    #[error("attestation witness shorter than the 40-byte r‖count prefix: got {0}")]
+    /// Shorter than the fixed `r(32) ‖ count(8)` prefix ([`WITNESS_PREFIX_LEN`]).
+    #[error(
+        "attestation witness shorter than the {WITNESS_PREFIX_LEN}-byte r‖count prefix: got {0}"
+    )]
     TooShort(usize),
-    /// The declared count exceeds [`MAX_ATTESTATION_RECORDS`]. Checked **before**
-    /// any length arithmetic, so it also caps the decode allocation and rules out
-    /// a `count · CANONICAL_LEN` overflow. Held as the raw wire `u64` — the value
-    /// may not fit `usize` on a 32-bit target, which is itself a reason to reject.
+    /// The declared (or encode-side) count exceeds [`MAX_ATTESTATION_RECORDS`].
+    /// Checked **before** any length arithmetic on decode, so it also caps the
+    /// allocation and rules out a `count · CANONICAL_LEN` overflow. Held as the
+    /// raw wire `u64` — the value may not fit `usize` on a 32-bit target, which
+    /// is itself a reason to reject.
     #[error("attestation witness count {0} exceeds cap {MAX_ATTESTATION_RECORDS}")]
     CountExceedsCap(u64),
-    /// Total length is not exactly `40 + count · HybridSignature::CANONICAL_LEN`.
+    /// Total length is not exactly
+    /// `WITNESS_PREFIX_LEN + count · HybridSignature::CANONICAL_LEN`.
     #[error("attestation witness length {got}, expected {expected} for {count} signature(s)")]
     LengthMismatch {
         count: usize,
         expected: usize,
         got: usize,
     },
-    /// The `index`-th signature failed canonical decode.
+    /// The `index`-th signature failed canonical encode/decode.
     #[error("attestation witness signature {index} invalid: {source}")]
     Signature {
         index: usize,
@@ -345,13 +352,23 @@ impl BlockAttestationWitness {
     /// alongside the block and pinned by the cross-language witness KAT — the
     /// `count` prefix mirrors [`attestation_root`]'s `u64`-LE length prefix so
     /// the two encodings share one integer convention.
-    pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, CryptoError> {
+    ///
+    /// Rejects a signature count above [`MAX_ATTESTATION_RECORDS`] (same cap as
+    /// decode) so an over-cap producer cannot emit a blob the decoder would
+    /// refuse — encode and decode share one validity surface.
+    pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, WitnessError> {
         let count = self.pass_signatures.len();
-        let mut out = Vec::with_capacity(40 + count * HybridSignature::CANONICAL_LEN);
+        if count > MAX_ATTESTATION_RECORDS {
+            return Err(WitnessError::CountExceedsCap(count as u64));
+        }
+        let mut out =
+            Vec::with_capacity(WITNESS_PREFIX_LEN + count * HybridSignature::CANONICAL_LEN);
         out.extend_from_slice(&self.r);
         out.extend_from_slice(&(count as u64).to_le_bytes());
-        for sig in &self.pass_signatures {
-            let bytes = sig.to_canonical_bytes()?;
+        for (index, sig) in self.pass_signatures.iter().enumerate() {
+            let bytes = sig
+                .to_canonical_bytes()
+                .map_err(|source| WitnessError::Signature { index, source })?;
             debug_assert_eq!(bytes.len(), HybridSignature::CANONICAL_LEN);
             out.extend_from_slice(&bytes);
         }
@@ -363,12 +380,13 @@ impl BlockAttestationWitness {
     /// and any malformed signature — all loud, because a malformed witness is a
     /// block-validity failure at admission, never a silent default.
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, WitnessError> {
-        if bytes.len() < 40 {
+        if bytes.len() < WITNESS_PREFIX_LEN {
             return Err(WitnessError::TooShort(bytes.len()));
         }
         let mut r = [0u8; 32];
         r.copy_from_slice(&bytes[0..32]);
-        let count_u64 = u64::from_le_bytes(bytes[32..40].try_into().expect("8 bytes"));
+        let count_u64 =
+            u64::from_le_bytes(bytes[32..WITNESS_PREFIX_LEN].try_into().expect("8 bytes"));
         // Cap BEFORE the length multiply: bounds the allocation and forecloses a
         // `count · CANONICAL_LEN` overflow on a hostile count. Compared in u64 so
         // the check itself never truncates on a 32-bit target.
@@ -378,7 +396,7 @@ impl BlockAttestationWitness {
         // ≤ MAX_ATTESTATION_RECORDS now, so this narrowing is infallible on every
         // target width (the cap fits every usize).
         let count = usize::try_from(count_u64).expect("count ≤ cap fits usize");
-        let expected = 40 + count * HybridSignature::CANONICAL_LEN;
+        let expected = WITNESS_PREFIX_LEN + count * HybridSignature::CANONICAL_LEN;
         if bytes.len() != expected {
             return Err(WitnessError::LengthMismatch {
                 count,
@@ -388,7 +406,7 @@ impl BlockAttestationWitness {
         }
         let mut pass_signatures = Vec::with_capacity(count);
         for index in 0..count {
-            let start = 40 + index * HybridSignature::CANONICAL_LEN;
+            let start = WITNESS_PREFIX_LEN + index * HybridSignature::CANONICAL_LEN;
             let end = start + HybridSignature::CANONICAL_LEN;
             let sig = HybridSignature::from_canonical_bytes(&bytes[start..end])
                 .map_err(|source| WitnessError::Signature { index, source })?;
@@ -644,22 +662,27 @@ mod tests {
         };
         let bytes = w.to_canonical_bytes().unwrap();
         // Layout: r(32) ‖ count_le(8) ‖ 2 × CANONICAL_LEN.
-        assert_eq!(bytes.len(), 40 + 2 * HybridSignature::CANONICAL_LEN);
+        assert_eq!(
+            bytes.len(),
+            WITNESS_PREFIX_LEN + 2 * HybridSignature::CANONICAL_LEN
+        );
         assert_eq!(&bytes[0..32], &[0x5A; 32]);
-        assert_eq!(&bytes[32..40], &2u64.to_le_bytes());
+        assert_eq!(&bytes[32..WITNESS_PREFIX_LEN], &2u64.to_le_bytes());
         assert_eq!(
             BlockAttestationWitness::from_canonical_bytes(&bytes).unwrap(),
             w
         );
 
-        // An all-miss block carries a witness of just `r ‖ count=0` — the
-        // defined-empty transport, never omitted.
+        // Codec-defined-empty: a zero-signature witness is still a valid
+        // `r ‖ count=0` encoding. That is distinct from the C++ side-table
+        // convention, which skips writing a row for empty/absent witnesses
+        // (interim / all-miss blocks store nothing; absent key ≡ no witness).
         let empty = BlockAttestationWitness {
             r: [1; 32],
             pass_signatures: vec![],
         };
         let eb = empty.to_canonical_bytes().unwrap();
-        assert_eq!(eb.len(), 40);
+        assert_eq!(eb.len(), WITNESS_PREFIX_LEN);
         assert_eq!(
             BlockAttestationWitness::from_canonical_bytes(&eb).unwrap(),
             empty
@@ -679,8 +702,8 @@ mod tests {
 
         // Short prefix.
         assert!(matches!(
-            BlockAttestationWitness::from_canonical_bytes(&[0u8; 39]),
-            Err(WitnessError::TooShort(39))
+            BlockAttestationWitness::from_canonical_bytes(&[0u8; WITNESS_PREFIX_LEN - 1]),
+            Err(WitnessError::TooShort(n)) if n == WITNESS_PREFIX_LEN - 1
         ));
 
         // Declares one signature, carries none.
@@ -691,7 +714,7 @@ mod tests {
             BlockAttestationWitness::from_canonical_bytes(&short_body),
             Err(WitnessError::LengthMismatch {
                 count: 1,
-                got: 40,
+                got: WITNESS_PREFIX_LEN,
                 ..
             })
         ));
@@ -708,10 +731,24 @@ mod tests {
 
         // Corrupt the first signature's leading version byte.
         let mut corrupt = good.clone();
-        corrupt[40] ^= 0xFF;
+        corrupt[WITNESS_PREFIX_LEN] ^= 0xFF;
         assert!(matches!(
             BlockAttestationWitness::from_canonical_bytes(&corrupt),
             Err(WitnessError::Signature { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn witness_encode_rejects_over_cap() {
+        let (_pk, sk) = keypair();
+        let sig = HybridEd25519MlDsa.sign(&sk, b"x").unwrap();
+        let over = BlockAttestationWitness {
+            r: [0; 32],
+            pass_signatures: vec![sig; MAX_ATTESTATION_RECORDS + 1],
+        };
+        assert!(matches!(
+            over.to_canonical_bytes(),
+            Err(WitnessError::CountExceedsCap(n)) if n == (MAX_ATTESTATION_RECORDS as u64) + 1
         ));
     }
 

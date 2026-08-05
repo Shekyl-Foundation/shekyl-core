@@ -190,9 +190,21 @@ int check_flush(cryptonote::core &core, std::vector<block_complete_entry> &block
     // process block
 
     block_verification_context bvc = {};
-    pool_supplement ps{};
+    block_connect_supplement connect{};
+    // Thread the credit-wire attestation witness from the export entry into the
+    // connect path (same as p2p make_block_connect_supplement_from_block_entry).
+    // Without this, verifying import drops the witness and never writes the
+    // height-keyed side table (Bugbot: import drops attestation witness).
+    if (!config::archival_attestation_witness_within_transport_cap(block_entry.attestation_witness.size()))
+    {
+      MERROR("import block carries an oversized attestation witness ("
+        << block_entry.attestation_witness.size() << " B)");
+      core.cleanup_handle_incoming_blocks();
+      return 1;
+    }
+    connect.attestation_witness = block_entry.attestation_witness;
 
-    core.handle_incoming_block(block_entry.block, pblocks.empty() ? NULL : &pblocks[blockidx++], bvc, ps, false); // <--- process block
+    core.handle_incoming_block(block_entry.block, pblocks.empty() ? NULL : &pblocks[blockidx++], bvc, connect, false); // <--- process block
 
     if(bvc.m_verifivation_failed)
     {
