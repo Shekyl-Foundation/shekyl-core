@@ -338,6 +338,27 @@ pub struct RefreshResult {
     pub reorg_fork_height: Option<i64>,
 }
 
+/// `rescan_blockchain` result (OpenAPI `RescanBlockchainResult`).
+///
+/// Same counters as [`RefreshResult`] but **without** `reorg_fork_height` —
+/// a full rescan rebuilds from the wallet's scan floor rather than rewinding
+/// a fork tip, so there is no fork to report.
+///
+/// Deliberately a distinct type rather than a reuse of [`RefreshResult`]
+/// (whose `reorg_fork_height` is `skip_serializing_if`, so today the two
+/// serialize identically). The contract declares two schemas; mirroring them
+/// one-to-one is what keeps a future change to one from silently rewriting
+/// the other's wire shape.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RescanBlockchainResult {
+    /// Heights scanned this call.
+    pub blocks_processed: i64,
+    /// Detected transfers ingested this call.
+    pub transfers_detected: i64,
+    /// Wallet synced height after the rescan.
+    pub synced_height: i64,
+}
+
 /// `build_pending_tx` result (OpenAPI `BuildPendingTxResult`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BuildPendingTxResult {
@@ -353,19 +374,21 @@ pub struct BuildPendingTxResult {
     pub content_gen: i64,
 }
 
-/// Success verdict projection for `submit_pending_tx`.
-///
-/// Engine's async submit returns [`shekyl_engine_core::TxHash`] on the
-/// success path; pool/chain duplicate distinctions are not yet exposed
-/// on that surface, so successful submits project as [`Self::Accepted`].
+/// Success verdict projection for `submit_pending_tx` — the client image
+/// of the Engine's [`shekyl_engine_core::SubmitOutcome`], 1:1 with the
+/// wire `SubmitVerdict` success arms (`DAEMON_SUBMIT_VERDICT.md` §2.1;
+/// projected by `project::submit_pending_tx_result`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SubmitVerdictView {
     /// Fresh accept / broadcast success.
     Accepted,
-    /// Already in the mempool (reserved for when Engine surfaces it).
+    /// Already in the mempool: an earlier submit of these bytes reached
+    /// the network (e.g. a retry after a transport-ambiguous attempt).
     AlreadyInPool,
-    /// Already confirmed on chain (reserved for when Engine surfaces it).
+    /// Already confirmed on chain per the daemon's claim;
+    /// `confirmed_height` carries the claimed height (display metadata —
+    /// refresh remains the settlement authority).
     AlreadyInChain,
 }
 
@@ -376,7 +399,11 @@ pub struct SubmitPendingTxResult {
     pub tx_hash: String,
     /// Success verdict.
     pub verdict: SubmitVerdictView,
-    /// Present iff verdict is `ALREADY_IN_CHAIN`.
+    /// Present iff verdict is `ALREADY_IN_CHAIN`: the daemon-claimed
+    /// confirming height (untrusted display metadata,
+    /// `DAEMON_SUBMIT_VERDICT.md` §7.2 — never settlement truth). The
+    /// field exists only on this result type — no refresh-populated
+    /// view shares it, structurally.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confirmed_height: Option<i64>,
 }

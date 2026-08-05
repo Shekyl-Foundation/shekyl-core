@@ -24,6 +24,12 @@
 //! for `build_select_sync` / `finalize_submit_*` / `reanchor_consumer_held`
 //! outside this tree fail `scripts/ci/check_engine_decomposition.sh`.
 //!
+//! Inside the tree the split is by phase: `engine` holds the type,
+//! selection, commit, re-anchor and submit orchestration; `submit_finalize`
+//! holds the §2.5 verdict dispositions (`finalize_submit_*`); `trait_impl`
+//! holds the `PendingTxEngine` / `WatchdogHost` surfaces; `support` and
+//! `types` hold the shared helpers and state.
+//!
 //! Extracted from the former monofile `engine/local_pending_tx.rs` per
 //! `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`. Policy + ratchet:
 //! same doc, §"Transfer workflow ownership".
@@ -34,6 +40,7 @@
 //! handle, the diagnostic sink, and reservation state under a `Mutex`.
 
 mod engine;
+mod submit_finalize;
 mod support;
 mod trait_impl;
 mod types;

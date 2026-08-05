@@ -35,20 +35,20 @@ use crate::engine::error::{
     TerminalErrorKind,
 };
 use crate::engine::fee_estimator::DaemonFeeEstimator;
-use crate::engine::fee_snapshot::FixedFeeSnapshotSource;
+use crate::engine::fee_snapshot::{FeeSnapshotSource, FixedFeeSnapshotSource};
 use crate::engine::key_actor::KeyEngineHandle;
 use crate::engine::local_keys::LocalKeys;
 use crate::engine::network::Network;
 use crate::engine::output_selector::WalletGreedyOutputSelector;
 use crate::engine::pending::{
-    FeePriority, InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, TxRecipient,
-    TxRecipientSummary, TxRequest,
+    FeePriority, InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitOutcome,
+    TxRecipient, TxRecipientSummary, TxRequest,
 };
 use crate::engine::signer::LocalSigner;
 use crate::engine::traits::FeeEstimates;
 use crate::engine::traits::PendingTxEngine;
 use crate::engine::transaction_submitter::{
-    canonical_tx_id, SubmitSuccess, SubmitterError, TransactionSubmitter,
+    canonical_tx_id, BroadcastKind, SubmitSuccess, SubmitterError, TransactionSubmitter,
 };
 use crate::engine::tx_counts::{InputCount, OutputCount};
 use crate::engine::LocalLedger;
@@ -123,18 +123,46 @@ fn test_fee_snapshot_source() -> FixedFeeSnapshotSource {
     FixedFeeSnapshotSource::new(test_fee_estimates())
 }
 
-struct TestTransactionSubmitter;
+/// Stands in for the daemon submitter on the **production** dispatch
+/// path — the one `submit_async` takes when no test-injected outcome is
+/// queued. Default reply is a fresh accept; [`Self::script`] replaces it
+/// so a test can drive that path with any verdict and assert what the
+/// real dispatch site projects (the injected path certifies only itself).
+#[derive(Default)]
+struct TestTransactionSubmitter {
+    scripted: std::sync::Mutex<Option<SubmitSuccess>>,
+}
+
+impl TestTransactionSubmitter {
+    /// The next production submit answers with `success` instead of a
+    /// fresh accept. One slot, consumed per submit.
+    fn script(&self, success: SubmitSuccess) {
+        *self
+            .scripted
+            .lock()
+            .expect("scripted submitter lock poisoned") = Some(success);
+    }
+}
 
 impl TransactionSubmitter for TestTransactionSubmitter {
     async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+        if let Some(scripted) = self
+            .scripted
+            .lock()
+            .expect("scripted submitter lock poisoned")
+            .take()
+        {
+            return Ok(scripted);
+        }
         Ok(SubmitSuccess::Broadcast {
             hash: canonical_tx_id(&tx_bytes),
+            kind: BroadcastKind::Accepted,
         })
     }
 }
 
 fn test_submitter() -> Arc<TestTransactionSubmitter> {
-    Arc::new(TestTransactionSubmitter)
+    Arc::new(TestTransactionSubmitter::default())
 }
 
 /// Smoke test: constructor succeeds and the engine's state
@@ -493,11 +521,29 @@ async fn funded_ledger_and_tree(
 }
 
 fn test_pending_tx_with_tree(ledger: Arc<LocalLedger>, tree: CurveTreeHandle) -> TestPendingTx {
+    test_pending_tx_with_tree_and_fee_source(ledger, tree, test_fee_snapshot_source())
+}
+
+/// [`test_pending_tx_with_tree`] with a caller-supplied fee-snapshot
+/// source — the seam the build-permit serialization pin uses to park a
+/// build *inside* its body at a deterministic suspension point.
+fn test_pending_tx_with_tree_and_fee_source<FS: FeeSnapshotSource>(
+    ledger: Arc<LocalLedger>,
+    tree: CurveTreeHandle,
+    fee_snapshot_source: FS,
+) -> LocalPendingTx<
+    LocalSigner,
+    WalletGreedyOutputSelector,
+    DaemonFeeEstimator,
+    FS,
+    TestTransactionSubmitter,
+    LocalLedger,
+> {
     LocalPendingTx::new(
         Arc::new(LocalSigner::new(test_signer_handle())),
         WalletGreedyOutputSelector,
         DaemonFeeEstimator,
-        test_fee_snapshot_source(),
+        fee_snapshot_source,
         test_submitter(),
         ledger,
         Some(tree),
@@ -826,7 +872,8 @@ async fn real_root_membership_proof_builds_and_submits() {
     let tx_hash = pending
         .submit(built.id, built.content_gen)
         .await
-        .expect("submit ok");
+        .expect("submit ok")
+        .hash();
     assert_eq!(
         tx_hash,
         canonical_tx_id(&built.tx_bytes),
@@ -1032,7 +1079,8 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
     let tx_hash = pending
         .submit(built.id, built.content_gen)
         .await
-        .expect("submit ok");
+        .expect("submit ok")
+        .hash();
     assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
     assert_eq!(pending.outstanding(), 0);
 
@@ -1090,7 +1138,8 @@ async fn submit_persists_tx_key_and_pending_hash() {
     let tx_hash = pending
         .submit(built.id, built.content_gen)
         .await
-        .expect("submit ok");
+        .expect("submit ok")
+        .hash();
 
     let guard = pending.ledger.read();
     let stored = guard
@@ -1165,7 +1214,8 @@ async fn confirmed_absent_release_keeps_retention_record() {
     let tx_hash = pending
         .submit(built.id, built.content_gen)
         .await
-        .expect("submit ok");
+        .expect("submit ok")
+        .hash();
 
     let released = WatchdogHost::release_awaiting_confirmation(&pending, &HashSet::from([tx_hash]));
     assert!(released > 0, "the F14 lock is released");
@@ -1308,14 +1358,20 @@ async fn ambiguous_verdict_keeps_dispatch_persisted_record() {
 /// claimed = 25): the F14 awaiting-confirmation lock is placed exactly
 /// as on the `Broadcast` arm (fund safety first — a no-lock
 /// disposition would leave a selectable-input window an adversary who
-/// slows the wallet's daemon's block delivery could steer it into),
-/// but baselined at the **claimed height**, not the wallet's current
-/// height. Release is the ordinary §2.6 path 1: refresh reaches the
-/// confirming block and `mark_spent` settles. No targeted re-scan is
-/// requested — refresh has not yet passed the claimed height, so
-/// path 1 is reachable.
+/// slows the wallet's daemon's block delivery could steer it into).
+/// Release is the ordinary §2.6 path 1: refresh reaches the confirming
+/// block and `mark_spent` settles. No targeted re-scan is requested —
+/// refresh has not yet passed the claimed height, so path 1 is
+/// reachable.
+///
+/// The persisted baseline is the claimed height **clamped to the
+/// wallet's synced height** (§2.5(a) as amended): the claim is
+/// untrusted, and the watchdog horizon is measured as `synced −
+/// baseline`, so a baseline the wallet has not reached is a horizon it
+/// cannot reach. The verdict still carries the raw claim to the
+/// consumer — this pins that the two are read from different places.
 #[tokio::test]
-async fn submit_already_in_chain_above_synced_locks_at_claimed_height() {
+async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
     let sink = Arc::new(AssertionSink::new());
     let (pending, _ledger, _tree_dir) =
         funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
@@ -1329,11 +1385,19 @@ async fn submit_already_in_chain_above_synced_locks_at_claimed_height() {
         height: 25, // > fixture synced height 20
     }));
 
-    let tx_hash = pending
+    let outcome = pending
         .submit(built.id, built.content_gen)
         .await
         .expect("AlreadyInChain resolves the submit successfully");
-    assert_eq!(tx_hash, expected_hash);
+    assert_eq!(
+        outcome,
+        SubmitOutcome::AlreadyInChain {
+            hash: expected_hash,
+            height: 25,
+        },
+        "the daemon-claimed confirming height crosses the Engine surface \
+         verbatim (untrusted display metadata, §7.2 — nothing re-derives it)"
+    );
     assert_eq!(pending.outstanding(), 0, "reservation released");
 
     // The F14 lock is placed on the selected inputs, baselined at the
@@ -1356,9 +1420,10 @@ async fn submit_already_in_chain_above_synced_locks_at_claimed_height() {
             let lock = td.awaiting_confirmation.as_ref().expect("filtered above");
             assert_eq!(lock.tx_hash, expected_hash);
             assert_eq!(
-                lock.accepted_at_height, 25,
-                "the lock is baselined at the claimed confirming height, \
-                 not the wallet's current height"
+                lock.accepted_at_height, 20,
+                "the lock is baselined at a height the wallet has reached — \
+                 the claimed 25 clamped to the synced 20, so the watchdog \
+                 horizon stays measurable"
             );
             assert!(
                 !td.is_spendable(u64::MAX),
@@ -1409,11 +1474,19 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
         height: 15, // ≤ fixture synced height 20
     }));
 
-    let tx_hash = pending
+    let outcome = pending
         .submit(built.id, built.content_gen)
         .await
         .expect("AlreadyInChain resolves the submit successfully");
-    assert_eq!(tx_hash, expected_hash);
+    assert_eq!(
+        outcome,
+        SubmitOutcome::AlreadyInChain {
+            hash: expected_hash,
+            height: 15,
+        },
+        "the below-synced claim surfaces on the Engine result exactly as the \
+         above-synced one — the outcome reports, the release path routes (§2.5(b))"
+    );
     assert_eq!(pending.outstanding(), 0, "reservation released");
 
     // R1 pin: the re-scan *request* releases nothing — the F14 lock
@@ -1458,6 +1531,430 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
         )),
         "AlreadyInChain resolution emits SubmitSucceeded: {events:?}"
     );
+}
+
+/// A pool-resident duplicate surfaces on the Engine submit result as
+/// `SubmitOutcome::AlreadyInPool` while keeping the **same** §2.5
+/// disposition as a fresh accept: reservation resolved, F14
+/// awaiting-confirmation lock placed, `spent` refresh-authoritative.
+/// The verdict informs; it never changes what the engine does.
+///
+/// Coverage boundary: the daemon→`BroadcastKind` mapping is pinned by
+/// the `transaction_submitter` unit tests and the dedup e2e
+/// (`daemon_dedups_identical_bytes_as_already_in_pool` shape); this
+/// test pins the kind→outcome projection through the full submit path
+/// and the disposition staying byte-identical to the accept arm.
+#[tokio::test]
+async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() {
+    let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    let expected_hash = canonical_tx_id(&built.tx_bytes);
+    pending.queue_submit_daemon_outcome(Ok(SubmitSuccess::Broadcast {
+        hash: expected_hash,
+        kind: BroadcastKind::AlreadyInPool,
+    }));
+
+    let outcome = pending
+        .submit(built.id, built.content_gen)
+        .await
+        .expect("a pool-resident duplicate resolves the submit successfully");
+    assert_eq!(
+        outcome,
+        SubmitOutcome::AlreadyInPool {
+            hash: expected_hash,
+        },
+        "the pool-resident verdict crosses the Engine surface distinctly"
+    );
+    assert_eq!(pending.outstanding(), 0, "reservation released");
+
+    // Disposition parity with the fresh-accept arm: F14 lock placed,
+    // `spent` untouched — the kind rode through as data, not dispatch.
+    {
+        let guard = pending.ledger.read();
+        let locked: Vec<_> = guard
+            .ledger
+            .ledger
+            .transfers()
+            .iter()
+            .filter(|td| td.awaiting_confirmation.is_some())
+            .collect();
+        assert!(
+            !locked.is_empty(),
+            "AlreadyInPool must place the F14 lock exactly as a fresh accept"
+        );
+        for td in &locked {
+            assert!(!td.spent, "spent stays refresh-authoritative");
+            let lock = td.awaiting_confirmation.as_ref().expect("filtered above");
+            assert_eq!(lock.tx_hash, expected_hash);
+            assert!(
+                !td.is_spendable(u64::MAX),
+                "locked output must be excluded from selection"
+            );
+        }
+    }
+}
+
+/// The lie-high damage cap (§7.2 rider row `AlreadyInChain.height`) is
+/// "released by the §2.6 confirmed-absent watchdog horizon (bounded
+/// liveness cost)". Asserted on the axis the cap actually lives on —
+/// horizon *reachability*, not the stored number: a daemon claiming
+/// `u64::MAX` must not be able to park `escape_ladder_step` on
+/// `HorizonNotReached` forever, because the F14 lock it places is
+/// persisted and nothing else would ever release it (refresh cannot
+/// observe a spend that never reached the chain).
+///
+/// The negative control is the unclamped value itself: fed as a
+/// baseline, `u64::MAX` fails this same assertion at every height, so
+/// the test cannot pass by accident.
+#[tokio::test]
+async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reachable() {
+    use crate::engine::submit_watchdog::{
+        escape_ladder_step, held_submits, DaemonHealthContext, HeldSubmit, WaitReason,
+        WatchdogConfig, WatchdogStep,
+    };
+
+    let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    let expected_hash = canonical_tx_id(&built.tx_bytes);
+    pending.queue_submit_daemon_outcome(Ok(SubmitSuccess::AlreadyInChain {
+        hash: expected_hash,
+        height: u64::MAX,
+    }));
+
+    let outcome = pending
+        .submit(built.id, built.content_gen)
+        .await
+        .expect("AlreadyInChain resolves the submit successfully");
+    assert_eq!(
+        outcome,
+        SubmitOutcome::AlreadyInChain {
+            hash: expected_hash,
+            height: u64::MAX,
+        },
+        "the raw claim still crosses the Engine surface — clamping is a \
+         lock-baseline decision, not a rewrite of what the daemon said"
+    );
+
+    let held = {
+        let guard = pending.ledger.read();
+        held_submits(&guard.ledger.ledger)
+    };
+    let held = held.first().expect("the F14 lock is placed (F40)");
+    assert_eq!(
+        *held,
+        HeldSubmit {
+            baseline_height: 20,
+            ..*held
+        }
+    );
+
+    // Horizon reachability, the property the §7.2 cap names.
+    let config = WatchdogConfig::from_block_target(120);
+    let healthy = DaemonHealthContext {
+        connections: 8,
+        height: 20,
+        target_height: 0,
+    };
+    let horizon_reached = 20 + config.escape_horizon_blocks;
+    assert_ne!(
+        escape_ladder_step(held, horizon_reached, healthy, config),
+        WatchdogStep::Wait(WaitReason::HorizonNotReached),
+        "a lock baselined at a reached height must clear the horizon once \
+         the wallet syncs past it — otherwise the escape ladder never runs \
+         and the persisted lock strands the inputs permanently"
+    );
+    // Negative control: the unclamped claim is exactly what would break it.
+    let unclamped = HeldSubmit {
+        baseline_height: u64::MAX,
+        ..*held
+    };
+    assert_eq!(
+        escape_ladder_step(&unclamped, horizon_reached, healthy, config),
+        WatchdogStep::Wait(WaitReason::HorizonNotReached),
+        "sanity: the unclamped baseline is unreachable, so this assertion \
+         discriminates rather than passing for any input"
+    );
+}
+
+/// Finding-verified gap: every other outcome assertion drives the
+/// **test-injected** dispatch arm, so the production arm — the one a
+/// real daemon reply takes — could project a different variant and the
+/// suite would stay green. Drive the production arm (nothing queued, the
+/// scripted submitter answers instead) and assert the *variant*, not
+/// just the hash.
+#[tokio::test]
+async fn production_submit_dispatch_projects_the_daemon_verdict() {
+    // One wallet per verdict: a submit places the F14 lock on the funded
+    // outputs, so a second build in the same fixture has nothing to spend.
+    async fn submit_via_production_dispatch(
+        reply: impl FnOnce(shekyl_types::TxHash) -> Option<SubmitSuccess>,
+    ) -> (shekyl_types::TxHash, SubmitOutcome) {
+        let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        let hash = canonical_tx_id(&built.tx_bytes);
+        if let Some(success) = reply(hash) {
+            pending.submitter.script(success);
+        }
+        // Nothing queued via `queue_submit_daemon_outcome`, so `submit_async`
+        // takes the production branch and the scripted submitter answers.
+        let outcome = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("submit resolves successfully");
+        (hash, outcome)
+    }
+
+    let (hash, outcome) = submit_via_production_dispatch(|hash| {
+        Some(SubmitSuccess::Broadcast {
+            hash,
+            kind: BroadcastKind::AlreadyInPool,
+        })
+    })
+    .await;
+    assert_eq!(
+        outcome,
+        SubmitOutcome::AlreadyInPool { hash },
+        "the production dispatch must project the pool-resident kind, not \
+         flatten it to a fresh accept"
+    );
+
+    let (hash, outcome) = submit_via_production_dispatch(|hash| {
+        Some(SubmitSuccess::AlreadyInChain { hash, height: 25 })
+    })
+    .await;
+    assert_eq!(
+        outcome,
+        SubmitOutcome::AlreadyInChain { hash, height: 25 },
+        "the production dispatch must carry the claimed height"
+    );
+
+    let (hash, outcome) = submit_via_production_dispatch(|_| None).await;
+    assert_eq!(
+        outcome,
+        SubmitOutcome::Accepted { hash },
+        "and an unscripted (default) reply still projects a fresh accept"
+    );
+}
+
+/// [`LocalSigner`] with a hook that fires *inside* `sign_transfer`.
+///
+/// That is the one suspension point between build's pre-sign fold and
+/// its commit boundary, so it is where a test can reproduce a refresh
+/// merge landing in the window that only `revalidate_selected_inputs`
+/// still covers — the fold's `gindex` guard has already run and passed.
+struct HookedSigner {
+    inner: LocalSigner,
+    before_sign: Box<dyn Fn() + Send + Sync>,
+}
+
+impl crate::engine::signer::Signer for HookedSigner {
+    type Error = <LocalSigner as crate::engine::signer::Signer>::Error;
+
+    async fn sign_transfer(
+        &self,
+        context: crate::engine::signer::TransferSigningContext,
+    ) -> Result<crate::engine::signer::SignedTransfer, Self::Error> {
+        (self.before_sign)();
+        self.inner.sign_transfer(context).await
+    }
+}
+
+/// Mark every ledger transfer spent — the effect a refresh merge has
+/// when it observes a co-spend of the wallet's outputs from another
+/// copy of the seed.
+fn mark_all_transfers_spent(ledger: &LocalLedger) {
+    let mut guard = ledger.write();
+    let ledger_block = &mut guard.ledger.ledger;
+    for index in 0..ledger_block.transfer_count() {
+        if let Some(td) = ledger_block.transfer_mut(index) {
+            td.spent = true;
+        }
+    }
+}
+
+/// Build's commit boundary is its lock₂: selection happened before the
+/// lock-free prover window, and `refresh` merges scan results under a
+/// *shared* engine borrow, so no embedder lock keeps that merge out of
+/// the window. A co-spend observed while the signer runs must refuse the
+/// build — the signed transaction is already dead, and handing back a
+/// `PendingTx` would spend the user's confirmation on bytes the daemon
+/// is certain to reject as a double spend.
+///
+/// The mutation is injected *after* the pre-sign fold, so the fold's
+/// `gindex` guard has already passed: only the commit-boundary
+/// re-validation can catch this, which is what the test is for.
+#[tokio::test]
+async fn build_refuses_when_a_selected_input_is_spent_during_signing() {
+    let (ledger, _dir, tree) = funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let hook_ledger = Arc::clone(&ledger);
+    let pending = LocalPendingTx::new(
+        Arc::new(HookedSigner {
+            inner: LocalSigner::new(test_signer_handle()),
+            before_sign: Box::new(move || mark_all_transfers_spent(&hook_ledger)),
+        }),
+        WalletGreedyOutputSelector,
+        DaemonFeeEstimator,
+        test_fee_snapshot_source(),
+        test_submitter(),
+        Arc::clone(&ledger),
+        Some(tree),
+        Arc::new(TracingDiagnosticSink),
+        ReservationTTLConfig::default(),
+        Network::Mainnet,
+    );
+
+    let err = pending
+        .build(standard_request(7_000))
+        .await
+        .expect_err("a build whose inputs were spent under it must refuse");
+    assert!(
+        matches!(
+            err,
+            SendError::CannotSign {
+                reason: "a selected input was spent elsewhere during assembly"
+            }
+        ),
+        "expected the commit-boundary spent refusal, got {err:?}"
+    );
+    assert_eq!(
+        pending.outstanding(),
+        0,
+        "the refused build must release its reservation, not strand the \
+         output locks"
+    );
+}
+
+/// Negative control for the test above: the same fixture with an inert
+/// hook builds successfully. Without this, a `revalidate_selected_inputs`
+/// that refused unconditionally — or a `HookedSigner` that broke signing
+/// outright — would still satisfy the refusal assertion.
+#[tokio::test]
+async fn build_commits_when_nothing_changes_under_the_signer() {
+    let (ledger, _dir, tree) = funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let pending = LocalPendingTx::new(
+        Arc::new(HookedSigner {
+            inner: LocalSigner::new(test_signer_handle()),
+            before_sign: Box::new(|| {}),
+        }),
+        WalletGreedyOutputSelector,
+        DaemonFeeEstimator,
+        test_fee_snapshot_source(),
+        test_submitter(),
+        Arc::clone(&ledger),
+        Some(tree),
+        Arc::new(TracingDiagnosticSink),
+        ReservationTTLConfig::default(),
+        Network::Mainnet,
+    );
+
+    pending
+        .build(standard_request(7_000))
+        .await
+        .expect("an undisturbed build commits");
+    assert_eq!(pending.outstanding(), 1, "the reservation is consumer-held");
+}
+
+/// Fee-snapshot source that parks inside `fetch` until gate permits
+/// arrive — a controllable, deterministic suspension point *inside* the
+/// build body for the build-permit serialization pin. `entered` counts
+/// how many builds reached the body.
+#[derive(Clone)]
+struct GatedFeeSnapshotSource {
+    entered: Arc<std::sync::atomic::AtomicUsize>,
+    gate: Arc<tokio::sync::Semaphore>,
+}
+
+impl FeeSnapshotSource for GatedFeeSnapshotSource {
+    async fn fetch(
+        &self,
+    ) -> Result<crate::engine::traits::FeeEstimates, crate::engine::error::FeeEstimatorError> {
+        self.entered
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.gate
+            .acquire()
+            .await
+            .expect("test gate semaphore is never closed")
+            .forget();
+        Ok(test_fee_estimates())
+    }
+}
+
+/// W-B step 1: concurrent `build` calls serialize on the engine-owned
+/// build permit. The second build must not enter the build body (its
+/// fee-snapshot fetch) while the first is parked inside the body —
+/// without the permit, `build` takes `&self` and two callers interleave
+/// freely the moment the embedder stops holding an exclusive Engine
+/// borrow, emitting the correlated `AssembleTx` burst the permit
+/// exists to forbid (the observable wallet-rpc's read-lock relaxation
+/// must not create).
+///
+/// Deterministic by construction: build B is driven with a noop-waker
+/// poll loop, never a sleep — with the permit it parks at the acquire
+/// before the body; without it the entered-counter reaches 2 on B's
+/// first poll.
+#[tokio::test]
+async fn concurrent_builds_serialize_on_the_build_permit() {
+    use std::future::Future;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (ledger, _tree_dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let entered = Arc::new(AtomicUsize::new(0));
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let pending = Arc::new(test_pending_tx_with_tree_and_fee_source(
+        Arc::clone(&ledger),
+        tree,
+        GatedFeeSnapshotSource {
+            entered: Arc::clone(&entered),
+            gate: Arc::clone(&gate),
+        },
+    ));
+
+    // Build A: spawned, holds the build permit, parks inside `fetch`.
+    let a = tokio::spawn({
+        let pending = Arc::clone(&pending);
+        async move { pending.build(standard_request(7_000)).await }
+    });
+    while entered.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    // Build B: driven manually with a noop waker. It must stay pending
+    // at the permit acquire and never reach the build body.
+    let mut b = std::pin::pin!(pending.build(standard_request(7_000)));
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    for _ in 0..16 {
+        assert!(
+            b.as_mut().poll(&mut cx).is_pending(),
+            "build B must not complete while A holds the build permit"
+        );
+    }
+    assert_eq!(
+        entered.load(Ordering::SeqCst),
+        1,
+        "build B entered the build body while build A held the permit"
+    );
+
+    // Release the gate for both fetches: A completes and drops the
+    // permit, then B acquires it, runs, and completes. Both reserve
+    // disjoint inputs (P6 output locks, untouched by the permit).
+    gate.add_permits(2);
+    let built_a = a
+        .await
+        .expect("build A task joins")
+        .expect("build A succeeds");
+    let built_b = b.await.expect("build B succeeds after the permit frees");
+    assert_ne!(built_a.id, built_b.id, "two distinct reservations");
+    assert_eq!(pending.outstanding(), 2);
 }
 
 /// PR 2c-1 — the real-tree closing milestone for archival bond-post
@@ -2297,7 +2794,8 @@ async fn submit_retryable_rejection_restores_reservation() {
     let tx_hash = pending
         .submit(built.id, built.content_gen)
         .await
-        .expect("restored reservation resubmits");
+        .expect("restored reservation resubmits")
+        .hash();
     assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
     assert_eq!(pending.outstanding(), 0);
 }
@@ -2847,7 +3345,8 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     let tx_hash = pending
         .submit(built.id, built.content_gen)
         .await
-        .expect("submit ok");
+        .expect("submit ok")
+        .hash();
     assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
     assert_eq!(daemon.submitted_count(), 1);
 
@@ -2893,11 +3392,13 @@ async fn daemon_dedupes_identical_tx_bytes() {
         .await
         .expect("daemon dedup accepts identical bytes");
     // A pool-resident duplicate is `AlreadyInPool` → the `Broadcast`
-    // disposition (§2.5: same as a fresh accept), carrying the local hash.
+    // disposition (§2.5: same as a fresh accept), carrying the local hash
+    // and the inform-only `AlreadyInPool` kind the Engine surface projects.
     assert_eq!(
         success,
         SubmitSuccess::Broadcast {
-            hash: canonical_tx_id(&built.tx_bytes)
+            hash: canonical_tx_id(&built.tx_bytes),
+            kind: BroadcastKind::AlreadyInPool,
         }
     );
     assert_eq!(daemon.submitted_count(), 1);

@@ -2,7 +2,82 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Genesis regenerated: the final five-founder allocation on every network,
+  and the pins are now reproducible.** All three `GENESIS_TX` strings in
+  `src/cryptonote_config.h` are re-pinned from freshly generated production
+  wallets (fresh OS entropy via `geblock gen-wallets`; BIP-39 on
+  mainnet/stagenet, raw-32 on testnet; every wallet restore-verified from its
+  written seed before its address was committed). Mainnet and stagenet move
+  from a single combined 100,000 SKL treasury output to the same **5 ×
+  20,000 SKL** shape testnet already shipped; the total (100,000 SKL, the
+  block-0 reward) is unchanged, as are every `NETWORK_ID` and `GENESIS_NONCE`
+  (10000 / 10101 / 10002). Only public addresses are committed — no seed
+  material is in any repository.
+
+  Because the genesis tx key is derived from the recipients file, the pins
+  are reproducible from committed inputs: `geblock verify` is green on all
+  three networks and the byte-compare gate
+  (`shekyl-genesis-tool/tests/config_pin_gate.rs::genesis_hex_matches_config_pin`)
+  is **un-ignored and live in CI** — recipients-vs-pin drift now fails the
+  build. The placeholder-era generator test is deleted with the era.
+
+  Derived artifacts re-pinned in the same change: the `mining_parity`
+  frozen genesis ids; the `shekyl-wire` regtest vectors
+  (`regtest_coinbase_h{0,1,2}.block` + hashes; h0 **is** the mainnet genesis,
+  so it now carries five outputs — `coinbase_roundtrip` asserts the count per
+  height); and the `shekyl-rpc-types` §3.4 txid-oracle miner-tx blobs
+  (`regtest_coinbase_h{0,1}.tx` + pins), which extract from those wire
+  vectors and must move with them. Each network's genesis id is confirmed by
+  three independent derivations: `geblock block-id` (pure Rust), the C++
+  `generate_genesis_block` path in `mining_parity`, and the live-daemon RPC
+  capture (`coinbase_hash` also CI-cross-anchors h0 to the published mainnet
+  id). `mining_parity` asserts the shipped genesis `tx_extra` is a fixed
+  point of C++ `sort_tx_extra` **and** the explicit field order
+  `0x01 → 0x06 → 0x07`, making geblock's canonical-emit-order claim fully
+  executable against the real sorter and field parser.
+
+- **`docs/GENESIS_ALLOCATIONS.md` published**, fulfilling the
+  `GENESIS_TRANSPARENCY.md` §5 commitment: per-network allocation tables,
+  genesis identities, the tx-key derivation spec, key-custody statement, and
+  the commands to rebuild and check the pinned bytes independently.
+
 ### Added
+
+- **Phase 4c wallet RPC rescan** (`Engine::start_rescan` +
+  `rescan_blockchain`). Named Engine API that rebuilds the wallet's
+  transaction history from the chain, starting at the wallet's scan floor.
+  Everything a replay cannot re-derive survives — retained `tx_keys`, notes,
+  payment-request rows, restore height, and the durable staking bond record;
+  everything scan-derived is rebuilt. The chain-global curve tree is left
+  untouched (it holds no wallet data). Every refusal is raised *before* the
+  destructive step: the single-flight slot it shares with `refresh`
+  (`-29200`), a daemon preflight (`-29201`), and a new `-29202`
+  `RESCAN_BLOCKED` for in-flight transactions whose spend record a chain
+  replay cannot rebuild — checked atomically with the reset, so a
+  concurrently-built transaction cannot slip through. Mid-scan failures
+  after the reset is durable return `-29203 RESCAN_INCOMPLETE` for every
+  join-path producer failure (not `-29201`, whose rescan contract is
+  "wallet untouched", and not a catch-all `-32603`). `shekyl-wallet-rpc`
+  dispatches `rescan_blockchain`; CLI `rescan` is un-stubbed and reports
+  whether a failure left the wallet reset. Closes FOLLOWUPS Phase 4b rescan
+  / WI-RPC-2b `rescan` deferrals; opens the `abandon_tx` follow-up that
+  `-29202` needs as an escape hatch. Of the Phase 4b quality gaps only the
+  OUTGOING filter remains Engine-gated — the build write-lock and submit
+  verdict entries closed in this same release (below).
+
+- **`submit_pending_tx` reports the real daemon verdict.** The wallet-RPC
+  send lifecycle no longer flattens every successful submit to
+  `ACCEPTED`: `Engine::submit_pending_tx{,_async}` returns the new
+  identity-bearing `SubmitOutcome`, and the OpenAPI `ALREADY_IN_POOL` /
+  `ALREADY_IN_CHAIN` verdicts — with the verdict-scoped
+  `confirmed_height` carrying the daemon-claimed confirming height
+  (display metadata, never settlement truth) — are reachable for the
+  first time. The CLI renders the three verdicts distinctly. Lock
+  lifecycle is unchanged: every success verdict places the F14
+  awaiting-confirmation lock and refresh remains the settlement
+  authority (`DAEMON_SUBMIT_VERDICT.md` §2.5 / §7.2).
 
 - **`geblock` — deterministic Rust genesis pipeline
   (`rust/shekyl-genesis-tool`).** Replaces the C++ `genesis_builder`
@@ -38,6 +113,45 @@
   `shekyl-crypto-pq/examples/gen_genesis_addrs.rs` placeholder generator
   (its label-derivation continues, documented and testable, as the
   `placeholder_recipients` test in `shekyl-genesis-tool`).
+
+### Fixed
+
+- **`build_pending_tx` / `submit_pending_tx` no longer stall read RPCs.**
+  Slow send work (FCMP++ membership assembly, daemon submit RPC) ran
+  under the wallet-RPC process's exclusive Engine lock, so
+  `get_balance` / `get_height` / `get_transfers` blocked for the whole
+  operation. `Engine::build_pending_tx{,_async}` and
+  `Engine::submit_pending_tx{,_async}` (and `discard_pending_tx`) now
+  take `&self`; wallet-RPC holds a read lock; builds serialize on an
+  engine-owned permit of one inside the engine — taken by build's
+  membership assembly and by submit's stale-reference re-anchor alike,
+  so the network observable is unchanged (one membership-assembly
+  round-trip at a time; raising the permit is an explicitly gated
+  future decision, not a tuning knob).
+
+- **A build no longer commits inputs a concurrent refresh invalidated.**
+  `refresh` merges scan results under a *shared* engine borrow, so it
+  was never serialized against the send lifecycle by the wallet-RPC
+  lock — under the write lock a merge simply landed just after the
+  build instead of during it, and either way the build committed
+  against the state it selected from. Build now re-validates its
+  selected inputs at the commit boundary — the same lock₂ discipline
+  the CT-5d re-anchor applies to its reference — and refuses if the
+  transfer vector shifted under a reorg or an input was observed spent
+  elsewhere, rather than returning a `PendingTx` the daemon is certain
+  to reject as a double spend.
+
+- **A daemon's `AlreadyInChain` height can no longer strand the spent
+  inputs.** The claimed confirming height is untrusted metadata
+  (`DAEMON_SUBMIT_VERDICT.md` §7.2) but was persisted verbatim as the
+  submit watchdog's horizon baseline. A claim above the wallet's tip —
+  a lying remote node, a reorg-confused daemon, or `u64::MAX` — held
+  the horizon at zero forever, so the escape ladder never ran and the
+  persisted awaiting-confirmation lock never released: the inputs
+  stayed unspendable across restarts with no alarm. The baseline is now
+  clamped to a height the wallet has actually reached, making §7.2's
+  "bounded liveness cost" damage cap true by construction. The raw
+  claim still routes the release path and still reaches the client.
 
 ## [3.1.0-alpha.7] - 2026-08-03
 

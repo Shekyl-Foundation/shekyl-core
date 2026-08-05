@@ -195,7 +195,7 @@ community fundraising, or other means decided at that time. No coins are
 reserved or earmarked for this purpose at launch.
 
 **Genesis shape and reproducibility.** Genesis carries the five-output
-20,000 SKL split on **every** network (the earlier single combined
+20,000 SHEKYL split on **every** network (the earlier single combined
 treasury output on mainnet/stagenet is retired). The genesis coinbase is
 built by the Rust `geblock` tool (`rust/shekyl-genesis-tool`) from the
 committed recipients files `config/genesis_recipients.{mainnet,testnet,stagenet}.json`,
@@ -208,14 +208,14 @@ discloses nothing beyond this document, and it makes the pinned
 three networks from the committed files and byte-compares against
 `src/cryptonote_config.h`.
 
-**Pre-launch placeholders.** Until the founder wallet ceremony runs, the
-committed recipients files hold deterministic placeholder addresses
-(label-derived keys; recorded and regenerable via the tool's
-`placeholder_recipients` test), not operational founder wallets. The
-final fresh-entropy founder addresses will replace them, and the
-specific genesis addresses for each founder will be published in
-`docs/GENESIS_ALLOCATIONS.md` together with the exact reproduction
-commands.
+**The allocations are final and published.** The recipient wallets were
+generated with fresh operating-system entropy, restore-verified from their
+written seeds, and their addresses committed to the recipients files above.
+Every genesis address, amount, and block identity — together with the exact
+commands to rebuild and check the pinned bytes yourself — is published in
+[`GENESIS_ALLOCATIONS.md`](GENESIS_ALLOCATIONS.md). No seed material has ever
+been committed to any repository; the placeholder era ended with that
+ceremony.
 
 ---
 

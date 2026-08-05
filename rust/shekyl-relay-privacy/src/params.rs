@@ -162,6 +162,32 @@ pub fn divert_to_anonymity_zone<R: crate::rng::RelayRng + ?Sized>(rng: &mut R) -
     crate::rng::bounded_uniform(rng, 9_999) < u64::from(MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS)
 }
 
+/// Outbound connections a node opens per zone by default — the deployed
+/// network's out-degree.
+///
+/// **Rust owns this value; C++ consumes it** through
+/// `shekyl_p2p_default_out_peers` (rule 20). It was `#define
+/// P2P_DEFAULT_CONNECTIONS_COUNT 12` in `cryptonote_config.h`, mirrored by
+/// hand into every Rust instrument that simulates the deployed topology —
+/// five copies, no owner, and nothing that fails when the daemon's value
+/// moves. That is F-7's failure mode one layer down: an instrument measuring
+/// a degree the deployment does not run, feeding derivations that then report
+/// numbers for a network that does not exist.
+///
+/// **Distinct from [`MIN_PROVISIONED_OUT_PEERS`], which is not an alias for
+/// it.** They hold the same number today and are derived in opposite
+/// directions: this one is the *configuration* the privacy quantities are
+/// measured **at**, while the floor below is derived **from** a measurement
+/// (`fluff_return_ms`) taken at this degree. Consuming either in place of the
+/// other inverts a derivation — if a future re-measure moves the floor, this
+/// default does not follow, and if the network default moves, the
+/// measurements are re-run rather than the floor being edited.
+///
+/// It lives in this crate because this crate owns the *relationship* between
+/// outbound degree and relay privacy: every consumer is an instrument here,
+/// and the one C++ needs is already exported from here.
+pub const P2P_DEFAULT_OUT_PEERS: u32 = 12;
+
 /// The per-zone outbound-connection floor the F-7 embargo provisioning
 /// assumes (F-8b, §45).
 ///
@@ -174,7 +200,8 @@ pub fn divert_to_anonymity_zone<R: crate::rng::RelayRng + ?Sized>(rng: &mut R) -
 /// parser refuses such counts, consuming this constant through
 /// `shekyl_relay_zone_min_provisioned_out_peers` — one owner, no C++ mirror.
 /// If a future re-measure extends the instrument below degree 12, this floor
-/// moves with `fluff_return_ms`, not independently of it.
+/// moves with `fluff_return_ms`, not independently of it — which is why it is
+/// its own constant and not an alias of [`P2P_DEFAULT_OUT_PEERS`].
 pub const MIN_PROVISIONED_OUT_PEERS: u32 = 12;
 
 /// The stem-graph shape, which fixes how many outbound peers carry stem
@@ -303,7 +330,7 @@ impl DandelionParams {
             // **Provisioned at the worst zone, not at one measurement —
             // F-7 (§26, §40, §44).** Measured p90 first-passage, memoryless
             // fluff flood (`simulate_fluff_return`), by deployed fluff rule at
-            // Shekyl's `P2P_DEFAULT_CONNECTIONS_COUNT = 12`:
+            // Shekyl's `P2P_DEFAULT_OUT_PEERS = 12`:
             //
             //   clearnet (EveryPeer, usable degree ~24)      ~1250 ms
             //   Tor-C  (OutboundOnly, usable degree 12 exact) ~3250 ms  <- binding

@@ -24,7 +24,15 @@ use shekyl_relay_privacy::{DelayFamily, EmbargoTimer, SplitMix64};
 fn tor_collapses_the_supernode_diffusion_observer() {
     use shekyl_relay_privacy::conformance::{simulate_transport_observation, Transport};
 
-    println!("\nSupernode diffusion observer: clearnet vs Tor (512 nodes, 8 peers)");
+    // Read the caption off the parameters rather than re-typing them: the
+    // 8 -> 12 `peers` pin (§69.2) silently re-parameterised this measurement
+    // while the header still claimed 8, so §6.5's recorded table stopped
+    // matching the test it names with nothing failing (§70).
+    let params = FloodParams::default();
+    println!(
+        "\nSupernode diffusion observer: clearnet vs Tor ({} nodes, {} peers)",
+        params.nodes, params.peers
+    );
     println!(
         "{:>7} {:>10} {:>18} {:>14}",
         "dial φ", "transport", "observed fraction", "first-spy π₀"
@@ -106,10 +114,14 @@ fn tor_collapses_the_supernode_diffusion_observer() {
         hi.first_spy_precision
     );
 
+    // Read the headline number off `hi` — the 30 %-reach arm this sentence
+    // describes — rather than re-typing it. A literal here drifts silently the
+    // moment a parameter moves, which is exactly what the `peers` pin did to
+    // the caption above (§70).
     println!(
         "\n  The delta is stark and structural: a clearnet supernode observes\n  \
          every fluff and attributes the source with the paper's first-spy\n  \
-         precision (~0.45 at a 30% attack); the same supernode over Tor observes\n  \
+         precision ({:.2} at a 30% attack); the same supernode over Tor observes\n  \
          NOTHING, because fluff never traverses its inbound edges\n  \
          (levin_notify.cpp:448). This is the measured additional security of the\n  \
          Tor configuration.\n\n  \
@@ -119,7 +131,8 @@ fn tor_collapses_the_supernode_diffusion_observer() {
          modelled transport-independently by simulate_blackhole_attack. So the\n  \
          Tor benefit is specifically the elimination of the cheap-inbound\n  \
          supernode, not a blanket improvement; the black-hole channel (and its\n  \
-         mean-invariant leak) is unchanged."
+         mean-invariant leak) is unchanged.",
+        hi.first_spy_precision
     );
 }
 

@@ -23,7 +23,7 @@ use super::util::usize_from;
 /// **Grounded as an OUTBOUND-occupancy channel, not the inbound reach.**
 /// [`dandelionpp.cpp:103-122`] builds `out_mapping_` by selecting `STEMS = 2`
 /// distinct peers, *without replacement*, from the origin's **outbound** pool
-/// (`P2P_DEFAULT_CONNECTIONS_COUNT = 12`, `cryptonote_config.h:134`). An adversary
+/// ([`crate::params::P2P_DEFAULT_OUT_PEERS`] = 12). An adversary
 /// enters that pool only by being *selected* as an outbound peer — a *different*
 /// capability than the cheap inbound dialing that gives
 /// [`simulate_transport_observation`]'s `dial_fraction`, so importing that inbound

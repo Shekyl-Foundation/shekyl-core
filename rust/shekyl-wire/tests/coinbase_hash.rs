@@ -16,10 +16,8 @@
 //! `vectors/capture_coinbase.py`. Regenerate the JSON and the `*.block` blobs
 //! together; nothing here is hand-copied, so the vectors can't drift out of sync.
 //!
-//! Regenerated for the credit-wire cutover (2026-08-04): the `block_header` gained
-//! `attestation_root` (`ARCHIVAL_CREDIT_WIRE.md` §3), moving every block hash, so
-//! all three heights were recaptured. Genesis (h0) is deterministic and equals
-//! `mining_parity`'s mainnet genesis id; h1/h2 are mined regtest blocks.
+//! Genesis (h0) is deterministic and equals `mining_parity`'s mainnet genesis
+//! id (CI-enforced below); h1/h2 are mined regtest blocks.
 //!
 //! Empty-set invariant: every captured height (no pass records yet) must carry
 //! `empty_attestation_root()` — live-derived from `shekyl-archival-retention`, not
@@ -28,11 +26,20 @@
 //!
 //! Mining address note: `capture_coinbase.py` mines to a freshly derived
 //! current-format regtest fixture address (`vectors/regtest_mining_recipients.json`),
-//! NOT the genesis treasury — a vector concern, not the treasury allocation; see
-//! `vectors/README.md` for the full rationale.
+//! NOT the genesis recipients — a vector concern, not the treasury allocation; see
+//! `vectors/README.md` for the full rationale. Note h0 **is** the mainnet genesis
+//! (regtest shares `GENESIS_TX`), so any genesis re-pin requires re-capturing this
+//! corpus.
 
 use shekyl_archival_retention::empty_attestation_root;
 use shekyl_wire::Block;
+
+/// Published mainnet genesis block id (`docs/GENESIS_ALLOCATIONS.md`,
+/// `mining_parity` frozen_id for MAINNET). h0 of this corpus must equal it:
+/// regtest shares mainnet `GENESIS_TX`, so the live-daemon capture and the C++
+/// `generate_genesis_block` path are two independent derivations of one id.
+const MAINNET_GENESIS_BLOCK_ID: &str =
+    "49d590b6e783c77dbe019436b283009c76de76ef6800211f56ca41a137a70d89";
 
 fn hex32(bytes: &[u8; 32]) -> String {
     let mut s = String::with_capacity(64);
@@ -84,5 +91,14 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
             block.header.attestation_root, empty_root,
             "height {height}: attestation_root must be empty_attestation_root(), not null_hash"
         );
+        if height == 0 {
+            // Cross-anchor: daemon-captured h0 must equal the published mainnet
+            // genesis id that mining_parity freezes independently via C++.
+            assert_eq!(
+                block_hash, MAINNET_GENESIS_BLOCK_ID,
+                "height 0 block_hash must equal the published mainnet genesis id \
+                 (mining_parity MAINNET frozen_id / GENESIS_ALLOCATIONS.md)"
+            );
+        }
     }
 }

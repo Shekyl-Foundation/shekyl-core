@@ -1456,10 +1456,10 @@ sustainability is unaffected by the recalibration.
   answer with a RESERVED refusal naming their gate rather than shipping a
   wallet2-era side door. Each is a *deferral with a named blocker* (rule 22),
   not a deletion:
-  - **`rescan`** — blocked on the Engine rescan API; `rescan_blockchain`
-    is already contract-`SPECIFIED` and returns `-32601` (see the existing
-    "Phase 4b: `rescan_blockchain` needs an Engine rescan API" item in
-    this queue — this row adds the CLI consumer, not a second blocker).
+  - **`rescan`** — **CLOSED 2026-08-04 (Phase 4c, `feat/wallet-rpc-phase-4c-rescan`)**.
+    Engine `start_rescan` + wallet-rpc `rescan_blockchain` + CLI `rescan`
+    landed; see the closed "Phase 4b: `rescan_blockchain` needs an Engine
+    rescan API" item below.
   - **Transaction proofs** (`get/check_tx_key`, `get/check_tx_proof`,
     `get/check_reserve_proof`) — blocked on Phase 2c (addresses/proofs)
     landing the proof surfaces in the Engine and the contract.
@@ -1635,22 +1635,50 @@ sustainability is unaffected by the recalibration.
   drifts. *Target: V3.1.*
 
 
-- **Phase 4b: `rescan_blockchain` needs an Engine rescan API** (added
-  2026-07-09). Wallet-rpc OpenAPI specifies `rescan_blockchain` (full
-  rescan from restore height, rebuild scan-derived state). Today Engine
-  only exposes `restore_from_height` + `refresh`; there is no
-  `Engine::rescan_*` that resets scan-derived ledger state to
-  `restore_from_height` before scanning. Phase 4b therefore leaves the
-  RPC method as `-32601` rather than inventing a silent
-  “set height + refresh” shim. **Reopening criterion:** Engine grows an
-  explicit rescan that resets scan-derived state to
-  `restore_from_height` (named API, tested). **Re-evaluation shape:**
-  wire `shekyl-wallet-rpc` `rescan_blockchain` to that API in a scoped
-  Phase 4b follow-up (or Phase 4c) PR; update OpenAPI only if the
-  projection differs. *Target: V3.0 / Phase 4b.*
+- **Phase 4b: `rescan_blockchain` needs an Engine rescan API** —
+  **CLOSED 2026-08-04 (Phase 4c, `feat/wallet-rpc-phase-4c-rescan`)**.
+  Engine grew `reset_scan_derived_state` + `start_rescan`
+  (`engine/rescan.rs`, over the shared single-flight slot now carved out
+  as `engine/refresh_slot.rs`). The reset preserves everything a chain
+  replay cannot re-derive — `tx_keys`, payment-request rows,
+  `restore_from_height`, and the durable `bonded_slots` bond record — and
+  clears the whole `LedgerBlock` plus the runtime indexes, `scan_completed`
+  and `scanned_pool_txs`. The chain-global curve tree is left alone (it
+  holds no wallet data, and rolling it back would force a genesis-onward
+  re-ingest). Refusals are hoisted ahead of the destructive step: daemon
+  preflight, then an in-flight-transaction guard atomic with the wipe.
+  `shekyl-wallet-rpc` `rescan_blockchain` and CLI `rescan` are live.
+  *Was target: V3.0 / Phase 4b.*
+
+- **Phase 4c: no way to abandon an unconfirmed submitted transaction, so a
+  never-mined tx can wedge `rescan`** (added 2026-08-04). `start_rescan`
+  refuses with `RescanBlocked` (`-29202`) while
+  `sync_state.pending_tx_hashes` is non-empty, because the inputs' spend
+  marking lives only in the transfer set the reset clears and a replay of
+  *confirmed* blocks cannot rebuild a spend that is still in the mempool —
+  those inputs would come back apparently unspent and be re-selected, and
+  two transactions provably spending one input self-link the wallet
+  (§7.1). The refusal is correct; its escape is missing. A tx that is
+  broadcast, dropped from every mempool, and never mined keeps its
+  `pending_tx_hashes` entry indefinitely (`reconcile_tx_key_retention`
+  retires an entry only against a *chain* reference), so that wallet can
+  never rescan again. **Named blocker:** an abandon surface is its own
+  contract decision, not a flag — it must prove non-exposure before
+  dropping the record (a daemon pool query is evidence, not proof, under
+  re-broadcast), and it must not delete the retained `TxSecretKey` while
+  exposure could still be live, which is exactly the I-2 ordering the
+  WI-RPC-3 retention design pins. Doing it wrong deletes proof material
+  for a transaction that later confirms. **Reopening criterion:** the
+  daemon exposes a pool-membership query with a stated staleness bound,
+  *or* the retention design gains a "presumed-dead, keys retained" state
+  that is safe to enter without one. **Re-evaluation shape:** an explicit
+  `abandon_tx` Engine API + RPC method in the `-291xx` send band, with a
+  crash-ordering test against the drop-then-confirm window; `start_rescan`
+  keeps refusing until the user runs it. *Target: V3.0 / Phase 4d.*
 
 - **Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing
-  history surface lands** (added 2026-07-09). The Engine ledger holds only
+  history surface lands** (added 2026-07-09; **Phase 4c disclosure
+  2026-08-04** — still blocked; reopening criteria unchanged). The Engine ledger holds only
   receive-side rows; `project::transfer_view` projects every row as
   `INCOMING` (outgoing sends surface as `SPENT` state on the funding row).
   A `get_transfers` call with `direction: OUTGOING` therefore matches nothing
@@ -1664,33 +1692,33 @@ sustainability is unaffected by the recalibration.
   distinct "not yet available" signal if clients depend on the filter.
   *Target: V3.0 / Phase 4b–4c.*
 
-- **Phase 4b: `build_pending_tx` holds the Engine write lock across FCMP++
-  assembly, stalling read RPCs** (added 2026-07-09). `Engine::build_pending_tx_async`
-  takes `&mut self`, so `send::build_pending_tx` holds `SharedEngine::write()`
-  across the curve-tree actor's `AssembleTx` (real, potentially slow async
-  I/O). While a build runs, every concurrent read RPC (`get_balance`,
-  `get_height`, `get_transfers`) blocks on `read()`, and `refresh` cannot
-  proceed — contradicting the `tenant.rs` note that reads share the Engine
-  under a read lock. The `Arc<RwLock<Engine>>` seam cannot fix this from the
-  RPC layer while build needs `&mut self`. **Reopening criterion:** Engine
-  splits the slow membership-path assembly out of the exclusive-borrow window
-  (interior mutability for the reservation commit, or an assemble-then-commit
-  API). **Re-evaluation shape:** narrow the write-lock hold in
-  `send::build_pending_tx` to the commit step once Engine exposes it.
-  *Target: V3.0 / Phase 4b–4c.*
-
-- **Phase 4b: `submit_pending_tx` verdict is flattened to `ACCEPTED`** (added
-  2026-07-09). `Engine::submit_pending_tx_async` returns a bare `TxHash`,
-  collapsing the internal `SubmitSuccess` distinction (`Broadcast` vs
-  `AlreadyInChain { height }`). `send::submit_pending_tx` therefore always
-  reports `verdict: ACCEPTED` / `confirmed_height: null`, so the OpenAPI
-  `ALREADY_IN_POOL` / `ALREADY_IN_CHAIN` verdicts (and `confirmed_height`)
-  are unreachable — documented as a known limitation on
-  `types::SubmitVerdictView`. **Reopening criterion:** Engine returns a
-  richer submit success type that preserves the pool/chain distinction and
-  confirmed height. **Re-evaluation shape:** map that type onto
-  `SubmitVerdictView` in `send::submit_pending_tx` and populate
-  `confirmed_height`. *Target: V3.0 / Phase 4b–4c.*
+- **Phase 4b: build concurrency permit stays 1 — raising it is a rule-21
+  reopen gated on anonymized segment fetch** (added 2026-08-04, W-B step 1;
+  supersedes "`build_pending_tx` holds the Engine write lock", resolved same
+  day — see the audit trail. The stall was real, the premise was not:
+  `PendingTxEngine::build` and its `LocalPendingTx` impl have taken `&self`
+  since CT-5c; only the `Engine` delegators demanded `&mut self`). With the
+  delegators relaxed and builds serialized on the engine-owned
+  `LocalPendingTx::build_permit` (one permit), read RPCs proceed during a
+  build and the network observable is unchanged — one `AssembleTx`
+  membership round-trip against the segment layer at a time. N>1 permits
+  would emit a **correlated burst of segment fetches** the (not yet
+  anonymized) segment server can count — concurrent-spend count and rough
+  input cardinality; privacy > performance says that observable is not
+  created until priced. The resource axis also opens at N>1: concurrent
+  builds reserve disjoint input sets, and the R8 TTL reclaim is a
+  mitigation, not a bound. **Reopening criterion:** the "Anonymized
+  (Tor/I2P) routing for non-forward segment fetch" item (this file) lands,
+  AND the reservation-exhaustion bound is designed. **Re-evaluation
+  shape:** raise the permit behind a priced decision naming the burst
+  observable. Refresh-vs-build concurrency is *not* part of this entry:
+  `refresh` takes shared engine borrows, so no embedder lock ever
+  serialized its ledger merge against a build, and the select →
+  assemble → sign → commit window is closed in-engine by build's lock₂
+  input re-validation, held under one ledger read guard **across the
+  `consumer_held` insert** (the check→insert gap was a bugbot finding
+  on PR #403, closed by widening the guard) rather than deferred.
+  *Target: V3.0 disposition stable; reopen substrate-anchored per above.*
 
 - **GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in`
   single-structured-output funding must land before genesis** (added
@@ -14227,6 +14255,77 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **Phase 4b `build_pending_tx` write-lock stall (resolved 2026-08-04,
+  `feat/w4b-submit-verdict`, W-B step 1; submit/discard extended same
+  PR review).** The FOLLOWUP's premise was wrong at source:
+  `PendingTxEngine::build` (`traits/pending_tx.rs`) and
+  `LocalPendingTx::build` (`transfer/trait_impl.rs`) take `&self`; only
+  the `Engine::build_pending_tx{,_async}` delegators demanded
+  `&mut self`, and the `Arc<RwLock<Engine>>` seam inherited that. Fixed
+  by relaxing the delegators to `&self` and serializing builds on the
+  engine-owned `LocalPendingTx::build_permit`
+  (`tokio::sync::Semaphore`, 1 permit) acquired at the top of `build` —
+  engine-owned so every embedder (wallet-rpc, the in-process GUI)
+  inherits the serialization, preserving today's network observable
+  (one `AssembleTx` at a time). Review extension applied the same
+  interior-mutability insight to `Engine::submit_pending_tx{,_async}`
+  and `discard_pending_tx` (`&self`; trait was already `&self`), so
+  `send::{build,submit,discard}_pending_tx` all hold `read()` and
+  concurrent reads proceed during build and the daemon submit
+  round-trip. Submit's own segment work — the stale-reference re-anchor
+  (`reanchor_consumer_held`), which issues the same `AssembleTx`
+  round-trip build does — takes the same permit, so the serialized
+  membership-fetch observable spans the whole send lifecycle rather
+  than build alone.
+  **Refresh-vs-build was never held by this lock** and is closed here,
+  not deferred: `refresh`'s driver and its `apply_scan_result` merge
+  take *read* guards (`refresh.rs`), so the pre-relaxation write guard
+  only changed *when* a merge landed relative to a build, never whether
+  the build committed against state the merge had invalidated. Build's
+  commit boundary is now its lock₂ — `revalidate_selected_inputs`
+  re-checks, under the state lock **and one ledger read guard held
+  across the `consumer_held` insert** (the check→insert gap was a
+  bugbot finding on PR #403; the check is a pure function of the
+  caller-held guard so re-opening the gap is unrepresentable), that
+  every selected input still carries the `gindex` its path was
+  assembled for and is still unspent,
+  refusing (and releasing the reservation) otherwise. This is the same
+  discipline the CT-5d re-anchor's lock₂ applies to its reference; it
+  does not make the merge atomic with the build — the co-spend happens
+  outside this wallet and nothing can — it bounds the build to what was
+  still true at commit, which is the entire window the relaxation
+  widened. Serialization is pinned by
+  `concurrent_builds_serialize_on_the_build_permit` (deterministic
+  noop-waker drive, no sleeps; proven-to-bite at permit=2), and the
+  `&self` relaxation is compile-coupled to `send.rs`'s read-guard call
+  sites. Canonical: `transfer/engine.rs` (`build_permit`),
+  `transfer/trait_impl.rs` (acquire), `shekyl-wallet-rpc/src/send.rs`.
+
+- **Phase 4b `submit_pending_tx` verdict flattening (resolved 2026-08-04,
+  `feat/w4b-submit-verdict`).** `Engine::submit_pending_tx{,_async}` now
+  returns the identity-bearing `SubmitOutcome` (`Accepted` / `AlreadyInPool`
+  / `AlreadyInChain { height }`) instead of a bare `TxHash`, and
+  `send::submit_pending_tx` projects it onto `SubmitVerdictView` — the
+  OpenAPI `ALREADY_IN_POOL` / `ALREADY_IN_CHAIN` verdicts and the
+  verdict-scoped `confirmed_height` are reachable for the first time. The
+  pool bit crosses the submitter seam as an **inform-only**
+  `BroadcastKind` payload on `SubmitSuccess::Broadcast`, so the §2.5
+  two-disposition partition is untouched (variant set = disposition set),
+  the accept finalizer is **kind-blind** — the sub-fact is projected at
+  the dispatch sites via the single `BroadcastKind::into_outcome` mapping
+  only *after* the disposition completes, so a kind-conditional
+  disposition is unrepresentable, not merely untested — and both F40 lock
+  paths are
+  byte-identical — regressions pin the disposition parity
+  (`submit_already_in_pool_surfaces_verdict_without_changing_disposition`)
+  and the height pass-through (the two `submit_already_in_chain_*` tests
+  now assert the full outcome). `confirmed_height` stays untrusted display
+  metadata per the `DAEMON_SUBMIT_VERDICT.md` §7.2 rider (refresh remains
+  settlement authority; no other method populates the field). CLI renders
+  the three verdicts distinctly. Canonical:
+  `rust/shekyl-engine-core/src/engine/pending.rs` (`SubmitOutcome`),
+  `rust/shekyl-wallet-rpc/src/project.rs` (`submit_pending_tx_result`).
 
 - **CLI `--proxy socks5://` local-DNS-leak warning (resolved 2026-07-23 in #360,
   `668b0b0bb`).** `ureq::Proxy::new` maps `socks5://`/`socks4://` to a protocol

@@ -3134,6 +3134,13 @@ bool shekyl_relay_zone_divert_relayed_tx();
 //! this put real fluff first-passage above the provisioned value.
 std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 
+//! Outbound connections a node opens per zone by default. Rust-owned (rule
+//! 20); replaces `#define P2P_DEFAULT_CONNECTIONS_COUNT`. This is the degree
+//! the relay-privacy measurements are taken AT; the floor above is derived
+//! FROM those measurements. Same value today, opposite derivations -- do not
+//! substitute one for the other.
+std::uint32_t shekyl_p2p_default_out_peers();
+
 //! Record `n` packed 32-byte CANONICAL tx hashes stemmed to `successor`
 //! (16-byte uuid); `source` is the arriving peer's uuid or null for local
 //! origin. Canonical, not blob-derived — blob bytes are not a stable identity

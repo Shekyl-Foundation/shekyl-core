@@ -678,6 +678,7 @@ mod tests {
     use shekyl_types::{PSlot, TxHash};
 
     use super::*;
+    use crate::engine::transaction_submitter::BroadcastKind;
 
     /// One scripted submit verdict (the `BondBroadcast` return shape).
     type Verdict = Result<SubmitSuccess, BroadcastSubmitError>;
@@ -752,6 +753,7 @@ mod tests {
                 .pop_front()
                 .unwrap_or(Ok(SubmitSuccess::Broadcast {
                     hash: TxHash::from_bytes([0u8; 32]),
+                    kind: BroadcastKind::Accepted,
                 }))
         }
     }
@@ -823,6 +825,7 @@ mod tests {
     fn accepted() -> Verdict {
         Ok(SubmitSuccess::Broadcast {
             hash: TxHash::from_bytes([1u8; 32]),
+            kind: BroadcastKind::Accepted,
         })
     }
 

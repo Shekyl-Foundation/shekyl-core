@@ -33,14 +33,23 @@ pub(crate) fn collect_label_residue(
     map
 }
 
-/// After a chain reorg drops transfers at `fork_height` and above, unwind
-/// `PaymentRequest` rows that matched transfers that no longer exist so a
-/// replay can re-match them.
+/// After a chain reorg drops transfers at `fork_height` and above — or after
+/// a rescan empties the transfer set outright — unwind `PaymentRequest` rows
+/// that matched transfers that no longer exist so a replay can re-match them.
+///
+/// `at_height` is the height an unwound request's expiry is classified
+/// against, passed explicitly rather than read from `ledger` because the two
+/// callers reset the tip at different points: the reorg merge still holds the
+/// post-rewind tip, while [`reset_scan_derived_state`] has already zeroed it
+/// (and `is_expired_at(0)` is false for every non-zero expiry, which would
+/// resurrect long-expired invoices as `Pending`).
+///
+/// [`reset_scan_derived_state`]: crate::engine::rescan::reset_scan_derived_state
 pub(crate) fn rewind_matched_payment_requests_after_reorg(
     payment_requests: &mut [PaymentRequest],
     ledger: &LedgerBlock,
+    at_height: u64,
 ) {
-    let current_height = ledger.height();
     for req in payment_requests.iter_mut() {
         if req.state != PaymentRequestState::Matched {
             continue;
@@ -57,7 +66,7 @@ pub(crate) fn rewind_matched_payment_requests_after_reorg(
         }
         req.matched_tx_hash = None;
         req.matched_output_index = None;
-        req.state = if req.is_expired_at(current_height) {
+        req.state = if req.is_expired_at(at_height) {
             PaymentRequestState::Expired
         } else {
             PaymentRequestState::Pending
@@ -252,9 +261,37 @@ mod tests {
         reqs[0].matched_output_index = Some(0);
 
         let ledger = LedgerBlock::empty();
-        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger);
+        let height = ledger.height();
+        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger, height);
         assert_eq!(reqs[0].state, PaymentRequestState::Pending);
         assert!(reqs[0].matched_tx_hash.is_none());
+    }
+
+    /// An unwound request whose expiry height has already passed is
+    /// classified `Expired`, not `Pending` — the property the explicit
+    /// `at_height` parameter exists to make reachable from the rescan
+    /// caller, which unwinds against an already-zeroed tip.
+    #[test]
+    fn rewind_expires_request_past_its_expiry_height() {
+        use shekyl_engine_state::LedgerBlock;
+
+        let mut reqs = vec![sample_request(9, 50)];
+        reqs[0].state = PaymentRequestState::Matched;
+        reqs[0].matched_tx_hash = Some(shekyl_types::TxHash::from_bytes([0xEF; 32]));
+        reqs[0].matched_output_index = Some(0);
+        reqs[0].expiry = Some(100);
+
+        let ledger = LedgerBlock::empty();
+        // Zeroed tip (the rescan shape) would say "not expired"; the
+        // pre-reset height the caller passes says otherwise.
+        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger, 0);
+        assert_eq!(reqs[0].state, PaymentRequestState::Pending);
+
+        reqs[0].state = PaymentRequestState::Matched;
+        reqs[0].matched_tx_hash = Some(shekyl_types::TxHash::from_bytes([0xEF; 32]));
+        reqs[0].matched_output_index = Some(0);
+        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger, 101);
+        assert_eq!(reqs[0].state, PaymentRequestState::Expired);
     }
 
     #[test]
@@ -293,7 +330,8 @@ mod tests {
             receive_attribution: ReceiveAttribution::Matched(PaymentRequestId(rid)),
         });
 
-        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger);
+        let height = ledger.height();
+        rewind_matched_payment_requests_after_reorg(&mut reqs, &ledger, height);
         assert_eq!(reqs[0].state, PaymentRequestState::Matched);
         assert_eq!(reqs[0].matched_tx_hash, Some(tx_hash));
     }

@@ -331,11 +331,15 @@ pub(crate) mod proof_bridge;
 pub mod proofs;
 pub(crate) mod pscan;
 pub mod refresh;
+/// Per-engine single-flight slot shared by `start_refresh` / `start_rescan`.
+pub(crate) mod refresh_slot;
 /// Track-2 end-to-end FAKECHAIN regtest (C++↔Rust FCMP++ verify parity). Spawns
 /// a real `shekyld --regtest` and drives the production [`Engine`] against it;
 /// all tests are `#[ignore]`d and require `SHEKYLD_BIN`.
 #[cfg(test)]
 mod regtest_e2e;
+/// Full-wallet rescan: reset scan-derived ledger state (Phase 4c).
+pub(crate) mod rescan;
 pub(crate) mod scan_floor;
 pub(crate) mod sealing_keys;
 pub(crate) mod sign_bridge;
@@ -432,7 +436,7 @@ pub use output_selector::{
 };
 pub use pending::{
     FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
-    TxHash, TxRecipient, TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
+    SubmitOutcome, TxHash, TxRecipient, TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
 };
 // The P-scan lifecycle surface (WI-1): handle + start error + cadence default,
 // re-exported so embedders holding the `PScanHandle` (the module keeps the

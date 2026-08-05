@@ -57,11 +57,15 @@
 //! - `build → Result<PendingTx, SendError>` — build-time validation
 //!   vocabulary (insufficient funds, no spendable outputs, selector
 //!   contract violation per F4).
-//! - `submit → Result<TxHash, SubmitError>` — submit-time outcome
-//!   vocabulary discriminating `TerminalErrorKind` (drops from
-//!   `in_flight` on resolution) vs. `AmbiguousErrorKind` (R9
-//!   daemon-side-authority preserved; rid stays `in_flight`) vs.
-//!   `SnapshotInvalidated` (segment-2h F1 lazy R5 disposition).
+//! - `submit → Result<SubmitOutcome, SubmitError>` — submit-time
+//!   outcome: success is the identity-bearing
+//!   [`SubmitOutcome`](crate::engine::pending::SubmitOutcome)
+//!   (`Accepted` / `AlreadyInPool` / `AlreadyInChain { height }`, all
+//!   sharing the §2.5 lock disposition); errors discriminate
+//!   `TerminalErrorKind` (drops from `in_flight` on resolution) vs.
+//!   `AmbiguousErrorKind` (R9 daemon-side-authority preserved; rid
+//!   stays `in_flight`) vs. `SnapshotInvalidated` (segment-2h F1 lazy
+//!   R5 disposition).
 //! - `discard → Result<(), PendingTxError>` — F2 ownership-boundary
 //!   discrimination (`DiscardBlockedPendingDaemonAck` vs.
 //!   `ReservationNotFound`).
@@ -99,7 +103,7 @@ use std::future::Future;
 
 use crate::engine::diagnostics::DiscardReason;
 use crate::engine::error::{PendingTxError, SendError, SubmitError};
-use crate::engine::pending::{PendingTx, ReservationId, TxHash, TxRequest};
+use crate::engine::pending::{PendingTx, ReservationId, SubmitOutcome, TxRequest};
 
 /// Engine-side surface for the [`PendingTx`] lifecycle (§2.4).
 ///
@@ -268,11 +272,17 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     /// `seen_gen` is the `content_gen` the consumer last reviewed on the
     /// [`PendingTx`] handle (CT-5d §4); it gates broadcast so a re-anchor cannot
     /// silently change the authorized content out from under the consumer.
+    ///
+    /// Success is the identity-bearing [`SubmitOutcome`]: a fresh accept,
+    /// a pool-resident duplicate, or the daemon's already-in-chain claim
+    /// with its claimed height. All three share the §2.5 lock disposition
+    /// — the verdict informs the consumer, it never changes what the
+    /// engine does with the reservation or the F14 lock.
     fn submit(
         &self,
         id: ReservationId,
         seen_gen: u64,
-    ) -> impl Future<Output = Result<TxHash, SubmitError>> + Send;
+    ) -> impl Future<Output = Result<SubmitOutcome, SubmitError>> + Send;
 
     /// Discard the named reservation with an explicit reason.
     ///

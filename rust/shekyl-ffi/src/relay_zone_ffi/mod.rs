@@ -702,6 +702,21 @@ pub extern "C" fn shekyl_relay_zone_min_provisioned_out_peers() -> u32 {
     shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS
 }
 
+/// Outbound connections a node opens per zone by default (rule 20: Rust owns
+/// the value, C++ consumes it).
+///
+/// Replaces `#define P2P_DEFAULT_CONNECTIONS_COUNT`. The relay-privacy
+/// instruments simulate the deployed out-degree, so a `#define` C++ could move
+/// without any Rust test failing left the measurements free to describe a
+/// network that does not exist. Not the same quantity as
+/// `shekyl_relay_zone_min_provisioned_out_peers`: this is the configuration
+/// the privacy numbers are measured **at**, that one is a floor derived
+/// **from** those measurements.
+#[no_mangle]
+pub extern "C" fn shekyl_p2p_default_out_peers() -> u32 {
+    shekyl_relay_privacy::params::P2P_DEFAULT_OUT_PEERS
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_next_wake(handle: *const RelayZoneHandle) -> u64 {
     if handle.is_null() {

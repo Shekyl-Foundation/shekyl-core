@@ -34,6 +34,8 @@ Wallet lifecycle:
   restore <filename> <seed...>        Restore wallet from mnemonic seed
   password                            Change wallet password
   refresh                             Sync with the daemon
+  rescan                              Rebuild transaction history from the
+                                      chain (\"hard\" accepted; same rescan)
   status                              Show wallet and daemon sync heights
 
 Address and balance:
@@ -86,8 +88,8 @@ Meta:
   exit / quit                         Exit shekyl-cli
 
 Not yet available (the RPC surface is designed but has not landed; see
-docs/FOLLOWUPS.md): rescan, message signing (sign/verify), and the
-offline cold-signing workflow (describe/sign/submit_transfer,
+docs/FOLLOWUPS.md): message signing (sign/verify), and the offline
+cold-signing workflow (describe/sign/submit_transfer,
 transfer --do-not-relay).";
 
 /// RESERVED-surface refusal: the command is part of the target set, but the
@@ -156,8 +158,8 @@ pub fn repl(
                     }
                     ResolvedCommand::Status => lifecycle::cmd_status(&rpc),
                     ResolvedCommand::Password => lifecycle::cmd_password(&rpc),
-                    ResolvedCommand::Rescan { .. } => {
-                        reserved("rescan", "the native rescan RPC surface");
+                    ResolvedCommand::Rescan { hard } => {
+                        lifecycle::cmd_rescan(&rpc, hard);
                     }
 
                     // Balance / address

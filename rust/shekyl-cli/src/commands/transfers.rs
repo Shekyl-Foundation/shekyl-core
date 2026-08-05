@@ -12,6 +12,7 @@
 //! the server (rewrite-plan pin: the RPC surface is UI-free).
 
 use serde_json::{json, Value};
+use shekyl_wallet_rpc::types::{SubmitPendingTxResult, SubmitVerdictView};
 
 use super::{confirm, format_amount, format_amount_str, require_open};
 use crate::rpc_client::RpcSession;
@@ -128,10 +129,42 @@ pub fn cmd_transfer(
         "submit_pending_tx",
         json!({ "pending_tx_id": pending_tx_id, "seen_gen": seen_gen }),
     ) {
-        Ok(val) => {
-            let tx_hash = val.get("tx_hash").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Transaction submitted: {tx_hash}");
-        }
+        // Decoded through the server's own result type, not a second copy of
+        // the verdict vocabulary: `SubmitVerdictView` owns the wire strings,
+        // and matching it exhaustively means a new verdict arm fails this
+        // build instead of silently rendering as a plain submit.
+        Ok(val) => match serde_json::from_value::<SubmitPendingTxResult>(val.clone()) {
+            // Render the verdict distinctly (rule 82): all three are success —
+            // the funds are on their way either way — but "already" tells the
+            // user an earlier attempt went through, so they neither resubmit
+            // nor double-count.
+            Ok(result) => {
+                let tx_hash = result.tx_hash;
+                match result.verdict {
+                    SubmitVerdictView::Accepted => println!("Transaction submitted: {tx_hash}"),
+                    SubmitVerdictView::AlreadyInPool => println!(
+                        "Transaction already in the network's pool (an earlier submit went \
+                         through): {tx_hash}"
+                    ),
+                    // The height is the daemon's claim, not an observation of
+                    // ours — say "reported" so the user reads it as such.
+                    SubmitVerdictView::AlreadyInChain => match result.confirmed_height {
+                        Some(h) => println!(
+                            "Transaction already confirmed on chain (reported height {h}): \
+                             {tx_hash}"
+                        ),
+                        None => println!("Transaction already confirmed on chain: {tx_hash}"),
+                    },
+                }
+            }
+            // A server newer than this CLI, or a malformed reply: the submit
+            // still succeeded, so never swallow the hash — print what we can
+            // and say the verdict was not understood.
+            Err(_) => {
+                let tx_hash = val.get("tx_hash").and_then(|v| v.as_str()).unwrap_or("?");
+                println!("Transaction submitted (verdict not recognized): {tx_hash}");
+            }
+        },
         Err(e) => {
             rpc.report("Failed to submit transaction", &e);
             // The failed submit left the reservation live; release it so the

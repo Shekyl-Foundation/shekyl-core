@@ -415,7 +415,9 @@ a high quantile, with the same testnet reopening trigger — and after the RD-1
 correction it *dominates* the hop term, so the testnet measurement must capture
 fluff-return first passage and not only stem hop latency. It is currently
 **2250 ms**, the measured p90 for a memoryless flood at 8 peers
-(`simulate_fluff_return`). *Round 1 refinement:* this is the p90 of the
+(`simulate_fluff_return`). *(Both numbers are superseded: F-7 re-measured under
+the deployed outbound-only rule at degree 12 → `F′ = 3250 ms`, §44; the
+`8` is the pre-§69.2 instrument default.)* *Round 1 refinement:* this is the p90 of the
 population-*marginal* first passage applied uniformly; `F(j)` actually grows
 with stem distance, so it is conservative for near positions and possibly
 slightly short for the origin. Negligible at the adopted parameters, but the
@@ -669,20 +671,21 @@ a number:
 `simulate_transport_observation` measures exactly the delta the §6.3 source fact
 produces, for the paper's primary adversary — a supernode that opens cheap
 *inbound* edges to a fraction of honest nodes and runs the first-spy estimator
-(512 nodes, 8 peers, `tor_collapses_the_supernode_diffusion_observer`):
+(512 nodes, 12 peers, `tor_collapses_the_supernode_diffusion_observer`; re-measured
+at the §69.2 `peers` pin — §70.2):
 
 | supernode reach | transport | fluff observed | first-spy π₀ |
 | --- | --- | --- | --- |
-| dials 5 % | clearnet | 1.0000 | 0.1155 |
+| dials 5 % | clearnet | 1.0000 | 0.0978 |
 | dials 5 % | **Tor/I2P** | **0.0000** | **0.000** |
-| dials 10 % | clearnet | 1.0000 | 0.1967 |
+| dials 10 % | clearnet | 1.0000 | 0.1760 |
 | dials 10 % | **Tor/I2P** | **0.0000** | **0.000** |
-| dials 30 % | clearnet | 1.0000 | 0.4463 |
+| dials 30 % | clearnet | 1.0000 | 0.4228 |
 | dials 30 % | **Tor/I2P** | **0.0000** | **0.000** |
 
 The delta is stark and structural: a clearnet supernode observes **every** fluff
 and attributes the source with the paper's first-spy precision (rising with its
-reach to ~0.45 at a 30 % attack); the same supernode over Tor observes
+reach to ~0.42 at a 30 % attack); the same supernode over Tor observes
 **nothing**, because fluff never traverses its inbound edges
 ([`zone/mod.rs:521`](../../rust/shekyl-relay/src/zone/mod.rs#L521)).
 That collapse is the measured additional security of the Tor configuration.
@@ -1500,7 +1503,9 @@ stem/fluff out-of-order messages"*. So a stem node's embargo is disarmed when
 
 *Measured.* `simulate_fluff_return` models the flood as first passage on a
 random graph with per-edge fluff delays — which is what the daemon does, since
-a node draws one flush deadline per peer connection. At 512 nodes, 8 peers:
+a node draws one flush deadline per peer connection. At 512 nodes, 8 peers
+(the pre-§69.2 instrument default; the F-4/F-5 *ratio* this table establishes
+is what the argument uses, and it is degree-insensitive):
 
 | fluff delay on each edge | mean | p90 |
 | --- | --- | --- |
@@ -6075,8 +6080,11 @@ reader can check rather than assume.
 
 ### 25.5 Parity runs the other way too, and §6 never asks
 
-§6.5 measures the clearnet inbound supernode at π₀ = **0.1155 / 0.1967 /
-0.4463** at 5/10/30 % reach, and measures outbound-only fluff collapsing it to
+§6.5 measures the clearnet inbound supernode at π₀ = **0.0978 / 0.1760 /
+0.4228** at 5/10/30 % reach (the figures read **0.1155 / 0.1967 / 0.4463** when
+this section was written, at the pre-§69.2 `peers = 8`; re-measured at the pin
+in §70.2, and the argument below is unchanged), and measures outbound-only
+fluff collapsing it to
 **0.0000**. That is a measured leak and its measured fix — **and we apply the
 fix only where the leak is structurally smaller.**
 
@@ -6229,19 +6237,22 @@ directions**:
   mean."* `F` rises ⇒ the §6.6 embargo-phase clearnet leak (0.0114 at 144 s)
   rises.
 
-So reverse-parity zeroes §6.5's inbound-supernode channel (π₀ up to **0.4463**
-at 30 % reach) while **worsening** §6.6's channel through `F`, and forces an
+So reverse-parity zeroes §6.5's inbound-supernode channel (π₀ up to **0.4228**
+at 30 % reach; **0.4463** as written here, pre-§69.2 — §70.2) while
+**worsening** §6.6's channel through `F`, and forces an
 embargo re-derivation. **That is exactly the signature §6.6 says it hunts —
 "a fix that helps one channel and quietly worsens another"** — and adopting or
 dismissing it on a coverage number would be asserting on the wrong axis. The
-expectation is still strongly net-positive (0.4463 dwarfs 0.0114), but *getting
+expectation is still strongly net-positive (0.4228 dwarfs 0.0114 — the margin
+is three decimal orders either way), but *getting
 it right* means producing `F′` from a directed instrument and feeding it through
 `derive` **and** through `simulate_passive_neighbor_leak`, at the high quantile
 the existing policy mandates.
 
 **Pin the parameter's meaning before the comparison.** `FloodParams::peers`
-defaults to **8** ([`flood.rs:32`](../../rust/shekyl-relay-privacy/src/conformance/flood.rs#L32))
-while `P2P_DEFAULT_CONNECTIONS_COUNT = 12`, and under the symmetric
+defaulted to **8** ([`flood.rs`](../../rust/shekyl-relay-privacy/src/conformance/flood.rs))
+while the daemon ran 12 — the state at the time of this finding; §69.2 pinned
+the default to 12 and §70.2 gave the value a Rust owner — and under the symmetric
 construction each node's effective fluff degree is ~**16**. Nothing states
 whether `peers` means outbound count, total, or a deliberate under-degree.
 Building the directed variant without settling that would compare
@@ -9561,6 +9572,29 @@ cannot build an `AppState`. A parallel path-list constant would be
 convention-theater — it cannot fire on the registration changing. The honest
 fix is an integration test that links the FFI; recorded as owed.
 
+> **Superseded 2026-08-04/05 — §69.1 and §70.1. Three claims above are now
+> false, and the paragraph is kept rather than rewritten because the reasoning
+> that produced it is the record.**
+>
+> 1. **"Routed inside the existing `if !restricted` block"** — that block is
+>    gone. Listener selection is `server::served_paths(restricted)`, one pure
+>    function over two handler-free path lists; `assemble` registers exactly
+>    what it yields and `build_router` is `assemble` plus layers. Grepping
+>    `if !restricted` in `server.rs` now finds nothing.
+> 2. **"Recorded as owed"** — the integration test was **retired, not
+>    deferred** (§69.1). The property is pure route-table selection; a daemon
+>    fixture would have tested the server around it. Nothing here is owed.
+> 3. **"Is not asserted by a test"** — it is, three ways, none of which links
+>    the FFI: the gate is asserted on the *assembled router* (dummy handlers,
+>    real table — 404 restricted / 200 unrestricted), against a specification
+>    written out independently of the route table, so a path *moved* between
+>    listeners fails instead of silently changing the oracle (§70.1).
+>
+> The paragraph's own instinct — that a parallel path-list constant is
+> convention-theatre because it cannot fire on the registration changing —
+> was right, and §70.1 is the second application of it: an oracle that
+> *iterates* the route table has the same defect as one that mirrors it.
+
 ### 55.3 The dead-code sweep, and why one of two survived
 
 - **`P2P_IDLE_CONNECTION_KILL_INTERVAL` — removed.** Definition only, zero
@@ -11303,3 +11337,295 @@ coming. Rewritten in place above; recorded here because the change is a
 > §67.1's stale blocker, one layer up: there, a carried obstacle had been
 > removed by unrelated work; here, a carried question had been dissolved by
 > our own.
+
+## 69. The gate test and the `peers` pin — both landed, and the gate cost a design correction
+
+**2026-08-04.** §67's two remaining items, executed. The `peers` pin went as
+proposed; the gate test did not, and the reason is worth recording because it
+is why the duplicate it deletes existed in the first place.
+
+### 69.1 The gate: the route table had to *drive* registration, not be lifted
+
+§67.1 proposed composing `node_server.cpp`'s real-`core` and real-`node_server`
+patterns into a dual-arm integration test. **Correctly rejected by the
+maintainer:** the gate is `if !restricted { … }` — pure Rust — and the defect
+to catch is *"someone moved that route out of the conditional."* Standing up a
+daemon to reach it tests the **server**; the property lives in the **route
+table**. Building the heavy fixture would have failed on any of a dozen
+startup conditions and passed on none of the interesting ones.
+
+**The first attempt at the light version did not link, and that is the
+finding.** Lifting the table to `Vec<(&'static str, MethodRouter<Arc<AppState>>)>`
+puts handler names in a function the tests call — and naming
+`json::get_stem_tallies` pulls `CoreRpc::stem_tallies`, which pulls
+`core_rpc_ffi_stem_tallies`, which Cargo never links. The lib tests linked on
+`dev` only because nothing reachable from a test named a handler.
+
+> **The old `UNRESTRICTED_ONLY_JSON_PATHS` const was not laziness — it was a
+> linkability constraint wearing the costume of a dual-maintenance smell.** It
+> was handler-free *so that a test could read it at all*. Deleting it as "a
+> duplicate" without that fact would have produced a design that cannot build.
+
+**What resolves both.** Split *which listener serves a path* (handler-free
+lists) from *what runs there* (one total `handler_for` match), put the
+`restricted` gate in a pure `served_paths` function, and have
+`build_router` **only** iterate that:
+
+```rust
+pub fn served_paths(restricted: bool) -> impl Iterator<Item = &'static str> {
+    let admin = if restricted { &[][..] } else { UNRESTRICTED_ONLY_JSON_PATHS };
+    ALWAYS_REGISTERED_PATHS.iter().copied().chain(admin.iter().copied())
+}
+
+for path in served_paths(restricted) {
+    router = router.route(path, handler_for(path));
+}
+```
+
+**The gate is one function.** Tests call `served_paths`; the router iterates
+`served_paths`. Re-encoding the gate as set algebra over the two consts would
+miss a deleted `if !restricted` inside that function — the residual the first
+landing still left open. Moving a path between listeners is a list edit only
+(one handler table, not two).
+
+**Both arms, each the other's control.** *unrestricted ⇒ present* proves the
+path is spelled right and selected; *restricted ⇒ absent* then means **gated**
+rather than **missing**. A generalising arm covers all sixteen admin paths, not
+just §55's.
+
+**Negative-controlled, because a seal is not coverage.** Moving
+`/get_stem_tallies` into `ALWAYS_REGISTERED_PATHS` fails the restricted-absent
+arm with the path named. The check it replaces — *"the const contains this
+string"* — passes under that same edit. That is what made it theatre.
+
+**Retired by this:** `BINARY_URI_PATHS` (binary paths live on the always-list)
+and **the owed dual-arm integration test itself**. The property it was
+chartered to establish is pure path selection; a daemon fixture would have
+tested the server *around* it. `/get_stem_tallies` is no longer an owed item.
+
+> **Reviewed in §70.1 (2026-08-05), and the generalising arm above did not
+> hold.** "A generalising arm covers all sixteen admin paths" is true of the
+> *loop*, not of the *property*: iterating `UNRESTRICTED_ONLY_JSON_PATHS`
+> catches a path in **both** lists and is silent when one is **moved out** of
+> it. The oracle now runs against a specification written independently of the
+> route table, and the gate is asserted on the assembled router rather than on
+> the path list. The linkability finding recorded above stands unchanged and is
+> what `assemble`'s generic handler parameter preserves.
+
+**One residue, named at its site:** a path listed with no `handler_for` arm
+panics at daemon start. Not unit-tested, deliberately — such a test must name
+a handler, which relinks the FFI. `#[ignore]` does not help; it skips
+execution, not linking. That was measured, not assumed.
+
+> **Closed in §70.1 (2026-08-05).** The residue was real but not unavoidable:
+> it followed from keying `handler_for` on `&str` with a `panic!` wildcard.
+> Keyed on an `Endpoint` enum with an exhaustive match, the same mistake is a
+> compile error. The linkability finding this section records is untouched —
+> handlers are still named only inside `handler_for`, which tests still never
+> call.
+
+### 69.2 The `peers` pin — 12, and why holding it fixed is *not* F-7's error
+
+`FloodParams::peers` is the count each node **initiates** to.
+**Pinned to `P2P_DEFAULT_CONNECTIONS_COUNT = 12`, identical in both arms.**
+The old default `8` is very likely Miller et al.'s measured mean degree of the
+2015 Bitcoin *server* graph — neither Bitcoin's outbound default nor a Shekyl
+quantity, and its exclusion of NAT'd clients does not map, since a NAT'd Shekyl
+node makes its 12 outbound and relays normally. **A value that is neither ours
+nor applicable is not a default.**
+
+**§67.2 called this F-7's error shape. That was too strong, and the maintainer's
+distinction is the correct one.** F-7's defect was comparing at different
+*configured* degrees — `EveryPeer`@8 against `OutboundOnly`@16 — so a rule
+change and a degree change moved together and attribution was ambiguous. Here
+the configured degree is **held identical** and the usable degree differs
+downstream (`~24` under `EveryPeer`, `12` under `OutboundOnly`) **as a
+consequence of the reach rule**. That is the causal chain being measured, not a
+confound. The precondition is discharged by pinning, not by a round.
+
+**The caveat, recorded at the number rather than here.** 12 is the *default*
+and real degree is heterogeneous: a NAT'd node has 12 out and 0 in, so its
+`EveryPeer` degree is 12, not ~24. Uniform defaults are the right control for a
+rule comparison, but they place the `EveryPeer` arm at the **optimistic** end of
+the real distribution — so the measured cost of reverse-parity is an
+**over**-estimate. Safe direction, and stated so a later reader does not mistake
+the bias for precision.
+
+### 69.3 What is left on the owed list
+
+| item | state |
+| --- | --- |
+| §12.11 rewrite | done (§68) |
+| `/get_stem_tallies` gate | **done — and the owed integration test retired, not deferred** |
+| `hop` quantile policy | decided (§66); clearnet measurement outstanding |
+| F′ reverse-parity readouts | **unblocked** — `peers` pinned; three readouts in §67.2's order |
+| the §69 gate test itself | **reopened and re-landed — §70.1**: the generalising arm iterated the list it guarded |
+| §6.5's π₀ table under the pin | **not updated here; corrected in §70.2** — the pin re-parameterised a measurement §6.5 records verbatim |
+
+## 70. The gate that iterated itself, and the degree that had no owner
+
+**2026-08-05.** Review round on §69. Ten findings, all verified against the
+tree before being taken; two of them are the round. §69 replaced a
+const-membership seal that could not fire under the edit it existed to catch —
+and the test it replaced it with had the same defect, one level up.
+
+### 70.1 An oracle that reads the thing under test cannot fail on the thing under test
+
+§69's generalising arm looped `UNRESTRICTED_ONLY_JSON_PATHS`:
+
+```rust
+for path in UNRESTRICTED_ONLY_JSON_PATHS {          // <- the list under test
+    assert!(served_paths(true).all(|p| p != *path));
+}
+```
+
+That catches **duplication** — a path in *both* lists is visited and found on
+the restricted listener. It is silent through **migration**. Move
+`/stop_daemon` *out* of the admin list and into `ALWAYS_REGISTERED_PATHS` and
+the loop simply stops visiting it: the expected set shrank with the code. All
+three gate tests stayed green while `served_paths(true)` began yielding
+`/stop_daemon`, `build_router` registered it on the public listener, and any
+unauthenticated remote client could halt the daemon with a `GET`. Verified by
+applying exactly that edit and watching the suite pass.
+
+> **§69's own sentence — "a parallel path-list constant would be
+> convention-theatre, it cannot fire on the registration changing" — was the
+> right instinct applied one step too shallow.** A *mirror* of the route table
+> cannot fire; so can an *iteration* of it. The property that makes an oracle
+> real is not where it reads from, it is whether the contract is stated
+> somewhere the code change does not reach.
+
+**What resolves it.** The tests now assert against `SPECIFIED_ALWAYS_PATHS` and
+`SPECIFIED_ADMIN_ONLY_PATHS` — the route table written out **independently**,
+in the test module, commented as deliberate dual maintenance so a later reader
+does not "clean up the duplicate" and re-open the hole. This is the one place a
+second copy is the point: it is the specification, and the diff that changes it
+is a diff a reviewer must justify. Set equality against the served surface
+closes four drift directions at once — a path **dropped** from a list
+(registered nowhere; the daemon starts clean, logs "listening", and every
+legacy binary-sync client 404s), **added** without review, **migrated** between
+listeners, or **duplicated** (axum panics before the daemon binds).
+
+**The gate is now asserted on the router, not on the list.** §69 left
+`build_router` uncalled by any test, so `served_paths(state.restricted)` — the
+one place the gate argument is actually supplied — had no witness at all: a
+refactor writing `served_paths(false)` would have shipped the whole admin
+surface publicly with the suite green, and `ServerConfig::default()` has
+`restricted: false`, so the failure direction was **open**. `assemble` now
+splits route registration out of `build_router`, generic over the handler
+binding; the tests build the real table with a dummy handler and probe it with
+requests — 404 for `/get_stem_tallies` on the restricted listener, 200 on the
+admin one, plus an unspecified-path control so the OKs are not vacuous. The
+linkability constraint §69.1 measured is preserved exactly: the generic
+parameter is what keeps handler names out of everything a test calls.
+
+**The `handler_for` residue is gone — it was avoidable at compile time.**
+§69.1 recorded "a path listed with no `handler_for` arm panics at daemon start"
+as an untestable residue. It was untestable *as written*, keyed on `&str` with
+a `panic!` wildcard; it was not unavoidable. The two path lists are now one
+table whose rows carry an `Endpoint` key and a `Visibility`, and `handler_for`
+matches `Endpoint` exhaustively with no wildcard — so a route added without a
+handler is `error[E0004]: non-exhaustive patterns`, verified by adding one.
+Green CI followed by a daemon that does not come up is no longer reachable.
+
+Two more properties became structural in the same move. **A path can no longer
+be admin-only and public at once** — visibility is a field of the row, not
+membership in one of two lists that could both contain it — and **an alias pair
+cannot drift apart**, because `/get_height` and `/getheight` are one row, not
+two strings that happen to share a match arm. Landed *after* the oracle rebuild
+above and as its own commit, deliberately: §69.1 measured a link failure from a
+similar-shaped change, so bundling the two would have made a link regression
+indistinguishable from an oracle regression. The order was the point — the
+specification tests green **untouched** across the type change, which is the
+evidence that the refactor preserved behaviour rather than the evidence being
+that they were edited to agree with it.
+
+**One residue remains, smaller and named.** `state.restricted` itself has no
+lib-test reach — building an `AppState` needs a `CoreRpc`, which links
+`core_rpc_ffi_*`. Named at the site rather than implied closed.
+
+**The sibling gate had no witness at all.** `/json_rpc` is on the always-list,
+so the public listener serves it, and its admin gate is per-method —
+`state.restricted && RESTRICTED_METHODS.contains(&method)` — in a 142-line file
+with no `#[cfg(test)]` block. Deleting `state.restricted &&`, or dropping
+`get_connections` (this node's live peer set) from the list, passed everything.
+§69 generalised one of the daemon's two restricted gates and left the other at
+the altitude it was arguing against. Extracted to a pure `method_is_gated` and
+witnessed dual-armed against its own specification, with wallet-facing methods
+as the control. Both gates were checked disjoint first: `stem_tallies` is a
+REST handler, and none of the sixteen admin REST paths appear in
+`RESTRICTED_METHODS`.
+
+### 70.2 The pin moved a measurement the doc was still quoting
+
+§69.2 pinned `FloodParams::peers` 8 → 12 and updated §67.2 and §28.4. It did
+not touch **§6.5**, whose table is the recorded output of
+`tor_collapses_the_supernode_diffusion_observer` — a test that consumes
+`FloodParams::default()`. The pin therefore re-parameterised that measurement
+silently, and every assertion in it got *easier* at higher degree
+(`observed_fraction > 0.9`, a structural-zero Tor arm, a monotonicity arm), so
+nothing failed. The header printed `8 peers` from a literal.
+
+Re-run on this branch, the corrected figures — and what they replace:
+
+| supernode reach | π₀ at `peers = 8` (as recorded) | π₀ at the pin, `peers = 12` |
+| --- | --- | --- |
+| dials 5 % | 0.1155 | **0.0978** |
+| dials 10 % | 0.1967 | **0.1760** |
+| dials 30 % | 0.4463 | **0.4228** |
+
+§6.5 and the three arguments downstream of it now carry the re-measured
+values. The Tor conclusion is untouched — the clearnet channel is ~5 % smaller
+and the Tor arm is still a structural zero — which is exactly why this was
+worth catching *as a doc defect rather than a design one*: an auditor rerunning
+the named test to reproduce §6.5 would have got numbers that did not match,
+with no failure and nothing in the diff, and no way to tell whether the doc was
+wrong, the simulator had regressed, or their run was misconfigured.
+
+**Both captions now read off the parameters** — the header and the headline π₀
+in the epilogue are formatted from `FloodParams::default()` and from the
+measured 30 %-reach arm. A literal in a caption is a number with no owner, and
+this is the second time in two rounds that shape has bitten.
+
+### 70.3 The degree itself had no owner — five copies, none of them Rust's
+
+The same finding, one layer down. `12` appeared as a bare literal citing
+`cryptonote_config.h` in five places in `shekyl-relay-privacy` alone
+(`conformance/flood.rs`, `conformance/selection.rs`, and three `const D_OUT`
+declarations in the measurement suite), against `#define
+P2P_DEFAULT_CONNECTIONS_COUNT 12` in C++. Nothing in Rust failed if the daemon's
+value moved: every instrument would have kept simulating a degree the network
+no longer ran, and the F′/embargo re-derivations that consume those instruments
+would have kept reporting numbers for a network that does not exist. **That is
+F-7's failure mode — an input measured on a configuration the deployment does
+not use — re-created underneath the fix for F-7.**
+
+**Rust owns it now** (rule 20): `params::P2P_DEFAULT_OUT_PEERS`, exported as
+`shekyl_p2p_default_out_peers()`, with the `#define` **deleted** and the three
+C++ consumers plus the one gtest reading the FFI. Adding a Rust constant while
+leaving the `#define` in place would have created a *sixth* mirror with no
+owner, which is worse than the state it was fixing; the cutover was the only
+version of this fix worth landing. Validated by building `unit_tests` and
+running the `node_server` suite — the F-8b refusal message now reports the
+default through the FFI ("Omit the option for the default (12)").
+
+**Not an alias of `MIN_PROVISIONED_OUT_PEERS`, and the distinction is
+load-bearing.** They hold the same number and are derived in opposite
+directions: `P2P_DEFAULT_OUT_PEERS` is the *configuration* the privacy
+quantities are measured **at**; `MIN_PROVISIONED_OUT_PEERS` is a floor derived
+**from** a measurement (`fluff_return_ms`) taken at that degree. Consuming
+either in place of the other inverts a derivation — if a re-measure moves the
+floor, the network default does not follow; if the network default moves, the
+measurements are re-run rather than the floor edited. Two constants, one value,
+two doc comments saying so.
+
+### 70.4 What this round leaves, stated rather than absorbed
+
+| item | state |
+| --- | --- |
+| §55.2's three false claims | **amended on the record** (superseded note, not a rewrite) |
+| `handler_for` totality → compile time | **done (§70.1)** — `Endpoint`-keyed table, exhaustive match, no wildcard; the startup panic is now `error[E0004]`, and the specification tests green untouched across the change |
+| `state.restricted` at the one call site | **open, named at the site** — needs an `AppState`, which links `core_rpc_ffi_*`; the only route-table property still resting on review |
+| `propagation_measurement` wall-clock | **accepted, and measured so it is visible**: `tor_collapses_the_supernode_diffusion_observer` runs **143–236 s** debug on the reference box across two runs (the spread is machine load, not variance in the instrument — the π₀ figures are bit-identical, the draws being seeded), and the whole suite runs in CI's default workspace pass because the crate's own dev-dependency self-enables `conformance` — so a `required-features` gate on the `[[test]]` would gate nothing. The two real remedies both cost more than the wall-clock: cutting trial counts edits a measurement instrument for CI convenience, and moving the suite behind a non-auto feature relocates the cost without removing it. Recorded rather than trimmed |
+| `hop` quantile policy | decided (§66); clearnet measurement still outstanding |
+| F′ reverse-parity readouts | unblocked; three readouts in §67.2's order |
