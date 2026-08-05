@@ -451,6 +451,31 @@ where
 
         let synced_height = self.ledger.with_wallet_ledger_mut(|wallet| {
             let synced_height = wallet.ledger.height();
+            // F40 §2.5(a): baseline at the claimed confirming height, not
+            // the wallet's current height — the watchdog horizon counts
+            // from the block that (per the verdict) settles the spend.
+            //
+            // Clamped to a height this wallet has actually reached. The
+            // claim is untrusted (§7.2 rider row `AlreadyInChain.height`),
+            // and that row's lie-high damage cap is "released by the §2.6
+            // confirmed-absent watchdog horizon (bounded liveness cost)" —
+            // which only holds if the horizon is *reachable*. The kernel
+            // gate is `synced_height - baseline_height >= horizon`
+            // (`submit_watchdog::escape_ladder_step`), so an unreachable
+            // claim (a lying remote node, a reorg-confused daemon, or
+            // `u64::MAX`) would park it at zero forever: the rung-1 probe
+            // never runs, no alarm is ever raised, and the F14 lock is
+            // *persisted*, so the inputs stay unspendable across restarts
+            // with no escape at all. Clamping costs nothing where the claim
+            // is honest — a wallet only holds a lock because it just built
+            // and submitted, which requires being at the tip, so an honest
+            // (a)-case claim is a handful of blocks above `synced_height`
+            // against a horizon of hundreds — and it degrades the lie-high
+            // case to exactly the baseline the fresh-accept path already
+            // uses. The raw claim still routes the release path below and
+            // still rides the verdict to the consumer; only the persisted
+            // baseline is bounded.
+            let baseline_height = height.min(synced_height);
             for index in selected_indices {
                 if let Some(td) = wallet.ledger.transfer_mut(index) {
                     // Same race guard as the accept path: if refresh already
@@ -460,11 +485,7 @@ where
                     if !td.spent {
                         td.awaiting_confirmation = Some(AwaitingConfirmation {
                             tx_hash,
-                            // F40 §2.5(a): baseline at the claimed confirming
-                            // height, not the wallet's current height — the
-                            // watchdog horizon counts from the block that
-                            // (per the verdict) settles the spend.
-                            accepted_at_height: height,
+                            accepted_at_height: baseline_height,
                         });
                     }
                 }
@@ -544,6 +565,66 @@ where
             .expect("pending-tx state lock poisoned")
             .held_bytes
             .retain(|tx_hash, _| live.contains(tx_hash));
+    }
+
+    /// Finalize one submit success and project the public outcome — the
+    /// **single** site where a `SubmitSuccess` becomes a [`SubmitOutcome`].
+    ///
+    /// Disposition first, projection after: both finalizers are kind-blind
+    /// and return only `TxHash`, so the `Accepted`-vs-`AlreadyInPool`
+    /// sub-fact cannot fork a disposition (§2.5 — the variant set is the
+    /// disposition set). Success splits by lock lifecycle: `Broadcast`
+    /// (fresh accept / pool-resident duplicate) places the F14
+    /// awaiting-confirmation lock baselined at the current height;
+    /// `AlreadyInChain` places it too (F40 — no selectable-input window in
+    /// either height case), baselined at the claimed confirming height
+    /// clamped to a height the wallet has reached, while the raw claim
+    /// routes the release path. Refresh remains the settlement authority
+    /// in both arms.
+    ///
+    /// Both dispatch sites — the test-injected reply and the production
+    /// submitter reply — route here, so a test that certifies one is
+    /// certifying the other.
+    fn finalize_submit_success(
+        &self,
+        state: &mut PendingTxState,
+        id: ReservationId,
+        success: SubmitSuccess,
+    ) -> SubmitOutcome {
+        match success {
+            SubmitSuccess::Broadcast { hash, kind } => {
+                let hash = self.finalize_submit_accept(state, id, hash);
+                kind.into_outcome(hash)
+            }
+            SubmitSuccess::AlreadyInChain { hash, height } => {
+                let hash = self.finalize_submit_already_in_chain(state, id, hash, height);
+                SubmitOutcome::AlreadyInChain { hash, height }
+            }
+        }
+    }
+
+    /// Finalize one submit failure — the single site mapping the
+    /// reservation-unaware [`SubmitterError`] onto the reservation-bound
+    /// [`SubmitError`]. The finalizers bind `id`, the reservation under
+    /// submit; the closed three-variant enum makes the former
+    /// pass-through-with-sentinel-rid arm unrepresentable. Shared by the
+    /// injected and production dispatch sites, as with
+    /// [`Self::finalize_submit_success`].
+    fn finalize_submit_error(
+        &self,
+        state: &mut PendingTxState,
+        id: ReservationId,
+        err: &SubmitterError,
+    ) -> SubmitError {
+        match err {
+            SubmitterError::RejectedTerminal { kind } => {
+                self.finalize_submit_terminal(state, id, *kind)
+            }
+            SubmitterError::RejectedRetryable { cause } => {
+                self.finalize_submit_retryable(state, id, *cause)
+            }
+            SubmitterError::Ambiguous { kind } => self.finalize_submit_ambiguous(state, id, *kind),
+        }
     }
 
     pub(super) fn finalize_submit_terminal(
@@ -1123,10 +1204,78 @@ where
         });
     }
 
+    /// Re-validate the selected inputs at build's commit boundary.
+    ///
+    /// Selection is separated from commit by the lock-free prover window
+    /// (`AssembleTx` + signing). `refresh` merges scan results under a
+    /// *shared* engine borrow (`refresh.rs` — `apply_scan_result` behind
+    /// `read().await`), so no embedder lock serializes that merge against
+    /// this window; it can land inside it. Two things it does invalidate a
+    /// build in flight:
+    ///
+    /// - **the transfer vector shifted** (a reorg rolled back and replayed
+    ///   blocks), so `indices` no longer address the outputs the paths were
+    ///   assembled for — committing would bind the reservation to the wrong
+    ///   outputs. Detected as a `gindex` mismatch, the same identity check
+    ///   the pre-sign fold uses ([`assemble_tx_to_sign`]);
+    /// - **an input was observed spent**, i.e. a co-spend from another copy
+    ///   of the seed landed on chain. The signed transaction is already
+    ///   dead — the daemon will reject it as a double spend.
+    ///
+    /// Either way, refuse. The user gets a clean build failure and the
+    /// reservation cleanup releases the output locks, instead of a
+    /// `PendingTx` we already know cannot be submitted. This does not make
+    /// the merge atomic with the build — nothing can, because the spend
+    /// happened outside this wallet — it bounds the build to what was still
+    /// true at commit, which is the whole window this method closes.
+    fn revalidate_selected_inputs(
+        &self,
+        indices: &[usize],
+        assemble_inputs: &[AssembleInput],
+    ) -> Result<(), SendError> {
+        // Parallel arrays in transaction-input order, built in lockstep by
+        // `build_select_sync`; a length mismatch is internal plumbing, not a
+        // runtime condition.
+        debug_assert_eq!(
+            indices.len(),
+            assemble_inputs.len(),
+            "assemble-input count must equal selected input count",
+        );
+        let verdict = if indices.len() != assemble_inputs.len() {
+            Err(SendError::CannotSign {
+                reason: "assemble-input count does not match selected input count",
+            })
+        } else {
+            self.ledger.with_ledger_block(|ledger| {
+                let transfers = ledger.transfers();
+                for (&index, ai) in indices.iter().zip(assemble_inputs) {
+                    let Some(td) = transfers.get(index) else {
+                        return Err(SendError::CannotSign {
+                            reason: "selected transfer index out of range at commit",
+                        });
+                    };
+                    if td.global_output_index != ai.gindex.0 {
+                        return Err(SendError::CannotSign {
+                            reason: "selected transfer shifted under the transaction before commit",
+                        });
+                    }
+                    if td.spent {
+                        return Err(SendError::CannotSign {
+                            reason: "a selected input was spent elsewhere during assembly",
+                        });
+                    }
+                }
+                Ok(())
+            })
+        };
+        verdict.map_err(|reason| fail_build_after_attempted(self.sink.as_ref(), reason))
+    }
+
     pub(super) fn commit_built_sync(
         &self,
         request: &TxRequest,
         meta: &BuiltPendingMeta,
+        assemble_inputs: &[AssembleInput],
         reference: ReferenceBlock,
         signed: SignedTransfer,
     ) -> Result<PendingTx, SendError> {
@@ -1146,6 +1295,18 @@ where
                 },
             )
         })?;
+        // Build's lock₂ — the same discipline the re-anchor's lock₂
+        // applies to its reference (`CT5D_REANCHOR.md` §5), on the axis
+        // build actually depends on: its inputs. Selection ran *before*
+        // the lock-free window (the `AssembleTx` round-trip and the
+        // signer), and refresh's ledger merge takes a **shared** engine
+        // borrow — no embedder lock excludes it from that window, so
+        // both of its effects have to be re-checked here rather than
+        // assumed away. The fold's `gindex` guard covers the pre-sign
+        // half only; this is the post-sign re-check, under the state
+        // lock, immediately before the reservation becomes
+        // `consumer_held`.
+        self.revalidate_selected_inputs(&meta.selected.indices, assemble_inputs)?;
         self.refresh_current_snapshot(&mut state);
 
         let id = meta.reservation_id;
@@ -1231,6 +1392,12 @@ where
     /// fee the fixed inputs cannot cover — F-I) is the CT-5d-deferred path: it
     /// surfaces as [`ReanchorError::ReselectionRequired`] so the consumer
     /// discards and rebuilds — never a bad proof, never a silent mutation.
+    ///
+    /// Runs under [`Self::build_permit`]: the prover phase issues the same
+    /// `AssembleTx` membership round-trip `build` does, so it belongs to the
+    /// same serialized network observable. Acquired once for the whole retry
+    /// loop — each attempt is another round-trip. Nothing on this path calls
+    /// `build`, so the single permit cannot be re-entered.
     pub(super) async fn reanchor_consumer_held(
         &self,
         id: ReservationId,
@@ -1241,6 +1408,12 @@ where
                 .ok_or(ReanchorError::Failed(SendError::CannotSign {
                     reason: "curve tree required to re-anchor a membership proof",
                 }))?;
+
+        let _build_permit = self
+            .build_permit
+            .acquire()
+            .await
+            .expect("build permit is never closed");
 
         // The lock-free prover run can re-stale the freshly-anchored reference
         // (the lock₂ TOCTOU); retry the whole loop a bounded number of times
@@ -1725,34 +1898,13 @@ where
             );
 
             if let Some(outcome) = self.take_queued_submit_outcome() {
-                // The submitter error carries no reservation id (the split that
-                // made the former rid-0 sentinel unrepresentable); the finalizers
-                // bind `id` — the reservation under submit — into the
-                // reservation-bound `SubmitError` they return. Success splits by
-                // lock-lifecycle disposition (§2.5): both arms place the F14
-                // lock (F40); `AlreadyInChain` baselines it at the claimed
-                // confirming height, which routes the release path.
+                // Test-injected daemon reply: same finalization as the
+                // production dispatch below, through the same two methods,
+                // so the injected path cannot certify a projection the real
+                // one does not perform.
                 return match outcome {
-                    Ok(SubmitSuccess::Broadcast { hash, kind }) => {
-                        // Disposition first (kind-blind finalizer), then the
-                        // outcome projection from the inform-only kind.
-                        let hash = self.finalize_submit_accept(&mut state, id, hash);
-                        Ok(kind.into_outcome(hash))
-                    }
-                    Ok(SubmitSuccess::AlreadyInChain { hash, height }) => {
-                        let hash =
-                            self.finalize_submit_already_in_chain(&mut state, id, hash, height);
-                        Ok(SubmitOutcome::AlreadyInChain { hash, height })
-                    }
-                    Err(SubmitterError::RejectedTerminal { kind }) => {
-                        Err(self.finalize_submit_terminal(&mut state, id, kind))
-                    }
-                    Err(SubmitterError::RejectedRetryable { cause }) => {
-                        Err(self.finalize_submit_retryable(&mut state, id, cause))
-                    }
-                    Err(SubmitterError::Ambiguous { kind }) => {
-                        Err(self.finalize_submit_ambiguous(&state, id, kind))
-                    }
+                    Ok(success) => Ok(self.finalize_submit_success(&mut state, id, success)),
+                    Err(err) => Err(self.finalize_submit_error(&mut state, id, &err)),
                 };
             }
 
@@ -1767,21 +1919,7 @@ where
                     .state
                     .lock()
                     .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
-                // Reservation-unaware submitter error in; reservation-bound
-                // `SubmitError` out — the finalizers bind `id`, the reservation
-                // under submit. The closed three-variant enum makes the former
-                // pass-through-with-sentinel-rid arm unrepresentable.
-                return Err(match submit_err {
-                    SubmitterError::RejectedTerminal { kind } => {
-                        self.finalize_submit_terminal(&mut state, id, kind)
-                    }
-                    SubmitterError::RejectedRetryable { cause } => {
-                        self.finalize_submit_retryable(&mut state, id, cause)
-                    }
-                    SubmitterError::Ambiguous { kind } => {
-                        self.finalize_submit_ambiguous(&state, id, kind)
-                    }
-                });
+                return Err(self.finalize_submit_error(&mut state, id, &submit_err));
             }
         };
 
@@ -1790,25 +1928,7 @@ where
             .lock()
             .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
 
-        // Success splits by lock-lifecycle disposition (§2.5): `Broadcast`
-        // (fresh accept / pool-resident duplicate) places the F14
-        // awaiting-confirmation lock baselined at the current height;
-        // `AlreadyInChain` places it too (F40 — no selectable-input window
-        // in either height case), baselined at the claimed confirming
-        // height, which routes the release path. Refresh remains the
-        // settlement authority in both arms. Both finalizers are kind-
-        // blind and return only `TxHash`; the public `SubmitOutcome` is
-        // constructed here after disposition completes.
-        Ok(match success {
-            SubmitSuccess::Broadcast { hash, kind } => {
-                let hash = self.finalize_submit_accept(&mut state, id, hash);
-                kind.into_outcome(hash)
-            }
-            SubmitSuccess::AlreadyInChain { hash, height } => {
-                let hash = self.finalize_submit_already_in_chain(&mut state, id, hash, height);
-                SubmitOutcome::AlreadyInChain { hash, height }
-            }
-        })
+        Ok(self.finalize_submit_success(&mut state, id, success))
     }
 
     pub(super) fn discard_sync(

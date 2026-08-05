@@ -60,11 +60,35 @@
   operation. `Engine::build_pending_tx{,_async}` and
   `Engine::submit_pending_tx{,_async}` (and `discard_pending_tx`) now
   take `&self`; wallet-RPC holds a read lock; builds serialize on an
-  engine-owned permit of one inside the engine — the network observable
-  is unchanged (one membership-assembly round-trip at a time; raising
-  the permit is an explicitly gated future decision, not a tuning
-  knob). `refresh` still waits for in-flight readers to finish, as
-  before.
+  engine-owned permit of one inside the engine — taken by build's
+  membership assembly and by submit's stale-reference re-anchor alike,
+  so the network observable is unchanged (one membership-assembly
+  round-trip at a time; raising the permit is an explicitly gated
+  future decision, not a tuning knob).
+
+- **A build no longer commits inputs a concurrent refresh invalidated.**
+  `refresh` merges scan results under a *shared* engine borrow, so it
+  was never serialized against the send lifecycle by the wallet-RPC
+  lock — under the write lock a merge simply landed just after the
+  build instead of during it, and either way the build committed
+  against the state it selected from. Build now re-validates its
+  selected inputs at the commit boundary — the same lock₂ discipline
+  the CT-5d re-anchor applies to its reference — and refuses if the
+  transfer vector shifted under a reorg or an input was observed spent
+  elsewhere, rather than returning a `PendingTx` the daemon is certain
+  to reject as a double spend.
+
+- **A daemon's `AlreadyInChain` height can no longer strand the spent
+  inputs.** The claimed confirming height is untrusted metadata
+  (`DAEMON_SUBMIT_VERDICT.md` §7.2) but was persisted verbatim as the
+  submit watchdog's horizon baseline. A claim above the wallet's tip —
+  a lying remote node, a reorg-confused daemon, or `u64::MAX` — held
+  the horizon at zero forever, so the escape ladder never ran and the
+  persisted awaiting-confirmation lock never released: the inputs
+  stayed unspendable across restarts with no alarm. The baseline is now
+  clamped to a height the wallet has actually reached, making §7.2's
+  "bounded liveness cost" damage cap true by construction. The raw
+  claim still routes the release path and still reaches the client.
 
 ## [3.1.0-alpha.7] - 2026-08-03
 

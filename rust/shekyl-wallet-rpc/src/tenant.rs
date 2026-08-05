@@ -14,7 +14,14 @@
 //! / `discard_pending_tx`) also runs under the read lock: slow work
 //! (FCMP++ assembly, daemon submit RPC) is serialized by
 //! `LocalPendingTx`'s interior mutability and its engine-owned build
-//! permit, not by this lock, so reads proceed during build and submit.
+//! permit — which covers build's `AssembleTx` and submit's re-anchor
+//! alike — not by this lock, so reads proceed during build and submit.
+//!
+//! Nothing here serializes anything against `refresh`: the refresh
+//! driver and its ledger merge take read guards as well, so this lock
+//! never was the barrier between them. Ordering that matters lives in
+//! the Engine, on the state the operation touches.
+//!
 //! Multi-tenant `--wallet-dir` exchanges extend this seam later
 //! (`WALLET_REWRITE_PLAN.md`).
 

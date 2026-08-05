@@ -84,8 +84,15 @@ pub(crate) async fn build_pending_tx(
     // an engine-owned permit of one (network observable unchanged:
     // serialized `AssembleTx`), so concurrent read RPCs (`get_balance`,
     // `get_height`, `get_transfers`) are no longer stalled behind a
-    // build. Writers (`refresh`) wait for this read guard to drain,
-    // exactly as they wait for any reader.
+    // build.
+    //
+    // This lock orders nothing against `refresh`: the refresh driver and
+    // its ledger merge take *read* guards too (`Engine::start_refresh`),
+    // so a merge could always land while a build ran, and can now land
+    // mid-build. Build owns that: it re-validates its selected inputs
+    // under the state lock at the commit boundary
+    // (`revalidate_selected_inputs`) and refuses rather than hand back a
+    // `PendingTx` the merge already invalidated.
     let engine = shared.read().await;
     let pending = engine.build_pending_tx_async(&request).await?;
     let result = pending_tx_result(&pending);
@@ -107,7 +114,10 @@ pub(crate) async fn submit_pending_tx(
     // Same interior-mutability insight as build (W-B review): submit
     // mutates under `LocalPendingTx`'s own state lock and awaits the
     // daemon under that implementor — exclusive Engine borrow only
-    // stalled concurrent read RPCs for the network round-trip.
+    // stalled concurrent read RPCs for the network round-trip. Submit's
+    // own slow segment work (the stale-reference re-anchor) takes the
+    // same build permit, so the serialized `AssembleTx` observable holds
+    // across build and submit alike.
     let engine = shared.read().await;
     let outcome = engine.submit_pending_tx_async(id, seen_gen).await?;
     let result = submit_pending_tx_result(&outcome);

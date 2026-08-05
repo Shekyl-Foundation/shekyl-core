@@ -117,25 +117,15 @@ where
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
     async fn build(&self, request: TxRequest) -> Result<PendingTx, SendError> {
-        // W-B step 1: serialize the whole build on the engine-owned
-        // permit — held from acquire through selection, the `AssembleTx`
-        // round-trip, and the insert into `consumer_held` that finishes
-        // this method, then released when this future returns (or on
-        // drop if the caller cancels while parked on acquire). The
-        // permit does **not** span any post-return caller work on the
-        // returned `PendingTx` handle; that is the consumer's
-        // reservation lifecycle (`submit` / `discard`), not build.
-        // One build at a time regardless of how many shared borrows the
-        // embedder hands out, so relaxing the Engine surface to `&self`
-        // changed no network observable.
-        //
-        // The permit is never closed (no `Semaphore::close` call site);
-        // a closed permit is an invariant break, not a domain error.
-        let _build_permit = self
-            .build_permit
-            .acquire()
-            .await
-            .expect("build permit is never closed");
+        // Refusals that need no network and no permit run first: an
+        // empty recipient list is a malformed request, and a tripped
+        // F28/F37 loop breaker exists precisely to refuse *fast*
+        // (§2.5 — the alarm was raised at trip time and only operator
+        // acknowledgment re-enables building). Queueing either behind a
+        // concurrent build's `AssembleTx` round-trip would make the
+        // breaker cost a full build's latency per refused attempt, and
+        // would make the sync `Engine::build_pending_tx` wrapper report
+        // permit contention (`CannotSign`) instead of the real error.
         if request.recipients.is_empty() {
             let err = SendError::InvalidRecipient {
                 reason: "TxRequest must carry at least one recipient",
@@ -149,9 +139,6 @@ where
             return Err(err);
         }
 
-        // F28/F37 loop-breaker gate (§2.5): while tripped, automatic
-        // builds are refused — the alarm was raised at trip time and only
-        // operator acknowledgment re-enables building.
         {
             let tripped = self
                 .state
@@ -167,6 +154,29 @@ where
                 return Err(err);
             }
         }
+
+        // W-B step 1: serialize the rest of the build on the
+        // engine-owned permit — held from here through selection, the
+        // `AssembleTx` round-trip, and the `consumer_held` commit that
+        // finishes this method, then released when this future returns
+        // (or on drop if it is cancelled after acquiring; a cancel while
+        // still parked on `acquire` holds nothing to release). The
+        // permit does **not** span any post-return caller work on the
+        // returned `PendingTx` handle; that is the consumer's
+        // reservation lifecycle (`submit` / `discard`), which takes the
+        // same permit at its own `AssembleTx` site
+        // (`reanchor_consumer_held`). One membership round-trip at a
+        // time regardless of how many shared borrows the embedder hands
+        // out, so relaxing the Engine surface to `&self` changed no
+        // network observable.
+        //
+        // The permit is never closed (no `Semaphore::close` call site);
+        // a closed permit is an invariant break, not a domain error.
+        let _build_permit = self
+            .build_permit
+            .acquire()
+            .await
+            .expect("build permit is never closed");
 
         let fee_snapshot = self.fee_snapshot_source.fetch().await.map_err(|err| {
             fail_build_after_attempted(self.sink.as_ref(), map_fee_estimator_error(&err))
@@ -327,7 +337,8 @@ where
                 let signer_err: SignerError = err.into();
                 fail_build_after_attempted(self.sink.as_ref(), map_signer_error(&signer_err))
             })?;
-        let pending = self.commit_built_sync(&request, &meta, reference, signed)?;
+        let pending =
+            self.commit_built_sync(&request, &meta, &assemble_inputs, reference, signed)?;
         reservation_cleanup.disarm();
         Ok(pending)
     }

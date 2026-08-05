@@ -1683,9 +1683,11 @@ sustainability is unaffected by the recalibration.
   (Tor/I2P) routing for non-forward segment fetch" item (this file) lands,
   AND the reservation-exhaustion bound is designed. **Re-evaluation
   shape:** raise the permit behind a priced decision naming the burst
-  observable; refresh-vs-build concurrency (a writer still drains the
-  build's read guard — the same serialization as before step 1) is a
-  separate assemble-then-commit design question, not a permit tweak.
+  observable. Refresh-vs-build concurrency is *not* part of this entry:
+  `refresh` takes shared engine borrows, so no embedder lock ever
+  serialized its ledger merge against a build, and the select →
+  assemble → sign → commit window is closed in-engine by build's lock₂
+  input re-validation (below) rather than deferred.
   *Target: V3.0 disposition stable; reopen substrate-anchored per above.*
 
 - **GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in`
@@ -14241,10 +14243,25 @@ Retained for citation in review; each links to the canonical record.
   and `discard_pending_tx` (`&self`; trait was already `&self`), so
   `send::{build,submit,discard}_pending_tx` all hold `read()` and
   concurrent reads proceed during build and the daemon submit
-  round-trip. `refresh` (a writer) still drains in-flight read guards —
-  the same reader-vs-refresh serialization as before, tracked as the
-  assemble-then-commit question on the permit-stays-1 entry (V3.0
-  queue). Serialization is pinned by
+  round-trip. Submit's own segment work — the stale-reference re-anchor
+  (`reanchor_consumer_held`), which issues the same `AssembleTx`
+  round-trip build does — takes the same permit, so the serialized
+  membership-fetch observable spans the whole send lifecycle rather
+  than build alone.
+  **Refresh-vs-build was never held by this lock** and is closed here,
+  not deferred: `refresh`'s driver and its `apply_scan_result` merge
+  take *read* guards (`refresh.rs`), so the pre-relaxation write guard
+  only changed *when* a merge landed relative to a build, never whether
+  the build committed against state the merge had invalidated. Build's
+  commit boundary is now its lock₂ — `revalidate_selected_inputs`
+  re-checks, under the state lock, that every selected input still
+  carries the `gindex` its path was assembled for and is still unspent,
+  refusing (and releasing the reservation) otherwise. This is the same
+  discipline the CT-5d re-anchor's lock₂ applies to its reference; it
+  does not make the merge atomic with the build — the co-spend happens
+  outside this wallet and nothing can — it bounds the build to what was
+  still true at commit, which is the entire window the relaxation
+  widened. Serialization is pinned by
   `concurrent_builds_serialize_on_the_build_permit` (deterministic
   noop-waker drive, no sleeps; proven-to-bite at permit=2), and the
   `&self` relaxation is compile-coupled to `send.rs`'s read-guard call
