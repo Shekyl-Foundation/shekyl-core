@@ -754,7 +754,7 @@ SHEKYL_SPIKE_HOURS=24 \
 | Cold circuit, single stream | Pessimistic; circuit build + rendezvous inside the timed path. The faithful model — each drawn miner *is* a different client | **60** |
 | Warm circuit, single stream | Optimistic; circuit reused | **60** |
 | 2 personas concurrent | §5.2 contention datum | **30 pairs (60 obs)** |
-| Soak, ≥ 24 h | Dispersion is time-varying; a one-hour sample understates the tail | **not run** — see §13 |
+| Soak, ≥ 24 h | Dispersion is time-varying; a one-hour sample understates the tail | **RUN — 2,680 fetches over a full 25 h diurnal span (§13a)** |
 
 **On `N`, and on what more `N` can and cannot buy.** The gate turns on a **10 %
 tail**, so the p90 needs a usable confidence interval. At `N = 200` the binomial
@@ -839,6 +839,11 @@ so the conclusion holds **a fortiori** — a §10.9-conformant deployment has mo
 isolation and less shared-process contention than the layout that produced the
 larger number.
 
+**Corroborated across the full diurnal cycle (§13a):** the ≥ 24 h soak — 2,680
+fetches, four vantages, every UTC hour — puts whole-span `D* = 25.0 s` with **no
+hour worse than `D* = 32.5 s`**, all NOT FORCEABLE by ≥ 3.7×. The single-window
+caveat the cold arm's `D*` carried is now removed by measurement, not argument.
+
 **Consequence: receipt-attested transfer is the only branch, and §8.2 is the
 whole scope.** TJ-A's sampling candidate does not come back to life on this
 measurement — which is the same direction §5.6's ROI ledger already reached
@@ -862,6 +867,45 @@ and *testable* gap rather than a hand-wave.
 margin, with the single named condition that would overturn it — a
 population-level p90 near 120 s — and the multiplier that condition requires.
 
+### 13a. The ≥ 24 h soak — RUN, and it confirms the verdict across the full diurnal cycle
+
+The soak §12.3 named as the right instrument (and §13 called the residual) is
+**done**: one conformant persona serving the real shard, sampled by four seed
+nodes in four regions, **one fresh-circuit fetch every 120 s per host for 25 h** —
+**2,680 fetches, 99.8 % completion, zero tor-heal events**.
+
+```text
+WHOLE SPAN (n = 2,680; 2,675 ok, 5 truncated = 0.0019, apparatus-class not timeout)
+  p50 10.9 s   p75 16.6 s   p90 24.9 s   p95 29.0 s   p99 60.6 s
+  D* = 25.0 s        q(120 s) = 0.0034
+  dispersion: min 3.0 s   p50 10.9 s   max 277.3 s     spread = 93×
+```
+
+**NOT FORCEABLE holds across every hour of the day.** Bucketed by UTC hour (24
+buckets, ~110 fetches each):
+
+- `D*` wobbles **18.6 s – 32.5 s** across the diurnal cycle — a ~1.75× swing, the
+  time-variation §8.3 named as load-bearing, now **bounded** rather than feared.
+- The **worst hour** (utc20, US-evening peak) is `D* = 32.5 s`, `q(120 s) =
+  0.0198` — still **3.7× below** the 120 s block boundary and far under
+  `q_risk* = 0.1011`.
+- **No hour** comes within a factor of 3 of forcing.
+
+So the diurnal variation the soak exists to catch is real but **small relative to
+the 4.8× whole-span margin** (`D* = 25.0 s` vs 120 s). Spanning the daily cycle
+did exactly what §12.3 predicted: it did not overturn the verdict, it **removed
+the single-window caveat** the earlier `D*` carried.
+
+**SPIKE-F-16 confirmed at scale.** The 93× dispersion (up from the concurrency
+run's 30× — a longer window catches more tail) on the identical request is the
+same circuit-lottery signature, and the per-hour `D*` wobble *is* that lottery
+being time-varying. Per-host medians span 7.8 s – 16.1 s (vantage moves the
+median), yet every host stays NOT FORCEABLE.
+
+**The `D*` is no longer quiescent-caveated by the single-window limit** — it spans
+the diurnal cycle. (It remains measured with PoW disabled, §17; SPIKE-F-18 shows
+that is the zero-cost quiescent state, and SPIKE-F-17 bounds the escalated case.)
+
 ### What would settle the residual, and what would not
 
 - **Would settle it:** the same harness run from several *deliberately
@@ -872,11 +916,10 @@ population-level p90 near 120 s — and the multiplier that condition requires.
   in any case the question is no longer where `q` sits at 28 s but whether a
   different population has a 10 % tail past 120 s. **More `N` here cannot answer
   that.**
-- **The ≥ 24 h soak** remains worth running for the diurnal-dispersion reason
-  (§8.3's load-bearing parameter), and is the arm this report does *not* yet
-  carry. But note what the cold arm already shows: the gap to the finest
-  block-denominated deadline is 4.2 ×, so diurnal variation would have to be
-  enormous to close it. **The soak is now a confirmation, not the pivot.**
+- **The ≥ 24 h soak** — **now carried (§13a)** — confirmed exactly this: diurnal
+  variation is real (`D*` 18.6–32.5 s across the day) but small against the margin,
+  and no hour comes within 3× of forcing. It was a confirmation, not the pivot, as
+  predicted.
 
 ---
 
