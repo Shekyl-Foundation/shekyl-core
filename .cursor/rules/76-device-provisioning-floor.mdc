@@ -49,7 +49,14 @@ their existing hardware qualifies.
 3. **Cross-machine ratios are measured, never assumed.** A ratio established on
    one axis does not transfer to another — different axes stress different
    parts of the memory hierarchy.
-4. **Synthesized future conditions are labelled as projections at the value.**
+4. **Values for the floor device are measured ON it, never scaled to it.** A
+   measurement on a faster machine multiplied by a known ratio is a
+   *diagnostic*, not a spec value. Faster machines exist in the harness to
+   detect workload changes; the moment one is used to *derive* a provisioned
+   number, a convenient measurement has been substituted for the decision — the
+   shape that produced every inherited constant this project has had to
+   re-derive.
+5. **Synthesized future conditions are labelled as projections at the value.**
    A number produced by simulating conditions that do not exist yet is a prior,
    not a measurement, and must say so or a later reader will skip the
    re-measurement it stands in for.

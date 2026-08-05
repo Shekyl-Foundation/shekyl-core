@@ -12942,3 +12942,49 @@ each participant.
 **The test to carry:** when an axis is dismissed as common-mode, ask whether
 its *cost* is common-mode too. Depth passed the first check and failed the
 second by a factor of 33 (2 ms against 66 ms across the same five layers).
+
+## 84. Pre-registered: what the Pi depth columns would mean, before they exist
+
+**2026-08-05, maintainer, written while the sweep builds.** *This arc is
+0-for-N on prose surviving its own measurement, so the interpretation is fixed
+before the numbers can shape it.*
+
+### 84.1 The prediction, and what each outcome means
+
+**Mechanism under test:** the per-layer cost is *"each input walks its own tree
+path"* — i.e. **work**.
+
+| outcome | reading |
+| --- | --- |
+| **Pi/x86 ratio stays flat across depth** | Confirms the mechanism: same operations, slower machine. §80.6's invariant is **earned**, and every future re-derivation becomes checkable against it. |
+| **Ratio RISES with depth in the high-input cells** | **Not work — the memory hierarchy.** The Pi is spilling a working set the x86 holds. That is a finding about *where the cost lives*, and it changes what the Pi arm measures. |
+
+**Where to look: the 8-input, depth-7 cell** — the biggest working set, and so
+the biggest divergence if there is one.
+
+**Recording this now is the whole point.** With the prediction fixed, the
+result is either a confirmation or a finding. Without it, whatever comes back
+gets rationalised after the fact — which is the failure this section exists to
+foreclose, and which the arc has already paid for repeatedly.
+
+### 84.2 The shortcut to pre-empt, before anyone reaches for it
+
+> **The Pi table is the specification. The x86 columns are diagnostic only —
+> they exist to detect a workload change, not to derive anything.**
+
+**The natural future move is:** a depth tier passes, someone re-measures on
+x86 because it is faster and easier, and scales by 5.56.
+
+**That would be a measurement standing in for a spec value** — the exact slot
+that produced `175` (a 2019 laptop comment), `peers = 8` (Bitcoin's 2015 server
+graph), `F` (an `EveryPeer` instrument at degree 8), and the minimum-spec
+question itself. **Four instances, one shape.**
+
+**So: the Pi column is derived from measurement on the spec machine, and never
+by scaling.** Same form as refusing an unpopulated tier (§83.3), one level up —
+the shortcut has to be a visible edit rather than a convenience.
+
+*(If §84.1 returns the drift outcome, this line stops being precautionary and
+becomes load-bearing: a ratio that varies with depth cannot be used to scale
+*at all*, and anyone who tried would produce a spec value that is wrong in the
+privacy-losing direction precisely where the sorting lives.)*
