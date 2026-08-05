@@ -209,8 +209,8 @@ json_handler!(pop_blocks, "/pop_blocks");
 ///
 /// # The gate lives in the route table (§69, §70)
 ///
-/// Path membership in `server::UNRESTRICTED_ONLY_JSON_PATHS` is the privacy
-/// fact; `server::served_paths` applies `restricted`; `server::assemble`
+/// This route's `Visibility::AdminOnly` row in `server::ROUTES` is the privacy
+/// fact; `server::served_routes` applies `restricted`; `server::assemble`
 /// registers exactly that, and [`crate::server::build_router`] is
 /// `assemble` plus layers. The gate is asserted **on the assembled router**:
 /// a dummy-handler build of the real table answers 200 for this path when

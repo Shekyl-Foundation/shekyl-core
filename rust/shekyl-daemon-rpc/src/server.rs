@@ -111,168 +111,357 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 }
 
 // ---------------------------------------------------------------------------
-// Route table (§55 / §69)
+// Route table (§55 / §69 / §70)
 //
-// Two handler-free path lists encode *which listener* serves a path. One pure
-// function ([`served_paths`]) applies the restricted gate. One total match
-// ([`handler_for`]) binds *what runs*. [`assemble`] registers the first with
-// the second, and [`build_router`] is `assemble` plus layers — so the gate
-// tests build the shipping router with a dummy handler and assert selection by
-// *serving requests*, not by re-reading a const.
+// ONE table. Each row names an endpoint, the path(s) it answers on, and which
+// listener serves it. [`served_paths`] applies the restricted gate; a total
+// match ([`handler_for`]) binds what runs; [`assemble`] registers the first
+// with the second, and [`build_router`] is `assemble` plus layers — so the
+// gate tests build the shipping router with a dummy handler and assert
+// selection by *serving requests*, not by re-reading a const.
 //
-// Handlers stay out of the lists (and out of anything a unit test calls)
+// Two properties are structural rather than tested, because the table is keyed
+// by an enum:
+//
+//   * A route with no handler does not compile. `handler_for` matches
+//     [`Endpoint`] exhaustively with no wildcard, so adding a row without
+//     binding it is a compile error, not a `panic!` at daemon start (§70.1).
+//   * A path cannot be admin-only *and* public. Visibility is a field of the
+//     row, not membership in one of two lists that could both contain it.
+//
+// Handlers stay out of the table (and out of anything a unit test calls)
 // because naming a handler pulls `core_rpc_ffi_*` into the link set; lib tests
 // build no daemon image. `assemble`'s generic handler parameter is what keeps
 // that true while still letting a test route the real table.
 //
 // The tests assert against a specification written out separately (§70): an
-// oracle that iterates these lists cannot fail when they change. Residue: a
-// path listed with no `handler_for` arm panics at daemon start — not
-// unit-tested, because such a test must name a handler.
+// oracle that iterates this table cannot fail when the table changes.
 // ---------------------------------------------------------------------------
 
-/// Paths registered on **both** listeners — JSON and binary alike.
+/// Which listener serves a route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Visibility {
+    /// Both listeners — the wallet-facing and sync surface.
+    Always,
+    /// The unrestricted (admin) listener only; never the restricted (public)
+    /// one. §55: `/get_stem_tallies` is the anonymity graph, the rest are node
+    /// administration.
+    AdminOnly,
+}
+
+/// An endpoint the daemon RPC serves.
+///
+/// The key that makes route-to-handler totality a compile-time property.
+/// Deliberately *not* the path string: aliases (`/get_height` //
+/// `/getheight`) are one endpoint answering on two paths, and keeping them
+/// one variant is what stops an alias pair from drifting apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Endpoint {
+    JsonRpc,
+    GetHeight,
+    GetTransactions,
+    GetAltBlocksHashes,
+    IsKeyImageSpent,
+    SubmitTransaction,
+    GetPublicNodes,
+    GetTransactionPool,
+    GetTransactionPoolHashesBin,
+    GetTransactionPoolHashes,
+    GetTransactionPoolStats,
+    GetInfo,
+    GetLimit,
+    GetBlocksBin,
+    GetBlocksByHeightBin,
+    GetHashesBin,
+    GetOIndexesBin,
+    GetStemTallies,
+    StartMining,
+    StopMining,
+    MiningStatus,
+    SaveBc,
+    GetPeerList,
+    SetLogHashRate,
+    SetLogLevel,
+    SetLogCategories,
+    SetBootstrapDaemon,
+    StopDaemon,
+    GetNetStats,
+    SetLimit,
+    OutPeers,
+    InPeers,
+    PopBlocks,
+}
+
+/// One row of the route table.
+pub(crate) struct Route {
+    pub(crate) endpoint: Endpoint,
+    /// Paths this endpoint answers on. More than one = epee-compatibility
+    /// aliases, which share a handler by construction.
+    pub(crate) paths: &'static [&'static str],
+    pub(crate) visibility: Visibility,
+}
+
+/// The daemon RPC route table — the single source of *what is served where*.
 ///
 /// Handler-free so tests can read it without linking `core_rpc_ffi_*`.
-/// Combined with [`UNRESTRICTED_ONLY_JSON_PATHS`] via [`served_paths`];
-/// [`build_router`] iterates that, not this list alone.
-pub(crate) const ALWAYS_REGISTERED_PATHS: &[&str] = &[
-    "/json_rpc",
-    // JSON REST (with aliases) -- GET + POST to match epee behaviour
-    "/get_height",
-    "/getheight",
-    "/get_transactions",
-    "/gettransactions",
-    "/get_alt_blocks_hashes",
-    "/is_key_image_spent",
+/// [`served_paths`] applies the gate; [`build_router`] registers the result.
+pub(crate) const ROUTES: &[Route] = &[
+    Route {
+        endpoint: Endpoint::JsonRpc,
+        paths: &["/json_rpc"],
+        visibility: Visibility::Always,
+    },
+    // JSON REST (with aliases) -- GET + POST to match epee behaviour.
+    Route {
+        endpoint: Endpoint::GetHeight,
+        paths: &["/get_height", "/getheight"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::GetTransactions,
+        paths: &["/get_transactions", "/gettransactions"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::GetAltBlocksHashes,
+        paths: &["/get_alt_blocks_hashes"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::IsKeyImageSpent,
+        paths: &["/is_key_image_spent"],
+        visibility: Visibility::Always,
+    },
     // The typed submit route (DAEMON_SUBMIT_VERDICT.md §2.4) is the only
     // submit surface; the legacy /send_raw_transaction proxy was deleted
     // per §9.3. POST only.
-    "/submit_transaction",
-    "/get_public_nodes",
-    "/get_transaction_pool",
-    "/get_transaction_pool_hashes.bin",
-    "/get_transaction_pool_hashes",
-    "/get_transaction_pool_stats",
-    "/get_info",
-    "/getinfo",
-    "/get_limit",
+    Route {
+        endpoint: Endpoint::SubmitTransaction,
+        paths: &["/submit_transaction"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::GetPublicNodes,
+        paths: &["/get_public_nodes"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::GetTransactionPool,
+        paths: &["/get_transaction_pool"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::GetTransactionPoolHashesBin,
+        paths: &["/get_transaction_pool_hashes.bin"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::GetTransactionPoolHashes,
+        paths: &["/get_transaction_pool_hashes"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::GetTransactionPoolStats,
+        paths: &["/get_transaction_pool_stats"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::GetInfo,
+        paths: &["/get_info", "/getinfo"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::GetLimit,
+        paths: &["/get_limit"],
+        visibility: Visibility::Always,
+    },
     // Binary endpoints.
-    "/get_blocks.bin",
-    "/getblocks.bin",
-    "/get_blocks_by_height.bin",
-    "/getblocks_by_height.bin",
-    "/get_hashes.bin",
-    "/gethashes.bin",
-    "/get_o_indexes.bin",
+    Route {
+        endpoint: Endpoint::GetBlocksBin,
+        paths: &["/get_blocks.bin", "/getblocks.bin"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::GetBlocksByHeightBin,
+        paths: &["/get_blocks_by_height.bin", "/getblocks_by_height.bin"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::GetHashesBin,
+        paths: &["/get_hashes.bin", "/gethashes.bin"],
+        visibility: Visibility::Always,
+    },
+    Route {
+        endpoint: Endpoint::GetOIndexesBin,
+        paths: &["/get_o_indexes.bin"],
+        visibility: Visibility::Always,
+    },
+    // §55: anonymity graph — the peer set is the sensitive part.
+    Route {
+        endpoint: Endpoint::GetStemTallies,
+        paths: &["/get_stem_tallies"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::StartMining,
+        paths: &["/start_mining"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::StopMining,
+        paths: &["/stop_mining"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::MiningStatus,
+        paths: &["/mining_status"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::SaveBc,
+        paths: &["/save_bc"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::GetPeerList,
+        paths: &["/get_peer_list"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::SetLogHashRate,
+        paths: &["/set_log_hash_rate"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::SetLogLevel,
+        paths: &["/set_log_level"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::SetLogCategories,
+        paths: &["/set_log_categories"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::SetBootstrapDaemon,
+        paths: &["/set_bootstrap_daemon"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::StopDaemon,
+        paths: &["/stop_daemon"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::GetNetStats,
+        paths: &["/get_net_stats"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::SetLimit,
+        paths: &["/set_limit"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::OutPeers,
+        paths: &["/out_peers"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::InPeers,
+        paths: &["/in_peers"],
+        visibility: Visibility::AdminOnly,
+    },
+    Route {
+        endpoint: Endpoint::PopBlocks,
+        paths: &["/pop_blocks"],
+        visibility: Visibility::AdminOnly,
+    },
 ];
 
-/// JSON REST paths registered **only** on the unrestricted (admin) listener —
-/// never on the restricted (public) one.
+/// Rows this listener serves.
 ///
-/// Handler-free by necessity: naming a handler pulls `core_rpc_ffi_*` into
-/// whatever links it, and `cargo test -p shekyl-daemon-rpc` builds no daemon
-/// image. [`served_paths`] is the single place the `restricted` gate is
-/// applied; tests call it, [`build_router`] iterates it.
-pub(crate) const UNRESTRICTED_ONLY_JSON_PATHS: &[&str] = &[
-    // §55: anonymity graph — peer set is the sensitive part.
-    "/get_stem_tallies",
-    "/start_mining",
-    "/stop_mining",
-    "/mining_status",
-    "/save_bc",
-    "/get_peer_list",
-    "/set_log_hash_rate",
-    "/set_log_level",
-    "/set_log_categories",
-    "/set_bootstrap_daemon",
-    "/stop_daemon",
-    "/get_net_stats",
-    "/set_limit",
-    "/out_peers",
-    "/in_peers",
-    "/pop_blocks",
-];
-
-/// Paths this listener serves.
-///
-/// **Single source of the restricted gate.** [`build_router`] iterates this;
-/// gate tests call this. Do not re-encode the gate as set algebra over the
-/// two consts — deleting the gate here must fail the tests that call here.
-pub(crate) fn served_paths(restricted: bool) -> impl Iterator<Item = &'static str> {
-    let admin: &[&str] = if restricted {
-        &[]
-    } else {
-        UNRESTRICTED_ONLY_JSON_PATHS
-    };
-    ALWAYS_REGISTERED_PATHS
+/// **Single source of the restricted gate.** [`build_router`] registers what
+/// this yields; the gate tests read it. Do not re-encode the gate as a filter
+/// at a call site — deleting the gate here must fail the tests that call here.
+pub(crate) fn served_routes(restricted: bool) -> impl Iterator<Item = &'static Route> {
+    ROUTES
         .iter()
-        .copied()
-        .chain(admin.iter().copied())
+        .filter(move |route| !(restricted && route.visibility == Visibility::AdminOnly))
 }
 
-/// Handler bound to a served path. Total over the union of
-/// [`ALWAYS_REGISTERED_PATHS`] and [`UNRESTRICTED_ONLY_JSON_PATHS`].
+/// Paths this listener serves — [`served_routes`] flattened over aliases.
 ///
-/// One match for both listeners: moving a path between lists is a list edit
-/// only. Deliberately not called from unit tests — naming a handler pulls
+/// Test-only *view*, not a second gate: it delegates to [`served_routes`], so
+/// deleting the `restricted` check there still fails every assertion written
+/// against this. The router registers rows (it needs the [`Endpoint`] to bind
+/// a handler); the specification is written in paths, because paths are what a
+/// remote caller can reach.
+#[cfg(test)]
+pub(crate) fn served_paths(restricted: bool) -> impl Iterator<Item = &'static str> {
+    served_routes(restricted).flat_map(|route| route.paths.iter().copied())
+}
+
+/// Handler bound to an endpoint.
+///
+/// **Total by construction**: the match is exhaustive over [`Endpoint`] with
+/// no wildcard arm, so a route added to [`ROUTES`] without a handler fails to
+/// compile. It used to key on `&str` and fall through to `panic!`, which made
+/// the same mistake a startup abort — green CI, then a daemon that does not
+/// come up (§70.1).
+///
+/// Deliberately not called from unit tests — naming a handler pulls
 /// `core_rpc_ffi_*` into the test binary (`#[ignore]` skips execution, not
-/// linking).
-///
-/// # Panics
-///
-/// If a path is listed with no arm — loud at daemon start rather than a route
-/// that silently vanishes.
-fn handler_for(path: &str) -> MethodRouter<Arc<AppState>> {
-    match path {
-        "/json_rpc" => post(json_rpc::handle),
-        "/get_height" | "/getheight" => get(json::get_height).post(json::get_height),
-        "/get_transactions" | "/gettransactions" => {
-            get(json::get_transactions).post(json::get_transactions)
-        }
-        "/get_alt_blocks_hashes" => {
+/// linking), which is why [`assemble`] takes the binding as a parameter.
+fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
+    match endpoint {
+        Endpoint::JsonRpc => post(json_rpc::handle),
+        Endpoint::GetHeight => get(json::get_height).post(json::get_height),
+        Endpoint::GetTransactions => get(json::get_transactions).post(json::get_transactions),
+        Endpoint::GetAltBlocksHashes => {
             get(json::get_alt_blocks_hashes).post(json::get_alt_blocks_hashes)
         }
-        "/is_key_image_spent" => get(json::is_key_image_spent).post(json::is_key_image_spent),
-        "/submit_transaction" => post(submit::submit_transaction),
-        "/get_public_nodes" => get(json::get_public_nodes).post(json::get_public_nodes),
-        "/get_transaction_pool" => get(json::get_transaction_pool).post(json::get_transaction_pool),
-        "/get_transaction_pool_hashes.bin" => {
+        Endpoint::IsKeyImageSpent => get(json::is_key_image_spent).post(json::is_key_image_spent),
+        Endpoint::SubmitTransaction => post(submit::submit_transaction),
+        Endpoint::GetPublicNodes => get(json::get_public_nodes).post(json::get_public_nodes),
+        Endpoint::GetTransactionPool => {
+            get(json::get_transaction_pool).post(json::get_transaction_pool)
+        }
+        Endpoint::GetTransactionPoolHashesBin => {
             get(json::get_transaction_pool_hashes_bin).post(json::get_transaction_pool_hashes_bin)
         }
-        "/get_transaction_pool_hashes" => {
+        Endpoint::GetTransactionPoolHashes => {
             get(json::get_transaction_pool_hashes).post(json::get_transaction_pool_hashes)
         }
-        "/get_transaction_pool_stats" => {
+        Endpoint::GetTransactionPoolStats => {
             get(json::get_transaction_pool_stats).post(json::get_transaction_pool_stats)
         }
-        "/get_info" | "/getinfo" => get(json::get_info).post(json::get_info),
-        "/get_limit" => get(json::get_limit).post(json::get_limit),
-        "/get_blocks.bin" | "/getblocks.bin" => post(binary::get_blocks),
-        "/get_blocks_by_height.bin" | "/getblocks_by_height.bin" => {
-            post(binary::get_blocks_by_height)
+        Endpoint::GetInfo => get(json::get_info).post(json::get_info),
+        Endpoint::GetLimit => get(json::get_limit).post(json::get_limit),
+        Endpoint::GetBlocksBin => post(binary::get_blocks),
+        Endpoint::GetBlocksByHeightBin => post(binary::get_blocks_by_height),
+        Endpoint::GetHashesBin => post(binary::get_hashes),
+        Endpoint::GetOIndexesBin => post(binary::get_o_indexes),
+        // Admin-only (listener selection is the row's `visibility`, not this
+        // match). §55: anonymity graph — the peer set is the sensitive part.
+        Endpoint::GetStemTallies => get(json::get_stem_tallies).post(json::get_stem_tallies),
+        Endpoint::StartMining => get(json::start_mining).post(json::start_mining),
+        Endpoint::StopMining => get(json::stop_mining).post(json::stop_mining),
+        Endpoint::MiningStatus => get(json::mining_status).post(json::mining_status),
+        Endpoint::SaveBc => get(json::save_bc).post(json::save_bc),
+        Endpoint::GetPeerList => get(json::get_peer_list).post(json::get_peer_list),
+        Endpoint::SetLogHashRate => get(json::set_log_hash_rate).post(json::set_log_hash_rate),
+        Endpoint::SetLogLevel => get(json::set_log_level).post(json::set_log_level),
+        Endpoint::SetLogCategories => get(json::set_log_categories).post(json::set_log_categories),
+        Endpoint::SetBootstrapDaemon => {
+            get(json::set_bootstrap_daemon).post(json::set_bootstrap_daemon)
         }
-        "/get_hashes.bin" | "/gethashes.bin" => post(binary::get_hashes),
-        "/get_o_indexes.bin" => post(binary::get_o_indexes),
-        // Admin-only (listener selection is [`served_paths`], not this match).
-        // §55: anonymity graph — peer set is the sensitive part.
-        "/get_stem_tallies" => get(json::get_stem_tallies).post(json::get_stem_tallies),
-        "/start_mining" => get(json::start_mining).post(json::start_mining),
-        "/stop_mining" => get(json::stop_mining).post(json::stop_mining),
-        "/mining_status" => get(json::mining_status).post(json::mining_status),
-        "/save_bc" => get(json::save_bc).post(json::save_bc),
-        "/get_peer_list" => get(json::get_peer_list).post(json::get_peer_list),
-        "/set_log_hash_rate" => get(json::set_log_hash_rate).post(json::set_log_hash_rate),
-        "/set_log_level" => get(json::set_log_level).post(json::set_log_level),
-        "/set_log_categories" => get(json::set_log_categories).post(json::set_log_categories),
-        "/set_bootstrap_daemon" => get(json::set_bootstrap_daemon).post(json::set_bootstrap_daemon),
-        "/stop_daemon" => get(json::stop_daemon).post(json::stop_daemon),
-        "/get_net_stats" => get(json::get_net_stats).post(json::get_net_stats),
-        "/set_limit" => get(json::set_limit).post(json::set_limit),
-        "/out_peers" => get(json::out_peers).post(json::out_peers),
-        "/in_peers" => get(json::in_peers).post(json::in_peers),
-        "/pop_blocks" => get(json::pop_blocks).post(json::pop_blocks),
-        other => panic!("served path {other} has no handler"),
+        Endpoint::StopDaemon => get(json::stop_daemon).post(json::stop_daemon),
+        Endpoint::GetNetStats => get(json::get_net_stats).post(json::get_net_stats),
+        Endpoint::SetLimit => get(json::set_limit).post(json::set_limit),
+        Endpoint::OutPeers => get(json::out_peers).post(json::out_peers),
+        Endpoint::InPeers => get(json::in_peers).post(json::in_peers),
+        Endpoint::PopBlocks => get(json::pop_blocks).post(json::pop_blocks),
     }
 }
 
@@ -288,11 +477,13 @@ fn handler_for(path: &str) -> MethodRouter<Arc<AppState>> {
 fn assemble<S, F>(restricted: bool, handler: F) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
-    F: Fn(&'static str) -> MethodRouter<S>,
+    F: Fn(Endpoint) -> MethodRouter<S>,
 {
     let mut router = Router::new();
-    for path in served_paths(restricted) {
-        router = router.route(path, handler(path));
+    for route in served_routes(restricted) {
+        for path in route.paths {
+            router = router.route(path, handler(route.endpoint));
+        }
     }
     router
 }

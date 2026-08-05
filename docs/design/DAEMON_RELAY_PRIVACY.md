@@ -11417,6 +11417,13 @@ panics at daemon start. Not unit-tested, deliberately — such a test must name
 a handler, which relinks the FFI. `#[ignore]` does not help; it skips
 execution, not linking. That was measured, not assumed.
 
+> **Closed in §70.1 (2026-08-05).** The residue was real but not unavoidable:
+> it followed from keying `handler_for` on `&str` with a `panic!` wildcard.
+> Keyed on an `Endpoint` enum with an exhaustive match, the same mistake is a
+> compile error. The linkability finding this section records is untouched —
+> handlers are still named only inside `handler_for`, which tests still never
+> call.
+
 ### 69.2 The `peers` pin — 12, and why holding it fixed is *not* F-7's error
 
 `FloodParams::peers` is the count each node **initiates** to.
@@ -11512,14 +11519,30 @@ admin one, plus an unspecified-path control so the OKs are not vacuous. The
 linkability constraint §69.1 measured is preserved exactly: the generic
 parameter is what keeps handler names out of everything a test calls.
 
-**Residue, and it is smaller but not gone.** `state.restricted` itself still
-has no lib-test reach — building an `AppState` needs a `CoreRpc`, which links
-`core_rpc_ffi_*`. Named at the site rather than implied closed. The
-`handler_for` panic residue §69.1 recorded is unchanged, and remains the
-correct disclosure: an `enum Route` would move it to compile time, but that is
-a type change to a route table whose test surface has just been rebuilt, and
-bundling the two would make a link regression indistinguishable from an oracle
-regression. Registered here, not deferred silently.
+**The `handler_for` residue is gone — it was avoidable at compile time.**
+§69.1 recorded "a path listed with no `handler_for` arm panics at daemon start"
+as an untestable residue. It was untestable *as written*, keyed on `&str` with
+a `panic!` wildcard; it was not unavoidable. The two path lists are now one
+table whose rows carry an `Endpoint` key and a `Visibility`, and `handler_for`
+matches `Endpoint` exhaustively with no wildcard — so a route added without a
+handler is `error[E0004]: non-exhaustive patterns`, verified by adding one.
+Green CI followed by a daemon that does not come up is no longer reachable.
+
+Two more properties became structural in the same move. **A path can no longer
+be admin-only and public at once** — visibility is a field of the row, not
+membership in one of two lists that could both contain it — and **an alias pair
+cannot drift apart**, because `/get_height` and `/getheight` are one row, not
+two strings that happen to share a match arm. Landed *after* the oracle rebuild
+above and as its own commit, deliberately: §69.1 measured a link failure from a
+similar-shaped change, so bundling the two would have made a link regression
+indistinguishable from an oracle regression. The order was the point — the
+specification tests green **untouched** across the type change, which is the
+evidence that the refactor preserved behaviour rather than the evidence being
+that they were edited to agree with it.
+
+**One residue remains, smaller and named.** `state.restricted` itself has no
+lib-test reach — building an `AppState` needs a `CoreRpc`, which links
+`core_rpc_ffi_*`. Named at the site rather than implied closed.
 
 **The sibling gate had no witness at all.** `/json_rpc` is on the always-list,
 so the public listener serves it, and its admin gate is per-method —
@@ -11601,7 +11624,8 @@ two doc comments saying so.
 | item | state |
 | --- | --- |
 | §55.2's three false claims | **amended on the record** (superseded note, not a rewrite) |
-| `handler_for` totality → compile time | **registered, not silently deferred** — `enum Route` is a type change to a route table whose test surface was just rebuilt; bundling makes a link regression indistinguishable from an oracle regression (§69.1 measured that link failure once already) |
+| `handler_for` totality → compile time | **done (§70.1)** — `Endpoint`-keyed table, exhaustive match, no wildcard; the startup panic is now `error[E0004]`, and the specification tests green untouched across the change |
+| `state.restricted` at the one call site | **open, named at the site** — needs an `AppState`, which links `core_rpc_ffi_*`; the only route-table property still resting on review |
 | `propagation_measurement` wall-clock | **accepted, and measured so it is visible**: `tor_collapses_the_supernode_diffusion_observer` runs **143–236 s** debug on the reference box across two runs (the spread is machine load, not variance in the instrument — the π₀ figures are bit-identical, the draws being seeded), and the whole suite runs in CI's default workspace pass because the crate's own dev-dependency self-enables `conformance` — so a `required-features` gate on the `[[test]]` would gate nothing. The two real remedies both cost more than the wall-clock: cutting trial counts edits a measurement instrument for CI convenience, and moving the suite behind a non-auto feature relocates the cost without removing it. Recorded rather than trimmed |
 | `hop` quantile policy | decided (§66); clearnet measurement still outstanding |
 | F′ reverse-parity readouts | unblocked; three readouts in §67.2's order |
