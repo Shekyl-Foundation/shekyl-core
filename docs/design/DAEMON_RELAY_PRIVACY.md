@@ -12721,3 +12721,70 @@ each scheduled re-derivation into a checkable act instead of a trusted one.
 **The fixture reaches depth 2 today.** Tiers 3–7 need `c1_branch_layers` (the
 Selene layer above Helios) — a fixture extension, not a new instrument, and the
 depth-2 work established the pattern.
+
+## 81. Two flags on the depth columns, and the schedule is not what §80.5 said
+
+**2026-08-05, maintainer.** Both concern the 48-cell table's unmeasured half.
+
+### 81.1 The 5.56× invariant needs both arms per tier, or it validates nothing
+
+§80.6 pinned the ratio as the sanity check for future re-derivations. **It only
+works if each depth tier gets both arms.** Measuring depth 3–7 on the Pi alone
+yields 40 cells with **no invariant to check them against**.
+
+**And flatness on one axis does not transfer to another.** The ratio is flat
+across *inputs* (5.36–5.75); depth is a different axis. **Deeper trees mean
+larger working sets, and the two machines have very different cache
+hierarchies**, so the ratio may well drift with depth.
+
+**Either outcome is worth having:**
+
+- **it drifts** → a real finding about *where the cost lives* — memory
+  hierarchy rather than arithmetic — which changes what the Pi arm is
+  measuring;
+- **it holds** → the check §80.6 wanted, now earned rather than assumed.
+
+The x86 arm is fast, so this is cheap. **Measure both columns per tier.**
+*(This is [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+rule 3 in its first application: cross-machine ratios are measured, never
+assumed.)*
+
+### 81.2 Depth 3–7 are projections, not measurements — label them at the value
+
+**The fixture synthesizes deep trees under genesis-era conditions.** The real
+depth-5 tree arrives years out, with different data volumes, different memory
+pressure, possibly different storage. **So those columns are projections.**
+
+They must be **labelled as such at the table**, or a future reader treats a
+synthesized depth-5 number as measured and **skips the re-measurement the
+schedule exists to trigger** — which is `175`'s failure exactly: a plausible
+number standing where a measurement belongs. **The difference is that here we
+would know it, and can say so at the value.**
+*(Rule 4 of [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc).)*
+
+### 81.3 Which corrects what the schedule is for
+
+§80.5 said the scheduled depth re-derivations become *"measure the next
+column."* **They do not.** The next column will already exist, as a projection.
+
+> **The schedule is: re-measure on the spec machine against the *actual* tree,
+> with the synthesized column as the prior.**
+
+That is a better-defined task than either *"re-derive the constant"* or *"look
+up the next column"* — it names the machine, the object, and what the existing
+number is for. And it makes the projection useful rather than dangerous: a
+prior to be confirmed or refuted, with a visible act either way.
+
+### 81.4 The floor is now a rule
+
+Per the maintainer: **not mission text — its own rule**, so it can move if the
+device landscape does (*"if we ever need to switch to our quantum computer
+mobile devices"*).
+
+Landed as
+[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc),
+carrying the floor itself, why it is a decision rather than a benchmark note,
+the four rules §81.1–81.2 generalise, and the **asymmetry that governs moving
+it**: too low is an error with a feedback channel, too high is one nothing
+reports — **so err toward the slower device, because that is the error the
+system can notice.**
