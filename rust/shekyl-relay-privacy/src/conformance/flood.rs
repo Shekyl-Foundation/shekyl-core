@@ -11,6 +11,7 @@
 // ^ Goodness-of-fit grading / simulation is float math over sample counts.
 //   Diagnostic-only and excluded from the default build.
 
+use crate::params::P2P_DEFAULT_OUT_PEERS;
 use crate::rng::{bounded_uniform, RelayRng};
 use crate::schedule::{DelayFamily, DelayTable};
 
@@ -45,7 +46,11 @@ pub struct FloodParams {
     pub nodes: usize,
     /// Fluff peers each node **initiates** to.
     ///
-    /// # Pinned to 12 = `P2P_DEFAULT_CONNECTIONS_COUNT` (§69)
+    /// # Pinned to [`P2P_DEFAULT_OUT_PEERS`] (§69, §70)
+    ///
+    /// Consumed from the constant, not re-typed as a literal: an instrument
+    /// that hardcodes the degree keeps simulating a network the daemon has
+    /// stopped running, which is F-7's failure mode one layer down.
     ///
     /// **Provenance of the old `8`, recorded because it was not (§28.4):** it
     /// is very likely the *measured mean degree of the 2015 Bitcoin server
@@ -90,7 +95,7 @@ impl Default for FloodParams {
     fn default() -> Self {
         Self {
             nodes: 512,
-            peers: 12,
+            peers: P2P_DEFAULT_OUT_PEERS as usize,
             reach: FloodReach::EveryPeer,
         }
     }

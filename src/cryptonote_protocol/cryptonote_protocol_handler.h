@@ -48,6 +48,7 @@
 #include "cryptonote_basic/connection_context.h"
 #include "net/levin_base.h"
 #include "p2p/net_node_common.h"
+#include "shekyl/shekyl_ffi.h"
 #include <boost/circular_buffer.hpp>
 
 PUSH_WARNINGS
@@ -121,7 +122,7 @@ namespace cryptonote
       if (it == m_max_out_peers.end())
       {
         MWARNING(epee::net_utils::zone_to_string(zone) << " max out peers not set, using default");
-        return P2P_DEFAULT_CONNECTIONS_COUNT;
+        return shekyl_p2p_default_out_peers();
       }
       return it->second;
     }

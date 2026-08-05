@@ -2877,7 +2877,7 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::set_max_out_peers(network_zone& zone, int64_t max)
   {
     if(max == -1) {
-      zone.m_config.m_net_config.max_out_connection_count = P2P_DEFAULT_CONNECTIONS_COUNT;
+      zone.m_config.m_net_config.max_out_connection_count = shekyl_p2p_default_out_peers();
       return true;
     }
     // F-8b: the embargo constant is derived from a fluff first passage
@@ -2896,7 +2896,7 @@ namespace nodetool
       MERROR("Outbound connection cap " << max << " is below the floor of "
           << out_floor << " that the relay embargo derivation assumes (F-8b); "
           "refusing to start under-provisioned. Omit the option for the default ("
-          << P2P_DEFAULT_CONNECTIONS_COUNT << ") or give a value >= " << out_floor << ".");
+          << shekyl_p2p_default_out_peers() << ") or give a value >= " << out_floor << ".");
       return false;
     }
     zone.m_config.m_net_config.max_out_connection_count = max;
