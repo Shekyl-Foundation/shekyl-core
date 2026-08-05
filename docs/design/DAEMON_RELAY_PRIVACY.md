@@ -3044,7 +3044,18 @@ where "reshape dominates" could still be wrong.
 
 ---
 
-## 15. The block-time seam — the embargo crossed a consensus timescale the derivation wasn't watching (Round 3)
+## 15. The block-time seam
+
+> **⚠ Under D the embargo is a FAMILY, not a value (§76, §78).** This section
+> reads throughout as though there is one number crossing one block interval.
+> **The disposition is unchanged** — §15.2's clean path is keyed on pool
+> residency rather than duration (§77.1), and §15.6 forbids block time as a
+> term at any level — but *"crosses exactly one block interval"* is an
+> **observation about where 190 s landed**, never an invariant. Do not read it
+> as a constraint the constants round must satisfy. What D actually moves is
+> §15.3's recovery distribution, and it moves it in the direction the priority
+> order accepts: a liveness cost sorted by shape, in place of a privacy cost
+> sorted by shape. — the embargo crossed a consensus timescale the derivation wasn't watching (Round 3)
 
 The 39 s pattern, turned on our own number: a value that satisfies the one
 constraint someone was watching (preemption probability) sitting near a boundary
@@ -12430,3 +12441,89 @@ measure the same thing.**
 > one block time could eventually be permitted to move the embargo through"*).
 > Anything that measures locally has to add a parameter, which is a visible,
 > reviewable act.
+
+## 78. The last unbounded axis is hardware — and its answer is a stated minimum spec
+
+**2026-08-05, maintainer.** D closed shape. **`hop`'s hardware term is now the
+open one, and it has shape's old problem: "the slow-hardware quantile" over a
+population of `n = 2`.**
+
+An x86 point and a Pi 4 point are **a ratio, not a distribution**. And the Pi 4
+is not the floor of the plausible population — a Pi 3, an older ARM SBC, a
+cheap VPS all sit below it. **§75 strictly applied points at provisioning for
+the slowest hardware anyone might run, which is unbounded exactly as the input
+axis was.**
+
+### 78.1 This axis has an answer shape the shape axis did not
+
+**A stated minimum supported spec.** It converts an unbounded *measurement*
+into a bounded *policy decision*.
+
+**And it is compatible with mission §2 rather than in tension with it.** §75's
+harm was that the sorting was **invisible and unchosen**. A published minimum —
+*"the anonymity guarantee is provisioned for Pi 4-class hardware"* — makes it
+**visible and chosen**:
+
+- **at or above spec**, everyone gets the same guarantee — the uniformity §75
+  requires;
+- **below spec**, the operator knows they are outside it, rather than silently
+  receiving worse anonymity they cannot see, measure, or attribute.
+
+*"Every user gets the same anonymity guarantees by default"* is satisfied by a
+stated default. It is not satisfied by an unstated one that happens to track
+what the user could afford.
+
+**It is an entry statement, not an exclusion.** Naming a Pi 4 as the supported
+floor tells someone their existing hardware **qualifies** — which is §75.1's
+barrier answer stated as policy instead of left as a measurement.
+
+**And it makes the derivation tractable:** one hardware measurement, at the
+spec machine, which we already have.
+
+### 78.2 Two consequences of choosing a spec, both worth naming now
+
+**It is freeze-coupled.** The embargo is a network-wide constant, so raising
+the minimum spec later *shortens* the embargo — a change every node must adopt
+together. **The spec is therefore genesis-frozen in the same sense staking
+default-on is** (the genesis-freeze bucket): not literally unchangeable, but
+changeable only by coordinated upgrade, which §75's rule
+([`75-system-autonomy`](../../.cursor/rules/75-system-autonomy.mdc)) exists to
+minimise. **Choosing it low costs latency forever; choosing it high sorts
+anonymity forever.** That asymmetry belongs in the decision.
+
+**It names a machine, not a number — and the number moves under it.** Tree
+depth grows monotonically (§72, §73.4), so *"Pi 4-class"* at genesis is not
+*"Pi 4-class"* at depth 7: the same spec machine costs **~127 ms today and
+~160 ms at five layers deeper** for the modal shape. **The spec fixes the
+machine; the scheduled re-derivations (§73.4) re-measure on it.** Stating the
+spec as a machine rather than a millisecond figure is what makes that
+schedule coherent — otherwise the re-derivation has nothing to re-measure
+*against*.
+
+### 78.3 The constants round's order
+
+**First, and it is a decision rather than a measurement:**
+
+1. **State the minimum supported spec.** It is the last unbounded axis and
+   every numeric item below depends on it.
+
+Then:
+
+2. **`f`'s functional form** from the bench surface — fixed cost, per-input
+   (superlinear over the measured range, §76.1), per-layer multiplying with
+   inputs (§73.4).
+3. **Transit and scheduling** — both now small relative to 127 ms and no
+   longer gating.
+4. **The scheduled depth re-derivations** at 1,444 / 25,992 / 987,696 / 17.8M /
+   675M outputs (§72's capacity schedule).
+5. **The batch-depth volume trigger** (~300k tx/day, §74.1).
+
+> **Item 1 is the one that gets answered implicitly if nobody asks it —
+> by whatever machine someone happened to bench on.** That is this arc's most
+> repeated failure in one line: `175` from a 2019 laptop comment, `peers = 8`
+> from Bitcoin's 2015 server graph, `F` from an `EveryPeer` instrument at
+> degree 8. **Each was a real measurement standing in for a decision nobody
+> made.** The minimum spec is the same slot, still open, and now visible before
+> it is filled rather than after.
+
+
