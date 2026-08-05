@@ -52,7 +52,8 @@ use relay_admission_fixture::{admission_verify, build_fixture, AdmissionFixture}
 
 // The gate's fixed shape: one input, two outputs.
 fn modal_shape() -> AdmissionFixture {
-    build_fixture(1, 2)
+    // Depth 2: the gate must sit at a shape production actually presents.
+    build_fixture(1, 2, 2)
 }
 
 // Setup is excluded from the measured region: `prove` is orders of magnitude

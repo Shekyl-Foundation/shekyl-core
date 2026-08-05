@@ -25,7 +25,8 @@ use multiexp::multiexp_vartime;
 use rand_core::OsRng;
 use shekyl_curve_generators::{SELENE_HASH_INIT, T};
 use shekyl_fcmp::leaf::PqcLeafScalar;
-use shekyl_fcmp::proof::{prove, ProveInput};
+use shekyl_fcmp::proof::{prove, BranchLayer, ProveInput};
+use shekyl_fcmp::tree::{hash_grow_helios, helios_hash_init, selene_point_to_helios_scalar};
 use shekyl_fcmp_proofs::SELENE_FCMP_GENERATORS;
 
 use shekyl_ffi::ct_balance_ffi::shekyl_check_commitment_masks;
@@ -56,8 +57,11 @@ pub struct AdmissionFixture {
 /// tree that admits `n_in` inputs, which keeps the sweep measuring **input
 /// count** rather than tree depth — a second axis that would otherwise ride
 /// along and produce F-7's confound (§69.2).
-pub fn build_fixture(n_in: usize, n_out: usize) -> AdmissionFixture {
-    let tree_depth: u8 = 1;
+pub fn build_fixture(n_in: usize, n_out: usize, tree_depth: u8) -> AdmissionFixture {
+    assert!(
+        (1..=2).contains(&tree_depth),
+        "fixture supports depth 1 (sub-production) and 2 (production minimum)"
+    );
     let signable_tx_hash = [0xABu8; 32];
 
     let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
@@ -106,8 +110,27 @@ pub fn build_fixture(n_in: usize, n_out: usize) -> AdmissionFixture {
         ));
         terms.push((h_pqcs[idx], generators[4 * idx + 3]));
     }
-    let tree_root_point: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT + multiexp_vartime(&terms);
-    let tree_root: [u8; 32] = tree_root_point.to_bytes();
+    let leaf_selene: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT + multiexp_vartime(&terms);
+
+    // Depth 1 roots at the leaf layer, which PRODUCTION NEVER DOES:
+    // `tree.rs` states a non-empty tree yields depth >= 2, because a single
+    // layer-0 node is promoted into a layer-1 Helios root rather than returned
+    // bare. Depth 1 is kept only as the sub-production floor the first sweep
+    // measured; depth 2 is the shallowest tree a live chain can present.
+    let (tree_root, c2_branch_layers) = if tree_depth == 1 {
+        (leaf_selene.to_bytes(), Vec::new())
+    } else {
+        let helios_child = selene_point_to_helios_scalar(&leaf_selene.to_bytes())
+            .expect("selene->helios conversion");
+        let root = hash_grow_helios(&helios_hash_init(), 0, &[0u8; 32], &[helios_child])
+            .expect("narrow consensus root");
+        (
+            root,
+            vec![BranchLayer {
+                siblings: vec![helios_child],
+            }],
+        )
+    };
 
     let chunk_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])> = (0..n_in)
         .map(|i| (os[i].to_bytes(), is[i].to_bytes(), cs[i].to_bytes()))
@@ -127,7 +150,7 @@ pub fn build_fixture(n_in: usize, n_out: usize) -> AdmissionFixture {
             leaf_chunk_outputs: chunk_outputs.clone(),
             leaf_chunk_h_pqc: chunk_h_pqc.clone(),
             c1_branch_layers: vec![],
-            c2_branch_layers: vec![],
+            c2_branch_layers: c2_branch_layers.clone(),
         })
         .collect();
 

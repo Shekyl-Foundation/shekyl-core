@@ -58,25 +58,31 @@ fn bench_admission(c: &mut Criterion) {
     // low and the wall-clock figure is per-transaction by construction.
     group.sample_size(10);
 
-    for n_in in [1usize, 2, 4] {
-        for n_out in [2usize, 16] {
-            let fixture = build_fixture(n_in, n_out);
+    // Depth 2 is production's SHALLOWEST tree (`tree.rs`: a non-empty tree
+    // yields depth >= 2). Depth 1 is retained as the sub-production floor the
+    // first sweep measured, so the pair gives the per-layer slope — the term
+    // that grows monotonically with the chain and has no code change to gate on.
+    for tree_depth in [1u8, 2] {
+        for n_in in [1usize, 2, 4] {
+            for n_out in [2usize, 16] {
+                let fixture = build_fixture(n_in, n_out, tree_depth);
 
-            // Self-witnessing: a fixture that does not verify would make every
-            // timing below a measurement of the rejection path.
-            let rc = admission_verify(&fixture, n_in, n_out);
-            assert_eq!(
-                rc, ADMISSION_OK,
-                "fixture must VERIFY, or the bench times the reject path \
-                 (n_in={n_in}, n_out={n_out})"
-            );
+                // Self-witnessing: a fixture that does not verify would make every
+                // timing below a measurement of the rejection path.
+                let rc = admission_verify(&fixture, n_in, n_out);
+                assert_eq!(
+                    rc, ADMISSION_OK,
+                    "fixture must VERIFY, or the bench times the reject path \
+                 (depth={tree_depth}, n_in={n_in}, n_out={n_out})"
+                );
 
-            group.throughput(Throughput::Elements(n_in as u64));
-            group.bench_with_input(
-                BenchmarkId::from_parameter(format!("in{n_in}_out{n_out}")),
-                &fixture,
-                |b, f| b.iter(|| admission_verify(f, n_in, n_out)),
-            );
+                group.throughput(Throughput::Elements(n_in as u64));
+                group.bench_with_input(
+                    BenchmarkId::from_parameter(format!("d{tree_depth}_in{n_in}_out{n_out}")),
+                    &fixture,
+                    |b, f| b.iter(|| admission_verify(f, n_in, n_out)),
+                );
+            }
         }
     }
 
