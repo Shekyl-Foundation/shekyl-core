@@ -65,7 +65,18 @@ pub enum WalletRpcErrorCode {
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200,
     /// Refresh / rescan / proofs: daemon RPC failed.
+    ///
+    /// For `rescan_blockchain` only the **preflight** refusal uses this code
+    /// (wallet untouched). A scan that fails *after* the reset is durable
+    /// emits [`Self::RescanIncomplete`] instead — same daemon class of
+    /// failure, opposite durability claim.
     DaemonUnreachable = -29201,
+    /// Rescan: refused — transactions in flight whose spend record a chain
+    /// replay cannot rebuild. A resolvable state conflict, not a bad request.
+    RescanBlocked = -29202,
+    /// Rescan: the reset persisted, then the producer failed before the
+    /// ledger was rebuilt. History is empty until a rescan finishes; retry.
+    RescanIncomplete = -29203,
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300,
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -143,6 +154,24 @@ pub enum WalletRpcError {
     /// Refresh already in flight (single-flight).
     #[error("refresh already running")]
     RefreshInProgress,
+    /// Rescan refused: in-flight transactions whose spend record a chain
+    /// replay cannot rebuild. Transient and client-resolvable — submit or
+    /// discard reservations, wait for confirmations, then retry.
+    #[error(
+        "cannot rescan while transactions are in flight: {detail}; \
+         submit or discard pending transactions, wait for confirmations, then retry"
+    )]
+    RescanBlocked {
+        /// Server-side counts (`error.data.detail`) — no amounts, no txids.
+        detail: String,
+    },
+    /// Rescan reset is durable but the subsequent scan failed. History is
+    /// empty until a rescan finishes; the wallet is re-runnable.
+    #[error(
+        "rescan reset completed but the scan failed; history is empty until a \
+         rescan finishes — retry once the problem is resolved"
+    )]
+    RescanIncomplete,
     /// Build: address parse / network check failed.
     #[error("invalid recipient")]
     InvalidRecipient,
@@ -232,6 +261,8 @@ impl WalletRpcError {
             Self::CapabilityForbids { .. } => WalletRpcErrorCode::CapabilityForbids,
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
             Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
+            Self::RescanBlocked { .. } => WalletRpcErrorCode::RescanBlocked,
+            Self::RescanIncomplete => WalletRpcErrorCode::RescanIncomplete,
             Self::InvalidRecipient => WalletRpcErrorCode::InvalidRecipient,
             Self::InsufficientFunds => WalletRpcErrorCode::InsufficientFunds,
             Self::FeeEstimationFailed => WalletRpcErrorCode::FeeEstimationFailed,
@@ -263,7 +294,9 @@ impl WalletRpcError {
             Self::CapabilityForbids { capability } => Some(json!({ "capability": capability })),
             Self::ContentGenMismatch { content_gen } => Some(json!({ "content_gen": content_gen })),
             Self::SubmitRejected { data } => Some(data.clone()),
-            Self::StakeNotReady { detail } => Some(json!({ "detail": detail })),
+            Self::StakeNotReady { detail } | Self::RescanBlocked { detail } => {
+                Some(json!({ "detail": detail }))
+            }
             _ => None,
         }
     }
@@ -273,6 +306,45 @@ impl WalletRpcError {
         let data = serde_json::to_value(verdict)
             .unwrap_or_else(|_| json!({ "verdict": "rejected", "cause": "unrecognized" }));
         Self::SubmitRejected { data }
+    }
+
+    /// Map a producer failure that arrives **after** `start_rescan` returned
+    /// a handle — i.e. after the reset is durable.
+    ///
+    /// The durability claim is the load-bearing axis, not the failure class:
+    /// `-29201` means "wallet untouched" (preflight only); every join-path
+    /// failure means history is empty until a rescan finishes, so they all
+    /// emit [`WalletRpcErrorCode::RescanIncomplete`]. Mapping only Io /
+    /// Cancelled / Malformed / CurveTree and leaving ConcurrentMutation /
+    /// InternalInvariantViolation to `-32603` was the same bug class as
+    /// reusing `-29201` — clients that branch on the durability code would
+    /// miss an incomplete rescan. Exhaustive match (no catch-all): a new
+    /// [`RefreshError`] variant fails to compile here until its durability
+    /// claim is named.
+    pub(crate) fn from_rescan_scan_failure(err: RefreshError) -> Self {
+        match &err {
+            // Start-only refusals — unreachable on the join path. Preserve
+            // their codes if they appear rather than inventing a third story.
+            RefreshError::AlreadyRunning
+            | RefreshError::RescanBlocked { .. }
+            | RefreshError::RescanPersist(_) => err.into(),
+
+            // Every producer failure after a durable reset: one wire code so
+            // durability-branching clients cannot miss a subclass. Detail
+            // stays server-side (`message()` contract / rule 30).
+            RefreshError::Io(io) => {
+                tracing::warn!(detail = %io, "rescan scan failed after durable reset");
+                Self::RescanIncomplete
+            }
+            RefreshError::Cancelled
+            | RefreshError::MalformedScanResult { .. }
+            | RefreshError::CurveTreeIngest { .. }
+            | RefreshError::ConcurrentMutation { .. }
+            | RefreshError::InternalInvariantViolation { .. } => {
+                tracing::warn!(?err, "rescan scan failed after durable reset");
+                Self::RescanIncomplete
+            }
+        }
     }
 }
 
@@ -319,21 +391,41 @@ impl From<RefreshError> for WalletRpcError {
     fn from(err: RefreshError) -> Self {
         match err {
             RefreshError::AlreadyRunning => Self::RefreshInProgress,
+            // A state conflict, not a malformed request: `rescan_blockchain`
+            // takes an empty params object, so the params were by definition
+            // correct. `-32602` here would tell an automated client its
+            // request shape is permanently wrong when the truth is "retry
+            // once the in-flight transactions settle".
+            RefreshError::RescanBlocked {
+                reservations,
+                unconfirmed,
+            } => Self::RescanBlocked {
+                detail: format!(
+                    "{reservations} reservation(s), {unconfirmed} unconfirmed transaction(s)"
+                ),
+            },
+            // Past the point of no return for the in-memory ledger; durable
+            // save may have failed. Category-only message — `detail` can
+            // carry a local filesystem path (rule 30 / `message()` contract).
+            RefreshError::RescanPersist(detail) => {
+                internal_detail("rescan reset persistence failed", detail)
+            }
             RefreshError::Io(IoError::Daemon { .. })
             | RefreshError::Io(IoError::Scanner { .. }) => Self::DaemonUnreachable,
             RefreshError::Io(other) => internal_detail("refresh I/O error", other),
-            RefreshError::ConcurrentMutation { wallet, result } => Self::InternalError(format!(
-                "refresh concurrent mutation: wallet={wallet}, result={result}"
-            )),
+            RefreshError::ConcurrentMutation { wallet, result } => internal_detail(
+                "refresh concurrent mutation",
+                format!("wallet={wallet}, result={result}"),
+            ),
             RefreshError::MalformedScanResult { reason } => {
-                Self::InternalError(format!("malformed scan result: {reason}"))
+                internal_detail("malformed scan result", reason)
             }
             RefreshError::Cancelled => Self::InternalError("refresh cancelled".into()),
             RefreshError::InternalInvariantViolation { context } => {
-                Self::InternalError(format!("refresh invariant: {context}"))
+                internal_detail("refresh invariant", context)
             }
             RefreshError::CurveTreeIngest { context, .. } => {
-                Self::InternalError(format!("curve-tree ingest: {context}"))
+                internal_detail("curve-tree ingest", context)
             }
         }
     }
@@ -526,6 +618,71 @@ mod tests {
         })
         .into();
         assert_eq!(err.code(), WalletRpcErrorCode::DaemonUnreachable);
+    }
+
+    /// Join-path failures after a durable reset must not reuse `-29201`:
+    /// that code's rescan contract is "wallet untouched" (preflight only).
+    #[test]
+    fn post_reset_daemon_io_is_rescan_incomplete_not_unreachable() {
+        let err = WalletRpcError::from_rescan_scan_failure(RefreshError::Io(IoError::Daemon {
+            detail: "/tmp/wallet.keys connection refused".into(),
+        }));
+        assert_eq!(err.code(), WalletRpcErrorCode::RescanIncomplete);
+        assert!(
+            !err.message().contains("/tmp"),
+            "post-reset scan failure must not echo local paths: {}",
+            err.message()
+        );
+    }
+
+    /// Durability is the axis, not the failure subclass: ConcurrentMutation
+    /// and InternalInvariantViolation after a durable reset are still
+    /// `-29203`, never the catch-all `-32603`.
+    #[test]
+    fn post_reset_producer_failures_are_all_rescan_incomplete() {
+        let cases = [
+            RefreshError::Cancelled,
+            RefreshError::MalformedScanResult {
+                reason: "test malformed",
+            },
+            RefreshError::ConcurrentMutation {
+                wallet: 1,
+                result: 2,
+            },
+            RefreshError::InternalInvariantViolation {
+                context: "test invariant",
+            },
+            RefreshError::CurveTreeIngest {
+                context: "test ingest",
+                recoverable_by_respawn: false,
+            },
+            RefreshError::Io(IoError::Scanner {
+                detail: "scan budget exhausted".into(),
+            }),
+        ];
+        for err in cases {
+            let mapped = WalletRpcError::from_rescan_scan_failure(err);
+            assert_eq!(
+                mapped.code(),
+                WalletRpcErrorCode::RescanIncomplete,
+                "expected -29203 for {mapped:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rescan_persist_is_category_only() {
+        let err: WalletRpcError =
+            RefreshError::RescanPersist("/home/user/.shekyl/wallet.keys: ENOSPC".into()).into();
+        assert_eq!(err.code(), WalletRpcErrorCode::InternalError);
+        assert_eq!(
+            err.message(),
+            "internal error: rescan reset persistence failed"
+        );
+        assert!(
+            !err.message().contains("/home"),
+            "persist failure must not leak filesystem paths"
+        );
     }
 
     #[test]

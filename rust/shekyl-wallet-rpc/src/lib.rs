@@ -9,11 +9,10 @@
 //! This crate is Engine-backed and Shekyl-native — it is **not** the transitional
 //! `shekyl-engine-rpc` wallet2 FFI bridge (deleted at Phase 5).
 //!
-//! # Phase 4b
+//! # Phase 4b / 4c
 //!
-//! Lifecycle, read queries, refresh, and send lifecycle, plus the
-//! Phase 4a scaffold. `rescan_blockchain` stays `-32601` until Engine
-//! grows an explicit rescan API.
+//! Lifecycle, read queries, refresh, send lifecycle, WI-RPC-1/2a/3, and
+//! Phase 4c `rescan_blockchain` (Engine `start_rescan`).
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]

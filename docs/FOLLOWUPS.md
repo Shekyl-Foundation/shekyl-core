@@ -1456,10 +1456,10 @@ sustainability is unaffected by the recalibration.
   answer with a RESERVED refusal naming their gate rather than shipping a
   wallet2-era side door. Each is a *deferral with a named blocker* (rule 22),
   not a deletion:
-  - **`rescan`** — blocked on the Engine rescan API; `rescan_blockchain`
-    is already contract-`SPECIFIED` and returns `-32601` (see the existing
-    "Phase 4b: `rescan_blockchain` needs an Engine rescan API" item in
-    this queue — this row adds the CLI consumer, not a second blocker).
+  - **`rescan`** — **CLOSED 2026-08-04 (Phase 4c, `feat/wallet-rpc-phase-4c-rescan`)**.
+    Engine `start_rescan` + wallet-rpc `rescan_blockchain` + CLI `rescan`
+    landed; see the closed "Phase 4b: `rescan_blockchain` needs an Engine
+    rescan API" item below.
   - **Transaction proofs** (`get/check_tx_key`, `get/check_tx_proof`,
     `get/check_reserve_proof`) — blocked on Phase 2c (addresses/proofs)
     landing the proof surfaces in the Engine and the contract.
@@ -1635,22 +1635,50 @@ sustainability is unaffected by the recalibration.
   drifts. *Target: V3.1.*
 
 
-- **Phase 4b: `rescan_blockchain` needs an Engine rescan API** (added
-  2026-07-09). Wallet-rpc OpenAPI specifies `rescan_blockchain` (full
-  rescan from restore height, rebuild scan-derived state). Today Engine
-  only exposes `restore_from_height` + `refresh`; there is no
-  `Engine::rescan_*` that resets scan-derived ledger state to
-  `restore_from_height` before scanning. Phase 4b therefore leaves the
-  RPC method as `-32601` rather than inventing a silent
-  “set height + refresh” shim. **Reopening criterion:** Engine grows an
-  explicit rescan that resets scan-derived state to
-  `restore_from_height` (named API, tested). **Re-evaluation shape:**
-  wire `shekyl-wallet-rpc` `rescan_blockchain` to that API in a scoped
-  Phase 4b follow-up (or Phase 4c) PR; update OpenAPI only if the
-  projection differs. *Target: V3.0 / Phase 4b.*
+- **Phase 4b: `rescan_blockchain` needs an Engine rescan API** —
+  **CLOSED 2026-08-04 (Phase 4c, `feat/wallet-rpc-phase-4c-rescan`)**.
+  Engine grew `reset_scan_derived_state` + `start_rescan`
+  (`engine/rescan.rs`, over the shared single-flight slot now carved out
+  as `engine/refresh_slot.rs`). The reset preserves everything a chain
+  replay cannot re-derive — `tx_keys`, payment-request rows,
+  `restore_from_height`, and the durable `bonded_slots` bond record — and
+  clears the whole `LedgerBlock` plus the runtime indexes, `scan_completed`
+  and `scanned_pool_txs`. The chain-global curve tree is left alone (it
+  holds no wallet data, and rolling it back would force a genesis-onward
+  re-ingest). Refusals are hoisted ahead of the destructive step: daemon
+  preflight, then an in-flight-transaction guard atomic with the wipe.
+  `shekyl-wallet-rpc` `rescan_blockchain` and CLI `rescan` are live.
+  *Was target: V3.0 / Phase 4b.*
+
+- **Phase 4c: no way to abandon an unconfirmed submitted transaction, so a
+  never-mined tx can wedge `rescan`** (added 2026-08-04). `start_rescan`
+  refuses with `RescanBlocked` (`-29202`) while
+  `sync_state.pending_tx_hashes` is non-empty, because the inputs' spend
+  marking lives only in the transfer set the reset clears and a replay of
+  *confirmed* blocks cannot rebuild a spend that is still in the mempool —
+  those inputs would come back apparently unspent and be re-selected, and
+  two transactions provably spending one input self-link the wallet
+  (§7.1). The refusal is correct; its escape is missing. A tx that is
+  broadcast, dropped from every mempool, and never mined keeps its
+  `pending_tx_hashes` entry indefinitely (`reconcile_tx_key_retention`
+  retires an entry only against a *chain* reference), so that wallet can
+  never rescan again. **Named blocker:** an abandon surface is its own
+  contract decision, not a flag — it must prove non-exposure before
+  dropping the record (a daemon pool query is evidence, not proof, under
+  re-broadcast), and it must not delete the retained `TxSecretKey` while
+  exposure could still be live, which is exactly the I-2 ordering the
+  WI-RPC-3 retention design pins. Doing it wrong deletes proof material
+  for a transaction that later confirms. **Reopening criterion:** the
+  daemon exposes a pool-membership query with a stated staleness bound,
+  *or* the retention design gains a "presumed-dead, keys retained" state
+  that is safe to enter without one. **Re-evaluation shape:** an explicit
+  `abandon_tx` Engine API + RPC method in the `-291xx` send band, with a
+  crash-ordering test against the drop-then-confirm window; `start_rescan`
+  keeps refusing until the user runs it. *Target: V3.0 / Phase 4d.*
 
 - **Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing
-  history surface lands** (added 2026-07-09). The Engine ledger holds only
+  history surface lands** (added 2026-07-09; **Phase 4c disclosure
+  2026-08-04** — still blocked; reopening criteria unchanged). The Engine ledger holds only
   receive-side rows; `project::transfer_view` projects every row as
   `INCOMING` (outgoing sends surface as `SPENT` state on the funding row).
   A `get_transfers` call with `direction: OUTGOING` therefore matches nothing
@@ -1665,7 +1693,8 @@ sustainability is unaffected by the recalibration.
   *Target: V3.0 / Phase 4b–4c.*
 
 - **Phase 4b: `build_pending_tx` holds the Engine write lock across FCMP++
-  assembly, stalling read RPCs** (added 2026-07-09). `Engine::build_pending_tx_async`
+  assembly, stalling read RPCs** (added 2026-07-09; **Phase 4c disclosure
+  2026-08-04** — still blocked; reopening criteria unchanged). `Engine::build_pending_tx_async`
   takes `&mut self`, so `send::build_pending_tx` holds `SharedEngine::write()`
   across the curve-tree actor's `AssembleTx` (real, potentially slow async
   I/O). While a build runs, every concurrent read RPC (`get_balance`,
@@ -1680,7 +1709,8 @@ sustainability is unaffected by the recalibration.
   *Target: V3.0 / Phase 4b–4c.*
 
 - **Phase 4b: `submit_pending_tx` verdict is flattened to `ACCEPTED`** (added
-  2026-07-09). `Engine::submit_pending_tx_async` returns a bare `TxHash`,
+  2026-07-09; **Phase 4c disclosure 2026-08-04** — still blocked; reopening
+  criteria unchanged). `Engine::submit_pending_tx_async` returns a bare `TxHash`,
   collapsing the internal `SubmitSuccess` distinction (`Broadcast` vs
   `AlreadyInChain { height }`). `send::submit_pending_tx` therefore always
   reports `verdict: ACCEPTED` / `confirmed_height: null`, so the OpenAPI

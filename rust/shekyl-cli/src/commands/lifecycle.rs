@@ -4,13 +4,13 @@
 // BSD-3-Clause
 
 //! Wallet lifecycle commands over the native RPC surface (WI-RPC-2a):
-//! create, open, close, restore, refresh, status, password.
+//! create, open, close, restore, refresh, rescan, status, password.
 
-use serde_json::json;
+use serde_json::{json, Value};
 use zeroize::Zeroize;
 
 use super::{read_password, require_closed, require_open};
-use crate::rpc_client::RpcSession;
+use crate::rpc_client::{RpcError, RpcSession};
 
 pub fn cmd_create(rpc: &RpcSession, filename: &str) {
     if !require_closed(rpc) {
@@ -164,6 +164,22 @@ pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
     }
 }
 
+/// Read an `i64` counter out of a scan result, defaulting to `0`.
+fn scan_counter(val: &Value, field: &str) -> i64 {
+    val.get(field).and_then(Value::as_i64).unwrap_or(0)
+}
+
+/// Print the counters shared by the `refresh` and `rescan_blockchain`
+/// results. Both project the same `RefreshSummary`, so the two commands
+/// report it identically rather than through two drifting copies.
+fn print_scan_result(headline: &str, val: &Value) {
+    let blocks = scan_counter(val, "blocks_processed");
+    let detected = scan_counter(val, "transfers_detected");
+    let height = scan_counter(val, "synced_height");
+    println!("{headline}: {blocks} blocks processed, {detected} transfers detected.");
+    println!("Wallet height: {height}");
+}
+
 pub fn cmd_refresh(rpc: &RpcSession) {
     if !require_open(rpc) {
         return;
@@ -171,25 +187,73 @@ pub fn cmd_refresh(rpc: &RpcSession) {
     println!("Refreshing...");
     match rpc.call("refresh", json!({})) {
         Ok(val) => {
-            let blocks = val
-                .get("blocks_processed")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let detected = val
-                .get("transfers_detected")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let height = val
-                .get("synced_height")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            println!("Refreshed: {blocks} blocks processed, {detected} transfers detected.");
-            println!("Wallet height: {height}");
-            if let Some(fork) = val.get("reorg_fork_height").and_then(|v| v.as_i64()) {
+            print_scan_result("Refreshed", &val);
+            if let Some(fork) = val.get("reorg_fork_height").and_then(Value::as_i64) {
                 println!("Note: a chain reorg was detected and rewound (fork height {fork}).");
             }
         }
         Err(e) => rpc.report("Refresh failed", &e),
+    }
+}
+
+/// `rescan_blockchain` error codes that are refusals raised **before** the
+/// wallet's scan state is reset (`docs/api/wallet_rpc.yaml`): wallet not
+/// open, refresh in progress, daemon unreachable (the rescan preflights it —
+/// `-29201` on this method means untouched; mid-scan daemon failure is
+/// `-29203`), and rescan blocked by in-flight transactions. Anything else
+/// — including `-29203 RESCAN_INCOMPLETE` — arrives after the reset is
+/// durable, and the user needs to be told that.
+const RESCAN_PRE_RESET_REFUSALS: [i64; 4] = [-29001, -29200, -29201, -29202];
+
+/// Full rescan from the wallet's scan floor (`rescan_blockchain`).
+///
+/// `hard` is accepted so wallet2-era `rescan_bc hard` muscle memory does not
+/// dead-end on "unknown command", but Shekyl has one rescan, not two: it
+/// always rebuilds every scan-derived fact from the chain while preserving
+/// what the chain cannot re-derive. Saying so out loud beats a modifier that
+/// silently does nothing — a user who typed `hard` because the wallet looked
+/// wrong would otherwise re-run the identical operation and conclude the
+/// wallet is unrecoverable.
+pub fn cmd_rescan(rpc: &RpcSession, hard: bool) {
+    if !require_open(rpc) {
+        return;
+    }
+    if hard {
+        println!(
+            "Note: Shekyl has a single rescan — it already rebuilds all scan-derived \
+             state. \"hard\" changes nothing."
+        );
+    }
+    println!("Rebuilding your transaction history from the chain. This can take a while.");
+    println!("Your transaction keys, notes, payment requests and staking records are kept.");
+    match rpc.call("rescan_blockchain", json!({})) {
+        Ok(val) => print_scan_result("Rescan complete", &val),
+        Err(e) => {
+            rpc.report("Rescan failed", &e);
+            // Whether history survived is the only thing the user actually
+            // needs from a failed rescan, and the three cases genuinely
+            // differ — say which one this was rather than averaging them
+            // into a hedge.
+            match &e {
+                RpcError::Rpc { code, .. } if RESCAN_PRE_RESET_REFUSALS.contains(code) => {
+                    eprintln!("Nothing was changed — your wallet is exactly as it was.");
+                }
+                RpcError::Rpc { .. } => {
+                    eprintln!(
+                        "Your history was already cleared before this failure, and will stay \
+                         empty until a rescan finishes. Run \"rescan\" again once the problem \
+                         above is resolved; nothing is lost that the chain cannot rebuild."
+                    );
+                }
+                RpcError::Transport(_) => {
+                    eprintln!(
+                        "The connection dropped, so it is unclear how far the rescan got. Run \
+                         \"status\" to see the wallet height, and \"rescan\" again if the \
+                         history is incomplete."
+                    );
+                }
+            }
+        }
     }
 }
 
