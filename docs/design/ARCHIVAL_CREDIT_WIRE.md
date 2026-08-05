@@ -299,6 +299,48 @@ root subsumes it, so the header drops to the 1-bit `kind`.)*
 The scan fold (§4) keys off the kept header; admission keys off the signatures +
 root — the two block-lifecycle points on the same records.
 
+**3.4 Witness residence — two tables, one owner each. RESOLVED (implementation
+round, 2026-08-05, CW-2 review).** The prunable witness of §3.2 is stored
+daemon-side in two LMDB side tables, and the binding rule is *ownership*, not
+convention:
+
+- **`archival_attestation_witness`, height-keyed** (`block_index + 1`, mirroring
+  the curve-tree root) — **owned by the main chain**. Written by `add_block`,
+  deleted by `pop_block`, reaped by the retention prune. Both the prune floor
+  and every read go through `archival_attestation_witness_key`, so the `+1`
+  exists in exactly one place.
+- **`archival_alt_attestation_witness`, hash-keyed** — **owned by the alt-block
+  table**. Written only beside `add_alt_block`, removed only by
+  `remove_alt_block` / `drop_alt_blocks` / `reset()`. A row therefore exists
+  there **iff** its alt block does.
+
+Neither owner writes the other's table. The consequences are what make the rule
+worth stating rather than leaving to comments:
+
+1. **`pop_block` must not park a witness in the hash-keyed table.** Most pops
+   never come back (`pop_blocks`, the startup hard-fork unwind, the
+   curve-tree-root-mismatch pop); a row parked under a hash that never becomes
+   an alt block is unreachable by a height-keyed prune and leaks for the life of
+   the database. Reorg survival is instead **explicit**: the reorg reads each
+   witness off its height row *before* popping and carries it with the block, to
+   `handle_alternative_block` (old chain kept as alternates) or to
+   `rollback_blockchain_switching` (promote failed).
+2. **`add_block` must not clear the hash-keyed row.** A switch that fails after
+   promoting a block leaves that block back in `alt_blocks` — the failure path's
+   `remove_alt_block` loop starts at the *failing* iterator — and it still needs
+   its witness there.
+3. **A detached row is never "stale".** Same block hash ⇒ same block ⇒ same
+   `attestation_root` ⇒ the same witness, so reading one by hash cannot yield
+   another block's bytes.
+
+Transport carries the witness on `block_complete_entry`, bounded **at each
+codec** (the epee KV map; `bootstrap::block_package`) rather than at call sites,
+so no ingress can be added that bypasses the bound. Every *outgoing* entry fills
+it from the single accessor `Blockchain::get_block_attestation_witness` — IBD
+serving, the fluffy missing-tx response, and the mined/submitted-block relay —
+because a node that receives a block without its witness stores none, can serve
+none, and propagates the gap.
+
 ---
 
 ## 4. Settlement-scan fold (depends on §3)

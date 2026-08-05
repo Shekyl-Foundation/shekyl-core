@@ -107,6 +107,12 @@ using namespace crypto;
 // txpool caches and blocks.dat exports) enforces the same boundary via
 // BOOST_CLASS_VERSION(cryptonote::block, 1): a pre-V9 archive is refused
 // loudly, not misparsed.
+//   Within V9 (no bump): the additive `archival_attestation_witness` table and
+//   its reorg-survival `archival_alt_attestation_witness` counterpart
+//   (ARCHIVAL_CREDIT_WIRE.md §3.2/§4, transport B2) are opened with MDB_CREATE.
+//   A new empty table is backward-compatible on an existing env — it does not
+//   change the block blob and needs no resync — so they ride the V9 boundary
+//   rather than asserting a false incompatibility with a bump.
 #define VERSION 9
 
 namespace
@@ -295,6 +301,8 @@ const char* const LMDB_PROPERTIES = "properties";
 
 const char* const LMDB_BLOCK_BURN = "block_burn";
 const char* const LMDB_ARCHIVAL_SERVE_CREDIT = "archival_serve_credit";
+const char* const LMDB_ARCHIVAL_ATTESTATION_WITNESS = "archival_attestation_witness";
+const char* const LMDB_ARCHIVAL_ALT_ATTESTATION_WITNESS = "archival_alt_attestation_witness";
 const char* const LMDB_ARCHIVAL_BOND = "archival_bond";
 const char* const LMDB_ARCHIVAL_SHARD_SEGMENT = "archival_shard_segment";
 const char* const LMDB_ARCHIVAL_SLASH_APPLIED = "archival_slash_applied";
@@ -1558,8 +1566,10 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   // Gate-2/gate-4 archival subdbs (serve-credit, bond, shard segment/leaf,
   // slash applied/log, the reorg journals — emission-claim, Unbond,
   // HoldingsUpdate, and the Rebond pre-image log) require headroom above the
-  // v7 curve-tree layout (36).
-  if ((result = mdb_env_set_maxdbs(m_env, 46)))
+  // v7 curve-tree layout (36). 48 includes the credit-wire
+  // archival_attestation_witness side table plus its reorg-survival
+  // archival_alt_attestation_witness counterpart (ARCHIVAL_CREDIT_WIRE.md §3.2/§4).
+  if ((result = mdb_env_set_maxdbs(m_env, 48)))
     throw0(DB_ERROR(lmdb_error("Failed to set max number of dbs: ", result).c_str()));
 
   int threads = tools::get_max_concurrency();
@@ -1677,6 +1687,16 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
     "Failed to open db handle for m_archival_budget_accrual");
   lmdb_db_open(txn, LMDB_ARCHIVAL_BUDGET, MDB_CREATE, m_archival_budget,
     "Failed to open db handle for m_archival_budget");
+  // MDB_INTEGERKEY is correct here: a single native-endian uint64 height key
+  // (mirrors m_curve_tree_roots), NOT a composite BE key like the archival
+  // tables above — so its cursor iterates in numeric order and the height prune
+  // below can break on the first retained row.
+  lmdb_db_open(txn, LMDB_ARCHIVAL_ATTESTATION_WITNESS, MDB_INTEGERKEY | MDB_CREATE, m_archival_attestation_witness,
+    "Failed to open db handle for m_archival_attestation_witness");
+  // Reorg-survival counterpart, keyed by BLOCK HASH (32B, compare_hash32 set below),
+  // NOT height — alt blocks are not height-canonical. Plain MDB_CREATE (no INTEGERKEY).
+  lmdb_db_open(txn, LMDB_ARCHIVAL_ALT_ATTESTATION_WITNESS, MDB_CREATE, m_archival_alt_attestation_witness,
+    "Failed to open db handle for m_archival_alt_attestation_witness");
 
   // INVARIANT: Shekyl curve-tree state uses composite keys. No DUPSORT.
   // If you're reaching for MDB_DUPSORT, stop and use a composite key instead.
@@ -1717,6 +1737,7 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   mdb_set_compare(txn, m_txpool_meta, compare_hash32);
   mdb_set_compare(txn, m_txpool_blob, compare_hash32);
   mdb_set_compare(txn, m_alt_blocks, compare_hash32);
+  mdb_set_compare(txn, m_archival_alt_attestation_witness, compare_hash32);
   mdb_set_compare(txn, m_properties, compare_string);
 
   if (!(mdb_flags & MDB_RDONLY))
@@ -1894,6 +1915,16 @@ void BlockchainLMDB::reset()
     throw0(DB_ERROR(lmdb_error("Failed to drop m_properties: ", result).c_str()));
   if (auto result = mdb_drop(txn, m_output_metadata, 0))
     throw0(DB_ERROR(lmdb_error("Failed to drop m_output_metadata: ", result).c_str()));
+  // Credit-wire (credit-wire CW-2): the prunable attestation-witness side tables are per-block state keyed by
+  // height / block-hash. reset() re-uses heights and hashes, so a stale witness row at a re-used
+  // key is actively WRONG (a re-added block would read a pre-reset witness). Drop both alongside
+  // the block tables — the height-keyed one (credit-wire CW-1b-ii) was omitted here, this closes that gap too.
+  // NB: the curve-tree and other archival tables (bond/segment/budget/...) are still NOT dropped
+  // by reset() — a broader pre-existing gap, out of credit-wire CW-2 scope and tracked separately.
+  if (auto result = mdb_drop(txn, m_archival_attestation_witness, 0))
+    throw0(DB_ERROR(lmdb_error("Failed to drop m_archival_attestation_witness: ", result).c_str()));
+  if (auto result = mdb_drop(txn, m_archival_alt_attestation_witness, 0))
+    throw0(DB_ERROR(lmdb_error("Failed to drop m_archival_alt_attestation_witness: ", result).c_str()));
 
   // init with current version
   MDB_val_str(k, "version");
@@ -4294,7 +4325,7 @@ void BlockchainLMDB::block_rtxn_abort() const
 }
 
 uint64_t BlockchainLMDB::add_block(const std::pair<block, blobdata>& blk, size_t block_weight, uint64_t long_term_block_weight, const difficulty_type& cumulative_difficulty, const uint64_t& coins_generated,
-    uint64_t archival_budget_accrual, const std::vector<std::pair<transaction, blobdata>>& txs)
+    uint64_t archival_budget_accrual, const blobdata& attestation_witness, const std::vector<std::pair<transaction, blobdata>>& txs)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
@@ -4312,7 +4343,7 @@ uint64_t BlockchainLMDB::add_block(const std::pair<block, blobdata>& blk, size_t
 
   try
   {
-    BlockchainDB::add_block(blk, block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, archival_budget_accrual, txs);
+    BlockchainDB::add_block(blk, block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, archival_budget_accrual, attestation_witness, txs);
   }
   catch (const DB_ERROR_TXN_START& e)
   {
@@ -4715,6 +4746,8 @@ void BlockchainLMDB::remove_alt_block(const crypto::hash &blkid)
   result = mdb_cursor_del(m_cur_alt_blocks, 0);
   if (result)
     throw0(DB_ERROR(lmdb_error("Error deleting alternate block " + epee::string_tools::pod_to_hex(blkid) + " from the db: ", result).c_str()));
+  // The alt block's attestation witness (if any) never outlives it (credit-wire CW-2).
+  remove_archival_alt_attestation_witness(blkid);
 }
 
 uint64_t BlockchainLMDB::get_alt_block_count()
@@ -4748,6 +4781,10 @@ void BlockchainLMDB::drop_alt_blocks()
   auto result = mdb_drop(*txn_ptr, m_alt_blocks, 0);
   if (result)
     throw1(DB_ERROR(lmdb_error("Error dropping alternative blocks: ", result).c_str()));
+  // Drop the alt-chain attestation witnesses alongside their alt blocks (credit-wire CW-2).
+  result = mdb_drop(*txn_ptr, m_archival_alt_attestation_witness, 0);
+  if (result)
+    throw1(DB_ERROR(lmdb_error("Error dropping alt attestation witnesses: ", result).c_str()));
 
   TXN_POSTFIX_SUCCESS();
 }
@@ -7208,6 +7245,34 @@ void BlockchainLMDB::delete_archival_budget_accrual_before_height(uint64_t prune
   mdb_cursor_close(cur);
 }
 
+void BlockchainLMDB::delete_archival_attestation_witness_before_height(uint64_t prune_below_height)
+{
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_attestation_witness, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_attestation_witness cursor for prune: ", rc).c_str()));
+
+  MDB_val k, v;
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
+  {
+    op = MDB_NEXT;
+    if (k.mv_size != sizeof(uint64_t))
+      throw std::runtime_error("FATAL: archival_attestation_witness key size mismatch on prune");
+    // Native-endian uint64 key (MDB_INTEGERKEY) — read directly, not load_be64.
+    uint64_t height;
+    memcpy(&height, k.mv_data, sizeof(height));
+    if (height >= prune_below_height)
+      break;  // MDB_INTEGERKEY iterates in numeric order; everything past here is retained.
+    rc = mdb_cursor_del(cur, 0);
+    if (rc)
+      throw0(DB_ERROR(lmdb_error("Failed to delete archival_attestation_witness row on prune: ", rc).c_str()));
+  }
+  if (rc && rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_attestation_witness cursor error on prune: ", rc).c_str()));
+  mdb_cursor_close(cur);
+}
+
 void BlockchainLMDB::prune_archival_epochs_before(uint64_t prune_below_epoch)
 {
   if (prune_below_epoch == 0)
@@ -7222,6 +7287,20 @@ void BlockchainLMDB::prune_archival_epochs_before(uint64_t prune_below_epoch)
   // (ARCHIVAL_BUDGET_SCHEDULE.md §3.2).
   delete_archival_budget_accrual_before_height(
     shekyl_archival_epoch_open_height(prune_below_epoch));
+  // Credit-wire attestation witnesses (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): the
+  // admission-only r + signatures are dead once a block is beyond the reorg
+  // window that could re-drive its connect. Pruned at the same epoch-open height
+  // boundary as the accrual rows — the retention window dominates the reorg
+  // window, so this drops them no earlier than they can be needed. (Settlement
+  // reads the kept tx_extra headers, never this witness — the §4 seam.)
+  //
+  // The floor goes through archival_attestation_witness_key: the accrual table is
+  // keyed at the block INDEX, this one at index + 1, so handing both the same
+  // 0-based epoch-open height would leave the retired epoch's last block holding
+  // its witness for a whole extra epoch. This is the one site that starts from a
+  // 0-based index, so it is the one the helper exists for.
+  delete_archival_attestation_witness_before_height(
+    archival_attestation_witness_key(shekyl_archival_epoch_open_height(prune_below_epoch)));
 }
 
 uint64_t BlockchainLMDB::get_archival_frozen_shard_count_on_write_txn() const
@@ -9131,6 +9210,96 @@ void BlockchainLMDB::remove_curve_tree_root_at_height(uint64_t block_height)
   int result = mdb_del(*m_write_txn, m_curve_tree_roots, &k, nullptr);
   if (result && result != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("Failed to remove curve tree root at height: ", result).c_str()));
+}
+
+// Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): prunable
+// admission bytes (r + pass signatures), height-keyed (native uint64,
+// MDB_INTEGERKEY), opaque at this layer. Mirrors the curve-tree root primitives
+// above — same key shape, same write-txn discipline.
+void BlockchainLMDB::store_archival_attestation_witness_at_height(uint64_t block_height, const blobdata& witness)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  MDB_val v = {witness.size(), (void *)witness.data()};
+  int result = mdb_put(*m_write_txn, m_archival_attestation_witness, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to store attestation witness at height: ", result).c_str()));
+}
+
+blobdata BlockchainLMDB::get_archival_attestation_witness_at_height(uint64_t block_height) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  MDB_val v;
+  int result = mdb_get(m_txn, m_archival_attestation_witness, &k, &v);
+  blobdata witness;
+  if (result == 0)
+    witness.assign(static_cast<const char *>(v.mv_data), v.mv_size);
+  else if (result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Error looking up attestation witness at height: ", result).c_str()));
+  TXN_POSTFIX_RDONLY();
+  return witness;
+}
+
+void BlockchainLMDB::remove_archival_attestation_witness_at_height(uint64_t block_height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  int result = mdb_del(*m_write_txn, m_archival_attestation_witness, &k, nullptr);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to remove attestation witness at height: ", result).c_str()));
+}
+
+// Reorg-survival alt-chain attestation witness (ARCHIVAL_CREDIT_WIRE.md §3): the
+// same opaque bytes as the height-keyed primitives above, but keyed by BLOCK HASH
+// (compare_hash32, set at open) so an alt block carries its witness across a reorg.
+// Lifetime is tied to the alt block via remove_alt_block / drop_alt_blocks.
+void BlockchainLMDB::store_archival_alt_attestation_witness(const crypto::hash& blkid, const blobdata& witness)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  MDB_val k = {sizeof(blkid), (void *)&blkid};
+  MDB_val v = {witness.size(), (void *)witness.data()};
+  int result = mdb_put(*m_write_txn, m_archival_alt_attestation_witness, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to store alt attestation witness: ", result).c_str()));
+}
+
+blobdata BlockchainLMDB::get_archival_alt_attestation_witness(const crypto::hash& blkid) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  MDB_val k = {sizeof(blkid), (void *)&blkid};
+  MDB_val v;
+  int result = mdb_get(m_txn, m_archival_alt_attestation_witness, &k, &v);
+  blobdata witness;
+  if (result == 0)
+    witness.assign(static_cast<const char *>(v.mv_data), v.mv_size);
+  else if (result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Error looking up alt attestation witness: ", result).c_str()));
+  TXN_POSTFIX_RDONLY();
+  return witness;
+}
+
+void BlockchainLMDB::remove_archival_alt_attestation_witness(const crypto::hash& blkid)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  MDB_val k = {sizeof(blkid), (void *)&blkid};
+  int result = mdb_del(*m_write_txn, m_archival_alt_attestation_witness, &k, nullptr);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to remove alt attestation witness: ", result).c_str()));
 }
 
 void BlockchainLMDB::save_curve_tree_checkpoint(uint64_t block_height)

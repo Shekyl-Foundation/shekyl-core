@@ -989,6 +989,218 @@ TEST(archival_substrate_lmdb, budget_reorg_pop_symmetry)
   EXPECT_EQ(db.get_total_burned(), burn_amt);
 }
 
+// Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): the
+// prunable, height-keyed admission bytes (r + pass signatures), opaque at the DB
+// layer. Exercises the lifecycle the block add/pop/prune path drives — store,
+// read-back, pop-remove, prune-remove — asserting removal via BOTH the pop key
+// and the prune's height break, and that absent/removed heights read as empty.
+TEST(archival_substrate_lmdb, attestation_witness_store_pop_prune_roundtrip)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t h_a = 1000;
+  const uint64_t h_b = 1001;
+  const std::string witness_a(64, 'a');   // opaque r||sigs stand-in
+  const std::string witness_b(128, 'b');
+
+  // Store two heights (the write the add path issues).
+  db.store_archival_attestation_witness_at_height(h_a, witness_a);
+  db.store_archival_attestation_witness_at_height(h_b, witness_b);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_EQ(db.get_archival_attestation_witness_at_height(h_a), witness_a);
+  EXPECT_EQ(db.get_archival_attestation_witness_at_height(h_b), witness_b);
+  // A never-written height reads as empty ("no witness" — an all-miss block).
+  EXPECT_TRUE(db.get_archival_attestation_witness_at_height(9999).empty());
+
+  // Pop-remove h_b (the pop-side key path); removing a never-written height is
+  // tolerated (an empty-witness block's pop still calls remove).
+  db.remove_archival_attestation_witness_at_height(h_b);
+  db.remove_archival_attestation_witness_at_height(9999);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_TRUE(db.get_archival_attestation_witness_at_height(h_b).empty());
+  EXPECT_EQ(db.get_archival_attestation_witness_at_height(h_a), witness_a);
+
+  // Prune below h_a+1: removes h_a. Asserted via the prune's own height break,
+  // not the store path — the removal path a mismatched key would silently orphan.
+  lmdb.delete_archival_attestation_witness_before_height(h_a + 1);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_TRUE(db.get_archival_attestation_witness_at_height(h_a).empty());
+
+  // Strictly-below boundary: a height AT the prune floor survives.
+  db.store_archival_attestation_witness_at_height(h_b, witness_b);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  lmdb.delete_archival_attestation_witness_before_height(h_b);   // floor == h_b: keeps h_b
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_EQ(db.get_archival_attestation_witness_at_height(h_b), witness_b);
+}
+
+// Credit-wire (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2): the reorg-survival alt-witness table is
+// hash-keyed and its lifetime is tied to the alt block. Pin store/get/absent-empty/explicit-remove,
+// and the two IMPLICIT cleanup ties (remove_alt_block, drop_alt_blocks) that keep a witness from
+// outliving its alt block — the leak the advisor flagged if bulk clears miss the new table.
+TEST(archival_substrate_lmdb, alt_attestation_witness_store_get_and_alt_block_cleanup)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+
+  crypto::hash blk1{}; blk1.data[0] = 0x11;
+  crypto::hash blk2{}; blk2.data[0] = 0x22;
+  const std::string wit1(80, 'a');    // opaque r||sigs stand-ins
+  const std::string wit2(200, 'b');
+  cryptonote::alt_block_data_t data{}; // POD; contents irrelevant to the witness table
+
+  db.add_alt_block(blk1, data, cryptonote::blobdata("\x01\x02", 2));
+  db.add_alt_block(blk2, data, cryptonote::blobdata("\x03\x04", 2));
+  db.store_archival_alt_attestation_witness(blk1, wit1);
+  db.store_archival_alt_attestation_witness(blk2, wit2);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_EQ(db.get_archival_alt_attestation_witness(blk1), wit1);
+  EXPECT_EQ(db.get_archival_alt_attestation_witness(blk2), wit2);
+  // Absent hash reads empty ("no witness" — an empty-attestation alt block).
+  crypto::hash absent{}; absent.data[0] = 0x99;
+  EXPECT_TRUE(db.get_archival_alt_attestation_witness(absent).empty());
+
+  // Explicit remove: gone; removing an absent hash is tolerated.
+  db.remove_archival_alt_attestation_witness(blk2);
+  db.remove_archival_alt_attestation_witness(absent);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_TRUE(db.get_archival_alt_attestation_witness(blk2).empty());
+  EXPECT_EQ(db.get_archival_alt_attestation_witness(blk1), wit1);
+
+  // Cleanup tie #1: remove_alt_block must also drop the stashed witness (else it outlives its block).
+  db.remove_alt_block(blk1);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_TRUE(db.get_archival_alt_attestation_witness(blk1).empty());
+
+  // Cleanup tie #2: drop_alt_blocks wipes the alt-witness table alongside the alt blocks. Called
+  // OUTSIDE an open batch — mdb_drop can invalidate write cursors open in the same txn.
+  db.add_alt_block(blk1, data, cryptonote::blobdata("\x01\x02", 2));
+  db.store_archival_alt_attestation_witness(blk1, wit1);
+  fixture.db.batch_stop();
+  EXPECT_EQ(db.get_archival_alt_attestation_witness(blk1), wit1);
+  db.drop_alt_blocks();
+  fixture.db.batch_start();
+  EXPECT_TRUE(db.get_archival_alt_attestation_witness(blk1).empty());
+}
+
+// Credit-wire (credit-wire CW-2): the height key is block_index + 1, and only the
+// helper may derive it. Pinned on its own because every drift between add, serve,
+// pop and prune is a drift in this one number; the paths that use it are pinned
+// through the real add_block / pop_block in
+// attestation_witness_threaded_through_add_block and
+// plain_pop_drops_the_witness_and_parks_no_detached_row.
+TEST(archival_substrate_lmdb, attestation_witness_height_key_is_index_plus_one)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+
+  const uint64_t block_index = 1234;
+  const uint64_t witness_key = archival_attestation_witness_key(block_index);
+  EXPECT_EQ(witness_key, block_index + 1);
+  const std::string witness(150, 'w');
+
+  db.store_archival_attestation_witness_at_height(witness_key, witness);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Negative control: nothing at the 0-based index.
+  EXPECT_TRUE(db.get_archival_attestation_witness_at_height(block_index).empty());
+  EXPECT_EQ(db.get_archival_attestation_witness_at_height(witness_key), witness);
+}
+
+// The retention prune must retire a block's witness on the SAME epoch boundary as
+// its budget-accrual row.
+//
+// The two tables live in different key spaces — accrual at the block index, the
+// witness at index + 1 — so handing both the raw epoch-open height (as the prune
+// did before it went through archival_attestation_witness_key) leaves the retired
+// epoch's LAST block holding its witness for a whole extra epoch. The assertion is
+// therefore taken at the boundary block, the only height where the off-by-one is
+// observable; a mid-epoch block would pass either way.
+TEST(archival_substrate_lmdb, epoch_prune_retires_witness_and_accrual_on_the_same_boundary)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t prune_below_epoch = 3;
+  const uint64_t floor_index = shekyl_archival_epoch_open_height(prune_below_epoch);
+  ASSERT_GT(floor_index, 0u);
+
+  // The last block of the retired epoch and the first block of the retained one.
+  const uint64_t last_retired_index = floor_index - 1;
+  const uint64_t first_retained_index = floor_index;
+
+  db.add_archival_budget_accrual(last_retired_index, 500);
+  db.add_archival_budget_accrual(first_retained_index, 700);
+  db.store_archival_attestation_witness_at_height(
+    archival_attestation_witness_key(last_retired_index), std::string(64, 'r'));
+  db.store_archival_attestation_witness_at_height(
+    archival_attestation_witness_key(first_retained_index), std::string(64, 'k'));
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Premise: both boundary rows exist before the prune, in both tables.
+  ASSERT_EQ(db.get_archival_budget_accrual(last_retired_index), 500u);
+  ASSERT_FALSE(db.get_archival_attestation_witness_at_height(
+    archival_attestation_witness_key(last_retired_index)).empty());
+
+  lmdb.prune_archival_epochs_before(prune_below_epoch);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Retired epoch's last block: BOTH rows gone. The witness row is the one that
+  // survived a whole extra epoch under the raw-height floor.
+  EXPECT_EQ(db.get_archival_budget_accrual(last_retired_index), 0u);
+  EXPECT_TRUE(db.get_archival_attestation_witness_at_height(
+    archival_attestation_witness_key(last_retired_index)).empty())
+    << "the retired epoch's last block kept its witness — the prune floor was passed in "
+       "0-based index space to a table keyed at index + 1";
+
+  // Retained epoch's first block: BOTH rows survive. Without this the test would
+  // also pass on a prune that simply deleted too much.
+  EXPECT_EQ(db.get_archival_budget_accrual(first_retained_index), 700u);
+  EXPECT_FALSE(db.get_archival_attestation_witness_at_height(
+    archival_attestation_witness_key(first_retained_index)).empty())
+    << "the prune reached into the retained epoch";
+}
+
+// Credit-wire (credit-wire CW-2): reset_and_set_genesis_block wipes the chain in place (BlockchainLMDB::reset
+// drops the block tables, keeps the env). Both witness tables MUST be dropped there — reset re-uses
+// heights and block hashes, so a surviving witness row at a re-used key would be read by a
+// re-added block. (The height-keyed table from credit-wire CW-1b-ii was omitted from reset() until this fix.)
+TEST(archival_substrate_lmdb, reset_drops_both_attestation_witness_tables)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+
+  crypto::hash blk{}; blk.data[0] = 0x33;
+  db.store_archival_attestation_witness_at_height(500, std::string(50, 'h'));
+  cryptonote::alt_block_data_t data{};
+  db.add_alt_block(blk, data, cryptonote::blobdata("\x01", 1));
+  db.store_archival_alt_attestation_witness(blk, std::string(60, 'a'));
+  fixture.db.batch_stop();
+
+  // reset() runs its own top-level txn, so it must be called outside an open batch.
+  db.reset();
+  fixture.db.batch_start();
+
+  EXPECT_TRUE(db.get_archival_attestation_witness_at_height(500).empty());
+  EXPECT_TRUE(db.get_archival_alt_attestation_witness(blk).empty());
+}
+
 // KAT B3 — close/revert symmetry (§3.2). Close E → frozen row written in the
 // same txn as sigma; pop the close → row deleted by the close revert while
 // the accrual rows survive (they revert per popped block, not per close);
@@ -1484,7 +1696,7 @@ void append_minimal_blocks(BlockchainDB& db, uint64_t count, uint64_t accrual_pe
     blk.miner_tx = std::move(miner_tx);
 
     db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-      height + 1, 0, accrual_per_block, {});
+      height + 1, 0, accrual_per_block, {}, {});
     prev = get_block_hash(blk);
   }
 }
@@ -1493,7 +1705,8 @@ void append_minimal_blocks(BlockchainDB& db, uint64_t count, uint64_t accrual_pe
 // add_block path (miner_tx + prev/height scaffolding that every bond-post /
 // emission connect KAT below otherwise open-codes identically). Returns the
 // connect height. Caller batch_stop/batch_start around it as needed.
-uint64_t connect_block_with_txs(BlockchainDB& db, const std::vector<transaction>& txs)
+uint64_t connect_block_with_txs(BlockchainDB& db, const std::vector<transaction>& txs,
+  const blobdata& attestation_witness = {})
 {
   const uint64_t connect_height = db.height();
   block blk{};
@@ -1523,11 +1736,156 @@ uint64_t connect_block_with_txs(BlockchainDB& db, const std::vector<transaction>
   }
 
   db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-    connect_height + 1, 0, 0, tx_blobs);
+    connect_height + 1, 0, 0, attestation_witness, tx_blobs);
   return connect_height;
 }
 
 } // namespace
+
+// The add_block path THREADS the witness into the height-keyed side table at
+// archival_attestation_witness_key(prev_height) — covering the add-side wiring
+// the primitive roundtrip above does not. Pop MOVES (not deletes) the matching
+// key into the hash-keyed table.
+TEST(archival_substrate_lmdb, attestation_witness_threaded_through_add_block)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  // add_block calls m_hardfork->add(...); a connect needs a hardfork set or it
+  // null-derefs (the connect KATs below do the same).
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  const uint64_t h0 = db.height();
+  const blobdata witness(96, 'w');
+  connect_block_with_txs(db, {}, witness);       // witness-carrying connect
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  const uint64_t key = archival_attestation_witness_key(h0);
+  EXPECT_EQ(db.get_archival_attestation_witness_at_height(key), witness);
+  // Negative control against an off-by-one: not at the 0-based block index.
+  EXPECT_TRUE(db.get_archival_attestation_witness_at_height(h0).empty());
+
+  // An empty witness (interim / all-miss block) writes no row.
+  connect_block_with_txs(db, {});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_TRUE(db.get_archival_attestation_witness_at_height(
+    archival_attestation_witness_key(h0 + 1)).empty());
+}
+
+// Real add_block → pop_block: the pop drops the height row and parks NOTHING.
+//
+// This is the orphan-leak boundary. The hash-keyed detached table is owned by the
+// alt-block table, and only handle_alternative_block writes it. If pop parked a row
+// there instead, every pop that never comes back — `pop_blocks N`, the startup
+// hard-fork unwind, the curve-tree-root-mismatch pop — would strand a row under a
+// block hash that never becomes an alt block, and the height-keyed retention prune
+// structurally cannot see it. The loop below is that scenario: N plain pops must
+// leave the detached table completely empty, not N orphans.
+TEST(archival_substrate_lmdb, plain_pop_drops_the_witness_and_parks_no_detached_row)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  constexpr size_t kBlocks = 5;
+  const blobdata witness(96, 'w');
+  const uint64_t h0 = db.height();
+
+  std::vector<crypto::hash> hashes;
+  for (size_t i = 0; i < kBlocks; ++i)
+  {
+    connect_block_with_txs(db, {}, witness);
+    hashes.push_back(db.get_block_hash_from_height(h0 + i));
+  }
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Premise: every block really did write a height row, so the pop assertions below
+  // cannot pass vacuously on a table that was empty all along.
+  for (size_t i = 0; i < kBlocks; ++i)
+    ASSERT_EQ(db.get_archival_attestation_witness_at_height(
+      archival_attestation_witness_key(h0 + i)), witness) << "block " << i;
+
+  for (size_t i = 0; i < kBlocks; ++i)
+  {
+    block popped{};
+    std::vector<transaction> popped_txs;
+    db.pop_block(popped, popped_txs);
+  }
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  for (size_t i = 0; i < kBlocks; ++i)
+  {
+    EXPECT_TRUE(db.get_archival_attestation_witness_at_height(
+      archival_attestation_witness_key(h0 + i)).empty()) << "height row " << i << " survived the pop";
+    EXPECT_TRUE(db.get_archival_alt_attestation_witness(hashes[i]).empty())
+      << "pop parked a detached witness for block " << i << ", which no alt block owns and no "
+         "height-keyed prune can ever reach";
+  }
+}
+
+// add_block writes the height-keyed row and leaves the hash-keyed table ALONE.
+//
+// The two tables have separate owners: main-chain adds/pops own the height rows,
+// the alt-block table owns the detached ones. A main-chain add that also cleared
+// the detached row would break that — a promote whose switch later fails still
+// needs the row while its block sits back in `alt_blocks`, and the alt block's own
+// removal is what clears it (pinned in
+// alt_attestation_witness_store_get_and_alt_block_cleanup).
+TEST(archival_substrate_lmdb, add_block_does_not_touch_the_alt_witness_table)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  const blobdata witness(96, 'w');
+  const uint64_t h0 = db.height();
+
+  // Drive the exact promote shape: the block being connected is the SAME one sitting
+  // in the alt-block table with its witness, which is how a reorg reaches add_block.
+  // Connect it, pop it, register it as an alt block with its witness (what
+  // handle_alternative_block does for a demoted block), then re-connect it.
+  connect_block_with_txs(db, {}, witness);
+  const crypto::hash blk = db.get_block_hash_from_height(h0);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  block popped{};
+  std::vector<transaction> popped_txs;
+  db.pop_block(popped, popped_txs);
+  cryptonote::alt_block_data_t alt_data{};
+  db.add_alt_block(blk, alt_data, cryptonote::blobdata("\x01", 1));
+  db.store_archival_alt_attestation_witness(blk, witness);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_EQ(db.get_archival_alt_attestation_witness(blk), witness);
+
+  // Promote: the same block re-connects to main carrying its witness.
+  connect_block_with_txs(db, {}, witness);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_EQ(db.get_block_hash_from_height(h0), blk);
+
+  EXPECT_EQ(db.get_archival_attestation_witness_at_height(
+    archival_attestation_witness_key(h0)), witness);
+  EXPECT_EQ(db.get_archival_alt_attestation_witness(blk), witness)
+    << "a main-chain add cleared a detached witness its alt block still owns — a switch that "
+       "fails after this point puts the block back in alt_blocks with no witness";
+
+  // And removing the alt block — the row's actual owner — is what clears it.
+  db.remove_alt_block(blk);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_TRUE(db.get_archival_alt_attestation_witness(blk).empty());
+}
 
 // ── WS-1 slash-side mirror KAT (REWARD_EMISSION_E3_GATING_ROUND.md §5.6) ──
 //

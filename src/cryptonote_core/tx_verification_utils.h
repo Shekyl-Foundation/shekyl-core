@@ -54,7 +54,10 @@ uint64_t get_transaction_weight_limit(uint8_t hf_version);
 bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv);
 
 /**
- * @brief Used to provide transaction info that skips the mempool to block handling code 
+ * @brief Used to provide transaction info that skips the mempool to block handling code.
+ *
+ * Tx-only. Block-level admission data (credit-wire attestation witness) rides
+ * [`block_connect_supplement`], not this type.
  */
 struct pool_supplement
 {
@@ -64,6 +67,24 @@ struct pool_supplement
     // If non-zero, then consider all the txs' non-input consensus (NIC) rules verified for this
     // hard fork. User: If you add an unverified transaction to txs_by_txid, set this field to zero!
     mutable std::uint8_t nic_verified_hf_version = 0;
+};
+
+/**
+ * @brief Block-level data that rides the connect path alongside the block itself.
+ *
+ * Separates the tx pool supplement from block-level admission data so
+ * `pool_supplement` stays tx-shaped. Both the p2p transport and reorg re-supply
+ * thread this single object into `handle_block_to_main_chain` /
+ * `handle_alternative_block`.
+ */
+struct block_connect_supplement
+{
+    pool_supplement pool;
+    // Per-block credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2).
+    // Opaque Rust-canonical bytes (r ‖ count ‖ pass signatures). Empty until the
+    // transport populates it; empty means "no witness supplied" and stores no
+    // side-table row on main-chain add.
+    blobdata attestation_witness;
 };
 
 /**

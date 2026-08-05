@@ -373,14 +373,14 @@ namespace cryptonote
      *
      * @param bl_ the block to be added
      * @param bvc metadata about the block addition's success/failure
-     * @param extra_block_txs txs belonging to this block that may not be in the mempool
+     * @param connect pool txs + block-level admission data (attestation witness)
      *
      * @return true on successful addition to the blockchain, else false
      */
     bool add_new_block(const block& bl_, block_verification_context& bvc);
 
     bool add_new_block(const block& bl_, block_verification_context& bvc,
-      pool_supplement& extra_block_txs);
+      block_connect_supplement& connect);
 
     /**
      * @brief clears the blockchain and starts a new one
@@ -540,6 +540,22 @@ namespace cryptonote
      * @return true unless any blocks or transactions are missing
      */
     bool handle_get_objects(NOTIFY_REQUEST_GET_OBJECTS::request& arg, NOTIFY_RESPONSE_GET_OBJECTS::request& rsp);
+
+    /**
+     * @brief the credit-wire attestation witness a main-chain block carries
+     *
+     * The single read site for the height-keyed witness table
+     * (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2). EVERY outgoing
+     * block_complete_entry must fill `attestation_witness` from here — a peer that
+     * receives a block without its witness stores none, cannot serve one, and
+     * relays the gap onward. The `+1` key convention lives behind
+     * `archival_attestation_witness_key`, so no caller re-derives it.
+     *
+     * @param b a block on the main chain (its coinbase height keys the lookup)
+     *
+     * @return the witness blob, empty when the block has none or it has been pruned
+     */
+    blobdata get_block_attestation_witness(const block& b) const;
 
     /**
      * @brief get the public key for an output
@@ -1206,6 +1222,21 @@ namespace cryptonote
 
     typedef std::unordered_map<crypto::hash, block_extended_info> blocks_ext_by_hash;
 
+    /**
+     * @brief a block a reorg has popped off the main chain, with what its height
+     *   rows held.
+     *
+     * The credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire
+     * CW-2) is height-keyed while the block is on main, so it must be read before
+     * the pop deletes that row. It then travels with the block to whichever owner
+     * takes it next — the alt-block table (kept as an alternate) or the main chain
+     * again (a failed switch rolled back). Blocks that are simply discarded drop it.
+     */
+    struct detached_block
+    {
+      block bl;
+      blobdata attestation_witness;
+    };
 
     BlockchainDB* m_db;
 
@@ -1409,12 +1440,12 @@ namespace cryptonote
      * @param bl the block to be added
      * @param id the hash of the block
      * @param bvc metadata concerning the block's validity
-     * @param extra_block_txs txs belonging to this block that may not be in the mempool
+     * @param connect pool txs + block-level admission data (attestation witness)
      *
      * @return true if the block was added successfully, otherwise false
      */
     bool handle_block_to_main_chain(const block& bl, const crypto::hash& id,
-      block_verification_context& bvc, pool_supplement& extra_block_txs);
+      block_verification_context& bvc, block_connect_supplement& connect);
 
     /**
      * @brief validate and add a new block to an alternate blockchain
@@ -1426,12 +1457,12 @@ namespace cryptonote
      * @param b the block to be added
      * @param id the hash of the block
      * @param bvc metadata concerning the block's validity
-     * @param extra_block_txs txs belonging to this block that may not be in the mempool
+     * @param connect pool txs + block-level admission data (attestation witness)
      *
      * @return true if the block was added successfully, otherwise false
      */
     bool handle_alternative_block(const block& b, const crypto::hash& id,
-      block_verification_context& bvc, pool_supplement& extra_block_txs);
+      block_verification_context& bvc, block_connect_supplement& connect);
 
     /**
      * @brief builds a list of blocks connecting a block to the main chain
@@ -1521,12 +1552,13 @@ namespace cryptonote
      * to do so, this function reverts the blockchain to how it was before
      * the attempted switch.
      *
-     * @param original_chain the chain to switch back to
+     * @param original_chain the chain to switch back to, each block paired with the
+     *   credit-wire attestation witness it held on main (captured at pop)
      * @param rollback_height the height to revert to before appending the original chain
      *
      * @return false if something goes wrong with reverting (very bad), otherwise true
      */
-    bool rollback_blockchain_switching(std::list<block>& original_chain, uint64_t rollback_height);
+    bool rollback_blockchain_switching(std::list<detached_block>& original_chain, uint64_t rollback_height);
 
     /**
      * @brief gets recent block weights for median calculation

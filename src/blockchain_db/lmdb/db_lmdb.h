@@ -340,6 +340,7 @@ public:
                             , const difficulty_type& cumulative_difficulty
                             , const uint64_t& coins_generated
                             , uint64_t archival_budget_accrual
+                            , const blobdata& attestation_witness
                             , const std::vector<std::pair<transaction, blobdata>>& txs
                             );
 
@@ -596,6 +597,13 @@ private:
   virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t block_height) const override;
   virtual void remove_curve_tree_root_at_height(uint64_t block_height) override;
 
+  virtual void store_archival_attestation_witness_at_height(uint64_t block_height, const blobdata& witness) override;
+  virtual blobdata get_archival_attestation_witness_at_height(uint64_t block_height) const override;
+  virtual void remove_archival_attestation_witness_at_height(uint64_t block_height) override;
+  virtual void store_archival_alt_attestation_witness(const crypto::hash& blkid, const blobdata& witness) override;
+  virtual blobdata get_archival_alt_attestation_witness(const crypto::hash& blkid) const override;
+  virtual void remove_archival_alt_attestation_witness(const crypto::hash& blkid) override;
+
   virtual void save_curve_tree_checkpoint(uint64_t block_height) override;
   virtual bool get_curve_tree_checkpoint(uint64_t block_height, std::vector<uint8_t>& checkpoint_data) const override;
   virtual uint64_t get_latest_curve_tree_checkpoint_height() const override;
@@ -702,6 +710,19 @@ public:
     uint64_t epoch_lo, uint64_t epoch_hi,
     std::vector<ArchivalEmissionEpochSnapshot>& out) const override;
 
+  // Height-based prune of the attestation-witness side table at the retention
+  // horizon (ARCHIVAL_CREDIT_WIRE.md §3.2/§4). Public so the DB-level test can
+  // assert the prune's own key derivation directly; called internally from
+  // prune_archival_epochs_before.
+  void delete_archival_attestation_witness_before_height(uint64_t prune_below_height);
+
+  // Retention-horizon prune across every epoch-scoped archival table. Public for
+  // the same reason as the helper above, and one more: this is where the accrual
+  // table (keyed at the block index) and the witness table (keyed at index + 1)
+  // are pruned from a single epoch-open height, so it is the only place the
+  // boundary between their two key spaces is observable.
+  void prune_archival_epochs_before(uint64_t prune_below_epoch);
+
 private:
   /// Single gather routine over the serve-credit rows for `settlement_epoch`
   /// (WS-1 §5.5 single sourcing, C++ side): the epoch close and the emission
@@ -718,7 +739,6 @@ private:
     const crypto::hash* p_id, ArchivalEmissionEpochSnapshot* outs) const;
   void process_archival_slash_for_epoch(uint64_t block_height, uint64_t settlement_epoch,
     uint32_t& seq);
-  void prune_archival_epochs_before(uint64_t prune_below_epoch);
   void delete_archival_r_market_for_epoch(uint64_t settlement_epoch);
   void delete_archival_r_market_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch);
@@ -856,6 +876,8 @@ private:
   MDB_dbi m_archival_epoch_close_log; // block_height -> settlement_epoch finalized
   MDB_dbi m_archival_budget_accrual;  // BE(height) -> BE(staker_inflow) (redirected write, §3.1)
   MDB_dbi m_archival_budget;          // BE(E) -> BE(budget) frozen at close (§3.2)
+  MDB_dbi m_archival_attestation_witness; // height [8B native, INTEGERKEY] -> prunable admission witness blob (r||pass-sigs; ARCHIVAL_CREDIT_WIRE.md §3.2/§4, transport B2 — never in the block blob)
+  MDB_dbi m_archival_alt_attestation_witness; // block hash [32B, compare_hash32] -> prunable alt-chain admission witness blob (reorg-survival counterpart to m_archival_attestation_witness; ARCHIVAL_CREDIT_WIRE.md §3, transport B2)
 
   MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]
   MDB_dbi m_pending_tree_drain;       // BE(block_height)||BE(output) [16B] -> maturity[8]||leaf[128] [136B]

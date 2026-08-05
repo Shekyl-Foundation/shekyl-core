@@ -32,8 +32,9 @@ use shekyl_archival_retention::{
     EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
     HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError, RebondPopError,
     RewardCommit, ShardSet, ShardSetError, UnbondConnectError, UnbondPopError, WireError,
-    CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
-    HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
+    ATTESTATION_HEADER_LEN, CHALLENGE_RESOLUTION_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
+    FAILURE_WINDOW_SERVE_BUDGET, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_ATTESTATION_RECORDS,
+    MAX_ATTESTATION_WITNESS_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -454,6 +455,40 @@ pub unsafe extern "C" fn shekyl_checked_sum_amounts(
 #[no_mangle]
 pub extern "C" fn shekyl_archival_epoch_open_height(settlement_epoch: u64) -> u64 {
     settlement_epoch_open_height(settlement_epoch)
+}
+
+// ── Attestation-witness cross-language constant authorities (credit-wire CW-2,
+//    gate CW-1b-iv). These expose the Rust-side authoritative values so C++ can
+//    assert its own `config::` constants agree — the real gate replacing the "must
+//    equal" doc-comment. The block-hash differential is blind to the witness (it is
+//    not in the block blob), so these + the byte-pinned witness KAT are the only
+//    checks on this surface. ──
+
+/// Genesis-frozen consensus cap on attestation records per block. C++ asserts
+/// `config::ARCHIVAL_MAX_ATTESTATION_RECORDS` equals this.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_max_attestation_records() -> u64 {
+    MAX_ATTESTATION_RECORDS as u64
+}
+
+/// Canonical length of one kept attestation header (`p_id ‖ s ‖ E ‖ kind`). C++
+/// asserts `config::ARCHIVAL_ATTESTATION_HEADER_BYTES` equals this.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_attestation_header_bytes() -> u64 {
+    ATTESTATION_HEADER_LEN as u64
+}
+
+/// The EXACT maximum canonical byte length of a block's attestation witness
+/// (`r ‖ count ‖ MAX records × HybridSignature`).
+///
+/// `config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` is defined as this same
+/// quantity and C++ asserts equality. Below it, C++ would reject on the wire a
+/// witness Rust admits — a consensus split; above it, every block gets that much
+/// free padding an attacker may fill. Equality is the only value with neither
+/// property, and it makes any drift in either language's operands loud.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_attestation_witness_max_bytes() -> u64 {
+    MAX_ATTESTATION_WITNESS_BYTES as u64
 }
 
 /// Last block of settlement epoch `E` (`H_close`, credit deadline).

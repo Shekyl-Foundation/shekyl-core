@@ -120,6 +120,19 @@ enum class relay_category : uint8_t
 
 bool matches_category(relay_method method, relay_category category) noexcept;
 
+/**
+ * @brief LMDB height key for a block's attestation witness.
+ *
+ * Mirrors `store_curve_tree_root_at_height`: keyed at the post-add chain height
+ * (`block_index + 1`), not the block's 0-based index. Every read/write site that
+ * starts from a 0-based block index MUST go through this helper so the +1
+ * cannot drift between add / serve / reorg paths.
+ */
+inline uint64_t archival_attestation_witness_key(uint64_t block_index) noexcept
+{
+  return block_index + 1;
+}
+
 #pragma pack(push, 1)
 
 /**
@@ -938,6 +951,15 @@ public:
    *   written here (keyed at the block's index) before the epoch-close hook
    *   fires, so the close of an epoch sees its final block's row
    *   (F-B1a/F-B1b).
+   * @param attestation_witness the block's prunable credit-wire admission
+   *   witness (`r` + per-pass HybridSignatures; ARCHIVAL_CREDIT_WIRE.md
+   *   §3.2/§4, transport B2). Opaque bytes here, decoded/verified in Rust behind
+   *   the FFI. Stored in the height-keyed m_archival_attestation_witness side
+   *   table in this same write txn (keyed to mirror the curve-tree root) and
+   *   pruned after horizon. Empty until the cutover packs pass records (interim
+   *   blocks carry the empty attestation set); an empty witness writes no row —
+   *   absent key reads as "no witness", the skip-when-empty convention the
+   *   accrual row above uses.
    * @param txs the transactions in the block
    *
    * @return the height of the chain post-addition
@@ -948,6 +970,7 @@ public:
                             , const difficulty_type& cumulative_difficulty
                             , const uint64_t& coins_generated
                             , uint64_t archival_budget_accrual
+                            , const blobdata& attestation_witness
                             , const std::vector<std::pair<transaction, blobdata>>& txs
                             );
 
@@ -2527,6 +2550,75 @@ public:
    * Called during pop_block to keep the table consistent with chain state.
    */
   virtual void remove_curve_tree_root_at_height(uint64_t block_height) = 0;
+
+  // ─── Credit-wire attestation witness (prunable, admission-only) ───────────
+  // The per-block `r` + pass-signature witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4,
+  // credit-wire CW-2): two tables, each with ONE owner.
+  //   * height-keyed — owned by the MAIN CHAIN. Written by add_block, deleted by
+  //     pop_block, reaped by the retention prune.
+  //   * hash-keyed — owned by the ALT-BLOCK TABLE. Written beside add_alt_block,
+  //     deleted beside remove_alt_block / drop_alt_blocks / reset. A row exists
+  //     there iff its alt block does, so no path can orphan one.
+  // Neither owner writes the other's table; a block moving between main and alt
+  // carries its witness explicitly through block_connect_supplement.
+  // Mined commitment lives in the block header's attestation_root (not the blob).
+  // Opaque bytes at this layer; decode/verify live in Rust.
+
+  /**
+   * @brief store a block's attestation witness keyed by block height.
+   *
+   * Called from add_block in the same write txn as the block add (keyed to
+   * mirror store_curve_tree_root_at_height). Not called for an empty witness.
+   */
+  virtual void store_archival_attestation_witness_at_height(uint64_t block_height, const blobdata& witness) = 0;
+
+  /**
+   * @brief retrieve the attestation witness stored at a given height.
+   *
+   * @return the witness blob, or empty if no row exists (a block with an empty
+   *   attestation set, or a pruned/never-written height).
+   */
+  virtual blobdata get_archival_attestation_witness_at_height(uint64_t block_height) const = 0;
+
+  /**
+   * @brief remove the stored attestation witness for a given height.
+   *
+   * Tolerant of a missing key. Called by pop_block (the block leaves main) and
+   * by the retention prune.
+   */
+  virtual void remove_archival_attestation_witness_at_height(uint64_t block_height) = 0;
+
+  // ─── Alt-chain attestation witness (hash-keyed) ───────────────────────────
+  // Hash-keyed counterpart to the height-keyed main table, holding the witness of
+  // every block currently in the alt-block table — whether it arrived as an alt
+  // block or was demoted there by a reorg. Its rows are owned by the alt block:
+  // written beside add_alt_block, removed by remove_alt_block / drop_alt_blocks /
+  // reset(). Nothing else writes or deletes here, so a row cannot outlive (or
+  // survive without) its alt block.
+
+  /**
+   * @brief store an alt block's attestation witness keyed by block hash.
+   *
+   * Called from handle_alternative_block alongside add_alt_block, in the same
+   * write txn. Not called for an empty witness (stores no row).
+   */
+  virtual void store_archival_alt_attestation_witness(const crypto::hash& blkid, const blobdata& witness) = 0;
+
+  /**
+   * @brief retrieve the attestation witness stashed for an alt block.
+   *
+   * @return the witness blob, or empty if no row exists (an alt block with an
+   *   empty attestation set, or one added before this table existed).
+   */
+  virtual blobdata get_archival_alt_attestation_witness(const crypto::hash& blkid) const = 0;
+
+  /**
+   * @brief remove the stashed attestation witness for an alt block.
+   *
+   * Tolerant of a missing key. Invoked implicitly by remove_alt_block /
+   * drop_alt_blocks so the witness never outlives its alt block.
+   */
+  virtual void remove_archival_alt_attestation_witness(const crypto::hash& blkid) = 0;
 
   // ─── FCMP++ Curve Tree Checkpoints & Pruning ─────────────────────────────
 
