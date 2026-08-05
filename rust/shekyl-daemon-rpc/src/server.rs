@@ -35,7 +35,7 @@ use crate::middleware::DEFAULT_BODY_LIMIT;
 use crate::submit::{DaemonSubmitEngine, DaemonTxVerifier, FfiSubmitShim, SubmitEngine};
 
 use axum::http::{HeaderValue, Method};
-use axum::routing::{get, post};
+use axum::routing::{get, post, MethodRouter};
 use axum::Router;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -111,129 +111,149 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 }
 
 /// Build the Axum router. `cors_origins` empty ⇒ default-deny CORS.
+/// Paths registered on **both** listeners — JSON and binary alike.
+///
+/// Handler-free for the same reason as [`UNRESTRICTED_ONLY_JSON_PATHS`], and
+/// iterated by [`build_router`] rather than mirroring it. Together the two
+/// lists are the complete served surface, which is what lets a test assert
+/// that an admin path is absent from the restricted listener rather than
+/// merely absent from a copy.
+pub const ALWAYS_REGISTERED_PATHS: &[&str] = &[
+    "/json_rpc",
+    // JSON REST (with aliases) -- GET + POST to match epee behaviour
+    "/get_height",
+    "/getheight",
+    "/get_transactions",
+    "/gettransactions",
+    "/get_alt_blocks_hashes",
+    "/is_key_image_spent",
+    // The typed submit route (DAEMON_SUBMIT_VERDICT.md §2.4) is the only
+    // submit surface; the legacy /send_raw_transaction proxy was deleted
+    // per §9.3. POST only.
+    "/submit_transaction",
+    "/get_public_nodes",
+    "/get_transaction_pool",
+    "/get_transaction_pool_hashes.bin",
+    "/get_transaction_pool_hashes",
+    "/get_transaction_pool_stats",
+    "/get_info",
+    "/getinfo",
+    "/get_limit",
+    // Binary endpoints.
+    "/get_blocks.bin",
+    "/getblocks.bin",
+    "/get_blocks_by_height.bin",
+    "/getblocks_by_height.bin",
+    "/get_hashes.bin",
+    "/gethashes.bin",
+    "/get_o_indexes.bin",
+];
+
+/// The handler bound to each always-registered path. Total over
+/// [`ALWAYS_REGISTERED_PATHS`].
+///
+/// # Panics
+///
+/// If a path is listed with no arm here — loud at daemon start, rather than a
+/// route that silently vanishes.
+fn always_handler(path: &str) -> MethodRouter<Arc<AppState>> {
+    match path {
+        "/json_rpc" => post(json_rpc::handle),
+        "/get_height" | "/getheight" => get(json::get_height).post(json::get_height),
+        "/get_transactions" | "/gettransactions" => {
+            get(json::get_transactions).post(json::get_transactions)
+        }
+        "/get_alt_blocks_hashes" => {
+            get(json::get_alt_blocks_hashes).post(json::get_alt_blocks_hashes)
+        }
+        "/is_key_image_spent" => get(json::is_key_image_spent).post(json::is_key_image_spent),
+        "/submit_transaction" => post(submit::submit_transaction),
+        "/get_public_nodes" => get(json::get_public_nodes).post(json::get_public_nodes),
+        "/get_transaction_pool" => get(json::get_transaction_pool).post(json::get_transaction_pool),
+        "/get_transaction_pool_hashes.bin" => {
+            get(json::get_transaction_pool_hashes_bin).post(json::get_transaction_pool_hashes_bin)
+        }
+        "/get_transaction_pool_hashes" => {
+            get(json::get_transaction_pool_hashes).post(json::get_transaction_pool_hashes)
+        }
+        "/get_transaction_pool_stats" => {
+            get(json::get_transaction_pool_stats).post(json::get_transaction_pool_stats)
+        }
+        "/get_info" | "/getinfo" => get(json::get_info).post(json::get_info),
+        "/get_limit" => get(json::get_limit).post(json::get_limit),
+        "/get_blocks.bin" | "/getblocks.bin" => post(binary::get_blocks),
+        "/get_blocks_by_height.bin" | "/getblocks_by_height.bin" => {
+            post(binary::get_blocks_by_height)
+        }
+        "/get_hashes.bin" | "/gethashes.bin" => post(binary::get_hashes),
+        "/get_o_indexes.bin" => post(binary::get_o_indexes),
+        other => panic!("ALWAYS_REGISTERED_PATHS lists {other} with no handler"),
+    }
+}
+
+/// The handler bound to each admin-only path.
+///
+/// **Total over [`UNRESTRICTED_ONLY_JSON_PATHS`], and deliberately separate
+/// from it.** The list says *which listener serves a path* — the privacy fact,
+/// and the one a test must be able to read. This says *what runs* — which
+/// necessarily names handlers, and naming a handler pulls `core_rpc_ffi_*`
+/// into whatever links it. Keeping them apart is what lets
+/// `cargo test -p shekyl-daemon-rpc` assert the gate without a daemon image;
+/// it is the same constraint that produced the old hand-maintained const, now
+/// with the list *driving* registration instead of mirroring it.
+///
+/// # Panics
+///
+/// If a path is added to the list with no arm here. That is a loud failure at
+/// **daemon start** — `build_router` iterates every listed path, so the first
+/// start after the mistake dies with the path named. It is the only residue of
+/// the split, and it is deliberately not covered by a unit test: such a test
+/// would have to name a handler, and naming one relinks `core_rpc_ffi_*` into
+/// the test binary, which is the constraint this whole split exists to satisfy.
+/// (`#[ignore]` does not help — it skips execution, not linking.)
+fn unrestricted_only_handler(path: &str) -> MethodRouter<Arc<AppState>> {
+    match path {
+        // §55: the anonymity graph — which peers this node stems to and how
+        // each behaved. Sharma Appendix B spends 50-100 probes per node to
+        // reconstruct exactly this.
+        "/get_stem_tallies" => get(json::get_stem_tallies).post(json::get_stem_tallies),
+        "/start_mining" => get(json::start_mining).post(json::start_mining),
+        "/stop_mining" => get(json::stop_mining).post(json::stop_mining),
+        "/mining_status" => get(json::mining_status).post(json::mining_status),
+        "/save_bc" => get(json::save_bc).post(json::save_bc),
+        "/get_peer_list" => get(json::get_peer_list).post(json::get_peer_list),
+        "/set_log_hash_rate" => get(json::set_log_hash_rate).post(json::set_log_hash_rate),
+        "/set_log_level" => get(json::set_log_level).post(json::set_log_level),
+        "/set_log_categories" => get(json::set_log_categories).post(json::set_log_categories),
+        "/set_bootstrap_daemon" => get(json::set_bootstrap_daemon).post(json::set_bootstrap_daemon),
+        "/stop_daemon" => get(json::stop_daemon).post(json::stop_daemon),
+        "/get_net_stats" => get(json::get_net_stats).post(json::get_net_stats),
+        "/set_limit" => get(json::set_limit).post(json::set_limit),
+        "/out_peers" => get(json::out_peers).post(json::out_peers),
+        "/in_peers" => get(json::in_peers).post(json::in_peers),
+        "/pop_blocks" => get(json::pop_blocks).post(json::pop_blocks),
+        other => panic!("UNRESTRICTED_ONLY_JSON_PATHS lists {other} with no handler"),
+    }
+}
+
 pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
     let restricted = state.restricted;
 
-    // JSON-RPC 2.0 and unrestricted JSON REST routes
-    let mut router = Router::new()
-        .route("/json_rpc", post(json_rpc::handle))
-        // Unrestricted JSON REST (with aliases) -- GET + POST to match epee behavior
-        .route("/get_height", get(json::get_height).post(json::get_height))
-        .route("/getheight", get(json::get_height).post(json::get_height))
-        .route(
-            "/get_transactions",
-            get(json::get_transactions).post(json::get_transactions),
-        )
-        .route(
-            "/gettransactions",
-            get(json::get_transactions).post(json::get_transactions),
-        )
-        .route(
-            "/get_alt_blocks_hashes",
-            get(json::get_alt_blocks_hashes).post(json::get_alt_blocks_hashes),
-        )
-        .route(
-            "/is_key_image_spent",
-            get(json::is_key_image_spent).post(json::is_key_image_spent),
-        )
-        // The typed submit route (DAEMON_SUBMIT_VERDICT.md §2.4) is the
-        // only submit surface; the legacy /send_raw_transaction proxy was
-        // deleted per §9.3. POST only.
-        .route("/submit_transaction", post(submit::submit_transaction))
-        .route(
-            "/get_public_nodes",
-            get(json::get_public_nodes).post(json::get_public_nodes),
-        )
-        .route(
-            "/get_transaction_pool",
-            get(json::get_transaction_pool).post(json::get_transaction_pool),
-        )
-        .route(
-            "/get_transaction_pool_hashes.bin",
-            get(json::get_transaction_pool_hashes_bin).post(json::get_transaction_pool_hashes_bin),
-        )
-        .route(
-            "/get_transaction_pool_hashes",
-            get(json::get_transaction_pool_hashes).post(json::get_transaction_pool_hashes),
-        )
-        .route(
-            "/get_transaction_pool_stats",
-            get(json::get_transaction_pool_stats).post(json::get_transaction_pool_stats),
-        )
-        .route("/get_info", get(json::get_info).post(json::get_info))
-        .route("/getinfo", get(json::get_info).post(json::get_info))
-        .route("/get_limit", get(json::get_limit).post(json::get_limit))
-        // Binary endpoints (always available). Keep these paths in sync with
-        // BINARY_URI_PATHS below (the guard test asserts against that const,
-        // which is intentionally handler-free so the FFI-less Rust test job
-        // can link — see its doc comment).
-        .route("/get_blocks.bin", post(binary::get_blocks))
-        .route("/getblocks.bin", post(binary::get_blocks))
-        .route(
-            "/get_blocks_by_height.bin",
-            post(binary::get_blocks_by_height),
-        )
-        .route(
-            "/getblocks_by_height.bin",
-            post(binary::get_blocks_by_height),
-        )
-        .route("/get_hashes.bin", post(binary::get_hashes))
-        .route("/gethashes.bin", post(binary::get_hashes))
-        .route("/get_o_indexes.bin", post(binary::get_o_indexes));
+    // Both surfaces are iterated from their path lists, so a route cannot be
+    // registered without appearing in the list a test can read.
+    let mut router = Router::new();
+    for path in ALWAYS_REGISTERED_PATHS {
+        router = router.route(path, always_handler(path));
+    }
 
     if !restricted {
-        router = router
-            // §55: anonymity graph — admin/unrestricted listener only.
-            // Keep in lockstep with UNRESTRICTED_ONLY_JSON_PATHS below.
-            .route(
-                "/get_stem_tallies",
-                get(json::get_stem_tallies).post(json::get_stem_tallies),
-            )
-            .route(
-                "/start_mining",
-                get(json::start_mining).post(json::start_mining),
-            )
-            .route(
-                "/stop_mining",
-                get(json::stop_mining).post(json::stop_mining),
-            )
-            .route(
-                "/mining_status",
-                get(json::mining_status).post(json::mining_status),
-            )
-            .route("/save_bc", get(json::save_bc).post(json::save_bc))
-            .route(
-                "/get_peer_list",
-                get(json::get_peer_list).post(json::get_peer_list),
-            )
-            .route(
-                "/set_log_hash_rate",
-                get(json::set_log_hash_rate).post(json::set_log_hash_rate),
-            )
-            .route(
-                "/set_log_level",
-                get(json::set_log_level).post(json::set_log_level),
-            )
-            .route(
-                "/set_log_categories",
-                get(json::set_log_categories).post(json::set_log_categories),
-            )
-            .route(
-                "/set_bootstrap_daemon",
-                get(json::set_bootstrap_daemon).post(json::set_bootstrap_daemon),
-            )
-            .route(
-                "/stop_daemon",
-                get(json::stop_daemon).post(json::stop_daemon),
-            )
-            .route(
-                "/get_net_stats",
-                get(json::get_net_stats).post(json::get_net_stats),
-            )
-            .route("/set_limit", get(json::set_limit).post(json::set_limit))
-            .route("/out_peers", get(json::out_peers).post(json::out_peers))
-            .route("/in_peers", get(json::in_peers).post(json::in_peers))
-            .route("/pop_blocks", get(json::pop_blocks).post(json::pop_blocks));
+        // Iterated, not chained: `UNRESTRICTED_ONLY_JSON_PATHS` is the single
+        // source of *which* paths are admin-only, so membership in that list
+        // IS registration. A route cannot be moved between listeners without
+        // moving its string, which is what the gate test asserts on.
+        for path in UNRESTRICTED_ONLY_JSON_PATHS {
+            router = router.route(path, unrestricted_only_handler(path));
+        }
     }
 
     router
@@ -338,33 +358,37 @@ pub async fn run_server(
     serve_with_listener(core, config, listener, shutdown).await
 }
 
-/// Binary URI paths registered by [`build_router`]. Kept as an explicit,
-/// handler-free table so in-lane tests can assert deleted decoy surfaces stay
-/// gone WITHOUT linking the C++ `core_rpc_ffi` symbols — `cargo test -p
-/// shekyl-daemon-rpc` (and the workspace Rust test job) build no daemon image,
-/// so a test that reached the real handlers would fail to link. This is a
-/// deliberate trade-off: the list is maintained in lockstep with the
-/// `.route(".../*.bin", ...)` calls in `build_router` above.
-pub const BINARY_URI_PATHS: &[&str] = &[
-    "/get_blocks.bin",
-    "/getblocks.bin",
-    "/get_blocks_by_height.bin",
-    "/getblocks_by_height.bin",
-    "/get_hashes.bin",
-    "/gethashes.bin",
-    "/get_o_indexes.bin",
-];
-
 /// JSON REST paths that must be registered **only** on the unrestricted
 /// (admin) listener — never on the restricted (public) one.
 ///
-/// Same dual-maintenance trade as [`BINARY_URI_PATHS`]: handler-free so
-/// `cargo test -p shekyl-daemon-rpc` can assert membership without linking
-/// `core_rpc_ffi_*`. **Not** a substitute for the dual-arm integration test
-/// (restricted ⇒ 404 **and** unrestricted ⇒ not-404) owed for
-/// `/get_stem_tallies`; it makes the sensitive set grepable and reviewable.
-/// Keep in lockstep with the `if !restricted` block in [`build_router`].
-pub const UNRESTRICTED_ONLY_JSON_PATHS: &[&str] = &["/get_stem_tallies"];
+/// Handler-free by necessity: naming a handler pulls `core_rpc_ffi_*` into
+/// whatever links it, and `cargo test -p shekyl-daemon-rpc` builds no daemon
+/// image. Splitting *which listener* (here) from *what runs*
+/// ([`unrestricted_only_handler`]) is what lets the gate be asserted at all.
+///
+/// **This list is no longer a mirror — [`build_router`] iterates it**, so
+/// membership *is* registration and the two cannot drift. That is what
+/// retires the owed dual-arm *integration* test: the property it was going to
+/// establish (restricted ⇒ 404, unrestricted ⇒ not-404) is a property of this
+/// list, and a daemon fixture would have tested the server around it.
+pub const UNRESTRICTED_ONLY_JSON_PATHS: &[&str] = &[
+    "/get_stem_tallies",
+    "/start_mining",
+    "/stop_mining",
+    "/mining_status",
+    "/save_bc",
+    "/get_peer_list",
+    "/set_log_hash_rate",
+    "/set_log_level",
+    "/set_log_categories",
+    "/set_bootstrap_daemon",
+    "/stop_daemon",
+    "/get_net_stats",
+    "/set_limit",
+    "/out_peers",
+    "/in_peers",
+    "/pop_blocks",
+];
 
 #[cfg(test)]
 mod tests {
@@ -377,20 +401,57 @@ mod tests {
     #[test]
     fn output_distribution_bin_not_registered() {
         assert!(
-            !BINARY_URI_PATHS.contains(&"/get_output_distribution.bin"),
+            !ALWAYS_REGISTERED_PATHS.contains(&"/get_output_distribution.bin"),
             "decoy distribution binary route must stay deleted"
         );
-        // Spot-check the live table still matches the routes wired above.
-        assert!(BINARY_URI_PATHS.contains(&"/get_blocks.bin"));
-        assert!(BINARY_URI_PATHS.contains(&"/get_o_indexes.bin"));
+        assert!(ALWAYS_REGISTERED_PATHS.contains(&"/get_blocks.bin"));
+        assert!(ALWAYS_REGISTERED_PATHS.contains(&"/get_o_indexes.bin"));
     }
 
+    /// The dual-arm gate, and **each arm is the other's control**.
+    ///
+    /// *restricted ⇒ absent* alone passes for a route that never existed, a
+    /// typo, or a deleted handler. *unrestricted ⇒ present* proves the path is
+    /// spelled right and actually registered, which is what makes the absence
+    /// mean **gated** rather than **missing**. Only the pair is
+    /// self-witnessing (§50.3: unchanged is the default state of everything
+    /// that did not happen).
+    ///
+    /// This can fire on the defect it exists for — a route moved out of the
+    /// gated set — because [`build_router`] *iterates* this list rather than
+    /// mirroring it. The check it replaces asserted that a hand-maintained
+    /// copy contained a string, which no amount of router editing could
+    /// falsify.
     #[test]
-    fn stem_tallies_is_named_unrestricted_only() {
+    fn stem_tallies_is_served_only_on_the_unrestricted_listener() {
         assert!(
             UNRESTRICTED_ONLY_JSON_PATHS.contains(&"/get_stem_tallies"),
-            "anonymity-graph readout must stay on the unrestricted-only path list"
+            "unrestricted arm: the anonymity-graph readout must be registered, \
+             or the restricted arm proves nothing"
         );
+        assert!(
+            !ALWAYS_REGISTERED_PATHS.contains(&"/get_stem_tallies"),
+            "restricted arm: the anonymity graph must never reach the public \
+             listener (§55)"
+        );
+        assert!(
+            ALWAYS_REGISTERED_PATHS.contains(&"/get_info"),
+            "control: the always-list is populated, so the absence above is real"
+        );
+    }
+
+    /// No admin-only path is also registered unconditionally.
+    ///
+    /// The generalisation of the arm above: a path in both lists would be
+    /// served publicly *and* look gated.
+    #[test]
+    fn no_admin_path_is_also_registered_unconditionally() {
+        for path in UNRESTRICTED_ONLY_JSON_PATHS {
+            assert!(
+                !ALWAYS_REGISTERED_PATHS.contains(path),
+                "{path} is admin-only but is also registered unconditionally"
+            );
+        }
     }
 
     #[tokio::test]

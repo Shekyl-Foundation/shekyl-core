@@ -45,24 +45,42 @@ pub struct FloodParams {
     pub nodes: usize,
     /// Fluff peers each node **initiates** to.
     ///
-    /// **Provenance, recorded because it was not (§28.4):** the default `8` is
-    /// very likely the *measured mean degree of the 2015 Bitcoin server graph*
-    /// (Miller et al., via Fanti–Viswanath, who model 8 outbound / 125 total
-    /// and note the effective average is "closer to 8 due to
-    /// nonhomogeneities"). It is **not** Bitcoin's outbound default and
-    /// **not** a Shekyl quantity — `P2P_DEFAULT_CONNECTIONS_COUNT` is 12. The
-    /// Shekyl pin is a modelling decision that is *not* settled here: their
-    /// figure excludes NAT'd clients because "clients do not relay
-    /// transactions", which is a Bitcoin fact that does not map, since a NAT'd
-    /// Shekyl node makes its 12 outbound and relays normally.
+    /// # Pinned to 12 = `P2P_DEFAULT_CONNECTIONS_COUNT` (§69)
+    ///
+    /// **Provenance of the old `8`, recorded because it was not (§28.4):** it
+    /// is very likely the *measured mean degree of the 2015 Bitcoin server
+    /// graph* (Miller et al., via Fanti–Viswanath, who model 8 outbound / 125
+    /// total and note the effective average is "closer to 8 due to
+    /// nonhomogeneities"). **Not** Bitcoin's outbound default and **not** a
+    /// Shekyl quantity. Their figure also excludes NAT'd clients because
+    /// "clients do not relay transactions", a Bitcoin fact that does not map:
+    /// a NAT'd Shekyl node makes its 12 outbound and relays normally. **A
+    /// value that is neither ours nor applicable is not a default, so it is
+    /// gone.**
+    ///
+    /// # Why holding this fixed is *not* F-7's error
     ///
     /// Under [`FloodReach::EveryPeer`] the effective degree is ~`2 × peers`
     /// (each node initiates `peers` and receives ~`peers`); under
-    /// [`FloodReach::OutboundOnly`] the out-degree is exactly `peers`. **A
-    /// before/after comparison that changes only `reach` therefore changes the
-    /// effective degree too** — that is the rule change and the degree change
-    /// arriving together, and it must be reported as such rather than
-    /// attributed to the rule alone.
+    /// [`FloodReach::OutboundOnly`] the out-degree is exactly `peers`. So a
+    /// comparison that changes only `reach` *does* see a different usable
+    /// degree — **and that is the mechanism by which the rule acts, not a
+    /// confound.** F-7's defect was comparing at different *configured*
+    /// degrees (`EveryPeer` at 8 against `OutboundOnly` at 16), so a rule
+    /// change and a degree change moved together and the attribution was
+    /// ambiguous. Here the **configured** degree is held identical in both
+    /// arms and the **usable** degree differs downstream of the rule, which is
+    /// the causal chain being measured.
+    ///
+    /// # The caveat that belongs at the number
+    ///
+    /// 12 is the *default*, and real degree is heterogeneous: a NAT'd node has
+    /// 12 out and 0 in, so its `EveryPeer` degree is 12 rather than ~24. Using
+    /// the default uniformly is the right **control** for a rule comparison,
+    /// but it puts the `EveryPeer` arm at the *optimistic* end of the real
+    /// distribution — which makes the measured cost of reverse-parity an
+    /// **over**-estimate. Safe direction, and stated so a later reader does
+    /// not mistake the bias for precision.
     pub peers: usize,
     /// Which edges relay (see [`FloodReach`]).
     pub reach: FloodReach,
@@ -72,7 +90,7 @@ impl Default for FloodParams {
     fn default() -> Self {
         Self {
             nodes: 512,
-            peers: 8,
+            peers: 12,
             reach: FloodReach::EveryPeer,
         }
     }

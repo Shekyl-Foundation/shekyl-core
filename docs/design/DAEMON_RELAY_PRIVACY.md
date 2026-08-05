@@ -11303,3 +11303,104 @@ coming. Rewritten in place above; recorded here because the change is a
 > §67.1's stale blocker, one layer up: there, a carried obstacle had been
 > removed by unrelated work; here, a carried question had been dissolved by
 > our own.
+
+## 69. The gate test and the `peers` pin — both landed, and the gate cost a design correction
+
+**2026-08-04.** §67's two remaining items, executed. The `peers` pin went as
+proposed; the gate test did not, and the reason is worth recording because it
+is why the duplicate it deletes existed in the first place.
+
+### 69.1 The gate: the route table had to *drive* registration, not be lifted
+
+§67.1 proposed composing `node_server.cpp`'s real-`core` and real-`node_server`
+patterns into a dual-arm integration test. **Correctly rejected by the
+maintainer:** the gate is `if !restricted { … }` — pure Rust — and the defect
+to catch is *"someone moved that route out of the conditional."* Standing up a
+daemon to reach it tests the **server**; the property lives in the **route
+table**. Building the heavy fixture would have failed on any of a dozen
+startup conditions and passed on none of the interesting ones.
+
+**The first attempt at the light version did not link, and that is the
+finding.** Lifting the table to `Vec<(&'static str, MethodRouter<Arc<AppState>>)>`
+puts handler names in a function the tests call — and naming
+`json::get_stem_tallies` pulls `CoreRpc::stem_tallies`, which pulls
+`core_rpc_ffi_stem_tallies`, which Cargo never links. The lib tests linked on
+`dev` only because nothing reachable from a test named a handler.
+
+> **The old `UNRESTRICTED_ONLY_JSON_PATHS` const was not laziness — it was a
+> linkability constraint wearing the costume of a dual-maintenance smell.** It
+> was handler-free *so that a test could read it at all*. Deleting it as "a
+> duplicate" without that fact would have produced a design that cannot build.
+
+**What resolves both.** Split *which listener serves a path* (the privacy fact,
+handler-free) from *what runs there* (a lookup that names handlers), and have
+`build_router` **iterate** the first:
+
+```rust
+for path in ALWAYS_REGISTERED_PATHS      { router = router.route(path, always_handler(path)); }
+if !restricted {
+    for path in UNRESTRICTED_ONLY_JSON_PATHS { router = router.route(path, unrestricted_only_handler(path)); }
+}
+```
+
+**Membership is now registration.** A route cannot be served without appearing
+in a list a test can read, and moving one between listeners means moving its
+string — which is exactly what the assertion reads. The lists stopped being
+mirrors, so they stopped being duplicates.
+
+**Both arms, each the other's control.** *unrestricted ⇒ present* proves the
+path is spelled right and registered; *restricted ⇒ absent* then means **gated**
+rather than **missing**. A generalising arm covers all sixteen admin paths, not
+just §55's.
+
+**Negative-controlled, because a seal is not coverage.** Moving
+`/get_stem_tallies` into `ALWAYS_REGISTERED_PATHS` fails both tests with the
+path named. The check it replaces — *"the const contains this string"* —
+passes under that same edit, which is what made it theatre.
+
+**Retired by this:** `BINARY_URI_PATHS` (now derived from the always-list, the
+same dual-maintenance trade one surface over) and **the owed dual-arm
+integration test itself**. The property it was chartered to establish is a
+property of the route table; a daemon fixture would have tested the server
+*around* it. `/get_stem_tallies` is no longer an owed item.
+
+**One residue, named at its site:** a path listed with no lookup arm panics at
+daemon start. Not unit-tested, deliberately — such a test must name a handler,
+which relinks the FFI. `#[ignore]` does not help; it skips execution, not
+linking. That was measured, not assumed.
+
+### 69.2 The `peers` pin — 12, and why holding it fixed is *not* F-7's error
+
+`FloodParams::peers` is the count each node **initiates** to.
+**Pinned to `P2P_DEFAULT_CONNECTIONS_COUNT = 12`, identical in both arms.**
+The old default `8` is very likely Miller et al.'s measured mean degree of the
+2015 Bitcoin *server* graph — neither Bitcoin's outbound default nor a Shekyl
+quantity, and its exclusion of NAT'd clients does not map, since a NAT'd Shekyl
+node makes its 12 outbound and relays normally. **A value that is neither ours
+nor applicable is not a default.**
+
+**§67.2 called this F-7's error shape. That was too strong, and the maintainer's
+distinction is the correct one.** F-7's defect was comparing at different
+*configured* degrees — `EveryPeer`@8 against `OutboundOnly`@16 — so a rule
+change and a degree change moved together and attribution was ambiguous. Here
+the configured degree is **held identical** and the usable degree differs
+downstream (`~24` under `EveryPeer`, `12` under `OutboundOnly`) **as a
+consequence of the reach rule**. That is the causal chain being measured, not a
+confound. The precondition is discharged by pinning, not by a round.
+
+**The caveat, recorded at the number rather than here.** 12 is the *default*
+and real degree is heterogeneous: a NAT'd node has 12 out and 0 in, so its
+`EveryPeer` degree is 12, not ~24. Uniform defaults are the right control for a
+rule comparison, but they place the `EveryPeer` arm at the **optimistic** end of
+the real distribution — so the measured cost of reverse-parity is an
+**over**-estimate. Safe direction, and stated so a later reader does not mistake
+the bias for precision.
+
+### 69.3 What is left on the owed list
+
+| item | state |
+| --- | --- |
+| §12.11 rewrite | done (§68) |
+| `/get_stem_tallies` gate | **done — and the owed integration test retired, not deferred** |
+| `hop` quantile policy | decided (§66); clearnet measurement outstanding |
+| F′ reverse-parity readouts | **unblocked** — `peers` pinned; three readouts in §67.2's order |
