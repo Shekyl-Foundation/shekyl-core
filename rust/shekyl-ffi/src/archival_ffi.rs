@@ -5449,6 +5449,25 @@ mod attestation_verify_tests {
         );
     }
 
+    /// The one deliberate divergence from the interim, pinned so the equivalence claim stays honest.
+    /// The interim ignores the witness, so an empty-root block carrying unsolicited witness bytes
+    /// (a peer can attach them via `entry.attestation_witness`) is ACCEPTED. The new verify pairs
+    /// pass headers (0) against witness signatures (>0) and rejects the count mismatch as
+    /// MALFORMED_WITNESS. Reject is the intended tightening — garbage witness bytes are never
+    /// accepted or stored, consistent with the exact witness-size cap. Pre-genesis there are no old
+    /// nodes, so the stricter rule costs nothing. Equivalence therefore holds on empty-WITNESS
+    /// blocks (the only shape that exists pre-cutover); on unsolicited witness bytes the new verify
+    /// is strictly stricter.
+    #[test]
+    fn empty_headers_nonempty_witness_is_malformed_witness() {
+        let (pubkey, p_id, sk) = real_p();
+        let s = one_pass(&sk, p_id, pubkey); // reused only for a real one-signature witness
+        assert_eq!(
+            call(empty_attestation_root(), 1, &[], &s.witness, &[]),
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS
+        );
+    }
+
     #[test]
     fn wrong_mined_root_is_root_mismatch() {
         let (pubkey, p_id, sk) = real_p();
