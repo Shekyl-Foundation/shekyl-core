@@ -1,0 +1,26 @@
+[package]
+name = "shekyl-levin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Levin p2p framing layer (bucket header, fragments, noise, compression). See docs/LEVIN_PROTOCOL.md."
+
+[features]
+# Mirrors the C++ HAVE_ZSTD build gate (contrib/epee/src/levin_compression.cpp):
+# with the feature off, `try_compress_message` is the identity and receiving a
+# COMPRESSED bucket is an error — exactly the C++ behavior without zstd.
+# Default-on because the production daemon builds with HAVE_ZSTD.
+default = ["zstd"]
+zstd = ["dep:zstd"]
+
+[dependencies]
+thiserror = { workspace = true }
+# Same libzstd the C++ side links (HAVE_ZSTD), via the maintained bindings —
+# guarantees frame-level compatibility with peers running the C++ stack.
+# Optional: only pulled in by the `zstd` feature above.
+zstd = { version = "0.13", optional = true }
+
+[lints]
+workspace = true
