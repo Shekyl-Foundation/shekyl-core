@@ -519,7 +519,7 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
             // path — emission-active blocks are refused above. Genesis has no
             // staker leg (its coinbase pays the whole hardcoded emission), so
             // a zero accrual is correct here, not a gap.
-            core.get_blockchain_storage().get_db().add_block(std::make_pair(b, block_to_blob(b)), block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, 0, txs);
+            core.get_blockchain_storage().get_db().add_block(std::make_pair(b, block_to_blob(b)), block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, 0, {}, txs);
           }
           catch (const std::exception& e)
           {

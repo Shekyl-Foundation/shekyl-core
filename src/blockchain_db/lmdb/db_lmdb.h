@@ -340,6 +340,7 @@ public:
                             , const difficulty_type& cumulative_difficulty
                             , const uint64_t& coins_generated
                             , uint64_t archival_budget_accrual
+                            , const blobdata& attestation_witness
                             , const std::vector<std::pair<transaction, blobdata>>& txs
                             );
 
@@ -596,6 +597,10 @@ private:
   virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t block_height) const override;
   virtual void remove_curve_tree_root_at_height(uint64_t block_height) override;
 
+  virtual void store_archival_attestation_witness_at_height(uint64_t block_height, const blobdata& witness) override;
+  virtual blobdata get_archival_attestation_witness_at_height(uint64_t block_height) const override;
+  virtual void remove_archival_attestation_witness_at_height(uint64_t block_height) override;
+
   virtual void save_curve_tree_checkpoint(uint64_t block_height) override;
   virtual bool get_curve_tree_checkpoint(uint64_t block_height, std::vector<uint8_t>& checkpoint_data) const override;
   virtual uint64_t get_latest_curve_tree_checkpoint_height() const override;
@@ -701,6 +706,12 @@ public:
   virtual void gather_archival_emission_window_snapshots(const crypto::hash& p_id,
     uint64_t epoch_lo, uint64_t epoch_hi,
     std::vector<ArchivalEmissionEpochSnapshot>& out) const override;
+
+  // Height-based prune of the attestation-witness side table at the retention
+  // horizon (ARCHIVAL_CREDIT_WIRE.md §3.2/§4). Public so the DB-level test can
+  // assert the prune's own key derivation directly; called internally from
+  // prune_archival_epochs_before.
+  void delete_archival_attestation_witness_before_height(uint64_t prune_below_height);
 
 private:
   /// Single gather routine over the serve-credit rows for `settlement_epoch`
@@ -856,6 +867,7 @@ private:
   MDB_dbi m_archival_epoch_close_log; // block_height -> settlement_epoch finalized
   MDB_dbi m_archival_budget_accrual;  // BE(height) -> BE(staker_inflow) (redirected write, §3.1)
   MDB_dbi m_archival_budget;          // BE(E) -> BE(budget) frozen at close (§3.2)
+  MDB_dbi m_archival_attestation_witness; // height [8B native, INTEGERKEY] -> prunable admission witness blob (r||pass-sigs; ARCHIVAL_CREDIT_WIRE.md §3.2/§4, transport B2 — never in the block blob)
 
   MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]
   MDB_dbi m_pending_tree_drain;       // BE(block_height)||BE(output) [16B] -> maturity[8]||leaf[128] [136B]

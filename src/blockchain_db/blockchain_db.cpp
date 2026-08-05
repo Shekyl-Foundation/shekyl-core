@@ -371,6 +371,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
                                 , const difficulty_type& cumulative_difficulty
                                 , const uint64_t& coins_generated
                                 , uint64_t archival_budget_accrual
+                                , const blobdata& attestation_witness
                                 , const std::vector<std::pair<transaction, blobdata>>& txs
                                 )
 {
@@ -540,6 +541,16 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     store_curve_tree_root_at_height(prev_height + 1, ct_root);
   }
 
+  // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): the
+  // prunable admission bytes (r + pass signatures) ride this same write txn,
+  // keyed at `prev_height + 1` — the SAME height store_curve_tree_root_at_height
+  // uses above, so pop_block's remove (which uses the popped block's height, the
+  // matching half of that proven pair) reverses exactly this row. An empty
+  // witness (interim blocks, all-miss blocks) writes no row: the absent key
+  // reads as "no witness" (the accrual row's skip-when-empty convention).
+  if (!attestation_witness.empty())
+    store_archival_attestation_witness_at_height(prev_height + 1, attestation_witness);
+
   // call out to subclass implementation to add the block & metadata
   time1 = epee::misc_utils::get_tick_count();
   add_block(blk, block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, num_rct_outs, blk_hash);
@@ -640,6 +651,13 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   remove_block();
 
   const uint64_t block_height = removed_block_height;
+
+  // Reverse the credit-wire attestation witness written in add_block. Keyed at
+  // `block_height` — the matching half of store_archival_attestation_witness_at_
+  // height's `prev_height + 1` pair (identical to the curve-tree root pairing) —
+  // and tolerant of a missing key (the row exists only for blocks that carried a
+  // non-empty witness). Same write txn as the pop.
+  remove_archival_attestation_witness_at_height(block_height);
 
   for (const auto& h : boost::adaptors::reverse(blk.tx_hashes))
   {

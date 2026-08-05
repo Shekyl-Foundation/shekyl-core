@@ -938,6 +938,15 @@ public:
    *   written here (keyed at the block's index) before the epoch-close hook
    *   fires, so the close of an epoch sees its final block's row
    *   (F-B1a/F-B1b).
+   * @param attestation_witness the block's prunable credit-wire admission
+   *   witness (`r` + per-pass HybridSignatures; ARCHIVAL_CREDIT_WIRE.md
+   *   §3.2/§4, transport B2). Opaque bytes here, decoded/verified in Rust behind
+   *   the FFI. Stored in the height-keyed m_archival_attestation_witness side
+   *   table in this same write txn (keyed to mirror the curve-tree root) and
+   *   pruned after horizon. Empty until the cutover packs pass records (interim
+   *   blocks carry the empty attestation set); an empty witness writes no row —
+   *   absent key reads as "no witness", the skip-when-empty convention the
+   *   accrual row above uses.
    * @param txs the transactions in the block
    *
    * @return the height of the chain post-addition
@@ -948,6 +957,7 @@ public:
                             , const difficulty_type& cumulative_difficulty
                             , const uint64_t& coins_generated
                             , uint64_t archival_budget_accrual
+                            , const blobdata& attestation_witness
                             , const std::vector<std::pair<transaction, blobdata>>& txs
                             );
 
@@ -2527,6 +2537,38 @@ public:
    * Called during pop_block to keep the table consistent with chain state.
    */
   virtual void remove_curve_tree_root_at_height(uint64_t block_height) = 0;
+
+  // ─── Credit-wire attestation witness (prunable, admission-only) ───────────
+  // The per-block `r` + pass-signature witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4,
+  // transport B2): height-keyed, mined-commitment lives in the block header's
+  // attestation_root (not the blob), stored here alongside the block add so it
+  // rides pop_block's atomic txn, and pruned after horizon. Opaque bytes at this
+  // layer; the per-record decode and countersignature verify live in Rust.
+
+  /**
+   * @brief store a block's attestation witness keyed by block height.
+   *
+   * Called from add_block in the same write txn as the block add (keyed to
+   * mirror store_curve_tree_root_at_height). Not called for an empty witness.
+   */
+  virtual void store_archival_attestation_witness_at_height(uint64_t block_height, const blobdata& witness) = 0;
+
+  /**
+   * @brief retrieve the attestation witness stored at a given height.
+   *
+   * @return the witness blob, or empty if no row exists (a block with an empty
+   *   attestation set, or a pruned/never-written height).
+   */
+  virtual blobdata get_archival_attestation_witness_at_height(uint64_t block_height) const = 0;
+
+  /**
+   * @brief remove the stored attestation witness for a given height.
+   *
+   * Called during pop_block (keyed to mirror remove_curve_tree_root_at_height);
+   * tolerant of a missing key (the row exists only for blocks that carried a
+   * non-empty witness).
+   */
+  virtual void remove_archival_attestation_witness_at_height(uint64_t block_height) = 0;
 
   // ─── FCMP++ Curve Tree Checkpoints & Pruning ─────────────────────────────
 
