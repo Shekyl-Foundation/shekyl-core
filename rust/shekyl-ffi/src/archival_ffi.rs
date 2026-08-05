@@ -5498,4 +5498,25 @@ mod attestation_verify_tests {
             unsafe { shekyl_archival_verify_attestation(w.as_ptr(), w.len(), std::ptr::null()) };
         assert_eq!(r, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR);
     }
+
+    // Pins the Rust side of the verdict-code family to its literals. shekyl_ffi.h's
+    // SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_* #defines are hand-matched to these (rule 25); a drift
+    // on either side breaks its own pin. Only OK == 0 is consensus-relevant.
+    #[test]
+    fn verdict_codes_are_pinned() {
+        assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK, 0);
+        assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR, 1);
+        assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS, 2);
+        assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS, 3);
+        assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED, 4);
+        assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH, 5);
+        assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID, 6);
+        assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT, 7);
+        assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE, 8);
+        assert_eq!(
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH,
+            9
+        );
+        assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY, 10);
+    }
 }

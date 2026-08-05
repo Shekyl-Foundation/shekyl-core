@@ -1827,6 +1827,60 @@ uint8_t shekyl_archival_verify_serve_credit_vin(
     size_t vin_payload_len,
     const struct shekyl_archival_verify_ctx* ctx_ptr);
 
+// ---------------------------------------------------------------------------
+// Credit-wire attestation admission verify (CW-3, ARCHIVAL_CREDIT_WIRE.md §3-§4)
+// ---------------------------------------------------------------------------
+// The recompute-and-compare + countersignature verify that replaces the interim
+// check_attestation_root. ALL logic is in Rust (shekyl_archival_verify_attestation):
+// C++ reads LMDB by keys step-1 names, fills the ctx with raw bytes, and obeys the
+// verdict — it parses nothing and decides nothing. Codes mirror archival_ffi.rs
+// (hand-maintained header, rule 25); the Rust side pins each to its literal
+// (attestation_verify_tests::verdict_codes_are_pinned). Only OK == 0 is
+// consensus-relevant (C++ accepts iff OK, rejects on any non-OK); the rest are the
+// distinct MERROR_VER diagnostics that split marshaling drift from forgery.
+
+/// One (p_id, hybrid pubkey) pair C++ resolved for a distinct pass p_id. pubkey_len == 0 is the
+/// bond-absent marker; == the hybrid canonical length is a key; any other length is malformed.
+struct shekyl_archival_pid_pubkey {
+    uint8_t p_id[32];
+    const uint8_t* pubkey_ptr;
+    size_t pubkey_len;
+};
+
+/// Consensus context for shekyl_archival_verify_attestation, filled after C++'s LMDB reads.
+/// cb_out_key is the coinbase vout[0] output pubkey the nonce binds (consensus rule);
+/// cb_out_key_readable == 0 means C++ could not read it (-> ERR_CBKEY_UNREADABLE, never garbage).
+/// headers is the RAW 49-byte-record tx_extra blob — Rust splits and parses it.
+struct shekyl_archival_attestation_verify_ctx {
+    uint8_t attestation_root[32];
+    uint8_t cb_out_key[32];
+    uint8_t cb_out_key_readable;
+    const uint8_t* headers_ptr;
+    size_t headers_len;
+    const struct shekyl_archival_pid_pubkey* pairs_ptr;
+    size_t pairs_len;
+};
+
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK                     0
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR           1
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS  2
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS  3
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED       4
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH      5
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID 6
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT        7
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE   8
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH 9
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY   10
+
+/// Verify a block's attestation set against its mined attestation_root. `witness` is the opaque
+/// `r || count || pass-signatures` blob (connect.attestation_witness); an empty blob is the
+/// zero-record set. Returns a SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_* code; reject on any non-OK.
+uint8_t shekyl_archival_verify_attestation(
+    const uint8_t* witness_ptr,
+    size_t witness_len,
+    const struct shekyl_archival_attestation_verify_ctx* ctx_ptr);
+
 // Bond-post CT balance (ARCHIVAL_BOND_GATE4.md §3.2)
 #define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK                    0
 #define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR        1
