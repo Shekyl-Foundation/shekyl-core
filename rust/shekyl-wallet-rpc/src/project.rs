@@ -7,6 +7,7 @@
 
 use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
+use shekyl_engine_core::SubmitOutcome;
 use shekyl_engine_state::TransferDetails;
 use shekyl_scanner::BalanceSummary;
 use shekyl_types::TxHash;
@@ -14,8 +15,8 @@ use shekyl_units::AtomicUnits;
 
 use crate::params::parse_hex32;
 use crate::types::{
-    BuildPendingTxResult, GetBalanceResult, RefreshResult, TransferDirection, TransferState,
-    TransferView,
+    BuildPendingTxResult, GetBalanceResult, RefreshResult, SubmitPendingTxResult,
+    SubmitVerdictView, TransferDirection, TransferState, TransferView,
 };
 
 /// Decimal string for OpenAPI `AtomicUnits`.
@@ -119,6 +120,40 @@ pub fn refresh_result(summary: &RefreshSummary, synced_height: u64) -> RefreshRe
     }
 }
 
+/// Project the Engine's identity-bearing [`SubmitOutcome`] to OpenAPI
+/// `SubmitPendingTxResult` — the projection that makes the contract's
+/// `ALREADY_IN_POOL` / `ALREADY_IN_CHAIN` verdicts reachable
+/// (`docs/FOLLOWUPS.md` "Phase 4b: `submit_pending_tx` verdict is
+/// flattened to `ACCEPTED`", closed with this projection).
+///
+/// `confirmed_height` is **verdict-scoped**: present iff
+/// `ALREADY_IN_CHAIN`, carrying the daemon-claimed confirming height.
+/// The claim is untrusted display metadata (`DAEMON_SUBMIT_VERDICT.md`
+/// §7.2 rider) — refresh remains the settlement authority, and the
+/// field exists only on `SubmitPendingTxResult` (structurally — no
+/// refresh-populated view shares it), so a client cannot mistake it
+/// for a refresh-observed confirmation.
+pub fn submit_pending_tx_result(outcome: &SubmitOutcome) -> SubmitPendingTxResult {
+    let tx_hash = outcome.hash().to_string();
+    match outcome {
+        SubmitOutcome::Accepted { .. } => SubmitPendingTxResult {
+            tx_hash,
+            verdict: SubmitVerdictView::Accepted,
+            confirmed_height: None,
+        },
+        SubmitOutcome::AlreadyInPool { .. } => SubmitPendingTxResult {
+            tx_hash,
+            verdict: SubmitVerdictView::AlreadyInPool,
+            confirmed_height: None,
+        },
+        SubmitOutcome::AlreadyInChain { height, .. } => SubmitPendingTxResult {
+            tx_hash,
+            verdict: SubmitVerdictView::AlreadyInChain,
+            confirmed_height: Some(i64::try_from(*height).unwrap_or(i64::MAX)),
+        },
+    }
+}
+
 /// Project [`PendingTx`] to OpenAPI `BuildPendingTxResult`.
 pub fn pending_tx_result(tx: &PendingTx) -> BuildPendingTxResult {
     BuildPendingTxResult {
@@ -167,6 +202,68 @@ mod tests {
         ] {
             assert!(parse_transfer_id(&bad).is_none(), "accepted {bad:?}");
         }
+    }
+
+    /// The three Engine verdicts project 1:1 onto the OpenAPI verdict
+    /// strings, with `confirmed_height` verdict-scoped: absent on
+    /// `ACCEPTED` / `ALREADY_IN_POOL` (the negative control — nothing
+    /// but an already-in-chain claim may populate the field), present
+    /// with the claimed height on `ALREADY_IN_CHAIN`. Expected wire
+    /// strings come from the OpenAPI contract (`wallet_rpc.yaml`
+    /// `SubmitPendingTxResult.verdict` enum), not from the projection
+    /// code under test.
+    #[test]
+    fn submit_verdicts_project_one_to_one_with_verdict_scoped_height() {
+        let hash = TxHash::from_bytes([0x2b; 32]);
+        let hash_hex = "2b".repeat(32);
+
+        let accepted = submit_pending_tx_result(&SubmitOutcome::Accepted { hash });
+        assert_eq!(accepted.tx_hash, hash_hex);
+        assert_eq!(accepted.verdict, SubmitVerdictView::Accepted);
+        assert_eq!(accepted.confirmed_height, None);
+
+        let in_pool = submit_pending_tx_result(&SubmitOutcome::AlreadyInPool { hash });
+        assert_eq!(in_pool.tx_hash, hash_hex);
+        assert_eq!(in_pool.verdict, SubmitVerdictView::AlreadyInPool);
+        assert_eq!(in_pool.confirmed_height, None);
+
+        let in_chain =
+            submit_pending_tx_result(&SubmitOutcome::AlreadyInChain { hash, height: 4242 });
+        assert_eq!(in_chain.tx_hash, hash_hex);
+        assert_eq!(in_chain.verdict, SubmitVerdictView::AlreadyInChain);
+        assert_eq!(in_chain.confirmed_height, Some(4242));
+
+        // Wire pins, derived from the contract: the SCREAMING_SNAKE_CASE
+        // verdict strings, and `confirmed_height` present as a JSON key
+        // iff ALREADY_IN_CHAIN ("Present iff verdict is ALREADY_IN_CHAIN").
+        let accepted_json = serde_json::to_value(&accepted).expect("serialize");
+        assert_eq!(accepted_json["verdict"], "ACCEPTED");
+        assert!(
+            accepted_json.get("confirmed_height").is_none(),
+            "ACCEPTED must not serialize a confirmed_height key: {accepted_json}"
+        );
+        let in_pool_json = serde_json::to_value(&in_pool).expect("serialize");
+        assert_eq!(in_pool_json["verdict"], "ALREADY_IN_POOL");
+        assert!(
+            in_pool_json.get("confirmed_height").is_none(),
+            "ALREADY_IN_POOL must not serialize a confirmed_height key: {in_pool_json}"
+        );
+        let in_chain_json = serde_json::to_value(&in_chain).expect("serialize");
+        assert_eq!(in_chain_json["verdict"], "ALREADY_IN_CHAIN");
+        assert_eq!(in_chain_json["confirmed_height"], 4242);
+    }
+
+    /// A daemon-claimed height beyond `i64` saturates instead of
+    /// wrapping or erroring — the projection idiom shared with the
+    /// other height fields (`i64::try_from(...).unwrap_or(i64::MAX)`).
+    #[test]
+    fn submit_claimed_height_beyond_i64_saturates() {
+        let hash = TxHash::from_bytes([0x2c; 32]);
+        let projected = submit_pending_tx_result(&SubmitOutcome::AlreadyInChain {
+            hash,
+            height: u64::MAX,
+        });
+        assert_eq!(projected.confirmed_height, Some(i64::MAX));
     }
 
     #[test]

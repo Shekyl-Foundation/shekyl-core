@@ -1679,19 +1679,6 @@ sustainability is unaffected by the recalibration.
   `send::build_pending_tx` to the commit step once Engine exposes it.
   *Target: V3.0 / Phase 4b–4c.*
 
-- **Phase 4b: `submit_pending_tx` verdict is flattened to `ACCEPTED`** (added
-  2026-07-09). `Engine::submit_pending_tx_async` returns a bare `TxHash`,
-  collapsing the internal `SubmitSuccess` distinction (`Broadcast` vs
-  `AlreadyInChain { height }`). `send::submit_pending_tx` therefore always
-  reports `verdict: ACCEPTED` / `confirmed_height: null`, so the OpenAPI
-  `ALREADY_IN_POOL` / `ALREADY_IN_CHAIN` verdicts (and `confirmed_height`)
-  are unreachable — documented as a known limitation on
-  `types::SubmitVerdictView`. **Reopening criterion:** Engine returns a
-  richer submit success type that preserves the pool/chain distinction and
-  confirmed height. **Re-evaluation shape:** map that type onto
-  `SubmitVerdictView` in `send::submit_pending_tx` and populate
-  `confirmed_height`. *Target: V3.0 / Phase 4b–4c.*
-
 - **GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in`
   single-structured-output funding must land before genesis** (added
   2026-07-08, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.5 residual 1 /
@@ -14227,6 +14214,31 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **Phase 4b `submit_pending_tx` verdict flattening (resolved 2026-08-04,
+  `feat/w4b-submit-verdict`).** `Engine::submit_pending_tx{,_async}` now
+  returns the identity-bearing `SubmitOutcome` (`Accepted` / `AlreadyInPool`
+  / `AlreadyInChain { height }`) instead of a bare `TxHash`, and
+  `send::submit_pending_tx` projects it onto `SubmitVerdictView` — the
+  OpenAPI `ALREADY_IN_POOL` / `ALREADY_IN_CHAIN` verdicts and the
+  verdict-scoped `confirmed_height` are reachable for the first time. The
+  pool bit crosses the submitter seam as an **inform-only**
+  `BroadcastKind` payload on `SubmitSuccess::Broadcast`, so the §2.5
+  two-disposition partition is untouched (variant set = disposition set),
+  the accept finalizer is **kind-blind** — the sub-fact is projected at
+  the dispatch sites via the single `BroadcastKind::into_outcome` mapping
+  only *after* the disposition completes, so a kind-conditional
+  disposition is unrepresentable, not merely untested — and both F40 lock
+  paths are
+  byte-identical — regressions pin the disposition parity
+  (`submit_already_in_pool_surfaces_verdict_without_changing_disposition`)
+  and the height pass-through (the two `submit_already_in_chain_*` tests
+  now assert the full outcome). `confirmed_height` stays untrusted display
+  metadata per the `DAEMON_SUBMIT_VERDICT.md` §7.2 rider (refresh remains
+  settlement authority; no other method populates the field). CLI renders
+  the three verdicts distinctly. Canonical:
+  `rust/shekyl-engine-core/src/engine/pending.rs` (`SubmitOutcome`),
+  `rust/shekyl-wallet-rpc/src/project.rs` (`submit_pending_tx_result`).
 
 - **CLI `--proxy socks5://` local-DNS-leak warning (resolved 2026-07-23 in #360,
   `668b0b0bb`).** `ureq::Proxy::new` maps `socks5://`/`socks4://` to a protocol

@@ -432,7 +432,7 @@ pub use output_selector::{
 };
 pub use pending::{
     FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
-    TxHash, TxRecipient, TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
+    SubmitOutcome, TxHash, TxRecipient, TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
 };
 // The P-scan lifecycle surface (WI-1): handle + start error + cadence default,
 // re-exported so embedders holding the `PScanHandle` (the module keeps the

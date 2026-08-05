@@ -15,9 +15,9 @@ use shekyl_engine_core::{FeePriority, ReservationId, TxRecipient, TxRequest};
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_atomic_units, parse_required_object};
-use crate::project::pending_tx_result;
+use crate::project::{pending_tx_result, submit_pending_tx_result};
 use crate::tenant::{require_open_engine, TenantState};
-use crate::types::{DiscardPendingTxResult, SubmitPendingTxResult, SubmitVerdictView};
+use crate::types::DiscardPendingTxResult;
 
 /// One recipient in `build_pending_tx` params.
 #[derive(Debug, Deserialize)]
@@ -98,12 +98,8 @@ pub(crate) async fn submit_pending_tx(
 
     let shared = require_open_engine(tenants).await?;
     let mut engine = shared.write().await;
-    let tx_hash = engine.submit_pending_tx_async(id, seen_gen).await?;
-    let result = SubmitPendingTxResult {
-        tx_hash: format!("{tx_hash}"),
-        verdict: SubmitVerdictView::Accepted,
-        confirmed_height: None,
-    };
+    let outcome = engine.submit_pending_tx_async(id, seen_gen).await?;
+    let result = submit_pending_tx_result(&outcome);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize submit_pending_tx: {e}")))
 }

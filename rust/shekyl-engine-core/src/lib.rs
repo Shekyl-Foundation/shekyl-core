@@ -27,9 +27,9 @@ pub use engine::{
     PScanHandle, PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
     RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
     RefreshReorgEvent, RefreshSummary, ReservationId, ScannableBlock, SendError, SoloSigner,
-    StakedBalance, StakedOutput, StakingReadError, StakingReadView, StateWrapKey, SuppressedClass,
-    TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
-    TxShapeEstimate, ViewMaterial,
+    StakedBalance, StakedOutput, StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome,
+    SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary,
+    TxRequest, TxShapeEstimate, ViewMaterial,
 };
 pub use outbound_label::label_plaintext_for_payment_uri;
 // Re-exported so the wallet-RPC layer's `make_uri` / `parse_uri` projections

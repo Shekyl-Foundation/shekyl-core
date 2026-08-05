@@ -30,8 +30,8 @@ use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::network::Network;
 use super::super::output_selector::{OutputCandidate, OutputSelector, SelectedOutputs};
 use super::super::pending::{
-    InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, TxHash, TxRecipientSummary,
-    TxRequest,
+    InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitOutcome, TxHash,
+    TxRecipientSummary, TxRequest,
 };
 use super::super::refresh::{derive_snapshot_id, LedgerSnapshot};
 use super::super::signer::{SignedTransfer, Signer, TransferSigningContext};
@@ -298,6 +298,11 @@ where
         }
     }
 
+    /// Deliberately **kind-blind**: the `Accepted`-vs-`AlreadyInPool`
+    /// sub-fact never enters this finalizer, so the one Broadcast
+    /// disposition (§2.5) cannot fork on it — the caller projects the
+    /// Engine-public outcome from the kind *after* this returns
+    /// (`BroadcastKind::into_outcome`, the single mapping site).
     pub(super) fn finalize_submit_accept(
         &self,
         state: &mut PendingTxState,
@@ -405,7 +410,7 @@ where
         id: ReservationId,
         tx_hash: TxHash,
         height: u64,
-    ) -> TxHash {
+    ) -> SubmitOutcome {
         let selected_indices: Vec<OutputId> = state
             .output_locks
             .iter()
@@ -482,7 +487,10 @@ where
             },
         );
 
-        tx_hash
+        SubmitOutcome::AlreadyInChain {
+            hash: tx_hash,
+            height,
+        }
     }
 
     /// Drain the F40 targeted re-scan queue (decision 3), returning the
@@ -1545,7 +1553,7 @@ where
         &self,
         id: ReservationId,
         seen_gen: u64,
-    ) -> Result<TxHash, SubmitError> {
+    ) -> Result<SubmitOutcome, SubmitError> {
         // --- pre-flight: membership under the state lock, staleness outside it
         // (CT-5d §5). The reference is the staleness authority — it *replaces* the
         // SnapshotId / built_at_tip_hash checks, so a benign tip advance no longer
@@ -1712,8 +1720,11 @@ where
                 // lock (F40); `AlreadyInChain` baselines it at the claimed
                 // confirming height, which routes the release path.
                 return match outcome {
-                    Ok(SubmitSuccess::Broadcast { hash }) => {
-                        Ok(self.finalize_submit_accept(&mut state, id, hash))
+                    Ok(SubmitSuccess::Broadcast { hash, kind }) => {
+                        // Disposition first (kind-blind finalizer), then the
+                        // outcome projection from the inform-only kind.
+                        let hash = self.finalize_submit_accept(&mut state, id, hash);
+                        Ok(kind.into_outcome(hash))
                     }
                     Ok(SubmitSuccess::AlreadyInChain { hash, height }) => {
                         Ok(self.finalize_submit_already_in_chain(&mut state, id, hash, height))
@@ -1772,7 +1783,12 @@ where
         // height, which routes the release path. Refresh remains the
         // settlement authority in both arms.
         Ok(match success {
-            SubmitSuccess::Broadcast { hash } => self.finalize_submit_accept(&mut state, id, hash),
+            SubmitSuccess::Broadcast { hash, kind } => {
+                // Disposition first (kind-blind finalizer), then the outcome
+                // projection from the inform-only kind.
+                let hash = self.finalize_submit_accept(&mut state, id, hash);
+                kind.into_outcome(hash)
+            }
             SubmitSuccess::AlreadyInChain { hash, height } => {
                 self.finalize_submit_already_in_chain(&mut state, id, hash, height)
             }

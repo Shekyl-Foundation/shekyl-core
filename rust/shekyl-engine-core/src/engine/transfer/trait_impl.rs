@@ -16,7 +16,7 @@ use super::super::error::{PendingTxError, SendError, SignerError, SubmitError};
 use super::super::fee_estimator::FeeEstimator;
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::output_selector::OutputSelector;
-use super::super::pending::{PendingTx, ReservationId, TxHash, TxRequest};
+use super::super::pending::{PendingTx, ReservationId, SubmitOutcome, TxHash, TxRequest};
 use super::super::signer::{Signer, TransferSigningContext};
 use super::super::signing_assembly::assemble_tx_to_sign;
 use super::super::submit_lifecycle::WatchdogHost;
@@ -317,7 +317,7 @@ where
         &self,
         id: ReservationId,
         seen_gen: u64,
-    ) -> impl Future<Output = Result<TxHash, SubmitError>> + Send {
+    ) -> impl Future<Output = Result<SubmitOutcome, SubmitError>> + Send {
         let this = self;
         async move { this.submit_async(id, seen_gen).await }
     }

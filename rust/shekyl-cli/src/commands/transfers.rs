@@ -130,7 +130,27 @@ pub fn cmd_transfer(
     ) {
         Ok(val) => {
             let tx_hash = val.get("tx_hash").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Transaction submitted: {tx_hash}");
+            // Render the submit verdict distinctly (rule 82): all three are
+            // success — the funds are on their way either way — but "already"
+            // tells the user an earlier attempt went through, so they don't
+            // resubmit or double-count. Unknown/missing verdicts fall through
+            // to the plain success line.
+            match val.get("verdict").and_then(|v| v.as_str()) {
+                Some("ALREADY_IN_POOL") => println!(
+                    "Transaction already in the network's pool (an earlier submit went \
+                     through): {tx_hash}"
+                ),
+                Some("ALREADY_IN_CHAIN") => {
+                    match val.get("confirmed_height").and_then(|v| v.as_i64()) {
+                        Some(h) => println!(
+                            "Transaction already confirmed on chain (reported height {h}): \
+                             {tx_hash}"
+                        ),
+                        None => println!("Transaction already confirmed on chain: {tx_hash}"),
+                    }
+                }
+                _ => println!("Transaction submitted: {tx_hash}"),
+            }
         }
         Err(e) => {
             rpc.report("Failed to submit transaction", &e);

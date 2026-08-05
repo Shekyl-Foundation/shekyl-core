@@ -41,14 +41,14 @@ use crate::engine::local_keys::LocalKeys;
 use crate::engine::network::Network;
 use crate::engine::output_selector::WalletGreedyOutputSelector;
 use crate::engine::pending::{
-    FeePriority, InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, TxRecipient,
-    TxRecipientSummary, TxRequest,
+    FeePriority, InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitOutcome,
+    TxRecipient, TxRecipientSummary, TxRequest,
 };
 use crate::engine::signer::LocalSigner;
 use crate::engine::traits::FeeEstimates;
 use crate::engine::traits::PendingTxEngine;
 use crate::engine::transaction_submitter::{
-    canonical_tx_id, SubmitSuccess, SubmitterError, TransactionSubmitter,
+    canonical_tx_id, BroadcastKind, SubmitSuccess, SubmitterError, TransactionSubmitter,
 };
 use crate::engine::tx_counts::{InputCount, OutputCount};
 use crate::engine::LocalLedger;
@@ -129,6 +129,7 @@ impl TransactionSubmitter for TestTransactionSubmitter {
     async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
         Ok(SubmitSuccess::Broadcast {
             hash: canonical_tx_id(&tx_bytes),
+            kind: BroadcastKind::Accepted,
         })
     }
 }
@@ -826,7 +827,8 @@ async fn real_root_membership_proof_builds_and_submits() {
     let tx_hash = pending
         .submit(built.id, built.content_gen)
         .await
-        .expect("submit ok");
+        .expect("submit ok")
+        .hash();
     assert_eq!(
         tx_hash,
         canonical_tx_id(&built.tx_bytes),
@@ -1032,7 +1034,8 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
     let tx_hash = pending
         .submit(built.id, built.content_gen)
         .await
-        .expect("submit ok");
+        .expect("submit ok")
+        .hash();
     assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
     assert_eq!(pending.outstanding(), 0);
 
@@ -1090,7 +1093,8 @@ async fn submit_persists_tx_key_and_pending_hash() {
     let tx_hash = pending
         .submit(built.id, built.content_gen)
         .await
-        .expect("submit ok");
+        .expect("submit ok")
+        .hash();
 
     let guard = pending.ledger.read();
     let stored = guard
@@ -1165,7 +1169,8 @@ async fn confirmed_absent_release_keeps_retention_record() {
     let tx_hash = pending
         .submit(built.id, built.content_gen)
         .await
-        .expect("submit ok");
+        .expect("submit ok")
+        .hash();
 
     let released = WatchdogHost::release_awaiting_confirmation(&pending, &HashSet::from([tx_hash]));
     assert!(released > 0, "the F14 lock is released");
@@ -1329,11 +1334,19 @@ async fn submit_already_in_chain_above_synced_locks_at_claimed_height() {
         height: 25, // > fixture synced height 20
     }));
 
-    let tx_hash = pending
+    let outcome = pending
         .submit(built.id, built.content_gen)
         .await
         .expect("AlreadyInChain resolves the submit successfully");
-    assert_eq!(tx_hash, expected_hash);
+    assert_eq!(
+        outcome,
+        SubmitOutcome::AlreadyInChain {
+            hash: expected_hash,
+            height: 25,
+        },
+        "the daemon-claimed confirming height crosses the Engine surface \
+         verbatim (untrusted display metadata, §7.2 — nothing re-derives it)"
+    );
     assert_eq!(pending.outstanding(), 0, "reservation released");
 
     // The F14 lock is placed on the selected inputs, baselined at the
@@ -1409,11 +1422,19 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
         height: 15, // ≤ fixture synced height 20
     }));
 
-    let tx_hash = pending
+    let outcome = pending
         .submit(built.id, built.content_gen)
         .await
         .expect("AlreadyInChain resolves the submit successfully");
-    assert_eq!(tx_hash, expected_hash);
+    assert_eq!(
+        outcome,
+        SubmitOutcome::AlreadyInChain {
+            hash: expected_hash,
+            height: 15,
+        },
+        "the below-synced claim surfaces on the Engine result exactly as the \
+         above-synced one — the outcome reports, the release path routes (§2.5(b))"
+    );
     assert_eq!(pending.outstanding(), 0, "reservation released");
 
     // R1 pin: the re-scan *request* releases nothing — the F14 lock
@@ -1458,6 +1479,70 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
         )),
         "AlreadyInChain resolution emits SubmitSucceeded: {events:?}"
     );
+}
+
+/// A pool-resident duplicate surfaces on the Engine submit result as
+/// `SubmitOutcome::AlreadyInPool` while keeping the **same** §2.5
+/// disposition as a fresh accept: reservation resolved, F14
+/// awaiting-confirmation lock placed, `spent` refresh-authoritative.
+/// The verdict informs; it never changes what the engine does.
+///
+/// Coverage boundary: the daemon→`BroadcastKind` mapping is pinned by
+/// the `transaction_submitter` unit tests and the dedup e2e
+/// (`daemon_dedups_identical_bytes_as_already_in_pool` shape); this
+/// test pins the kind→outcome projection through the full submit path
+/// and the disposition staying byte-identical to the accept arm.
+#[tokio::test]
+async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() {
+    let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    let expected_hash = canonical_tx_id(&built.tx_bytes);
+    pending.queue_submit_daemon_outcome(Ok(SubmitSuccess::Broadcast {
+        hash: expected_hash,
+        kind: BroadcastKind::AlreadyInPool,
+    }));
+
+    let outcome = pending
+        .submit(built.id, built.content_gen)
+        .await
+        .expect("a pool-resident duplicate resolves the submit successfully");
+    assert_eq!(
+        outcome,
+        SubmitOutcome::AlreadyInPool {
+            hash: expected_hash,
+        },
+        "the pool-resident verdict crosses the Engine surface distinctly"
+    );
+    assert_eq!(pending.outstanding(), 0, "reservation released");
+
+    // Disposition parity with the fresh-accept arm: F14 lock placed,
+    // `spent` untouched — the kind rode through as data, not dispatch.
+    {
+        let guard = pending.ledger.read();
+        let locked: Vec<_> = guard
+            .ledger
+            .ledger
+            .transfers()
+            .iter()
+            .filter(|td| td.awaiting_confirmation.is_some())
+            .collect();
+        assert!(
+            !locked.is_empty(),
+            "AlreadyInPool must place the F14 lock exactly as a fresh accept"
+        );
+        for td in &locked {
+            assert!(!td.spent, "spent stays refresh-authoritative");
+            let lock = td.awaiting_confirmation.as_ref().expect("filtered above");
+            assert_eq!(lock.tx_hash, expected_hash);
+            assert!(
+                !td.is_spendable(u64::MAX),
+                "locked output must be excluded from selection"
+            );
+        }
+    }
 }
 
 /// PR 2c-1 — the real-tree closing milestone for archival bond-post
@@ -2297,7 +2382,8 @@ async fn submit_retryable_rejection_restores_reservation() {
     let tx_hash = pending
         .submit(built.id, built.content_gen)
         .await
-        .expect("restored reservation resubmits");
+        .expect("restored reservation resubmits")
+        .hash();
     assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
     assert_eq!(pending.outstanding(), 0);
 }
@@ -2847,7 +2933,8 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     let tx_hash = pending
         .submit(built.id, built.content_gen)
         .await
-        .expect("submit ok");
+        .expect("submit ok")
+        .hash();
     assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
     assert_eq!(daemon.submitted_count(), 1);
 
@@ -2893,11 +2980,13 @@ async fn daemon_dedupes_identical_tx_bytes() {
         .await
         .expect("daemon dedup accepts identical bytes");
     // A pool-resident duplicate is `AlreadyInPool` → the `Broadcast`
-    // disposition (§2.5: same as a fresh accept), carrying the local hash.
+    // disposition (§2.5: same as a fresh accept), carrying the local hash
+    // and the inform-only `AlreadyInPool` kind the Engine surface projects.
     assert_eq!(
         success,
         SubmitSuccess::Broadcast {
-            hash: canonical_tx_id(&built.tx_bytes)
+            hash: canonical_tx_id(&built.tx_bytes),
+            kind: BroadcastKind::AlreadyInPool,
         }
     );
     assert_eq!(daemon.submitted_count(), 1);

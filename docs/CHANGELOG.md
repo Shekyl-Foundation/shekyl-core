@@ -4,6 +4,18 @@
 
 ### Added
 
+- **`submit_pending_tx` reports the real daemon verdict.** The wallet-RPC
+  send lifecycle no longer flattens every successful submit to
+  `ACCEPTED`: `Engine::submit_pending_tx{,_async}` returns the new
+  identity-bearing `SubmitOutcome`, and the OpenAPI `ALREADY_IN_POOL` /
+  `ALREADY_IN_CHAIN` verdicts — with the verdict-scoped
+  `confirmed_height` carrying the daemon-claimed confirming height
+  (display metadata, never settlement truth) — are reachable for the
+  first time. The CLI renders the three verdicts distinctly. Lock
+  lifecycle is unchanged: every success verdict places the F14
+  awaiting-confirmation lock and refresh remains the settlement
+  authority (`DAEMON_SUBMIT_VERDICT.md` §2.5 / §7.2).
+
 - **`geblock` — deterministic Rust genesis pipeline
   (`rust/shekyl-genesis-tool`).** Replaces the C++ `genesis_builder`
   end-to-end: `gen-wallets` (exactly five fresh-entropy founder/developer
