@@ -8989,6 +8989,50 @@ its wake.
     cycle, own PR) — reopens only when that track is opened; the
     re-evaluation shape is a design round against the inventory.
 
+    Two decisions are **named here rather than deferred silently**, because
+    both are undecidable until LV-3 creates the thing they are about:
+
+    - **libzstd link strategy.** `zstd-sys` `cc`-compiles a vendored
+      libzstd unless its non-default `pkg-config` feature is enabled; the
+      C++ build links the system library (`CMakeLists.txt`
+      `pkg_check_modules` / `find_library`, then `-DHAVE_ZSTD`). The moment
+      `shekyl-levin` is folded into a staticlib the daemon links, that
+      binary carries two libzstd implementations with colliding `ZSTD_*`
+      symbols, and `zstd-sys`'s `links = "zstd"` key conflicts with any
+      other crate claiming it. Blocker: `shekyl-levin` is in no staticlib
+      today, so there is no link graph to decide against — enabling
+      `pkg-config` now would add a system-libzstd build requirement to
+      every Rust CI job for a crate that is inert. Recorded in
+      `rust/shekyl-levin/Cargo.toml` at the dependency itself.
+    - **Post-inflate limit interop window.** `BucketReader` bounds a
+      decompressed payload by `min(packet limit, per-command limit)`, which
+      the C++ declares but never re-checks after inflating. `COMPRESSED` is
+      only ever set on `NOTIFY_NEW_TRANSACTIONS`, whose effective limit is
+      100 MB, while `DECOMPRESSED_MAX_SIZE` is 128 MiB — so a relay batch
+      inflating into that ~34 MB gap is accepted by a C++ receiver and
+      rejected by the Rust one. Nothing bounds the uncompressed batch on the
+      sender side, so it is reachable in principle (order 670 weight-limit
+      transactions in one batch), though not observed. Blocker: deciding
+      between "confirm unreachable in real traffic" and "widen the bound to
+      `DECOMPRESSED_MAX_SIZE` for this one command" needs a mixed C++/Rust
+      network to measure against, which cannot exist while the crate is
+      unwired. Enforcing the declared limit is the pre-cutover default
+      because the alternative is an unbounded memory-exhaustion surface (a
+      few KB of frame forcing a 128 MiB allocation per connection). Stated
+      in full in the crate's divergence census, entry 4.
+    - **Handshake coupling of the packet-size limit.** The framing crate
+      cannot detect handshake completion — it does not decode command
+      bodies — so `BucketReader::complete_handshake` is the caller's
+      obligation, made hard to misuse (a fresh reader is pinned at 256 KiB
+      and there is no general setter) but not enforceable from inside. The
+      cutover layer, which *does* see the handshake command and
+      `handshake_complete()`, must call it at exactly the three points the
+      C++ raises `m_max_packet_size`
+      (`levin_protocol_handler_async.h:564`, `:661`, `:699`) and nowhere
+      else. Calling it early exposes an unauthenticated peer to the 100 MB
+      limit; never calling it stalls chain sync on the first >256 KiB
+      block notification.
+
   **Target: V3.2+** (rides the daemon Rust-forward track alongside the
   wallet_rpc_server cutover bucket). Not V3.0-gating: genesis ships on the
   C++ p2p path per `DAEMON_REDB_STORE.md` ("P2P and levin remain C++ at

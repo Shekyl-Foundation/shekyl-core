@@ -59,7 +59,7 @@ mod tests {
         let head = BucketHead::read(msg[..HEADER_SIZE].try_into().unwrap()).unwrap();
         assert_eq!(head.command, 2002);
         assert_eq!(head.payload_len, 3);
-        assert!(!head.expect_response);
+        assert!(!head.expects_response());
         assert_eq!(head.flags, Flags::REQUEST);
         assert_eq!(head.return_code, 0);
         assert_eq!(head.protocol_version, PROTOCOL_VERSION_1);
@@ -70,7 +70,7 @@ mod tests {
     fn invoke_sets_expect_response() {
         let msg = invoke(1001, &[]);
         let head = BucketHead::read(msg[..HEADER_SIZE].try_into().unwrap()).unwrap();
-        assert!(head.expect_response);
+        assert!(head.expects_response());
         assert_eq!(head.flags, Flags::REQUEST);
     }
 
@@ -80,6 +80,6 @@ mod tests {
         let head = BucketHead::read(msg[..HEADER_SIZE].try_into().unwrap()).unwrap();
         assert_eq!(head.flags, Flags::RESPONSE);
         assert_eq!(head.return_code, -4);
-        assert!(!head.expect_response);
+        assert!(!head.expects_response());
     }
 }

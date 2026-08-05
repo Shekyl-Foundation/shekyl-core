@@ -21,7 +21,11 @@ implementation:
   post), a pluggable per-command size-limit hook (the C++
   `connection_context::get_max_bytes` seam — the daemon's command table
   itself is cutover-layer policy), noise discard, fragment reassembly,
-  decompression, and message classification.
+  decompression, and message classification. `feed` buffers bytes and
+  `next_message` parses one bucket at a time, so — as in `handle_recv`,
+  which dispatches inside its parse loop — at most one decoded payload is
+  live at a time and an already-delivered message survives a later bucket
+  in the same read being malformed.
 
 Byte-identity is pinned by KATs (`tests/oracle_kats.rs`) mirroring the C++
 gtests in `tests/unit_tests/levin.cpp` assertion for assertion; round-trip
@@ -43,22 +47,21 @@ chunk boundaries, and noise sizes.
 
 ## Documented divergences from the C++ oracle
 
-All three are read-side. Divergences 1–2 are strictly tighter (no conforming
-sender trips them). Divergence 3 is a deliberate model cleanup that agrees
-with the C++ on every conforming packet (including all
-`make_fragmented_notify` output):
+**The authoritative census lives in the crate docs** — the module comment at
+the top of [`src/lib.rs`](src/lib.rs), rendered by `cargo doc -p shekyl-levin`.
+It is deliberately kept in exactly one place: a second copy drifts from the
+code and then lies about it, which is the failure this crate is least able to
+afford.
 
-1. the reassembled inner fragment header's **signature is verified**; the
-   C++ `memcpy`s it without checking;
-2. the inner header's `length` must fit the reassembled bytes and the
-   delivered payload is **trimmed to that length**; the C++ forwards the
-   fragment zero-padding to the command handler and relies on the payload
-   parser ignoring trailing bytes;
-3. **response classification** uses the logical message header's
-   `protocol_version` (inner after reassembly). The C++ sticky
-   `m_oponent_protocol_ver` is only refreshed on outer-header parse, so a
-   crafted fragment train can disagree on whether a reassembled bucket is
-   a response. Conforming outer fragment headers always carry version 1,
-   and the protocol's fragment emitters only produce notifications.
+In summary, and without restating it: every divergence is *stricter* than the
+C++ — none accepts anything the oracle rejects. Five are read-side (three
+about fragment reassembly and response classification, one bounding a
+decompressed payload by the packet limit in force, one latching the reader
+after a fatal error); one is emit-side, where `try_compress_message` returns
+malformed input unchanged rather than re-framing it.
 
-Emit-side output is byte-identical, no divergences.
+All but one are unreachable for a conforming sender. The exception is the
+post-inflate bound, which has a stated ~34 MB interop window against a C++
+peer; the crate docs give the numbers and the reasoning. Do not summarise
+that away — "no conforming sender trips any of them" is exactly the sort of
+unchecked blanket claim the single-location census exists to prevent.

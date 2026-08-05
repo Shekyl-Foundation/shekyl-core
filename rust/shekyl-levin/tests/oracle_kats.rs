@@ -10,6 +10,15 @@
 //! pinned to the same wire bytes. Removing these loses the cross-language
 //! byte-identity pin; they do NOT cover the read-side state machine (see
 //! `reader_stream.rs`).
+//!
+//! Coverage boundary, stated so it is not mistaken for completeness: these
+//! pin `make_header`, `make_noise_notify` and `make_fragmented_notify`.
+//! `try_compress_message` is deliberately **not** byte-pinned — its framing
+//! is identical, but the compressed bytes come from whichever libzstd is
+//! linked, so a golden vector here would pin the codec build rather than the
+//! protocol. Divergence 7 in the crate docs states that in full. The
+//! constants both sides share are guarded separately, by
+//! `ci/levin-constant-parity`.
 
 use shekyl_levin::{
     fragmented_notify, noise_notify, BucketHead, Flags, HEADER_SIZE, LEVIN_SIGNATURE,

@@ -83,16 +83,20 @@ impl Flags {
 /// A parsed Levin bucket header.
 ///
 /// The signature is verified on decode and written on encode; it is not
-/// stored. `expect_response` is a single non-zero byte on the wire — decode
-/// maps any non-zero value to `true` (the C++ reads it as a truthy `uint8_t`),
-/// so re-encoding a header whose sender used a value other than `0`/`1` is
-/// semantically, not byte-, identical.
+/// stored. Every other field is kept in its wire form so that
+/// `BucketHead::read(b).write() == *b` for **any** 33 bytes carrying a valid
+/// signature: unknown [`Flags`] bits are preserved verbatim, and
+/// `expect_response` keeps the raw `uint8_t` the C++ reads as truthy rather
+/// than being narrowed to a `bool` (which would re-encode a sender's `0x02`
+/// as `0x01`). Use [`BucketHead::expects_response`] for the truthiness test.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BucketHead {
     /// Payload length in bytes (`m_cb`); excludes the header itself.
     pub payload_len: u64,
-    /// Whether the peer must answer this command (`m_have_to_return_data`).
-    pub expect_response: bool,
+    /// Whether the peer must answer this command
+    /// (`m_have_to_return_data`), as the raw wire byte: any non-zero value
+    /// means "yes". Emitters write `0` or `1` via [`BucketHead::make`].
+    pub expect_response: u8,
     /// Command identifier (e.g. 1001 handshake, 2002 new-transactions).
     pub command: u32,
     /// Response return code; `0` on requests and notifications.
@@ -110,12 +114,19 @@ impl BucketHead {
     pub fn make(command: u32, payload_len: u64, flags: Flags, expect_response: bool) -> BucketHead {
         BucketHead {
             payload_len,
-            expect_response,
+            expect_response: u8::from(expect_response),
             command,
             return_code: 0,
             flags,
             protocol_version: PROTOCOL_VERSION_1,
         }
+    }
+
+    /// Whether the peer must answer this command. Mirrors the C++ reading
+    /// `m_have_to_return_data` as a truthy `uint8_t`.
+    #[must_use]
+    pub const fn expects_response(&self) -> bool {
+        self.expect_response != 0
     }
 
     /// Serialize to the 33-byte wire form.
@@ -124,7 +135,7 @@ impl BucketHead {
         let mut out = [0u8; HEADER_SIZE];
         out[0..8].copy_from_slice(&LEVIN_SIGNATURE.to_le_bytes());
         out[8..16].copy_from_slice(&self.payload_len.to_le_bytes());
-        out[16] = u8::from(self.expect_response);
+        out[16] = self.expect_response;
         out[17..21].copy_from_slice(&self.command.to_le_bytes());
         out[21..25].copy_from_slice(&self.return_code.to_le_bytes());
         out[25..29].copy_from_slice(&self.flags.bits().to_le_bytes());
@@ -152,7 +163,7 @@ impl BucketHead {
         };
         Ok(BucketHead {
             payload_len: le_u64(8..16),
-            expect_response: bytes[16] != 0,
+            expect_response: bytes[16],
             command: le_u32(17..21),
             return_code: i32::from_le_bytes(bytes[21..25].try_into().expect("static 4-byte slice")),
             flags: Flags::from_bits(le_u32(25..29)),
@@ -187,7 +198,7 @@ mod tests {
     fn header_roundtrip() {
         let head = BucketHead {
             payload_len: 0xDEAD_BEEF,
-            expect_response: true,
+            expect_response: 1,
             command: 1001,
             return_code: -7,
             flags: Flags::REQUEST.union(Flags::COMPRESSED),
@@ -195,6 +206,26 @@ mod tests {
         };
         let bytes = head.write();
         assert_eq!(BucketHead::read(&bytes).unwrap(), head);
+    }
+
+    /// Decode/encode must be byte-exact for *any* signed header, not just the
+    /// ones our own builders emit — a relay or differential harness that
+    /// re-emits a peer's bucket must reproduce its bytes.
+    #[test]
+    fn decode_encode_is_byte_exact_for_unusual_wire_values() {
+        let mut bytes = BucketHead::make(2002, 7, Flags::REQUEST, false).write();
+        // A sender whose `expect_response` is truthy but not 1, and flag bits
+        // outside the five this crate names.
+        bytes[16] = 0x02;
+        bytes[25..29].copy_from_slice(&0x8000_0021u32.to_le_bytes());
+
+        let head = BucketHead::read(&bytes).unwrap();
+        assert!(head.expects_response(), "0x02 is truthy");
+        assert_eq!(
+            head.write(),
+            bytes,
+            "re-encoding must not normalize wire bytes"
+        );
     }
 
     #[test]

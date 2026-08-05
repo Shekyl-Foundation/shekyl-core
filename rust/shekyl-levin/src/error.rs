@@ -4,8 +4,10 @@
 // BSD-3-Clause
 
 //! Framing errors. Every variant is a **connection-fatal** condition in the
-//! C++ oracle (`handle_recv` returns `false` and the connection closes);
-//! callers should treat any `Error` from the reader the same way.
+//! C++ oracle (`handle_recv` returns `false` and the connection closes).
+//! [`crate::BucketReader`] does not rely on the caller to honor that: the
+//! first error latches the reader, and every later call returns
+//! [`Error::Poisoned`].
 
 /// Levin framing error.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -62,6 +64,13 @@ pub enum Error {
         /// or the codec error string).
         reason: String,
     },
+
+    /// The reader already returned a fatal error and was used again. In the
+    /// C++ oracle `handle_recv` returning `false` *is* the disconnect, so the
+    /// question cannot arise; here the reader latches so a caller that logs
+    /// an error and keeps reading cannot keep a malformed peer alive.
+    #[error("levin reader used after a fatal framing error; close the connection")]
+    Poisoned,
 
     /// `noise_notify` / `fragmented_notify` was asked for a noise size too
     /// small to carry the required header(s). C++ returns `nullptr`.

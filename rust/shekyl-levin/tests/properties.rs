@@ -14,13 +14,31 @@ use shekyl_levin::{
     fragmented_notify, invoke, noise_notify, notify, response, BucketReader, Received, HEADER_SIZE,
 };
 
-/// Feed a byte stream to a fresh reader in chunks of at most `chunk` bytes.
-fn read_chunked(stream: &[u8], chunk: usize) -> Vec<Received> {
+/// Feed a byte stream to a fresh reader in chunks of at most `chunk` bytes,
+/// pulling messages as they complete.
+///
+/// The builders under test emit exactly one logical message, so this returns
+/// `Option` rather than a `Vec`: collecting into a growable batch is the
+/// shape the reader deliberately does not have, and a helper with that shape
+/// would keep passing against a reader that decoded a whole feed at once.
+/// Any second message is a failure, not an extra element.
+fn read_chunked(stream: &[u8], chunk: usize) -> Option<Received> {
     let mut reader = BucketReader::new();
-    let mut got = Vec::new();
-    for piece in stream.chunks(chunk.max(1)) {
-        got.extend(reader.advance(piece).expect("valid stream must parse"));
+    let mut got = None;
+    for piece in stream.chunks(chunk) {
+        reader.feed(piece).expect("stream within limits");
+        while let Some(message) = reader.next_message().expect("valid stream must parse") {
+            assert!(
+                got.replace(message).is_none(),
+                "builders emit exactly one logical message"
+            );
+        }
     }
+    assert_eq!(
+        reader.buffered_bytes(),
+        0,
+        "a complete stream must leave nothing buffered"
+    );
     got
 }
 
@@ -32,7 +50,7 @@ proptest! {
         chunk in 1usize..512,
     ) {
         let got = read_chunked(&notify(command, &payload), chunk);
-        prop_assert_eq!(got, vec![Received::Notification { command, payload }]);
+        prop_assert_eq!(got, Some(Received::Notification { command, payload }));
     }
 
     #[test]
@@ -42,7 +60,7 @@ proptest! {
         chunk in 1usize..512,
     ) {
         let got = read_chunked(&invoke(command, &payload), chunk);
-        prop_assert_eq!(got, vec![Received::Request { command, payload }]);
+        prop_assert_eq!(got, Some(Received::Request { command, payload }));
     }
 
     #[test]
@@ -55,7 +73,7 @@ proptest! {
         let got = read_chunked(&response(command, return_code, &payload), chunk);
         prop_assert_eq!(
             got,
-            vec![Received::Response { command, return_code, payload }]
+            Some(Received::Response { command, return_code, payload })
         );
     }
 
@@ -65,7 +83,7 @@ proptest! {
         chunk in 1usize..512,
     ) {
         let got = read_chunked(&noise_notify(noise_bytes).unwrap(), chunk);
-        prop_assert!(got.is_empty());
+        prop_assert!(got.is_none());
     }
 
     /// The fragmentation contract, for arbitrary payload/noise combinations:
@@ -84,10 +102,10 @@ proptest! {
         let stream = fragmented_notify(noise_size, command, &payload).unwrap();
         prop_assert_eq!(stream.len() % noise_size, 0, "wire is noise-granular");
 
-        let got = read_chunked(&stream, chunk);
-        prop_assert_eq!(got.len(), 1);
-        let Received::Notification { command: got_command, payload: got_payload } =
-            got.into_iter().next().unwrap()
+        let Some(got) = read_chunked(&stream, chunk) else {
+            return Err(TestCaseError::fail("expected a message"));
+        };
+        let Received::Notification { command: got_command, payload: got_payload } = got
         else {
             return Err(TestCaseError::fail("expected a notification"));
         };
