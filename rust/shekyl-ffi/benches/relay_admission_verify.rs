@@ -96,8 +96,12 @@ fn bench_admission(c: &mut Criterion) {
         // that cell a built-in control on the comparison.
         (2u8, ChunkLayout::Spread, "d2spread"),
     ] {
+        // Outputs are pinned at the modal 2: §72.3 measured that axis at
+        // ~0.07 ms each, which cannot move the constant, and holding it fixed
+        // keeps this sweep on the axis §79 is about.
+        let n_out = 2usize;
         for n_in in [1usize, 2, 4] {
-            for n_out in [2usize] {
+            {
                 let fixture = build_fixture(n_in, n_out, tree_depth, layout);
 
                 // Self-witnessing: a fixture that does not verify would make every
