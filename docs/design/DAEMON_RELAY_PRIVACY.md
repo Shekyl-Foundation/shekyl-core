@@ -11629,3 +11629,123 @@ two doc comments saying so.
 | `propagation_measurement` wall-clock | **accepted, and measured so it is visible**: `tor_collapses_the_supernode_diffusion_observer` runs **143–236 s** debug on the reference box across two runs (the spread is machine load, not variance in the instrument — the π₀ figures are bit-identical, the draws being seeded), and the whole suite runs in CI's default workspace pass because the crate's own dev-dependency self-enables `conformance` — so a `required-features` gate on the `[[test]]` would gate nothing. The two real remedies both cost more than the wall-clock: cutting trial counts edits a measurement instrument for CI convenience, and moving the suite behind a non-auto feature relocates the cost without removing it. Recorded rather than trimmed |
 | `hop` quantile policy | decided (§66); clearnet measurement still outstanding |
 | F′ reverse-parity readouts | unblocked; three readouts in §67.2's order |
+
+## 71. `hop` defined — forward-to-forward, not transit, and the soak does not measure it
+
+**2026-08-05.** §66 chose the statistic; this chooses the **quantity**. It has
+to come first for the same reason the quantile did: it decides what the field
+work extracts, and it must be identical on both transports or the two arms are
+not comparable — the `peers`-pin lesson (§69.2) on a different parameter.
+
+### 71.1 The soak strengthens §66, and makes its saving a floor
+
+The soak's structural finding is exactly §66's split. **The median is
+reproducible across three apparatus — 13.3 / 14.7 / 10.9 s — while the tail is
+the circuit lottery.** That is what "independent draws average" looks like in
+the field: averaging pulls toward the reproducible part, so the **effective
+scalar is the stable quantity and the dispersion is largely what averaging
+removes.**
+
+**And it makes §66's measured saving a lower bound.** The 1.35× / 1.97×
+over-provisioning was computed at 3× and 30× dispersion. At the soak's **93×**
+the gap between a scalar-p90 reading and the effective scalar widens further,
+so §66 saves *more* than it measured — and it now has field data for the
+assumption it rested on rather than a modelled spread.
+
+### 71.2 It does not feed `hop`, because it is a different observable
+
+The soak measures **end-to-end shard fetches** — rendezvous and circuit build
+included. `S(h)`'s `hop` is the spacing between successive **forwards on
+connections already held open**. Circuit build is plausibly most of the soak's
+tail and is *absent* from `hop` entirely; a stem forward reuses an established
+connection.
+
+**Reusing it would import a term the mechanism does not pay** — the mirror of
+F-7, where a figure measured under one configuration was applied to another.
+Same error, opposite sign: F-7 under-provisioned by importing a too-small
+figure; this would over-provision by importing a too-large one.
+
+### 71.3 What `hop` is, and the provenance agrees
+
+**`hop` is the observed spacing between `A` forwarding and `B` forwarding.**
+Structurally that is three terms:
+
+```text
+hop  =  A→B transit  +  B's verification  +  B's scheduling
+```
+
+**Verification is inside the critical path, verified at source.**
+`cryptonote_protocol_handler.inl` calls `m_core.handle_incoming_tx(...)` in the
+per-transaction loop at `:957`, and `relay_transactions(...)` only after that
+loop closes, at `:986`. `B` verifies, then forwards. Under **FCMP++
+membership proofs and ML-DSA-65 signatures** that term is not a rounding error.
+
+*(Scheduling is the small term: a stem forward is dispatched immediately on the
+zone strand — `dandelionpp_notify` plans and sends with no deliberate per-hop
+delay. The fluff scheduler's draw belongs to `F`, not here.)*
+
+**The inherited number already contained a processing term, which settles the
+definitional question rather than opening it.** §21 records `175`'s entire
+justification as *"a testrun from a recent Intel laptop took ~80 ms […] At
+least 50 ms will be added to the latency if crossing an ocean."* So the
+constant was **never pure transit** — it is a processing figure plus one ocean
+crossing. What is stale is not the shape but the content: **that ~80 ms is
+Monero-era verification**, and ours is a different and larger computation.
+
+> **A pure circuit-RTT measurement under-estimates `hop`, which is the
+> privacy-losing direction** — transactions cut short of their stem (§21's own
+> asymmetry, and the reason `F` carries a high-quantile policy at all). An
+> RTT rig would therefore fail *safe-looking* and *wrong*.
+
+### 71.4 The definition, stated so both arms can be held to it
+
+> **`time_between_hop_ms` is the elapsed time from a relay receiving a stem
+> transaction to that relay having forwarded it — transit, verification and
+> scheduling inclusive. It is measured at the relay layer as forward-to-forward
+> spacing, never at the transport as round-trip time, and the definition is
+> identical on clearnet and on the anonymity zone.**
+
+Three consequences that follow directly:
+
+1. **The rig is a two-node relay, not a latency probe.** It must run real
+   verification, because verification is a term. A transport-level tool cannot
+   produce this number however well it is pointed.
+2. **The transports differ in exactly one term.** Verification and scheduling
+   are the same computation on both; only transit changes. That is what makes
+   the two arms comparable, and it is why the clearnet arm can establish the
+   quantile (§65.3) and the Tor arm inherit it.
+3. **`hop` moves when the proof system moves.** It is coupled to FCMP++ and
+   ML-DSA-65 verification cost, so it is not a network constant that can be
+   measured once — a re-derivation trigger belongs beside it.
+
+### 71.5 What this opens
+
+**We have no recorded verification cost for the relay path.** There are benches
+under `shekyl-crypto-pq`, but nothing measuring the FCMP++ + ML-DSA-65 verify a
+relay actually performs before forwarding. **That term is measurable in-repo,
+without a network** — and since it is a *floor* on `hop` under any transport,
+it is worth having before either field arm runs: it bounds how much of the
+number is transit at all, and it is the half that does not need a rig.
+
+### 71.6 One increment on §70, and it is about the control rather than the oracle
+
+§70.1 named the oracle defect: *an oracle that reads the thing under test
+cannot fail on the thing under test.* The maintainer's framing generalises it
+one step — the tests built **their own selector** (set algebra over the two
+consts) rather than driving the production one, so every assertion specified
+the test's fiction and the guard was never in the loop. **Test-channel ≠
+production-channel**, and `served_paths(restricted)` as the single selector
+both `build_router` and the tests call is the parameter-not-branch repair.
+
+**The increment §70 does not carry is about the *control*, not the oracle:**
+
+> **A negative control must delete the mechanism under test, not perturb an
+> input to it.** Moving a path between lists perturbs the **data**; deleting
+> the `if !restricted` guard removes the **code**. Only the second is a control
+> for a guard.
+
+§69 ran the first and reported the gate negative-controlled. It was — against
+the wrong edit. **That is why a design in which `/stop_daemon` could be served
+to an unauthenticated remote caller passed a control I had written and
+believed.** Recorded with the specific failure rather than the abstraction,
+because that clause is what makes the rule survive restatement.

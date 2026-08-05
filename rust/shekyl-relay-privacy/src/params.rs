@@ -252,8 +252,34 @@ impl StemGraph {
 /// permitted.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DandelionParams {
-    /// Time for a stem transaction to traverse one node, including network
-    /// latency. Better to overestimate: it scales the embargo directly.
+    /// Elapsed time from a relay **receiving** a stem transaction to that
+    /// relay having **forwarded** it. Better to overestimate: it scales the
+    /// embargo directly.
+    ///
+    /// # What it includes (§71) — three terms, not one
+    ///
+    /// ```text
+    /// hop  =  A→B transit  +  B's verification  +  B's scheduling
+    /// ```
+    ///
+    /// **Verification is inside the critical path**, not beside it:
+    /// `cryptonote_protocol_handler.inl` calls `handle_incoming_tx` in the
+    /// per-transaction loop and reaches `relay_transactions` only after that
+    /// loop closes. Under FCMP++ membership proofs and ML-DSA-65 signatures
+    /// that term is not a rounding error, and **it moves when the proof system
+    /// moves** — this is not a network constant that can be measured once.
+    ///
+    /// The inherited `175` already carried a processing term: §21 records its
+    /// whole justification as *"a testrun from a recent Intel laptop took
+    /// ~80 ms […] At least 50 ms will be added to the latency if crossing an
+    /// ocean."* The shape was right; the ~80 ms is Monero-era verification.
+    ///
+    /// **Measure forward-to-forward at the relay layer, never round-trip at
+    /// the transport.** An RTT rig omits verification and scheduling, so it
+    /// under-estimates — transactions cut short of their stem, which is the
+    /// privacy-losing direction (§21's asymmetry). The definition is identical
+    /// on clearnet and on the anonymity zone; only the transit term differs,
+    /// which is what makes the two arms comparable.
     ///
     /// # Quantile policy (§66) — an *effective* scalar, not a per-hop quantile
     ///
