@@ -831,8 +831,15 @@ where
     /// the merge atomic with the build — nothing can, because the spend
     /// happened outside this wallet — it bounds the build to what was still
     /// true at commit, which is the whole window this method closes.
+    ///
+    /// A pure check against a **caller-held** ledger guard: taking (and
+    /// releasing) the guard in here would re-open a check→insert gap for
+    /// refresh's write-guarded merge to land in — the caller holds one
+    /// read guard across this check *and* the `consumer_held` insert, so
+    /// a merge lands strictly before (detected here) or strictly after
+    /// (indistinguishable from any post-return spend).
     fn revalidate_selected_inputs(
-        &self,
+        ledger: &LedgerBlock,
         indices: &[usize],
         assemble_inputs: &[AssembleInput],
     ) -> Result<(), SendError> {
@@ -844,34 +851,30 @@ where
             assemble_inputs.len(),
             "assemble-input count must equal selected input count",
         );
-        let verdict = if indices.len() != assemble_inputs.len() {
-            Err(SendError::CannotSign {
+        if indices.len() != assemble_inputs.len() {
+            return Err(SendError::CannotSign {
                 reason: "assemble-input count does not match selected input count",
-            })
-        } else {
-            self.ledger.with_ledger_block(|ledger| {
-                let transfers = ledger.transfers();
-                for (&index, ai) in indices.iter().zip(assemble_inputs) {
-                    let Some(td) = transfers.get(index) else {
-                        return Err(SendError::CannotSign {
-                            reason: "selected transfer index out of range at commit",
-                        });
-                    };
-                    if td.global_output_index != ai.gindex.0 {
-                        return Err(SendError::CannotSign {
-                            reason: "selected transfer shifted under the transaction before commit",
-                        });
-                    }
-                    if td.spent {
-                        return Err(SendError::CannotSign {
-                            reason: "a selected input was spent elsewhere during assembly",
-                        });
-                    }
-                }
-                Ok(())
-            })
-        };
-        verdict.map_err(|reason| fail_build_after_attempted(self.sink.as_ref(), reason))
+            });
+        }
+        let transfers = ledger.transfers();
+        for (&index, ai) in indices.iter().zip(assemble_inputs) {
+            let Some(td) = transfers.get(index) else {
+                return Err(SendError::CannotSign {
+                    reason: "selected transfer index out of range at commit",
+                });
+            };
+            if td.global_output_index != ai.gindex.0 {
+                return Err(SendError::CannotSign {
+                    reason: "selected transfer shifted under the transaction before commit",
+                });
+            }
+            if td.spent {
+                return Err(SendError::CannotSign {
+                    reason: "a selected input was spent elsewhere during assembly",
+                });
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn commit_built_sync(
@@ -898,18 +901,10 @@ where
                 },
             )
         })?;
-        // Build's lock₂ — the same discipline the re-anchor's lock₂
-        // applies to its reference (`CT5D_REANCHOR.md` §5), on the axis
-        // build actually depends on: its inputs. Selection ran *before*
-        // the lock-free window (the `AssembleTx` round-trip and the
-        // signer), and refresh's ledger merge takes a **shared** engine
-        // borrow — no embedder lock excludes it from that window, so
-        // both of its effects have to be re-checked here rather than
-        // assumed away. The fold's `gindex` guard covers the pre-sign
-        // half only; this is the post-sign re-check, under the state
-        // lock, immediately before the reservation becomes
-        // `consumer_held`.
-        self.revalidate_selected_inputs(&meta.selected.indices, assemble_inputs)?;
+        // `refresh_current_snapshot` re-enters the ledger lock, so it runs
+        // before the guarded section below (a re-entrant read while a
+        // writer queues can deadlock); snapshot freshness is diagnostics,
+        // not the staleness authority (that is the reference block).
         self.refresh_current_snapshot(&mut state);
 
         let id = meta.reservation_id;
@@ -929,26 +924,54 @@ where
         // (§4 F-G). Built with checked arithmetic — the balance was validated in
         // `build_select_sync`, so a failure here is corrupt state and must fail
         // the build rather than feed a wrong value into a consent decision.
+        // Ledger-independent, so it runs before the guard to keep the guarded
+        // section minimal.
         let fingerprint =
             ContentFingerprint::from_build(meta.fee, &summary, meta.selected.total_covered)
                 .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
-        state.consumer_held.insert(
-            id,
-            ConsumerHeldEntry {
-                created_at,
-                snapshot_id,
-                built_at_height: meta.synced,
-                built_at_tip_hash: meta.tip_hash,
-                tx_bytes: tx_bytes.clone(),
-                request: request.clone(),
-                reference,
-                // A fresh build is generation 0; re-anchor bumps it (§4).
-                content_gen: 0,
-                fingerprint,
-                tx_key_secret,
-            },
-        );
+        // Build's lock₂ — the same discipline the re-anchor's lock₂
+        // applies to its reference (`CT5D_REANCHOR.md` §5), on the axis
+        // build actually depends on: its inputs. Selection ran *before*
+        // the lock-free window (the `AssembleTx` round-trip and the
+        // signer), and refresh's ledger merge takes a **shared** engine
+        // borrow — no embedder lock excludes it from that window, so
+        // both of its effects have to be re-checked here rather than
+        // assumed away. The fold's `gindex` guard covers the pre-sign
+        // half only; this is the post-sign re-check.
+        //
+        // One ledger read guard spans the re-check AND the
+        // `consumer_held` insert (nesting order state → ledger, the same
+        // direction the submit finalizers use): refresh's merge needs the
+        // write guard, so it lands strictly before this section (the
+        // re-check refuses) or strictly after (indistinguishable from a
+        // spend confirming after build returns — the daemon's terminal
+        // double-spend reject handles it, as it must). Without the held
+        // guard there is a check→insert gap the merge can land in, and
+        // the commit could hand back a `PendingTx` the ledger already
+        // invalidated.
+        self.ledger
+            .with_ledger_block(|ledger| {
+                Self::revalidate_selected_inputs(ledger, &meta.selected.indices, assemble_inputs)?;
+                state.consumer_held.insert(
+                    id,
+                    ConsumerHeldEntry {
+                        created_at,
+                        snapshot_id,
+                        built_at_height: meta.synced,
+                        built_at_tip_hash: meta.tip_hash,
+                        tx_bytes: tx_bytes.clone(),
+                        request: request.clone(),
+                        reference,
+                        // A fresh build is generation 0; re-anchor bumps it (§4).
+                        content_gen: 0,
+                        fingerprint,
+                        tx_key_secret,
+                    },
+                );
+                Ok(())
+            })
+            .map_err(|reason: SendError| fail_build_after_attempted(self.sink.as_ref(), reason))?;
 
         let pending = PendingTx {
             id,

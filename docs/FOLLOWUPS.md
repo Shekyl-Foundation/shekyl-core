@@ -1715,7 +1715,9 @@ sustainability is unaffected by the recalibration.
   `refresh` takes shared engine borrows, so no embedder lock ever
   serialized its ledger merge against a build, and the select →
   assemble → sign → commit window is closed in-engine by build's lock₂
-  input re-validation (below) rather than deferred.
+  input re-validation, held under one ledger read guard **across the
+  `consumer_held` insert** (the check→insert gap was a bugbot finding
+  on PR #403, closed by widening the guard) rather than deferred.
   *Target: V3.0 disposition stable; reopen substrate-anchored per above.*
 
 - **GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in`
@@ -14282,8 +14284,12 @@ Retained for citation in review; each links to the canonical record.
   only changed *when* a merge landed relative to a build, never whether
   the build committed against state the merge had invalidated. Build's
   commit boundary is now its lock₂ — `revalidate_selected_inputs`
-  re-checks, under the state lock, that every selected input still
-  carries the `gindex` its path was assembled for and is still unspent,
+  re-checks, under the state lock **and one ledger read guard held
+  across the `consumer_held` insert** (the check→insert gap was a
+  bugbot finding on PR #403; the check is a pure function of the
+  caller-held guard so re-opening the gap is unrepresentable), that
+  every selected input still carries the `gindex` its path was
+  assembled for and is still unspent,
   refusing (and releasing the reservation) otherwise. This is the same
   discipline the CT-5d re-anchor's lock₂ applies to its reference; it
   does not make the merge atomic with the build — the co-spend happens
