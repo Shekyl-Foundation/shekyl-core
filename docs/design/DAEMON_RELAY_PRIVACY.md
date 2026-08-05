@@ -11332,42 +11332,47 @@ puts handler names in a function the tests call — and naming
 > was handler-free *so that a test could read it at all*. Deleting it as "a
 > duplicate" without that fact would have produced a design that cannot build.
 
-**What resolves both.** Split *which listener serves a path* (the privacy fact,
-handler-free) from *what runs there* (a lookup that names handlers), and have
-`build_router` **iterate** the first:
+**What resolves both.** Split *which listener serves a path* (handler-free
+lists) from *what runs there* (one total `handler_for` match), put the
+`restricted` gate in a pure `served_paths` function, and have
+`build_router` **only** iterate that:
 
 ```rust
-for path in ALWAYS_REGISTERED_PATHS      { router = router.route(path, always_handler(path)); }
-if !restricted {
-    for path in UNRESTRICTED_ONLY_JSON_PATHS { router = router.route(path, unrestricted_only_handler(path)); }
+pub fn served_paths(restricted: bool) -> impl Iterator<Item = &'static str> {
+    let admin = if restricted { &[][..] } else { UNRESTRICTED_ONLY_JSON_PATHS };
+    ALWAYS_REGISTERED_PATHS.iter().copied().chain(admin.iter().copied())
+}
+
+for path in served_paths(restricted) {
+    router = router.route(path, handler_for(path));
 }
 ```
 
-**Membership is now registration.** A route cannot be served without appearing
-in a list a test can read, and moving one between listeners means moving its
-string — which is exactly what the assertion reads. The lists stopped being
-mirrors, so they stopped being duplicates.
+**The gate is one function.** Tests call `served_paths`; the router iterates
+`served_paths`. Re-encoding the gate as set algebra over the two consts would
+miss a deleted `if !restricted` inside that function — the residual the first
+landing still left open. Moving a path between listeners is a list edit only
+(one handler table, not two).
 
 **Both arms, each the other's control.** *unrestricted ⇒ present* proves the
-path is spelled right and registered; *restricted ⇒ absent* then means **gated**
+path is spelled right and selected; *restricted ⇒ absent* then means **gated**
 rather than **missing**. A generalising arm covers all sixteen admin paths, not
 just §55's.
 
 **Negative-controlled, because a seal is not coverage.** Moving
-`/get_stem_tallies` into `ALWAYS_REGISTERED_PATHS` fails both tests with the
-path named. The check it replaces — *"the const contains this string"* —
-passes under that same edit, which is what made it theatre.
+`/get_stem_tallies` into `ALWAYS_REGISTERED_PATHS` fails the restricted-absent
+arm with the path named. The check it replaces — *"the const contains this
+string"* — passes under that same edit. That is what made it theatre.
 
-**Retired by this:** `BINARY_URI_PATHS` (now derived from the always-list, the
-same dual-maintenance trade one surface over) and **the owed dual-arm
-integration test itself**. The property it was chartered to establish is a
-property of the route table; a daemon fixture would have tested the server
-*around* it. `/get_stem_tallies` is no longer an owed item.
+**Retired by this:** `BINARY_URI_PATHS` (binary paths live on the always-list)
+and **the owed dual-arm integration test itself**. The property it was
+chartered to establish is pure path selection; a daemon fixture would have
+tested the server *around* it. `/get_stem_tallies` is no longer an owed item.
 
-**One residue, named at its site:** a path listed with no lookup arm panics at
-daemon start. Not unit-tested, deliberately — such a test must name a handler,
-which relinks the FFI. `#[ignore]` does not help; it skips execution, not
-linking. That was measured, not assumed.
+**One residue, named at its site:** a path listed with no `handler_for` arm
+panics at daemon start. Not unit-tested, deliberately — such a test must name
+a handler, which relinks the FFI. `#[ignore]` does not help; it skips
+execution, not linking. That was measured, not assumed.
 
 ### 69.2 The `peers` pin — 12, and why holding it fixed is *not* F-7's error
 

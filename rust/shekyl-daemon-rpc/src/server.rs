@@ -110,14 +110,26 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
         .allow_headers(tower_http::cors::Any)
 }
 
-/// Build the Axum router. `cors_origins` empty ⇒ default-deny CORS.
+// ---------------------------------------------------------------------------
+// Route table (§55 / §69)
+//
+// Two handler-free path lists encode *which listener* serves a path. One pure
+// function ([`served_paths`]) applies the restricted gate. One total match
+// ([`handler_for`]) binds *what runs*. [`build_router`] only iterates
+// `served_paths` — so gate tests call the same function the router uses, and
+// moving a path between listeners is a list edit, not a handler-table edit.
+//
+// Handlers stay out of the lists (and out of anything a unit test calls)
+// because naming a handler pulls `core_rpc_ffi_*` into the link set; lib tests
+// build no daemon image. Residue: a path listed with no `handler_for` arm
+// panics at daemon start. Not unit-tested — such a test must name a handler.
+// ---------------------------------------------------------------------------
+
 /// Paths registered on **both** listeners — JSON and binary alike.
 ///
-/// Handler-free for the same reason as [`UNRESTRICTED_ONLY_JSON_PATHS`], and
-/// iterated by [`build_router`] rather than mirroring it. Together the two
-/// lists are the complete served surface, which is what lets a test assert
-/// that an admin path is absent from the restricted listener rather than
-/// merely absent from a copy.
+/// Handler-free so tests can read it without linking `core_rpc_ffi_*`.
+/// Combined with [`UNRESTRICTED_ONLY_JSON_PATHS`] via [`served_paths`];
+/// [`build_router`] iterates that, not this list alone.
 pub const ALWAYS_REGISTERED_PATHS: &[&str] = &[
     "/json_rpc",
     // JSON REST (with aliases) -- GET + POST to match epee behaviour
@@ -149,14 +161,63 @@ pub const ALWAYS_REGISTERED_PATHS: &[&str] = &[
     "/get_o_indexes.bin",
 ];
 
-/// The handler bound to each always-registered path. Total over
-/// [`ALWAYS_REGISTERED_PATHS`].
+/// JSON REST paths registered **only** on the unrestricted (admin) listener —
+/// never on the restricted (public) one.
+///
+/// Handler-free by necessity: naming a handler pulls `core_rpc_ffi_*` into
+/// whatever links it, and `cargo test -p shekyl-daemon-rpc` builds no daemon
+/// image. [`served_paths`] is the single place the `restricted` gate is
+/// applied; tests call it, [`build_router`] iterates it.
+pub const UNRESTRICTED_ONLY_JSON_PATHS: &[&str] = &[
+    // §55: anonymity graph — peer set is the sensitive part.
+    "/get_stem_tallies",
+    "/start_mining",
+    "/stop_mining",
+    "/mining_status",
+    "/save_bc",
+    "/get_peer_list",
+    "/set_log_hash_rate",
+    "/set_log_level",
+    "/set_log_categories",
+    "/set_bootstrap_daemon",
+    "/stop_daemon",
+    "/get_net_stats",
+    "/set_limit",
+    "/out_peers",
+    "/in_peers",
+    "/pop_blocks",
+];
+
+/// Paths this listener serves.
+///
+/// **Single source of the restricted gate.** [`build_router`] iterates this;
+/// gate tests call this. Do not re-encode the gate as set algebra over the
+/// two consts — deleting the gate here must fail the tests that call here.
+pub fn served_paths(restricted: bool) -> impl Iterator<Item = &'static str> {
+    let admin: &[&str] = if restricted {
+        &[]
+    } else {
+        UNRESTRICTED_ONLY_JSON_PATHS
+    };
+    ALWAYS_REGISTERED_PATHS
+        .iter()
+        .copied()
+        .chain(admin.iter().copied())
+}
+
+/// Handler bound to a served path. Total over the union of
+/// [`ALWAYS_REGISTERED_PATHS`] and [`UNRESTRICTED_ONLY_JSON_PATHS`].
+///
+/// One match for both listeners: moving a path between lists is a list edit
+/// only. Deliberately not called from unit tests — naming a handler pulls
+/// `core_rpc_ffi_*` into the test binary (`#[ignore]` skips execution, not
+/// linking).
 ///
 /// # Panics
 ///
-/// If a path is listed with no arm here — loud at daemon start, rather than a
-/// route that silently vanishes.
-fn always_handler(path: &str) -> MethodRouter<Arc<AppState>> {
+/// If a path is listed with no arm — loud at daemon start rather than a route
+/// that silently vanishes.
+fn handler_for(path: &str) -> MethodRouter<Arc<AppState>> {
     match path {
         "/json_rpc" => post(json_rpc::handle),
         "/get_height" | "/getheight" => get(json::get_height).post(json::get_height),
@@ -187,35 +248,8 @@ fn always_handler(path: &str) -> MethodRouter<Arc<AppState>> {
         }
         "/get_hashes.bin" | "/gethashes.bin" => post(binary::get_hashes),
         "/get_o_indexes.bin" => post(binary::get_o_indexes),
-        other => panic!("ALWAYS_REGISTERED_PATHS lists {other} with no handler"),
-    }
-}
-
-/// The handler bound to each admin-only path.
-///
-/// **Total over [`UNRESTRICTED_ONLY_JSON_PATHS`], and deliberately separate
-/// from it.** The list says *which listener serves a path* — the privacy fact,
-/// and the one a test must be able to read. This says *what runs* — which
-/// necessarily names handlers, and naming a handler pulls `core_rpc_ffi_*`
-/// into whatever links it. Keeping them apart is what lets
-/// `cargo test -p shekyl-daemon-rpc` assert the gate without a daemon image;
-/// it is the same constraint that produced the old hand-maintained const, now
-/// with the list *driving* registration instead of mirroring it.
-///
-/// # Panics
-///
-/// If a path is added to the list with no arm here. That is a loud failure at
-/// **daemon start** — `build_router` iterates every listed path, so the first
-/// start after the mistake dies with the path named. It is the only residue of
-/// the split, and it is deliberately not covered by a unit test: such a test
-/// would have to name a handler, and naming one relinks `core_rpc_ffi_*` into
-/// the test binary, which is the constraint this whole split exists to satisfy.
-/// (`#[ignore]` does not help — it skips execution, not linking.)
-fn unrestricted_only_handler(path: &str) -> MethodRouter<Arc<AppState>> {
-    match path {
-        // §55: the anonymity graph — which peers this node stems to and how
-        // each behaved. Sharma Appendix B spends 50-100 probes per node to
-        // reconstruct exactly this.
+        // Admin-only (listener selection is [`served_paths`], not this match).
+        // §55: anonymity graph — peer set is the sensitive part.
         "/get_stem_tallies" => get(json::get_stem_tallies).post(json::get_stem_tallies),
         "/start_mining" => get(json::start_mining).post(json::start_mining),
         "/stop_mining" => get(json::stop_mining).post(json::stop_mining),
@@ -232,28 +266,17 @@ fn unrestricted_only_handler(path: &str) -> MethodRouter<Arc<AppState>> {
         "/out_peers" => get(json::out_peers).post(json::out_peers),
         "/in_peers" => get(json::in_peers).post(json::in_peers),
         "/pop_blocks" => get(json::pop_blocks).post(json::pop_blocks),
-        other => panic!("UNRESTRICTED_ONLY_JSON_PATHS lists {other} with no handler"),
+        other => panic!("served path {other} has no handler"),
     }
 }
 
+/// Build the Axum router. `cors_origins` empty ⇒ default-deny CORS.
+///
+/// Routes come only from [`served_paths`]; handlers only from [`handler_for`].
 pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
-    let restricted = state.restricted;
-
-    // Both surfaces are iterated from their path lists, so a route cannot be
-    // registered without appearing in the list a test can read.
     let mut router = Router::new();
-    for path in ALWAYS_REGISTERED_PATHS {
-        router = router.route(path, always_handler(path));
-    }
-
-    if !restricted {
-        // Iterated, not chained: `UNRESTRICTED_ONLY_JSON_PATHS` is the single
-        // source of *which* paths are admin-only, so membership in that list
-        // IS registration. A route cannot be moved between listeners without
-        // moving its string, which is what the gate test asserts on.
-        for path in UNRESTRICTED_ONLY_JSON_PATHS {
-            router = router.route(path, unrestricted_only_handler(path));
-        }
+    for path in served_paths(state.restricted) {
+        router = router.route(path, handler_for(path));
     }
 
     router
@@ -358,38 +381,6 @@ pub async fn run_server(
     serve_with_listener(core, config, listener, shutdown).await
 }
 
-/// JSON REST paths that must be registered **only** on the unrestricted
-/// (admin) listener — never on the restricted (public) one.
-///
-/// Handler-free by necessity: naming a handler pulls `core_rpc_ffi_*` into
-/// whatever links it, and `cargo test -p shekyl-daemon-rpc` builds no daemon
-/// image. Splitting *which listener* (here) from *what runs*
-/// ([`unrestricted_only_handler`]) is what lets the gate be asserted at all.
-///
-/// **This list is no longer a mirror — [`build_router`] iterates it**, so
-/// membership *is* registration and the two cannot drift. That is what
-/// retires the owed dual-arm *integration* test: the property it was going to
-/// establish (restricted ⇒ 404, unrestricted ⇒ not-404) is a property of this
-/// list, and a daemon fixture would have tested the server around it.
-pub const UNRESTRICTED_ONLY_JSON_PATHS: &[&str] = &[
-    "/get_stem_tallies",
-    "/start_mining",
-    "/stop_mining",
-    "/mining_status",
-    "/save_bc",
-    "/get_peer_list",
-    "/set_log_hash_rate",
-    "/set_log_level",
-    "/set_log_categories",
-    "/set_bootstrap_daemon",
-    "/stop_daemon",
-    "/get_net_stats",
-    "/set_limit",
-    "/out_peers",
-    "/in_peers",
-    "/pop_blocks",
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,58 +389,71 @@ mod tests {
     use http::Request;
     use tower::ServiceExt;
 
+    /// Deleted decoy surface must not reappear on *either* listener.
+    ///
+    /// Assert against [`served_paths`] (the full served surface), not only
+    /// `ALWAYS_REGISTERED_PATHS` — absence from the always-list alone would
+    /// still pass if the route landed on the admin list.
     #[test]
     fn output_distribution_bin_not_registered() {
         assert!(
-            !ALWAYS_REGISTERED_PATHS.contains(&"/get_output_distribution.bin"),
-            "decoy distribution binary route must stay deleted"
+            served_paths(false).all(|p| p != "/get_output_distribution.bin"),
+            "decoy distribution binary route must stay deleted on every listener"
         );
-        assert!(ALWAYS_REGISTERED_PATHS.contains(&"/get_blocks.bin"));
-        assert!(ALWAYS_REGISTERED_PATHS.contains(&"/get_o_indexes.bin"));
+        assert!(
+            served_paths(true).any(|p| p == "/get_blocks.bin"),
+            "control: live binary surface still served on the restricted listener"
+        );
+        assert!(
+            served_paths(true).any(|p| p == "/get_o_indexes.bin"),
+            "control: live binary surface still served on the restricted listener"
+        );
     }
 
-    /// The dual-arm gate, and **each arm is the other's control**.
+    /// Dual-arm gate via the same function [`build_router`] iterates.
     ///
-    /// *restricted ⇒ absent* alone passes for a route that never existed, a
-    /// typo, or a deleted handler. *unrestricted ⇒ present* proves the path is
-    /// spelled right and actually registered, which is what makes the absence
-    /// mean **gated** rather than **missing**. Only the pair is
-    /// self-witnessing (§50.3: unchanged is the default state of everything
-    /// that did not happen).
-    ///
-    /// This can fire on the defect it exists for — a route moved out of the
-    /// gated set — because [`build_router`] *iterates* this list rather than
-    /// mirroring it. The check it replaces asserted that a hand-maintained
-    /// copy contained a string, which no amount of router editing could
-    /// falsify.
+    /// *restricted ⇒ absent* alone passes for a route that never existed.
+    /// *unrestricted ⇒ present* proves the path is spelled right and selected,
+    /// which is what makes the absence mean **gated** rather than **missing**.
+    /// Both arms call [`served_paths`] — re-encoding the gate as set algebra
+    /// over the consts would miss a deleted `if !restricted` inside that
+    /// function.
     #[test]
-    fn stem_tallies_is_served_only_on_the_unrestricted_listener() {
+    fn stem_tallies_is_gated_by_restricted() {
         assert!(
-            UNRESTRICTED_ONLY_JSON_PATHS.contains(&"/get_stem_tallies"),
-            "unrestricted arm: the anonymity-graph readout must be registered, \
+            served_paths(false).any(|p| p == "/get_stem_tallies"),
+            "unrestricted arm: the anonymity-graph readout must be selected, \
              or the restricted arm proves nothing"
         );
         assert!(
-            !ALWAYS_REGISTERED_PATHS.contains(&"/get_stem_tallies"),
+            served_paths(true).all(|p| p != "/get_stem_tallies"),
             "restricted arm: the anonymity graph must never reach the public \
              listener (§55)"
         );
         assert!(
-            ALWAYS_REGISTERED_PATHS.contains(&"/get_info"),
-            "control: the always-list is populated, so the absence above is real"
+            served_paths(true).any(|p| p == "/get_info"),
+            "control: the restricted surface is non-empty, so the absence above is real"
         );
     }
 
-    /// No admin-only path is also registered unconditionally.
+    /// Every admin-only path is selected only when unrestricted.
     ///
-    /// The generalisation of the arm above: a path in both lists would be
-    /// served publicly *and* look gated.
+    /// Generalisation of the stem-tallies arms: also catches a path listed in
+    /// both consts (would be served publicly *and* look gated).
     #[test]
-    fn no_admin_path_is_also_registered_unconditionally() {
+    fn admin_paths_are_absent_from_the_restricted_listener() {
         for path in UNRESTRICTED_ONLY_JSON_PATHS {
             assert!(
+                served_paths(false).any(|p| p == *path),
+                "{path} is listed admin-only but is not selected when unrestricted"
+            );
+            assert!(
+                served_paths(true).all(|p| p != *path),
+                "{path} is admin-only but is selected on the restricted listener"
+            );
+            assert!(
                 !ALWAYS_REGISTERED_PATHS.contains(path),
-                "{path} is admin-only but is also registered unconditionally"
+                "{path} is admin-only but is also in ALWAYS_REGISTERED_PATHS"
             );
         }
     }
