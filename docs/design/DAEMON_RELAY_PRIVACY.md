@@ -12122,7 +12122,75 @@ depends on whether we ship a pre-validated hash set and how far it reaches —
 **a shipping decision nobody has taken.** Until it is, *"run a node on a Pi"*
 should be qualified for initial sync, though **not** for steady-state relaying.
 
-### 74.3 What the numbers support
+### 74.3 Pruned — the Pi is a derivation floor, not a deployment story
+
+**§74.3 as first written inflated a derivation input into an operational
+envelope. Corrected here rather than edited away.**
+
+**What the Pi arm is for:** the policy provisions `hop` at a high quantile over
+the **node population**, and the Pi bounds the slow end. **Whether anyone runs
+one at volume is beside the point** — it establishes what the constant has to
+cover so that whoever *is* slowest is not systematically preempted. That is a
+derivation input, and it was the whole reason §72.5 named the population a
+policy decision.
+
+Three claims hung on it, and two do not survive:
+
+- **Throughput ceiling — withdrawn.** *"A prerequisite for Pi viability at
+  300k tx/day"* describes a scenario nobody is in: a network at that volume has
+  hardware to match, and 300k on x86 is 23.6 ms serial at ~8 % utilisation.
+  Pi-bound throughput is not a situation real deployments reach.
+- **Initial sync — withdrawn from this document.** It is an operator-experience
+  question about whether Pi-class nodes can *bootstrap*, not a relay-privacy
+  one. It surfaced here by accident. §74.2's source finding stands and is worth
+  passing to whoever owns node onboarding — **the fast path exists, is enabled
+  by default, and its reach is an unmade shipping decision** — but carrying it
+  here would be this arc keeping someone else's item.
+- **Large-input transactions are under-provisioned — this survives, and it is
+  the real output.** 383 ms against a 175 ms constant at 4 inputs and chain
+  age, on the arm the policy derives from. **A privacy penalty correlated with
+  wallet composition**: consolidations and wallets spending many small outputs
+  draw embargoes provisioned for a fraction of their true travel time, so they
+  preempt and self-fluff more often. No adversary required, and **invisible to
+  the affected user**, who cannot see that their transaction shape bought them
+  a shorter embargo.
+
+**And the batch verifier returns to being a throughput optimisation.** Its
+disposition has now moved three times — landmine (§72.4), then "evaluate it as
+the fix" (§73.7), now neither — as the numbers underneath it changed. **The
+part that never moved is the only part to keep: taking it changes `hop`'s batch
+term and obliges a re-derivation.** That is the durable hook; the rest was
+successive readings of a utilisation figure nobody had computed.
+
+> **The practical output of the Pi arm is one number for the constants round
+> and one structural finding — not an operational envelope.**
+
+### 74.4 The operational statement that *is* supported
+
+Narrower than §74.3's first version, and worth stating because it is the
+reassuring direction:
+
+**At startup-scale volume, anyone can run a relay node — a Raspberry Pi 4
+included.** At ~20k tx/day the Pi sits at 2.9 % utilisation with ~3.8 ms mean
+queue wait, and the flat 5.4× ratio means low-end hardware degrades
+**predictably rather than falling off a cliff**. Any general-purpose laptop is
+far inside the envelope.
+
+Two honest limits on that sentence:
+
+1. It is about **steady-state relaying**. Initial-sync bootstrap is the
+   separate question §74.3 hands off.
+2. **A Pi 4 is a *choice* of floor, not a measured minimum.** Nothing here
+   establishes it as the slowest hardware anyone will use, and a Pi 5 is
+   expected faster but is unmeasured. §72.5's point stands: **which hardware is
+   in the population is a decision**, and this arm bounds a floor it did not
+   also justify.
+
+### 74.5 What the numbers support
+
+*(Superseded in part by §74.3 — the throughput-ceiling and batch-verifier
+bullets below were the inflated reading; kept so the correction has something
+to point at.)*
 
 - **A Pi is a viable relay node.** ~680k tx/day ceiling against a network
   running ~20k, and the flat 5.4× ratio means low-end hardware degrades
