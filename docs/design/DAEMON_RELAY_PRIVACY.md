@@ -11680,6 +11680,13 @@ per-transaction loop at `:957`, and `relay_transactions(...)` only after that
 loop closes, at `:986`. `B` verifies, then forwards. Under **FCMP++
 membership proofs and ML-DSA-65 signatures** that term is not a rounding error.
 
+> **CORRECTED at §72.2: ML-DSA-65 is not verified on this path.**
+> `shekyl_fcmp_verify` takes the PQ public-key hashes as `PqcLeafScalar`s bound
+> *into* the proof — a commitment, not a signature check. The term is **FCMP++
+> only**, plus a per-output prime-order check
+> (`shekyl_check_commitment_masks`). The structural claim here is unaffected;
+> only the named proof system narrows.
+
 *(Scheduling is the small term: a stem forward is dispatched immediately on the
 zone strand — `dandelionpp_notify` plans and sends with no deliberate per-hop
 delay. The fluff scheduler's draw belongs to `F`, not here.)*
@@ -11749,3 +11756,137 @@ the wrong edit. **That is why a design in which `/stop_daemon` could be served
 to an unauthenticated remote caller passed a control I had written and
 believed.** Recorded with the specific failure rather than the abstraction,
 because that clause is what makes the rule survive restatement.
+
+## 72. The verification surface enumerated — ML-DSA-65 is not in it, and the curve is 2-D
+
+**2026-08-05.** §71 defined `hop` to include `B`'s verification and named that
+term *"FCMP++ membership proofs and ML-DSA-65 signatures."* **Enumerating the
+surface before benching it shows the second half is wrong**, and the
+enumeration changes the measurement's shape.
+
+### 72.1 Enumerate the surface, don't name the primitives
+
+A bench built from *"which primitives are involved"* reports a floor as if it
+were the value. The question is instead: **every `shekyl_*` call reachable
+between receive and forward.** That set *is* the verification term.
+
+**One boundary first, because it splits the two paths:** `blockchain.cpp:5885`
+skips `shekyl_fcmp_verify` on the *block* path because pool admission already
+did it. **Only the pool-admission path is `hop`.** Benching the block path
+would measure a deliberately cheaper traversal.
+
+The ordinary-transaction admission surface, in call order:
+
+| call | axis | role |
+| --- | --- | --- |
+| `shekyl_fcmp_pqc_leaf_hash` | **inputs** | one hash per PQ pubkey, feeding the proof's leaf scalars |
+| `shekyl_check_commitment_masks` | **outputs** (`rv.outPk.size()`) | canonical prime-order point check per output commitment |
+| `shekyl_checked_sum_amounts` | outputs | balance arithmetic |
+| `shekyl_fcmp_verify` | **inputs** (`num_spend`) | the membership proof — the dominant term |
+
+*(The `shekyl_archival_*` and `shekyl_emission_*` families also appear in these
+files but gate on archival/emission input types, not ordinary transactions.
+They are a separate surface and a separate curve.)*
+
+### 72.2 ML-DSA-65 is not verified on this path — corrected
+
+§71's *"and ML-DSA-65 signatures"* does not hold for ordinary transactions.
+`shekyl_fcmp_verify` takes `pqc_pk_hashes_ptr` and converts each entry to a
+`shekyl_fcmp::leaf::PqcLeafScalar` — **the PQ commitment is a hash bound into
+the proof, not a signature checked beside it.** No ML-DSA verification occurs.
+
+Every ML-DSA `verify` call in the workspace sits in `multisig.rs`,
+`derivation.rs`, `signature.rs` and `archival_p.rs` — multisig assembly and
+archival/staking flows, none of them on the relay path a stem transaction
+takes.
+
+> **This narrows the term rather than shrinking the finding.** §71's structural
+> claim — verification is inside `hop`'s critical path, and `hop` moves when
+> the proof system moves — is unaffected and still verified at `:957`/`:986`.
+> What changes is *which* proof system: **FCMP++ only.** A bench built against
+> §71 as written would have measured a lattice cost the relay never pays and
+> reported it as part of `hop`, over-provisioning the embargo on a term that
+> does not exist.
+
+### 72.3 The curve is two-dimensional, and both axes are real
+
+Inputs drive `shekyl_fcmp_verify` (`num_spend`, bounded by
+`shekyl_fcmp::MAX_INPUTS`) and the per-input leaf hash. Outputs drive
+`shekyl_check_commitment_masks` — a prime-order subgroup check per output
+commitment, which is not free — and the balance sum.
+
+**So the deliverable is a cost surface over (inputs, outputs)**, weighted at
+use by the shape distribution — which is itself a free parameter, unfixed
+pre-genesis. Same structure as everything else in this arc (§60.4): the curve
+is derivable now, the weighting is a decision.
+
+### 72.4 Batch depth is modelled, not benched
+
+The `:957`/`:986` structure means a batch of `N` pays `N` verifications before
+*any* forward, so the last transaction's `hop` carries the whole batch:
+
+```text
+hop  ≈  transit  +  (depth × verify)  +  scheduling
+```
+
+**Depth is a free parameter, so it belongs in the derivation as a multiplier,
+not in the bench as a dimension.** Benching it would bake in an assumed depth
+and report the product as a measurement. A quiet two-node rig sees depth 1 and
+would silently report the floor.
+
+### 72.5 Preconditions recorded before the number, because they decide it
+
+The policy is *"better to overestimate"* realised as a high quantile, and
+**the quantile is over the node population** — so the slow end is the one the
+constant is derived from and the fast machine is the sanity check. Inverting
+that provisions for hardware the least-equipped operators do not have, and on
+a privacy coin those are disproportionately the Tor-node-on-a-Pi operators.
+**Choosing the population is deciding whose anonymity the embargo is sized
+for**, which makes it a decision to state, not an artifact of whichever machine
+was available.
+
+Recorded for the slow arm, since an unrecorded environment makes a number
+unreproducible and an artifact indistinguishable from a property:
+
+- **Raspberry Pi 4 Model B Rev 1.4**, Cortex-A72, **aarch64, 64-bit userland**,
+  4 cores, 8 GB. Model *and* userland pinned: A72 and A76 differ substantially
+  on this work, and 32- vs 64-bit matters for the arithmetic.
+- **Governor was `ondemand`** — must be `performance` for the run, or the
+  figure carries scheduler variance.
+- **`vcgencmd get_throttled` is unreadable** (`/dev/vcio` absent). A throttled
+  Pi reads *slower*, which is the safe direction and therefore the dangerous
+  one: it makes an artifact look like a property. **Throttle state must be
+  reported beside the result, or the result states that it could not be.**
+
+**Why two real points rather than one plus a scaling factor.** FCMP++
+verification is elliptic-curve work and is SIMD-sensitive, so a laptop's AVX2
+against a Pi's NEON is a wider gap than the ring-signature checks `175`'s
+provenance came from would have shown. **The laptop-to-Pi ratio for *our*
+verification is not a ratio anyone has intuitions about** — scaling one
+measurement by a guessed factor would be §60.4's error one more time.
+
+### 72.6 Instruction counts and wall clock are different instruments
+
+- **`iai-callgrind` instruction counts** are hardware-independent, so they are
+  the **CI drift gate** — they fire when the proof system moves, from any
+  runner. x86 only; not run on the Pi.
+- **Wall clock** is the `hop` input, and needs both machines.
+
+Same bench target, two consumers. Conflating them yields either a gate that
+flaps with runner hardware or a number that cannot be gated.
+
+**The gate is pinned to the relay path, not to a primitive.** The quantity is
+what admission costs; a primitive-level bench drifts from it the moment the
+calling code changes — which is the same reason `peers` needed a Rust owner
+rather than a mirrored `#define` (§70.3).
+
+### 72.7 State
+
+Confirmed present and blocking nothing: `shekyl_fcmp::proof::prove` can
+construct proofs at arbitrary shape, so the surface is buildable in-repo
+without fixtures. `shekyl-engine-core` supplies the `_iai` companion pattern.
+The Pi has 8 GB and 48 GB free; its toolchain is installing.
+
+**Not yet measured. What §72 fixes is the shape of the measurement**, which is
+the half that decides whether the number means anything — and which, taken
+after the bench, would have arrived as a retraction.

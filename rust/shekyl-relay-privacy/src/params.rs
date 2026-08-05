@@ -265,9 +265,14 @@ pub struct DandelionParams {
     /// **Verification is inside the critical path**, not beside it:
     /// `cryptonote_protocol_handler.inl` calls `handle_incoming_tx` in the
     /// per-transaction loop and reaches `relay_transactions` only after that
-    /// loop closes. Under FCMP++ membership proofs and ML-DSA-65 signatures
-    /// that term is not a rounding error, and **it moves when the proof system
-    /// moves** — this is not a network constant that can be measured once.
+    /// loop closes. The term is **FCMP++ membership-proof verification**
+    /// (`shekyl_fcmp_verify`, scaling with input count) plus a per-output
+    /// prime-order check (`shekyl_check_commitment_masks`) — **not** ML-DSA-65,
+    /// whose public-key hashes are bound into the proof as scalars rather than
+    /// verified as signatures (§72.2). It is not a rounding error, and **it
+    /// moves when the proof system moves** — this is not a network constant
+    /// that can be measured once, which is why an instruction-count gate on the
+    /// admission path belongs beside it rather than a comment.
     ///
     /// The inherited `175` already carried a processing term: §21 records its
     /// whole justification as *"a testrun from a recent Intel laptop took
