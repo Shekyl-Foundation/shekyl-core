@@ -1794,7 +1794,7 @@ uint8_t shekyl_archival_p_canonical_id_from_pubkey(
 uint64_t shekyl_archival_epoch_open_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_epoch_close_height(uint64_t settlement_epoch);
 
-// Attestation-witness cross-language constant authorities (credit-wire PR-B2, 1b-iv).
+// Attestation-witness cross-language constant authorities (credit-wire CW-2, CW-1b-iv).
 // The Rust-side authoritative values; C++ config must agree (equality) or over-bound
 // (the coarse witness cap). The block-hash differential is blind to the witness, so
 // these are the real gate. Asserted in tests/unit_tests/archival_credit_wire.cpp.

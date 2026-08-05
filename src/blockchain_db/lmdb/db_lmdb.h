@@ -716,6 +716,13 @@ public:
   // prune_archival_epochs_before.
   void delete_archival_attestation_witness_before_height(uint64_t prune_below_height);
 
+  // Retention-horizon prune across every epoch-scoped archival table. Public for
+  // the same reason as the helper above, and one more: this is where the accrual
+  // table (keyed at the block index) and the witness table (keyed at index + 1)
+  // are pruned from a single epoch-open height, so it is the only place the
+  // boundary between their two key spaces is observable.
+  void prune_archival_epochs_before(uint64_t prune_below_epoch);
+
 private:
   /// Single gather routine over the serve-credit rows for `settlement_epoch`
   /// (WS-1 §5.5 single sourcing, C++ side): the epoch close and the emission
@@ -732,7 +739,6 @@ private:
     const crypto::hash* p_id, ArchivalEmissionEpochSnapshot* outs) const;
   void process_archival_slash_for_epoch(uint64_t block_height, uint64_t settlement_epoch,
     uint32_t& seq);
-  void prune_archival_epochs_before(uint64_t prune_below_epoch);
   void delete_archival_r_market_for_epoch(uint64_t settlement_epoch);
   void delete_archival_r_market_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch);

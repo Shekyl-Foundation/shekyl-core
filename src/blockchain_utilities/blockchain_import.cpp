@@ -191,17 +191,10 @@ int check_flush(cryptonote::core &core, std::vector<block_complete_entry> &block
 
     block_verification_context bvc = {};
     block_connect_supplement connect{};
-    // Thread the credit-wire attestation witness from the export entry into the
-    // connect path (same as p2p make_block_connect_supplement_from_block_entry).
-    // Without this, verifying import drops the witness and never writes the
-    // height-keyed side table (Bugbot: import drops attestation witness).
-    if (!config::archival_attestation_witness_within_transport_cap(block_entry.attestation_witness.size()))
-    {
-      MERROR("import block carries an oversized attestation witness ("
-        << block_entry.attestation_witness.size() << " B)");
-      core.cleanup_handle_incoming_blocks();
-      return 1;
-    }
+    // Thread the credit-wire attestation witness the chunk carried into the connect
+    // path (same as p2p make_block_connect_supplement_from_block_entry), so verifying
+    // import writes the height-keyed side table instead of dropping it. Its size was
+    // already bounded by bootstrap::block_package's own codec.
     connect.attestation_witness = block_entry.attestation_witness;
 
     core.handle_incoming_block(block_entry.block, pblocks.empty() ? NULL : &pblocks[blockidx++], bvc, connect, false); // <--- process block
@@ -282,6 +275,19 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
   uint8_t major_version, minor_version;
   uint64_t dummy;
   bootstrap.seek_to_first_chunk(import_file, major_version, minor_version, dummy, dummy);
+
+  // Refuse a file written before chunks carried the credit-wire attestation witness
+  // (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2). The field is trailing, so such a
+  // chunk cannot parse as the current block_package in any case — but the reason has
+  // to be legible: importing it would otherwise mean a chain whose every block is
+  // permanently witness-less, which only surfaces after the cutover.
+  if (major_version != 0 && minor_version < bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS)
+  {
+    MFATAL("bootstrap file is v" << unsigned(major_version) << "." << unsigned(minor_version)
+      << ", which predates the attestation-witness field (v" << unsigned(major_version) << "."
+      << unsigned(bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS) << "). Re-export it with this build.");
+    return false;
+  }
 
   std::string str1;
   char buffer1[1024];
@@ -460,6 +466,9 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
           bce.pruned = false;
           bce.block = std::move(block);
           bce.txs = std::move(txs);
+          // The witness the chunk carried; check_flush threads it into the connect
+          // supplement (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2).
+          bce.attestation_witness = bp.attestation_witness;
           blocks.push_back(bce);
           int ret = check_flush(core, blocks, false);
           if (ret)
@@ -531,7 +540,9 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
             // path — emission-active blocks are refused above. Genesis has no
             // staker leg (its coinbase pays the whole hardcoded emission), so
             // a zero accrual is correct here, not a gap.
-            core.get_blockchain_storage().get_db().add_block(std::make_pair(b, block_to_blob(b)), block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, 0, {}, txs);
+            // The witness the chunk carried, on the same terms as the verifying path
+            // above — empty for genesis, which is the only block that reaches here.
+            core.get_blockchain_storage().get_db().add_block(std::make_pair(b, block_to_blob(b)), block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, 0, bp.attestation_witness, txs);
           }
           catch (const std::exception& e)
           {

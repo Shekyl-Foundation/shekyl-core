@@ -159,7 +159,7 @@ fn two_record_root_matches_pin() {
 
 // Genesis-frozen consensus values, pinned as literals (a change is a deliberate
 // consensus edit, so it must move this tripwire). These are the Rust authority the
-// FFI exposes and C++ `config::` asserts equality/bound against (1b-iv gate).
+// FFI exposes and C++ `config::` asserts equality/bound against (the credit-wire CW-1b-iv gate).
 #[test]
 fn attestation_constants_are_pinned() {
     assert_eq!(MAX_ATTESTATION_RECORDS, 256);

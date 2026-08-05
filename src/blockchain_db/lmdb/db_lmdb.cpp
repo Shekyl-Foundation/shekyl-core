@@ -1915,12 +1915,12 @@ void BlockchainLMDB::reset()
     throw0(DB_ERROR(lmdb_error("Failed to drop m_properties: ", result).c_str()));
   if (auto result = mdb_drop(txn, m_output_metadata, 0))
     throw0(DB_ERROR(lmdb_error("Failed to drop m_output_metadata: ", result).c_str()));
-  // Credit-wire (PR-B2): the prunable attestation-witness side tables are per-block state keyed by
+  // Credit-wire (credit-wire CW-2): the prunable attestation-witness side tables are per-block state keyed by
   // height / block-hash. reset() re-uses heights and hashes, so a stale witness row at a re-used
   // key is actively WRONG (a re-added block would read a pre-reset witness). Drop both alongside
-  // the block tables — the height-keyed one (1b-ii) was omitted here, this closes that gap too.
+  // the block tables — the height-keyed one (credit-wire CW-1b-ii) was omitted here, this closes that gap too.
   // NB: the curve-tree and other archival tables (bond/segment/budget/...) are still NOT dropped
-  // by reset() — a broader pre-existing gap, out of PR-B2 scope and tracked separately.
+  // by reset() — a broader pre-existing gap, out of credit-wire CW-2 scope and tracked separately.
   if (auto result = mdb_drop(txn, m_archival_attestation_witness, 0))
     throw0(DB_ERROR(lmdb_error("Failed to drop m_archival_attestation_witness: ", result).c_str()));
   if (auto result = mdb_drop(txn, m_archival_alt_attestation_witness, 0))
@@ -4746,7 +4746,7 @@ void BlockchainLMDB::remove_alt_block(const crypto::hash &blkid)
   result = mdb_cursor_del(m_cur_alt_blocks, 0);
   if (result)
     throw0(DB_ERROR(lmdb_error("Error deleting alternate block " + epee::string_tools::pod_to_hex(blkid) + " from the db: ", result).c_str()));
-  // The alt block's attestation witness (if any) never outlives it (credit-wire PR-B2).
+  // The alt block's attestation witness (if any) never outlives it (credit-wire CW-2).
   remove_archival_alt_attestation_witness(blkid);
 }
 
@@ -4781,7 +4781,7 @@ void BlockchainLMDB::drop_alt_blocks()
   auto result = mdb_drop(*txn_ptr, m_alt_blocks, 0);
   if (result)
     throw1(DB_ERROR(lmdb_error("Error dropping alternative blocks: ", result).c_str()));
-  // Drop the alt-chain attestation witnesses alongside their alt blocks (credit-wire PR-B2).
+  // Drop the alt-chain attestation witnesses alongside their alt blocks (credit-wire CW-2).
   result = mdb_drop(*txn_ptr, m_archival_alt_attestation_witness, 0);
   if (result)
     throw1(DB_ERROR(lmdb_error("Error dropping alt attestation witnesses: ", result).c_str()));
@@ -7293,8 +7293,14 @@ void BlockchainLMDB::prune_archival_epochs_before(uint64_t prune_below_epoch)
   // boundary as the accrual rows — the retention window dominates the reorg
   // window, so this drops them no earlier than they can be needed. (Settlement
   // reads the kept tx_extra headers, never this witness — the §4 seam.)
+  //
+  // The floor goes through archival_attestation_witness_key: the accrual table is
+  // keyed at the block INDEX, this one at index + 1, so handing both the same
+  // 0-based epoch-open height would leave the retired epoch's last block holding
+  // its witness for a whole extra epoch. This is the one site that starts from a
+  // 0-based index, so it is the one the helper exists for.
   delete_archival_attestation_witness_before_height(
-    shekyl_archival_epoch_open_height(prune_below_epoch));
+    archival_attestation_witness_key(shekyl_archival_epoch_open_height(prune_below_epoch)));
 }
 
 uint64_t BlockchainLMDB::get_archival_frozen_shard_count_on_write_txn() const

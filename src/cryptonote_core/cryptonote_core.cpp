@@ -1264,6 +1264,20 @@ namespace cryptonote
         << " b.tx_hashes.size()=" << b.tx_hashes.size() << ", missed_txs.size()" << missed_txs.size());
 
       block_to_blob(b, arg.b.block);
+      // Attach the credit-wire attestation witness the block connected with
+      // (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2). Read back from the DB rather
+      // than carried separately: the block is on the main chain by here
+      // (m_added_to_main_chain, re-checked above), so its height row is the one
+      // authority for what this block's witness is.
+      //
+      // This is the relay site for both locally mined blocks and RPC-submitted ones.
+      // It reads empty today, and will keep reading empty until the CW-3 block-template
+      // writer produces a witness AND the connect above (add_new_block's 2-arg overload,
+      // which supplies none) carries it. Wiring a witness parameter through now would be
+      // threading with no producer at either end — the same inert plumbing this PR had to
+      // remove from the import path. Named here so the next maintainer sees the seam
+      // rather than reading this line as a finished path.
+      arg.b.attestation_witness = m_blockchain_storage.get_block_attestation_witness(b);
       // Relay an empty fluffy block
       arg.b.txs.clear();
 
@@ -1374,7 +1388,9 @@ namespace cryptonote
     // If force refresh is enabled, though, which the user turns on if they are vigilant about
     // saving each block, then it doesn't matter either way: cleanup_handle_incoming_blocks()
     // always triggers a sync.
-    size_t block_total_bytes = block_blob.size();
+    // Counts the credit-wire attestation witness too, so this estimate and
+    // m_block_queue's accounting size the same object the same way.
+    size_t block_total_bytes = block_blob.size() + connect.attestation_witness.size();
     for (const auto &t : connect.pool.txs_by_txid)
       block_total_bytes += t.second.second.size();
 
@@ -1501,6 +1517,11 @@ namespace cryptonote
   bool core::get_block_by_hash(const crypto::hash &h, block &blk, bool *orphan) const
   {
     return m_blockchain_storage.get_block_by_hash(h, blk, orphan);
+  }
+  //-----------------------------------------------------------------------------------------------
+  blobdata core::get_block_attestation_witness(const block &blk) const
+  {
+    return m_blockchain_storage.get_block_attestation_witness(blk);
   }
   //-----------------------------------------------------------------------------------------------
   std::string core::print_pool(bool short_format) const

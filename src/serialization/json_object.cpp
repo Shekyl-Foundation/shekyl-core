@@ -1030,7 +1030,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::b
   // NB: the credit-wire attestation_witness field is intentionally NOT serialized here. This
   // JSON codec is an introspection-only surface with no block-ingestion consumer, and it does
   // not round-trip block_complete_entry today; the witness travels the consensus path over the
-  // epee KV codec (cryptonote_protocol_defs.h) instead. See PR-B2 / ARCHIVAL_CREDIT_WIRE.md §3.
+  // epee KV codec (cryptonote_protocol_defs.h) instead. See credit-wire CW-2 / ARCHIVAL_CREDIT_WIRE.md §3.
 
   dest.EndObject();
 }

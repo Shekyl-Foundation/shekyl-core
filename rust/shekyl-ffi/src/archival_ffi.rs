@@ -457,12 +457,12 @@ pub extern "C" fn shekyl_archival_epoch_open_height(settlement_epoch: u64) -> u6
     settlement_epoch_open_height(settlement_epoch)
 }
 
-// ── Attestation-witness cross-language constant authorities (credit-wire PR-B2,
-//    1b-iv). These expose the Rust-side authoritative values so C++ can assert its
-//    own `config::` constants agree — the real gate replacing the "must equal"
-//    doc-comment. The block-hash differential is blind to the witness (it is not in
-//    the block blob), so these + the byte-pinned witness KAT are the only checks on
-//    this surface. ──
+// ── Attestation-witness cross-language constant authorities (credit-wire CW-2,
+//    gate CW-1b-iv). These expose the Rust-side authoritative values so C++ can
+//    assert its own `config::` constants agree — the real gate replacing the "must
+//    equal" doc-comment. The block-hash differential is blind to the witness (it is
+//    not in the block blob), so these + the byte-pinned witness KAT are the only
+//    checks on this surface. ──
 
 /// Genesis-frozen consensus cap on attestation records per block. C++ asserts
 /// `config::ARCHIVAL_MAX_ATTESTATION_RECORDS` equals this.
@@ -479,10 +479,13 @@ pub extern "C" fn shekyl_archival_attestation_header_bytes() -> u64 {
 }
 
 /// The EXACT maximum canonical byte length of a block's attestation witness
-/// (`r ‖ count ‖ MAX records × HybridSignature`). The coarse C++ transport cap
-/// `config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` must OVER-BOUND this
-/// (`cpp_cap ≥ this`) — a C++ cap below it would reject a witness Rust admits, a
-/// consensus split. C++ asserts the `≥` direction against this value.
+/// (`r ‖ count ‖ MAX records × HybridSignature`).
+///
+/// `config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` is defined as this same
+/// quantity and C++ asserts equality. Below it, C++ would reject on the wire a
+/// witness Rust admits — a consensus split; above it, every block gets that much
+/// free padding an attacker may fill. Equality is the only value with neither
+/// property, and it makes any drift in either language's operands loud.
 #[no_mangle]
 pub extern "C" fn shekyl_archival_attestation_witness_max_bytes() -> u64 {
     MAX_ATTESTATION_WITNESS_BYTES as u64

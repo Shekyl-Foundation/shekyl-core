@@ -370,29 +370,29 @@ namespace config
   // record) and the coinbase extra size (256 × 49 B ≈ 12.5 KiB).
   constexpr size_t ARCHIVAL_ATTESTATION_HEADER_BYTES = 49;
   constexpr size_t ARCHIVAL_MAX_ATTESTATION_RECORDS = 256;
-  // Archival attestation-witness transport cap (ARCHIVAL_CREDIT_WIRE.md §3;
-  // PR-B2). The block_complete_entry carries the Rust canonical witness encoding
-  // (r ‖ count ‖ count × HybridSignature) as an opaque blob, stored only in a
-  // prunable side table; the real structural bounds live in
-  // shekyl-archival-retention::attestation_wire (BlockAttestationWitness). Like
-  // ARCHIVAL_EMISSION_VIN_MAX_BYTES below, this is a coarse allocation guard, not
-  // a structural check: it bounds the p2p deserializer and the side-table write
-  // so a peer cannot force an unbounded RAM/disk write before the Rust decoder
-  // runs. The wire maximum is 32 (r) + 8 (count) + MAX_ATTESTATION_RECORDS hybrid
-  // signatures ≈ 847 KiB < 1 MiB. Exact record-count/length validation is the
-  // Rust decoder's job (Phase 2 admission), never this guard.
-  constexpr size_t ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES = 1024 * 1024;
-  // Coarse guard, not a structural check — but assert at compile time that it over-bounds the
-  // largest canonical witness so a future MAX bump cannot silently exceed it: r(32) + count(8) +
-  // MAX × one hybrid signature. (The Rust↔C++ equality of MAX and the hybrid-sig length is the
-  // separate CI gate; this static_assert only keeps the coarse bound self-consistent.)
-  static_assert(ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES >=
-                  32 + 8 + ARCHIVAL_MAX_ATTESTATION_RECORDS * PQC_HYBRID_SINGLE_SIG_LEN,
-                "ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES must over-bound the canonical witness maximum");
-  // Coarse transport-cap predicate shared by every p2p / import ingress that
-  // buffers an opaque attestation-witness blob (fluffy handoff, get_objects
-  // response loop, verifying import). Exact structural validation is the Rust
-  // decoder's job at admission — this only bounds allocation.
+  // Archival attestation-witness transport cap (ARCHIVAL_CREDIT_WIRE.md §3,
+  // credit-wire CW-2). The block_complete_entry carries the Rust canonical witness
+  // encoding (r ‖ count ‖ count × HybridSignature) as an opaque blob, stored only
+  // in a prunable side table; the real structural bounds live in
+  // shekyl-archival-retention::attestation_wire (BlockAttestationWitness). This is
+  // an allocation guard, not a structural check: it bounds every deserializer that
+  // buffers the blob so a peer cannot force an unbounded RAM/disk write before the
+  // Rust decoder runs. Exact record-count/length validation is the Rust decoder's
+  // job (Phase 2 admission), never this guard.
+  //
+  // Written as the maximum itself — r(32) + count(8) + MAX records × one hybrid
+  // signature — rather than a round number above it. A hand-picked slack figure is
+  // free padding an attacker may send on every block for no consensus reason, and
+  // it silently stops tracking the real bound the moment either operand moves. The
+  // FFI gate asserts this equals Rust's own maximum
+  // (shekyl_archival_attestation_witness_max_bytes), so a divergence is loud.
+  constexpr size_t ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES =
+    32 + 8 + ARCHIVAL_MAX_ATTESTATION_RECORDS * PQC_HYBRID_SINGLE_SIG_LEN;
+  // Transport-cap predicate shared by every codec that deserializes an opaque
+  // attestation-witness blob (the p2p block_complete_entry KV map, the bootstrap
+  // block_package). Enforced AT the codec, not at its callers: a call-site check
+  // only covers the ingress paths someone remembered, and the next one added
+  // silently gets no bound at all.
   constexpr bool archival_attestation_witness_within_transport_cap(size_t n) noexcept
   {
     return n <= ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES;

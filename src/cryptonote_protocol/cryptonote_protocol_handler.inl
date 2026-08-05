@@ -670,17 +670,9 @@ namespace cryptonote
     // directly to core::handle_single_incoming_block() -> Blockchain::add_block(), which means we
     // can skip the mempool for faster block propagation. Later in the function, we will erase all
     // transactions from the relayed block.
-    // Coarse-bound the credit-wire attestation witness before it is copied into the
-    // connect supplement (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2). Guards against a peer
-    // forcing an oversized opaque-blob allocation/write ahead of the Rust decoder.
-    if (!config::archival_attestation_witness_within_transport_cap(arg.b.attestation_witness.size()))
-    {
-      LOG_ERROR_CCONTEXT("fluffy block " << new_block_hash << " carries an oversized attestation "
-        "witness (" << arg.b.attestation_witness.size() << " B), dropping connection");
-      drop_connection(context, false, false);
-      return 1;
-    }
-
+    // The credit-wire attestation witness is bounded by block_complete_entry's own
+    // KV codec (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2), so an oversized blob
+    // never deserializes into `arg` and no check belongs here.
     block_connect_supplement connect;
     if (!make_block_connect_supplement_from_block_entry(arg.b.txs, blk_txids_set, /*allow_pruned=*/false, arg.b.attestation_witness, connect))
     {
@@ -809,6 +801,12 @@ namespace cryptonote
     txids.reserve(b.tx_hashes.size());
     NOTIFY_NEW_FLUFFY_BLOCK::request fluffy_response;
     fluffy_response.b.block = t_serializable_object_to_blob(b);
+    // Re-attach the credit-wire attestation witness we hold for this block
+    // (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2). This response is rebuilt from
+    // our own DB, so without this the requesting peer connects the block with no
+    // witness, stores no row, and relays that gap to ITS peers — the loss is
+    // permanent and spreads. Empty is omitted on the wire.
+    fluffy_response.b.attestation_witness = m_core.get_block_attestation_witness(b);
     fluffy_response.current_blockchain_height = arg.current_blockchain_height;
     std::vector<bool> seen(b.tx_hashes.size(), false);
     for(auto& tx_idx: arg.missing_tx_indices)
@@ -1088,6 +1086,12 @@ namespace cryptonote
       blocks_size += element.block.size();
       for (const auto &tx : element.txs)
         blocks_size += tx.blob.size();
+      // The credit-wire attestation witness is held in RAM by m_block_queue for as
+      // long as the rest of the span is, and blocks_size is the ONLY bound the sync
+      // throttle has on that queue. Leaving it out would let a peer park up to one
+      // cap's worth of witness per queued block while the daemon believes it is
+      // under its size threshold.
+      blocks_size += element.attestation_witness.size();
     }
     size += blocks_size;
 
@@ -1225,19 +1229,6 @@ namespace cryptonote
       {
         LOG_ERROR_CCONTEXT("sent wrong NOTIFY_RESPONSE_GET_OBJECTS: block with id=" << epee::string_tools::pod_to_hex(get_blob_hash(arg.blocks[i].block))
           << ", tx_hashes.size()=" << b.tx_hashes.size() << " mismatch with block_complete_entry.m_txs.size()=" << arg.blocks[i].txs.size() << ", dropping connection");
-        drop_connection(context, false, false);
-        ++m_sync_bad_spans_downloaded;
-        return 1;
-      }
-
-      // Coarse-bound the credit-wire attestation witness here, in the validation loop, BEFORE the
-      // span is buffered into m_block_queue (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2). Checking it at
-      // queue-drain time would let a peer park oversized opaque blobs in RAM first; exact
-      // structural validation is the Rust decoder's job at admission, not this guard.
-      if (!config::archival_attestation_witness_within_transport_cap(arg.blocks[i].attestation_witness.size()))
-      {
-        LOG_ERROR_CCONTEXT("sent NOTIFY_RESPONSE_GET_OBJECTS with an oversized attestation witness ("
-          << arg.blocks[i].attestation_witness.size() << " B), dropping connection");
         drop_connection(context, false, false);
         ++m_sync_bad_spans_downloaded;
         return 1;

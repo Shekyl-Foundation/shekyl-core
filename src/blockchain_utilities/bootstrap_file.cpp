@@ -126,7 +126,7 @@ bool BootstrapFile::initialize_file(uint64_t first_block, uint64_t last_block)
 
   bootstrap::file_info bfi;
   bfi.major_version = 1;
-  bfi.minor_version = 0;
+  bfi.minor_version = bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS;
   bfi.header_size = header_size;
 
   bootstrap::blocks_info bbi;
@@ -245,6 +245,11 @@ void BootstrapFile::write_block(block& block)
     bp.cumulative_difficulty = cumulative_difficulty;
     bp.coins_generated = coins_generated;
   }
+
+  // Export the credit-wire attestation witness alongside the block (single read site,
+  // ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2). Empty for blocks that have none or
+  // whose witness is past the retention horizon.
+  bp.attestation_witness = m_blockchain_storage->get_block_attestation_witness(block);
 
   blobdata bd = t_serializable_object_to_blob(bp);
   m_output_stream->write((const char*)bd.data(), bd.size());

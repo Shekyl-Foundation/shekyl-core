@@ -34,6 +34,7 @@
 #include "serialization/keyvalue_serialization.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/blobdatatype.h"
+#include "cryptonote_config.h"
 
 namespace cryptonote
 {
@@ -135,11 +136,11 @@ namespace cryptonote
     blobdata block;
     uint64_t block_weight;
     std::vector<tx_blob_entry> txs;
-    // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2): the
-    // opaque Rust-canonical witness bytes for this block, committed by the mined
-    // attestation_root header field and stored in a prunable side table. Carried
-    // independently of `pruned` (a block's witness has nothing to do with its tx
-    // pruning), absent-and-empty on old peers. Never interpreted here.
+    // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire
+    // CW-2): the opaque Rust-canonical witness bytes for this block, committed by
+    // the mined attestation_root header field and stored in a prunable side table.
+    // Carried independently of `pruned` (a block's witness has nothing to do with
+    // its tx pruning), absent-and-empty on old peers. Never interpreted here.
     blobdata attestation_witness;
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE_OPT(pruned, false)
@@ -167,6 +168,14 @@ namespace cryptonote
         }
       }
       KV_SERIALIZE_OPT(attestation_witness, blobdata{})
+      // Bound the opaque witness HERE, at the codec, so no ingress can bypass it —
+      // every p2p path that deserializes a block_complete_entry (fluffy handoff,
+      // get_objects response, and any future one) is covered by construction. This
+      // mirrors txin_archival_reward_emission, which bounds its own blob inside
+      // BEGIN_SERIALIZE rather than trusting its callers. Refusing here also means
+      // the oversized blob never reaches m_block_queue's accounting.
+      if (!config::archival_attestation_witness_within_transport_cap(this_ref.attestation_witness.size()))
+        return false;
     END_KV_SERIALIZE_MAP()
 
     block_complete_entry(): pruned(false), block_weight(0) {}

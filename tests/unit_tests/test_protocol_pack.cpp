@@ -73,7 +73,7 @@ namespace
   }
 }
 
-// Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3; PR-B2): the block_complete_entry
+// Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2): the block_complete_entry
 // epee KV codec must carry the witness across the p2p wire independent of the pruned/txs branch
 // (the field sits OUTSIDE the if(pruned)/else), and an absent field — an old peer, or the empty
 // default that KV_SERIALIZE_OPT omits — must deserialize to empty rather than fail the load.
@@ -103,6 +103,48 @@ TEST(protocol_pack, block_complete_entry_attestation_witness_roundtrip)
       cryptonote::block_complete_entry out;
       ASSERT_TRUE(epee::serialization::load_t_from_binary(out, epee::to_span(buff))) << "pruned=" << pruned;
       EXPECT_TRUE(out.attestation_witness.empty()) << "pruned=" << pruned;
+    }
+  }
+}
+
+// The transport cap is enforced BY the codec, so no p2p ingress can bypass it — the
+// fluffy handoff, the get_objects response loop, and any path added later are all
+// covered by construction rather than by a hand-placed check each one remembers.
+// This is the only test standing behind that enforcement; without it the three
+// deleted call-site checks would have been traded for an untested one.
+TEST(protocol_pack, block_complete_entry_attestation_witness_cap_is_enforced_by_the_codec)
+{
+  constexpr size_t cap = config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES;
+
+  for (bool pruned : {false, true})
+  {
+    // Exactly at the cap: admitted, and round-trips whole. The boundary is inclusive
+    // because it IS Rust's canonical maximum — one byte of slack either way is a
+    // consensus difference, not a rounding choice.
+    {
+      epee::byte_slice buff;
+      const cryptonote::blobdata at_cap(cap, '\x5a');
+      const cryptonote::block_complete_entry in = make_bce(pruned, at_cap);
+      ASSERT_TRUE(epee::serialization::store_t_to_binary(in, buff)) << "pruned=" << pruned;
+      cryptonote::block_complete_entry out;
+      ASSERT_TRUE(epee::serialization::load_t_from_binary(out, epee::to_span(buff)))
+        << "a witness at exactly the cap was rejected, pruned=" << pruned;
+      EXPECT_EQ(out.attestation_witness.size(), cap) << "pruned=" << pruned;
+    }
+    // One byte over: the load fails. A peer cannot get an oversized blob past
+    // deserialization, so it never reaches m_block_queue's accounting or the DB.
+    {
+      epee::byte_slice buff;
+      const cryptonote::blobdata over_cap(cap + 1, '\x5a');
+      const cryptonote::block_complete_entry in = make_bce(pruned, over_cap);
+      // The store side runs the same map, so an oversized entry cannot even be
+      // serialized — either outcome refuses it; what must never happen is a
+      // successful load carrying the oversized blob.
+      cryptonote::block_complete_entry out;
+      const bool stored = epee::serialization::store_t_to_binary(in, buff);
+      const bool loaded = stored && epee::serialization::load_t_from_binary(out, epee::to_span(buff));
+      EXPECT_FALSE(loaded)
+        << "a witness one byte over the cap deserialized, pruned=" << pruned;
     }
   }
 }

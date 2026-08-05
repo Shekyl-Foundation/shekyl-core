@@ -29,6 +29,8 @@
 #pragma once
 
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
+#include "cryptonote_basic/blobdatatype.h"
+#include "cryptonote_config.h"
 #include "serialization/difficulty_type.h"
 
 
@@ -36,6 +38,13 @@ namespace cryptonote
 {
   namespace bootstrap
   {
+
+    // Minor version at which a chunk started carrying the credit-wire attestation
+    // witness. A file below this is refused on import: the field is trailing, so
+    // parsing an older chunk with the current block_package would fail mid-record
+    // anyway, and a bootstrap silently missing every witness is worse than a loud
+    // "re-export this file".
+    constexpr uint8_t BOOTSTRAP_MINOR_VERSION_WITNESS = 1;
 
     struct file_info
     {
@@ -83,6 +92,9 @@ namespace cryptonote
       END_SERIALIZE()
     };
 
+    // Bootstrap chunk as written by minor version >= BOOTSTRAP_MINOR_VERSION_WITNESS.
+    // Earlier minors are refused at the import entry point rather than parsed with a
+    // trailing field missing.
     struct block_package
     {
       cryptonote::block block;
@@ -90,6 +102,12 @@ namespace cryptonote
       size_t block_weight;
       difficulty_type cumulative_difficulty;
       uint64_t coins_generated;
+      // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire
+      // CW-2). Opaque bytes, exactly as the p2p block_complete_entry carries them.
+      // Without it in the export format a bootstrapped node holds no witness for any
+      // imported block — it can serve none to its IBD peers and, after the cutover,
+      // cannot re-drive their admission.
+      blobdata attestation_witness;
 
       BEGIN_SERIALIZE()
         FIELD(block)
@@ -97,6 +115,12 @@ namespace cryptonote
         VARINT_FIELD(block_weight)
         FIELD(cumulative_difficulty)
         VARINT_FIELD(coins_generated)
+        FIELD(attestation_witness)
+        // Bound the opaque blob at this codec, the same way block_complete_entry's KV
+        // map does for the p2p path — a bootstrap file is an untrusted input too, and
+        // a cap enforced by the importer instead would miss any other reader.
+        if (!config::archival_attestation_witness_within_transport_cap(attestation_witness.size()))
+          return false;
       END_SERIALIZE()
     };
 

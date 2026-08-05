@@ -416,6 +416,13 @@ namespace cryptonote
      bool get_block_by_hash(const crypto::hash &h, block &blk, bool *orphan = NULL) const;
 
      /**
+      * @copydoc Blockchain::get_block_attestation_witness
+      *
+      * @note see Blockchain::get_block_attestation_witness
+      */
+     blobdata get_block_attestation_witness(const block &blk) const;
+
+     /**
       * @copydoc Blockchain::get_alternative_blocks
       *
       * @note see Blockchain::get_alternative_blocks(std::vector<block>&) const

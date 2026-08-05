@@ -2553,11 +2553,16 @@ public:
 
   // ─── Credit-wire attestation witness (prunable, admission-only) ───────────
   // The per-block `r` + pass-signature witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4,
-  // transport B2): height-keyed on main, hash-keyed when detached (alt / mid-reorg).
+  // credit-wire CW-2): two tables, each with ONE owner.
+  //   * height-keyed — owned by the MAIN CHAIN. Written by add_block, deleted by
+  //     pop_block, reaped by the retention prune.
+  //   * hash-keyed — owned by the ALT-BLOCK TABLE. Written beside add_alt_block,
+  //     deleted beside remove_alt_block / drop_alt_blocks / reset. A row exists
+  //     there iff its alt block does, so no path can orphan one.
+  // Neither owner writes the other's table; a block moving between main and alt
+  // carries its witness explicitly through block_connect_supplement.
   // Mined commitment lives in the block header's attestation_root (not the blob).
-  // pop_block MOVES height→hash so reorg survival is a DB property of pop — callers
-  // do not stash in memory. add_block writes height and clears the hash-keyed copy.
-  // Pruned after horizon. Opaque bytes at this layer; decode/verify live in Rust.
+  // Opaque bytes at this layer; decode/verify live in Rust.
 
   /**
    * @brief store a block's attestation witness keyed by block height.
@@ -2578,16 +2583,18 @@ public:
   /**
    * @brief remove the stored attestation witness for a given height.
    *
-   * Tolerant of a missing key. pop_block prefers move-to-hash over bare delete
-   * when a non-empty witness is present; this remains for prune and tests.
+   * Tolerant of a missing key. Called by pop_block (the block leaves main) and
+   * by the retention prune.
    */
   virtual void remove_archival_attestation_witness_at_height(uint64_t block_height) = 0;
 
-  // ─── Detached / alt-chain attestation witness (hash-keyed) ────────────────
-  // Hash-keyed counterpart to the height-keyed main table. Holds witnesses for
-  // (a) alt blocks and (b) blocks mid-reorg after pop_block moves them off main.
-  // Cleared by add_block (when the block returns to main), remove_alt_block,
-  // drop_alt_blocks, or explicit discard of disconnected-chain blocks.
+  // ─── Alt-chain attestation witness (hash-keyed) ───────────────────────────
+  // Hash-keyed counterpart to the height-keyed main table, holding the witness of
+  // every block currently in the alt-block table — whether it arrived as an alt
+  // block or was demoted there by a reorg. Its rows are owned by the alt block:
+  // written beside add_alt_block, removed by remove_alt_block / drop_alt_blocks /
+  // reset(). Nothing else writes or deletes here, so a row cannot outlive (or
+  // survive without) its alt block.
 
   /**
    * @brief store an alt block's attestation witness keyed by block hash.
