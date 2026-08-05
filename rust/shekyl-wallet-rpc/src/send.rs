@@ -15,9 +15,9 @@ use shekyl_engine_core::{FeePriority, ReservationId, TxRecipient, TxRequest};
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_atomic_units, parse_required_object};
-use crate::project::pending_tx_result;
+use crate::project::{pending_tx_result, submit_pending_tx_result};
 use crate::tenant::{require_open_engine, TenantState};
-use crate::types::{DiscardPendingTxResult, SubmitPendingTxResult, SubmitVerdictView};
+use crate::types::DiscardPendingTxResult;
 
 /// One recipient in `build_pending_tx` params.
 #[derive(Debug, Deserialize)]
@@ -79,7 +79,21 @@ pub(crate) async fn build_pending_tx(
     };
 
     let shared = require_open_engine(tenants).await?;
-    let mut engine = shared.write().await;
+    // W-B step 1: build runs under a *read* lock — the slow FCMP++
+    // assembly lives inside `LocalPendingTx`'s interior mutability behind
+    // an engine-owned permit of one (network observable unchanged:
+    // serialized `AssembleTx`), so concurrent read RPCs (`get_balance`,
+    // `get_height`, `get_transfers`) are no longer stalled behind a
+    // build.
+    //
+    // This lock orders nothing against `refresh`: the refresh driver and
+    // its ledger merge take *read* guards too (`Engine::start_refresh`),
+    // so a merge could always land while a build ran, and can now land
+    // mid-build. Build owns that: it re-validates its selected inputs
+    // under the state lock at the commit boundary
+    // (`revalidate_selected_inputs`) and refuses rather than hand back a
+    // `PendingTx` the merge already invalidated.
+    let engine = shared.read().await;
     let pending = engine.build_pending_tx_async(&request).await?;
     let result = pending_tx_result(&pending);
     serde_json::to_value(result)
@@ -97,13 +111,16 @@ pub(crate) async fn submit_pending_tx(
     })?;
 
     let shared = require_open_engine(tenants).await?;
-    let mut engine = shared.write().await;
-    let tx_hash = engine.submit_pending_tx_async(id, seen_gen).await?;
-    let result = SubmitPendingTxResult {
-        tx_hash: format!("{tx_hash}"),
-        verdict: SubmitVerdictView::Accepted,
-        confirmed_height: None,
-    };
+    // Same interior-mutability insight as build (W-B review): submit
+    // mutates under `LocalPendingTx`'s own state lock and awaits the
+    // daemon under that implementor — exclusive Engine borrow only
+    // stalled concurrent read RPCs for the network round-trip. Submit's
+    // own slow segment work (the stale-reference re-anchor) takes the
+    // same build permit, so the serialized `AssembleTx` observable holds
+    // across build and submit alike.
+    let engine = shared.read().await;
+    let outcome = engine.submit_pending_tx_async(id, seen_gen).await?;
+    let result = submit_pending_tx_result(&outcome);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize submit_pending_tx: {e}")))
 }
@@ -116,7 +133,9 @@ pub(crate) async fn discard_pending_tx(
     let id = parse_reservation_id(&p.pending_tx_id)?;
 
     let shared = require_open_engine(tenants).await?;
-    let mut engine = shared.write().await;
+    // Discard is a short pending-tx state mutation under interior
+    // mutability; exclusive Engine borrow is not required.
+    let engine = shared.read().await;
     // Engine maps unknown handles to Ok(()) (idempotent discard).
     engine.discard_pending_tx(id)?;
     let result = DiscardPendingTxResult {};

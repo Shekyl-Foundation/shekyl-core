@@ -13,7 +13,7 @@ use shekyl_curve_tree::{
     select_reference_height, should_reanchor, two_sided_reference_height, AssembleInput,
     BlockHeight, Gindex, ReferenceBlock, TwoSidedRefusal, REF_ANCHOR_AGE,
 };
-use shekyl_engine_state::{AwaitingConfirmation, LedgerBlock};
+use shekyl_engine_state::LedgerBlock;
 use shekyl_units::AtomicUnits;
 
 use super::super::curve_tree_actor::CurveTreeHandle;
@@ -22,16 +22,15 @@ use super::super::diagnostics::{
     PendingTxDiagnostic,
 };
 use super::super::error::{
-    AmbiguousErrorKind, OutputSelectorError, PendingTxError, RetryableRejectCause, SendError,
-    SignerError, SubmitError, TerminalErrorKind,
+    OutputSelectorError, PendingTxError, SendError, SignerError, SubmitError,
 };
 use super::super::fee_estimator::{FeeEstimationContext, FeeEstimator};
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::network::Network;
 use super::super::output_selector::{OutputCandidate, OutputSelector, SelectedOutputs};
 use super::super::pending::{
-    InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, TxHash, TxRecipientSummary,
-    TxRequest,
+    InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitOutcome, TxHash,
+    TxRecipientSummary, TxRequest,
 };
 use super::super::refresh::{derive_snapshot_id, LedgerSnapshot};
 use super::super::signer::{SignedTransfer, Signer, TransferSigningContext};
@@ -44,7 +43,7 @@ use super::super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 
 use super::support::{
     build_error_kind, fail_build_after_attempted, map_fee_estimator_error,
-    map_handle_err_to_reanchor, map_output_selector_error, map_signer_error, phase1_tx_hash,
+    map_handle_err_to_reanchor, map_output_selector_error, map_signer_error,
     release_output_locks_for, with_pending_tx_state_mut, TreeSpendGate,
 };
 use super::types::{
@@ -167,6 +166,17 @@ where
     /// Engine state guarded by [`Mutex`] for interior mutability;
     /// see [`PendingTxState`] rustdoc.
     pub(crate) state: Mutex<PendingTxState>,
+    /// Build-serialization permit (W-B step 1, `docs/FOLLOWUPS.md`
+    /// "build concurrency permit stays 1"): exactly one `build` runs at
+    /// a time, **engine-owned** so every embedder — wallet-rpc under a
+    /// read lock, the in-process GUI — inherits the serialization now
+    /// that `Engine::build_pending_tx{,_async}` take `&self`. This
+    /// preserves the pre-relaxation network observable: one
+    /// `AssembleTx` membership round-trip against the segment layer at
+    /// a time. Raising the count is a rule-21 reopen gated on
+    /// anonymized segment fetch (correlated-burst observable) — never a
+    /// throughput tweak.
+    pub(crate) build_permit: tokio::sync::Semaphore,
     /// Test-only: overrides the Phase 1 daemon stub on the next
     /// `submit` after `SubmitAttempted` (PR 5 C7 R9 per-error-class
     /// coverage). FIFO not required — one slot consumed per submit.
@@ -298,193 +308,6 @@ where
         }
     }
 
-    pub(super) fn finalize_submit_accept(
-        &self,
-        state: &mut PendingTxState,
-        id: ReservationId,
-        tx_hash: TxHash,
-    ) -> TxHash {
-        let selected_indices: Vec<OutputId> = state
-            .output_locks
-            .iter()
-            .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
-            .collect();
-
-        // §5.3 decision 2: retain the network-exposed bytes for the
-        // watchdog's rung-1 resubmit-same-bytes probe before the in-flight
-        // record (their only holder) is dropped. Ephemeral — a restart
-        // drops the map and the probe rung degrades to the operator alarm.
-        //
-        // WI-RPC-3 retention: nothing to write here — the record was
-        // persisted at dispatch (pin 1, dispatch form), keyed by the
-        // canonical txid of the bytes; dropping the entry wipes the
-        // runtime copy of the secret. (A daemon returning a hash that
-        // differs from the canonical txid would leave the record
-        // pending under the canonical key — safe direction, the proof
-        // stays servable for the tx actually broadcast.)
-        if let Some(flight) = state.in_flight.remove(&id) {
-            state.held_bytes.insert(tx_hash, flight.entry.tx_bytes);
-        }
-        release_output_locks_for(state, id);
-        // F28/F37: a definite accept ends any consecutive-rejection streak
-        // (it does not clear a tripped breaker — see `SubmitLoopBreaker`).
-        state.loop_breaker.record_accept();
-
-        // F14 (`DAEMON_SUBMIT_VERDICT.md` §2.6): the accepting verdict means
-        // the tx is network-exposed, not settled. Instead of the legacy
-        // durable `spent = true` write, place the persisted
-        // awaiting-confirmation lock on each input: the output stays
-        // unselectable across restarts (same-key-image rebuild hazard,
-        // §7.1) until refresh observes the spend on-chain
-        // (confirmed-present release, `mark_spent`) or the watchdog horizon
-        // resolves the tx as confirmed-absent.
-        self.ledger.with_wallet_ledger_mut(|wallet| {
-            let accepted_at_height = wallet.ledger.height();
-            for index in selected_indices {
-                if let Some(td) = wallet.ledger.transfer_mut(index) {
-                    // Race guard: if the tx mined during the submit round-trip,
-                    // a refresh may already have observed the spend and run
-                    // `mark_spent` (spent = true, lock cleared). The
-                    // confirmed-present state is authoritative — re-locking an
-                    // already-spent input would persist an inconsistent
-                    // `spent && awaiting_confirmation` record whose F14 lock no
-                    // future `mark_spent` ever clears. Place the lock only on
-                    // inputs still unspent at commit time.
-                    if !td.spent {
-                        td.awaiting_confirmation = Some(AwaitingConfirmation {
-                            tx_hash,
-                            accepted_at_height,
-                        });
-                    }
-                }
-            }
-        });
-
-        emit_pending_tx_diagnostic(
-            self.sink.as_ref(),
-            PendingTxDiagnostic::SubmitSucceeded {
-                reservation_id: id,
-                tx_hash,
-            },
-        );
-
-        tx_hash
-    }
-
-    /// Resolve a submit whose verdict was `AlreadyInChain { height }`
-    /// (F40, §2.5): confirmation observed by verdict — the reservation is
-    /// done, but **refresh remains the settlement authority**.
-    ///
-    /// The F14 awaiting-confirmation lock is placed in **both** height
-    /// cases (fund safety first: a no-lock disposition leaves a
-    /// selectable-input window an adversary who slows the wallet's own
-    /// daemon's block delivery can steer it into). The lock is baselined
-    /// at the daemon-claimed confirming `height`, not at the wallet's
-    /// current height; `height` decides only the **release path**:
-    ///
-    /// - *`height` > wallet synced height:* the ordinary §2.6 path-1
-    ///   release — refresh reaches the confirming block and `mark_spent`
-    ///   settles spent-marking, clearing the lock.
-    /// - *`height` ≤ wallet synced height:* refresh already passed that
-    ///   height without observing the spend — path-1 is unreachable by
-    ///   construction (the FOLLOWUPS stranded-lock wedge). Emit
-    ///   [`PendingTxDiagnostic::TargetedRescanRequested`] so the driving
-    ///   actor enqueues a targeted re-scan of the window around `height`
-    ///   (reorg-heal machinery). A failed re-scan **never releases**
-    ///   (F40-R1); it falls through to the F31 resubmit-as-status-query
-    ///   via the watchdog, and consecutive fruitless re-scans are
-    ///   breaker-bounded (F40-R2) → operator alarm.
-    ///
-    /// The verdict authorizes lock-lifecycle transitions only; `spent`
-    /// stays refresh-written (`docs/FOLLOWUPS.md` "`AlreadyInChain` submit
-    /// verdict", closed with the disposition split; reshaped to F40 with
-    /// the `height` carve-out).
-    pub(super) fn finalize_submit_already_in_chain(
-        &self,
-        state: &mut PendingTxState,
-        id: ReservationId,
-        tx_hash: TxHash,
-        height: u64,
-    ) -> TxHash {
-        let selected_indices: Vec<OutputId> = state
-            .output_locks
-            .iter()
-            .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
-            .collect();
-
-        // §5.3 decision 2: retain the network-exposed bytes for the
-        // watchdog probe (see the accept path). The AlreadyInChain arm
-        // holds too, so a fruitless-re-scan escalation can fall through to
-        // the F31 resubmit-as-status-query with the original bytes.
-        //
-        // WI-RPC-3 retention: as on the accept path, the record was
-        // persisted at dispatch — an AlreadyInChain verdict changes the
-        // lock baseline, not the retention record.
-        if let Some(flight) = state.in_flight.remove(&id) {
-            state.held_bytes.insert(tx_hash, flight.entry.tx_bytes);
-        }
-        release_output_locks_for(state, id);
-        // F28/F37: a definite identity-bearing verdict ends any
-        // consecutive-rejection streak, same as a fresh accept.
-        state.loop_breaker.record_accept();
-
-        let synced_height = self.ledger.with_wallet_ledger_mut(|wallet| {
-            let synced_height = wallet.ledger.height();
-            for index in selected_indices {
-                if let Some(td) = wallet.ledger.transfer_mut(index) {
-                    // Same race guard as the accept path: if refresh already
-                    // observed the spend and ran `mark_spent`, the
-                    // confirmed-present state is authoritative — re-locking
-                    // would strand an inconsistent record.
-                    if !td.spent {
-                        td.awaiting_confirmation = Some(AwaitingConfirmation {
-                            tx_hash,
-                            // F40 §2.5(a): baseline at the claimed confirming
-                            // height, not the wallet's current height — the
-                            // watchdog horizon counts from the block that
-                            // (per the verdict) settles the spend.
-                            accepted_at_height: height,
-                        });
-                    }
-                }
-            }
-            synced_height
-        });
-
-        // F40 §2.5(b): a claim refresh has already scanned past routes to
-        // the targeted re-scan. Requesting is all that happens here — the
-        // R1 never-release property is structural (nothing below this
-        // point can release the lock just placed), and the R2 breaker
-        // lives with the re-scan executor.
-        if height <= synced_height {
-            // Decision 3: enqueue the control-flow request on the dedicated
-            // queue the driver drains; the diagnostic below is the
-            // observability trace only (sinks are observability-only).
-            state.rescan_queue.push(RescanRequest {
-                tx_hash,
-                claimed_height: height,
-            });
-            emit_pending_tx_diagnostic(
-                self.sink.as_ref(),
-                PendingTxDiagnostic::TargetedRescanRequested {
-                    reservation_id: id,
-                    tx_hash,
-                    claimed_height: height,
-                },
-            );
-        }
-
-        emit_pending_tx_diagnostic(
-            self.sink.as_ref(),
-            PendingTxDiagnostic::SubmitSucceeded {
-                reservation_id: id,
-                tx_hash,
-            },
-        );
-
-        tx_hash
-    }
-
     /// Drain the F40 targeted re-scan queue (decision 3), returning the
     /// pending requests for the driver to execute this tick and leaving
     /// the queue empty. One lock acquisition.
@@ -523,124 +346,6 @@ where
             .expect("pending-tx state lock poisoned")
             .held_bytes
             .retain(|tx_hash, _| live.contains(tx_hash));
-    }
-
-    pub(super) fn finalize_submit_terminal(
-        &self,
-        state: &mut PendingTxState,
-        id: ReservationId,
-        kind: TerminalErrorKind,
-    ) -> SubmitError {
-        if let Some(flight) = state.in_flight.remove(&id) {
-            // WI-RPC-3 retention: a terminal verdict is a definite
-            // refusal — the daemon did not relay (single-egress), so
-            // exposure never began. Retire the dispatch-persisted
-            // record; a refused build leaves no residue (pin 1's
-            // discard side).
-            let txid = canonical_tx_id(&flight.entry.tx_bytes);
-            self.ledger.with_wallet_ledger_mut(|wallet| {
-                wallet.retire_retained_tx_key(&txid.to_bytes());
-            });
-        }
-        release_output_locks_for(state, id);
-
-        emit_pending_tx_diagnostic(
-            self.sink.as_ref(),
-            PendingTxDiagnostic::Discarded {
-                reservation_id: id,
-                reason: DiscardReason::DaemonRejectedTerminal { kind },
-            },
-        );
-
-        // F28/F37 loop-breaker (§2.5): a second consecutive same-kind
-        // rejection is a systematic disagreement — alarm once and gate
-        // further builds until the operator acknowledges.
-        if state.loop_breaker.record_terminal(kind) {
-            emit_pending_tx_diagnostic(
-                self.sink.as_ref(),
-                PendingTxDiagnostic::SubmitLoopBreakerTripped {
-                    reservation_id: id,
-                    kind,
-                },
-            );
-        }
-
-        SubmitError::DaemonRejectedTerminal { kind }
-    }
-
-    /// Restore a reservation whose daemon verdict was a §2.5 retryable
-    /// rejection (`StaleRoot` / `ReferenceTooRecent` / `ReferenceNotFound`)
-    /// to `consumer_held`.
-    ///
-    /// The verdict is definite (not in pool, not in chain — under
-    /// single-egress, provably unrelayed), but the input selection remains
-    /// sound, so the `output_locks` are **retained**: releasing them would
-    /// let a competing build select the same inputs and broadcast a second
-    /// same-key-image artifact (`DAEMON_SUBMIT_VERDICT.md` §7.1). The
-    /// entry returns with its full re-anchor substrate, so the consumer's
-    /// next `submit(rid, seen_gen)` reproves against a fresh reference
-    /// where the pre-flight staleness check calls for it (the `StaleRoot`
-    /// remedy) or simply re-offers the same bytes (`ReferenceTooRecent` /
-    /// `ReferenceNotFound` after their per-cause waits).
-    pub(super) fn finalize_submit_retryable(
-        &self,
-        state: &mut PendingTxState,
-        id: ReservationId,
-        cause: RetryableRejectCause,
-    ) -> SubmitError {
-        if let Some(flight) = state.in_flight.remove(&id) {
-            // WI-RPC-3 retention: §2.5 retryable is likewise definite
-            // ("provably unrelayed") — retire the dispatch-persisted
-            // record. The next `submit(id, gen)` re-persists at its own
-            // dispatch, possibly under a new canonical txid after a
-            // re-anchor rebuild, so retiring here also prevents a stale
-            // record for bytes that will never be re-offered.
-            let txid = canonical_tx_id(&flight.entry.tx_bytes);
-            self.ledger.with_wallet_ledger_mut(|wallet| {
-                wallet.retire_retained_tx_key(&txid.to_bytes());
-            });
-            state.consumer_held.insert(id, flight.entry);
-        }
-
-        emit_pending_tx_diagnostic(
-            self.sink.as_ref(),
-            PendingTxDiagnostic::SubmitRetryablyRejected {
-                reservation_id: id,
-                cause,
-            },
-        );
-
-        SubmitError::DaemonRejectedRetryable {
-            cause,
-            reservation_id: id,
-        }
-    }
-
-    pub(super) fn finalize_submit_ambiguous(
-        &self,
-        state: &PendingTxState,
-        id: ReservationId,
-        kind: AmbiguousErrorKind,
-    ) -> SubmitError {
-        let tx_hash = state
-            .in_flight
-            .get(&id)
-            .map(|flight| canonical_tx_id(&flight.entry.tx_bytes))
-            .unwrap_or_else(|| phase1_tx_hash(id));
-
-        emit_pending_tx_diagnostic(
-            self.sink.as_ref(),
-            PendingTxDiagnostic::SubmitPendingResolution {
-                reservation_id: id,
-                tx_hash,
-                kind,
-            },
-        );
-
-        SubmitError::DaemonAmbiguous {
-            kind,
-            reservation_id: id,
-        }
     }
 
     pub(super) fn build_select_sync(
@@ -1102,10 +807,81 @@ where
         });
     }
 
+    /// Re-validate the selected inputs at build's commit boundary.
+    ///
+    /// Selection is separated from commit by the lock-free prover window
+    /// (`AssembleTx` + signing). `refresh` merges scan results under a
+    /// *shared* engine borrow (`refresh.rs` — `apply_scan_result` behind
+    /// `read().await`), so no embedder lock serializes that merge against
+    /// this window; it can land inside it. Two things it does invalidate a
+    /// build in flight:
+    ///
+    /// - **the transfer vector shifted** (a reorg rolled back and replayed
+    ///   blocks), so `indices` no longer address the outputs the paths were
+    ///   assembled for — committing would bind the reservation to the wrong
+    ///   outputs. Detected as a `gindex` mismatch, the same identity check
+    ///   the pre-sign fold uses ([`assemble_tx_to_sign`]);
+    /// - **an input was observed spent**, i.e. a co-spend from another copy
+    ///   of the seed landed on chain. The signed transaction is already
+    ///   dead — the daemon will reject it as a double spend.
+    ///
+    /// Either way, refuse. The user gets a clean build failure and the
+    /// reservation cleanup releases the output locks, instead of a
+    /// `PendingTx` we already know cannot be submitted. This does not make
+    /// the merge atomic with the build — nothing can, because the spend
+    /// happened outside this wallet — it bounds the build to what was still
+    /// true at commit, which is the whole window this method closes.
+    ///
+    /// A pure check against a **caller-held** ledger guard: taking (and
+    /// releasing) the guard in here would re-open a check→insert gap for
+    /// refresh's write-guarded merge to land in — the caller holds one
+    /// read guard across this check *and* the `consumer_held` insert, so
+    /// a merge lands strictly before (detected here) or strictly after
+    /// (indistinguishable from any post-return spend).
+    fn revalidate_selected_inputs(
+        ledger: &LedgerBlock,
+        indices: &[usize],
+        assemble_inputs: &[AssembleInput],
+    ) -> Result<(), SendError> {
+        // Parallel arrays in transaction-input order, built in lockstep by
+        // `build_select_sync`; a length mismatch is internal plumbing, not a
+        // runtime condition.
+        debug_assert_eq!(
+            indices.len(),
+            assemble_inputs.len(),
+            "assemble-input count must equal selected input count",
+        );
+        if indices.len() != assemble_inputs.len() {
+            return Err(SendError::CannotSign {
+                reason: "assemble-input count does not match selected input count",
+            });
+        }
+        let transfers = ledger.transfers();
+        for (&index, ai) in indices.iter().zip(assemble_inputs) {
+            let Some(td) = transfers.get(index) else {
+                return Err(SendError::CannotSign {
+                    reason: "selected transfer index out of range at commit",
+                });
+            };
+            if td.global_output_index != ai.gindex.0 {
+                return Err(SendError::CannotSign {
+                    reason: "selected transfer shifted under the transaction before commit",
+                });
+            }
+            if td.spent {
+                return Err(SendError::CannotSign {
+                    reason: "a selected input was spent elsewhere during assembly",
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn commit_built_sync(
         &self,
         request: &TxRequest,
         meta: &BuiltPendingMeta,
+        assemble_inputs: &[AssembleInput],
         reference: ReferenceBlock,
         signed: SignedTransfer,
     ) -> Result<PendingTx, SendError> {
@@ -1125,6 +901,10 @@ where
                 },
             )
         })?;
+        // `refresh_current_snapshot` re-enters the ledger lock, so it runs
+        // before the guarded section below (a re-entrant read while a
+        // writer queues can deadlock); snapshot freshness is diagnostics,
+        // not the staleness authority (that is the reference block).
         self.refresh_current_snapshot(&mut state);
 
         let id = meta.reservation_id;
@@ -1144,26 +924,54 @@ where
         // (§4 F-G). Built with checked arithmetic — the balance was validated in
         // `build_select_sync`, so a failure here is corrupt state and must fail
         // the build rather than feed a wrong value into a consent decision.
+        // Ledger-independent, so it runs before the guard to keep the guarded
+        // section minimal.
         let fingerprint =
             ContentFingerprint::from_build(meta.fee, &summary, meta.selected.total_covered)
                 .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
-        state.consumer_held.insert(
-            id,
-            ConsumerHeldEntry {
-                created_at,
-                snapshot_id,
-                built_at_height: meta.synced,
-                built_at_tip_hash: meta.tip_hash,
-                tx_bytes: tx_bytes.clone(),
-                request: request.clone(),
-                reference,
-                // A fresh build is generation 0; re-anchor bumps it (§4).
-                content_gen: 0,
-                fingerprint,
-                tx_key_secret,
-            },
-        );
+        // Build's lock₂ — the same discipline the re-anchor's lock₂
+        // applies to its reference (`CT5D_REANCHOR.md` §5), on the axis
+        // build actually depends on: its inputs. Selection ran *before*
+        // the lock-free window (the `AssembleTx` round-trip and the
+        // signer), and refresh's ledger merge takes a **shared** engine
+        // borrow — no embedder lock excludes it from that window, so
+        // both of its effects have to be re-checked here rather than
+        // assumed away. The fold's `gindex` guard covers the pre-sign
+        // half only; this is the post-sign re-check.
+        //
+        // One ledger read guard spans the re-check AND the
+        // `consumer_held` insert (nesting order state → ledger, the same
+        // direction the submit finalizers use): refresh's merge needs the
+        // write guard, so it lands strictly before this section (the
+        // re-check refuses) or strictly after (indistinguishable from a
+        // spend confirming after build returns — the daemon's terminal
+        // double-spend reject handles it, as it must). Without the held
+        // guard there is a check→insert gap the merge can land in, and
+        // the commit could hand back a `PendingTx` the ledger already
+        // invalidated.
+        self.ledger
+            .with_ledger_block(|ledger| {
+                Self::revalidate_selected_inputs(ledger, &meta.selected.indices, assemble_inputs)?;
+                state.consumer_held.insert(
+                    id,
+                    ConsumerHeldEntry {
+                        created_at,
+                        snapshot_id,
+                        built_at_height: meta.synced,
+                        built_at_tip_hash: meta.tip_hash,
+                        tx_bytes: tx_bytes.clone(),
+                        request: request.clone(),
+                        reference,
+                        // A fresh build is generation 0; re-anchor bumps it (§4).
+                        content_gen: 0,
+                        fingerprint,
+                        tx_key_secret,
+                    },
+                );
+                Ok(())
+            })
+            .map_err(|reason: SendError| fail_build_after_attempted(self.sink.as_ref(), reason))?;
 
         let pending = PendingTx {
             id,
@@ -1210,6 +1018,12 @@ where
     /// fee the fixed inputs cannot cover — F-I) is the CT-5d-deferred path: it
     /// surfaces as [`ReanchorError::ReselectionRequired`] so the consumer
     /// discards and rebuilds — never a bad proof, never a silent mutation.
+    ///
+    /// Runs under [`Self::build_permit`]: the prover phase issues the same
+    /// `AssembleTx` membership round-trip `build` does, so it belongs to the
+    /// same serialized network observable. Acquired once for the whole retry
+    /// loop — each attempt is another round-trip. Nothing on this path calls
+    /// `build`, so the single permit cannot be re-entered.
     pub(super) async fn reanchor_consumer_held(
         &self,
         id: ReservationId,
@@ -1220,6 +1034,12 @@ where
                 .ok_or(ReanchorError::Failed(SendError::CannotSign {
                     reason: "curve tree required to re-anchor a membership proof",
                 }))?;
+
+        let _build_permit = self
+            .build_permit
+            .acquire()
+            .await
+            .expect("build permit is never closed");
 
         // The lock-free prover run can re-stale the freshly-anchored reference
         // (the lock₂ TOCTOU); retry the whole loop a bounded number of times
@@ -1545,7 +1365,7 @@ where
         &self,
         id: ReservationId,
         seen_gen: u64,
-    ) -> Result<TxHash, SubmitError> {
+    ) -> Result<SubmitOutcome, SubmitError> {
         // --- pre-flight: membership under the state lock, staleness outside it
         // (CT-5d §5). The reference is the staleness authority — it *replaces* the
         // SnapshotId / built_at_tip_hash checks, so a benign tip advance no longer
@@ -1704,29 +1524,13 @@ where
             );
 
             if let Some(outcome) = self.take_queued_submit_outcome() {
-                // The submitter error carries no reservation id (the split that
-                // made the former rid-0 sentinel unrepresentable); the finalizers
-                // bind `id` — the reservation under submit — into the
-                // reservation-bound `SubmitError` they return. Success splits by
-                // lock-lifecycle disposition (§2.5): both arms place the F14
-                // lock (F40); `AlreadyInChain` baselines it at the claimed
-                // confirming height, which routes the release path.
+                // Test-injected daemon reply: same finalization as the
+                // production dispatch below, through the same two methods,
+                // so the injected path cannot certify a projection the real
+                // one does not perform.
                 return match outcome {
-                    Ok(SubmitSuccess::Broadcast { hash }) => {
-                        Ok(self.finalize_submit_accept(&mut state, id, hash))
-                    }
-                    Ok(SubmitSuccess::AlreadyInChain { hash, height }) => {
-                        Ok(self.finalize_submit_already_in_chain(&mut state, id, hash, height))
-                    }
-                    Err(SubmitterError::RejectedTerminal { kind }) => {
-                        Err(self.finalize_submit_terminal(&mut state, id, kind))
-                    }
-                    Err(SubmitterError::RejectedRetryable { cause }) => {
-                        Err(self.finalize_submit_retryable(&mut state, id, cause))
-                    }
-                    Err(SubmitterError::Ambiguous { kind }) => {
-                        Err(self.finalize_submit_ambiguous(&state, id, kind))
-                    }
+                    Ok(success) => Ok(self.finalize_submit_success(&mut state, id, success)),
+                    Err(err) => Err(self.finalize_submit_error(&mut state, id, &err)),
                 };
             }
 
@@ -1741,21 +1545,7 @@ where
                     .state
                     .lock()
                     .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
-                // Reservation-unaware submitter error in; reservation-bound
-                // `SubmitError` out — the finalizers bind `id`, the reservation
-                // under submit. The closed three-variant enum makes the former
-                // pass-through-with-sentinel-rid arm unrepresentable.
-                return Err(match submit_err {
-                    SubmitterError::RejectedTerminal { kind } => {
-                        self.finalize_submit_terminal(&mut state, id, kind)
-                    }
-                    SubmitterError::RejectedRetryable { cause } => {
-                        self.finalize_submit_retryable(&mut state, id, cause)
-                    }
-                    SubmitterError::Ambiguous { kind } => {
-                        self.finalize_submit_ambiguous(&state, id, kind)
-                    }
-                });
+                return Err(self.finalize_submit_error(&mut state, id, &submit_err));
             }
         };
 
@@ -1764,19 +1554,7 @@ where
             .lock()
             .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
 
-        // Success splits by lock-lifecycle disposition (§2.5): `Broadcast`
-        // (fresh accept / pool-resident duplicate) places the F14
-        // awaiting-confirmation lock baselined at the current height;
-        // `AlreadyInChain` places it too (F40 — no selectable-input window
-        // in either height case), baselined at the claimed confirming
-        // height, which routes the release path. Refresh remains the
-        // settlement authority in both arms.
-        Ok(match success {
-            SubmitSuccess::Broadcast { hash } => self.finalize_submit_accept(&mut state, id, hash),
-            SubmitSuccess::AlreadyInChain { hash, height } => {
-                self.finalize_submit_already_in_chain(&mut state, id, hash, height)
-            }
-        })
+        Ok(self.finalize_submit_success(&mut state, id, success))
     }
 
     pub(super) fn discard_sync(
@@ -1917,6 +1695,7 @@ where
             ttl,
             network,
             state,
+            build_permit: tokio::sync::Semaphore::new(1),
             #[cfg(any(test, feature = "test-helpers"))]
             submit_daemon_outcome: Mutex::new(None),
         }

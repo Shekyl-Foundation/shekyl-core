@@ -10,8 +10,20 @@
 //! `Arc<RwLock<_>>` so long-running work (`refresh` via
 //! [`Engine::start_refresh`]) does not hold the process-level tenant
 //! mutex, and so concurrent read RPCs can share the Engine under a
-//! read lock. Multi-tenant `--wallet-dir` exchanges extend this seam
-//! later (`WALLET_REWRITE_PLAN.md`).
+//! read lock. The send lifecycle (`build_pending_tx` / `submit_pending_tx`
+//! / `discard_pending_tx`) also runs under the read lock: slow work
+//! (FCMP++ assembly, daemon submit RPC) is serialized by
+//! `LocalPendingTx`'s interior mutability and its engine-owned build
+//! permit — which covers build's `AssembleTx` and submit's re-anchor
+//! alike — not by this lock, so reads proceed during build and submit.
+//!
+//! Nothing here serializes anything against `refresh`: the refresh
+//! driver and its ledger merge take read guards as well, so this lock
+//! never was the barrier between them. Ordering that matters lives in
+//! the Engine, on the state the operation touches.
+//!
+//! Multi-tenant `--wallet-dir` exchanges extend this seam later
+//! (`WALLET_REWRITE_PLAN.md`).
 
 use shekyl_engine_core::{Engine, PScanHandle, SoloSigner};
 use std::path::PathBuf;

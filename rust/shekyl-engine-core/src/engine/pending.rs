@@ -189,7 +189,8 @@ impl ReservationId {
     }
 }
 
-/// Result of [`Engine::submit_pending_tx`].
+/// The canonical transaction id — carried in every arm of
+/// [`SubmitOutcome`], the result of [`Engine::submit_pending_tx`].
 ///
 /// The canonical [`TxHash`] from `shekyl-types`, re-exported here so the
 /// pending-tx surface keeps its `pending::TxHash` path while there is a
@@ -209,6 +210,70 @@ pub use shekyl_types::TxHash;
 // backward source-text compatibility within the crate; the
 // `engine::mod` re-export surface is unchanged.
 pub use super::fee_estimator::FeePriority;
+
+/// Success surface of [`Engine::submit_pending_tx`] — the daemon's
+/// identity-bearing submit verdict, projected 1:1 for Engine consumers
+/// (the wallet-RPC `SubmitVerdictView` / OpenAPI
+/// `SubmitPendingTxResult.verdict` + `confirmed_height` is its client
+/// image; `docs/FOLLOWUPS.md` "Phase 4b: `submit_pending_tx` verdict is
+/// flattened", closed with this type).
+///
+/// All three variants share the fund-safety behavior: the F14
+/// awaiting-confirmation lock is placed on the spent inputs in every arm
+/// (`DAEMON_SUBMIT_VERDICT.md` §2.5 / F40 — no selectable-input window),
+/// and **refresh remains the settlement authority**. The variants differ
+/// only in what the daemon reported about the bytes:
+///
+/// - [`Accepted`](Self::Accepted): fresh accept — network-exposed, not
+///   settled.
+/// - [`AlreadyInPool`](Self::AlreadyInPool): pool-resident duplicate
+///   (e.g. a retry after a transport-ambiguous first attempt) — the
+///   earlier submit did reach the network. Same disposition as a fresh
+///   accept; reported distinctly so the consumer learns the ambiguity
+///   resolved.
+/// - [`AlreadyInChain`](Self::AlreadyInChain): the daemon claims this
+///   txid is already in the main chain at `height`. The claim is
+///   **untrusted, damage-capped metadata** (§7.2 rider row
+///   `AlreadyInChain.height`): internally it only routes the lock
+///   release path (F40-R1/R2). Consumers display it as the daemon's
+///   claim, never treat it as confirmation — confirmation is what
+///   refresh observes.
+///
+/// The `hash` in every variant is the **locally computed** canonical
+/// txid — the daemon reply carries no txid field (§2.2 wire minimalism),
+/// so an untrusted daemon cannot influence the recorded identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitOutcome {
+    /// Fresh daemon accept: the bytes are held and network-exposed.
+    Accepted {
+        /// The locally computed tx id.
+        hash: TxHash,
+    },
+    /// The daemon already held these bytes in its pool (dedup by txid).
+    AlreadyInPool {
+        /// The locally computed tx id.
+        hash: TxHash,
+    },
+    /// The daemon claims the txid is already in the main chain.
+    AlreadyInChain {
+        /// The locally computed tx id.
+        hash: TxHash,
+        /// Daemon-claimed confirming-block height — untrusted display /
+        /// release-path metadata (§7.2), never settlement truth.
+        height: u64,
+    },
+}
+
+impl SubmitOutcome {
+    /// The locally computed canonical tx id, whichever verdict arrived.
+    pub fn hash(&self) -> TxHash {
+        match self {
+            Self::Accepted { hash }
+            | Self::AlreadyInPool { hash }
+            | Self::AlreadyInChain { hash, .. } => *hash,
+        }
+    }
+}
 
 /// One transfer destination for [`TxRequest`].
 #[derive(Clone, Debug)]
@@ -705,7 +770,9 @@ pub(crate) fn build_pending_tx_in_state(
 /// Submit a [`PendingTx`] handle: run invariants, mark its inputs
 /// as locally spent, and return the (Phase-1 stubbed) tx hash.
 ///
-/// See [`Engine::submit_pending_tx`] for the contract.
+/// See [`Engine::submit_pending_tx`] for the invariant contract; note the
+/// Engine surface returns the daemon-verdict-bearing [`SubmitOutcome`],
+/// while this pre-daemon in-state helper keeps the bare stub hash.
 #[cfg(test)]
 pub(crate) fn submit_pending_tx_in_state(
     ledger: &mut LedgerBlock,
@@ -795,16 +862,22 @@ where
     let mut pinned = pin!(future);
     match pinned.as_mut().poll(&mut cx) {
         Poll::Ready(val) => val,
+        // Production `LocalPendingTx::build` awaits FCMP++ assembly and
+        // parks on the engine-owned build permit when another build is
+        // in flight — both are legitimate `Poll::Pending` reasons that
+        // the sync wrapper cannot drive. Callers on an async runtime
+        // must use `build_pending_tx_async`.
         Poll::Pending => Err(SendError::CannotSign {
-            reason:
-                "sync Engine::build_pending_tx requires an immediately-ready PendingTxEngine future",
+            reason: "sync Engine::build_pending_tx requires an immediately-ready \
+                     PendingTxEngine future (async assembly or build-permit \
+                     contention — use build_pending_tx_async)",
         }),
     }
 }
 
-fn poll_immediate_submit<F>(id: ReservationId, future: F) -> Result<TxHash, SubmitError>
+fn poll_immediate_submit<F>(id: ReservationId, future: F) -> Result<SubmitOutcome, SubmitError>
 where
-    F: Future<Output = Result<TxHash, SubmitError>>,
+    F: Future<Output = Result<SubmitOutcome, SubmitError>>,
 {
     let mut cx = Context::from_waker(Waker::noop());
     let mut pinned = pin!(future);
@@ -838,7 +911,13 @@ impl<
     }
 
     /// Build a [`PendingTx`] via [`PendingTxEngine::build`].
-    pub fn build_pending_tx(&mut self, request: &TxRequest) -> Result<PendingTx, SendError> {
+    ///
+    /// `&self` (W-B step 1): build's mutation runs under the
+    /// implementor's interior mutability, and the production
+    /// `LocalPendingTx` serializes builds on an engine-owned permit of
+    /// one — so embedders may call this through a shared borrow (e.g. a
+    /// `RwLock` read guard) without changing the network observable.
+    pub fn build_pending_tx(&self, request: &TxRequest) -> Result<PendingTx, SendError> {
         poll_immediate_build(self.pending.build(request.clone()))
     }
 
@@ -847,11 +926,19 @@ impl<
     /// `seen_gen` is the [`PendingTx::content_gen`] the consumer last reviewed;
     /// it gates broadcast against a submit-time re-anchor that changed the
     /// authorized content (CT-5d, [`docs/design/CT5D_REANCHOR.md`] §4).
+    ///
+    /// Success is the identity-bearing [`SubmitOutcome`] — fresh accept,
+    /// pool-resident duplicate, or the daemon's already-in-chain claim
+    /// with its claimed height (all sharing the §2.5 lock disposition).
+    ///
+    /// `&self` (same interior-mutability insight as build, W-B review):
+    /// submit mutates only under the implementor's own state lock and
+    /// awaits the daemon RPC without needing an exclusive Engine borrow.
     pub fn submit_pending_tx(
-        &mut self,
+        &self,
         id: ReservationId,
         seen_gen: u64,
-    ) -> Result<TxHash, SubmitError> {
+    ) -> Result<SubmitOutcome, SubmitError> {
         poll_immediate_submit(id, self.pending.submit(id, seen_gen))
     }
 
@@ -863,8 +950,13 @@ impl<
     /// immediate-ready contract ([`poll_immediate_build`]) cannot drive it and
     /// returns `CannotSign`. Callers already on an async runtime use this method
     /// (the "async `Engine` methods" pairing the sync wrapper's doc anticipates).
+    /// `&self` (W-B step 1): the slow FCMP++ membership assembly inside
+    /// build no longer needs the embedder's exclusive Engine borrow —
+    /// read RPCs proceed while a build runs. Serialization of the build
+    /// itself (and its `AssembleTx` network observable) is owned by the
+    /// production implementor's permit of one, not by the borrow.
     pub async fn build_pending_tx_async(
-        &mut self,
+        &self,
         request: &TxRequest,
     ) -> Result<PendingTx, SendError> {
         self.pending.build(request.clone()).await
@@ -872,11 +964,16 @@ impl<
 
     /// Async counterpart to [`Self::submit_pending_tx`] — the production submit
     /// awaits the daemon RPC. See [`Self::build_pending_tx_async`].
+    ///
+    /// `&self`: the daemon round-trip is implementor-owned interior
+    /// mutability, so embedders may hold a shared Engine borrow across
+    /// submit (wallet-RPC uses a read guard) without stalling concurrent
+    /// read RPCs for the duration of the network call.
     pub async fn submit_pending_tx_async(
-        &mut self,
+        &self,
         id: ReservationId,
         seen_gen: u64,
-    ) -> Result<TxHash, SubmitError> {
+    ) -> Result<SubmitOutcome, SubmitError> {
         self.pending.submit(id, seen_gen).await
     }
 
@@ -885,7 +982,10 @@ impl<
     /// Orchestration always passes [`DiscardReason::ConsumerExplicit`].
     /// Unknown handles are idempotent: [`PendingTxError::ReservationNotFound`]
     /// from the engine maps to `Ok(())` per cross-cutting lock 4.
-    pub fn discard_pending_tx(&mut self, id: ReservationId) -> Result<(), PendingTxError> {
+    ///
+    /// `&self`: discard is a short state-lock mutation on the pending-tx
+    /// implementor; no exclusive Engine borrow is required.
+    pub fn discard_pending_tx(&self, id: ReservationId) -> Result<(), PendingTxError> {
         match self.pending.discard(id, DiscardReason::ConsumerExplicit) {
             Ok(()) | Err(PendingTxError::ReservationNotFound { .. }) => Ok(()),
             Err(err) => Err(err),

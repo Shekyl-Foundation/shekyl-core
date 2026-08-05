@@ -18,7 +18,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use super::error::{PendingTxError, SendError, SubmitError};
-use super::pending::{PendingTx, ReservationId, TxHash, TxRequest};
+use super::pending::{PendingTx, ReservationId, SubmitOutcome, TxRequest};
 use super::traits::pending_tx::PendingTxEngine;
 
 /// Composable failure-injection wrapper over any
@@ -138,7 +138,7 @@ impl<P: PendingTxEngine> PendingTxEngine for FaultInjecting<P> {
         &self,
         id: ReservationId,
         seen_gen: u64,
-    ) -> impl std::future::Future<Output = Result<TxHash, SubmitError>> + Send {
+    ) -> impl std::future::Future<Output = Result<SubmitOutcome, SubmitError>> + Send {
         let injected = self
             .queued_submit_failures
             .lock()
@@ -183,7 +183,7 @@ mod tests {
 
     use super::*;
     use crate::engine::diagnostics::DiscardReason;
-    use crate::engine::pending::FeePriority;
+    use crate::engine::pending::{FeePriority, TxHash};
     use crate::engine::traits::PendingTxEngine;
 
     struct DelegationStub {
@@ -224,8 +224,12 @@ mod tests {
             &self,
             _id: ReservationId,
             _seen_gen: u64,
-        ) -> impl std::future::Future<Output = Result<TxHash, SubmitError>> + Send {
-            async { Ok(TxHash::from_bytes([1u8; 32])) }
+        ) -> impl std::future::Future<Output = Result<SubmitOutcome, SubmitError>> + Send {
+            async {
+                Ok(SubmitOutcome::Accepted {
+                    hash: TxHash::from_bytes([1u8; 32]),
+                })
+            }
         }
 
         fn discard(
@@ -263,11 +267,17 @@ mod tests {
 
         let pending = wrapper.build(standard_request()).await.expect("build ok");
         assert_eq!(wrapper.outstanding(), 1);
-        let hash = wrapper
+        let outcome = wrapper
             .submit(pending.id, pending.content_gen)
             .await
             .expect("submit ok");
-        assert_eq!(hash.as_bytes(), &[1u8; 32]);
+        assert_eq!(
+            outcome,
+            SubmitOutcome::Accepted {
+                hash: TxHash::from_bytes([1u8; 32]),
+            },
+            "delegation passes the inner engine's verdict through unchanged"
+        );
         assert_eq!(wrapper.queued_build_failures(), 0);
         assert_eq!(wrapper.queued_submit_failures(), 0);
     }
