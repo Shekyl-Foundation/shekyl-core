@@ -1674,7 +1674,10 @@ sustainability is unaffected by the recalibration.
   that is safe to enter without one. **Re-evaluation shape:** an explicit
   `abandon_tx` Engine API + RPC method in the `-291xx` send band, with a
   crash-ordering test against the drop-then-confirm window; `start_rescan`
-  keeps refusing until the user runs it. *Target: V3.0 / Phase 4d.*
+  keeps refusing until the user runs it. **Design round 0 OPEN
+  (2026-08-05):** `docs/design/WALLET_SEND_RECORD.md` — the
+  "presumed-dead, keys retained" arm is SJ-DQ-4; the RPC contract is
+  SJ-DQ-8. *Target: V3.0 / Phase 4d.*
 
 - **Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing
   history surface lands** (added 2026-07-09; **Phase 4c disclosure
@@ -1690,6 +1693,9 @@ sustainability is unaffected by the recalibration.
   shape:** project outgoing rows in `transfer_view` and let the existing
   `get_transfers` filter select them; until then, consider surfacing a
   distinct "not yet available" signal if clients depend on the filter.
+  **Design round 0 OPEN (2026-08-05):**
+  `docs/design/WALLET_SEND_RECORD.md` — the spend-side record is the
+  SJ-DQ family; projections close this entry via PR-SJ-2.
   *Target: V3.0 / Phase 4b–4c.*
 
 - **Phase 4b: build concurrency permit stays 1 — raising it is a rule-21
