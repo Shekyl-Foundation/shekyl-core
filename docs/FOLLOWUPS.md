@@ -6664,18 +6664,22 @@ sustainability is unaffected by the recalibration.
      (not merely justify the placement) at cutover.
 
   **Considered and rejected — records-gating the `CBKEY_UNREADABLE` check for exact
-  empty-shape equivalence.** The shim is strictly stricter than the interim on two
-  already-invalid shapes (unsolicited witness bytes → `MALFORMED_WITNESS`; an
-  unreadable coinbase `vout[0]` → `CBKEY_UNREADABLE`). Moving the upfront cbkey check
+  empty-shape equivalence.** The shim is strictly stricter than the interim on three
+  pinned shapes (unsolicited witness bytes → `MALFORMED_WITNESS`; an unreadable
+  coinbase `vout[0]` → `CBKEY_UNREADABLE`; an unparseable coinbase `tx_extra` →
+  `HEADERS_UNREADABLE`). Moving the upfront cbkey check
   to fire only when pass records exist would make the shim reject nothing the interim
   accepted. Rejected on the merits, not deferred: it reopens the locked step-2 verdict
   order (cap-first → structure → root-before-countersig — the diagnostic property that
   surfaces marshaling drift as `ROOT_MISMATCH` before forgery as `COUNTERSIG_INVALID`)
   to gain equivalence *only* over blocks `prevalidate_miner_transaction` already
   rejects (`vout == 1`, enforced after the shim at both sites) — cosmetic equivalence
-  over blocks that cannot exist on a valid chain. The divergence is a fail-fast
-  correctness improvement, not a regression; "strictly stricter on two already-invalid
-  shapes," stated honestly, is how it should stand.
+  over blocks that cannot exist on a valid chain. The divergences are fail-fast
+  correctness improvements, not regressions: the first two fire only on
+  already-invalid shapes; the third (unparseable extra, added on PR #410 review —
+  the reader must not collapse "malformed extra" into "empty attestation set") is a
+  deliberate tightening of the inherited arbitrary-`tx_extra` tolerance, pinned in
+  `ARCHIVAL_CREDIT_WIRE.md` §3.2 and `unreadable_headers_is_headers_unreadable`.
 
   **Target: V3.0 pre-genesis** (both preconditions gate the credit-wire cutover;
   precondition 2 is cutover-blocking). Closed when the cutover PR wires the miner

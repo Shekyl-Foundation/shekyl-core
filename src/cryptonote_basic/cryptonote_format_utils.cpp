@@ -636,18 +636,19 @@ namespace cryptonote
   //---------------------------------------------------------------
   bool get_archival_attestation_from_extra(const std::vector<uint8_t>& tx_extra, std::string& attestation_blob)
   {
+    // false ONLY on a tx_extra parse failure: the headers are UNREADABLE, which
+    // callers must treat as distinct from "successfully parsed, no attestation
+    // tag" (true with an empty blob -- the committed empty set). Collapsing the
+    // two would let a malformed coinbase extra pass for the empty attestation
+    // set at admission while the settlement scan later reads the same bytes.
+    attestation_blob.clear();
     std::vector<tx_extra_field> tx_extra_fields;
-    // Propagate parse failure explicitly: a malformed extra must not be
-    // confused with "field absent" (which also returns false, but only after a
-    // successful parse that simply lacks the tag).
     if (!parse_tx_extra(tx_extra, tx_extra_fields))
       return false;
 
     tx_extra_archival_attestation field;
-    if (!find_tx_extra_field_by_type(tx_extra_fields, field))
-      return false;
-
-    attestation_blob = field.blob;
+    if (find_tx_extra_field_by_type(tx_extra_fields, field))
+      attestation_blob = field.blob;
     return true;
   }
   //---------------------------------------------------------------

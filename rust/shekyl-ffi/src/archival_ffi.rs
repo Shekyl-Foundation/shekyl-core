@@ -765,6 +765,11 @@ pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH: u8 = 9;
 /// A pair's pubkey length is neither 0 (bond-absent) nor `HYBRID_PUBKEY_CANONICAL_BYTES` — a
 /// truncated/oversized buffer, NOT diagnosed as a bad signature.
 pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY: u8 = 10;
+/// C++ could not read the kept-header blob because the coinbase `tx_extra` failed to parse.
+/// Unreadable headers are NOT the empty set: the `attestation_root` commitment over the kept
+/// headers is unverifiable, and the settlement scan later reads those same coinbase bytes — so
+/// the block is rejected loudly rather than admitted as if it committed zero records.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE: u8 = 11;
 
 /// One `(p_id, hybrid pubkey)` pair C++ resolved for a distinct pass `p_id` that step-1 named.
 /// `pubkey_len == 0` is the bond-absent marker; `== HYBRID_PUBKEY_CANONICAL_BYTES` is a key; any
@@ -781,12 +786,15 @@ pub struct ShekylArchivalPidPubkey {
 /// reads. `cb_out_key` is the coinbase `vout[0]` output pubkey the nonce binds (consensus rule:
 /// the attestation binds `vout[0]`, not an arbitrary output); `cb_out_key_readable == 0` means C++
 /// could not read it (→ `..._ERR_CBKEY_UNREADABLE`, never garbage). `headers` is the RAW
-/// 49-byte-record `tx_extra` blob — Rust splits and parses it (untrusted input, rule 20 #3).
+/// 49-byte-record `tx_extra` blob — Rust splits and parses it (untrusted input, rule 20 #3);
+/// `headers_readable == 0` means C++ could not parse the coinbase `tx_extra` at all
+/// (→ `..._ERR_HEADERS_UNREADABLE`, never misread as the committed empty set).
 #[repr(C)]
 pub struct ShekylArchivalAttestationVerifyCtx {
     pub attestation_root: [u8; 32],
     pub cb_out_key: [u8; 32],
     pub cb_out_key_readable: u8,
+    pub headers_readable: u8,
     pub headers_ptr: *const u8,
     pub headers_len: usize,
     pub pairs_ptr: *const ShekylArchivalPidPubkey,
@@ -813,9 +821,12 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
     }
     let ctx = unsafe { &*ctx_ptr };
 
-    // C++ never improvises the unreadable-coinbase verdict.
+    // C++ never improvises the unreadable-coinbase or unreadable-headers verdicts.
     if ctx.cb_out_key_readable == 0 {
         return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE;
+    }
+    if ctx.headers_readable == 0 {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE;
     }
 
     // 1. Header blob: cap FIRST (structural, before per-record work), then parse ONCE. The parsed
@@ -5387,6 +5398,7 @@ mod attestation_verify_tests {
             attestation_root: root,
             cb_out_key: CB,
             cb_out_key_readable: cb_readable,
+            headers_readable: 1,
             headers_ptr: if headers.is_empty() {
                 std::ptr::null()
             } else {
@@ -5601,7 +5613,7 @@ mod attestation_verify_tests {
         );
     }
 
-    /// The second (and last) deliberate divergence from the interim, on the same empty shape. The
+    /// The second deliberate divergence from the interim, on the same empty shape. The
     /// interim never reads the coinbase, so it accepts an empty-root block whose `vout[0]` is
     /// unreadable and leaves the rejection to `prevalidate_miner_transaction`; the verify checks the
     /// C++-supplied cb-key-readable flag up front and rejects with CBKEY_UNREADABLE. Like the witness
@@ -5614,6 +5626,31 @@ mod attestation_verify_tests {
             call(empty_attestation_root(), 0, &[], &[], &[]),
             SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE
         );
+    }
+
+    /// The third (and last) deliberate divergence from the interim, and the only one that fires on
+    /// a shape the inherited consensus treats as valid: a coinbase `tx_extra` that fails to parse.
+    /// The interim never reads the extra, so it accepts such a block iff its mined root is the
+    /// empty root. But unreadable headers are NOT the committed empty set -- attestation-shaped
+    /// bytes could ride an unparseable extra outside the `attestation_root` commitment, and the
+    /// settlement scan later reads those same coinbase bytes, so admission-vs-settlement must not
+    /// disagree about them. C++ flags the parse failure (`headers_readable == 0`) and the verify
+    /// rejects with HEADERS_UNREADABLE -- loud failure over graceful misreading (rule 16's
+    /// pre-genesis inversion), pinned here so the tightening stays deliberate.
+    #[test]
+    fn unreadable_headers_is_headers_unreadable() {
+        let ctx = ShekylArchivalAttestationVerifyCtx {
+            attestation_root: empty_attestation_root(),
+            cb_out_key: CB,
+            cb_out_key_readable: 1,
+            headers_readable: 0,
+            headers_ptr: std::ptr::null(),
+            headers_len: 0,
+            pairs_ptr: std::ptr::null(),
+            pairs_len: 0,
+        };
+        let r = unsafe { shekyl_archival_verify_attestation(std::ptr::null(), 0, &raw const ctx) };
+        assert_eq!(r, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE);
     }
 
     #[test]
@@ -5643,6 +5680,10 @@ mod attestation_verify_tests {
             9
         );
         assert_eq!(SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY, 10);
+        assert_eq!(
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE,
+            11
+        );
     }
 
     // ---- step 1: shekyl_archival_attestation_pass_p_ids -------------------------------------

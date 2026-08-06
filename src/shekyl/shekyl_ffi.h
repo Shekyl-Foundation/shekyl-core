@@ -1850,11 +1850,14 @@ struct shekyl_archival_pid_pubkey {
 /// Consensus context for shekyl_archival_verify_attestation, filled after C++'s LMDB reads.
 /// cb_out_key is the coinbase vout[0] output pubkey the nonce binds (consensus rule);
 /// cb_out_key_readable == 0 means C++ could not read it (-> ERR_CBKEY_UNREADABLE, never garbage).
-/// headers is the RAW 49-byte-record tx_extra blob — Rust splits and parses it.
+/// headers is the RAW 49-byte-record tx_extra blob — Rust splits and parses it;
+/// headers_readable == 0 means C++ could not parse the coinbase tx_extra at all
+/// (-> ERR_HEADERS_UNREADABLE, never misread as the committed empty set).
 struct shekyl_archival_attestation_verify_ctx {
     uint8_t attestation_root[32];
     uint8_t cb_out_key[32];
     uint8_t cb_out_key_readable;
+    uint8_t headers_readable;
     const uint8_t* headers_ptr;
     size_t headers_len;
     const struct shekyl_archival_pid_pubkey* pairs_ptr;
@@ -1872,6 +1875,7 @@ struct shekyl_archival_attestation_verify_ctx {
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE   8
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH 9
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY   10
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE 11
 
 /// Step 1: name the distinct pass p_ids in a block's attestation headers, so C++ knows which
 /// archival-bond pubkeys to read before it can build the ctx pairs above. Parses the same raw

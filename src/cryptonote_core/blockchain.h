@@ -1668,13 +1668,17 @@ namespace cryptonote
      *
      * Pre-cutover no block carries pass records, so on every VALID block (empty
      * witness, well-formed coinbase) this matches the interim's
-     * `attestation_root == empty_attestation_root()`. It is strictly stricter on two
-     * malformed shapes the interim deferred to later validation: unsolicited witness
-     * bytes on an empty-root block (`MALFORMED_WITNESS`) and an unreadable coinbase
-     * `vout[0]` (`CBKEY_UNREADABLE`, which `prevalidate_miner_transaction` rejects
-     * anyway). Both are already-invalid, so no valid block's verdict changes. The
-     * populated path is proven by the across-FFI KAT and turns on for producers at
-     * the cutover.
+     * `attestation_root == empty_attestation_root()`. It is strictly stricter on
+     * three pinned shapes: unsolicited witness bytes on an empty-root block
+     * (`MALFORMED_WITNESS`) and an unreadable coinbase `vout[0]`
+     * (`CBKEY_UNREADABLE`, which `prevalidate_miner_transaction` rejects anyway)
+     * are already-invalid; a coinbase `tx_extra` that fails to parse
+     * (`HEADERS_UNREADABLE`) is a deliberate tightening of the inherited
+     * arbitrary-tx_extra tolerance — the `attestation_root` commitment over the
+     * kept headers is unverifiable when they cannot be read, and the settlement
+     * scan later reads those same bytes (pinned by
+     * `unreadable_headers_is_headers_unreadable`). The populated path is proven by
+     * the across-FFI KAT and turns on for producers at the cutover.
      *
      * @param b the block to be checked
      * @param witness the block's opaque attestation-witness blob

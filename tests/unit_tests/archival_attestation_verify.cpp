@@ -74,6 +74,7 @@ uint8_t run_verify(const std::vector<uint8_t>& root, uint8_t cb_readable,
   std::memcpy(ctx.attestation_root, root.data(), 32);
   std::memcpy(ctx.cb_out_key, cbkey.data(), 32);
   ctx.cb_out_key_readable = cb_readable;
+  ctx.headers_readable = 1;
   ctx.headers_ptr = headers.data();
   ctx.headers_len = headers.size();
   ctx.pairs_ptr = &pair;
@@ -122,6 +123,21 @@ TEST(archival_attestation_verify, unreadable_cbkey_is_cbkey_unreadable)
     SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE);
 }
 
+// headers_readable flag offset: 0 means C++ could not parse the coinbase tx_extra -> the verify
+// refuses rather than misreading a malformed extra as the committed empty attestation set.
+TEST(archival_attestation_verify, unreadable_headers_is_headers_unreadable)
+{
+  uint8_t empty_root[32];
+  ASSERT_TRUE(shekyl_attestation_root_empty(empty_root));
+
+  shekyl_archival_attestation_verify_ctx ctx{};
+  std::memcpy(ctx.attestation_root, empty_root, 32);
+  ctx.cb_out_key_readable = 1;
+  ctx.headers_readable = 0;
+  EXPECT_EQ(shekyl_archival_verify_attestation(nullptr, 0, &ctx),
+    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE);
+}
+
 // The empty (pre-cutover) shape across the FFI: the C++ empty root (shekyl_attestation_root_empty)
 // agrees with the Rust verify's recompute over zero records -> OK; a non-empty root -> reject.
 TEST(archival_attestation_verify, empty_shape_across_ffi)
@@ -132,6 +148,7 @@ TEST(archival_attestation_verify, empty_shape_across_ffi)
   shekyl_archival_attestation_verify_ctx ctx{};
   std::memcpy(ctx.attestation_root, empty_root, 32);
   ctx.cb_out_key_readable = 1;  // no records -> the key value is unused, but the flag must be set
+  ctx.headers_readable = 1;     // parsed extra, no attestation tag -> the committed empty set
   ctx.headers_ptr = nullptr;
   ctx.headers_len = 0;
   ctx.pairs_ptr = nullptr;

@@ -5565,31 +5565,37 @@ bool Blockchain::verify_block_attestation(const block& b, const blobdata& witnes
   // hands the raw bytes across, and obeys the verdict. It parses nothing structural and decides
   // nothing (rule 20). Pre-cutover no block carries pass records, so on every VALID block (empty
   // witness, well-formed coinbase) this matches the interim's attestation_root ==
-  // empty_attestation_root(); it is strictly stricter only on already-invalid shapes (unsolicited
-  // witness bytes, or an unreadable coinbase vout[0] that prevalidate_miner_transaction rejects
-  // anyway), so no valid block's verdict changes.
+  // empty_attestation_root(); it is strictly stricter only on three pinned shapes (unsolicited
+  // witness bytes, an unreadable coinbase vout[0] that prevalidate_miner_transaction rejects anyway,
+  // and a coinbase tx_extra that fails to parse), so no valid block's verdict changes except the
+  // deliberate unparseable-extra tightening pinned in unreadable_headers_is_headers_unreadable.
   const crypto::hash id = get_block_hash(b);
 
-  // 1. Header blob from the coinbase tx_extra. get_archival_attestation_from_extra collapses "field
-  //    absent" and "malformed extra" to false; both are safe as empty headers, because empty headers
-  //    make Rust recompute the empty-set root -- they can only push the verdict toward reject, never
-  //    toward a passing populated verify.
+  // 1. Header blob from the coinbase tx_extra. get_archival_attestation_from_extra returns false
+  //    ONLY on a tx_extra parse failure (a parsed extra with no attestation tag is true with an
+  //    empty blob -- the committed empty set). Unreadable is NOT empty: attestation-shaped bytes
+  //    could ride an unparseable extra outside the attestation_root commitment, and the settlement
+  //    scan later reads these same coinbase bytes, so flag it and let Rust return
+  //    ERR_HEADERS_UNREADABLE -- a loud reject, never a silent empty.
   std::string headers;
-  if (!get_archival_attestation_from_extra(b.miner_tx.extra, headers))
-    headers.clear();
+  const bool headers_readable = get_archival_attestation_from_extra(b.miner_tx.extra, headers);
 
-  // 2. Step 1: name the distinct pass p_ids so we know which bonds to read. Zero authority -- step 2
-  //    re-derives the authoritative set and rejects any coverage mismatch (ERR_PUBKEY_SET_MISMATCH).
+  // 2. Step 1 (readable headers only -- unreadable headers name nothing): name the distinct pass
+  //    p_ids so we know which bonds to read. Zero authority -- step 2 re-derives the authoritative
+  //    set and rejects any coverage mismatch (ERR_PUBKEY_SET_MISMATCH).
   uint8_t pass_ids[config::ARCHIVAL_MAX_ATTESTATION_RECORDS][32];
   size_t pass_id_count = 0;
-  const uint8_t step1 = shekyl_archival_attestation_pass_p_ids(
-    headers.empty() ? nullptr : reinterpret_cast<const uint8_t*>(headers.data()), headers.size(),
-    pass_ids, config::ARCHIVAL_MAX_ATTESTATION_RECORDS, &pass_id_count);
-  if (step1 != SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK)
+  if (headers_readable)
   {
-    MERROR_VER("Block with id: " << id << " has malformed attestation headers (step-1 verdict "
-      << (unsigned)step1 << ")");
-    return false;
+    const uint8_t step1 = shekyl_archival_attestation_pass_p_ids(
+      headers.empty() ? nullptr : reinterpret_cast<const uint8_t*>(headers.data()), headers.size(),
+      pass_ids, config::ARCHIVAL_MAX_ATTESTATION_RECORDS, &pass_id_count);
+    if (step1 != SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK)
+    {
+      MERROR_VER("Block with id: " << id << " has malformed attestation headers (step-1 verdict "
+        << (unsigned)step1 << ")");
+      return false;
+    }
   }
 
   // 3. Read each distinct bond's hybrid pubkey. Fill ALL pubkey buffers first, THEN build the pairs
@@ -5622,6 +5628,7 @@ bool Blockchain::verify_block_attestation(const block& b, const blobdata& witnes
     std::memcpy(ctx.cb_out_key, cb_out_key.data, 32);
     ctx.cb_out_key_readable = 1;
   }
+  ctx.headers_readable = headers_readable ? 1 : 0;
   ctx.headers_ptr = headers.empty() ? nullptr : reinterpret_cast<const uint8_t*>(headers.data());
   ctx.headers_len = headers.size();
   ctx.pairs_ptr = pairs.empty() ? nullptr : pairs.data();
