@@ -33,8 +33,11 @@ thiserror = { workspace = true }
 # isolate) needs a link graph that does not exist yet — shekyl-levin is in no
 # staticlib today. Recorded in the FOLLOWUPS "Levin p2p migration" LV-3 entry.
 #
-# Optional: only pulled in by the `zstd` feature above.
-zstd = { version = "0.13", optional = true }
+# Optional: only pulled in by the `zstd` feature above. The version is the
+# single-source [workspace.dependencies] pin (decision 2026-08-06): further
+# consumers are anticipated (shard serving), and one pin keeps every
+# component's frames interoperable by construction.
+zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Round-trip property tests (rule 50): builder → chunked reader → same
