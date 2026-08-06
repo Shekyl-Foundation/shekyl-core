@@ -5,13 +5,21 @@
 **C1** (premise corrected per R1-4's check — see §2), **C2** (reworded
 to the R1-3 ownership form), **C3**, **C5**, **C7** (new, per R1-2),
 the **§5 non-goals**, and the **PR-SJ-1/2/3 decomposition**.
-Re-posed against the §1 recoverability table and awaiting R1 pass 2:
-**SJ-DQ-1**, **SJ-DQ-4** (reframed per R1-3), **SJ-DQ-5**, **SJ-DQ-6**;
-the `abandon_tx` force-path sub-question is pulled up from SJ-DQ-8 into
-R1 scope (R1-5). Decisions stamp into the section that carries them,
-dated, per the binding-record convention (`DAEMON_SUBMIT_VERDICT.md`
-§1 shape). Per R1-6: any deferral R1 creates carries named rule-21
-reopen criteria at ratification time, not at PR time.
+**R1 pass 2 folded 2026-08-05**: **C1 REPLACED** (the envelope is the
+boundary — the pass-1 form was wrong twice over, see §2), **SJ-DQ-1
+DECIDED** (full row, addresses stored, no knob; the reduced-row GUI
+mock and its gate are **withdrawn**, not downgraded — findings M-1..M-4
+die with the instrument), **SJ-DQ-5 re-scoped** (user control, not
+seizure defense), **SJ-DQ-7 widened by scope ruling** (the dormant
+`tx_notes` annotation surface folds in and ships with PR-SJ-2), and
+the `attributes` bag gets its **own disposition** (deletion-leaning,
+below). Still open for pass 3: SJ-DQ-4's remaining mechanics,
+SJ-DQ-5's control design, SJ-DQ-6, and the `abandon_tx` force-path
+sub-question (pulled up from SJ-DQ-8 at pass 1, R1-5). Decisions stamp
+into the section that carries them, dated, per the binding-record
+convention (`DAEMON_SUBMIT_VERDICT.md` §1 shape). Per R1-6: any
+deferral R1 creates carries named rule-21 reopen criteria at
+ratification time, not at PR time.
 
 **Identifier family:** `SJ-DQ-N` (send-journal design questions),
 registered at birth in
@@ -67,6 +75,25 @@ layer; that waits on engine-side transaction journaling"
   pending_tx_hashes` are dispatch-authored and preserved across rescan;
   `reconcile_tx_key_retention` retires entries only against a *chain*
   reference (I-2).
+- **The envelope** (`../WALLET_FILE_FORMAT_V1.md` §1): every persistent
+  wallet mutation outside the keys file lives in the AEAD-sealed
+  `.wallet` container (Argon2id → wrap key → random file KEK → HKDF
+  per-region keys; cross-bound to `.wallet.keys`). Stance Minimum-Leak:
+  a sealed file discloses nothing — no balance, no history, not even
+  network or capability mode. The journal lands inside this envelope by
+  construction, beside the transfers cache; the companion file already
+  holds the spend seed.
+- **A dormant annotation surface already exists**:
+  `tx_meta.tx_notes: BTreeMap<[u8;32], String>` ("user-authored
+  free-text notes, keyed by txid") and the untyped `attributes` bag
+  (`shekyl-engine-state/src/tx_meta_block.rs:183–191`) — persisted,
+  sealed, schema-versioned, rescan-preserved (`engine/rescan.rs`
+  preserve list), and promised to clients in the published contract
+  (`../api/wallet_rpc.yaml` `rescan_blockchain`: "user-authored
+  records (retained tx keys, notes, …) survive") — with **zero
+  production readers or writers** (verified: the only other mention
+  deliberately excludes them from an invariant). The WI-RPC-3-F-1
+  dormancy class: contract-referenced state no user can reach.
 
 **Per-field recoverability under chain replay** (R1-1; replaces round
 0's flat "replay is blind" claim, which overstated the loss — and whose
@@ -85,33 +112,50 @@ it).
 | Recipient addresses | **No** | one-time output keys; nothing on chain links an output to an address without the recipient's view material |
 | Per-recipient split | **No** | CT commitments hide non-ours output amounts; without addresses there is no per-recipient attribution |
 
-**Consequence (load-bearing for SJ-DQ-1/4/5):** a journal row with no
-recipient addresses forfeits nothing replay cannot rebuild — txid,
-height, fee, total sent, and change are all recoverable. The journal's
-*unique* contribution is counterparty identity and the per-recipient
-split — exactly the field C1 names as the most dangerous thing the
-wallet could write. The record is still required (a *usable* history
-should not demand a full replay, states like `PresumedDead` are not
-chain-derivable, and the dispatched input set must survive the rescan
-wipe per the reframed SJ-DQ-4) — but the cost of *not storing
-addresses* is convenience, not history.
+**Consequence (load-bearing for SJ-DQ-4, and for honesty about what
+the journal adds):** replay rebuilds txid, height, fee, total sent,
+and change; the journal's *unique* content is counterparty identity,
+the per-recipient split, and the non-chain-derivable states
+(`PresumedDead`, the dispatched input set that must survive the rescan
+wipe per the reframed SJ-DQ-4). At pass 1 this table was also carrying
+SJ-DQ-1's retention question; pass 2 settled that on different ground —
+the envelope frame (C1) — so the table no longer arbitrates a storage
+default. It remains the authority on what must ride the journal versus
+what replay provides for free.
 
 ## 2. Binding constraints (inputs to the round, not open questions)
 
-- **C1 — privacy of the record** *(RATIFIED at R1 pass 1, premise
-  corrected per R1-4's check)*. Recipient addresses and the
-  per-recipient split are the most sensitive artifact the wallet would
-  write locally — and per the §1 table, the only unrecoverable one.
-  Premise as verified: a seized wallet file today already discloses
-  **user-curated** counterparty data — the address book
-  (`bookkeeping_block.rs::AddressBookEntry { address, description,
-  payment_id }`, rescan-preserved); payment-request rows carry our own
-  receiving side (FA-8), not counterparties. The journal would be the
-  first **automatic, comprehensive** counterparty record: the
-  disclosure delta is "every send ever made" versus "payees the user
-  chose to save." Every field in SJ-DQ-1 carries an explicit
-  disclosure-ledger entry, and prune policy (SJ-DQ-5) is first-class
-  scope (rule 00 priority 2; rule 82).
+- **C1 — the envelope is the boundary** *(REPLACED at R1 pass 2; both
+  pass-1 forms were wrong)*. Pass 1 called recipient addresses "the
+  most sensitive artifact the wallet would write locally" and reasoned
+  from a seized file. Neither premise survived §1's grounding: the
+  journal lands inside the AEAD-sealed `.wallet` envelope by
+  construction — the same container that holds the transfers cache,
+  beside a keys file holding the **seed**, which is strictly more
+  sensitive than any address — and the wallet already commits to
+  user-authored counterparty-bearing records inside that envelope
+  (`tx_notes`: an invoice number ties a payment to a named business
+  relationship, an amount owed, and a date; rescan-preserved and
+  contract-promised). A sealed file discloses *nothing* (Minimum-Leak);
+  in the only world where the journal is readable — seized file **plus
+  password** — the adversary holds the spend keys and the complete
+  incoming history, and withholding a payee address protects no one.
+  Privacy-by-omission also *displaces* rather than deletes: the record
+  moves to a notes app or spreadsheet — no Argon2id, no AEAD, no
+  anti-swap binding, likely cloud-synced — a measurable privacy loss.
+  A rule that fires only against the feature under discussion is a
+  preference, not a principle. **The binding constraint:** the journal
+  inherits the envelope's guarantees and never leaves it except at
+  named, disciplined boundary crossings, which is where the
+  disclosure ledger points —
+  - **the RPC wire**: `get_transfers` OUTGOING puts addresses in
+    responses, and the contract permits a TCP listener
+    (`shekyl-wallet-rpc/src/server.rs` `ListenAddr`), not only the
+    0600-UDS spawn path;
+  - **process memory** (rules 35/36): zeroize discipline, no `Debug`
+    that renders addresses, no path into error strings (the
+    WI-RPC-2a precedent that stopped internal errors echoing paths);
+  - **logs, crash dumps, backups**: cheap at PR-SJ-1, expensive later.
 - **C2 — one owner per fact; the journal owns dispatch facts**
   *(RATIFIED at R1 pass 1 in this wording, per R1-3)*. The journal
   **owns** what the wallet authored at dispatch — the selected input
@@ -163,29 +207,25 @@ addresses* is convenience, not history.
 
 ## 3. Design questions
 
-- **SJ-DQ-1 — record shape and its disclosure ledger** *(re-posed
-  against the §1 table, R1-1/R1-4)*. The table inverts round 0's
-  cost/benefit: a no-addresses row (`txid`, `dispatched_at_height`,
-  `fee`, `state`, total, change) forfeits nothing replay cannot
-  rebuild — the choice is about counterparty identity alone. R1
-  leaning on record: **addresses not stored by default** — the
-  asymmetry argument (a user lacking the record loses convenience; a
-  seized user loses their counterparties irreversibly, while the rest
-  of the history survives either way). The counter, held as genuinely
-  strong: a wallet that cannot say who you paid is a poor wallet;
-  users will enable the knob universally, and an opt-in everyone
-  enables is protection theater plus a knob — the exact rule-81
-  failure mode. **The decisive test is empirical, and runs before
-  ratification, not during:** mock the reduced GUI transaction row
-  (date / total / fee / txid, plus an address-book join where a
-  counterparty happens to be a saved payee) and judge whether the list
-  is usable. Usable ⇒ default-off is right; unreadable ⇒ opt-in is
-  theater and the honest answer is store-by-default with a serious
-  SJ-DQ-5 prune story. Option opened by the C1 premise check: rows
-  could store an **address-book entry reference** instead of a raw
-  address (user-curated indirection — deleting a contact anonymizes
-  their history); evaluate alongside, not instead of, the default
-  question.
+- **SJ-DQ-1 — DECIDED at R1 pass 2: full row, addresses stored, no
+  knob.** The row records the send the wallet actually made:
+  `recipients[{address, amount}]`, fee, change, heights, state.
+  Settled by C1's envelope frame, not by the §1 table: inside the
+  sealed container that already holds the seed and commits to
+  `tx_notes`, there is no coherent policy that admits the seed and
+  excludes a payee address — and not writing the record displaces it
+  to unprotectable storage. The pass-1 leaning (default-off) is
+  reversed; the pass-1 "counter" was simply correct — an opt-in
+  everyone enables is protection theater plus a knob, the exact
+  rule-81 failure mode. **The reduced-row GUI mock and its
+  ratification gate are withdrawn, not downgraded** (its findings
+  M-1..M-4 die with the instrument): it was apparatus built to answer
+  a question the envelope had already answered. The
+  address-book-reference option is demoted to what it is —
+  normalization (one place to rename a contact), evaluated on
+  convenience merits in PR-SJ-2, carrying no privacy argument. The
+  disclosure ledger's remaining work is C1's boundary crossings, not
+  field selection.
 - **SJ-DQ-2 — write point and crash window.** Dispatch-time beside
   `record_retained_tx_key` under the same guard (extending the I-2
   atomic-write pattern: record exists before the bytes can reach the
@@ -220,15 +260,14 @@ addresses* is convenience, not history.
   spend via key image — idempotent re-mark), the crash ordering of the
   late-confirmation flip, and which `-29202` refusals this retires
   versus keeps.
-- **SJ-DQ-5 — prune and deletion policy** *(re-posed against the §1
-  table)*. Pruning a no-addresses row is low-stakes — its content is
-  replay-equivalent — so the question sharpens to the fields that are
-  not: the address field (if SJ-DQ-1 stores one, in raw or
-  book-reference form) and the row's relationship to the retained
-  `TxSecretKey` (C2: prune must not cascade into proof material; do
-  they share a lifetime or not — decide explicitly). State the
-  seized-file story before and after prune, per C1's disclosure
-  ledger.
+- **SJ-DQ-5 — prune is user control over their own history** *(re-scoped
+  at R1 pass 2; seizure defense is the envelope's job, C1)*. The
+  honest, smaller question: what deletion the user gets — a row, a
+  counterparty's rows, the whole journal — with the C2 rule intact
+  (prune never cascades into `tx_keys` proof material; decide the
+  shared-or-independent lifetime explicitly) and the boundary story
+  stated: a pruned row is gone from wallet-controlled storage and
+  backups; storage the user copied elsewhere is their own.
 - **SJ-DQ-6 — schema placement and migration** *(re-posed under C7)*.
   `LedgerBlock` is excluded by C7, so the candidates are a sibling
   dispatch-authored block beside `tx_meta`/`bookkeeping` vs. a new
@@ -236,11 +275,31 @@ addresses* is convenience, not history.
   PR-SJ-1 lands the C7 marker trait with the documented
   `awaiting_confirmation` field-level exception and its planned
   retirement.
-- **SJ-DQ-7 — projection contract.** OUTGOING rows have no
-  output index: id scheme (`txid`-keyed vs. the receive rows'
-  `txid:index`), fee population, INCOMING/OUTGOING interleave ordering
-  in `get_transfers`, additive OpenAPI deltas, and the CLI/GUI
-  enablement that closes W-D end to end.
+- **SJ-DQ-7 — projection contract, widened to cover annotations**
+  *(scope ruling at R1 pass 2, run against rule 19)*. The journal
+  half: OUTGOING rows have no output index — id scheme (`txid`-keyed
+  vs. the receive rows' `txid:index`), fee population,
+  INCOMING/OUTGOING interleave ordering in `get_transfers`, additive
+  OpenAPI deltas, and the CLI/GUI enablement that closes W-D end to
+  end. The annotation half: the dormant `tx_notes` surface (§1)
+  shares exactly this projection surface — a note attaches to a
+  transfer row of either direction — and none of the record surface
+  (no lifecycle, no crash window, no state machine). Ruling: **fold
+  annotation exposure in here and ship it with PR-SJ-2** — a
+  `set_tx_note` / note-on-`TransferView` pair plus the OpenAPI delta,
+  no engine work beyond read/write — so the projection contract is
+  designed once. It is not gated on the journal; pull it into its own
+  small PR only if wanted sooner than PR-SJ-2.
+- **`attributes` — its own disposition, not a ride-along** *(posed at
+  R1 pass 2; ratify at pass 3)*. The untyped `String → String` bag is
+  wallet2-lineage shape by its own docstring ("Wallet2 used an
+  `unordered_map<string, string>`"), with no reader, no writer, no
+  defined semantics — an inherited forward-compat reservation that
+  never earned a consumer. Rules 60/81 point at deletion, not
+  exposure. Disposition to ratify: **delete in PR-SJ-2's schema
+  touch** (the rule-42 bump is already being paid there); rule-21
+  reopen criterion = a named, typed UX-state need that `tx_notes`
+  cannot carry.
 - **SJ-DQ-8 — `abandon_tx` contract.** `-291xx` code allocation,
   idempotency, the crash-ordering test the FOLLOWUP names
   (drop-then-confirm window), and the `start_rescan` interplay (keeps
@@ -256,18 +315,23 @@ addresses* is convenience, not history.
 
 ## 4. Shape of the work (decomposition RATIFIED at R1 pass 1)
 
-R1 pass 1 ratified the decomposition below and C1/C2/C3/C5/C7 + §5;
-pass 2 ratifies the re-posed SJ-DQ-1/4/5/6 (unblocked by the §1 table)
-plus the force-path sub-question; the rest of SJ-DQ-7/8 ratifies with
-its PRs. The SJ-DQ-1 GUI-usability test (mock the reduced row) runs
-before pass 2. Per R1-6, every deferral pass 2 creates carries named
-rule-21 reopen criteria at ratification. Then:
+R1 pass 1 ratified the decomposition below and C2/C3/C5/C7 + §5; pass
+2 replaced C1, decided SJ-DQ-1, re-scoped SJ-DQ-5, and widened
+PR-SJ-2's scope with the annotation exposure and the `attributes`
+disposition. Pass 3 ratifies what remains: SJ-DQ-4's re-application
+mechanics, SJ-DQ-5's control design, SJ-DQ-6, the force-path
+sub-question, and the `attributes` deletion. The rest of SJ-DQ-7/8
+ratifies with its PRs. Per R1-6, every deferral carries named rule-21
+reopen criteria at ratification. Then:
 
 1. **PR-SJ-1** — journal record + schema bump + preserve-set wiring +
    state machine on the dispatch/verdict/refresh/watchdog edges
    (engine-core + engine-state; closes nothing yet, enables both).
 2. **PR-SJ-2** — projections: `transfer_view` OUTGOING + fee, CLI, GUI
-   list. Closes the W-D FOLLOWUP.
+   list; the annotation exposure (`set_tx_note` + note on
+   `TransferView`, both directions); the `attributes` deletion (if
+   pass 3 ratifies it — the rule-42 bump is shared). Closes the W-D
+   FOLLOWUP.
 3. **PR-SJ-3** — `PresumedDead` entry + `abandon_tx` Engine API + RPC +
    crash-ordering test. Closes the abandon FOLLOWUP.
 
