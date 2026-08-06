@@ -12634,12 +12634,16 @@ generation time and tx size"*), enforced at **three** layers: consensus
 - **`F` dominates `hop`.** 3250 ms against 73–328 ms, so a **5.6× hardware
   difference moves the embargo 13 %.** The spec decision is cheap.
 - **The cap bounds the tail at 8.** §75's sorting is real, **closed, and
-  small**: at Pi 4 spec a scalar leaves **56 s** uncovered across the whole
-  legal shape domain.
+  small**: at Pi 4 spec a scalar leaves **52–57 s** uncovered across the whole
+  legal shape domain, depending on the assumed transit (52 s at 100 ms, 57 s
+  at 25 ms). Re-derived from the spec machine's own cells rather than the
+  scaled stand-ins the first pass used — see the correction in §80.3 — and
+  pinned in `spec_decision_matrix`, so the figure the decision rests on
+  cannot drift silently.
 
 So D-vs-B stopped being a principled question and became a priced one.
 
-### 80.3 D adopted — for decoupling, not for the 56 s
+### 80.3 D adopted — for decoupling, not for the ~55 s
 
 **The decisive argument is not the magnitude.** Under scalar-at-8,
 `MAX_INPUTS` is **coupled to the embargo**, which is network-wide: raising the
@@ -12657,9 +12661,22 @@ privacy parameter wearing a capacity label.**
 
 **And D is cheaper, not merely more correct.** Over-provisioning is the policy
 default *because it covers unmeasured variance* — you round up when you do not
-know the value. **Here we know it**: 129 ms at 1 input, 409 ms at 8, both
-measured. Provisioning the 1-input case at the 8-input value is not caution,
-it is **paying ~57 s of recovery latency on every transaction for nothing.**
+know the value. **Here we know it**: **124.5 ms at 1 input, 399.2 ms at 8**,
+both measured on the spec machine (§85.3). Provisioning the 1-input case at
+the 8-input value is not caution, it is **paying ~55 s of recovery latency on
+every transaction for nothing.**
+
+> **Corrected 2026-08-06, and the correction is §84.2's own trap sprung on
+> this section.** As first written this read *"129 ms at 1 input, 409 ms at 8,
+> **both measured**"* — but those two numbers are `23.182 × 5.56` and
+> `73.481 × 5.56`, i.e. the x86 arm scaled by the ratio. **They were not
+> measurements; they were the shortcut this document had already forbidden**,
+> written into the paragraph that prices the decision. The measured cells
+> (§85.3) are 3.5 % and 2.4 % lower, so the direction was over-provisioning
+> and the argument survives — **which is exactly why it went unnoticed for a
+> round.** `spec_decision_matrix` now carries a `Provenance` field per §87.2
+> and a test that fails if a spec-path row is filled by scaling, so the next
+> instance is a red test rather than a re-read.
 
 ### 80.4 Pi 4 is the minimum supported spec — and its status has changed
 
@@ -12839,7 +12856,7 @@ no code change and nothing to trigger a review.
 
 > **This retroactively strengthens the D decision, on evidence that did not
 > exist when it was taken.** §80.3 adopted D for *decoupling*, and priced the
-> alternative at "~57 s of recovery latency on every transaction for nothing."
+> alternative at "~55 s of recovery latency on every transaction for nothing."
 > **That price was the genesis-era one.** Under scalar-at-8 the over-provision
 > is paid against a tail that more than doubles while the modal case stays
 > flat — so the scalar gets **monotonically worse** for exactly the
@@ -12886,8 +12903,10 @@ table has 48 x86 cells and no invariant to check them against.
 *(Hop inputs verified against the measured surface: Pi-spec modal hop is
 183 ms at genesis and 194 ms at depth 7; the 8-input hop goes 453 → 818 ms.)*
 
-**D is not "57 s better" — it is 55 s better now, 126 s better later, and the
-gap only widens.**
+**D's advantage is not the single figure §80.3 priced it at — it is 55 s now,
+126 s later, and the gap only widens.** *(§80.3's genesis figure was 57 s from
+the scaled stand-ins and is 55 s from the measured cells it has since been
+corrected onto; the argument here lives in the second column regardless.)*
 
 **And the modal embargo is effectively a constant: 3 s of drift across the
 entire depth range.** That bounds what the re-derivation schedule is *for*.
