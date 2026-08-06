@@ -64,10 +64,19 @@
 //!
 //! # Reading the output
 //!
-//! The result is a **surface over `(n_in, n_out)`**, not a scalar. Collapsing
-//! it to the constant is a separate step and must use the *effective* scalar
-//! over the shape distribution, never the p90 of any single cell — otherwise
-//! §66's compounding error reappears one level down, inside `hop`.
+//! The result is a **surface, not a scalar**: 64 cells over `n_in ∈ 1..=8`
+//! crossed with the eight depth/layout rows swept below.
+//!
+//! **`n_out` is not one of the axes** — it is pinned at the modal 2. §72.3
+//! measured that term at ~0.07 ms per output, an order below the cell-to-cell
+//! spread on either real axis, so sweeping it would buy a third dimension that
+//! cannot move the constant and would dilute the one §79 is about. Naming it
+//! as an axis here would misdescribe what the numbers cover.
+//!
+//! Collapsing the surface to the constant is a separate step and must use the
+//! *effective* scalar over the shape distribution, never the p90 of any single
+//! cell — otherwise §66's compounding error reappears one level down, inside
+//! `hop`.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
