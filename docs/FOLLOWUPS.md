@@ -1739,6 +1739,49 @@ sustainability is unaffected by the recalibration.
   on PR #403, closed by widening the guard) rather than deferred.
   *Target: V3.0 disposition stable; reopen substrate-anchored per above.*
 
+- **A4 DECIDED (2026-08-06): air-gapped cold bundles DESCOPED from V3.0
+  — the reason changed, and the clause carries the reason** (roadmap
+  A4; grounded in the FCMP++ separability investigation at
+  `fa92f55f1`). NOT "cryptographically blocked" and NOT
+  "privacy-fatal": membership and spend authorization are separable
+  **by construction** — `SpendAuthAndLinkability` is a standalone
+  per-input proof over the prefix hash only (`shekyl-fcmp/src/
+  proof.rs`; `FcmpPlusPlus::new(sal_pairs, fcmp)` composes at
+  assembly, bound by the shared rerandomized openings;
+  `FcmpMembershipOnly` and `frost_sal` already exercise the halves
+  independently), and the PQC auths — which DO bind the anchor and
+  the proof bytes (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1) — are
+  view-tier re-signable, so a cold flow re-anchors membership hot at
+  submit (canonical `tip − REF_ANCHOR_AGE`, no reference-age
+  fingerprint). The descope reason: the shippable form is bounded and
+  KNOWN, and its two largest pieces — **verified display**
+  (recompute-and-display; without it the air gap protects the key,
+  not the payment) and the **envelope-sealed bundle** (a plaintext
+  bundle contradicts the ratified envelope rule,
+  `WALLET_SEND_RECORD.md` C1) — are unstarted product work that would
+  join a critical path already carrying A1–A3, C, and D. A half-form
+  is worse than none. **Clause (rule 21), three pinned items:**
+  **(1)** the separated SA/L-split form is LOAD-BEARING, not an
+  optimization — the carried-proof form re-creates the reference-age
+  anonymity partition (`shekyl-curve-tree/src/reference.rs`
+  privacy-canonical sentinel; the naive form's usable window is
+  ~94 blocks × 120 s ≈ 3.1 h), so any future shortcut form is
+  FORECLOSED now, while the reasoning is fresh; **(2)**
+  `ExportedUnsigned` is ADDITIVE to the send-record state machine
+  (SJ-DQ-3) — a new variant and a field, never a schema break —
+  **verified at PR-SJ-1** while cheap (the persisted encoding must
+  admit the variant without a version break); **(3)** V3.0 is
+  RECORDED as shipping with **no offline-key capability**, jointly
+  with B2's hardware-device deletion — named, not emergent
+  (`WALLET_REWRITE_PLAN.md`). **Reopening shape:** the two-phase
+  prove API (SA/L cold over the completed prefix incl. key images;
+  membership re-proven hot at submit; rerandomization blinds retained
+  hot under rules 35/36; PQC auths re-signed hot), the
+  `ExportedUnsigned` state with expiry/reclaim (the R8 TTL emitter
+  gap stands), and the envelope-sealed bundle format — designed as
+  one unit, never piecemeal. *Target: V3.1+ (decision stable for
+  V3.0).*
+
 - **GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in`
   single-structured-output funding must land before genesis** (added
   2026-07-08, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.5 residual 1 /

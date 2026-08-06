@@ -288,8 +288,15 @@ story, not the read path.
   would mean reopening a ratified design, so A4 resolves before pass 3
   freezes this. **B2 is DECIDED (2026-08-06: delete the hardware-device
   C++ surface with Phase 5, rule-21 clause in `FOLLOWUPS.md` — and it
-  touches no journal state, so it never gated this machine); the pass-3
-  gate is A4 alone.**
+  touches no journal state, so it never gated this machine).**
+  **A4 is DECIDED (2026-08-06: cold bundles DESCOPED from V3.0 —
+  clause in `FOLLOWUPS.md` "A4 DECIDED"): the V3.0 machine ships
+  WITHOUT `ExportedUnsigned`, and the GATE IS CLEARED — pass 3 is
+  unblocked.** One obligation transfers into PR-SJ-1 from the A4
+  clause, item (2): verify the persisted state-machine encoding
+  admits a future `ExportedUnsigned` variant (a new variant and a
+  field) **additively** — no version break, no schema migration —
+  and pin that with a test while it is cheap.
 - **SJ-DQ-4 — the spend marking survives the wipe; `PresumedDead` is a
   display state** *(REFRAMED per R1-3; round 0 asked the wrong
   question)*. Round 0 treated `PresumedDead` as an evidence threshold

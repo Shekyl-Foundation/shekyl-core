@@ -396,6 +396,8 @@ Default lean: option 3 unless the audit surfaces a behavioral distinction. Which
   - **Air-gapped flow** (view-only on a network-connected machine; signing on a separate offline machine via file-based unsigned/signed-tx handoff) is a separate feature. Required for high-value users who don't trust hardware vendors.
 
   Decision: keep air-gapped flow, **reshape cleaner than wallet2**. Replace wallet2's separate `export_outputs` / `import_outputs` / `export_key_images` / `import_key_images` with two typed bundle types: `UnsignedTxBundle` (network-connected machine produces; offline machine consumes) and `SignedTxBundle` (offline machine produces; network-connected machine consumes). Each bundle is a single file containing everything needed for the next stage. Phase 2d implements both bundle types end-to-end. The four wallet2 file-format dance methods do not survive.
+
+  **UPDATE 2026-08-06 (roadmap A4 DECIDED): descoped from V3.0.** The capability is kept — and the FCMP++ separability investigation confirmed it is *tractable* (SA/L is a standalone proof over the prefix hash; membership re-proves hot at submit with no reference-age fingerprint; PQC auths are view-tier re-signable) — but the shippable form's two largest pieces (verified display on the offline device; the envelope-sealed bundle) are unstarted product work, and a half-form is worse than none: cold signing without verified display protects the key and not the payment, and a plaintext bundle contradicts the envelope rule. Full clause with the three pinned items (SA/L-split form is load-bearing — shortcut carried-proof forms foreclosed; `ExportedUnsigned` additive to the send-record machine, verified at PR-SJ-1; V3.0 ships no offline-key capability, jointly with B2) in `docs/FOLLOWUPS.md` "A4 DECIDED". *Target: V3.1+.*
 - **Multisig type-system shape:** add `Wallet<S: WalletSignerKind>` where `S = SoloSigner | MultisigSigner<N, K>`. V3.0 only constructs `Wallet<SoloSigner>`; V3.1 enables the multisig path without changing call sites.
 
 ### Phase 1 deliverables
@@ -739,6 +741,12 @@ After Phase 4 lands and the binaries pass acceptance tests. Single commit, separ
   threaded through `cryptonote_basic`/`cryptonote_core`/`fcmp` by lineage
   (default-device parameters in tx construction) and its retirement is
   daemon-side surgery scoped separately.
+- **V3.0 offline-key posture (A4 + B2, jointly, 2026-08-06): V3.0 ships with
+  no offline-key capability** — no hardware-device path (B2: `device_trezor`
+  deleted; no vendor firmware signs the hybrid) and no air-gapped cold
+  bundles (A4: descoped with the rule-21 clause in `FOLLOWUPS.md`). Named
+  here as a decision so the posture is deliberate, not an emergent gap
+  someone discovers at release review.
 - Delete `src/wallet/CMakeLists.txt` entries; `src/wallet/` may shrink to a stub or be removed entirely.
 
 ### Transitional C++ helpers (introduced for `wallet2.cpp` rewires)
