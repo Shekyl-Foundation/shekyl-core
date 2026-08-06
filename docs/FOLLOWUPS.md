@@ -6639,6 +6639,58 @@ sustainability is unaffected by the recalibration.
   V3.0 pre-genesis.** Closed when single-sig decode rejects a Bech32-checksum
   address string and the per-segment tests land.
 
+- **Credit-wire cutover has two preconditions the Phase-2 verify cannot satisfy
+  itself** (added 2026-08-05, credit-wire CW-3 shim). Phase 2 landed
+  `Blockchain::verify_block_attestation` (recompute-and-compare + per-pass
+  countersignature) at both admission sites, replacing the interim
+  empty-root check. Two things must land in the cutover PR (Phase 5) *before*
+  producers emit populated blocks, and neither is visible to the empty-witness
+  gates that pass pre-cutover:
+  1. **Miner-local witness wiring.** `handle_block_found`
+     ([`cryptonote_core.cpp`](../src/cryptonote_core/cryptonote_core.cpp), the
+     `add_new_block(b, bvc)` call) routes a freshly-mined block through the
+     **2-arg, witness-less** `add_new_block`, so its attestation witness never
+     reaches the verify. Pre-cutover harmless (locally-mined blocks are
+     empty-root); post-cutover the node would `MALFORMED_WITNESS`-reject its own
+     populated blocks. A hard guard in the 2-arg `add_new_block` already turns
+     the drop into an immediate failure (a non-empty `attestation_root` at the
+     witness-less entry aborts the add), so a forgotten wiring is loud, not
+     silent. Fix: route `handle_block_found` through the 3-arg `add_new_block`
+     with the mined block's witness once the miner-side aggregation exists.
+  2. **Signature leg behind PoW — CUTOVER-BLOCKING.** Both call sites sit in the
+     "cheap test" slot *before* PoW verification. Post-cutover the verify does up
+     to `ARCHIVAL_MAX_ATTESTATION_RECORDS` hybrid ML-DSA checks there; an attacker
+     who picks garbage signatures can compute the matching `attestation_root` (the
+     root commits the signature bytes), so `ROOT_MISMATCH` does not short-circuit
+     for an attacker who controls the root — free asymmetric verification work with
+     no PoW spent. Zero cost pre-cutover (empty witnesses), but reachable the moment
+     populated blocks exist, so the signature-verifying leg must move behind PoW *at*
+     the cutover that enables population, never after: landing the settlement writer
+     / population without it opens the amplification. Fix: move the leg after PoW
+     (not merely justify the placement) at cutover.
+
+  **Considered and rejected — records-gating the `CBKEY_UNREADABLE` check for exact
+  empty-shape equivalence.** The shim is strictly stricter than the interim on three
+  pinned shapes (unsolicited witness bytes → `MALFORMED_WITNESS`; an unreadable
+  coinbase `vout[0]` → `CBKEY_UNREADABLE`; an unparseable coinbase `tx_extra` →
+  `HEADERS_UNREADABLE`). Moving the upfront cbkey check
+  to fire only when pass records exist would make the shim reject nothing the interim
+  accepted. Rejected on the merits, not deferred: it reopens the locked step-2 verdict
+  order (cap-first → structure → root-before-countersig — the diagnostic property that
+  surfaces marshaling drift as `ROOT_MISMATCH` before forgery as `COUNTERSIG_INVALID`)
+  to gain equivalence *only* over blocks `prevalidate_miner_transaction` already
+  rejects (`vout == 1`, enforced after the shim at both sites) — cosmetic equivalence
+  over blocks that cannot exist on a valid chain. The divergences are fail-fast
+  correctness improvements, not regressions: the first two fire only on
+  already-invalid shapes; the third (unparseable extra, added on PR #410 review —
+  the reader must not collapse "malformed extra" into "empty attestation set") is a
+  deliberate tightening of the inherited arbitrary-`tx_extra` tolerance, pinned in
+  `ARCHIVAL_CREDIT_WIRE.md` §3.2 and `unreadable_headers_is_headers_unreadable`.
+
+  **Target: V3.0 pre-genesis** (both preconditions gate the credit-wire cutover;
+  precondition 2 is cutover-blocking). Closed when the cutover PR wires the miner
+  witness and moves the signature leg behind PoW.
+
 ---
 
 ## V3.1 — audit response and stressnet gates

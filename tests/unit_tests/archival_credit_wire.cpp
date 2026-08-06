@@ -127,7 +127,7 @@ TEST(archival_credit_wire, tx_extra_attestation_round_trips_and_sorts)
 
   // get round-trips the blob byte-identically.
   std::string got;
-  ASSERT_TRUE(cryptonote::get_archival_attestation_from_extra(extra, got));
+  ASSERT_TRUE(cryptonote::parse_archival_attestation_from_extra(extra, got));
   ASSERT_EQ(got, blob);
 
   // sort must NOT hit "someone forgot to add a case", and the sorted extra still
@@ -135,8 +135,34 @@ TEST(archival_credit_wire, tx_extra_attestation_round_trips_and_sorts)
   std::vector<uint8_t> sorted;
   ASSERT_TRUE(cryptonote::sort_tx_extra(extra, sorted));
   std::string got_sorted;
-  ASSERT_TRUE(cryptonote::get_archival_attestation_from_extra(sorted, got_sorted));
+  ASSERT_TRUE(cryptonote::parse_archival_attestation_from_extra(sorted, got_sorted));
   ASSERT_EQ(got_sorted, blob);
+}
+
+// The reader's tri-state contract: "parsed, tag absent" is true with an EMPTY blob (the committed
+// empty set) and "tx_extra unparseable" is false (headers UNREADABLE). Collapsing the two is the
+// admission bug the verify's HEADERS_UNREADABLE verdict exists to prevent -- a malformed coinbase
+// extra must never pass for the empty attestation set.
+TEST(archival_credit_wire, attestation_reader_splits_absent_from_unreadable)
+{
+  // Parsed extra with no attestation tag -> true, empty blob.
+  std::vector<uint8_t> extra;
+  crypto::public_key pk;
+  memset(&pk, 0x22, sizeof(pk));
+  ASSERT_TRUE(cryptonote::add_tx_pub_key_to_extra(extra, pk));
+  std::string blob{"sentinel"};  // must be cleared, not left stale
+  ASSERT_TRUE(cryptonote::parse_archival_attestation_from_extra(extra, blob));
+  ASSERT_TRUE(blob.empty());
+
+  // An attestation tag followed by an unparseable tail -> false: the tag's bytes must NOT be
+  // returned as if the extra were well-formed.
+  std::string records(config::ARCHIVAL_ATTESTATION_HEADER_BYTES, '\x10');
+  std::vector<uint8_t> malformed;
+  ASSERT_TRUE(cryptonote::add_archival_attestation_to_tx_extra(malformed, records));
+  malformed.push_back(0xFE);  // truncated/unknown trailing field -> parse_tx_extra fails
+  blob = "sentinel";
+  ASSERT_FALSE(cryptonote::parse_archival_attestation_from_extra(malformed, blob));
+  ASSERT_TRUE(blob.empty());
 }
 
 // The header length matches the Rust canonical record; the record cap is pinned.

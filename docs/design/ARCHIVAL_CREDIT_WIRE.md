@@ -370,8 +370,12 @@ fixes two lifecycle points on the same records:
   `r ‖ cb_out_key ‖ P ‖ s ‖ E` and verify `P`'s signature; require **miss**
   records carry none; check each `kind` bit matches signature-presence; run the
   coinbase-output-key uniqueness check. A malformed set invalidates the *block*;
-  it touches signatures + `r` (present pre-prune) and **never touches settlement
-  state**.
+  so does a coinbase `tx_extra` that fails to parse (`HEADERS_UNREADABLE`): the
+  kept-header carrier is then unreadable, the root's commitment over it is
+  unverifiable, and the settlement fold reads those same bytes later — a
+  deliberate tightening of the inherited arbitrary-`tx_extra` tolerance, applied
+  to the coinbase at admission. Admission touches signatures + `r` (present
+  pre-prune) and **never touches settlement state**.
 - **Settlement (slash-deadline scan, per-epoch, `MAX_CLAIM_AGE_W` later,
   POST-prune).** Fold the **kept headers only** — `p_id, shard_id, E, kind` — into
   `serve_credit_bit` per `(P, s)` per epoch, pass-priority. The signatures and
