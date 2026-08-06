@@ -13,7 +13,13 @@ die with the instrument), **SJ-DQ-5 re-scoped** (user control, not
 seizure defense), **SJ-DQ-7 widened by scope ruling** (the dormant
 `tx_notes` annotation surface folds in and ships with PR-SJ-2), and
 the `attributes` bag gets its **own disposition** (deletion-leaning,
-below). Still open for pass 3: SJ-DQ-4's remaining mechanics,
+below). **Pass-2 amendment (2026-08-05):** the §1 table gains the
+FA-10 label row — payment-request linkage (`LABEL_KIND_REQUEST` rid in
+`enc_label`) is **conditionally** replay-recoverable via the OUTBOUND
+re-derivation chain given the retained tx key and a candidate
+recipient address; checked against SJ-DQ-1 before its ratification
+finalizes, and it does not disturb the decision (see the table's
+amendment note). Still open for pass 3: SJ-DQ-4's remaining mechanics,
 SJ-DQ-5's control design, SJ-DQ-6, and the `abandon_tx` force-path
 sub-question (pulled up from SJ-DQ-8 at pass 1, R1-5). Decisions stamp
 into the section that carries them, dated, per the binding-record
@@ -83,6 +89,17 @@ layer; that waits on engine-side transaction journaling"
   network or capability mode. The journal lands inside this envelope by
   construction, beside the transfers cache; the companion file already
   holds the spend seed.
+- **FA-10 labels** (`shekyl-crypto-pq/src/label.rs`; §5.7.11, adopted
+  2026-05-31): every output carries a fixed 8-byte plaintext
+  XOR-encrypted under per-output `k_label` + a 1-byte `label_tag`,
+  same discipline as amounts. Sentinel `[0xFF; 8]` when nothing is
+  said; on-wire bytes differ per output even for sentinel sends (no
+  cleartext-constant path); slot presence is not optional on wire
+  (`../POST_QUANTUM_CRYPTOGRAPHY.md` — gating means a wallet feature
+  flag for meaningful tags, never slot absence). `LABEL_KIND_REQUEST`
+  echoes a payment-request rid; `k_label` is one branch of the single
+  per-output `OutputSecrets` HKDF tree the OUTBOUND proof already
+  re-derives from the retained tx key.
 - **A dormant annotation surface already exists**:
   `tx_meta.tx_notes: BTreeMap<[u8;32], String>` ("user-authored
   free-text notes, keyed by txid") and the untyped `attributes` bag
@@ -111,6 +128,7 @@ it).
 | Total sent | **Yes (derived)** | Σ(our spent inputs' amounts — known, they are our outputs) − change − fee |
 | Recipient addresses | **No** | one-time output keys; nothing on chain links an output to an address without the recipient's view material |
 | Per-recipient split | **No** | CT commitments hide non-ours output amounts; without addresses there is no per-recipient attribution |
+| Payment-request linkage (rid echoed in `enc_label`, FA-10 `LABEL_KIND_REQUEST`) | **Conditional** — retained `tx_key` ∧ candidate recipient address | every output carries the uniform 8-byte label slot (`shekyl-crypto-pq/src/label.rs`, §5.7.11/FA-10; sentinel or tag, wire-indistinguishable); the sender re-derives `k_label` exactly as the OUTBOUND proof does — `rederive_combined_ss(tx_key_secret, recipient_x25519_pk, recipient_ml_kem_ek, idx)` (`shekyl-proofs/src/tx_proof.rs`) → `derive_output_secrets(...).k_label` (`derivation.rs`) → decrypt + `classify_label_plaintext`. Needs the recipient's *address material* as input, so it is trial-derivation against known addresses (journal rows post-SJ-DQ-1, or the address book) — never blind |
 
 **Consequence (load-bearing for SJ-DQ-4, and for honesty about what
 the journal adds):** replay rebuilds txid, height, fee, total sent,
@@ -122,6 +140,19 @@ SJ-DQ-1's retention question; pass 2 settled that on different ground —
 the envelope frame (C1) — so the table no longer arbitrates a storage
 default. It remains the authority on what must ride the journal versus
 what replay provides for free.
+
+**FA-10 amendment (2026-08-05, checked before SJ-DQ-1's ratification
+finalizes):** the label row above was missing at pass 1. Two
+consequences, neither disturbing the SJ-DQ-1 decision. (1) Honesty:
+request-linkage is *not* journal-unique — it is conditionally
+replay-recoverable, and the condition (a candidate address) is exactly
+what the decided full row stores, so the decision is self-consistent
+with its own recoverability story. (2) PR-SJ-1: the journal stores the
+echoed rid **directly at dispatch** (the send path computes it —
+`encode_request_plaintext` behind the FFI URI-pay path; a dispatch
+fact under C2's ownership), so surfacing "paid request #N" never
+requires the trial re-derivation; the derivation chain is the *replay*
+story, not the read path.
 
 ## 2. Binding constraints (inputs to the round, not open questions)
 
@@ -252,8 +283,9 @@ what replay provides for free.
   catastrophic: the inputs stay locked either way, and a late
   confirmation is a state flip, not a self-link. The evidence bar
   collapses from "prove non-exposure" to "good enough to show the
-  user" (watchdog confirmed-absent horizon + F31 status-query outcome
-  + breaker state), and abandon becomes fully self-contained — arm 2
+  user" (watchdog confirmed-absent horizon + F31 status-query
+  outcome + breaker state), and abandon becomes fully self-contained
+  — arm 2
   reached without a daemon feature. Remaining questions for pass 2:
   the re-application mechanics (post-rescan join of journal input sets
   onto replayed rows; what happens when replay already re-derived the
