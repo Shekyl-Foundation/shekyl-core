@@ -1278,9 +1278,9 @@ impl<
     ///
     /// Pre-V3.2, the public `Engine::create` and `Engine::open_full`
     /// constructors are concrete-typed (`daemon: DaemonClient`)
-    /// because their callers — `shekyl-cli`, `shekyl-engine-rpc`,
-    /// the upcoming JSON-RPC server cutover — only ever wire a
-    /// real daemon transport. Until V3.2, `replace_daemon` is the
+    /// because their callers — `shekyl-cli`, `shekyl-wallet-rpc` —
+    /// only ever wire a real daemon transport. Until V3.2,
+    /// `replace_daemon` is the
     /// test surface; production paths cannot reach it because
     /// `pub(crate) #[cfg(test)]` excludes them from the published
     /// API and from the non-test build.
