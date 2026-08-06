@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **The transitional `rust/shekyl-engine-rpc` crate is deleted** (C++-retirement
+  roadmap B1). It was the wallet2-era Rust FFI library — a JSON-RPC server and
+  embeddable library wrapping C++ `wallet2` through `src/wallet/wallet2_ffi.{h,cpp}`
+  — and every consumer had already migrated off it: `shekyl-cli` became a native
+  RPC client at WI-RPC-2a, the Tauri GUI wallet dropped it for in-process
+  `shekyl-engine-core` path-deps, and Phase 4a/4b/4c built the Engine-native
+  `shekyl-wallet-rpc` beside it rather than through it. Verified at deletion: no
+  Cargo manifest in the workspace depended on it, no file under `rust/` outside
+  the crate referenced `wallet2_ffi`, and `cmake/BuildRust.cmake` never built it
+  (it builds `shekyl-ffi` and `shekyl-daemon-image` only), so no C++ extern could
+  resolve against it.
+
+  Retired with the crate: its `rust-scanner` feature and the
+  `scanner_state::{LiveLedger, ScannerState}` read-side JSON-RPC cache (the
+  FOLLOWUPS entry that scheduled this for a Phase 4b *cutover* is closed — it
+  retired by deletion instead), its `native-sign` feature, and its `multisig`
+  feature, which named no code inside the crate and only forwarded to
+  `shekyl-engine-core` / `shekyl-fcmp`; dropping it from the `ci/multisig-feature`
+  lane removes a no-op arm, not coverage. `.github/workflows/codeql.yml` loses a
+  now-pointless `--exclude`, and `rust-audit-test.yml`'s `dalek-ff-group`
+  isolation loop loses an entry whose every dependency is separately named in the
+  same loop.
+
+  **Not in scope:** the C++ `src/wallet/wallet2_ffi.{h,cpp}` facade this crate
+  wrapped is untouched and still compiled. It now has no Rust consumer at all;
+  deleting it is Phase 5's job (`docs/design/WALLET_REWRITE_PLAN.md` §Phase 5).
+  `docs/WALLET_RPC_RUST.md` is re-anchored on that surviving C++ surface, and is
+  no longer the wallet-RPC reference — that is `docs/api/wallet_rpc.yaml`.
+
 ## [3.1.0-alpha.7] - 2026-08-06
 
 ### Changed

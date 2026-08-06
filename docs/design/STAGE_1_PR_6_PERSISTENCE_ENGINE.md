@@ -159,7 +159,7 @@ Per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc):
 | `load_state` / open on trait | Q9.11 closed no |
 | `LedgerEngine` persist read accessor (Phase 0c) | Not invented in PR 6 |
 | Wallet rewrite Phases 1–5 | `WALLET_REWRITE_PLAN.md` |
-| FFI / C++ / `shekyl-engine-rpc` | V3.2+ |
+| FFI / C++ (`shekyl-engine-rpc` deleted at roadmap B1) | V3.2+ |
 | Diagnostic stream / `FaultInjecting` wrapper | Bounded lens; no failure-injection trait surface at V3.0 |
 
 ---

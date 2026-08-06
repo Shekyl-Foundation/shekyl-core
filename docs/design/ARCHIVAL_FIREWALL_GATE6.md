@@ -2363,9 +2363,10 @@ The build lands only the piece that lives in `shekyl-core`:
   been touched — and the blocker is **not** RPC. The GUI is a Tauri app that
   **links the engine crates in-process** (`shekyl-gui-wallet/src-tauri/Cargo.toml`
   path-deps `shekyl-engine-core`) and calls them directly from
-  `#[tauri::command]` handlers → `wallet_bridge`; `shekyl-engine-rpc` is linked
-  as an FFI library, **not** run as a wallet-RPC server
-  (`shekyl-gui-wallet/docs/WALLET_STARTUP.md`), and the `shekyl-rpc-*` crates are
+  `#[tauri::command]` handlers → `wallet_bridge`; the transitional
+  `shekyl-engine-rpc` was linked as an FFI library, **never** run as a
+  wallet-RPC server, and has since been deleted outright (roadmap B1) — the
+  conclusion below is unchanged, and now holds a fortiori. The `shekyl-rpc-*` crates are
   the *daemon* (node) RPC, a different axis. So `plan_drain` is reachable from a
   Tauri command directly — no wallet-RPC layer is a prerequisite.
 

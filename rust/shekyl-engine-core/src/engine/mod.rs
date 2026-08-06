@@ -20,7 +20,7 @@
 //! is generic over signer / daemon / ledger trait implementors, with
 //! defaults that preserve the existing concrete-typed shape for
 //! production callers — the CLI ([`shekyl-cli`]) and the JSON-RPC
-//! server ([`shekyl-engine-rpc`]) sit on top of this surface, never
+//! server ([`shekyl-wallet-rpc`]) sit on top of this surface, never
 //! reaching around it.
 //!
 //! # What this module rejects on purpose
@@ -60,7 +60,7 @@
 //! 1. **Async runtime** — caller-provided multi-threaded `tokio`. IO-bound
 //!    methods are `async`; pure compute stays sync.
 //! 2. **Error types** — per-domain enums in [`error`], unified at the
-//!    RPC boundary by [`shekyl-engine-rpc`].
+//!    RPC boundary by [`shekyl-wallet-rpc`].
 //! 3. **Locking discipline** — `&self` queries / `&mut self` mutations.
 //!    The RPC binary wraps in [`Arc<RwLock<Engine>>`].
 //! 4. **`PendingTx` lifetime** — process-local, chain-state-tagged,

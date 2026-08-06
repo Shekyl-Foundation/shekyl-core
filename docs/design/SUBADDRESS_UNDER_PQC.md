@@ -785,7 +785,9 @@ Merchants: 2–3 accounts, not 10⁴ subaddresses.
 
 **Not in substrate today.** `WALLET_REWRITE_PLAN.md` locked **flat
 `SubaddressIndex(u32)`** per wallet (no account level); C++/RPC still carry
-`account_index` in legacy paths (`shekyl-cli`, `shekyl-engine-rpc`) —
+`account_index` in legacy paths (the C++ `wallet2_ffi` dispatcher; the Rust
+`shekyl-cli` and `shekyl-engine-rpc` carriers are gone — the latter deleted
+outright at roadmap B1) —
 End-state 5 **reverses** the flat-subaddress decision in favor of
 seed-derived accounts + drops subaddress indices. Pre-genesis amendment to
 `WALLET_REWRITE_PLAN.md` on closure (FA-7).

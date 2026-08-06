@@ -816,7 +816,8 @@ All methods are called via `POST /json_rpc`. Key groups:
 - **UTXO control:** `freeze`, `thaw`, `frozen`
 - **Mining:** `start_mining`, `stop_mining`
 
-For the full RPC reference, see [WALLET_RPC_RUST.md](WALLET_RPC_RUST.md).
+For the full RPC reference, see the wallet-RPC contract
+[`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml).
 
 ---
 

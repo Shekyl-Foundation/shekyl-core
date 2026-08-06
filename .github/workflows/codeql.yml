@@ -55,7 +55,7 @@ jobs:
         # the harness build there. CodeQL Rust analysis of the
         # differential harness is queued for V3.x once the workflow's
         # CodeQL coverage can stand up the C library at analysis time.
-        run: cargo build --release --workspace --exclude shekyl-cli --exclude shekyl-engine-rpc --exclude shekyl-randomx-differential
+        run: cargo build --release --workspace --exclude shekyl-cli --exclude shekyl-randomx-differential
         working-directory: rust
 
       - name: Perform CodeQL Analysis

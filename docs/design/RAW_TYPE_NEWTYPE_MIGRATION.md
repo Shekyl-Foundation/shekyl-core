@@ -263,7 +263,7 @@ crypto and less prone to the cross-domain confusion that bites the wallet path.
   upstream; the raw representation *is* the contract. Only the oxide
   application/protocol layer (transactions, blocks, ringct, rpc DTOs) is "ours
   to type."
-- **RPC/JSON DTO edges** ([engine-rpc](../../rust/shekyl-engine-rpc/src/types.rs),
+- **RPC/JSON DTO edges** ([wallet-rpc](../../rust/shekyl-wallet-rpc/src/lib.rs),
   [daemon-rpc](../../rust/shekyl-daemon-rpc/src/types.rs)): keep raw at the
   wire, convert inward — do not newtype the serde struct itself.
 - **`shekyl-encoding`, `shekyl-chacha`, `shekyl-crypto-hash`**: correctly
