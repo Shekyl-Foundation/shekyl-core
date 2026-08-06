@@ -1620,14 +1620,27 @@ sustainability is unaffected by the recalibration.
   (REST + json_rpc, unrestricted only). Caps flow from `core_rpc_server::init`
   through `shekyl_daemon_rpc_start` (0 = unlimited). See `DAEMON_RPC_RUST.md`.
 
-- **Trezor test harness: migrate `mock_rpc_daemon` off epee HTTP map**
-  (added 2026-07-10, epee HTTP listener deletion). `tests/trezor/daemon.h`
-  subclasses `core_rpc_server` and drives it via the epee
-  `CHAIN_HTTP_TO_MAP2` / `handle_http_request_map` request map, which was
-  removed with the listener. The harness only builds under `TREZOR_DEBUG`
-  (off in CI), so this does not gate the default build, but it must be
-  ported to exercise the Axum surface (or the in-process handler calls)
-  before `TREZOR_DEBUG` runs are restored. *Target: V3.1.*
+- **Hardware-device C++ surface: B2 DECIDED — delete with Phase 5, not
+  re-home** (decided 2026-08-06, roadmap review; supersedes the
+  2026-07-10 "Trezor test harness: migrate `mock_rpc_daemon` off epee
+  HTTP map" entry — the harness dies with the driver, so the migration
+  is moot). Scope: `src/device_trezor/` (23 files, 6,348 lines),
+  `tests/trezor/` (7 files, 2,932 lines), `cmake/CheckTrezor.cmake` +
+  CMake wiring. Verified at `b66718afe`: outside itself the driver is
+  consumed only by `wallet2.cpp` and build wiring — no daemon code —
+  so deletion costs nothing beyond deleting, while re-homing would
+  keep wallet2's type surface alive to serve a device driver and break
+  the Phase-5 single-commit principle. Decisive: this is currently
+  *impossible* hardware support — no vendor firmware signs the
+  ML-DSA-65+Ed25519 hybrid or speaks FCMP++ (rules 15/16).
+  **Reversion clause (rule 21):** reopen when a hardware vendor ships
+  hybrid PQ signing, implemented as a Rust `Signer` impl against the
+  engine signer seam — never a resurrected C++ driver. **Boundary:**
+  the base `src/device/` abstraction (3,818 lines) is NOT this entry —
+  `cryptonote_basic`/`cryptonote_core`/`fcmp` thread it by lineage;
+  its retirement is separate daemon-side scope. Execution rides the
+  Phase-5 deletion commit (`WALLET_REWRITE_PLAN.md` §Phase 5).
+  *Target: V3.0 / Phase 5.*
 
 - **Daemon RPC: restricted-method dual-list single-source** (added
   2026-07-10). Axum `RESTRICTED_METHODS` and any remaining C++ notions

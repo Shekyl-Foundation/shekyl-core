@@ -285,8 +285,11 @@ story, not the read path.
   the machine grows exported-unsigned / signed-elsewhere states and
   `build_pending_tx` grows an export path — the same function PR-SJ-1
   modifies; descoped ⇒ neither exists. Deciding A4 after ratification
-  would mean reopening a ratified design, so A4 (and the roadmap's B2
-  decision) resolve before pass 3 freezes this.
+  would mean reopening a ratified design, so A4 resolves before pass 3
+  freezes this. **B2 is DECIDED (2026-08-06: delete the hardware-device
+  C++ surface with Phase 5, rule-21 clause in `FOLLOWUPS.md` — and it
+  touches no journal state, so it never gated this machine); the pass-3
+  gate is A4 alone.**
 - **SJ-DQ-4 — the spend marking survives the wipe; `PresumedDead` is a
   display state** *(REFRAMED per R1-3; round 0 asked the wrong
   question)*. Round 0 treated `PresumedDead` as an evidence threshold

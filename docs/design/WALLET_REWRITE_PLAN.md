@@ -723,6 +723,22 @@ After Phase 4 lands and the binaries pass acceptance tests. Single commit, separ
 - Delete `src/wallet/api/` (Qt-API surface).
 - Delete `src/simplewallet/`.
 - Delete `src/wallet/wallet_rpc_server.{h,cpp}`, `wallet_rpc_server_commands_defs.h`, `wallet_rpc_server_error_codes.h`.
+- Delete `src/device_trezor/` (23 files, 6,348 lines) + `tests/trezor/` (7
+  files, 2,932 lines) + `cmake/CheckTrezor.cmake` and the `src/CMakeLists.txt`
+  / `src/wallet/CMakeLists.txt` wiring — **B2 DECIDED 2026-08-06: delete, not
+  re-home.** Verified: `device_trezor`'s only consumers outside itself are
+  `wallet2.cpp` and build wiring — no daemon code touches it — and re-homing
+  would keep wallet2's type surface alive purely to serve a device driver,
+  breaking this phase's single-commit principle. This is not deferred hardware
+  support but currently *impossible* hardware support: no vendor firmware
+  signs the ML-DSA-65+Ed25519 hybrid or speaks FCMP++ (rules 15/16).
+  **Reversion clause (rule 21):** reopen when a hardware vendor ships hybrid
+  PQ signing — implemented as a Rust `Signer` impl against the engine's
+  signer seam, never as a resurrected C++ driver. **Boundary note:** the
+  *base* `src/device/` abstraction (13 files, 3,818 lines) is NOT B2 — it is
+  threaded through `cryptonote_basic`/`cryptonote_core`/`fcmp` by lineage
+  (default-device parameters in tx construction) and its retirement is
+  daemon-side surgery scoped separately.
 - Delete `src/wallet/CMakeLists.txt` entries; `src/wallet/` may shrink to a stub or be removed entirely.
 
 ### Transitional C++ helpers (introduced for `wallet2.cpp` rewires)
