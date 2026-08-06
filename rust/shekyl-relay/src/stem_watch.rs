@@ -3,8 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Per-successor stem outcomes — the signal §12.11 specifies and production
-//! does not currently record (`DAEMON_RELAY_PRIVACY.md` §33.2).
+//! Per-successor stem outcomes — the signal §12.11 specifies, recorded here.
+//! (`DAEMON_RELAY_PRIVACY.md` §33.2 named the gap this type closed; the
+//! wiring is live — see the call-chain diagram below. Recording is all that
+//! is live: nothing consumes the tallies as reputation yet, per the
+//! deliberately-open parameters listed further down.)
 //!
 //! # Why this derives the outcome instead of importing it
 //!
