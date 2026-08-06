@@ -41,25 +41,22 @@ namespace levin
 {
 namespace
 {
-  //! Copy an FFI buffer into `output` and free the Rust allocation.
-  //! Empty / null buffers clear `output` without reading through a null
-  //! pointer (C++ `basic_string::assign(const char*, size_type)` is only
-  //! well-defined for a non-null source when the count is positive).
-  void take_buffer(ShekylBuffer& buf, std::string& output)
+  //! Human-readable cause for an FFI return code. The receive path closes
+  //! the connection on every failure, so the code is the only thing that
+  //! tells an operator whether they are looking at a hostile peer or an
+  //! honest one whose batch outgrew a cap — responses that are opposite.
+  const char* levin_rc_reason(const int32_t rc) noexcept
   {
-    if (buf.ptr == nullptr || buf.len == 0)
-      output.clear();
-    else
-      output.assign(reinterpret_cast<const char*>(buf.ptr), buf.len);
-    shekyl_buffer_free(buf.ptr, buf.len);
-    buf = {};
+    switch (rc)
+    {
+    case -3: return "malformed frame or missing declared content size";
+    case -4: return "null pointer or undersized output buffer";
+    case -6: return "the linked Rust image has no zstd support";
+    case -7: return "size limit exceeded";
+    default: return "unknown failure";
+    }
   }
 } // anonymous
-
-  bool is_compression_available() noexcept
-  {
-    return shekyl_levin_compression_available();
-  }
 
   bool compress_payload(epee::span<const uint8_t> input, std::string& output)
   {
@@ -72,27 +69,54 @@ namespace
       // for small or incompressible payloads; only negative codes are bugs.
       output.clear();
       if (rc < 0)
-        MERROR("Levin payload compression failed, rc=" << rc);
+        MERROR("Levin payload compression failed: " << levin_rc_reason(rc) << " (rc=" << rc << ")");
       return false;
     }
-    take_buffer(buf, output);
+    // Compression is the one direction that still hands back a Rust
+    // allocation: its output size is not knowable before the fact.
+    if (buf.ptr == nullptr || buf.len == 0)
+      output.clear();
+    else
+      output.assign(reinterpret_cast<const char*>(buf.ptr), buf.len);
+    shekyl_buffer_free(buf.ptr, buf.len);
     return true;
   }
 
   bool decompress_payload(epee::span<const uint8_t> input, std::string& output,
                           const uint64_t max_output)
   {
-    ShekylBuffer buf{};
-    const int32_t rc =
-        shekyl_levin_decompress_payload(input.data(), input.size(), max_output, &buf);
+    // Two steps on purpose. The first validates the frame's *declared*
+    // content size against the caller's limit before anything is sized from
+    // it, so a frame that lies cannot cost an allocation; the second
+    // inflates straight into this string's storage. Nothing is allocated on
+    // the Rust side and nothing is copied across the boundary — during IBD
+    // these are multi-megabyte block batches, once per packet per
+    // connection.
+    std::size_t inflated = 0;
+    int32_t rc = shekyl_levin_inflated_size(input.data(), input.size(), max_output, &inflated);
     if (rc != 0)
     {
       // Contract: false leaves `output` empty (callers may reuse the string).
       output.clear();
-      MERROR("Levin payload decompression failed, rc=" << rc);
+      MERROR("Levin payload decompression rejected: " << levin_rc_reason(rc) << " (rc=" << rc << ")");
       return false;
     }
-    take_buffer(buf, output);
+
+    output.resize(inflated);
+    std::size_t written = 0;
+    rc = shekyl_levin_decompress_into(input.data(), input.size(),
+                                      reinterpret_cast<uint8_t*>(output.empty() ? nullptr : &output[0]),
+                                      output.size(), &written);
+    if (rc != 0)
+    {
+      output.clear();
+      MERROR("Levin payload decompression failed: " << levin_rc_reason(rc) << " (rc=" << rc << ")");
+      return false;
+    }
+    // `shekyl_levin_decompress_into` rejects any frame that does not deliver
+    // exactly the declared size, so this cannot shrink the string; it is
+    // here so the postcondition is stated where the buffer is handed on.
+    output.resize(written);
     return true;
   }
 

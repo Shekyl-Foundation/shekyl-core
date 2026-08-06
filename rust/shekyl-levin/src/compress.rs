@@ -36,24 +36,53 @@ pub const fn is_compression_available() -> bool {
     cfg!(feature = "zstd")
 }
 
-/// Compress one payload under the production Levin policy. Returns `None`
-/// — meaning "send it uncompressed" — when compression is unavailable, the
-/// payload is below [`COMPRESSION_MIN_PAYLOAD`], the codec fails, or the
-/// result is not strictly smaller than the input.
+/// Compress one payload under the production Levin policy.
+///
+/// The three outcomes are distinct on purpose, because the C++ shim has to
+/// react differently to each:
+///
+/// - `Ok(Some(bytes))` — compressed; frame it with the `COMPRESSED` flag.
+/// - `Ok(None)` — **declined**, meaning "send it uncompressed". Not an
+///   error: compression unavailable, payload below
+///   [`COMPRESSION_MIN_PAYLOAD`], codec failure, or a result that is not
+///   strictly smaller than the input. Every one of these is an ordinary
+///   outcome on a live relay path.
+/// - `Err(`[`Error::OversizeDeflate`]`)` — the caller offered a payload
+///   larger than any plaintext this protocol carries. Not a decline: no
+///   conforming caller can produce one, so folding it into `Ok(None)`
+///   would silently paper over a caller bug.
 ///
 /// This is the payload-level seam the C++ shim reaches through the FFI
 /// (`shekyl_levin_compress_payload`): the header rewrite stays on whichever
 /// side framed the message, and only opaque payload bytes cross.
-#[must_use]
-pub fn compress_payload(payload: &[u8]) -> Option<Vec<u8>> {
+///
+/// # Errors
+///
+/// [`Error::OversizeDeflate`] when `payload` exceeds
+/// [`DECOMPRESSED_MAX_SIZE`].
+pub fn compress_payload(payload: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+    // The bound that belongs here is the *plaintext* one. Bounding the
+    // compressor's input by the wire packet limit would reject exactly the
+    // 100–128 MB payloads compression exists to bring under that limit —
+    // the input to this function has not been framed yet, and the thing the
+    // packet limit constrains is the compressed frame that comes out.
+    let len = u64::try_from(payload.len()).expect("usize fits in u64");
+    if len > DECOMPRESSED_MAX_SIZE {
+        return Err(Error::OversizeDeflate {
+            len,
+            limit: DECOMPRESSED_MAX_SIZE,
+        });
+    }
     if !is_compression_available() || payload.len() < COMPRESSION_MIN_PAYLOAD {
-        return None;
+        return Ok(None);
     }
-    let compressed = zstd_compress(payload)?;
+    let Some(compressed) = zstd_compress(payload) else {
+        return Ok(None);
+    };
     if compressed.len() >= payload.len() {
-        return None;
+        return Ok(None);
     }
-    Some(compressed)
+    Ok(Some(compressed))
 }
 
 /// Try to compress **one** finalized Levin message (header + payload).
@@ -78,17 +107,30 @@ pub fn compress_payload(payload: &[u8]) -> Option<Vec<u8>> {
 ///   white-noise feature exists to provide; compressing one would shorten it
 ///   and make cover traffic distinguishable from real traffic on the wire.
 ///
-/// None of the three is reachable from the C++ call graph today — the only
-/// call site, `make_payload_send_txs` in `src/cryptonote_protocol/
-/// levin_notify.cpp`, passes a single `finalize_notify` message, and the
-/// covert path's `make_fragmented_notify` output never reaches it — so these
-/// are guards against a future caller, not a live defect.
+/// The C++ has **three** call sites, not one, and two of them are
+/// command-generic: `make_payload_send_txs` (`levin_notify.cpp`, the
+/// Dandelion++ tx path), `relay_notify_to_list` and `invoke_notify_to_peer`
+/// (both `src/p2p/net_node.inl`, which compress whatever command they are
+/// handed). All three pass a single `finalize_notify` message, so none
+/// reaches the guards above today — but "the only call site passes X" is not
+/// what keeps them unreachable, and stating it that way invites the next
+/// caller to be added without checking.
 ///
-/// One cover-traffic case is *not* guardable here: when a notification fits
-/// in one noise bucket, `fragmented_notify` emits an ordinary `Q` message
-/// zero-padded to the noise size, which carries no wire marking that
-/// distinguishes it from any other notification. Keeping that message
-/// uncompressed is the calling layer's obligation.
+/// One class of message is *not* guardable from in here, because nothing on
+/// the wire distinguishes it: a message whose **size is itself the privacy
+/// property**. Two exist today.
+///
+/// - `--pad-transactions` quantizes a `NOTIFY_NEW_TRANSACTIONS` blob to a
+///   1024-byte boundary with a run of spaces, which zstd erases almost
+///   perfectly — recovering the very size signal the padding was bought to
+///   hide.
+/// - When a notification fits in one noise bucket, `fragmented_notify`
+///   emits an ordinary `Q` message zero-padded to the noise size, carrying
+///   no marking that separates it from any other notification.
+///
+/// Both are the calling layer's obligation: it knows it shaped the size,
+/// and the bytes do not say so. `make_payload_send_txs` discharges the
+/// first by not calling the compressor at all when `pad` is set.
 #[must_use]
 pub fn try_compress_message(message: Vec<u8>) -> Vec<u8> {
     if !is_compression_available() || message.len() <= HEADER_SIZE {
@@ -111,7 +153,11 @@ pub fn try_compress_message(message: Vec<u8>) -> Vec<u8> {
     if !head.flags.intersects(Flags::REQUEST.union(Flags::RESPONSE)) {
         return message;
     }
-    let Some(compressed) = compress_payload(&message[HEADER_SIZE..]) else {
+    // A message that reached here is at most one packet, so the plaintext
+    // bound cannot fire; treating an error like a decline keeps this
+    // function total ("returns the input unchanged") rather than growing a
+    // failure mode its callers have no way to act on.
+    let Ok(Some(compressed)) = compress_payload(&message[HEADER_SIZE..]) else {
         return message;
     };
 
@@ -124,25 +170,62 @@ pub fn try_compress_message(message: Vec<u8>) -> Vec<u8> {
     out
 }
 
-/// Decompress a `COMPRESSED` bucket's payload, bounded by `max_output`.
+/// Read a `COMPRESSED` bucket's frame header and return the exact number of
+/// bytes it will inflate to, validated against
+/// `min(max_output, DECOMPRESSED_MAX_SIZE)`.
 ///
-/// The frame must declare its content size, and that size is checked
-/// **before any buffer is allocated** against
-/// `min(max_output, DECOMPRESSED_MAX_SIZE)`. Callers pass the same limit the
-/// bucket header was checked against, so an inflated payload can never
-/// exceed the packet-size limit in force — [`DECOMPRESSED_MAX_SIZE`] alone
-/// would not achieve that, being larger than
-/// [`crate::DEFAULT_MAX_PACKET_SIZE`] and four orders of magnitude above the
-/// pre-handshake limit. Checking the declared size first also stops a frame
-/// that lies about its content size from costing the full allocation before
-/// the codec rejects it.
+/// This is the **allocation gate**, split out from the inflation itself so
+/// that no buffer is sized from a number the frame merely claims until that
+/// number has been checked. Callers pass the same limit the bucket header
+/// was checked against, so an inflated payload can never exceed the
+/// packet-size limit in force — [`DECOMPRESSED_MAX_SIZE`] alone would not
+/// achieve that, being larger than [`crate::DEFAULT_MAX_PACKET_SIZE`] and
+/// four orders of magnitude above the pre-handshake limit.
 ///
 /// # Errors
 ///
 /// [`Error::CompressionUnavailable`] without the `zstd` feature;
-/// [`Error::Decompress`] on a malformed, size-less, or oversized frame.
+/// [`Error::Decompress`] on a malformed or size-less frame;
+/// [`Error::OversizeInflate`] when the declared size exceeds the limit.
+pub fn inflated_size(input: &[u8], max_output: u64) -> Result<usize, Error> {
+    zstd_inflated_size(input, max_output.min(DECOMPRESSED_MAX_SIZE))
+}
+
+/// Inflate `input` directly into `out`, returning the bytes written.
+///
+/// `out` must be sized from [`inflated_size`] on the same `input`. Writing
+/// into caller-owned storage is what lets the C++ shim inflate straight
+/// into the `std::string` it is going to hand upward: no Rust-side
+/// allocation, no copy across the boundary, and no heap ownership crossing
+/// the FFI in either direction. It is also why nothing here needs wiping —
+/// Levin payloads are public wire data, and the buffer belongs to the
+/// caller either way.
+///
+/// # Errors
+///
+/// [`Error::CompressionUnavailable`] without the `zstd` feature;
+/// [`Error::Decompress`] if the codec rejects the frame or writes a
+/// different number of bytes than `out` is sized for.
+pub fn decompress_into(input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
+    zstd_decompress_into(input, out)
+}
+
+/// Allocate-and-inflate convenience over [`inflated_size`] +
+/// [`decompress_into`], for Rust consumers such as [`crate::BucketReader`]
+/// that want an owned buffer.
+///
+/// # Errors
+///
+/// As [`inflated_size`] and [`decompress_into`].
 pub fn decompress_payload(input: &[u8], max_output: u64) -> Result<Vec<u8>, Error> {
-    zstd_decompress(input, max_output.min(DECOMPRESSED_MAX_SIZE))
+    let size = inflated_size(input, max_output)?;
+    let mut out = vec![0u8; size];
+    let written = decompress_into(input, &mut out)?;
+    // `decompress_into` already rejects a short write, so this is a
+    // restatement rather than a second check; keeping it makes the
+    // postcondition local to the buffer being returned.
+    out.truncate(written);
+    Ok(out)
 }
 
 #[cfg(feature = "zstd")]
@@ -156,7 +239,7 @@ fn zstd_compress(_payload: &[u8]) -> Option<Vec<u8>> {
 }
 
 #[cfg(feature = "zstd")]
-fn zstd_decompress(input: &[u8], limit: u64) -> Result<Vec<u8>, Error> {
+fn zstd_inflated_size(input: &[u8], limit: u64) -> Result<usize, Error> {
     let declared = zstd::zstd_safe::get_frame_content_size(input)
         .map_err(|err| Error::Decompress {
             reason: format!("cannot read frame header: {err}"),
@@ -164,23 +247,42 @@ fn zstd_decompress(input: &[u8], limit: u64) -> Result<Vec<u8>, Error> {
         .ok_or_else(|| Error::Decompress {
             reason: "frame does not declare its content size".to_owned(),
         })?;
-    // Checked before allocating: `zstd::bulk::decompress` reserves the
-    // capacity it is given up front, so a lying frame must not get that far.
     if declared > limit {
-        return Err(Error::Decompress {
-            reason: format!("frame claims {declared} bytes, exceeds the limit {limit}"),
-        });
+        return Err(Error::OversizeInflate { declared, limit });
     }
-    let capacity = usize::try_from(declared).map_err(|_| Error::Decompress {
+    // `limit` is at most DECOMPRESSED_MAX_SIZE (128 MiB), so on any target
+    // this crate builds for the checked value already fits `usize`; the
+    // conversion is written fallibly rather than asserted so a 16-bit
+    // target would fail loudly instead of truncating.
+    usize::try_from(declared).map_err(|_| Error::Decompress {
         reason: format!("frame claims {declared} bytes, exceeds address space"),
-    })?;
-    zstd::bulk::decompress(input, capacity).map_err(|err| Error::Decompress {
-        reason: err.to_string(),
     })
 }
 
 #[cfg(not(feature = "zstd"))]
-fn zstd_decompress(_input: &[u8], _limit: u64) -> Result<Vec<u8>, Error> {
+fn zstd_inflated_size(_input: &[u8], _limit: u64) -> Result<usize, Error> {
+    Err(Error::CompressionUnavailable)
+}
+
+#[cfg(feature = "zstd")]
+fn zstd_decompress_into(input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
+    let written = zstd::zstd_safe::decompress(out, input).map_err(|code| Error::Decompress {
+        reason: zstd::zstd_safe::get_error_name(code).to_owned(),
+    })?;
+    // A frame that declares one content size and delivers another is
+    // malformed. zstd checks this itself, but the caller sized `out` from
+    // the declared size, so a short write would otherwise surface as
+    // trailing zeros in an "successfully" inflated payload.
+    if written != out.len() {
+        return Err(Error::Decompress {
+            reason: format!("frame declared {} bytes but produced {written}", out.len()),
+        });
+    }
+    Ok(written)
+}
+
+#[cfg(not(feature = "zstd"))]
+fn zstd_decompress_into(_input: &[u8], _out: &mut [u8]) -> Result<usize, Error> {
     Err(Error::CompressionUnavailable)
 }
 
@@ -229,6 +331,11 @@ mod tests {
 
     /// The declared content size is rejected against the caller's limit, not
     /// only against `DECOMPRESSED_MAX_SIZE` — and before any allocation.
+    ///
+    /// The oversize verdict must arrive as its own variant: an operator
+    /// seeing repeated disconnects has to be able to tell "this peer's
+    /// batch outgrew the cap" from "this peer sent garbage", and those call
+    /// for opposite responses.
     #[test]
     fn declared_size_over_the_callers_limit_rejected() {
         let payload = vec![0u8; 4096];
@@ -236,13 +343,88 @@ mod tests {
         let frame = &compressed[HEADER_SIZE..];
 
         // Well under DECOMPRESSED_MAX_SIZE, so only the caller's limit bites.
-        let err = decompress_payload(frame, 1024).unwrap_err();
-        assert!(
-            matches!(err, Error::Decompress { ref reason } if reason.contains("exceeds the limit")),
-            "unexpected error: {err:?}"
+        assert_eq!(
+            decompress_payload(frame, 1024).unwrap_err(),
+            Error::OversizeInflate {
+                declared: 4096,
+                limit: 1024
+            }
         );
         // The same frame at a sufficient limit still inflates.
         assert_eq!(decompress_payload(frame, 4096).unwrap(), payload);
+    }
+
+    /// Negative control on the variant split: a garbage frame must NOT come
+    /// back as `OversizeInflate`, or the two codes would be a distinction
+    /// the C++ shim reports without the receive path ever making it.
+    #[test]
+    fn malformed_frame_is_not_reported_as_oversize() {
+        let err = decompress_payload(b"not a zstd frame", DECOMPRESSED_MAX_SIZE).unwrap_err();
+        assert!(
+            matches!(err, Error::Decompress { .. }),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    /// `decompress_into` writes into caller storage and reports the count;
+    /// this is the shape the C++ shim uses to inflate straight into its
+    /// `std::string` with no Rust-side allocation.
+    #[test]
+    fn decompress_into_caller_storage() {
+        let payload = vec![3u8; 8192];
+        let compressed = try_compress_message(notify(2002, &payload));
+        let frame = &compressed[HEADER_SIZE..];
+
+        let size = inflated_size(frame, DECOMPRESSED_MAX_SIZE).unwrap();
+        assert_eq!(size, payload.len());
+
+        let mut out = vec![0u8; size];
+        assert_eq!(decompress_into(frame, &mut out).unwrap(), payload.len());
+        assert_eq!(out, payload);
+    }
+
+    /// An undersized destination is a codec error, not a silent truncation.
+    #[test]
+    fn decompress_into_undersized_buffer_errors() {
+        let payload = vec![3u8; 8192];
+        let compressed = try_compress_message(notify(2002, &payload));
+        let frame = &compressed[HEADER_SIZE..];
+
+        let mut out = vec![0u8; 16];
+        assert!(decompress_into(frame, &mut out).is_err());
+        assert_eq!(
+            out,
+            vec![0u8; 16],
+            "no partial write into the caller's buffer"
+        );
+    }
+
+    /// Compression bounds its input by the *plaintext* maximum, not the
+    /// wire packet limit. A payload between the two must still compress —
+    /// bringing it under the wire limit is the whole point of the codec.
+    #[test]
+    fn payload_above_the_wire_limit_still_compresses() {
+        let len = usize::try_from(crate::DEFAULT_MAX_PACKET_SIZE).unwrap() + 4096;
+        let payload = vec![0u8; len];
+        let compressed = compress_payload(&payload)
+            .expect("under the plaintext maximum")
+            .expect("a run of zeros compresses");
+        assert!(u64::try_from(compressed.len()).unwrap() < crate::DEFAULT_MAX_PACKET_SIZE);
+    }
+
+    /// Above the plaintext maximum it is a caller bug, reported as such —
+    /// not folded into the "send it uncompressed" decline.
+    #[test]
+    fn payload_above_the_plaintext_maximum_is_an_error() {
+        let len = usize::try_from(DECOMPRESSED_MAX_SIZE).unwrap() + 1;
+        let payload = vec![0u8; len];
+        assert_eq!(
+            compress_payload(&payload).unwrap_err(),
+            Error::OversizeDeflate {
+                len: DECOMPRESSED_MAX_SIZE + 1,
+                limit: DECOMPRESSED_MAX_SIZE
+            }
+        );
     }
 
     /// A multi-bucket buffer must come back untouched: compressing it would
@@ -302,5 +484,24 @@ mod tests_without_zstd {
             decompress_payload(b"any bytes at all", DECOMPRESSED_MAX_SIZE),
             Err(Error::CompressionUnavailable)
         );
+        // Both primitives, not only the convenience wrapper — the C++ shim
+        // reaches `inflated_size` and `decompress_into` directly, so an arm
+        // covered only through `decompress_payload` would not be covered
+        // where production actually enters.
+        assert_eq!(
+            inflated_size(b"any bytes at all", DECOMPRESSED_MAX_SIZE),
+            Err(Error::CompressionUnavailable)
+        );
+        assert_eq!(
+            decompress_into(b"any bytes at all", &mut [0u8; 8]),
+            Err(Error::CompressionUnavailable)
+        );
+    }
+
+    /// The decline path stays a decline with the codec absent: "send it
+    /// uncompressed" is the correct outcome, not an error.
+    #[test]
+    fn compress_declines_rather_than_failing() {
+        assert_eq!(compress_payload(&vec![0u8; 4096]), Ok(None));
     }
 }

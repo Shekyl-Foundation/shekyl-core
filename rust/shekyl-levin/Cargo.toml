@@ -28,10 +28,15 @@ thiserror = { workspace = true }
 # The dual-libzstd / symbol-collision question formerly parked at the
 # FOLLOWUPS LV-3 entry is resolved by construction.
 #
-# Optional: only pulled in by the `zstd` feature above. The version is the
-# single-source [workspace.dependencies] pin (decision 2026-08-06): further
-# consumers are anticipated (shard serving), and one pin keeps every
-# component's frames interoperable by construction.
+# Optional: only pulled in by the `zstd` feature above. The version AND the
+# feature set are the single-source [workspace.dependencies] pin (decision
+# 2026-08-06): further consumers are anticipated (shard serving), and one
+# pin keeps every component's frames interoperable by construction. The pin
+# is `default-features = false` — see the reasoning at the workspace entry;
+# in short, the crate's defaults compile dictionary-builder C that does not
+# link on mingw and legacy-format decoders we never emit. Inheriting the
+# feature set (rather than restating it here) is what keeps a second
+# consumer from quietly re-enabling either.
 zstd = { workspace = true, optional = true }
 
 [dev-dependencies]

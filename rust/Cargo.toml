@@ -264,7 +264,28 @@ thiserror = "2"
 # serving in the TJ archival track compresses shard payloads. One pin here
 # keeps every consumer on the same vendored libzstd, so compressed frames
 # are interoperable across components by construction.
-zstd = "0.13"
+#
+# `default-features = false` drops all three of the crate's defaults, and
+# each is dropped for a reason — they are not incidental trimming:
+#
+# - `zdict_builder` compiles `zstd/lib/dictBuilder` (`cover.c`), which calls
+#   POSIX `qsort_r`. mingw-w64 has no `qsort_r`, so the Win64 cross build
+#   fails at link with an undefined reference the moment `libshekyl_ffi.a`
+#   carries those objects — which it does since the compression-shim cut
+#   folded `shekyl-levin` into the daemon's Rust image. We train no
+#   dictionaries; the builder is dead weight that breaks a supported target.
+# - `legacy` compiles the decoders for zstd frame formats v0.1–v0.7. Every
+#   frame we inflate came from this same pinned encoder, so a legacy frame
+#   on the wire is by definition non-conforming — keeping those decoders
+#   would only widen the attacker-reachable C surface on the p2p receive
+#   path for a format we never emit.
+# - `arrays` adds a `WriteBuf` impl for `[u8; N]` only. We write into
+#   `Vec<u8>` and `&mut [u8]`, both of which are impl'd unconditionally.
+#
+# What remains is what `shekyl-levin` actually calls: `zstd::bulk` and
+# `zstd::zstd_safe::{get_frame_content_size, decompress}`, over the
+# `std`-enabled `zstd-safe` that the crate pins internally.
+zstd = { version = "0.13", default-features = false }
 serde = { version = "1", features = ["derive"] }
 # Single source of truth for the secret-wiping crate, replacing the
 # per-crate pins that had drifted across two version floors (`1` / `^1.5`)

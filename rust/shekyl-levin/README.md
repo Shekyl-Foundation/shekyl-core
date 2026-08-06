@@ -15,7 +15,6 @@ implementation:
   feature over i2p/Tor;
 - the zstd `COMPRESSED` path (cargo feature `zstd`, default on — this crate
   owns the policy; feature off is only for pure-Rust unavailability tests);
-
 - an incremental stream reader (`BucketReader`) mirroring the
   `async_protocol_handler::handle_recv` state machine: partial reads,
   signature early-reject, packet-size limits (256 KiB pre-handshake / 100 MB

@@ -57,13 +57,42 @@ pub enum Error {
     #[error("received compressed levin payload but zstd support is not compiled in")]
     CompressionUnavailable,
 
-    /// The zstd frame is malformed, does not declare its content size, or
-    /// declares a size above [`crate::DECOMPRESSED_MAX_SIZE`].
+    /// The zstd frame is malformed or does not declare its content size.
+    ///
+    /// Kept **distinct from [`Error::OversizeInflate`]** because the two
+    /// demand opposite operator responses: a malformed frame is a corrupt
+    /// or hostile peer, while an oversized one may be an honest peer whose
+    /// batch outgrew the cap. A single "decompression failed" code cannot
+    /// tell an operator which of the two they are looking at, and the C++
+    /// receive path closes the connection on both.
     #[error("zstd decompression failed: {reason}")]
     Decompress {
-        /// Human-readable failure cause (frame size missing, cap exceeded,
-        /// or the codec error string).
+        /// Human-readable failure cause (missing frame content size, or the
+        /// codec's own error string).
         reason: String,
+    },
+
+    /// A zstd frame's *declared* content size exceeds the limit in force —
+    /// `min(caller limit, [`crate::DECOMPRESSED_MAX_SIZE`])`. Detected from
+    /// the frame header, before any output buffer is allocated.
+    #[error("inflated payload would be {declared} bytes, exceeding the limit {limit}")]
+    OversizeInflate {
+        /// The content size the frame header declared.
+        declared: u64,
+        /// The limit in force for this bucket.
+        limit: u64,
+    },
+
+    /// A payload handed to the compressor is larger than any plaintext this
+    /// protocol carries ([`crate::DECOMPRESSED_MAX_SIZE`]). Distinct from a
+    /// decline: nothing in a conforming caller produces one, so it is a
+    /// caller bug rather than "send it uncompressed".
+    #[error("payload of {len} bytes exceeds the compressible maximum {limit}")]
+    OversizeDeflate {
+        /// The payload length the caller offered.
+        len: u64,
+        /// [`crate::DECOMPRESSED_MAX_SIZE`].
+        limit: u64,
     },
 
     /// The reader already returned a fatal error and was used again. In the

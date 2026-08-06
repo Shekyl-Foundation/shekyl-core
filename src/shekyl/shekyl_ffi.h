@@ -3331,25 +3331,47 @@ void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms
 // HAVE_ZSTD build gate are gone. Payloads are public wire data; buffers are
 // Rust-allocated and MUST be freed with shekyl_buffer_free.
 //
-// Return codes (rule 40): 0 = ok (out set); 1 = compression declined, send
-// uncompressed (not an error; out is nulled); -3 = malformed/size-less/
-// oversized frame or input above the Levin packet limit; -4 = null pointer;
+// Return codes (rule 40): 0 = ok (output parameter set); 1 = compression
+// declined, send uncompressed (not an error; out is nulled); -3 = malformed
+// or size-less frame; -4 = null pointer / undersized output buffer;
 // -6 = the Rust image was built without the zstd feature (production always
-// has it on; pure-Rust feature-off builds only).
+// has it on; pure-Rust feature-off builds only); -7 = a size limit was
+// exceeded.
+//
+// -3 and -7 are separate because they call for opposite operator responses
+// — a corrupt or hostile peer versus an honest peer whose batch outgrew the
+// per-command cap — and the receive path closes the connection on both.
+//
+// Decompression writes into CALLER storage: size it with
+// shekyl_levin_inflated_size, then inflate with shekyl_levin_decompress_into.
+// Nothing is allocated on the Rust side and nothing is copied across the
+// boundary, which matters during IBD where these are multi-megabyte block
+// batches once per packet per connection. Only compression returns a
+// Rust-allocated ShekylBuffer (its output size is not knowable in advance),
+// and that buffer MUST be freed with shekyl_buffer_free.
 
-//! True when the linked Rust image can compress/decompress Levin payloads.
-bool shekyl_levin_compression_available();
 //! Compress one Levin payload (zstd level 1, 256-byte minimum,
 //! only-if-smaller). 0 = out set (free with shekyl_buffer_free); 1 = send
-//! it uncompressed.
+//! it uncompressed. Input is bounded by the *plaintext* maximum (128 MiB),
+//! not the wire packet limit: a payload between the two is exactly what
+//! compression exists to bring under that limit.
 int32_t shekyl_levin_compress_payload(const uint8_t* input, size_t input_len,
                                       ShekylBuffer* out);
-//! Decompress one Levin COMPRESSED payload. The frame must declare its
-//! content size; the declared size is checked against
-//! min(max_output, 128 MiB) before any allocation — pass the packet-size
-//! limit the bucket header was checked against.
-int32_t shekyl_levin_decompress_payload(const uint8_t* input, size_t input_len,
-                                        uint64_t max_output, ShekylBuffer* out);
+//! Read a COMPRESSED payload's frame header and report the exact inflated
+//! size. The frame must declare its content size, and that size is checked
+//! against min(max_output, 128 MiB) before the caller sizes anything from
+//! it — pass the packet-size limit the bucket header was checked against,
+//! which makes the bound on an inflated payload identical to the bound the
+//! same connection enforces on an uncompressed one.
+int32_t shekyl_levin_inflated_size(const uint8_t* input, size_t input_len,
+                                   uint64_t max_output, size_t* out_size);
+//! Inflate a COMPRESSED payload directly into caller-owned storage. `out`
+//! must be `out_cap` writable bytes sized from shekyl_levin_inflated_size on
+//! the same input; a frame that does not deliver exactly `out_cap` bytes is
+//! rejected rather than partially written.
+int32_t shekyl_levin_decompress_into(const uint8_t* input, size_t input_len,
+                                     uint8_t* out, size_t out_cap,
+                                     size_t* out_written);
 
 } // extern "C"
 

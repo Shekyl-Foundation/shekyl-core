@@ -126,8 +126,8 @@ mod message;
 mod reader;
 
 pub use compress::{
-    compress_payload, decompress_payload, is_compression_available, try_compress_message,
-    COMPRESSION_MIN_PAYLOAD, DECOMPRESSED_MAX_SIZE, ZSTD_COMPRESSION_LEVEL,
+    compress_payload, decompress_into, decompress_payload, inflated_size, is_compression_available,
+    try_compress_message, COMPRESSION_MIN_PAYLOAD, DECOMPRESSED_MAX_SIZE, ZSTD_COMPRESSION_LEVEL,
 };
 pub use error::Error;
 pub use fragment::{fragmented_notify, noise_notify};

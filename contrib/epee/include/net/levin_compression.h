@@ -53,15 +53,18 @@ namespace levin
 
   //! Decompress one Levin COMPRESSED payload. `max_output` bounds the
   //! declared content size *before any allocation*; pass the packet-size
-  //! limit the bucket header was checked against. Returns false on a
+  //! limit the bucket header was checked against — the same
+  //! min(packet limit, per-command cap) the bucket header itself is checked
+  //! against, which is what makes the bound on an inflated payload
+  //! identical to the bound on an uncompressed one. Returns false on a
   //! malformed, size-less, or oversized frame (connection-fatal for the
-  //! caller). On false, `output` is cleared (safe for callers that reuse
-  //! the string).
+  //! caller), logging which of those it was. On false, `output` is cleared
+  //! (safe for callers that reuse the string).
+  //!
+  //! Inflation writes directly into `output` — no intermediate buffer, no
+  //! copy across the FFI boundary.
   bool decompress_payload(epee::span<const uint8_t> input, std::string& output,
                           uint64_t max_output);
-
-  //! Whether the linked Rust image can compress/decompress.
-  bool is_compression_available() noexcept;
 
 } // levin
 } // epee

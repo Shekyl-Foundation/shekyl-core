@@ -9055,14 +9055,28 @@ its wake.
     Decisions once named here, and their dispositions:
 
     - **libzstd link strategy — RESOLVED 2026-08-06** (compression-shim
-      cut, this branch). The question dissolved rather than being decided:
-      the C++ `epee::levin` compression path became a marshaling shim over
-      the `shekyl_levin_*` FFI, the system-libzstd detection/link and the
-      `HAVE_ZSTD` gate were deleted, and the vendored `zstd-sys` copy
-      pinned by the workspace became the binary's single zstd. There is no
-      dual-libzstd fold left for LV-3 to encounter, and `links = "zstd"`
-      is claimed exactly once. Recorded at the dependency in
-      `rust/shekyl-levin/Cargo.toml`.
+      cut, this branch). The C++ `epee::levin` compression path became a
+      marshaling shim over the `shekyl_levin_*` FFI, the system-libzstd
+      detection/link and the `HAVE_ZSTD` gate were deleted, and the
+      vendored `zstd-sys` copy pinned by the workspace became the binary's
+      single zstd. There is no dual-libzstd fold left for LV-3 to
+      encounter, and `links = "zstd"` is claimed exactly once. Recorded at
+      the dependency in `rust/shekyl-levin/Cargo.toml`.
+
+      The fold was **not free**, and the earlier phrasing here ("the
+      question dissolved rather than being decided") was written before the
+      cost showed up. Folding `shekyl-levin` into `shekyl-ffi` put zstd's C
+      objects into `libshekyl_ffi.a` for the first time, and the Win64
+      mingw cross-build failed at link: the crate's default `zdict_builder`
+      feature compiles `zstd/lib/dictBuilder/cover.c`, which calls POSIX
+      `qsort_r`, and mingw-w64 has no such symbol. The fix is a narrowed
+      pin — `zstd = { version = "0.13", default-features = false }` — which
+      also drops `legacy` (decoders for frame formats v0.1–v0.7 that we
+      never emit, so keeping them only widened the attacker-reachable C
+      surface on the p2p receive path). The general lesson for LV-3: a
+      vendored C dependency entering the daemon's Rust image inherits every
+      target that image is cross-compiled for, and the crate's defaults are
+      chosen for hosted Linux development, not for our target matrix.
     - **Post-inflate limit interop window — RESOLVED 2026-08-06** (same
       cut). The C++ decompress site now enforces the identical
       `min(packet limit, per-command limit)` bound the Rust
@@ -9071,6 +9085,65 @@ its wake.
       accept-window and the 128 MiB-allocation-per-connection exhaustion
       surface with it. Both implementations agree; divergence census
       entry 4 records the resolution.
+
+      One consequence, stated rather than discovered later. The bound is
+      now symmetric — it is the *same* `min(max_packet_size,
+      get_max_bytes(command))` expression the bucket header itself is
+      checked against at both header sites — so a compressed message can
+      deliver exactly what an uncompressed one could, and no more. Before
+      the cut, compression could smuggle a payload past the packet limit
+      the connection was enforcing; that was the bypass, not a feature.
+      What follows is that a `NOTIFY_RESPONSE_GET_OBJECTS` batch whose
+      *serialized* size exceeded 100 MB used to sync (compressed under the
+      limit, inflated under the flat 128 MiB cap) and now does not.
+      Reachability is bounded but not zero: `handle_request_get_objects`
+      caps a request at `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT` = 100
+      blocks and nothing caps the *bytes*, so it needs 1 MB average blocks
+      across a 100-block batch.
+
+      **Reversion clause (rule 21).** Reopen if a real network produces a
+      get-objects response over the packet limit. The fix then is
+      **send-side batch splitting** — bound the response by serialized
+      bytes as well as block count — and explicitly *not* relaxing the
+      inflate bound back, which would restore an unbounded
+      allocation-per-connection surface to buy an IBD path that the
+      uncompressed case never had either.
+    - **Should the tx-relay path compress at all? — REJECTED NOW, with
+      reopening criteria (rule 21).** Registered 2026-08-06, at the cut
+      that made compression unconditional.
+
+      Before this branch, a build without system libzstd silently did not
+      compress; deleting the `HAVE_ZSTD` gate makes compression happen in
+      every build, on every relay path, including
+      `NOTIFY_NEW_TRANSACTIONS`. That is the correct default for bandwidth
+      and it is what the gate deletion bought — but compressed *size* is
+      itself an observable, and on a privacy chain the tx-relay path is
+      the one where an observable is most expensive. The immediate
+      instance is closed in code: `make_payload_send_txs` does not
+      compress a `--pad-transactions` message, because zstd erases the
+      padding run and hands back the volume signal the padding was bought
+      to hide (pinned by `levin_notify.padding_survives_the_emit_path`,
+      negative-controlled).
+
+      What is *not* closed is the general question: a compression **ratio**
+      is a function of payload entropy, so the on-wire size of an
+      unpadded relay message leaks something about its contents that a
+      fixed-size encoding would not. Rejected now on three grounds: (a)
+      FCMP++ transaction bodies are near-incompressible — proof and
+      commitment material is high-entropy, so the achievable ratio, and
+      hence the leak, is small; (b) padding is the actual defense for this
+      channel and it composes correctly now; (c) quantifying the residual
+      needs a measurement instrument over real transaction bodies, which
+      does not exist pre-genesis.
+
+      **Reopen when** any of: a measured compression ratio above ~1.2 on
+      real `NOTIFY_NEW_TRANSACTIONS` bodies (which would mean the bodies
+      carry more structure than assumed); `--pad-transactions` is proposed
+      as default-on (at which point compression on that path is dead
+      weight and should be dropped outright rather than guarded); or a
+      relay-privacy round takes up wire-size observables generally, where
+      this belongs alongside the Q-11 Unit 2 wire-observer work. The
+      re-evaluation shape is a measurement, not an argument.
     - **Handshake coupling of the packet-size limit.** The framing crate
       cannot detect handshake completion — it does not decode command
       bodies — so `BucketReader::complete_handshake` is the caller's

@@ -182,6 +182,21 @@ namespace
             handler_.after_init_connection();
         }
 
+        //! Sizes of the frames still queued, as they would go on the wire.
+        //!
+        //! The decoded-message assertions elsewhere in this file cannot see
+        //! a size defect: the receive path inflates a COMPRESSED bucket
+        //! before handing it up, so padding present in the *decoded*
+        //! message says nothing about whether it survived to the wire.
+        std::vector<std::size_t> queued_wire_sizes() const
+        {
+            std::vector<std::size_t> sizes;
+            sizes.reserve(endpoint_.send_queue_.size());
+            for (const auto& message : endpoint_.send_queue_)
+                sizes.push_back(message.size());
+            return sizes;
+        }
+
         //\return Number of messages processed
         std::size_t process_send_queue(const bool valid = true)
         {
@@ -645,13 +660,6 @@ TEST(make_fragment, multiple)
 // the codec itself — constants, frame handling, caps — is owned and tested
 // by rust/shekyl-levin. Before this seam existed the C++ tree had no
 // compression coverage at all.
-
-TEST(levin_compression, is_available_from_the_rust_image)
-{
-    // The C++ build has no HAVE_ZSTD gate anymore: availability is a
-    // property of the linked Rust image, which builds with zstd default-on.
-    EXPECT_TRUE(epee::levin::is_compression_available());
-}
 
 TEST(levin_compression, payload_roundtrips_through_the_ffi)
 {
@@ -1216,6 +1224,129 @@ TEST_F(levin_notify, fluff_with_padding)
             EXPECT_FALSE(notification._.empty());
             EXPECT_TRUE(notification.dandelionpp_fluff);
         }
+    }
+}
+
+// A padded transaction message must reach the wire padded.
+//
+// `make_tx_message` quantizes the serialized payload to a 1024-byte boundary
+// with a run of spaces so an observer cannot read transaction volume off the
+// frame size. zstd erases that run almost perfectly, so compressing a padded
+// message puts the frame size back in step with the real payload and hands
+// the observer exactly the signal the operator paid bandwidth to hide.
+//
+// This has to be asserted on the *wire* bytes. Every other padding test in
+// this file inspects the decoded notification, and the decoded message
+// carries its padding either way — the receive path inflates a COMPRESSED
+// bucket before handing it up. Reverting the `if (!pad)` guard in
+// `make_payload_send_txs` leaves all of those green and fails only this.
+TEST_F(levin_notify, padding_survives_the_emit_path)
+{
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, true);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    // Deliberately large and highly compressible: without the guard zstd
+    // collapses both the transaction bodies and the padding run, so the
+    // quantization is unmistakably gone rather than marginally off.
+    std::vector<cryptonote::blobdata> txs(2);
+    txs[0].resize(4096, 'f');
+    txs[1].resize(4096, 'e');
+
+    ASSERT_EQ(10u, contexts_.size());
+    auto context = contexts_.begin();
+    EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::fluff));
+
+    io_service_.restart();
+    ASSERT_LT(0u, io_service_.poll());
+    notifier.run_fluff();
+    ASSERT_LT(0u, io_service_.poll());
+
+    unsigned inspected = 0;
+    for (++context; context != contexts_.end(); ++context)
+    {
+        for (const std::size_t wire_size : context->queued_wire_sizes())
+        {
+            ASSERT_LT(sizeof(epee::levin::bucket_head2), wire_size);
+            const std::size_t payload = wire_size - sizeof(epee::levin::bucket_head2);
+            EXPECT_EQ(0u, payload % 1024)
+                << "padded message went on the wire at " << payload
+                << " payload bytes, which is not a 1024-byte multiple";
+            ++inspected;
+        }
+    }
+    EXPECT_LT(0u, inspected) << "no frames observed; the test proved nothing";
+
+    // Drain, so the receive path is still exercised and the fixture's
+    // teardown invariants hold.
+    for (context = contexts_.begin(); context != contexts_.end(); ++context)
+        context->process_send_queue();
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
+    std::sort(txs.begin(), txs.end());
+    for (unsigned count = 0; count < inspected; ++count)
+    {
+        auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
+        EXPECT_EQ(txs, notification.txs);
+        EXPECT_FALSE(notification._.empty());
+    }
+}
+
+// The guard above must not have simply switched compression off. With
+// padding disabled the same compressible payload has to still shrink — a
+// wire frame smaller than the transactions it carries is only possible if
+// the compressor ran.
+TEST_F(levin_notify, unpadded_messages_still_compress)
+{
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    std::vector<cryptonote::blobdata> txs(2);
+    txs[0].resize(4096, 'f');
+    txs[1].resize(4096, 'e');
+
+    ASSERT_EQ(10u, contexts_.size());
+    auto context = contexts_.begin();
+    EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::fluff));
+
+    io_service_.restart();
+    ASSERT_LT(0u, io_service_.poll());
+    notifier.run_fluff();
+    ASSERT_LT(0u, io_service_.poll());
+
+    unsigned inspected = 0;
+    for (++context; context != contexts_.end(); ++context)
+    {
+        for (const std::size_t wire_size : context->queued_wire_sizes())
+        {
+            EXPECT_LT(wire_size, txs[0].size() + txs[1].size())
+                << "unpadded message went on the wire uncompressed";
+            ++inspected;
+        }
+    }
+    EXPECT_LT(0u, inspected) << "no frames observed; the test proved nothing";
+
+    // Draining also proves the compressed frames are the receive path's
+    // problem and not just smaller bytes: each one must inflate back into
+    // the original transactions.
+    for (context = contexts_.begin(); context != contexts_.end(); ++context)
+        context->process_send_queue();
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
+    std::sort(txs.begin(), txs.end());
+    for (unsigned count = 0; count < inspected; ++count)
+    {
+        auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
+        EXPECT_EQ(txs, notification.txs);
     }
 }
 
