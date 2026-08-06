@@ -26,8 +26,16 @@ SJ-DQ-3's ratification is gated on the roadmap's A4 cold-bundle
 decision (R-2). Still open for pass 3: SJ-DQ-4's remaining mechanics,
 SJ-DQ-5's control design, SJ-DQ-6, and the `abandon_tx` force-path
 sub-question (pulled up from SJ-DQ-8 at pass 1, R1-5).
-**Pass 3 PROPOSED (2026-08-06, pending ratification — P3-1..P3-5,
-stamped inline):** P3-1 rescan re-application mechanics + the
+**Pass 3 RATIFIED (2026-08-06; P3-1..P3-5 stamped inline, two
+refinements at ratification):** P3-1a is **split, pre-committed** —
+PR-SJ-1 lands the reclassification, the journal facts sufficient to
+derive `awaiting_confirmation`, and a **both-agree equivalence
+invariant** against the live field (making PR-SJ-1b a deletion, the
+interim state redundant-but-consistent, and C7's exception provably
+vacuous from PR-SJ-1); PR-SJ-1b lands the 91-reference retirement as
+its own graded PR. P3-4's reopen criterion is tightened to match the
+code: reopen if a blocked flow emerges **that discard cannot clear**
+(the reservations half of `-29202` still refuses). Proposal record: P3-1 rescan re-application mechanics + the
 `-29202` split (unconfirmed half retires, reservations half stays;
 sub-question P3-1a poses the `awaiting_confirmation`
 derived-cache/retirement scope call); P3-2 two-tier deletion with
@@ -330,7 +338,7 @@ story, not the read path.
   spend via key image — idempotent re-mark), the crash ordering of the
   late-confirmation flip, and which `-29202` refusals this retires
   versus keeps.
-  **PASS-3 PROPOSAL P3-1 (2026-08-06, pending ratification):**
+  **P3-1 RATIFIED (2026-08-06).**
   *Re-application:* after `reset_scan_derived_state` + replay, for
   every journal row in a non-terminal state, for each input in its
   carried set: if replay already marked the funding row spent
@@ -352,17 +360,25 @@ story, not the read path.
   locks are in-memory indices into the very rows the wipe destroys,
   and the remedy (discard, then rescan) is cheap and in-session. Code
   `-29202` stays allocated; its message narrows to the reservations
-  case. *One scope call posed, not decided (P3-1a):* C2's end-state
-  makes `TransferDetails.awaiting_confirmation` a **derived cache**
-  of journal facts (the `LedgerIndexes` precedent: journal owns,
-  cache rebuilds at load/rescan) — which retires the C7 field-level
-  exception. Proposal: PR-SJ-1 lands the reclassification + the
-  rescan-rebuild proof; the field's full retirement (rewiring the
-  finalize/refresh/watchdog sites to journal edges) lands in PR-SJ-1
-  **iff** the diff stays proportionate, else it splits to an
-  immediately-following PR-SJ-1b — reopen criterion if deferred: the
-  C7 exception note names PR-SJ-1b, and PR-SJ-2 does not land before
-  it.
+  case. *P3-1a RATIFIED AS SPLIT, PRE-COMMITTED (2026-08-06):* the
+  conditional "iff proportionate" form was rejected at ratification —
+  that judgment would be made mid-PR under momentum, and the measured
+  surface says it will not stay proportionate: **91 references across
+  27 files, 17 production** — the balance hot path (7 refs,
+  iai-instruction-gated: a reclassification there carries a
+  performance-gate risk unrelated to the journal), `shekyl-engine-rpc`
+  (2 refs that evaporate for free when B1 lands), and two committed
+  schema snapshots (whose delta would stack a third independent
+  change onto a schema review already carrying
+  `SEND_JOURNAL_BLOCK_VERSION = 1` and the C7 marker). So: **PR-SJ-1**
+  lands the derived-cache reclassification, journal facts sufficient
+  to derive `awaiting_confirmation`, and a **both-agree equivalence
+  invariant** (journal-derived locks == live field, checked with the
+  ledger invariants) — making the interim state
+  redundant-but-consistent and C7's documented exception **provably
+  vacuous from PR-SJ-1**; **PR-SJ-1b** (pre-committed, not
+  conditional) lands the field's retirement as a deletion graded on
+  its own, sequenced so PR-SJ-2 does not land before it.
 - **SJ-DQ-5 — prune is user control over their own history** *(re-scoped
   at R1 pass 2; seizure defense is the envelope's job, C1)*. The
   honest, smaller question: what deletion the user gets — a row, a
@@ -371,7 +387,7 @@ story, not the read path.
   shared-or-independent lifetime explicitly) and the boundary story
   stated: a pruned row is gone from wallet-controlled storage and
   backups; storage the user copied elsewhere is their own.
-  **PASS-3 PROPOSAL P3-2 (2026-08-06, pending ratification):**
+  **P3-2 RATIFIED (2026-08-06).**
   two-tier deletion, `tx_keys` lifetime **independent**. Tier 1
   (default): delete journal row(s) — one row, all rows for a
   counterparty (a filter over the same operation), or the whole
@@ -393,7 +409,7 @@ story, not the read path.
   PR-SJ-1 lands the C7 marker trait with the documented
   `awaiting_confirmation` field-level exception and its planned
   retirement.
-  **PASS-3 PROPOSAL P3-3 (2026-08-06, pending ratification):** a
+  **P3-3 RATIFIED (2026-08-06).** a
   **dedicated block** — `send_journal` on `WalletLedger` beside
   `tx_meta`/`bookkeeping`, with its own `SEND_JOURNAL_BLOCK_VERSION
   = 1` (the `BOOKKEEPING_BLOCK_VERSION` precedent: per-block
@@ -431,8 +447,7 @@ story, not the read path.
   touch** (the rule-42 bump is already being paid there); rule-21
   reopen criterion = a named, typed UX-state need that `tx_notes`
   cannot carry.
-  **PASS-3 PROPOSAL P3-5 (2026-08-06, pending ratification): ratify
-  as posed** — delete `attributes` in PR-SJ-2's schema bump, with the
+  **P3-5 RATIFIED (2026-08-06), as posed** — delete `attributes` in PR-SJ-2's schema bump, with the
   stated reopen criterion. No counter-argument surfaced across three
   passes; zero consumers verified twice.
 - **SJ-DQ-8 — `abandon_tx` contract.** `-291xx` code allocation,
@@ -447,8 +462,8 @@ story, not the read path.
   the spend marking journal-carried and re-applied, a forced abandon
   bypasses only the display evidence, not the self-link safety; decide
   whether that makes a force path acceptable or merely tempting.
-  **PASS-3 PROPOSAL P3-4 (2026-08-06, pending ratification): no force
-  path — and abandon's job reframes.** With P3-1 retiring the
+  **P3-4 RATIFIED (2026-08-06): no force path — and abandon's job
+  reframes.** With P3-1 retiring the
   unconfirmed half of `-29202`, abandon is no longer load-bearing for
   rescan — the "support pressure" scenario that would exercise a
   force path dissolves, because nothing is blocked waiting on an
@@ -456,8 +471,10 @@ story, not the read path.
   only remaining product is hiding a row early, which SJ-DQ-5's
   tier-1 deletion already provides through the honest door — so a
   force path is a knob with no unique capability (rule 81): decline.
-  Reopen criterion: a flow emerges that is genuinely blocked pending
-  abandon (none exists after P3-1). *Abandon's remaining real job* —
+  Reopen criterion, worded to match what P3-1 actually delivers
+  (the reservations half of `-29202` still refuses, with
+  discard-then-rescan as the in-session remedy): reopen if a blocked
+  flow emerges **that discard cannot clear**. *Abandon's remaining real job* —
   the retention wedge: `reconcile_tx_key_retention` retires entries
   only against a chain reference, so a dead tx's
   `pending_tx_hashes` entry lives forever. `abandon_tx` becomes: the
@@ -487,8 +504,9 @@ reopen criteria at ratification. Then:
    state machine on the dispatch/verdict/refresh/watchdog edges plus
    rescan re-application (retiring the unconfirmed half of `-29202`)
    and the C7 marker trait; the `awaiting_confirmation`
-   derived-cache reclassification lands here, with full field
-   retirement in-PR iff proportionate (P3-1a), else PR-SJ-1b
+   derived-cache reclassification + the both-agree equivalence
+   invariant land here; field retirement is **PR-SJ-1b**
+   (pre-committed; PR-SJ-2 does not land before it)
    (engine-core + engine-state; closes nothing yet, enables both).
 2. **PR-SJ-2** — projections: `transfer_view` OUTGOING + fee, CLI, GUI
    list; the annotation exposure (`set_tx_note` + note on
