@@ -4159,6 +4159,7 @@ dependencies = [
  "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
+ "shekyl-levin",
  "shekyl-logging",
  "shekyl-pow-randomx",
  "shekyl-proofs",

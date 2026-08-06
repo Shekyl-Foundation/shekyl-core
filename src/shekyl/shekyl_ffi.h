@@ -3323,6 +3323,33 @@ void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms
 void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms,
                                    const std::uint8_t* outbound, std::size_t n);
 
+// ── Levin payload compression (IMPLEMENTATION_INDEX.md LV row) ─────────────
+//
+// The epee::levin compression path (contrib/epee/src/levin_compression.cpp)
+// is a marshaling shim over these exports, so the Rust-pinned libzstd is the
+// single zstd implementation in the binary — the system-libzstd link and the
+// HAVE_ZSTD build gate are gone. Payloads are public wire data; buffers are
+// Rust-allocated and MUST be freed with shekyl_buffer_free.
+//
+// Return codes (rule 40): 0 = ok (out set); 1 = compression declined, send
+// uncompressed (not an error; out is nulled); -3 = malformed/size-less/
+// oversized frame or input above the Levin packet limit; -4 = null pointer;
+// -6 = the Rust image was built without zstd support.
+
+//! True when the linked Rust image can compress/decompress Levin payloads.
+bool shekyl_levin_compression_available();
+//! Compress one Levin payload (zstd level 1, 256-byte minimum,
+//! only-if-smaller). 0 = out set (free with shekyl_buffer_free); 1 = send
+//! it uncompressed.
+int32_t shekyl_levin_compress_payload(const uint8_t* input, size_t input_len,
+                                      ShekylBuffer* out);
+//! Decompress one Levin COMPRESSED payload. The frame must declare its
+//! content size; the declared size is checked against
+//! min(max_output, 128 MiB) before any allocation — pass the packet-size
+//! limit the bucket header was checked against.
+int32_t shekyl_levin_decompress_payload(const uint8_t* input, size_t input_len,
+                                        uint64_t max_output, ShekylBuffer* out);
+
 } // extern "C"
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and

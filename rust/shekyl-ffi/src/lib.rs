@@ -123,6 +123,11 @@ pub mod dandelionpp_ffi;
 // callbacks so no enum tag crosses the boundary (§18.4a).
 pub mod relay_zone_ffi;
 
+// Levin payload compression FFI (IMPLEMENTATION_INDEX LV row). The C++
+// `epee::levin` compression path is a marshaling shim over these exports;
+// the Rust-pinned libzstd is the single zstd implementation in the binary.
+pub mod levin_ffi;
+
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
 // `shekyl_log_install_tracing_forwarder`, …) are compiled into

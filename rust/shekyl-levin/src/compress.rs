@@ -28,6 +28,26 @@ pub const fn is_compression_available() -> bool {
     cfg!(feature = "zstd")
 }
 
+/// Compress one payload the way the C++ `compress_payload` does. Returns
+/// `None` — meaning "send it uncompressed" — when compression is
+/// unavailable, the payload is below [`COMPRESSION_MIN_PAYLOAD`], the codec
+/// fails, or the result is not strictly smaller than the input.
+///
+/// This is the payload-level seam the C++ shim reaches through the FFI
+/// (`shekyl_levin_compress_payload`): the header rewrite stays on whichever
+/// side framed the message, and only opaque payload bytes cross.
+#[must_use]
+pub fn compress_payload(payload: &[u8]) -> Option<Vec<u8>> {
+    if !is_compression_available() || payload.len() < COMPRESSION_MIN_PAYLOAD {
+        return None;
+    }
+    let compressed = zstd_compress(payload)?;
+    if compressed.len() >= payload.len() {
+        return None;
+    }
+    Some(compressed)
+}
+
 /// Try to compress **one** finalized Levin message (header + payload).
 ///
 /// Returns the input unchanged when compression is unavailable, the message
@@ -83,16 +103,9 @@ pub fn try_compress_message(message: Vec<u8>) -> Vec<u8> {
     if !head.flags.intersects(Flags::REQUEST.union(Flags::RESPONSE)) {
         return message;
     }
-    let payload = &message[HEADER_SIZE..];
-    if payload.len() < COMPRESSION_MIN_PAYLOAD {
-        return message;
-    }
-    let Some(compressed) = zstd_compress(payload) else {
+    let Some(compressed) = compress_payload(&message[HEADER_SIZE..]) else {
         return message;
     };
-    if compressed.len() >= payload.len() {
-        return message;
-    }
 
     head.flags = head.flags.union(Flags::COMPRESSED);
     head.payload_len = u64::try_from(compressed.len()).expect("usize fits in u64");
