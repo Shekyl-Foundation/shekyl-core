@@ -484,9 +484,9 @@ reopen criteria at ratification. Then:
 
 1. **PR-SJ-1** — journal record (`send_journal` block, own version,
    append-only state enum with the A4 clause-(2) additive pin) +
-   state machine on the dispatch/verdict/refresh/watchdog edges +
+   state machine on the dispatch/verdict/refresh/watchdog edges plus
    rescan re-application (retiring the unconfirmed half of `-29202`)
-   + the C7 marker trait; the `awaiting_confirmation`
+   and the C7 marker trait; the `awaiting_confirmation`
    derived-cache reclassification lands here, with full field
    retirement in-PR iff proportionate (P3-1a), else PR-SJ-1b
    (engine-core + engine-state; closes nothing yet, enables both).
