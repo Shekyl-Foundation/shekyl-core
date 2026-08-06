@@ -65,9 +65,16 @@ decompressed payload by the packet limit in force, one latching the reader
 after a fatal error); one is emit-side, where `try_compress_message` returns
 malformed input unchanged rather than re-framing it.
 
-All are unreachable for a conforming sender. The post-inflate bound was
-the one exception (a ~34 MB interop window against a C++ peer) until the
-2026-08-06 compression-shim cut brought the C++ receiver onto the same
-`min(packet limit, per-command cap)` bound; census entry 4 records the
-resolution. Do not summarise the census into blanket claims — checking
+All are unreachable for a conforming sender, and **two stopped being
+divergences at all** at the 2026-08-06 compression cut — kept in the census
+as the record of how they closed, not deleted, because "the difference went
+away" is exactly the claim that rots into folklore once the entry is gone.
+The post-inflate bound was the one reachable exception (a ~34 MB interop
+window against a C++ peer) until the cut brought the C++ receiver onto the
+same `min(packet limit, per-command cap)` bound (entry 4); the emit-side
+strictness stopped being a difference when `epee::levin::
+try_compress_message` became a forwarding shim over this crate, so its
+guards — signature, one-message, and the noise class whose constant on-wire
+size cover traffic depends on — are now simply the emit path (entry 6). Do
+not summarise the census into blanket claims — checking
 each entry is exactly what the single-location census exists to force.
