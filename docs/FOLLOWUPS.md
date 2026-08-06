@@ -9135,38 +9135,54 @@ its wake.
       and against the same wire bytes: FCMP++ spend transactions and
       genesis coinbases run **7.97–7.995 bits/B** of entropy, and zstd
       levels 1/3/9 *expand* every corpus (ratio 1.000–1.001). Level 1 is
-      what this path uses. Two consequences, and the second is the
-      uncomfortable one:
+      what this path uses. It splits the question in two, and the two
+      answers point opposite ways:
 
-      - The leak is negligible **because the compression does not
-        happen**. `compress_payload`'s only-if-smaller rule declines
-        anything that fails to shrink, so a `NOTIFY_NEW_TRANSACTIONS`
-        message dominated by transaction bodies is sent uncompressed
-        whether or not it was padded. The guard added here is belt to that
-        brace, and is still worth having: the epee `portable_storage`
-        framing around the bodies (field names, varints, and the padding
-        run itself) *is* compressible, which is exactly why a padded
-        message compressed in the first place.
-      - The same measurement makes the *value* of the Levin `COMPRESSED`
-        path on tx relay close to zero. It is not zero everywhere —
+      - **Unpadded** relay messages are essentially never compressed.
+        Bodies that expand under level 1 fail the only-if-smaller rule, so
+        the `COMPRESSED` flag rarely gets set and there is little ratio
+        left to leak. The corollary is uncomfortable rather than
+        reassuring: "compression on tx relay earns its keep" is now an
+        unsupported claim. It is not worthless everywhere —
         `NOTIFY_RESPONSE_GET_OBJECTS` carries block data with real
-        structure, and that is the path where bandwidth actually matters
-        — but "compression on tx relay earns its keep" is now an
-        unsupported claim rather than an assumption.
+        structure, and that is where bandwidth actually matters — but on
+        this path it is close to nothing.
+      - **Padded** messages compress anyway, and the guard is therefore
+        load-bearing rather than defence in depth. Entropy of the bodies
+        is beside the point: padding is by construction a long run of one
+        character, so the padded case is *systematically* compressible no
+        matter how random the transactions are. Measured on the branch,
+        with pseudorandom 4 KiB bodies matching the Z-1 entropy — a
+        message padded to **9216** payload bytes goes on the wire at
+        **8237** with the guard removed. The ~979-byte space run collapses
+        to a couple of dozen bytes, which more than pays for the ~0.1% the
+        incompressible bodies expand by, and the 1024-quantization is
+        gone. `levin_notify.padding_survives_the_emit_path` is that
+        measurement, kept as a test.
 
       Rejected now rather than acted on, because deleting the path is a
       wire-behaviour change that wants its own measurement (per-command
       ratios on a live-ish corpus) and this branch is a plumbing cut.
-      **Reopen when** any of: per-command ratios are measured and
-      `NOTIFY_NEW_TRANSACTIONS` shows no saving, in which case skip
-      compression for that command outright and delete the padding guard
-      with it; `--pad-transactions` is proposed as default-on (same
-      conclusion, arrived at from the other side); or a relay-privacy
-      round takes up wire-size observables generally, alongside the Q-11
-      Unit 2 wire-observer work. Z-3 (zstd output is non-canonical, so
-      nothing may attest over it) was checked here and does not bite:
-      Levin compression is transport-only and nothing signs or commits to
-      the compressed bytes.
+      **Two separate reopening criteria, because one does not license the
+      other:**
+
+      - *Does the path earn its keep?* Measure per-command ratios on
+        unpadded traffic. If `NOTIFY_NEW_TRANSACTIONS` shows no saving,
+        skip compression for that command outright — which would retire
+        the padding guard as a side effect, since there would be no
+        compressor left to guard against.
+      - *May the guard be deleted on its own?* Only a measurement on
+        **padded** messages could license that, and the number above says
+        it will not: a no-saving result on unpadded traffic says nothing
+        about the padded case. Do not read the first criterion as
+        permission for this one.
+
+      Also reopen if `--pad-transactions` is proposed as default-on, or if
+      a relay-privacy round takes up wire-size observables generally,
+      alongside the Q-11 Unit 2 wire-observer work. Z-3 (zstd output is
+      non-canonical, so nothing may attest over it) was checked here and
+      does not bite: Levin compression is transport-only and nothing signs
+      or commits to the compressed bytes.
     - **Handshake coupling of the packet-size limit.** The framing crate
       cannot detect handshake completion — it does not decode command
       bodies — so `BucketReader::complete_handshake` is the caller's

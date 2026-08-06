@@ -1255,6 +1255,15 @@ TEST_F(levin_notify, fluff_with_padding)
 // carries its padding either way — the receive path inflates a COMPRESSED
 // bucket before handing it up. Reverting the `if (!pad)` guard in
 // `make_payload_send_txs` leaves all of those green and fails only this.
+//
+// The transaction bodies are pseudorandom on purpose. Real Shekyl wire
+// bytes measure 7.97–7.995 bits/B of entropy and zstd level 1 *expands*
+// them (FOLLOWUPS Z-1, 2026-08-06), so a compressible corpus here would
+// prove the guard matters for traffic that does not exist. What makes a
+// padded message compressible is not its payload, it is the padding: a run
+// of ~1000 identical spaces collapses to a couple of dozen bytes, which
+// beats the ~0.1% the incompressible bodies expand by. That is why the
+// quantization falls even when the transactions themselves are noise.
 TEST_F(levin_notify, padding_survives_the_emit_path)
 {
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, true);
@@ -1266,12 +1275,22 @@ TEST_F(levin_notify, padding_survives_the_emit_path)
     notifier.new_out_connection();
     io_service_.poll();
 
-    // Deliberately large and highly compressible: without the guard zstd
-    // collapses both the transaction bodies and the padding run, so the
-    // quantization is unmistakably gone rather than marginally off.
+    // Incompressible bodies, matching the Z-1 measurement of real traffic.
+    // A cheap deterministic PRNG, not `crypto::rand`: the test must fail the
+    // same way on every run.
     std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(4096, 'f');
-    txs[1].resize(4096, 'e');
+    std::uint32_t state = 0x9e3779b9u;
+    for (auto& tx : txs)
+    {
+        tx.resize(4096);
+        for (char& byte : tx)
+        {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            byte = static_cast<char>(state & 0xff);
+        }
+    }
 
     ASSERT_EQ(10u, contexts_.size());
     auto context = contexts_.begin();
@@ -1311,10 +1330,17 @@ TEST_F(levin_notify, padding_survives_the_emit_path)
     }
 }
 
-// The guard above must not have simply switched compression off. With
-// padding disabled the same compressible payload has to still shrink — a
-// wire frame smaller than the transactions it carries is only possible if
-// the compressor ran.
+// The guard above must not have simply switched compression off: with
+// padding disabled the compressor still has to be reachable.
+//
+// This one deliberately uses a *compressible* corpus, which the padding
+// test deliberately does not. The claim here is only "the !pad branch
+// still reaches the codec" — a wire frame smaller than the transactions it
+// carries is possible only if the compressor ran. It is emphatically NOT a
+// claim that real traffic compresses; Z-1 measured real bodies at 7.99
+// bits/B, where zstd level 1 expands them and the only-if-smaller rule
+// declines. Using realistic bytes here would make this test pass for the
+// wrong reason — by proving nothing at all.
 TEST_F(levin_notify, unpadded_messages_still_compress)
 {
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);

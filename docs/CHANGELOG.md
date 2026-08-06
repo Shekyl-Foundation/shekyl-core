@@ -111,7 +111,12 @@
     tests inspect the decoded message, which carries its padding either
     way and so cannot see this), with
     `levin_notify.unpadded_messages_still_compress` as the control that
-    the guard did not simply switch compression off.
+    the guard did not simply switch compression off. The test uses
+    pseudorandom bodies matching the Z-1 entropy measurement, because the
+    hazard does not depend on compressible transactions: padding is a long
+    run of one character, so a padded message compresses however random
+    its transactions are. Measured — 9216 payload bytes padded, 8237 on
+    the wire with the guard removed, quantization gone.
   - **Decompression writes into caller storage.** `shekyl_levin_
     inflated_size` + `shekyl_levin_decompress_into` replace the
     buffer-returning decompress export, so the C++ shim inflates straight
