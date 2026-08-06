@@ -47,6 +47,7 @@
 #include "int-util.h"
 #include "p2p/net_node.h"
 #include "net/levin_base.h"
+#include "net/levin_compression.h"
 #include "span.h"
 
 namespace
@@ -635,6 +636,102 @@ TEST(make_fragment, multiple)
 
     EXPECT_EQ(18, fragment.size());
     EXPECT_EQ(18, std::count(fragment.cbegin(), fragment.cend(), 0));
+}
+
+// ── Compression shim (shekyl_levin_* FFI) ──────────────────────────────────
+//
+// These bite against the C++↔Rust marshaling seam in levin_compression.cpp
+// (buffer ownership, length handling, return-code mapping, limit plumbing);
+// the codec itself — constants, frame handling, caps — is owned and tested
+// by rust/shekyl-levin. Before this seam existed the C++ tree had no
+// compression coverage at all.
+
+TEST(levin_compression, is_available_from_the_rust_image)
+{
+    // The C++ build has no HAVE_ZSTD gate anymore: availability is a
+    // property of the linked Rust image, which builds with zstd default-on.
+    EXPECT_TRUE(epee::levin::is_compression_available());
+}
+
+TEST(levin_compression, payload_roundtrips_through_the_ffi)
+{
+    std::string payload(8 * 1024, '\0');
+    for (std::size_t i = 0; i < payload.size(); ++i)
+        payload[i] = static_cast<char>(i % 251);
+
+    const epee::span<const uint8_t> input{
+        reinterpret_cast<const uint8_t*>(payload.data()), payload.size()};
+
+    std::string compressed;
+    ASSERT_TRUE(epee::levin::compress_payload(input, compressed));
+    EXPECT_LT(compressed.size(), payload.size());
+
+    std::string decompressed;
+    ASSERT_TRUE(epee::levin::decompress_payload(
+        epee::strspan<uint8_t>(compressed), decompressed, LEVIN_DEFAULT_MAX_PACKET_SIZE));
+    EXPECT_EQ(payload, decompressed);
+}
+
+TEST(levin_compression, small_payload_declines_not_errors)
+{
+    // Below the 256-byte minimum (single-sourced in rust/shekyl-levin):
+    // "send it uncompressed", reported as false with no output.
+    const std::string payload(255, 'a');
+    std::string compressed;
+    EXPECT_FALSE(epee::levin::compress_payload(
+        epee::strspan<uint8_t>(payload), compressed));
+    EXPECT_TRUE(compressed.empty());
+}
+
+TEST(levin_compression, garbage_frame_rejected)
+{
+    const std::string garbage = "definitely not a zstd frame";
+    std::string decompressed;
+    EXPECT_FALSE(epee::levin::decompress_payload(
+        epee::strspan<uint8_t>(garbage), decompressed, LEVIN_DEFAULT_MAX_PACKET_SIZE));
+}
+
+TEST(levin_compression, inflation_bounded_by_the_callers_limit)
+{
+    // A valid frame whose declared content size exceeds max_output must be
+    // rejected before allocation — this is the limit the async handler now
+    // passes from min(packet limit, per-command cap).
+    const std::string payload(8 * 1024, '\0');
+    std::string compressed;
+    ASSERT_TRUE(epee::levin::compress_payload(
+        epee::strspan<uint8_t>(payload), compressed));
+
+    std::string decompressed;
+    EXPECT_FALSE(epee::levin::decompress_payload(
+        epee::strspan<uint8_t>(compressed), decompressed, 1024));
+    EXPECT_TRUE(epee::levin::decompress_payload(
+        epee::strspan<uint8_t>(compressed), decompressed, payload.size()));
+    EXPECT_EQ(payload, decompressed);
+}
+
+TEST(levin_compression, try_compress_message_flags_and_reinflates)
+{
+    // End-to-end over the emit path: finalize a notify, compress the whole
+    // message, verify the header rewrite, then inflate the payload back.
+    std::string payload(4 * 1024, '\0');
+    epee::levin::message_writer message;
+    message.buffer.write(epee::to_span(payload));
+
+    epee::byte_slice compressed_msg =
+        epee::levin::try_compress_message(message.finalize_notify(2002));
+    ASSERT_LE(sizeof(epee::levin::bucket_head2), compressed_msg.size());
+
+    epee::levin::bucket_head2 head;
+    std::memcpy(std::addressof(head), compressed_msg.data(), sizeof(head));
+    EXPECT_TRUE(SWAP32LE(head.m_flags) & LEVIN_PACKET_COMPRESSED);
+    EXPECT_EQ(SWAP64LE(head.m_cb), compressed_msg.size() - sizeof(head));
+
+    const epee::span<const uint8_t> frame{
+        compressed_msg.data() + sizeof(head), compressed_msg.size() - sizeof(head)};
+    std::string decompressed;
+    ASSERT_TRUE(epee::levin::decompress_payload(
+        frame, decompressed, LEVIN_DEFAULT_MAX_PACKET_SIZE));
+    EXPECT_EQ(payload, decompressed);
 }
 
 TEST_F(levin_notify, defaulted)

@@ -29,7 +29,6 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
 
 #include "span.h"
 
@@ -37,12 +36,29 @@ namespace epee
 {
 namespace levin
 {
-  constexpr std::size_t COMPRESSION_MIN_PAYLOAD = 256;
-  constexpr std::size_t DECOMPRESSED_MAX_SIZE = 128 * 1024 * 1024; // 128 MiB safety cap
-  constexpr int ZSTD_COMPRESSION_LEVEL = 1; // fast mode: best speed, still ~2:1 on structured data
+  // These are marshaling shims over the `shekyl_levin_*` FFI
+  // (src/shekyl/shekyl_ffi.h, rust/shekyl-ffi/src/levin_ffi.rs): the
+  // Rust-pinned libzstd is the single zstd implementation in the binary,
+  // and the compression policy constants (256-byte minimum payload,
+  // level 1, 128 MiB decompression cap) are single-sourced in
+  // rust/shekyl-levin/src/compress.rs. No system libzstd is linked and
+  // there is no HAVE_ZSTD build gate; availability is a property of the
+  // linked Rust image.
 
+  //! Compress one Levin payload. Returns false meaning "send it
+  //! uncompressed" (below the minimum, not smaller compressed, or
+  //! compression unavailable) — not an error.
   bool compress_payload(epee::span<const uint8_t> input, std::string& output);
-  bool decompress_payload(epee::span<const uint8_t> input, std::string& output);
+
+  //! Decompress one Levin COMPRESSED payload. `max_output` bounds the
+  //! declared content size *before any allocation*; pass the packet-size
+  //! limit the bucket header was checked against. Returns false on a
+  //! malformed, size-less, or oversized frame (connection-fatal for the
+  //! caller).
+  bool decompress_payload(epee::span<const uint8_t> input, std::string& output,
+                          uint64_t max_output);
+
+  //! Whether the linked Rust image can compress/decompress.
   bool is_compression_available() noexcept;
 
 } // levin

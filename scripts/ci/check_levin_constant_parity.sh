@@ -25,6 +25,13 @@
 # `HEADER_SIZE` has no C++ literal — it is `sizeof(bucket_head2)` — so
 # `levin_base.h` carries a `static_assert(sizeof(bucket_head2) == 33)` for
 # this script to read. That assert is load-bearing; see the comment on it.
+#
+# The compression constants (COMPRESSION_MIN_PAYLOAD, DECOMPRESSED_MAX_SIZE,
+# ZSTD_COMPRESSION_LEVEL) are no longer compared: the C++ compression path
+# is a marshaling shim over the shekyl_levin_* FFI, so those constants are
+# single-sourced in rust/shekyl-levin/src/compress.rs with no C++ copy to
+# drift. This gate covers only the constants that still exist twice — the
+# framing values in levin_base.h — until the LV-3 cutover retires them too.
 
 set -euo pipefail
 
@@ -32,11 +39,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
 levin_base="contrib/epee/include/net/levin_base.h"
-levin_compression="contrib/epee/include/net/levin_compression.h"
 rust_header="rust/shekyl-levin/src/header.rs"
-rust_compress="rust/shekyl-levin/src/compress.rs"
 
-for f in "$levin_base" "$levin_compression" "$rust_header" "$rust_compress"; do
+for f in "$levin_base" "$rust_header"; do
   if [[ ! -f "$f" ]]; then
     echo "FAIL: expected file is missing: $f" >&2
     echo "      (a move or rename must update this gate, not bypass it)" >&2
@@ -104,11 +109,6 @@ cpp_define() { # name file
     sed -E "s/^[[:space:]]*#define[[:space:]]+$1[[:space:]]+//"; } || true
 }
 
-cpp_constexpr() { # name file
-  { grep -E "^[[:space:]]*constexpr[^=]*[[:space:]*]$1[[:space:]]*=" "$2" | head -1 |
-    sed -E "s/^.*[[:space:]*]$1[[:space:]]*=[[:space:]]*//"; } || true
-}
-
 rust_const() { # name file
   { grep -E "^pub const $1[[:space:]]*:" "$2" | head -1 |
     sed -E "s/^pub const $1[[:space:]]*:[^=]*=[[:space:]]*//"; } || true
@@ -119,7 +119,7 @@ rust_flag() { # name
     sed -E 's/.*Flags\(([^)]*)\).*/\1/'; } || true
 }
 
-echo "Levin wire-constant parity: $levin_base + $levin_compression vs rust/shekyl-levin"
+echo "Levin wire-constant parity: $levin_base vs rust/shekyl-levin"
 echo
 
 compare "LEVIN_SIGNATURE" \
@@ -148,18 +148,6 @@ compare "Flags::END" \
   "$(cpp_define LEVIN_PACKET_END "$levin_base")" "$(rust_flag END)"
 compare "Flags::COMPRESSED" \
   "$(cpp_define LEVIN_PACKET_COMPRESSED "$levin_base")" "$(rust_flag COMPRESSED)"
-
-compare "COMPRESSION_MIN_PAYLOAD" \
-  "$(cpp_constexpr COMPRESSION_MIN_PAYLOAD "$levin_compression")" \
-  "$(rust_const COMPRESSION_MIN_PAYLOAD "$rust_compress")"
-
-compare "DECOMPRESSED_MAX_SIZE" \
-  "$(cpp_constexpr DECOMPRESSED_MAX_SIZE "$levin_compression")" \
-  "$(rust_const DECOMPRESSED_MAX_SIZE "$rust_compress")"
-
-compare "ZSTD_COMPRESSION_LEVEL" \
-  "$(cpp_constexpr ZSTD_COMPRESSION_LEVEL "$levin_compression")" \
-  "$(rust_const ZSTD_COMPRESSION_LEVEL "$rust_compress")"
 
 # HEADER_SIZE: read the C++ side out of the static_assert, since
 # `sizeof(bucket_head2)` leaves no literal of its own.

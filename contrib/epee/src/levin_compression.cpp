@@ -25,97 +25,64 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+// Marshaling shim over the shekyl_levin_* FFI (rule 20: the boundary
+// advanced; the codec, its policy constants, and the safety caps live in
+// rust/shekyl-levin/src/compress.rs). This file owns no compression logic
+// and links no libzstd — the Rust image carries the single copy.
+
 #include "net/levin_compression.h"
 
 #include "misc_log_ex.h"
-
-#ifdef HAVE_ZSTD
-#include <zstd.h>
-#endif
+#include "shekyl/shekyl_ffi.h"
 
 namespace epee
 {
 namespace levin
 {
+namespace
+{
+  //! Copy an FFI buffer into `output` and free the Rust allocation.
+  void take_buffer(ShekylBuffer& buf, std::string& output)
+  {
+    output.assign(reinterpret_cast<const char*>(buf.ptr), buf.len);
+    shekyl_buffer_free(buf.ptr, buf.len);
+  }
+} // anonymous
+
   bool is_compression_available() noexcept
   {
-#ifdef HAVE_ZSTD
-    return true;
-#else
-    return false;
-#endif
+    return shekyl_levin_compression_available();
   }
 
   bool compress_payload(epee::span<const uint8_t> input, std::string& output)
   {
-#ifdef HAVE_ZSTD
-    if (input.size() < COMPRESSION_MIN_PAYLOAD)
-      return false;
-
-    const size_t bound = ZSTD_compressBound(input.size());
-    if (ZSTD_isError(bound))
-      return false;
-
-    output.resize(bound);
-    const size_t compressed_size = ZSTD_compress(
-        output.data(), bound,
-        input.data(), input.size(),
-        ZSTD_COMPRESSION_LEVEL);
-
-    if (ZSTD_isError(compressed_size))
+    ShekylBuffer buf{};
+    const int32_t rc = shekyl_levin_compress_payload(input.data(), input.size(), &buf);
+    if (rc != 0)
     {
-      MERROR("zstd compression failed: " << ZSTD_getErrorName(compressed_size));
-      output.clear();
+      // rc == 1 is "declined — send it uncompressed", the expected outcome
+      // for small or incompressible payloads; only negative codes are bugs.
+      if (rc < 0)
+        MERROR("Levin payload compression failed, rc=" << rc);
       return false;
     }
-
-    if (compressed_size >= input.size())
-    {
-      output.clear();
-      return false;
-    }
-
-    output.resize(compressed_size);
+    take_buffer(buf, output);
     return true;
-#else
-    (void)input;
-    (void)output;
-    return false;
-#endif
   }
 
-  bool decompress_payload(epee::span<const uint8_t> input, std::string& output)
+  bool decompress_payload(epee::span<const uint8_t> input, std::string& output,
+                          const uint64_t max_output)
   {
-#ifdef HAVE_ZSTD
-    const unsigned long long decompressed_size = ZSTD_getFrameContentSize(input.data(), input.size());
-    if (decompressed_size == ZSTD_CONTENTSIZE_UNKNOWN || decompressed_size == ZSTD_CONTENTSIZE_ERROR)
+    ShekylBuffer buf{};
+    const int32_t rc =
+        shekyl_levin_decompress_payload(input.data(), input.size(), max_output, &buf);
+    if (rc != 0)
     {
-      MERROR("zstd decompression: cannot determine content size");
+      MERROR("Levin payload decompression failed, rc=" << rc);
       return false;
     }
-    if (decompressed_size > DECOMPRESSED_MAX_SIZE)
-    {
-      MERROR("zstd decompression: frame claims " << decompressed_size << " bytes, exceeds limit");
-      return false;
-    }
-
-    output.resize(static_cast<size_t>(decompressed_size));
-    const size_t actual = ZSTD_decompress(output.data(), output.size(), input.data(), input.size());
-    if (ZSTD_isError(actual))
-    {
-      MERROR("zstd decompression failed: " << ZSTD_getErrorName(actual));
-      output.clear();
-      return false;
-    }
-
-    output.resize(actual);
+    take_buffer(buf, output);
     return true;
-#else
-    (void)input;
-    (void)output;
-    MERROR("Received compressed Levin payload but zstd support was not compiled in");
-    return false;
-#endif
   }
 
 } // levin

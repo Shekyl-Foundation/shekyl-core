@@ -74,9 +74,6 @@ namespace levin
 
   byte_slice try_compress_message(byte_slice input)
   {
-    if (!is_compression_available())
-      return input;
-
     const auto data = to_span(input);
     if (data.size() <= sizeof(bucket_head2))
       return input;
@@ -87,9 +84,11 @@ namespace levin
       return input;
 
     const span<const uint8_t> payload{data.data() + sizeof(bucket_head2), data.size() - sizeof(bucket_head2)};
-    if (payload.size() < COMPRESSION_MIN_PAYLOAD)
-      return input;
 
+    // compress_payload declines (returns false) below the minimum payload
+    // size, when not smaller compressed, and when compression is
+    // unavailable — the policy lives behind the FFI, single-sourced in
+    // rust/shekyl-levin.
     std::string compressed;
     if (!compress_payload(payload, compressed))
       return input;

@@ -499,7 +499,12 @@ public:
           std::string decompressed_buf;
           if (m_current_head.m_flags & LEVIN_PACKET_COMPRESSED)
           {
-            if (!levin::decompress_payload(buff_to_invoke, decompressed_buf))
+            // Bound the inflated size by the same limit the bucket header was
+            // checked against, so a compressed payload cannot expand past the
+            // packet-size / per-command caps in force.
+            const uint64_t max_decompressed = std::min<uint64_t>(
+                max_packet_size, m_connection_context.get_max_bytes(m_current_head.m_command));
+            if (!levin::decompress_payload(buff_to_invoke, decompressed_buf, max_decompressed))
             {
               MERROR(m_connection_context << "Failed to decompress Levin payload, cmd=" << m_current_head.m_command);
               return false;
