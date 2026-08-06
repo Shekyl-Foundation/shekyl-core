@@ -59,6 +59,24 @@
 
 ### Added
 
+- **Levin p2p compression routed through Rust; system libzstd dropped.**
+  The C++ `epee::levin` compression path is now a marshaling shim over the
+  new `shekyl_levin_*` FFI (`rust/shekyl-ffi/src/levin_ffi.rs`, backed by
+  `shekyl-levin`), making the workspace-pinned vendored libzstd the
+  binary's **single** zstd implementation: the root-CMake zstd detection,
+  the `HAVE_ZSTD` gate (and its silently-degraded "compression disabled"
+  fallback), the epee system-libzstd link, and the C++ compression
+  constants are all deleted. Receive-side hardening rode the cut: the C++
+  handler now bounds decompression by `min(packet limit, per-command cap)`
+  — the same bound the Rust `BucketReader` enforces — closing a ~34 MB
+  inflation accept-window on `NOTIFY_NEW_TRANSACTIONS` and a
+  128-MiB-allocation-per-connection exhaustion surface. Five new
+  `levin_compression` gtests cover the seam (the C++ tree previously had
+  zero compression coverage); the Levin constant-parity CI gate drops its
+  three compression rows (single-sourced in Rust now, nothing left to
+  drift). `zstd = "0.13"` is promoted to `[workspace.dependencies]`
+  (decision 2026-08-06; shard serving is the anticipated next consumer).
+
 - **`shekyl-levin` — Rust Levin framing crate (LV-1), inert until wired.**
   The byte-exact Rust skeleton of `docs/LEVIN_PROTOCOL.md`: the 33-byte
   bucket header, notification/request/response builders, noise and

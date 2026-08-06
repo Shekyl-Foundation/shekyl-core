@@ -40,10 +40,15 @@ chunk boundaries, and noise sizes.
   separate, tracked work item.
 - **Not the connection stack.** No sockets, timeouts, invoke/response
   correlation, or peer management.
-- **Not wired.** The daemon's live path stays C++ (`contrib/epee`,
-  `src/p2p/`, `src/cryptonote_protocol/levin_notify.*`) until the scheduled
-  p2p cutover. This crate is the verified foundation that cutover starts
-  from.
+- **Framing not wired; compression is.** Since 2026-08-06 the daemon's
+  compression path runs through this crate: `contrib/epee`'s
+  `levin_compression.cpp` is a marshaling shim over the `shekyl_levin_*`
+  FFI (`rust/shekyl-ffi/src/levin_ffi.rs`), and the vendored libzstd here
+  is the binary's single zstd (no system libzstd, no `HAVE_ZSTD` gate).
+  The framing path — builders, `BucketReader` — stays C++
+  (`contrib/epee`, `src/p2p/`, `src/cryptonote_protocol/levin_notify.*`)
+  until the scheduled p2p cutover. This crate is the verified foundation
+  that cutover starts from.
 
 ## Documented divergences from the C++ oracle
 
@@ -60,8 +65,9 @@ decompressed payload by the packet limit in force, one latching the reader
 after a fatal error); one is emit-side, where `try_compress_message` returns
 malformed input unchanged rather than re-framing it.
 
-All but one are unreachable for a conforming sender. The exception is the
-post-inflate bound, which has a stated ~34 MB interop window against a C++
-peer; the crate docs give the numbers and the reasoning. Do not summarise
-that away — "no conforming sender trips any of them" is exactly the sort of
-unchecked blanket claim the single-location census exists to prevent.
+All are unreachable for a conforming sender. The post-inflate bound was
+the one exception (a ~34 MB interop window against a C++ peer) until the
+2026-08-06 compression-shim cut brought the C++ receiver onto the same
+`min(packet limit, per-command cap)` bound; census entry 4 records the
+resolution. Do not summarise the census into blanket claims — checking
+each entry is exactly what the single-location census exists to force.

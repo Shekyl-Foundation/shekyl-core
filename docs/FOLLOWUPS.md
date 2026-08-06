@@ -9025,8 +9025,13 @@ its wake.
   byte-identical against the C++ gtests) landed 2026-08-05, deliberately
   inert — the scoping decision was "exact, fully-tested skeleton now;
   cutover scheduled for the future" (shekyl-levin plan, 2026-08-05; index
-  row `LV-1…LV-N`). The remaining work is **rejected-now with named
-  reopening criteria** (rule 21):
+  row `LV-1…LV-N`). UPDATE 2026-08-06: the crate's **compression half is
+  production-live** — the C++ `epee::levin` compression path is a
+  marshaling shim over the `shekyl_levin_*` FFI and the system-libzstd
+  dependency is deleted (single-owner libzstd; zstd decision 2026-08-06).
+  The framing half (builders, `BucketReader`) stays inert until LV-3. The
+  remaining work is **rejected-now with named reopening criteria**
+  (rule 21):
 
   - **LV-2 — epee portable_storage payload codec + command schemas.** The
     framing crate carries payloads as opaque bytes; speaking live
@@ -9047,37 +9052,25 @@ its wake.
     cycle, own PR) — reopens only when that track is opened; the
     re-evaluation shape is a design round against the inventory.
 
-    Two decisions are **named here rather than deferred silently**, because
-    both are undecidable until LV-3 creates the thing they are about:
+    Decisions once named here, and their dispositions:
 
-    - **libzstd link strategy.** `zstd-sys` `cc`-compiles a vendored
-      libzstd unless its non-default `pkg-config` feature is enabled; the
-      C++ build links the system library (`CMakeLists.txt`
-      `pkg_check_modules` / `find_library`, then `-DHAVE_ZSTD`). The moment
-      `shekyl-levin` is folded into a staticlib the daemon links, that
-      binary carries two libzstd implementations with colliding `ZSTD_*`
-      symbols, and `zstd-sys`'s `links = "zstd"` key conflicts with any
-      other crate claiming it. Blocker: `shekyl-levin` is in no staticlib
-      today, so there is no link graph to decide against — enabling
-      `pkg-config` now would add a system-libzstd build requirement to
-      every Rust CI job for a crate that is inert. Recorded in
-      `rust/shekyl-levin/Cargo.toml` at the dependency itself.
-    - **Post-inflate limit interop window.** `BucketReader` bounds a
-      decompressed payload by `min(packet limit, per-command limit)`, which
-      the C++ declares but never re-checks after inflating. `COMPRESSED` is
-      only ever set on `NOTIFY_NEW_TRANSACTIONS`, whose effective limit is
-      100 MB, while `DECOMPRESSED_MAX_SIZE` is 128 MiB — so a relay batch
-      inflating into that ~34 MB gap is accepted by a C++ receiver and
-      rejected by the Rust one. Nothing bounds the uncompressed batch on the
-      sender side, so it is reachable in principle (order 670 weight-limit
-      transactions in one batch), though not observed. Blocker: deciding
-      between "confirm unreachable in real traffic" and "widen the bound to
-      `DECOMPRESSED_MAX_SIZE` for this one command" needs a mixed C++/Rust
-      network to measure against, which cannot exist while the crate is
-      unwired. Enforcing the declared limit is the pre-cutover default
-      because the alternative is an unbounded memory-exhaustion surface (a
-      few KB of frame forcing a 128 MiB allocation per connection). Stated
-      in full in the crate's divergence census, entry 4.
+    - **libzstd link strategy — RESOLVED 2026-08-06** (compression-shim
+      cut, this branch). The question dissolved rather than being decided:
+      the C++ `epee::levin` compression path became a marshaling shim over
+      the `shekyl_levin_*` FFI, the system-libzstd detection/link and the
+      `HAVE_ZSTD` gate were deleted, and the vendored `zstd-sys` copy
+      pinned by the workspace became the binary's single zstd. There is no
+      dual-libzstd fold left for LV-3 to encounter, and `links = "zstd"`
+      is claimed exactly once. Recorded at the dependency in
+      `rust/shekyl-levin/Cargo.toml`.
+    - **Post-inflate limit interop window — RESOLVED 2026-08-06** (same
+      cut). The C++ decompress site now enforces the identical
+      `min(packet limit, per-command limit)` bound the Rust
+      `BucketReader` does (`levin_protocol_handler_async.h`,
+      `max_decompressed`), closing the ~34 MB `NOTIFY_NEW_TRANSACTIONS`
+      accept-window and the 128 MiB-allocation-per-connection exhaustion
+      surface with it. Both implementations agree; divergence census
+      entry 4 records the resolution.
     - **Handshake coupling of the packet-size limit.** The framing crate
       cannot detect handshake completion — it does not decode command
       bodies — so `BucketReader::complete_handshake` is the caller's

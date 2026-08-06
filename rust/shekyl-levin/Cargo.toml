@@ -17,21 +17,14 @@ zstd = ["dep:zstd"]
 
 [dependencies]
 thiserror = { workspace = true }
-# Compatibility with peers running the C++ stack comes from the zstd *frame
-# format*, which is stable and version-independent — NOT from sharing a
-# library with the C++ build. This is a different libzstd: `zstd-sys` takes
-# its pkg-config branch only under its non-default `pkg-config` feature, so
-# by default it `cc`-compiles the copy vendored in the crate, while the C++
-# build links the system library (`CMakeLists.txt`: pkg_check_modules /
-# find_library, then -DHAVE_ZSTD).
-#
-# Two consequences to settle at the LV-3 cutover, when this crate is first
-# folded into a staticlib the daemon links: the binary would then carry two
-# libzstd implementations with colliding ZSTD_* symbols, and `zstd-sys`
-# declares `links = "zstd"`, which conflicts with any other crate claiming
-# that key. Deciding between them (enable `pkg-config`, or keep vendored and
-# isolate) needs a link graph that does not exist yet — shekyl-levin is in no
-# staticlib today. Recorded in the FOLLOWUPS "Levin p2p migration" LV-3 entry.
+# This vendored, pinned libzstd (zstd-sys `cc`-compiles the copy in the
+# crate; the non-default `pkg-config` feature is NOT enabled) is the
+# binary's SINGLE zstd implementation since the compression-shim cut
+# (2026-08-06): the C++ epee::levin path reaches it through the
+# shekyl_levin_* FFI, the system-libzstd link and HAVE_ZSTD gate are
+# deleted, and `links = "zstd"` is claimed exactly once, by zstd-sys.
+# The dual-libzstd / symbol-collision question formerly parked at the
+# FOLLOWUPS LV-3 entry is resolved by construction.
 #
 # Optional: only pulled in by the `zstd` feature above. The version is the
 # single-source [workspace.dependencies] pin (decision 2026-08-06): further

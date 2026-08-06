@@ -78,8 +78,10 @@ members = [
     # Levin p2p framing layer (bucket header, fragments, noise, zstd flag
     # path) — the byte-exact Rust skeleton of docs/LEVIN_PROTOCOL.md, KAT'd
     # against the C++ epee::levin oracle. Framing only: no portable_storage,
-    # no sockets, no daemon wiring; inert until the scheduled p2p cutover
-    # (IMPLEMENTATION_INDEX.md LV row).
+    # no sockets. The compression half is production-live (the C++
+    # epee::levin compression path shims through shekyl-ffi's
+    # shekyl_levin_* exports — single-owner libzstd); the framing half is
+    # inert until the scheduled p2p cutover (IMPLEMENTATION_INDEX.md LV row).
     "shekyl-levin",
 
     "shekyl-archival-retention",
