@@ -47,14 +47,16 @@ namespace levin
 
   //! Compress one Levin payload. Returns false meaning "send it
   //! uncompressed" (below the minimum, not smaller compressed, or
-  //! compression unavailable) — not an error.
+  //! compression unavailable) — not an error. On false, `output` is
+  //! cleared (safe for callers that reuse the string).
   bool compress_payload(epee::span<const uint8_t> input, std::string& output);
 
   //! Decompress one Levin COMPRESSED payload. `max_output` bounds the
   //! declared content size *before any allocation*; pass the packet-size
   //! limit the bucket header was checked against. Returns false on a
   //! malformed, size-less, or oversized frame (connection-fatal for the
-  //! caller).
+  //! caller). On false, `output` is cleared (safe for callers that reuse
+  //! the string).
   bool decompress_payload(epee::span<const uint8_t> input, std::string& output,
                           uint64_t max_output);
 

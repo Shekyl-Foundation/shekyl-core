@@ -238,16 +238,16 @@ jobs:
         # bare-Rust environment passes; the differential harness asserts
         # under its own substrate-correct environment.
         run: cargo test --locked --workspace --exclude shekyl-randomx-differential
-      - name: "shekyl-levin: HAVE_ZSTD-off parity lane (--no-default-features)"
+      - name: "shekyl-levin: zstd-feature-off unavailability lane (--no-default-features)"
         working-directory: rust
-        # LV-1. `shekyl-levin`'s `zstd` feature is default-on and mirrors the
-        # C++ `HAVE_ZSTD` build gate: with it off, `try_compress_message` is
-        # the identity and a COMPRESSED bucket is a hard error. The
-        # workspace-wide test above only ever builds the default features, so
-        # without this lane the crate's claimed HAVE_ZSTD-off behavior is
-        # never compiled *or* executed and can break green. Clippy too: the
-        # `#[cfg(not(feature = "zstd"))]` arms are invisible to the
-        # workspace clippy step for the same reason.
+        # `shekyl-levin`'s `zstd` feature is default-on (production always
+        # compresses via the shekyl_levin_* FFI; there is no C++ HAVE_ZSTD
+        # gate). Feature-off keeps try_compress_message as the identity and
+        # treats a COMPRESSED bucket as a hard error. The workspace-wide
+        # test above only ever builds default features, so without this lane
+        # the unavailability arms are never compiled *or* executed and can
+        # rot green. Clippy too: the `#[cfg(not(feature = "zstd"))]` arms
+        # are invisible to the workspace clippy step for the same reason.
         #
         # `src/compress.rs` carries `tests_without_zstd`, which only compiles
         # in this configuration — otherwise this lane would prove nothing but

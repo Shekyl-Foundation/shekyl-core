@@ -3,11 +3,19 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The `COMPRESSED` flag path, mirroring `epee::levin::try_compress_message`
-//! and `decompress_payload` (`contrib/epee/src/levin_compression.cpp`).
-//! With the `zstd` cargo feature disabled this module behaves exactly like a
-//! C++ build without `HAVE_ZSTD`: compression is a no-op and receiving a
-//! compressed bucket is a hard error.
+//! The `COMPRESSED` flag path — **this module is the policy owner**.
+//!
+//! Since the 2026-08-06 compression-shim cut the C++
+//! `epee::levin::{compress,decompress}_payload` path is a marshaling shim
+//! over the `shekyl_levin_*` FFI that reaches these functions: the codec,
+//! the 256-byte minimum, the only-if-smaller rule, level 1, and the
+//! inflate caps are single-sourced here. Do not "mirror C++" when editing
+//! — C++ is the consumer.
+//!
+//! With the `zstd` cargo feature disabled, compression is a no-op and
+//! receiving a compressed bucket is a hard error. That shape exists for
+//! pure-Rust unavailability tests (`--no-default-features`); the production
+//! daemon image always builds with the feature on.
 
 use crate::error::Error;
 use crate::header::{BucketHead, Flags, HEADER_SIZE};
@@ -28,10 +36,10 @@ pub const fn is_compression_available() -> bool {
     cfg!(feature = "zstd")
 }
 
-/// Compress one payload the way the C++ `compress_payload` does. Returns
-/// `None` — meaning "send it uncompressed" — when compression is
-/// unavailable, the payload is below [`COMPRESSION_MIN_PAYLOAD`], the codec
-/// fails, or the result is not strictly smaller than the input.
+/// Compress one payload under the production Levin policy. Returns `None`
+/// — meaning "send it uncompressed" — when compression is unavailable, the
+/// payload is below [`COMPRESSION_MIN_PAYLOAD`], the codec fails, or the
+/// result is not strictly smaller than the input.
 ///
 /// This is the payload-level seam the C++ shim reaches through the FFI
 /// (`shekyl_levin_compress_payload`): the header rewrite stays on whichever
@@ -266,9 +274,10 @@ mod tests {
     }
 }
 
-/// `HAVE_ZSTD`-off parity: with the feature disabled, compression is the
-/// identity and a `COMPRESSED` bucket is a hard error. Without these the
-/// `--no-default-features` CI leg would only prove the crate compiles.
+/// Feature-off unavailability path: with the `zstd` feature disabled,
+/// compression is the identity and a `COMPRESSED` bucket is a hard error.
+/// Without these the `--no-default-features` CI leg would only prove the
+/// crate compiles.
 #[cfg(all(test, not(feature = "zstd")))]
 mod tests_without_zstd {
     use super::*;

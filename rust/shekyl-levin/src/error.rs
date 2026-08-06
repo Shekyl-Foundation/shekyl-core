@@ -52,7 +52,8 @@ pub enum Error {
     },
 
     /// A `COMPRESSED` bucket arrived but this build has no zstd support
-    /// (`zstd` cargo feature disabled — the C++ `HAVE_ZSTD`-off behavior).
+    /// (`zstd` cargo feature disabled — pure-Rust unavailability path;
+    /// the production daemon image always has the feature on).
     #[error("received compressed levin payload but zstd support is not compiled in")]
     CompressionUnavailable,
 

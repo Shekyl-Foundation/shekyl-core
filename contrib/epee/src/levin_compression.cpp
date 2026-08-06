@@ -42,10 +42,17 @@ namespace levin
 namespace
 {
   //! Copy an FFI buffer into `output` and free the Rust allocation.
+  //! Empty / null buffers clear `output` without reading through a null
+  //! pointer (C++ `basic_string::assign(const char*, size_type)` is only
+  //! well-defined for a non-null source when the count is positive).
   void take_buffer(ShekylBuffer& buf, std::string& output)
   {
-    output.assign(reinterpret_cast<const char*>(buf.ptr), buf.len);
+    if (buf.ptr == nullptr || buf.len == 0)
+      output.clear();
+    else
+      output.assign(reinterpret_cast<const char*>(buf.ptr), buf.len);
     shekyl_buffer_free(buf.ptr, buf.len);
+    buf = {};
   }
 } // anonymous
 
@@ -60,8 +67,10 @@ namespace
     const int32_t rc = shekyl_levin_compress_payload(input.data(), input.size(), &buf);
     if (rc != 0)
     {
+      // Contract: false leaves `output` empty (callers may reuse the string).
       // rc == 1 is "declined — send it uncompressed", the expected outcome
       // for small or incompressible payloads; only negative codes are bugs.
+      output.clear();
       if (rc < 0)
         MERROR("Levin payload compression failed, rc=" << rc);
       return false;
@@ -78,6 +87,8 @@ namespace
         shekyl_levin_decompress_payload(input.data(), input.size(), max_output, &buf);
     if (rc != 0)
     {
+      // Contract: false leaves `output` empty (callers may reuse the string).
+      output.clear();
       MERROR("Levin payload decompression failed, rc=" << rc);
       return false;
     }

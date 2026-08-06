@@ -8,10 +8,12 @@ repository.workspace = true
 description = "Levin p2p framing layer (bucket header, fragments, noise, compression). See docs/LEVIN_PROTOCOL.md."
 
 [features]
-# Mirrors the C++ HAVE_ZSTD build gate (contrib/epee/src/levin_compression.cpp):
-# with the feature off, `try_compress_message` is the identity and receiving a
-# COMPRESSED bucket is an error — exactly the C++ behavior without zstd.
-# Default-on because the production daemon builds with HAVE_ZSTD.
+# Codec gate for pure-Rust builds of this crate. Default-on: the production
+# daemon image always compresses (C++ reaches this crate through the
+# shekyl_levin_* FFI; there is no C++ HAVE_ZSTD gate anymore). Feature-off
+# keeps `try_compress_message` as the identity and treats a COMPRESSED
+# bucket as a hard error — exercised by the dedicated CI lane so the
+# unavailability arms cannot rot green.
 default = ["zstd"]
 zstd = ["dep:zstd"]
 

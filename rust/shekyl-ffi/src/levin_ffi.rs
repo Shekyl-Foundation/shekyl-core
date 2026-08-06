@@ -41,8 +41,8 @@ pub const SHEKYL_LEVIN_DECLINED: i32 = 1;
 pub const SHEKYL_LEVIN_ERR_FORMAT: i32 = -3;
 /// A required pointer was null.
 pub const SHEKYL_LEVIN_ERR_NULL: i32 = -4;
-/// The Rust image was built without the `zstd` feature (mirror of a C++
-/// build without `HAVE_ZSTD`).
+/// The Rust image was built without the `zstd` feature (production always
+/// has it on; this code is for pure-Rust feature-off builds only).
 pub const SHEKYL_LEVIN_ERR_UNAVAILABLE: i32 = -6;
 
 /// Whether the linked Rust image can compress/decompress Levin payloads.

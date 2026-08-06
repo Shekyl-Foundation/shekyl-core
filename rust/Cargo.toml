@@ -259,11 +259,11 @@ repository = "https://github.com/radawson/Shekyl"
 [workspace.dependencies]
 thiserror = "2"
 # Single-source zstd pin (decision 2026-08-06): the Levin COMPRESSED path
-# consumes it today (`shekyl-levin`, feature-gated `HAVE_ZSTD` parity), and
-# further consumers are anticipated — shard serving in the TJ archival track
-# compresses shard payloads. One pin here keeps every consumer on the same
-# libzstd (the same C library the daemon links), so compressed frames are
-# interoperable across components by construction.
+# consumes it today (`shekyl-levin`, default-on; production reaches it via
+# the shekyl_levin_* FFI), and further consumers are anticipated — shard
+# serving in the TJ archival track compresses shard payloads. One pin here
+# keeps every consumer on the same vendored libzstd, so compressed frames
+# are interoperable across components by construction.
 zstd = "0.13"
 serde = { version = "1", features = ["derive"] }
 # Single source of truth for the secret-wiping crate, replacing the

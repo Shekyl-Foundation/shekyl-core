@@ -13,8 +13,9 @@ implementation:
 - whole-message builders for the notification / request / response flows;
 - dummy ("noise") messages and noise-shaped fragmentation for the white-noise
   feature over i2p/Tor;
-- the zstd `COMPRESSED` path (cargo feature `zstd`, default on — feature off
-  mirrors a C++ build without `HAVE_ZSTD`);
+- the zstd `COMPRESSED` path (cargo feature `zstd`, default on — this crate
+  owns the policy; feature off is only for pure-Rust unavailability tests);
+
 - an incremental stream reader (`BucketReader`) mirroring the
   `async_protocol_handler::handle_recv` state machine: partial reads,
   signature early-reject, packet-size limits (256 KiB pre-handshake / 100 MB

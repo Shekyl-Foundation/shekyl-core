@@ -675,9 +675,10 @@ TEST(levin_compression, payload_roundtrips_through_the_ffi)
 TEST(levin_compression, small_payload_declines_not_errors)
 {
     // Below the 256-byte minimum (single-sourced in rust/shekyl-levin):
-    // "send it uncompressed", reported as false with no output.
+    // "send it uncompressed", reported as false with empty output — even
+    // when the caller reuses a non-empty string (the false⇒empty contract).
     const std::string payload(255, 'a');
-    std::string compressed;
+    std::string compressed = "stale-caller-reuse";
     EXPECT_FALSE(epee::levin::compress_payload(
         epee::strspan<uint8_t>(payload), compressed));
     EXPECT_TRUE(compressed.empty());
@@ -685,10 +686,13 @@ TEST(levin_compression, small_payload_declines_not_errors)
 
 TEST(levin_compression, garbage_frame_rejected)
 {
+    // Same false⇒empty contract on the decompress failure path: a reused
+    // non-empty `output` must not retain stale bytes after rejection.
     const std::string garbage = "definitely not a zstd frame";
-    std::string decompressed;
+    std::string decompressed = "stale-caller-reuse";
     EXPECT_FALSE(epee::levin::decompress_payload(
         epee::strspan<uint8_t>(garbage), decompressed, LEVIN_DEFAULT_MAX_PACKET_SIZE));
+    EXPECT_TRUE(decompressed.empty());
 }
 
 TEST(levin_compression, inflation_bounded_by_the_callers_limit)

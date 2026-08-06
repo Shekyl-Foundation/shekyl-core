@@ -3334,7 +3334,8 @@ void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms
 // Return codes (rule 40): 0 = ok (out set); 1 = compression declined, send
 // uncompressed (not an error; out is nulled); -3 = malformed/size-less/
 // oversized frame or input above the Levin packet limit; -4 = null pointer;
-// -6 = the Rust image was built without zstd support.
+// -6 = the Rust image was built without the zstd feature (production always
+// has it on; pure-Rust feature-off builds only).
 
 //! True when the linked Rust image can compress/decompress Levin payloads.
 bool shekyl_levin_compression_available();
