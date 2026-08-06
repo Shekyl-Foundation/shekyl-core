@@ -2849,6 +2849,42 @@ sustainability is unaffected by the recalibration.
   [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md) §7.4 /
   §8 #11.
 
+- **Shard serving on `P`: zstd compression REJECTED by measurement
+  (Z-1, 2026-08-06) — rule-21 reopen recorded.** Posed as a new design
+  question (Z-1..Z-6, roadmap-review thread) rather than an extension
+  of the shekyl-levin transport work (different threat model, same
+  library). Z-1 ran first, alone, on real wire bytes at dev
+  `660cee668` — three freshly built FCMP++ spend txs (13,039 B each,
+  1-in/2-out) plus the three network genesis coinbases (6,263 B,
+  5-output): byte entropy 7.97–7.995 bits/B; zstd levels 1/3/9
+  EXPAND every corpus (ratio 1.000–1.001); level 19 reaches only
+  0.996 aggregate and is a net LOSS on single-response units
+  (1.001–1.002). Wire content is cryptographic output end to end
+  (KEM ciphertexts, curve points, proofs, ML-DSA auths, hashes); the
+  compressible minority (varints, framing) is noise against it. The
+  answer is **don't**, per the pre-registered kill line (≥0.97 ⇒
+  drop). Standing hazards recorded so any reopen re-prices them, not
+  just the ratio: Z-2 — compressed length is a stable per-shard
+  content oracle directly opposed to `P`'s length-uniformity goal
+  (padding a compressed stream discards the saving); Z-3 — zstd
+  output is non-canonical (version/level/window/threading), so any
+  attestation or countersignature must bind canonical uncompressed
+  content, never the transport encoding (the F-9 rule; structural
+  gate before any design); Z-4 — decompression caps must derive from
+  the known shard size, not a global constant (adversarial
+  challenger, asymmetric cost); Z-5 — `links = "zstd"` graph
+  collision + vendored-C growth against rule 20 (the LV-3 hazard);
+  Z-6 — content-dependent compression timing stacks on graded
+  serving latency (compress-once-at-write would be the only
+  defensible form). **Reopening criterion:** a wire-format change
+  introducing substantial compressible structure, demonstrated by
+  re-running the Z-1 measurement on real shard bytes at ≥10%
+  saving — and Z-3 answered structurally before any design work.
+  Corpus caveats, stated: no block headers (hash/varint-dominated,
+  ~100–200 B/block) and a small unique-tx sample — immaterial at
+  7.99 bits/B entropy (a larger window cannot find structure that is
+  not there). *Target: V3.0 disposition stable (closed).*
+
 - **Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11
   single-image amendment).** The per-binary Rust-image selection in
   `cmake/BuildRust.cmake` structurally gives every binary one Rust
@@ -4985,6 +5021,21 @@ sustainability is unaffected by the recalibration.
   (including per-wallet-constant clustering without view key). Spec pointer:
   `FA-6_VIEW_TAG_ML_KEM.md` §3.2, §5.1. **Target:** V3.0 pre-genesis before
   multisig receive path is production-load-bearing (or explicit waiver).
+
+- **`tx_extra` `0x02` Nonce: shed from the genesis grammar — FA-10 is
+  the sanctioned tagging channel** (added 2026-08-06, roadmap-review
+  thread; scope-routed to the credit-wire / tx_extra canonical-form
+  lane rather than the send-record round). With FA-10 labels adopted
+  (uniform 8-byte per-output `enc_label`, sentinel-indistinguishable
+  on wire — grounding in `docs/design/WALLET_SEND_RECORD.md` §1), the
+  `0x02` Nonce field is a second, non-uniform tagging channel that
+  partitions users exactly the way FA-10 was designed to prevent:
+  presence-vs-absence and length are cleartext observables. Shedding
+  follows the `0x03`/`0xDE` precedent. The padding-length,
+  field-ordering, and duplicate-tag canonical-form channels are
+  separate items in that lane, not this entry. Genesis-frozen wire
+  grammar ⇒ lands pre-genesis. *Target: V3.0 (with the tx_extra
+  canonical-form pass).*
 
 - **Phase 2a send path — engine substrate (closed 2026-06).** `LocalPendingTx`
   build/sign/wire/submit on `Engine<S>` with production daemon fee snapshot +

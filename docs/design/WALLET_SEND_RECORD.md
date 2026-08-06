@@ -19,7 +19,11 @@ FA-10 label row — payment-request linkage (`LABEL_KIND_REQUEST` rid in
 re-derivation chain given the retained tx key and a candidate
 recipient address; checked against SJ-DQ-1 before its ratification
 finalizes, and it does not disturb the decision (see the table's
-amendment note). Still open for pass 3: SJ-DQ-4's remaining mechanics,
+amendment note). **Roadmap fold (2026-08-06):** the C++-retirement
+roadmap review adds two edges — SJ-DQ-1 gains the R-4 fee-provenance
+clause (realized fee of the built tx, never an estimator value), and
+SJ-DQ-3's ratification is gated on the roadmap's A4 cold-bundle
+decision (R-2). Still open for pass 3: SJ-DQ-4's remaining mechanics,
 SJ-DQ-5's control design, SJ-DQ-6, and the `abandon_tx` force-path
 sub-question (pulled up from SJ-DQ-8 at pass 1, R1-5). Decisions stamp
 into the section that carries them, dated, per the binding-record
@@ -256,7 +260,14 @@ story, not the read path.
   normalization (one place to rename a contact), evaluated on
   convenience merits in PR-SJ-2, carrying no privacy argument. The
   disclosure ledger's remaining work is C1's boundary crossings, not
-  field selection.
+  field selection. **Fee provenance (folded 2026-08-06, roadmap
+  review R-4):** the recorded fee is the realized fee of the built
+  transaction (`PendingTx.fee_atomic_units` — the same value the wire
+  tx pays and the chain sees in cleartext, §1 table), never an
+  estimator output. This keeps the row correct through the
+  stub-estimator era: a stub-informed *choice* still yields a real
+  on-chain fee, and the journal records what happened, not what was
+  predicted — durable wrong data being worse than a display bug.
 - **SJ-DQ-2 — write point and crash window.** Dispatch-time beside
   `record_retained_tx_key` under the same guard (extending the I-2
   atomic-write pattern: record exists before the bytes can reach the
@@ -267,7 +278,15 @@ story, not the read path.
   `Dispatched → Confirmed{height} | TerminalRejected | PresumedDead |
   Abandoned`, plus reorg back-edges (`Confirmed → Dispatched`-class).
   Produce the per-edge authority table (refresh / watchdog / submit
-  verdict / user) and audit each edge against C3.
+  verdict / user) and audit each edge against C3. **Pass-3 gate
+  (added 2026-08-06, roadmap review R-2):** ratifying this machine is
+  gated on the C++-retirement roadmap's **A4 decision** (air-gapped
+  `UnsignedTxBundle`/`SignedTxBundle` in or out of scope). In scope ⇒
+  the machine grows exported-unsigned / signed-elsewhere states and
+  `build_pending_tx` grows an export path — the same function PR-SJ-1
+  modifies; descoped ⇒ neither exists. Deciding A4 after ratification
+  would mean reopening a ratified design, so A4 (and the roadmap's B2
+  decision) resolve before pass 3 freezes this.
 - **SJ-DQ-4 — the spend marking survives the wipe; `PresumedDead` is a
   display state** *(REFRAMED per R1-3; round 0 asked the wrong
   question)*. Round 0 treated `PresumedDead` as an evidence threshold

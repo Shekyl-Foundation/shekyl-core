@@ -106,7 +106,7 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 - **CLI feature parity:** `shekyl-cli` exists but does not yet implement the daily-use command set.
 - **RPC feature parity:** `shekyl-engine-rpc` exists but does not yet implement the JSON-RPC method set the GUI/mobile clients will eventually depend on.
 - **Wallet flows:** wallet creation (generate / restore-from-bip39 / restore-from-raw / restore-from-view-key / watch-only / hardware-offload), open with password rotation, lost-state rescan path are partially in [shekyl-engine-file](../../rust/shekyl-engine-file) but not exposed as a clean `Wallet::*` API.
-- **C++ deletion:** `wallet2.cpp` (~6500 LoC), `wallet2_ffi.cpp`, `wallet/api/` (Qt-API surface used by GUI today), `simplewallet/` (~10 kLoC), `wallet_rpc_server*.cpp` are still in tree. CMake still builds them.
+- **C++ deletion:** `wallet2.cpp` (13,360 LoC; `src/wallet/` totals 28,761 lines across 17 files incl. `CMakeLists.txt` — figures corrected 2026-08-06, the earlier ~6500 was stale), `wallet2_ffi.cpp`, and `wallet_rpc_server*.cpp` are still in tree; `simplewallet/` and `wallet/api/` are already deleted. CMake still builds the remainder.
 - **monero-oxide vendor sync:** verify the vendored tree matches the upstream commit we want for the wallet stack's needs (`shekyl-primitives`, `shekyl-generators`, `shekyl-io`, `shekyl-fcmp-plus-plus`, `shekyl-bulletproofs`, `shekyl-rpc`, `helioselene`, `ec-divisors`, `generalized-bulletproofs`). Don't un-pin in this plan.
 
 ## Architecture target
@@ -717,7 +717,7 @@ After Phase 4 lands and the binaries pass acceptance tests. Single commit, separ
 
 ### C++ source
 
-- Delete `src/wallet/wallet2.{h,cpp}` (~6500 LoC).
+- Delete `src/wallet/wallet2.{h,cpp}` (13,360 LoC in `wallet2.cpp` alone — figure corrected 2026-08-06).
 - Delete `src/wallet/wallet2_ffi.{h,cpp}`.
 - Delete `src/wallet/wallet2_handle_views.{h,cpp}` (the per-block RAII wrappers introduced for 2l.b — never landed, but if they did, they go).
 - Delete `src/wallet/api/` (Qt-API surface).
