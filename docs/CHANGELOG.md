@@ -6,6 +6,46 @@
 
 ### Changed
 
+- **Dandelion++ relay timing is now decided in Rust; the daemon C++ is a
+  transport shim.** The relay-privacy arc (`DAEMON_RELAY_PRIVACY.md`,
+  RP-1…RP-4; PRs #370, #372, #374, #377, #380) cut the stem/fluff epoch
+  scheduler, stem map, fluff batching and delays, covert-channel scheduling,
+  and the stem embargo out of `levin_notify.cpp` / `tx_pool.cpp` into
+  `shekyl-relay` + `shekyl-relay-privacy` behind the `shekyl_relay_zone_*` /
+  `shekyl_dandelionpp_*` FFI. `src/net/dandelionpp.{h,cpp}` is deleted; asio
+  keeps only the sleep (one timer armed from Rust's `next_wake()`).
+
+  The inherited mechanism was defective, not just relocated: the 39 s Poisson
+  embargo did not follow from its own printed derivation and its distribution
+  contradicted the derivation's survival assumption (F-1/F-2). The
+  replacement is an exact-solve memoryless embargo, re-derived at **190 s**
+  after `fluff_return_ms` was re-measured under the outbound-only flood the
+  anonymity zones actually run (F-7: 2250 → 3250 ms); the wallet's
+  propagation timeout moves 664 → **874 s**. Relayed clearnet arrivals now
+  take a 2 %-per-hop anonymity-zone eligibility roll (R-1, #389), and
+  per-successor stem outcomes are recorded (StemWatch) and readable via the
+  new `/get_stem_tallies` RPC — recorded only; no reputation thresholds act
+  on them yet.
+
+  **Operator impact:** cover traffic ("noise") is **removed, not optional**
+  — configuration B (Tor + noise) was an origin-routing oracle, so
+  `--tx-proxy`'s `disable_noise` flag is a warn-and-ignore no-op and no
+  shipped configuration sends covert padding (the wire-observer defense
+  returns as Q-11 Unit 2). Anonymity-zone deployments now require an
+  outbound-connection floor of **12**: `--tx-proxy` refuses below it and
+  runtime `out_peers` changes clamp to it (F-8b).
+
+- **The relay minimum supported device is stated: Raspberry Pi 4.** The hop
+  verification surface (#408, #409; `DAEMON_RELAY_PRIVACY.md` §§72–87)
+  measured proof-verification cost across the full 48-cell shape domain on
+  both x86 and Pi 4 arms and resolved the decisions: Pi 4 is the provisioning
+  floor (promoted to `.cursor/rules/76-device-provisioning-floor.mdc`),
+  per-shape cost is a lookup table rather than a scalar or a fitted curve
+  (option D — decoupling `FCMP_MAX_INPUTS_PER_TX` from the embargo), and the
+  table refuses below-spec entries rather than clamping. The adopted `hop`
+  parameter set these decisions imply has **not yet shipped** in
+  `shekyl-relay-privacy` (tracked in `IMPLEMENTATION_INDEX.md`, RP row).
+
 - **`blocks.dat` bootstrap files now carry the credit-wire attestation
   witness, and older files are refused.** `bootstrap::block_package` gained an
   `attestation_witness` field, written by `blockchain_export` and threaded
