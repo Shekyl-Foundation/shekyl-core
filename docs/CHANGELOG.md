@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.1.0-alpha.7] - 2026-08-06
+
 ### Changed
 
 - **`blocks.dat` bootstrap files now carry the credit-wire attestation
