@@ -28,6 +28,13 @@ shekyl-stats = { path = "../shekyl-stats", optional = true }
 # The conformance instruments are the point of this crate's test surface, so
 # the test build always enables them.
 shekyl-relay-privacy = { path = ".", features = ["conformance"] }
+# TEST-ONLY, and it does not touch the daemon-linked build (the default build
+# stays dependency-free). `spec_decision_matrix` claims its table is exhaustive
+# over the legal input domain; the only way that claim can FAIL when the cap
+# moves is to compare against the cap as the code enforces it. `MAX_INPUTS` is
+# checked by `proof::verify`, which is the call the surface times, so it is the
+# anchor with the shortest path to the number.
+shekyl-fcmp = { path = "../shekyl-fcmp" }
 
 [lints]
 workspace = true
