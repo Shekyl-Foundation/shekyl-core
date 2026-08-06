@@ -36,6 +36,14 @@ Stage 0 PR-2 ships one populated section in this class
 documented as placeholder sections below and are populated by
 their respective Stage 1 per-trait PRs.
 
+**Relay admission drift gate (`docs/design/DAEMON_RELAY_PRIVACY.md`
+§72.6).** §11 extends the `crypto_bench_*` class with the relay
+pool-admission verification gate — the first **iai-only** row in
+`capture_rust_baseline.sh`. Its wall-clock sibling is a 64-cell
+two-machine sweep (reference x86 + Raspberry Pi 4) feeding the `hop`
+constant, deliberately not a per-PR job; only the instruction-count
+arm is registered and gated.
+
 **Schema version.** `shekyl_rust_v0`. A schema bump is required
 whenever any benchmark's operation list, argument set, or measurement
 boundary changes; whenever a KAT profile (e.g. the iai-callgrind
@@ -482,7 +490,7 @@ The criterion sibling keeps the production path (`scheme.sign(..)`,
 `keypair_generate()`, `OsRng` for BP+) because wall-clock averaging
 absorbs the rejection-sampling variance at the per-iteration level;
 only the instruction-count metric needs determinism. Both halves of
-the split are documented as §11.3 "known gap" because neither fully
+the split are documented as §12.3 "known gap" because neither fully
 exercises the production hedged-randomized sign path in a stable
 way — the criterion half measures it but with variance, the iai
 half measures a fips204-compliant deterministic variant.
@@ -495,7 +503,7 @@ curve-tree fixture is its own scope of work (the tree root is
 chain-dependent; synthesizing a valid fixture from scratch requires
 either a snapshot from the live daemon or a deterministic regtest
 chain of useful depth, neither of which is cheap). It is tracked as
-**§11.1 below**. In the interim, a delta in this bench is
+**§12.1 below**. In the interim, a delta in this bench is
 interpretable as a regression in **Bulletproofs+ or ML-DSA-65 only**;
 membership-proof cost is tracked separately once the fixture lands.
 
@@ -694,7 +702,57 @@ that PR's merge SHA.
 this section's body with the populated content following the §6
 template above.
 
-## 11. Known gaps
+## 11. `crypto_bench_relay_admission_verify`
+
+**Crate.** `shekyl-ffi`.
+**Binaries.** `benches/relay_admission_verify.rs` (criterion — NOT
+registered in the rolling baseline, see below),
+`benches/relay_admission_verify_iai.rs` (iai-callgrind, registered
+as an iai-only row in `capture_rust_baseline.sh`).
+**Class.** `crypto_bench_*` (bidirectional ±5% / ±15%).
+
+**What it measures.** The relay pool-admission verification term —
+the same two `shekyl_*` FFI entry points `blockchain.cpp` calls at
+admission, **in that order**: `shekyl_check_commitment_masks` over
+the output commitments, then `shekyl_fcmp_verify` over the FCMP++
+proof. Pinned to the admission path rather than to a primitive so
+the gate cannot drift from what admission actually costs when the
+calling code changes (`DAEMON_RELAY_PRIVACY.md` §72.6, §70.3).
+
+**Fixture shape.** One fixed cell: `1-in / 2-out`, tree depth 2,
+`ChunkLayout::Shared` — the modal transaction shape and the
+cheapest cell, so the gate is sensitive to the per-transaction
+floor rather than to a tail cell. The fixture is built by the
+shared `relay_admission_fixture.rs` module (same workload as the
+wall-clock sweep) and **asserted to VERIFY before it is timed**;
+without that self-witness a broken fixture would time the
+early-return reject path and present as a large speed-up.
+
+**Measurement boundary.** `prove` (fixture construction) is
+`setup`, excluded from the measured region. The fixture is returned
+from the measured function rather than dropped inside it, so its
+heap deallocations are not charged to the gate (same artifact
+`balance_iai.rs` documents).
+
+**Class rationale.** `crypto_bench_*` and not slowdown-only
+`hot_path_bench_*` because the threshold must be **bidirectional**:
+the known failure mode (a fixture that stops verifying) manifests
+as a dramatic instruction-count *drop*, which a slowdown-only class
+would classify as an unambiguous improvement.
+
+**Registration split.** The criterion sibling is the `hop` input —
+hardware-dependent on purpose, run on the reference machine and on
+the Pi, multi-hour at full sweep — so it is deliberately absent
+from the per-PR rolling baseline. The iai row is the CI drift gate:
+a change to FCMP++ verification moves this count, which is the
+signal that `hop` (and the embargo derived from it) is owed a
+re-derivation.
+
+**Apples-to-oranges against C++.** No C++ counterpart; the C++
+admission path is the *caller* of these FFI entry points, not an
+independent implementation.
+
+## 12. Known gaps
 
 The v0 baseline is explicit about what it does not measure:
 
@@ -779,7 +837,7 @@ lives asymmetrically between the two stacks — this is the
 apples-to-oranges manifest discipline the hardening document
 prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
 
-## 12. Cross-references
+## 13. Cross-references
 
 - `docs/MID_REWIRE_HARDENING.md` §3.1 — C++ scope, Five-path list,
   daemon-coupling rationale.
@@ -801,19 +859,22 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
 - `docs/PERFORMANCE_BASELINE.md` — frozen-baseline numbers for
   `engine_trait_bench_*` (one populated row per merged
   introducing PR).
+- `docs/design/DAEMON_RELAY_PRIVACY.md` §72 — measurement design
+  for the relay admission surface (§11); §72.6 pins the
+  instruction-count / wall-clock instrument split.
 - `docs/benchmarks/wallet2_baseline_v0.manifest.md` — C++ sibling
   manifest.
 - `scripts/bench/capture_rust_baseline.sh` — authoritative local
   runner. Emits `shekyl_rust_v0.json` and
   `shekyl_rust_v0.iai.snapshot` into this directory.
 
-## 13. Change log for this manifest
+## 14. Change log for this manifest
 
 - `v0` (commit 2 of the mid-rewire hardening pass, a.k.a.
   `bench(wallet-state)`): initial Rust baseline. Live measurements:
   all five hot paths (`ledger_postcard_roundtrip`, `balance_compute`,
   `wallet_open_cold`, `scan_block`, `transfer_e2e_1in_2out`). Known
-  gaps documented in §11 (FCMP++ membership proof, hot-spend ledger
+  gaps documented in §12 (FCMP++ membership proof, hot-spend ledger
   shape, Argon2id production profile under Valgrind).
 - Stage 0 PR-2 of the V3 engine trait spec measurement gate (see
   `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1 and
@@ -825,3 +886,11 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   class is additive routing in `compare.py` over the same JSON
   envelope. Sections previously numbered §6–§8 (Known gaps,
   Cross-references, Change log) renumbered to §§11–13.
+- Relay verification surface PR (`docs/design/DAEMON_RELAY_PRIVACY.md`
+  §72): added §11 (`crypto_bench_relay_admission_verify`), the
+  §72.6 relay admission drift gate and the first iai-only row in
+  `capture_rust_baseline.sh`. Schema version unchanged
+  (`shekyl_rust_v0`); the function name routes into the existing
+  `crypto_bench_*` class, no new routing in `compare.py`. Sections
+  previously numbered §§11–13 (Known gaps, Cross-references,
+  Change log) renumbered to §§12–14.

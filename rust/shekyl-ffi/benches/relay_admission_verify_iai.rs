@@ -26,6 +26,17 @@
 //! Its wall-clock twin is deliberately NOT registered — that one is a 64-cell
 //! sweep measured on the reference machine and on the Pi, not a per-PR job.
 //!
+//! **And how the gate finds this bench, because registration alone is not
+//! routing.** `compare.py` routes each entry by function-name prefix; a name
+//! outside its three classes is `unrouted` — reported, never failed — and the
+//! paragraph above becomes a comment with a harness after all. The function
+//! below is therefore named into the `crypto_bench_*` class
+//! (`docs/benchmarks/shekyl_rust_v0.manifest.md` §11), and that class rather
+//! than slowdown-only `hot_path_bench_*` **because its threshold is
+//! bidirectional**: the failure mode `modal_shape` documents — a fixture that
+//! stops verifying — presents as a dramatic instruction-count *drop*, which a
+//! slowdown-only class would wave through as a pleasant result.
+//!
 //! Conflating them would give either a gate that flaps with runner hardware or
 //! a number that cannot be gated.
 //!
@@ -91,14 +102,16 @@ fn modal_shape() -> AdmissionFixture {
 // ~95 % of the count; there it was `zeroize`, here it would be `free`.
 #[library_benchmark]
 #[bench::modal(setup = modal_shape)]
-fn relay_admission_verify_iai(fixture: AdmissionFixture) -> (AdmissionFixture, AdmissionStatus) {
+fn crypto_bench_relay_admission_verify(
+    fixture: AdmissionFixture,
+) -> (AdmissionFixture, AdmissionStatus) {
     let status = black_box(admission_verify(black_box(&fixture)));
     (fixture, status)
 }
 
 library_benchmark_group!(
     name = relay_admission_verify_group;
-    benchmarks = relay_admission_verify_iai
+    benchmarks = crypto_bench_relay_admission_verify
 );
 
 main!(library_benchmark_groups = relay_admission_verify_group);
