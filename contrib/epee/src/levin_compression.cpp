@@ -58,30 +58,6 @@ namespace
   }
 } // anonymous
 
-  bool compress_payload(epee::span<const uint8_t> input, std::string& output)
-  {
-    ShekylBuffer buf{};
-    const int32_t rc = shekyl_levin_compress_payload(input.data(), input.size(), &buf);
-    if (rc != 0)
-    {
-      // Contract: false leaves `output` empty (callers may reuse the string).
-      // rc == 1 is "declined — send it uncompressed", the expected outcome
-      // for small or incompressible payloads; only negative codes are bugs.
-      output.clear();
-      if (rc < 0)
-        MERROR("Levin payload compression failed: " << levin_rc_reason(rc) << " (rc=" << rc << ")");
-      return false;
-    }
-    // Compression is the one direction that still hands back a Rust
-    // allocation: its output size is not knowable before the fact.
-    if (buf.ptr == nullptr || buf.len == 0)
-      output.clear();
-    else
-      output.assign(reinterpret_cast<const char*>(buf.ptr), buf.len);
-    shekyl_buffer_free(buf.ptr, buf.len);
-    return true;
-  }
-
   bool decompress_payload(epee::span<const uint8_t> input, std::string& output,
                           const uint64_t max_output)
   {

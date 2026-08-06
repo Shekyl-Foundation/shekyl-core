@@ -73,12 +73,25 @@
   128-MiB-allocation-per-connection exhaustion surface — the bound is the
   *same* expression the bucket header is checked against, so a compressed
   message can deliver exactly what an uncompressed one could and no more.
-  Four new `levin_compression` gtests cover the seam (the C++ tree
-  previously had zero compression coverage); the Levin constant-parity CI
-  gate drops its three compression rows (single-sourced in Rust now,
-  nothing left to drift). `zstd` is promoted to
-  `[workspace.dependencies]` (decision 2026-08-06; shard serving is the
-  anticipated next consumer), pinned `default-features = false`: the
+  The emit seam is **whole-message** (`shekyl_levin_compress_message`), not
+  payload-level: whether a buffer may be compressed at all is a property of
+  its bucket header, so a payload-level seam left those questions stranded
+  in C++ as a second, weaker copy of the policy — one that checked neither
+  the signature, nor that the header accounted for every byte after it, nor
+  the noise/fragment class whose constant on-wire size is the entire
+  property the white-noise feature buys. `epee::levin::try_compress_message`
+  is now a forwarding shim and `epee::levin::compress_payload` is gone; the
+  C++ carries no compression policy at all. Five new `levin_compression`
+  gtests cover the seam (the C++ tree previously had zero compression
+  coverage), including `cover_traffic_is_returned_unchanged` —
+  negative-controlled, a 4 KiB dummy compresses to 52 bytes without the
+  guard. The Levin constant-parity CI gate drops its three compression rows
+  (single-sourced in Rust now, nothing left to drift). `zstd` is promoted to
+  `[workspace.dependencies]` (decision 2026-08-06) — not to hold a place
+  for the anticipated shard-serving consumer, which the same day's Z-1
+  measurement ruled out, but because the feature set is load-bearing and
+  must not be re-litigated per crate — pinned `default-features = false`:
+  the
   default `zdict_builder` compiles dictionary-builder C that calls POSIX
   `qsort_r` and breaks the Win64 mingw link once zstd objects enter
   `libshekyl_ffi.a`, and the default `legacy` compiles decoders for frame

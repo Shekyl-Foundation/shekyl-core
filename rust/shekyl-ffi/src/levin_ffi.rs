@@ -17,15 +17,26 @@
 //! `ZSTD_*` symbol collision when `shekyl-levin` joins a linked staticlib
 //! (the `links = "zstd"` key is claimed once, by `zstd-sys`).
 //!
-//! The seam is **payload-level**, matching the pre-existing
-//! `epee::levin::compress_payload` / `decompress_payload` API: framing (the
-//! bucket-header rewrite that sets the `COMPRESSED` flag) stays on whichever
-//! side framed the message; only opaque payload bytes cross.
+//! The two directions sit at **different levels, on purpose**.
+//!
+//! Emit is **message-level** ([`shekyl_levin_compress_message`]): whether a
+//! buffer may be compressed at all is a property of its bucket header, not
+//! its payload bytes — is it already compressed, is it exactly one message,
+//! is it the noise/fragment class whose constant on-wire size is the entire
+//! point of it. A payload-level seam would have to leave those questions on
+//! the C++ side, which is exactly how the C++ came to carry a second,
+//! weaker copy of the policy. `shekyl-levin` owns all of it;
+//! `epee::levin::try_compress_message` forwards.
+//!
+//! Receive is **frame-level** ([`shekyl_levin_inflated_size`] +
+//! [`shekyl_levin_decompress_into`]): by then the C++ handler has already
+//! parsed and range-checked the header, and what it holds is one opaque
+//! zstd frame plus the limit it must not exceed.
 //!
 //! Error codes follow rule 40 (distinct codes, not booleans):
-//! `0` success; `1` compression declined (send uncompressed — the C++
-//! `compress_payload == false` path); `-3` malformed frame; `-4` null
-//! pointer; `-6` compression not compiled in; `-7` size limit exceeded.
+//! `0` success; `1` compression declined (send the input unchanged); `-3`
+//! malformed frame; `-4` null pointer; `-6` compression not compiled in;
+//! `-7` size limit exceeded.
 //!
 //! `-3` and `-7` are deliberately **not** one code. On the receive path
 //! both close the connection, but they describe opposite situations — a
@@ -47,16 +58,17 @@
 //!
 //! Compression still returns an owned [`ShekylBuffer`], because its output
 //! size is not knowable before the fact and the emit path is not the one
-//! that carries bulk. Payloads are public wire data, so returning them by
-//! buffer is permitted (rule 40's secret-material restriction does not
-//! apply).
+//! that carries bulk. Levin payloads are public wire data, so returning
+//! them by buffer is permitted (rule 40's secret-material restriction does
+//! not apply).
 
 use crate::{slice_from_ptr, ShekylBuffer};
 
 /// Success: the operation completed and its output parameter is set.
 pub const SHEKYL_LEVIN_OK: i32 = 0;
-/// Compression declined (payload too small, incompressible, or codec
-/// unavailable): send the payload uncompressed. Not an error.
+/// Compression declined: send the input unchanged. Not an error — it
+/// covers the message being too small, incompressible, already compressed,
+/// cover traffic whose size must not move, or the codec being absent.
 pub const SHEKYL_LEVIN_DECLINED: i32 = 1;
 /// Malformed input: bad zstd frame, or one that does not declare its
 /// content size.
@@ -90,23 +102,30 @@ fn code_for(err: &shekyl_levin::Error) -> i32 {
     }
 }
 
-/// Compress one Levin payload (zstd level 1, 256-byte minimum,
-/// only-if-smaller — the `epee::levin::compress_payload` contract).
+/// Compress one finalized Levin message — header and payload together.
 ///
-/// Returns [`SHEKYL_LEVIN_OK`] with `out` set, or [`SHEKYL_LEVIN_DECLINED`]
-/// meaning "send it uncompressed" (`out` is nulled). Free `out` with
-/// `shekyl_buffer_free`.
+/// The seam is at the **message** level, not the payload level, because the
+/// decision of whether a given buffer may be compressed is not a property
+/// of its payload bytes: it depends on the bucket header (already
+/// compressed? exactly one message? the noise/fragment class, whose
+/// constant on-wire size is the whole point of it?). Splitting the decision
+/// from the data it is about is what left the C++ carrying a second,
+/// weaker copy of this policy; `shekyl-levin` owns all of it now, and
+/// `epee::levin::try_compress_message` is a forwarding shim.
+///
+/// Returns [`SHEKYL_LEVIN_OK`] with `out` holding the re-framed
+/// `COMPRESSED` message (free with `shekyl_buffer_free`), or
+/// [`SHEKYL_LEVIN_DECLINED`] meaning "send the input unchanged" (`out` is
+/// nulled) — which covers every refusal, from "too small to be worth it"
+/// to "this is cover traffic". The caller still owns its input in both
+/// cases, so a decline costs it nothing.
 ///
 /// # Safety
 ///
 /// `input` must point to `input_len` readable bytes; `out` must be a valid
-/// writable pointer. The input bound is
-/// [`shekyl_levin::DECOMPRESSED_MAX_SIZE`] — the *plaintext* maximum, not
-/// the wire packet limit, because a payload between the two is exactly what
-/// compression exists to bring under the wire limit. Larger returns
-/// [`SHEKYL_LEVIN_ERR_TOO_LARGE`].
+/// writable pointer.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_levin_compress_payload(
+pub unsafe extern "C" fn shekyl_levin_compress_message(
     input: *const u8,
     input_len: usize,
     out: *mut ShekylBuffer,
@@ -116,17 +135,16 @@ pub unsafe extern "C" fn shekyl_levin_compress_payload(
     }
     // SAFETY: caller guarantees `out` is writable (checked non-null above).
     unsafe { *out = ShekylBuffer::null() };
-    let Some(payload) = (unsafe { slice_from_ptr(input, input_len) }) else {
+    let Some(message) = (unsafe { slice_from_ptr(input, input_len) }) else {
         return SHEKYL_LEVIN_ERR_NULL;
     };
-    match shekyl_levin::compress_payload(payload) {
-        Ok(Some(compressed)) => {
+    match shekyl_levin::compress_message(message) {
+        Some(compressed) => {
             // SAFETY: `out` checked non-null above.
             unsafe { *out = ShekylBuffer::from_vec(compressed) };
             SHEKYL_LEVIN_OK
         }
-        Ok(None) => SHEKYL_LEVIN_DECLINED,
-        Err(err) => code_for(&err),
+        None => SHEKYL_LEVIN_DECLINED,
     }
 }
 
@@ -234,28 +252,47 @@ pub unsafe extern "C" fn shekyl_levin_decompress_into(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_levin::HEADER_SIZE;
 
-    /// Round trip across the exact boundary the C++ shim uses — compress to
-    /// an owned buffer, then size-and-inflate into caller storage. Bites
-    /// against a marshaling defect (length, ownership, code mapping); it
-    /// does NOT re-prove the codec, which `shekyl-levin`'s tests own.
+    /// Compress a notify message across the FFI, returning the buffer the
+    /// export handed back. Panics unless the export actually compressed it,
+    /// so a test built on this cannot silently exercise the decline path.
+    fn compress_notify(payload: &[u8]) -> ShekylBuffer {
+        let message = shekyl_levin::notify(2002, payload);
+        let mut out = ShekylBuffer::null();
+        // SAFETY: valid slice + out pointer.
+        let rc =
+            unsafe { shekyl_levin_compress_message(message.as_ptr(), message.len(), &raw mut out) };
+        assert_eq!(rc, SHEKYL_LEVIN_OK);
+        assert!(!out.ptr.is_null() && out.len < message.len());
+        out
+    }
+
+    /// The zstd frame inside a re-framed `COMPRESSED` message.
+    ///
+    /// # Safety
+    /// `buf` must be a buffer returned by `shekyl_levin_compress_message`.
+    unsafe fn frame_of(buf: &ShekylBuffer) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(buf.ptr.add(HEADER_SIZE), buf.len - HEADER_SIZE) }
+    }
+
+    /// Round trip across the exact boundary the C++ shim uses — compress a
+    /// whole message, then size-and-inflate its frame into caller storage.
+    /// Bites against a marshaling defect (length, ownership, code mapping);
+    /// it does NOT re-prove the codec, which `shekyl-levin`'s tests own.
     #[test]
     fn ffi_roundtrip_and_code_mapping() {
         let payload = vec![7u8; 4096];
-        let mut compressed = ShekylBuffer::null();
-        // SAFETY: valid slice + out pointer.
-        let rc = unsafe {
-            shekyl_levin_compress_payload(payload.as_ptr(), payload.len(), &raw mut compressed)
-        };
-        assert_eq!(rc, SHEKYL_LEVIN_OK);
-        assert!(!compressed.ptr.is_null() && compressed.len < payload.len());
+        let compressed = compress_notify(&payload);
+        // SAFETY: buffer returned by the export above.
+        let frame = unsafe { frame_of(&compressed) };
 
         let mut size = 0usize;
-        // SAFETY: buffer from the call above; valid out pointer.
+        // SAFETY: valid slice + out pointer.
         let rc = unsafe {
             shekyl_levin_inflated_size(
-                compressed.ptr,
-                compressed.len,
+                frame.as_ptr(),
+                frame.len(),
                 shekyl_levin::DEFAULT_MAX_PACKET_SIZE,
                 &raw mut size,
             )
@@ -268,8 +305,8 @@ mod tests {
         // SAFETY: valid input slice, caller-owned destination, out pointer.
         let rc = unsafe {
             shekyl_levin_decompress_into(
-                compressed.ptr,
-                compressed.len,
+                frame.as_ptr(),
+                frame.len(),
                 inflated.as_mut_ptr(),
                 inflated.len(),
                 &raw mut written,
@@ -284,13 +321,16 @@ mod tests {
     }
 
     #[test]
-    fn small_payload_declines_and_garbage_frame_rejects() {
+    fn small_message_declines_and_garbage_frame_rejects() {
         let mut out = ShekylBuffer::null();
-        let tiny = [0u8; 8];
+        let tiny = shekyl_levin::notify(2002, &[0u8; 8]);
         // SAFETY: valid slice + out pointer.
-        let rc = unsafe { shekyl_levin_compress_payload(tiny.as_ptr(), tiny.len(), &raw mut out) };
+        let rc = unsafe { shekyl_levin_compress_message(tiny.as_ptr(), tiny.len(), &raw mut out) };
         assert_eq!(rc, SHEKYL_LEVIN_DECLINED);
-        assert!(out.ptr.is_null());
+        assert!(
+            out.ptr.is_null(),
+            "a decline must hand back nothing to free"
+        );
 
         let garbage = b"not a zstd frame";
         let mut size = 0usize;
@@ -308,9 +348,24 @@ mod tests {
 
         // SAFETY: null out pointer is the case under test.
         let rc = unsafe {
-            shekyl_levin_compress_payload(tiny.as_ptr(), tiny.len(), std::ptr::null_mut())
+            shekyl_levin_compress_message(tiny.as_ptr(), tiny.len(), std::ptr::null_mut())
         };
         assert_eq!(rc, SHEKYL_LEVIN_ERR_NULL);
+    }
+
+    /// Cover traffic must cross the boundary unchanged. This is the guard
+    /// the C++ emit path never had while it carried its own copy of the
+    /// policy: a noise bucket's constant on-wire size is the entire property
+    /// the white-noise feature buys, and compressing one would shorten it.
+    #[test]
+    fn noise_message_declines_across_the_ffi() {
+        let dummy = shekyl_levin::noise_notify(4096).unwrap();
+        let mut out = ShekylBuffer::null();
+        // SAFETY: valid slice + out pointer.
+        let rc =
+            unsafe { shekyl_levin_compress_message(dummy.as_ptr(), dummy.len(), &raw mut out) };
+        assert_eq!(rc, SHEKYL_LEVIN_DECLINED);
+        assert!(out.ptr.is_null());
     }
 
     /// The two failure codes the C++ shim logs differently must actually be
@@ -319,29 +374,23 @@ mod tests {
     /// would pass with the codes collapsed, which is the defect.
     #[test]
     fn oversize_and_malformed_map_to_distinct_codes() {
-        let payload = vec![7u8; 4096];
-        let mut compressed = ShekylBuffer::null();
-        // SAFETY: valid slice + out pointer.
-        let rc = unsafe {
-            shekyl_levin_compress_payload(payload.as_ptr(), payload.len(), &raw mut compressed)
-        };
-        assert_eq!(rc, SHEKYL_LEVIN_OK);
+        let compressed = compress_notify(&vec![7u8; 4096]);
+        // SAFETY: buffer returned by the export.
+        let frame = unsafe { frame_of(&compressed) };
 
         // A well-formed frame whose declared size is over the caller's cap.
         let mut size = 0usize;
-        // SAFETY: buffer from the call above; valid out pointer.
-        let rc = unsafe {
-            shekyl_levin_inflated_size(compressed.ptr, compressed.len, 64, &raw mut size)
-        };
+        // SAFETY: valid slice + out pointer.
+        let rc =
+            unsafe { shekyl_levin_inflated_size(frame.as_ptr(), frame.len(), 64, &raw mut size) };
         assert_eq!(rc, SHEKYL_LEVIN_ERR_TOO_LARGE);
         assert_eq!(size, 0);
 
         // The same frame under a sufficient cap is accepted, so the code
         // above is about the limit and not about the frame.
         // SAFETY: as above.
-        let rc = unsafe {
-            shekyl_levin_inflated_size(compressed.ptr, compressed.len, 4096, &raw mut size)
-        };
+        let rc =
+            unsafe { shekyl_levin_inflated_size(frame.as_ptr(), frame.len(), 4096, &raw mut size) };
         assert_eq!(rc, SHEKYL_LEVIN_OK);
         assert_eq!(size, 4096);
 
@@ -354,21 +403,17 @@ mod tests {
     /// the receive path would then parse as a message.
     #[test]
     fn undersized_destination_rejects_without_partial_write() {
-        let payload = vec![7u8; 4096];
-        let mut compressed = ShekylBuffer::null();
-        // SAFETY: valid slice + out pointer.
-        let rc = unsafe {
-            shekyl_levin_compress_payload(payload.as_ptr(), payload.len(), &raw mut compressed)
-        };
-        assert_eq!(rc, SHEKYL_LEVIN_OK);
+        let compressed = compress_notify(&vec![7u8; 4096]);
+        // SAFETY: buffer returned by the export.
+        let frame = unsafe { frame_of(&compressed) };
 
         let mut small = vec![0u8; 32];
         let mut written = 1usize;
         // SAFETY: valid input, caller-owned destination, out pointer.
         let rc = unsafe {
             shekyl_levin_decompress_into(
-                compressed.ptr,
-                compressed.len,
+                frame.as_ptr(),
+                frame.len(),
                 small.as_mut_ptr(),
                 small.len(),
                 &raw mut written,

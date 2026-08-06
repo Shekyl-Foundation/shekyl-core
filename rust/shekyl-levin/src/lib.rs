@@ -17,14 +17,20 @@
 //! stream reader ([`BucketReader`]) that demultiplexes socket bytes into
 //! complete messages.
 //!
-//! **Wiring status (2026-08-06):** the compression half
-//! ([`compress_payload`] / [`decompress_payload`]) is **production-live**
-//! — the C++ `epee::levin` compression path is a marshaling shim over the
-//! `shekyl_levin_*` FFI (`rust/shekyl-ffi/src/levin_ffi.rs`), and the
-//! Rust-pinned libzstd is the binary's single zstd (the system-libzstd
-//! link and `HAVE_ZSTD` gate are gone). The framing half — builders and
-//! [`BucketReader`] — stays inert until the LV-3 cutover; the C++ path in
-//! `contrib/epee` remains the live framing implementation.
+//! **Wiring status (2026-08-06):** the compression half is
+//! **production-live** — the C++ `epee::levin` compression path is a
+//! marshaling shim over the `shekyl_levin_*` FFI
+//! (`rust/shekyl-ffi/src/levin_ffi.rs`), and the Rust-pinned libzstd is the
+//! binary's single zstd (the system-libzstd link and `HAVE_ZSTD` gate are
+//! gone). The seam is whole-message on the way out
+//! ([`compress_message`], which `epee::levin::try_compress_message`
+//! forwards to) and frame-level on the way in ([`inflated_size`] +
+//! [`decompress_into`], which `epee::levin::decompress_payload` forwards
+//! to). No compression policy is left in C++.
+//!
+//! The framing half — builders and [`BucketReader`] — stays inert until the
+//! LV-3 cutover; the C++ path in `contrib/epee` remains the live framing
+//! implementation.
 //!
 //! Deliberate **non-goals** of this crate:
 //!
@@ -37,9 +43,8 @@
 //! # Parity oracle
 //!
 //! The byte-level oracle is the C++ implementation:
-//! `epee::levin::{make_header, make_noise_notify, make_fragmented_notify,
-//! try_compress_message}` (`contrib/epee/src/levin_base.cpp`) and the
-//! read-side state machine in
+//! `epee::levin::{make_header, make_noise_notify, make_fragmented_notify}`
+//! (`contrib/epee/src/levin_base.cpp`) and the read-side state machine in
 //! `contrib/epee/include/net/levin_protocol_handler_async.h`
 //! (`handle_recv`). The tests mirror the `tests/unit_tests/levin.cpp`
 //! gtest expectations byte for byte, and a CI gate
@@ -53,9 +58,11 @@
 //! rather than restating it, because a second copy drifts and then lies.
 //!
 //! Every entry is *stricter* than the oracle — none accepts something the
-//! C++ rejects. All but one are also unreachable for a conforming sender
-//! (nothing `make_fragmented_notify` emits trips any of them); **divergence
-//! 4 is the exception, and its reachable window is stated there.** Adding a
+//! C++ rejects — and each is unreachable for a conforming sender today.
+//! Two entries (4 and 6) stopped being divergences at the 2026-08-06
+//! compression cut and are kept as the record of how they closed; that is
+//! deliberate, because "the difference went away" is exactly the kind of
+//! claim that rots into folklore once the entry is deleted. Adding a
 //! blanket "no conforming sender" to this list without checking each entry
 //! is precisely the kind of unverified claim this census exists to stop.
 //!
@@ -99,12 +106,18 @@
 //! pinned assertion-for-assertion by `tests/oracle_kats.rs`. Two caveats,
 //! neither of which those KATs cover:
 //!
-//! 6. **`try_compress_message` refuses malformed input** — a buffer whose
-//!    header signature does not verify, whose `length` disagrees with the
-//!    bytes after it (i.e. is not exactly one message), or which is the
-//!    noise/fragment class comes back unchanged instead of being re-framed.
-//!    The C++ `memcpy`s the header unchecked and would compress all three.
-//!    See [`try_compress_message`] for why each matters.
+//! 6. **`try_compress_message` refuses malformed input** — *resolved
+//!    2026-08-06; no longer a divergence.* A buffer whose header signature
+//!    does not verify, whose `length` disagrees with the bytes after it
+//!    (i.e. is not exactly one message), or which is the noise/fragment
+//!    class comes back unchanged instead of being re-framed. The C++ used
+//!    to `memcpy` the header unchecked and would have compressed all three
+//!    — the noise case being the one that mattered, since shortening a
+//!    dummy makes cover traffic distinguishable from real traffic on the
+//!    wire. The compression cut deleted that copy: `epee::levin::
+//!    try_compress_message` now forwards to [`compress_message`], so these
+//!    guards are the emit path rather than a difference from it. See
+//!    [`try_compress_message`] for why each matters.
 //! 7. **compressed payload bytes are not pinned, and cannot be** — for a
 //!    well-formed message the *framing* `try_compress_message` produces is
 //!    byte-identical (same header, same `COMPRESSED` bit, same `length`
@@ -126,8 +139,9 @@ mod message;
 mod reader;
 
 pub use compress::{
-    compress_payload, decompress_into, decompress_payload, inflated_size, is_compression_available,
-    try_compress_message, COMPRESSION_MIN_PAYLOAD, DECOMPRESSED_MAX_SIZE, ZSTD_COMPRESSION_LEVEL,
+    compress_message, compress_payload, decompress_into, decompress_payload, inflated_size,
+    is_compression_available, try_compress_message, COMPRESSION_MIN_PAYLOAD, DECOMPRESSED_MAX_SIZE,
+    ZSTD_COMPRESSION_LEVEL,
 };
 pub use error::Error;
 pub use fragment::{fragmented_notify, noise_notify};

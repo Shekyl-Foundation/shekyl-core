@@ -258,12 +258,24 @@ repository = "https://github.com/radawson/Shekyl"
 
 [workspace.dependencies]
 thiserror = "2"
-# Single-source zstd pin (decision 2026-08-06): the Levin COMPRESSED path
-# consumes it today (`shekyl-levin`, default-on; production reaches it via
-# the shekyl_levin_* FFI), and further consumers are anticipated — shard
-# serving in the TJ archival track compresses shard payloads. One pin here
-# keeps every consumer on the same vendored libzstd, so compressed frames
-# are interoperable across components by construction.
+# Single-source zstd pin (decision 2026-08-06). One consumer today:
+# `shekyl-levin`'s COMPRESSED path, which production reaches via the
+# shekyl_levin_* FFI.
+#
+# The original justification — "shard serving is the anticipated second
+# consumer" — was **falsified the same day** by the Z-1 measurement
+# (FOLLOWUPS, "Shard serving on `P`: zstd compression REJECTED by
+# measurement"): Shekyl wire bytes run 7.97–7.995 bits/B of entropy and
+# zstd levels 1/3/9 *expand* every corpus. So this entry is not holding a
+# place for a second consumer, and it is not here for frame
+# interoperability either.
+#
+# It stays because the **feature set below is load-bearing** and must not
+# be re-litigated per crate. A second crate that added `zstd = "0.13"` with
+# defaults would silently re-break the Win64 cross build and re-widen the
+# receive-path C surface, and `links = "zstd"` makes the graph collision a
+# hard error rather than a quiet one (Z-5 records that hazard). Centralising
+# the decision is what makes those failure modes unreachable.
 #
 # `default-features = false` drops all three of the crate's defaults, and
 # each is dropped for a reason — they are not incidental trimming:

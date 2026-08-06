@@ -9126,24 +9126,47 @@ its wake.
       negative-controlled).
 
       What is *not* closed is the general question: a compression **ratio**
-      is a function of payload entropy, so the on-wire size of an
-      unpadded relay message leaks something about its contents that a
-      fixed-size encoding would not. Rejected now on three grounds: (a)
-      FCMP++ transaction bodies are near-incompressible — proof and
-      commitment material is high-entropy, so the achievable ratio, and
-      hence the leak, is small; (b) padding is the actual defense for this
-      channel and it composes correctly now; (c) quantifying the residual
-      needs a measurement instrument over real transaction bodies, which
-      does not exist pre-genesis.
+      is a function of payload entropy, so the on-wire size of an unpadded
+      relay message leaks something about its contents that a fixed-size
+      encoding would not — the hazard recorded as **Z-2** in the shard
+      entry above ("compressed length is a stable content oracle").
 
-      **Reopen when** any of: a measured compression ratio above ~1.2 on
-      real `NOTIFY_NEW_TRANSACTIONS` bodies (which would mean the bodies
-      carry more structure than assumed); `--pad-transactions` is proposed
-      as default-on (at which point compression on that path is dead
-      weight and should be dropped outright rather than guarded); or a
-      relay-privacy round takes up wire-size observables generally, where
-      this belongs alongside the Q-11 Unit 2 wire-observer work. The
-      re-evaluation shape is a measurement, not an argument.
+      **Z-1 measured the input this question turns on**, on the same day
+      and against the same wire bytes: FCMP++ spend transactions and
+      genesis coinbases run **7.97–7.995 bits/B** of entropy, and zstd
+      levels 1/3/9 *expand* every corpus (ratio 1.000–1.001). Level 1 is
+      what this path uses. Two consequences, and the second is the
+      uncomfortable one:
+
+      - The leak is negligible **because the compression does not
+        happen**. `compress_payload`'s only-if-smaller rule declines
+        anything that fails to shrink, so a `NOTIFY_NEW_TRANSACTIONS`
+        message dominated by transaction bodies is sent uncompressed
+        whether or not it was padded. The guard added here is belt to that
+        brace, and is still worth having: the epee `portable_storage`
+        framing around the bodies (field names, varints, and the padding
+        run itself) *is* compressible, which is exactly why a padded
+        message compressed in the first place.
+      - The same measurement makes the *value* of the Levin `COMPRESSED`
+        path on tx relay close to zero. It is not zero everywhere —
+        `NOTIFY_RESPONSE_GET_OBJECTS` carries block data with real
+        structure, and that is the path where bandwidth actually matters
+        — but "compression on tx relay earns its keep" is now an
+        unsupported claim rather than an assumption.
+
+      Rejected now rather than acted on, because deleting the path is a
+      wire-behaviour change that wants its own measurement (per-command
+      ratios on a live-ish corpus) and this branch is a plumbing cut.
+      **Reopen when** any of: per-command ratios are measured and
+      `NOTIFY_NEW_TRANSACTIONS` shows no saving, in which case skip
+      compression for that command outright and delete the padding guard
+      with it; `--pad-transactions` is proposed as default-on (same
+      conclusion, arrived at from the other side); or a relay-privacy
+      round takes up wire-size observables generally, alongside the Q-11
+      Unit 2 wire-observer work. Z-3 (zstd output is non-canonical, so
+      nothing may attest over it) was checked here and does not bite:
+      Levin compression is transport-only and nothing signs or commits to
+      the compressed bytes.
     - **Handshake coupling of the packet-size limit.** The framing crate
       cannot detect handshake completion — it does not decode command
       bodies — so `BucketReader::complete_handshake` is the caller's

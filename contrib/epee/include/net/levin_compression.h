@@ -36,20 +36,19 @@ namespace epee
 {
 namespace levin
 {
-  // These are marshaling shims over the `shekyl_levin_*` FFI
-  // (src/shekyl/shekyl_ffi.h, rust/shekyl-ffi/src/levin_ffi.rs): the
-  // Rust-pinned libzstd is the single zstd implementation in the binary,
-  // and the compression policy constants (256-byte minimum payload,
-  // level 1, 128 MiB decompression cap) are single-sourced in
-  // rust/shekyl-levin/src/compress.rs. No system libzstd is linked and
-  // there is no HAVE_ZSTD build gate; availability is a property of the
-  // linked Rust image.
-
-  //! Compress one Levin payload. Returns false meaning "send it
-  //! uncompressed" (below the minimum, not smaller compressed, or
-  //! compression unavailable) — not an error. On false, `output` is
-  //! cleared (safe for callers that reuse the string).
-  bool compress_payload(epee::span<const uint8_t> input, std::string& output);
+  // Marshaling shim over the `shekyl_levin_*` FFI (src/shekyl/shekyl_ffi.h,
+  // rust/shekyl-ffi/src/levin_ffi.rs): the Rust-pinned libzstd is the single
+  // zstd implementation in the binary, and the compression policy constants
+  // (256-byte minimum payload, level 1, 128 MiB decompression cap) are
+  // single-sourced in rust/shekyl-levin/src/compress.rs. No system libzstd
+  // is linked and there is no HAVE_ZSTD build gate; availability is a
+  // property of the linked Rust image.
+  //
+  // Only the receive half lives here. The emit half is whole-message and is
+  // `epee::levin::try_compress_message` in levin_base.h, itself a shim over
+  // `shekyl_levin_compress_message` — there is no C++ payload-level compress
+  // entry point, because every question that decides whether a buffer may be
+  // compressed is about its bucket header.
 
   //! Decompress one Levin COMPRESSED payload. `max_output` bounds the
   //! declared content size *before any allocation*; pass the packet-size

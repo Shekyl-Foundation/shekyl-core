@@ -5,12 +5,13 @@
 
 //! The `COMPRESSED` flag path — **this module is the policy owner**.
 //!
-//! Since the 2026-08-06 compression-shim cut the C++
-//! `epee::levin::{compress,decompress}_payload` path is a marshaling shim
-//! over the `shekyl_levin_*` FFI that reaches these functions: the codec,
-//! the 256-byte minimum, the only-if-smaller rule, level 1, and the
-//! inflate caps are single-sourced here. Do not "mirror C++" when editing
-//! — C++ is the consumer.
+//! Since the 2026-08-06 compression-shim cut, `epee::levin`'s
+//! `try_compress_message` and `decompress_payload` are marshaling shims
+//! over the `shekyl_levin_*` FFI that reaches these functions. The codec,
+//! the 256-byte minimum, the only-if-smaller rule, level 1, the inflate
+//! caps, **and which messages may be compressed at all** are single-sourced
+//! here; the C++ carries none of it. Do not "mirror C++" when editing —
+//! C++ is the consumer.
 //!
 //! With the `zstd` cargo feature disabled, compression is a no-op and
 //! receiving a compressed bucket is a hard error. That shape exists for
@@ -52,9 +53,8 @@ pub const fn is_compression_available() -> bool {
 ///   conforming caller can produce one, so folding it into `Ok(None)`
 ///   would silently paper over a caller bug.
 ///
-/// This is the payload-level seam the C++ shim reaches through the FFI
-/// (`shekyl_levin_compress_payload`): the header rewrite stays on whichever
-/// side framed the message, and only opaque payload bytes cross.
+/// This is the payload-level half of the policy; [`compress_message`] wraps
+/// it with the header questions and is what the C++ shim actually reaches.
 ///
 /// # Errors
 ///
@@ -92,12 +92,12 @@ pub fn compress_payload(payload: &[u8]) -> Result<Option<Vec<u8>>, Error> {
 /// not smaller compressed. On success the returned message carries the
 /// `COMPRESSED` flag and a `length` field covering the compressed payload.
 ///
-/// Three inputs are also returned unchanged rather than re-framed — see the
-/// crate docs' "emit-side: `try_compress_message` refuses malformed input"
-/// divergence:
+/// Three inputs are also returned unchanged rather than re-framed. Until
+/// the 2026-08-06 cut these were divergences from a C++ emit path that had
+/// none of them (it `memcpy`d the header unchecked); that path now forwards
+/// here, so they are simply the rules:
 ///
-/// - a buffer whose header signature does not verify (the C++ `memcpy`s the
-///   header unchecked and would compress it anyway);
+/// - a buffer whose header signature does not verify;
 /// - a buffer whose header `length` disagrees with the bytes after it — i.e.
 ///   anything other than exactly one message, such as the multi-bucket
 ///   stream [`crate::fragmented_notify`] returns. Compressing that would
@@ -106,6 +106,7 @@ pub fn compress_payload(payload: &[u8]) -> Result<Option<Vec<u8>>, Error> {
 ///   exactly `noise_size` bytes *because* that is the property the
 ///   white-noise feature exists to provide; compressing one would shorten it
 ///   and make cover traffic distinguishable from real traffic on the wire.
+///   This is the one with teeth: a 4 KiB dummy compresses to ~52 bytes.
 ///
 /// The C++ has **three** call sites, not one, and two of them are
 /// command-generic: `make_payload_send_txs` (`levin_notify.cpp`, the
@@ -133,33 +134,43 @@ pub fn compress_payload(payload: &[u8]) -> Result<Option<Vec<u8>>, Error> {
 /// first by not calling the compressor at all when `pad` is set.
 #[must_use]
 pub fn try_compress_message(message: Vec<u8>) -> Vec<u8> {
-    if !is_compression_available() || message.len() <= HEADER_SIZE {
-        return message;
+    match compress_message(&message) {
+        Some(compressed) => compressed,
+        None => message,
     }
-    let Ok(header_bytes) = <&[u8; HEADER_SIZE]>::try_from(&message[..HEADER_SIZE]) else {
-        return message;
-    };
-    let Ok(mut head) = BucketHead::read(header_bytes) else {
-        return message;
-    };
+}
+
+/// The borrowing form of [`try_compress_message`]: `None` means "send the
+/// input unchanged", `Some(bytes)` a re-framed `COMPRESSED` message.
+///
+/// This is the shape the C++ shim reaches through
+/// `shekyl_levin_compress_message`, which owns a `byte_slice` it wants to
+/// keep on the decline path and so has nothing to hand over. Every rule in
+/// [`try_compress_message`]'s contract lives here; that function is the
+/// owned-`Vec` convenience over it.
+#[must_use]
+pub fn compress_message(message: &[u8]) -> Option<Vec<u8>> {
+    if !is_compression_available() || message.len() <= HEADER_SIZE {
+        return None;
+    }
+    let header_bytes = <&[u8; HEADER_SIZE]>::try_from(&message[..HEADER_SIZE]).ok()?;
+    let mut head = BucketHead::read(header_bytes).ok()?;
     if head.flags.contains(Flags::COMPRESSED) {
-        return message;
+        return None;
     }
     // Exactly one message: the header must account for every byte after it.
     if head.payload_len != u64::try_from(message.len() - HEADER_SIZE).expect("usize fits in u64") {
-        return message;
+        return None;
     }
     // Noise/fragment class: constant on-wire size is the point of it.
     if !head.flags.intersects(Flags::REQUEST.union(Flags::RESPONSE)) {
-        return message;
+        return None;
     }
     // A message that reached here is at most one packet, so the plaintext
     // bound cannot fire; treating an error like a decline keeps this
-    // function total ("returns the input unchanged") rather than growing a
-    // failure mode its callers have no way to act on.
-    let Ok(Some(compressed)) = compress_payload(&message[HEADER_SIZE..]) else {
-        return message;
-    };
+    // function total ("leave the input alone") rather than growing a failure
+    // mode its callers have no way to act on.
+    let compressed = compress_payload(&message[HEADER_SIZE..]).ok()??;
 
     head.flags = head.flags.union(Flags::COMPRESSED);
     head.payload_len = u64::try_from(compressed.len()).expect("usize fits in u64");
@@ -167,7 +178,7 @@ pub fn try_compress_message(message: Vec<u8>) -> Vec<u8> {
     let mut out = Vec::with_capacity(HEADER_SIZE + compressed.len());
     out.extend_from_slice(&head.write());
     out.extend_from_slice(&compressed);
-    out
+    Some(out)
 }
 
 /// Read a `COMPRESSED` bucket's frame header and return the exact number of
