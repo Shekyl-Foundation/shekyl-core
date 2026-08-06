@@ -85,9 +85,10 @@ namespace cryptonote
   bool add_extra_nonce_to_tx_extra(std::vector<uint8_t>& tx_extra, const blobdata& extra_nonce);
   bool add_mm_merkle_root_to_tx_extra(std::vector<uint8_t>& tx_extra, const crypto::hash& mm_merkle_root, size_t mm_merkle_tree_depth);
   bool add_archival_attestation_to_tx_extra(std::vector<uint8_t>& tx_extra, const std::string& attestation_blob);
-  // false ONLY on a tx_extra parse failure (headers UNREADABLE); a successful
-  // parse with no attestation tag is true with an empty attestation_blob.
-  bool get_archival_attestation_from_extra(const std::vector<uint8_t>& tx_extra, std::string& attestation_blob);
+  // parse_* convention (same bool as parse_tx_extra): false ONLY on a tx_extra
+  // parse failure (headers UNREADABLE); a successful parse with no attestation
+  // tag is true with an empty attestation_blob (the committed empty set).
+  bool parse_archival_attestation_from_extra(const std::vector<uint8_t>& tx_extra, std::string& attestation_blob);
   bool remove_field_from_tx_extra(std::vector<uint8_t>& tx_extra, const std::type_info &type);
   void set_payment_id_to_tx_extra_nonce(blobdata& extra_nonce, const crypto::hash& payment_id);
   void set_encrypted_payment_id_to_tx_extra_nonce(blobdata& extra_nonce, const crypto::hash8& payment_id);

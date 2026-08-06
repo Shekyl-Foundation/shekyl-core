@@ -5571,14 +5571,14 @@ bool Blockchain::verify_block_attestation(const block& b, const blobdata& witnes
   // deliberate unparseable-extra tightening pinned in unreadable_headers_is_headers_unreadable.
   const crypto::hash id = get_block_hash(b);
 
-  // 1. Header blob from the coinbase tx_extra. get_archival_attestation_from_extra returns false
+  // 1. Header blob from the coinbase tx_extra. parse_archival_attestation_from_extra returns false
   //    ONLY on a tx_extra parse failure (a parsed extra with no attestation tag is true with an
   //    empty blob -- the committed empty set). Unreadable is NOT empty: attestation-shaped bytes
   //    could ride an unparseable extra outside the attestation_root commitment, and the settlement
   //    scan later reads these same coinbase bytes, so flag it and let Rust return
   //    ERR_HEADERS_UNREADABLE -- a loud reject, never a silent empty.
   std::string headers;
-  const bool headers_readable = get_archival_attestation_from_extra(b.miner_tx.extra, headers);
+  const bool headers_readable = parse_archival_attestation_from_extra(b.miner_tx.extra, headers);
 
   // 2. Step 1 (readable headers only -- unreadable headers name nothing): name the distinct pass
   //    p_ids so we know which bonds to read. Zero authority -- step 2 re-derives the authoritative
