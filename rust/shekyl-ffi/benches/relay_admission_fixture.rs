@@ -35,9 +35,28 @@ use shekyl_fcmp_proofs::SELENE_FCMP_GENERATORS;
 use shekyl_ffi::ct_balance_ffi::shekyl_check_commitment_masks;
 use shekyl_ffi::shekyl_fcmp_verify;
 
-/// `shekyl_fcmp_verify` / `shekyl_check_commitment_masks` both use `0` for
-/// success; the XOR below is `0` only when both succeeded.
-pub const ADMISSION_OK: u8 = 0;
+/// Both admission calls' status codes, kept apart.
+///
+/// The two FFI functions use `0` for success and **overlapping** non-zero
+/// spaces: `shekyl_check_commitment_masks` returns `1..=4`
+/// (`ct_balance_ffi.rs`) and `shekyl_fcmp_verify` returns the `VerifyError`
+/// discriminant `1..=8` (`lib.rs`). Folding them into one byte therefore loses
+/// *which* call failed, and folding them with XOR loses *that* one failed —
+/// `3 ^ 3 == 0` reads as success, and the whole sweep then times the rejection
+/// path while its self-witness assert passes. Carrying both codes is the only
+/// encoding where "the fixture verified" is [`ADMISSION_OK`] and nothing else
+/// is, and it names the failing call in the assert message when it fires.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AdmissionStatus {
+    pub masks_rc: u8,
+    pub verify_rc: u8,
+}
+
+/// Both calls succeeded — the only status a fixture the benches time may have.
+pub const ADMISSION_OK: AdmissionStatus = AdmissionStatus {
+    masks_rc: 0,
+    verify_rc: 0,
+};
 
 /// Everything `blockchain.cpp` hands the admission calls for one transaction.
 pub struct AdmissionFixture {
@@ -51,15 +70,15 @@ pub struct AdmissionFixture {
     /// Output commitment masks — `rv.outPk`, the axis `check_commitment_masks`
     /// walks.
     pub masks_flat: Vec<u8>,
+    /// The shape this fixture WAS BUILT AT, carried so the admission call
+    /// cannot be handed a different one. `n_in`/`n_out` used to be call
+    /// parameters, which let a caller time a shape the fixture does not hold —
+    /// a mismatch the FFI answers with a rejection, i.e. a silent measurement
+    /// of the reject path rather than an error.
+    pub n_in: usize,
+    pub n_out: usize,
 }
 
-/// Build a verifiable `n_in`-input, `n_out`-output admission fixture.
-///
-/// All inputs share one depth-1 leaf chunk, so the tree root is a single
-/// multiexp over the chunk's `4 × n_in` leaf scalars. That is the smallest
-/// tree that admits `n_in` inputs, which keeps the sweep measuring **input
-/// count** rather than tree depth — a second axis that would otherwise ride
-/// along and produce F-7's confound (§69.2).
 /// How the spent outputs sit in the curve tree.
 ///
 /// **This is the fixture caveat §76.1 flagged, made measurable.** The input
@@ -77,6 +96,14 @@ pub enum ChunkLayout {
     Spread,
 }
 
+/// Build a verifiable `n_in`-input, `n_out`-output admission fixture.
+///
+/// Under [`ChunkLayout::Shared`] all inputs sit in one leaf chunk, so the leaf
+/// layer is a single multiexp over `4 × n_in` scalars and every input walks the
+/// same path — the control that keeps the sweep measuring **input count**
+/// rather than tree depth, a second axis that would otherwise ride along and
+/// produce F-7's confound (§69.2). [`ChunkLayout::Spread`] is the production
+/// topology; see the enum.
 pub fn build_fixture(
     n_in: usize,
     n_out: usize,
@@ -159,6 +186,14 @@ pub fn build_fixture(
     // layer-0 node is promoted into a layer-1 Helios root rather than returned
     // bare. Depth 1 is kept only as the sub-production floor the first sweep
     // measured; depth 2 is the shallowest tree a live chain can present.
+    // The walk is local rather than a call into `shekyl-engine-core`'s
+    // `synthetic_tree` helpers, and deliberately: those are `pub(crate)`, they
+    // build wallet-side `LeafEntry` trees, and they have no notion of the
+    // multi-chunk `Spread` layout this sweep exists to measure. Widening a
+    // production crate's visibility to serve a bench is the worse trade. What
+    // IS shared is shared: the hashes and curve conversions below are
+    // `shekyl_fcmp::tree`'s own, so the layer convention has one owner.
+    //
     // Walk the alternating tree to `tree_depth`. `tree.rs`: layer 0 is the
     // Selene leaf, odd layers are Helios over the x-coords of the Selene points
     // below, even layers > 0 are Selene over the x-coords of the Helios points
@@ -286,33 +321,41 @@ pub fn build_fixture(
         tree_depth,
         signable_tx_hash,
         masks_flat,
+        n_in,
+        n_out,
     }
 }
 
 /// The admission sequence, in `blockchain.cpp`'s order.
 ///
-/// Returned rather than discarded so the optimiser cannot delete the work —
-/// the fixture-drop artifact that made an earlier bench measure `zeroize`
-/// instead of its workload.
-pub fn admission_verify(f: &AdmissionFixture, n_in: usize, n_out: usize) -> u8 {
-    let masks_rc =
-        unsafe { shekyl_check_commitment_masks(f.masks_flat.as_ptr(), n_out, std::ptr::null(), 0) };
+/// The shape comes from the fixture, not from the caller, so the pair cannot
+/// disagree. The status is returned rather than discarded so the optimiser
+/// cannot delete the work — and both codes are returned, not folded, so the
+/// callers' `assert_eq!(…, ADMISSION_OK)` is a real self-witness (see
+/// [`AdmissionStatus`]).
+pub fn admission_verify(f: &AdmissionFixture) -> AdmissionStatus {
+    let masks_rc = unsafe {
+        shekyl_check_commitment_masks(f.masks_flat.as_ptr(), f.n_out, std::ptr::null(), 0)
+    };
 
     let verify_rc = unsafe {
         shekyl_fcmp_verify(
             f.proof.as_ptr(),
             f.proof.len(),
             f.key_images_flat.as_ptr(),
-            n_in,
+            f.n_in,
             f.pseudo_outs_flat.as_ptr(),
-            n_in,
+            f.n_in,
             f.pqc_hashes_flat.as_ptr(),
-            n_in,
+            f.n_in,
             f.tree_root.as_ptr(),
             f.tree_depth,
             f.signable_tx_hash.as_ptr(),
         )
     };
 
-    masks_rc ^ verify_rc
+    AdmissionStatus {
+        masks_rc,
+        verify_rc,
+    }
 }

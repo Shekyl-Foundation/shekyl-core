@@ -5,6 +5,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+# `benches/relay_admission_fixture.rs` is a shared module `#[path]`-included by
+# both bench targets, NOT a bench of its own. Autodiscovery would compile and
+# run it as a third target -- a libtest harness over zero tests, whose only
+# effect is CI time and a bench name that measures nothing. The two real
+# targets are declared explicitly below.
+autobenches = false
 
 [lib]
 name = "shekyl_ffi"

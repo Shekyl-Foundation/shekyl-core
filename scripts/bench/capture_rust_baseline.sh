@@ -64,6 +64,16 @@ need python3
 # `pub(crate)` state-injection helpers) participate in the rolling
 # baseline without expanding production visibility.
 #
+# The criterion field may be EMPTY (`<crate>::<iai-bench>`), which
+# runs the gungraun arm alone. That is not a convenience: a wall-clock
+# target whose run costs hours does not belong in a per-PR job, while
+# its instruction-count sibling still has to gate. `relay_admission_verify`
+# is the case that forced it — 64 cells, each building an FCMP++ proof,
+# measured on the reference machine AND on the Pi (`DAEMON_RELAY_PRIVACY.md`
+# §72.6). Registering that pair whole would have put a multi-hour sweep on
+# every PR; registering neither would have left the drift gate the bench
+# documents as enforced running nowhere.
+#
 # Order matters only for human readability in the JSON envelope and
 # the iai snapshot; the script treats each row as self-contained.
 #
@@ -91,6 +101,11 @@ BENCHES=(
   # (the 6-i projection is synchronous + runtime-free).
   "shekyl-engine-core:engine_trait_bench_key_dispatch:engine_trait_bench_key_dispatch_baseline_iai:bench-internals"
   "shekyl-engine-core:engine_trait_bench_key_merge_projection:engine_trait_bench_key_merge_projection_iai:bench-internals"
+  # §72.6's drift gate: what pool admission costs, at the modal 1-in/2-out
+  # shape. iai-only by design — see the empty-criterion-field note above.
+  # A change to FCMP++ verification moves this count, which is the signal
+  # that `hop` (and the embargo derived from it) is owed a re-derivation.
+  "shekyl-ffi::relay_admission_verify_iai"
 )
 
 # Clean criterion output so the envelope reflects this run only.
@@ -101,6 +116,11 @@ rm -rf "${RUST_ROOT}/target/criterion"
 
 for row in "${BENCHES[@]}"; do
   IFS=':' read -r CRATE CRIT_BENCH IAI_BENCH FEATURES <<<"${row}"
+  if [[ -z "${CRIT_BENCH}" ]]; then
+    echo
+    echo "[capture_rust_baseline] criterion : ${CRATE} -- none registered (iai-only row)"
+    continue
+  fi
   FEATURE_ARGS=()
   if [[ -n "${FEATURES:-}" ]]; then
     FEATURE_ARGS=(--features "${FEATURES}")

@@ -379,7 +379,14 @@ jobs:
           cargo bench --no-run -p "$CRATE" --bench "${TARGET%_iai}" 2>&1 | tail -5
           BENCH_BIN=$(ls -t target/release/deps/${TARGET%_iai}-* \
                       | grep -v '\.d$' | head -1)
-          samply record --output /tmp/profile.json --no-open \
+          # `--profile-time 10` is per BENCHMARK, not per binary, so the run
+          # scales with the target's cell count: `relay_admission_verify`
+          # sweeps 64 cells and builds an FCMP++ proof for each, which would
+          # outrun this job's 15-minute budget and turn a diagnostic into a
+          # second red check beside the gate that actually tripped. Bound the
+          # sampling itself so the profile is best-effort and the job's
+          # runtime does not depend on which bench regressed.
+          timeout 600 samply record --output /tmp/profile.json --no-open \
             "$BENCH_BIN" --bench --profile-time 10 || true
           ls -la /tmp/profile.json || echo "samply produced no profile"
 

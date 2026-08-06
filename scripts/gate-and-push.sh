@@ -32,6 +32,13 @@
 # clippy and the doc-link gate still run. `cargo test --workspace` is
 # deliberately never used: it pulls randomx-differential, which is not part of
 # the Rust gate.
+#
+# WHAT THIS DOES NOT COVER, stated so "all gates green" is not read as more
+# than it is: `cargo audit`, the persisted-schema snapshot check, and every
+# C++ / depends job run in CI. It covers the three Rust gates that reject the
+# most pushes, at CI's exact invocations -- `--locked` included, because a
+# lockfile that does not resolve the branch's manifests is a red CI run that
+# no amount of local fmt/clippy/test can see.
 
 set -euo pipefail
 
@@ -68,21 +75,48 @@ cd "$REPO_ROOT"
 echo "== fmt =="
 (cd rust && cargo fmt --all -- --check)
 
-echo "== clippy (CI-exact: +1.94.0, workspace, all targets) =="
-(cd rust && cargo +1.94.0 clippy --workspace --all-targets -- -D warnings)
+echo "== clippy (CI-exact: +1.94.0, workspace, all targets, --locked) =="
+(cd rust && cargo +1.94.0 clippy --locked --workspace --all-targets -- -D warnings)
 
 if [[ ${#TEST_ARGS[@]} -gt 0 ]]; then
-	echo "== test ${TEST_ARGS[*]} =="
-	(cd rust && cargo test "${TEST_ARGS[@]}")
+	echo "== test ${TEST_ARGS[*]} (--locked) =="
+	(cd rust && cargo test --locked "${TEST_ARGS[@]}")
 fi
 
 echo "== doc links =="
-# Uninitialised submodules produce dead links that are a local artifact, not a
-# regression; CI initialises them. Fail only on links outside that set.
-if python3 scripts/ci/check_doc_links.py 2>&1 | grep 'dead link' | grep -v 'external/randomx-v2'; then
-	echo "doc-link gate FAILED (above are not submodule artifacts)" >&2
+# The checker exits 1 for dead links, 2 for a malformed allowlist, and
+# whatever python exits with if it crashes or has been moved. ALL of those
+# must stop the push; exactly one class may be waived -- dead links into an
+# uninitialised submodule, which are a local artifact CI does not have.
+#
+# So: branch on the EXIT STATUS first, filter the output second. The inverse
+# (grep for a message, ignore the status) makes every failure that does not
+# print that message read as green, which is this script's own failure mode
+# one level in.
+DOC_LINK_OUT="$(mktemp)"
+trap 'rm -f "${DOC_LINK_OUT}"' EXIT
+DOC_LINK_RC=0
+python3 scripts/ci/check_doc_links.py >"${DOC_LINK_OUT}" 2>&1 || DOC_LINK_RC=$?
+case "${DOC_LINK_RC}" in
+0) ;;
+1)
+	if ! grep -q 'dead link' "${DOC_LINK_OUT}"; then
+		echo "doc-link gate FAILED: exit 1 with no 'dead link' rows -- the checker's contract moved" >&2
+		cat "${DOC_LINK_OUT}" >&2
+		exit 1
+	fi
+	if grep 'dead link' "${DOC_LINK_OUT}" | grep -v 'external/randomx-v2'; then
+		echo "doc-link gate FAILED (above are not submodule artifacts)" >&2
+		exit 1
+	fi
+	echo "   dead links are all uninitialised-submodule artifacts -- waived"
+	;;
+*)
+	echo "doc-link gate FAILED: the checker itself exited ${DOC_LINK_RC}" >&2
+	cat "${DOC_LINK_OUT}" >&2
 	exit 1
-fi
+	;;
+esac
 
 echo "== all gates green -- pushing $BRANCH to $REMOTE =="
 git push "$REMOTE" "$BRANCH"

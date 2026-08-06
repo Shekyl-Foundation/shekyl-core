@@ -117,25 +117,24 @@ fn bench_admission(c: &mut Criterion) {
         // the domain has EIGHT points, and measuring all of them makes the
         // surface itself the specification (§80).
         for n_in in 1usize..=8 {
-            {
-                let fixture = build_fixture(n_in, n_out, tree_depth, layout);
+            let fixture = build_fixture(n_in, n_out, tree_depth, layout);
 
-                // Self-witnessing: a fixture that does not verify would make every
-                // timing below a measurement of the rejection path.
-                let rc = admission_verify(&fixture, n_in, n_out);
-                assert_eq!(
-                    rc, ADMISSION_OK,
-                    "fixture must VERIFY, or the bench times the reject path \
+            // Self-witnessing: a fixture that does not verify would make every
+            // timing below a measurement of the rejection path. The status
+            // carries both FFI codes, so a failure names which call rejected.
+            let rc = admission_verify(&fixture);
+            assert_eq!(
+                rc, ADMISSION_OK,
+                "fixture must VERIFY, or the bench times the reject path \
                  ({tag}, n_in={n_in}, n_out={n_out})"
-                );
+            );
 
-                group.throughput(Throughput::Elements(n_in as u64));
-                group.bench_with_input(
-                    BenchmarkId::from_parameter(format!("{tag}_in{n_in}_out{n_out}")),
-                    &fixture,
-                    |b, f| b.iter(|| admission_verify(f, n_in, n_out)),
-                );
-            }
+            group.throughput(Throughput::Elements(n_in as u64));
+            group.bench_with_input(
+                BenchmarkId::from_parameter(format!("{tag}_in{n_in}_out{n_out}")),
+                &fixture,
+                |b, f| b.iter(|| admission_verify(f)),
+            );
         }
     }
 
