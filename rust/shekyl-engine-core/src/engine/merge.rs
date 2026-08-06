@@ -258,6 +258,13 @@ impl<
         state
             .ledger
             .reconcile_tx_key_retention(reorg_fork_height.is_some());
+        // PR-SJ-1 (`WALLET_SEND_RECORD.md` P3-1): the send-journal
+        // reconciler — reorg back-edges, refresh-authoritative confirm
+        // edges, and F14 lock re-derivation from journal facts (the
+        // mechanism that makes rescan re-application free). Same write
+        // guard as the merge: a trigger and its journal edge persist
+        // atomically.
+        state.ledger.reconcile_send_journal(reorg_fork_height);
         Ok(())
     }
 

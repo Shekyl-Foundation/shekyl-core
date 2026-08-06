@@ -208,12 +208,15 @@ impl<
             {
                 let mut guard = engine.ledger.write();
                 let state = &mut *guard;
-                let unconfirmed = state.ledger.sync_state.pending_tx_hashes.len();
-                if reservations > 0 || unconfirmed > 0 {
-                    return Err(RefreshError::RescanBlocked {
-                        reservations,
-                        unconfirmed,
-                    });
+                // PR-SJ-1: the unconfirmed half of this refusal retired —
+                // the send journal carries dispatched input sets across
+                // the wipe and the merge reconciler re-derives the F14
+                // locks during replay (`WALLET_SEND_RECORD.md` P3-1).
+                // Pre-dispatch reservations still refuse: no journal row
+                // exists, and their in-memory locks index the rows the
+                // wipe destroys. Discard-then-rescan is the remedy.
+                if reservations > 0 {
+                    return Err(RefreshError::RescanBlocked { reservations });
                 }
                 reset_scan_derived_state(&mut state.ledger, &mut state.indexes);
             }
@@ -382,6 +385,56 @@ mod tests {
         );
         assert!(wallet.staking.staking_enabled);
         assert_eq!(wallet.staking.p_slot, 4);
+    }
+
+    /// The send journal is dispatch-authored, not scan-derived: nothing
+    /// in a chain replay can rebuild recipients or the per-recipient
+    /// split (CT), so the block lives outside `LedgerBlock` and survives
+    /// the reset by construction (C6/C7 — see `send_journal_block`).
+    #[test]
+    fn reset_preserves_send_journal() {
+        use shekyl_engine_state::{SendInputRef, SendRecipient, SendRecord, SendState};
+
+        let mut wallet = WalletLedger::empty();
+        wallet.send_journal.rows.insert(
+            [5u8; 32],
+            SendRecord {
+                dispatched_at_height: 42,
+                fee: 700,
+                recipients: vec![SendRecipient {
+                    address: "shekyl1example".to_owned(),
+                    amount: 7_000,
+                }],
+                change_amount: 22_300,
+                inputs: vec![SendInputRef {
+                    gindex: 11,
+                    amount: 30_000,
+                }],
+                lock_baseline: Some(43),
+                state: SendState::Dispatched,
+            },
+        );
+        wallet.ledger.transfers.push(sample_transfer(2));
+
+        let mut indexes = LedgerIndexes::empty();
+        reset_scan_derived_state(&mut wallet, &mut indexes);
+
+        assert_unscanned(&wallet.ledger);
+        let row = &wallet.send_journal.rows[&[5u8; 32]];
+        assert_eq!(row.state, SendState::Dispatched);
+        assert_eq!(
+            row.lock_baseline,
+            Some(43),
+            "the baseline survives the wipe"
+        );
+        assert_eq!(
+            row.inputs,
+            vec![SendInputRef {
+                gindex: 11,
+                amount: 30_000
+            }],
+            "the carried input set survives — it is what re-derives the F14 locks"
+        );
     }
 
     /// An invoice whose expiry height has already passed is unwound to
@@ -557,16 +610,21 @@ mod start_rescan_integration_tests {
         );
     }
 
-    /// An unconfirmed submitted transaction blocks the rescan: its inputs'
-    /// spend record lives only in the transfer set the reset would erase,
-    /// and no chain replay can rebuild it while the tx is unmined. The
-    /// refusal is raised before the wipe, so the wallet is untouched.
+    /// An unconfirmed submitted transaction no longer blocks the rescan
+    /// (PR-SJ-1, P3-1): the send journal carries the dispatched input set
+    /// across the wipe and the merge reconciler re-derives the F14 locks
+    /// during replay, so the refusal's unconfirmed half is retired.
     ///
     /// Runs on the hybrid (reachable-daemon) fixture deliberately — the
-    /// preflight sits ahead of this guard, so a dead daemon would mask the
+    /// preflight sits ahead of this path, so a dead daemon would mask the
     /// property under test.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn unconfirmed_submitted_tx_blocks_rescan_without_touching_the_wallet() {
+    async fn unconfirmed_submitted_tx_no_longer_blocks_rescan() {
+        // PR-SJ-1 (`WALLET_SEND_RECORD.md` P3-1): the unconfirmed half of
+        // the -29202 refusal retired — the send journal carries the
+        // dispatched input set across the wipe and the merge reconciler
+        // re-derives the F14 locks during replay, so a pending submitted
+        // tx no longer wedges rescan.
         let (arc, _tmp) = make_hybrid_engine_arc().await;
         let seeded = seed_scanned_state(&arc).await;
         {
@@ -575,16 +633,43 @@ mod start_rescan_integration_tests {
             guard.ledger.sync_state.pending_tx_hashes.push([0x11; 32]);
         }
 
+        let handle = Engine::start_rescan(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("an unconfirmed submitted tx must NOT block the rescan (P3-1)");
+        drop(handle);
+        await_slot_release(&arc).await;
+
+        let engine = arc.read().await;
+        assert_ne!(
+            engine.ledger.synced_height(),
+            seeded,
+            "the rescan proceeded: scan-derived state was reset"
+        );
+        assert!(
+            !engine.refresh_slot.is_claimed(),
+            "a blocked rescan must release the single-flight slot"
+        );
+    }
+
+    /// The kept half of `-29202` (P3-1): a pre-dispatch reservation has
+    /// no send-journal row and its in-memory output locks index the very
+    /// rows the wipe destroys — rescan refuses, wallet untouched, and
+    /// discard-then-rescan is the in-session remedy.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn held_reservation_still_blocks_rescan_without_touching_the_wallet() {
+        let (arc, _tmp) = make_hybrid_engine_arc().await;
+        let seeded = seed_scanned_state(&arc).await;
+        {
+            let engine = arc.read().await;
+            engine.test_hold_reservation();
+        }
+
         let err = Engine::start_rescan(arc.clone(), RefreshOptions::default())
             .await
-            .expect_err("an unconfirmed submitted tx must block the rescan");
+            .expect_err("a held reservation must still block the rescan");
         match err {
-            RefreshError::RescanBlocked {
-                reservations,
-                unconfirmed,
-            } => {
-                assert_eq!(reservations, 0);
-                assert_eq!(unconfirmed, 1);
+            RefreshError::RescanBlocked { reservations } => {
+                assert_eq!(reservations, 1);
             }
             other => panic!("expected RescanBlocked, got {other:?}"),
         }
@@ -594,10 +679,6 @@ mod start_rescan_integration_tests {
             engine.ledger.synced_height(),
             seeded,
             "a blocked rescan must not reset the ledger"
-        );
-        assert!(
-            !engine.refresh_slot.is_claimed(),
-            "a blocked rescan must release the single-flight slot"
         );
     }
 

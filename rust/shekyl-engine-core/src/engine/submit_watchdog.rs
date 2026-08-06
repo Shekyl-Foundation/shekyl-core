@@ -419,14 +419,14 @@ pub(crate) fn apply_probe_outcome(
 /// Release makes the outputs selectable again; it does **not**
 /// authorize an automatic rebuild (§2.6 invariant 3 / §7.4).
 pub(crate) fn release_awaiting_confirmation(
-    ledger: &mut LedgerBlock,
+    wallet: &mut shekyl_engine_state::WalletLedger,
     tx_hashes: &HashSet<TxHash>,
 ) -> usize {
     if tx_hashes.is_empty() {
         return 0;
     }
     let mut released = 0;
-    for td in &mut ledger.transfers {
+    for td in &mut wallet.ledger.transfers {
         if td
             .awaiting_confirmation
             .as_ref()
@@ -434,6 +434,20 @@ pub(crate) fn release_awaiting_confirmation(
         {
             td.awaiting_confirmation = None;
             released += 1;
+        }
+    }
+    // PR-SJ-1: the confirmed-absent release is the `PresumedDead` entry
+    // (SJ-DQ-4 / P3-4 — a display state; keys and the I-2 reference are
+    // retained). `lock_baseline` clears so the merge reconciler's lock
+    // re-derivation never re-creates a lock the watchdog deliberately
+    // released; a late confirmation flips the row to `Confirmed` through
+    // the same reconciler, loudly un-presuming it.
+    for txid in tx_hashes {
+        if let Some(row) = wallet.send_journal.rows.get_mut(&txid.to_bytes()) {
+            if row.state == shekyl_engine_state::SendState::Dispatched {
+                row.state = shekyl_engine_state::SendState::PresumedDead;
+                row.lock_baseline = None;
+            }
         }
     }
     released
@@ -529,23 +543,60 @@ mod tests {
                 accepted_at_height: 4_000,
             })
         };
-        let mut ledger = ledger_with(vec![
+        let mut wallet = shekyl_engine_state::WalletLedger::empty();
+        wallet.ledger = ledger_with(vec![
             transfer_with_lock(1, lock(gone)),
             transfer_with_lock(2, lock(gone)),
             transfer_with_lock(3, lock(still_held)),
         ]);
+        // PR-SJ-1: seed the owning journal rows so the release's
+        // PresumedDead edge is observable (and the fixture stays
+        // invariant-honest: locks derive from dispatch facts).
+        for (txid, gindexes) in [(gone, vec![1u64, 2]), (still_held, vec![3u64])] {
+            wallet.send_journal.rows.insert(
+                txid.to_bytes(),
+                shekyl_engine_state::SendRecord {
+                    dispatched_at_height: 3_999,
+                    fee: 1,
+                    recipients: Vec::new(),
+                    change_amount: 0,
+                    inputs: gindexes
+                        .into_iter()
+                        .map(|gindex| shekyl_engine_state::SendInputRef { gindex, amount: 1 })
+                        .collect(),
+                    lock_baseline: Some(4_000),
+                    state: shekyl_engine_state::SendState::Dispatched,
+                },
+            );
+        }
 
         assert_eq!(
-            release_awaiting_confirmation(&mut ledger, &HashSet::from([gone])),
+            release_awaiting_confirmation(&mut wallet, &HashSet::from([gone])),
             2
         );
+        let released_row = &wallet.send_journal.rows[&gone.to_bytes()];
+        assert_eq!(
+            released_row.state,
+            shekyl_engine_state::SendState::PresumedDead,
+            "confirmed-absent release is the PresumedDead entry (P3-4)"
+        );
+        assert_eq!(
+            released_row.lock_baseline, None,
+            "baseline clears so the reconciler never re-locks a released tx"
+        );
+        assert_eq!(
+            wallet.send_journal.rows[&still_held.to_bytes()].state,
+            shekyl_engine_state::SendState::Dispatched,
+            "unrelated row untouched"
+        );
+        let ledger = &wallet.ledger;
         assert!(ledger.transfers()[0].is_spendable(u64::MAX));
         assert!(ledger.transfers()[1].is_spendable(u64::MAX));
         assert!(
             !ledger.transfers()[2].is_spendable(u64::MAX),
             "unrelated lock survives"
         );
-        assert_eq!(held_submits(&ledger).len(), 1);
+        assert_eq!(held_submits(ledger).len(), 1);
     }
 
     fn healthy() -> DaemonHealthContext {

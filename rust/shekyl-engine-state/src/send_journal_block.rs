@@ -195,10 +195,9 @@ mod tests {
         .into_iter()
         .enumerate()
         {
+            let key = u8::try_from(i).expect("four variants fit in u8");
             let mut block = SendJournalBlock::empty();
-            block
-                .rows
-                .insert([i as u8; 32], sample_record(state, Some(43)));
+            block.rows.insert([key; 32], sample_record(state, Some(43)));
             let bytes = postcard::to_allocvec(&block).expect("serialize");
             let back: SendJournalBlock = postcard::from_bytes(&bytes).expect("deserialize");
             assert_eq!(back, block);

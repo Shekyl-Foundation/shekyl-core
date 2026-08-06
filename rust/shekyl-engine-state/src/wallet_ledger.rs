@@ -251,6 +251,84 @@ impl WalletLedger {
         }
     }
 
+    /// Send-journal reconciler (`WALLET_SEND_RECORD.md` P3-1) — the
+    /// merge post-pass that keeps the journal and the F14 derived
+    /// cache agreeing, and the mechanism that makes rescan
+    /// re-application free. Runs under the same write guard as the
+    /// scan merge (crash-ordering: a trigger and its edge persist
+    /// together), every merge, idempotently:
+    ///
+    /// 1. **Reorg back-edges**: a `Confirmed { height ≥ fork }` row
+    ///    returns to `Dispatched` — the confirming block is gone;
+    ///    refresh re-observes or the watchdog resolves.
+    /// 2. **Confirm edges** (refresh-authoritative, C3): a transfer
+    ///    whose observed `spending_tx_hash` matches a journal row
+    ///    moves the row to `Confirmed { spent_height }`. A
+    ///    `PresumedDead` row flips here too — the loud late
+    ///    confirmation (`PresumedDead` was only ever display).
+    /// 3. **Lock re-derivation** (the SJ-DQ-4 inversion): for every
+    ///    `Dispatched` row with a `lock_baseline`, any carried input
+    ///    present in the ledger, unspent, and unlocked gets its F14
+    ///    lock re-derived from the journal facts. After a rescan wipe
+    ///    this incrementally restores the locks as replay re-creates
+    ///    the rows; on an ordinary merge it is a no-op (the invariant
+    ///    holds already).
+    pub fn reconcile_send_journal(&mut self, reorg_fork_height: Option<u64>) {
+        use crate::send_journal_block::SendState;
+        use crate::transfer::AwaitingConfirmation;
+
+        let Self {
+            ledger,
+            send_journal,
+            ..
+        } = self;
+
+        if let Some(fork) = reorg_fork_height {
+            for row in send_journal.rows.values_mut() {
+                if let SendState::Confirmed { height } = row.state {
+                    if height >= fork {
+                        row.state = SendState::Dispatched;
+                    }
+                }
+            }
+        }
+
+        for td in &ledger.transfers {
+            let (Some(spending_tx), Some(height)) = (&td.spending_tx_hash, td.spent_height) else {
+                continue;
+            };
+            if let Some(row) = send_journal.rows.get_mut(&spending_tx.to_bytes()) {
+                if !matches!(row.state, SendState::Confirmed { .. }) {
+                    row.state = SendState::Confirmed { height };
+                }
+            }
+        }
+
+        for (txid, row) in &send_journal.rows {
+            if row.state != SendState::Dispatched {
+                continue;
+            }
+            let Some(base) = row.lock_baseline else {
+                continue;
+            };
+            for inp in &row.inputs {
+                let Some(td) = ledger
+                    .transfers
+                    .iter_mut()
+                    .find(|t| t.global_output_index == inp.gindex)
+                else {
+                    continue;
+                };
+                if !td.spent && td.awaiting_confirmation.is_none() {
+                    td.awaiting_confirmation = Some(AwaitingConfirmation {
+                        tx_hash: shekyl_types::TxHash::from_bytes(*txid),
+                        accepted_at_height: base,
+                    });
+                }
+            }
+        }
+    }
+
     /// Retire the retention record for a tx the daemon *definitely
     /// refused* (terminal / retryable submit verdict — provably
     /// unrelayed under single-egress, `DAEMON_SUBMIT_VERDICT.md` §2.5):
@@ -734,11 +812,159 @@ mod tests {
         });
         w.ledger.transfers.push(locked_row);
         w.ledger.tip.synced_height = 30;
+        {
+            // The equivalence invariant (I-5) requires the lock's owning
+            // journal row: dispatch facts the F14 cache derives from.
+            use crate::send_journal_block::{SendInputRef, SendRecord, SendState};
+            w.send_journal.rows.insert(
+                txid,
+                SendRecord {
+                    dispatched_at_height: 20,
+                    fee: 5,
+                    recipients: Vec::new(),
+                    change_amount: 0,
+                    inputs: vec![SendInputRef {
+                        gindex: 0x11,
+                        amount: 1,
+                    }],
+                    lock_baseline: Some(25),
+                    state: SendState::Dispatched,
+                },
+            );
+        }
 
         let (confirmed, collected) = w.reconcile_tx_key_retention(false);
         assert_eq!(confirmed, 0);
         assert_eq!(collected, 0, "F14-locked secret survives");
         assert!(w.tx_meta.tx_keys.contains_key(&txid));
         w.check_invariants().expect("I-2 with lock leg");
+    }
+
+    /// P3-1: the merge reconciler re-derives F14 locks from journal
+    /// facts — idempotently (run-twice diffs nothing), skipping spent
+    /// inputs (confirmed evidence supersedes) and rows without a
+    /// baseline.
+    #[test]
+    fn reconcile_send_journal_rederives_locks_idempotently() {
+        use crate::send_journal_block::{SendInputRef, SendRecord, SendState};
+
+        let txid = [0x42; 32];
+        let mut w = WalletLedger::empty();
+        let mut unlocked = mk_transfer(0x21, 10);
+        unlocked.global_output_index = 100;
+        let mut spent = mk_transfer(0x22, 10);
+        spent.global_output_index = 101;
+        spent.spent = true;
+        spent.key_image = Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+            [9u8; 32],
+        ));
+        spent.spent_height = Some(12);
+        w.ledger.transfers.push(unlocked);
+        w.ledger.transfers.push(spent);
+        w.ledger.tip.synced_height = 30;
+        w.send_journal.rows.insert(
+            txid,
+            SendRecord {
+                dispatched_at_height: 20,
+                fee: 5,
+                recipients: Vec::new(),
+                change_amount: 0,
+                inputs: vec![
+                    SendInputRef {
+                        gindex: 100,
+                        amount: 1,
+                    },
+                    SendInputRef {
+                        gindex: 101,
+                        amount: 1,
+                    },
+                    SendInputRef {
+                        gindex: 999,
+                        amount: 1,
+                    }, // not replayed yet
+                ],
+                lock_baseline: Some(25),
+                state: SendState::Dispatched,
+            },
+        );
+
+        w.reconcile_send_journal(None);
+        let lock = w.ledger.transfers[0]
+            .awaiting_confirmation
+            .as_ref()
+            .expect("unspent carried input re-derives its F14 lock");
+        assert_eq!(lock.tx_hash.to_bytes(), txid);
+        assert_eq!(lock.accepted_at_height, 25);
+        assert!(
+            w.ledger.transfers[1].awaiting_confirmation.is_none(),
+            "spent input is never re-locked"
+        );
+
+        let before = format!("{:?}", w.ledger.transfers);
+        w.reconcile_send_journal(None);
+        assert_eq!(
+            before,
+            format!("{:?}", w.ledger.transfers),
+            "reconcile is idempotent"
+        );
+        w.check_invariants().expect("I-5 holds after re-derivation");
+    }
+
+    /// P3-1: confirm edges are refresh-authoritative (observed
+    /// `spending_tx_hash` moves the row to Confirmed — including a loud
+    /// late confirmation out of PresumedDead), and a reorg at/below the
+    /// confirming height returns the row to Dispatched.
+    #[test]
+    fn reconcile_send_journal_confirms_reorgs_and_unpresumes() {
+        use crate::send_journal_block::{SendRecord, SendState};
+
+        let txid = [0x43; 32];
+        let mut w = WalletLedger::empty();
+        let mut spent = mk_transfer(0x31, 10);
+        spent.global_output_index = 200;
+        spent.spent = true;
+        spent.key_image = Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+            [8u8; 32],
+        ));
+        spent.spent_height = Some(18);
+        spent.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
+        w.ledger.transfers.push(spent);
+        w.ledger.tip.synced_height = 30;
+        w.send_journal.rows.insert(
+            txid,
+            SendRecord {
+                dispatched_at_height: 15,
+                fee: 5,
+                recipients: Vec::new(),
+                change_amount: 0,
+                inputs: Vec::new(),
+                lock_baseline: None,
+                state: SendState::PresumedDead,
+            },
+        );
+
+        w.reconcile_send_journal(None);
+        assert_eq!(
+            w.send_journal.rows[&txid].state,
+            SendState::Confirmed { height: 18 },
+            "late confirmation un-presumes the row"
+        );
+
+        // A real reorg's merge rewinds the transfer's spend marking
+        // (`handle_reorg` un-marks orphaned confirmed spends) BEFORE the
+        // reconciler post-pass runs — model that ordering contract here,
+        // else step 2 would correctly re-confirm from the still-marked row.
+        {
+            let td = &mut w.ledger.transfers[0];
+            td.spent = false;
+            td.spent_height = None;
+            td.spending_tx_hash = None;
+        }
+        w.reconcile_send_journal(Some(18));
+        assert_eq!(
+            w.send_journal.rows[&txid].state,
+            SendState::Dispatched,
+            "a reorg at the confirming height returns the row to Dispatched"
+        );
     }
 }

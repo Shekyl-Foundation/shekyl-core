@@ -118,6 +118,12 @@ where
                     }
                 }
             }
+            // PR-SJ-1: mirror the F14 baseline into the owning journal
+            // row, same guard (C2: journal owns the dispatch facts, the
+            // field is the derived cache; I-5 equivalence).
+            if let Some(row) = wallet.send_journal.rows.get_mut(&tx_hash.to_bytes()) {
+                row.lock_baseline = Some(accepted_at_height);
+            }
         });
 
         emit_pending_tx_diagnostic(
@@ -346,6 +352,11 @@ where
             let txid = canonical_tx_id(&flight.entry.tx_bytes);
             self.ledger.with_wallet_ledger_mut(|wallet| {
                 wallet.retire_retained_tx_key(&txid.to_bytes());
+                // PR-SJ-1: the journal row survives as failed-send
+                // history (SJ-DQ-3, rule 82) — only the secret retires.
+                if let Some(row) = wallet.send_journal.rows.get_mut(&txid.to_bytes()) {
+                    row.state = shekyl_engine_state::SendState::TerminalRejected;
+                }
             });
         }
         release_output_locks_for(state, id);
@@ -404,6 +415,12 @@ where
             let txid = canonical_tx_id(&flight.entry.tx_bytes);
             self.ledger.with_wallet_ledger_mut(|wallet| {
                 wallet.retire_retained_tx_key(&txid.to_bytes());
+                // PR-SJ-1: a retryable refusal undoes the dispatch — the
+                // reservation returns to consumer_held and the next
+                // submit re-dispatches (possibly under a new txid after
+                // a re-anchor). The journal row mirrors the retention
+                // record: removed here, re-born at the next dispatch.
+                wallet.send_journal.rows.remove(&txid.to_bytes());
             });
             state.consumer_held.insert(id, flight.entry);
         }

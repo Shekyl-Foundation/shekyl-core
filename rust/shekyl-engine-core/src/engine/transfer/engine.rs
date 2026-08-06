@@ -36,7 +36,7 @@ use super::super::refresh::{derive_snapshot_id, LedgerSnapshot};
 use super::super::signer::{SignedTransfer, Signer, TransferSigningContext};
 use super::super::signing_assembly::assemble_tx_to_sign;
 use super::super::traits::LedgerEngine;
-use super::super::transaction_submitter::canonical_tx_id;
+use super::super::transaction_submitter::{canonical_tx_id, wire_fee};
 use super::super::transaction_submitter::{SubmitSuccess, SubmitterError, TransactionSubmitter};
 use super::super::tx_counts::{InputCount, OutputCount};
 use super::super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
@@ -1502,11 +1502,68 @@ where
             // is wiped when the entry drops (`TxSecretKey` is
             // zeroize-on-drop).
             let dispatch_txid = canonical_tx_id(&held.tx_bytes);
+            // PR-SJ-1 (`WALLET_SEND_RECORD.md` R-4): the realized fee is
+            // read from the wire bytes — the same cleartext value the
+            // chain sees — never an estimator output. Wallet-built bytes
+            // are canonical wire by construction (the `canonical_tx_id`
+            // contract).
+            let realized_fee = wire_fee(&held.tx_bytes);
+            let selected: Vec<OutputId> = state
+                .output_locks
+                .iter()
+                .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
+                .collect();
             let retained = shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
                 *held.tx_key_secret.as_bytes(),
             ));
             self.ledger.with_wallet_ledger_mut(|wallet| {
                 wallet.record_retained_tx_key(dispatch_txid.to_bytes(), retained);
+                // PR-SJ-1: the journal row is born in the same guard as
+                // the retention record — dispatch facts persist
+                // atomically, before the bytes can reach the daemon
+                // (pin-1 dispatch form). C2: the journal owns these
+                // facts; the F14 field stays a derived cache.
+                let inputs: Vec<shekyl_engine_state::SendInputRef> = selected
+                    .iter()
+                    .filter_map(|&idx| {
+                        wallet.ledger.transfers().get(idx).map(|td| {
+                            shekyl_engine_state::SendInputRef {
+                                gindex: td.global_output_index,
+                                amount: td.amount().to_raw(),
+                            }
+                        })
+                    })
+                    .collect();
+                let sent: u64 = held
+                    .request
+                    .recipients
+                    .iter()
+                    .map(|r| r.amount_atomic_units.to_raw())
+                    .sum();
+                let input_total: u64 = inputs.iter().map(|i| i.amount).sum();
+                let recipients = held
+                    .request
+                    .recipients
+                    .iter()
+                    .map(|r| shekyl_engine_state::SendRecipient {
+                        address: r.address.clone(),
+                        amount: r.amount_atomic_units.to_raw(),
+                    })
+                    .collect();
+                wallet.send_journal.rows.insert(
+                    dispatch_txid.to_bytes(),
+                    shekyl_engine_state::SendRecord {
+                        dispatched_at_height: wallet.ledger.height(),
+                        fee: realized_fee,
+                        recipients,
+                        change_amount: input_total
+                            .saturating_sub(sent)
+                            .saturating_sub(realized_fee),
+                        inputs,
+                        lock_baseline: None,
+                        state: shekyl_engine_state::SendState::Dispatched,
+                    },
+                );
             });
 
             let submitted_at = Instant::now();

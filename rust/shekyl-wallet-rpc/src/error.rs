@@ -159,7 +159,7 @@ pub enum WalletRpcError {
     /// discard reservations, wait for confirmations, then retry.
     #[error(
         "cannot rescan while transactions are in flight: {detail}; \
-         submit or discard pending transactions, wait for confirmations, then retry"
+         submit or discard pending reservations, then retry"
     )]
     RescanBlocked {
         /// Server-side counts (`error.data.detail`) — no amounts, no txids.
@@ -396,13 +396,8 @@ impl From<RefreshError> for WalletRpcError {
             // correct. `-32602` here would tell an automated client its
             // request shape is permanently wrong when the truth is "retry
             // once the in-flight transactions settle".
-            RefreshError::RescanBlocked {
-                reservations,
-                unconfirmed,
-            } => Self::RescanBlocked {
-                detail: format!(
-                    "{reservations} reservation(s), {unconfirmed} unconfirmed transaction(s)"
-                ),
+            RefreshError::RescanBlocked { reservations } => Self::RescanBlocked {
+                detail: format!("{reservations} reservation(s)"),
             },
             // Past the point of no return for the in-memory ledger; durable
             // save may have failed. Category-only message — `detail` can

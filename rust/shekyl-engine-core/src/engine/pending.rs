@@ -910,6 +910,12 @@ impl<
         self.pending.outstanding()
     }
 
+    /// Test-only passthrough to [`PendingTxEngine::test_hold_reservation`].
+    #[cfg(test)]
+    pub(crate) fn test_hold_reservation(&self) {
+        self.pending.test_hold_reservation();
+    }
+
     /// Build a [`PendingTx`] via [`PendingTxEngine::build`].
     ///
     /// `&self` (W-B step 1): build's mutation runs under the
