@@ -6651,17 +6651,35 @@ sustainability is unaffected by the recalibration.
      witness-less entry aborts the add), so a forgotten wiring is loud, not
      silent. Fix: route `handle_block_found` through the 3-arg `add_new_block`
      with the mined block's witness once the miner-side aggregation exists.
-  2. **Signature leg behind PoW.** Both call sites sit in the "cheap test" slot
-     *before* PoW verification. Post-cutover the verify does up to
-     `ARCHIVAL_MAX_ATTESTATION_RECORDS` hybrid ML-DSA checks there; an attacker
-     who picks garbage signatures can compute the matching `attestation_root`
-     (the root commits the signature bytes), so `ROOT_MISMATCH` does not
-     short-circuit for an attacker who controls the root — that is free
-     asymmetric work with no PoW spent. Zero cost pre-cutover (empty witnesses).
-     Fix: move the signature-verifying leg after PoW, or justify the placement
-     explicitly, at cutover. **Target: V3.0 pre-genesis** (both gate the
-     credit-wire cutover). Closed when the cutover PR wires the miner witness
-     and orders the signature leg behind PoW.
+  2. **Signature leg behind PoW — CUTOVER-BLOCKING.** Both call sites sit in the
+     "cheap test" slot *before* PoW verification. Post-cutover the verify does up
+     to `ARCHIVAL_MAX_ATTESTATION_RECORDS` hybrid ML-DSA checks there; an attacker
+     who picks garbage signatures can compute the matching `attestation_root` (the
+     root commits the signature bytes), so `ROOT_MISMATCH` does not short-circuit
+     for an attacker who controls the root — free asymmetric verification work with
+     no PoW spent. Zero cost pre-cutover (empty witnesses), but reachable the moment
+     populated blocks exist, so the signature-verifying leg must move behind PoW *at*
+     the cutover that enables population, never after: landing the settlement writer
+     / population without it opens the amplification. Fix: move the leg after PoW
+     (not merely justify the placement) at cutover.
+
+  **Considered and rejected — records-gating the `CBKEY_UNREADABLE` check for exact
+  empty-shape equivalence.** The shim is strictly stricter than the interim on two
+  already-invalid shapes (unsolicited witness bytes → `MALFORMED_WITNESS`; an
+  unreadable coinbase `vout[0]` → `CBKEY_UNREADABLE`). Moving the upfront cbkey check
+  to fire only when pass records exist would make the shim reject nothing the interim
+  accepted. Rejected on the merits, not deferred: it reopens the locked step-2 verdict
+  order (cap-first → structure → root-before-countersig — the diagnostic property that
+  surfaces marshaling drift as `ROOT_MISMATCH` before forgery as `COUNTERSIG_INVALID`)
+  to gain equivalence *only* over blocks `prevalidate_miner_transaction` already
+  rejects (`vout == 1`, enforced after the shim at both sites) — cosmetic equivalence
+  over blocks that cannot exist on a valid chain. The divergence is a fail-fast
+  correctness improvement, not a regression; "strictly stricter on two already-invalid
+  shapes," stated honestly, is how it should stand.
+
+  **Target: V3.0 pre-genesis** (both preconditions gate the credit-wire cutover;
+  precondition 2 is cutover-blocking). Closed when the cutover PR wires the miner
+  witness and moves the signature leg behind PoW.
 
 ---
 
