@@ -3044,7 +3044,7 @@ where "reshape dominates" could still be wrong.
 
 ---
 
-## 15. The block-time seam
+## 15. The block-time seam — the embargo crossed a consensus timescale the derivation wasn't watching (Round 3)
 
 > **⚠ Under D the embargo is a FAMILY, not a value (§76, §78).** This section
 > reads throughout as though there is one number crossing one block interval.
@@ -3055,7 +3055,7 @@ where "reshape dominates" could still be wrong.
 > as a constraint the constants round must satisfy. What D actually moves is
 > §15.3's recovery distribution, and it moves it in the direction the priority
 > order accepts: a liveness cost sorted by shape, in place of a privacy cost
-> sorted by shape. — the embargo crossed a consensus timescale the derivation wasn't watching (Round 3)
+> sorted by shape.
 
 The 39 s pattern, turned on our own number: a value that satisfies the one
 constraint someone was watching (preemption probability) sitting near a boundary
@@ -11873,10 +11873,26 @@ unreproducible and an artifact indistinguishable from a property:
   on this work, and 32- vs 64-bit matters for the arithmetic.
 - **Governor was `ondemand`** — must be `performance` for the run, or the
   figure carries scheduler variance.
-- **`vcgencmd get_throttled` is unreadable** (`/dev/vcio` absent). A throttled
-  Pi reads *slower*, which is the safe direction and therefore the dangerous
-  one: it makes an artifact look like a property. **Throttle state must be
-  reported beside the result, or the result states that it could not be.**
+- **Throttle state.** A throttled Pi reads *slower*, which is the safe
+  direction and therefore the dangerous one: it makes an artifact look like a
+  property. **Throttle state must be reported beside the result, or the result
+  states that it could not be.**
+
+  *Corrected 2026-08-05: `vcgencmd get_throttled` was first recorded here as
+  unreadable because `/dev/vcio` was **absent**. It is not — it is
+  `crw------- root:root`, mode 0600, and Ubuntu 26.04 on Pi does not ship the
+  udev rule that gives the `video` group access. `vcgencmd`'s error text
+  (*"Try creating a device file with: sudo mknod …"*) reads as absence and was
+  taken at face value; `mknod` returns `EEXIST`. **A tool's suggested remedy is
+  not a diagnosis** — the fix is a udev rule or a scoped sudoers entry, not a
+  device node.*
+
+  **And a root-free proxy exists**, which is what the run actually carries:
+  `/sys/class/thermal/thermal_zone0/temp`. The Pi 4 soft-throttles at 80 °C and
+  hard-throttles at 85 °C, so sampling temperature across the sweep bounds
+  thermal throttling directly. Measured **69 °C under sustained compile load** —
+  the heaviest work the box sees — so the margin is ~11 °C before the first
+  threshold.
 - **Storage — and it is not what was assumed.** `skl-pi` has **no NVMe**
   (`/dev/nvme*` absent). Root is the **SD card** (`/dev/mmcblk0p2`). The
   attached USB device is a **WD easystore 2648 / WD10SDRW-11A0XS0, 931 GB,
