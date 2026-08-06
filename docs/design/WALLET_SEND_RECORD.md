@@ -25,7 +25,16 @@ clause (realized fee of the built tx, never an estimator value), and
 SJ-DQ-3's ratification is gated on the roadmap's A4 cold-bundle
 decision (R-2). Still open for pass 3: SJ-DQ-4's remaining mechanics,
 SJ-DQ-5's control design, SJ-DQ-6, and the `abandon_tx` force-path
-sub-question (pulled up from SJ-DQ-8 at pass 1, R1-5). Decisions stamp
+sub-question (pulled up from SJ-DQ-8 at pass 1, R1-5).
+**Pass 3 PROPOSED (2026-08-06, pending ratification — P3-1..P3-5,
+stamped inline):** P3-1 rescan re-application mechanics + the
+`-29202` split (unconfirmed half retires, reservations half stays;
+sub-question P3-1a poses the `awaiting_confirmation`
+derived-cache/retirement scope call); P3-2 two-tier deletion with
+independent `tx_keys` lifetime; P3-3 dedicated `send_journal` block
+with append-only state enum (the A4 clause-(2) pin); P3-4 no force
+path + abandon reframed to the retention-reference migration; P3-5
+`attributes` deletion ratified as posed. Decisions stamp
 into the section that carries them, dated, per the binding-record
 convention (`DAEMON_SUBMIT_VERDICT.md` §1 shape). Per R1-6: any
 deferral R1 creates carries named rule-21 reopen criteria at
@@ -321,6 +330,39 @@ story, not the read path.
   spend via key image — idempotent re-mark), the crash ordering of the
   late-confirmation flip, and which `-29202` refusals this retires
   versus keeps.
+  **PASS-3 PROPOSAL P3-1 (2026-08-06, pending ratification):**
+  *Re-application:* after `reset_scan_derived_state` + replay, for
+  every journal row in a non-terminal state, for each input in its
+  carried set: if replay already marked the funding row spent
+  (key-image observed — confirmed evidence supersedes), skip; else
+  re-derive the awaiting-confirmation lock from the journal facts.
+  Set-union semantics — deterministic and idempotent by construction;
+  pinned by a test that runs re-application twice and diffs nothing.
+  *Crash ordering:* every journal edge is written inside the same
+  wallet-ledger guard as the state change that triggers it (the
+  finalize / refresh / watchdog write sites), and persistence is a
+  single atomic envelope replace (`engine-file` `atomic.rs`;
+  `drive_persistence` under one exclusive hold — the rescan path's
+  own comment pins the pattern), so a crash never splits a trigger
+  from its edge. *`-29202` splits:* the check is
+  `reservations > 0 || unconfirmed > 0` (`rescan.rs:213`). The
+  **unconfirmed half retires** in PR-SJ-1 — journal re-application is
+  strictly stronger than refusing. The **reservations half keeps
+  refusing**: a pre-dispatch build has no journal row, its output
+  locks are in-memory indices into the very rows the wipe destroys,
+  and the remedy (discard, then rescan) is cheap and in-session. Code
+  `-29202` stays allocated; its message narrows to the reservations
+  case. *One scope call posed, not decided (P3-1a):* C2's end-state
+  makes `TransferDetails.awaiting_confirmation` a **derived cache**
+  of journal facts (the `LedgerIndexes` precedent: journal owns,
+  cache rebuilds at load/rescan) — which retires the C7 field-level
+  exception. Proposal: PR-SJ-1 lands the reclassification + the
+  rescan-rebuild proof; the field's full retirement (rewiring the
+  finalize/refresh/watchdog sites to journal edges) lands in PR-SJ-1
+  **iff** the diff stays proportionate, else it splits to an
+  immediately-following PR-SJ-1b — reopen criterion if deferred: the
+  C7 exception note names PR-SJ-1b, and PR-SJ-2 does not land before
+  it.
 - **SJ-DQ-5 — prune is user control over their own history** *(re-scoped
   at R1 pass 2; seizure defense is the envelope's job, C1)*. The
   honest, smaller question: what deletion the user gets — a row, a
@@ -329,6 +371,21 @@ story, not the read path.
   shared-or-independent lifetime explicitly) and the boundary story
   stated: a pruned row is gone from wallet-controlled storage and
   backups; storage the user copied elsewhere is their own.
+  **PASS-3 PROPOSAL P3-2 (2026-08-06, pending ratification):**
+  two-tier deletion, `tx_keys` lifetime **independent**. Tier 1
+  (default): delete journal row(s) — one row, all rows for a
+  counterparty (a filter over the same operation), or the whole
+  journal. Never touches `tx_meta.tx_keys` (C2: proof material has
+  its own lifecycle; a deleted row's OUTBOUND proof still works,
+  stated plainly in the UX). Tier 2 (explicit, rule-82 warned):
+  full scrub — row plus retirement of the retained `TxSecretKey`,
+  destroying the OUTBOUND-proof capability for that txid; requires
+  the same class of explicit confirmation as seed display. Honest
+  boundary line in both tiers: a seized file after tier-1 deletion
+  still shows `tx_keys` membership (txid-was-ours), only tier 2
+  removes that — and neither reaches copies the user made outside
+  the wallet's storage. No retention time-bound in V3.0 (no
+  auto-expiry knob — rule 81; deletion is a user act).
 - **SJ-DQ-6 — schema placement and migration** *(re-posed under C7)*.
   `LedgerBlock` is excluded by C7, so the candidates are a sibling
   dispatch-authored block beside `tx_meta`/`bookkeeping` vs. a new
@@ -336,6 +393,19 @@ story, not the read path.
   PR-SJ-1 lands the C7 marker trait with the documented
   `awaiting_confirmation` field-level exception and its planned
   retirement.
+  **PASS-3 PROPOSAL P3-3 (2026-08-06, pending ratification):** a
+  **dedicated block** — `send_journal` on `WalletLedger` beside
+  `tx_meta`/`bookkeeping`, with its own `SEND_JOURNAL_BLOCK_VERSION
+  = 1` (the `BOOKKEEPING_BLOCK_VERSION` precedent: per-block
+  versioning, no coupling to `tx_meta`'s bump history), its own
+  snapshot + KAT, preserved across rescan by construction (outside
+  `LedgerBlock`). C7's marker trait lands in the same PR; the
+  `awaiting_confirmation` exception follows P3-1a's resolution. The
+  A4 clause-(2) pin lands here concretely: the row's state enum is
+  **append-only** (a doc-pinned rule at the enum plus a
+  discriminant-stability KAT), so the future `ExportedUnsigned`
+  variant and its field are additive — old files read forward, no
+  version break, no migration.
 - **SJ-DQ-7 — projection contract, widened to cover annotations**
   *(scope ruling at R1 pass 2, run against rule 19)*. The journal
   half: OUTGOING rows have no output index — id scheme (`txid`-keyed
@@ -361,6 +431,10 @@ story, not the read path.
   touch** (the rule-42 bump is already being paid there); rule-21
   reopen criterion = a named, typed UX-state need that `tx_notes`
   cannot carry.
+  **PASS-3 PROPOSAL P3-5 (2026-08-06, pending ratification): ratify
+  as posed** — delete `attributes` in PR-SJ-2's schema bump, with the
+  stated reopen criterion. No counter-argument surfaced across three
+  passes; zero consumers verified twice.
 - **SJ-DQ-8 — `abandon_tx` contract.** `-291xx` code allocation,
   idempotency, the crash-ordering test the FOLLOWUP names
   (drop-then-confirm window), and the `start_rescan` interplay (keeps
@@ -373,6 +447,29 @@ story, not the read path.
   the spend marking journal-carried and re-applied, a forced abandon
   bypasses only the display evidence, not the self-link safety; decide
   whether that makes a force path acceptable or merely tempting.
+  **PASS-3 PROPOSAL P3-4 (2026-08-06, pending ratification): no force
+  path — and abandon's job reframes.** With P3-1 retiring the
+  unconfirmed half of `-29202`, abandon is no longer load-bearing for
+  rescan — the "support pressure" scenario that would exercise a
+  force path dissolves, because nothing is blocked waiting on an
+  abandon. The inversion defuses the *safety* half of force, but its
+  only remaining product is hiding a row early, which SJ-DQ-5's
+  tier-1 deletion already provides through the honest door — so a
+  force path is a knob with no unique capability (rule 81): decline.
+  Reopen criterion: a flow emerges that is genuinely blocked pending
+  abandon (none exists after P3-1). *Abandon's remaining real job* —
+  the retention wedge: `reconcile_tx_key_retention` retires entries
+  only against a chain reference, so a dead tx's
+  `pending_tx_hashes` entry lives forever. `abandon_tx` becomes: the
+  journal edge `Dispatched|PresumedDead → Abandoned` (user-authored,
+  C3-clean) **plus migrating the I-2 live reference from
+  `sync_state.pending_tx_hashes` to the journal row itself** — keys
+  retained per C2, the pending set stays a true live-work set, and
+  the I-2 invariant extends its reference list with "journal row in
+  a non-terminal-or-abandoned state". The crash-ordering test the
+  FOLLOWUPS entry names (drop-then-confirm) pins the reference
+  migration + the late-confirmation flip `Abandoned → Confirmed`
+  (which un-abandons loudly rather than staying wrong).
 
 ## 4. Shape of the work (decomposition RATIFIED at R1 pass 1)
 
@@ -385,8 +482,13 @@ sub-question, and the `attributes` deletion. The rest of SJ-DQ-7/8
 ratifies with its PRs. Per R1-6, every deferral carries named rule-21
 reopen criteria at ratification. Then:
 
-1. **PR-SJ-1** — journal record + schema bump + preserve-set wiring +
-   state machine on the dispatch/verdict/refresh/watchdog edges
+1. **PR-SJ-1** — journal record (`send_journal` block, own version,
+   append-only state enum with the A4 clause-(2) additive pin) +
+   state machine on the dispatch/verdict/refresh/watchdog edges +
+   rescan re-application (retiring the unconfirmed half of `-29202`)
+   + the C7 marker trait; the `awaiting_confirmation`
+   derived-cache reclassification lands here, with full field
+   retirement in-PR iff proportionate (P3-1a), else PR-SJ-1b
    (engine-core + engine-state; closes nothing yet, enables both).
 2. **PR-SJ-2** — projections: `transfer_view` OUTGOING + fee, CLI, GUI
    list; the annotation exposure (`set_tx_note` + note on
