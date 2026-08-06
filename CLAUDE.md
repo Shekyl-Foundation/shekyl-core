@@ -73,6 +73,7 @@ Architecture & scope
 - [`60-no-monero-legacy`](.cursor/rules/60-no-monero-legacy.mdc) — v3-from-genesis, no Monero chain history; remove dead pre-genesis code
 - [`70-modular-consensus`](.cursor/rules/70-modular-consensus.mdc) — PoW consensus; staking is economic; no speculative consensus scaffolding
 - [`75-system-autonomy`](.cursor/rules/75-system-autonomy.mdc) — self-regulating design; minimize coordinated upgrades
+- [`76-device-provisioning-floor`](.cursor/rules/76-device-provisioning-floor.mdc) — stated minimum supported device (Pi 4); constants derived from work time are provisioned at the floor, never at the machine that was handy
 
 Rust & FFI
 
