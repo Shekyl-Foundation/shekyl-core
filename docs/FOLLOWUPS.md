@@ -1760,7 +1760,19 @@ sustainability is unaffected by the recalibration.
   bundle contradicts the ratified envelope rule,
   `WALLET_SEND_RECORD.md` C1) — are unstarted product work that would
   join a critical path already carrying A1–A3, C, and D. A half-form
-  is worse than none. **Clause (rule 21), three pinned items:**
+  is worse than none. **The accurate posture statement: V3.0 ships
+  cold *storage*, not cold *signing*** — seed custody is complete
+  (generate, write the phrase, receive, hold; nothing is missing for
+  the storage case); the gap is that *spending* requires the seed to
+  enter a networked machine at restore. Decline reason, stated
+  honestly: bounded engineering not scheduled for V3.0, with cold
+  storage already covered by seed custody — not cryptographically
+  blocked, not privacy-fatal. *(Supersession note, 2026-08-06: an
+  earlier same-day form of this entry coupled the posture jointly
+  with B2 as "no offline-key capability" — withdrawn on review: B2
+  removes a signing device that cannot function anyway, and custody
+  was never on the device; the two decisions are independent.)*
+  **Clause (rule 21), two pinned items:**
   **(1)** the separated SA/L-split form is LOAD-BEARING, not an
   optimization — the carried-proof form re-creates the reference-age
   anonymity partition (`shekyl-curve-tree/src/reference.rs`
@@ -1770,10 +1782,7 @@ sustainability is unaffected by the recalibration.
   `ExportedUnsigned` is ADDITIVE to the send-record state machine
   (SJ-DQ-3) — a new variant and a field, never a schema break —
   **verified at PR-SJ-1** while cheap (the persisted encoding must
-  admit the variant without a version break); **(3)** V3.0 is
-  RECORDED as shipping with **no offline-key capability**, jointly
-  with B2's hardware-device deletion — named, not emergent
-  (`WALLET_REWRITE_PLAN.md`). **Reopening shape:** the two-phase
+  admit the variant without a version break). **Reopening shape:** the two-phase
   prove API (SA/L cold over the completed prefix incl. key images;
   membership re-proven hot at submit; rerandomization blinds retained
   hot under rules 35/36; PQC auths re-signed hot), the
