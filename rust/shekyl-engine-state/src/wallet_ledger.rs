@@ -6,9 +6,10 @@
 //! `.wallet`-side ledger aggregator.
 //!
 //! Bundles the six typed blocks — [`LedgerBlock`], [`BookkeepingBlock`],
-//! [`TxMetaBlock`], [`SyncStateBlock`], and [`StakingBlock`] — into a
-//! single postcard-serialized payload that the wallet-file orchestrator
-//! (commit 2h) stores as Region 2 of the `.wallet` file.
+//! [`TxMetaBlock`], [`SyncStateBlock`], [`StakingBlock`], and
+//! [`SendJournalBlock`] — into a single postcard-serialized payload that
+//! the wallet-file orchestrator (commit 2h) stores as Region 2 of the
+//! `.wallet` file.
 //!
 //! # Two-tier versioning
 //!
@@ -36,7 +37,7 @@
 //!
 //! # Wire format
 //!
-//! `postcard` over the five blocks in declared field order plus the
+//! `postcard` over the six blocks in declared field order plus the
 //! bundle `format_version`. Every inner block's `block_version` stays
 //! within the block's own postcard frame, so a version bump on one
 //! block does not accidentally shift the byte offsets of any other
@@ -47,6 +48,7 @@
 //! [`TxMetaBlock`]: crate::tx_meta_block::TxMetaBlock
 //! [`SyncStateBlock`]: crate::sync_state_block::SyncStateBlock
 //! [`StakingBlock`]: crate::staking_block::StakingBlock
+//! [`SendJournalBlock`]: crate::send_journal_block::SendJournalBlock
 
 use serde::{Deserialize, Serialize};
 
@@ -54,7 +56,7 @@ use crate::{
     bookkeeping_block::BookkeepingBlock,
     error::WalletLedgerError,
     ledger_block::LedgerBlock,
-    send_journal_block::SendJournalBlock,
+    send_journal_block::{SendInputRef, SendJournalBlock, SendRecipient},
     staking_block::StakingBlock,
     sync_state_block::SyncStateBlock,
     tx_meta_block::{TxMetaBlock, TxSecretKey, TxSecretKeys},
@@ -114,7 +116,7 @@ use crate::{
 /// `WalletLedger` was touched.
 pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 13;
 
-/// The `.wallet`-side ledger bundle: the four typed blocks + a
+/// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.
 ///
 /// Deliberately NOT [`Clone`] at the aggregator level because
@@ -170,10 +172,12 @@ impl WalletLedger {
         }
     }
 
-    /// Assemble a wallet ledger from its four component blocks, pinning
-    /// the bundle `format_version`. Caller-supplied blocks keep their
-    /// own `block_version` values (already current by construction
-    /// through each block's `new` / `empty` constructor).
+    /// Assemble a wallet ledger from its scan-/UX-/meta-side blocks,
+    /// pinning the bundle `format_version`. The dispatch-authored
+    /// [`SendJournalBlock`] starts empty — callers that need seeded
+    /// rows insert after construction. Caller-supplied blocks keep
+    /// their own `block_version` values (already current by
+    /// construction through each block's `new` / `empty` constructor).
     pub fn new(
         ledger: LedgerBlock,
         bookkeeping: BookkeepingBlock,
@@ -251,6 +255,41 @@ impl WalletLedger {
         }
     }
 
+    /// Birth the send-journal row for a dispatch (same guard as
+    /// [`Self::record_retained_tx_key`] — pin-1 form). See
+    /// [`SendJournalBlock::record_dispatched`].
+    pub fn record_dispatched_send(
+        &mut self,
+        txid: [u8; 32],
+        fee: u64,
+        recipients: Vec<SendRecipient>,
+        inputs: Vec<SendInputRef>,
+    ) {
+        let height = self.ledger.height();
+        self.send_journal
+            .record_dispatched(txid, height, fee, recipients, inputs);
+    }
+
+    /// Accepting-verdict write for the journal (`WALLET_SEND_RECORD.md`
+    /// C2): stamp `lock_baseline` on the owning row, then re-derive the
+    /// F14 cache from journal facts. Fresh accept and `AlreadyInChain`
+    /// both route here — the only difference is the baseline height —
+    /// so the dual-write of lock + baseline cannot diverge.
+    ///
+    /// Panics if no journal row exists: dispatch always births the row
+    /// before the bytes leave for the daemon.
+    pub fn stamp_send_lock_baseline(&mut self, txid: &[u8; 32], baseline: u64) {
+        assert!(
+            self.send_journal.stamp_lock_baseline(txid, baseline),
+            "send-journal row must exist before an accepting verdict (born at dispatch)"
+        );
+        // Full reconcile: confirm edges handle the rare race where the
+        // spend was already observed during the submit round-trip;
+        // re-derivation places the F14 locks the field still carries
+        // until PR-SJ-1b.
+        self.reconcile_send_journal(None);
+    }
+
     /// Send-journal reconciler (`WALLET_SEND_RECORD.md` P3-1) — the
     /// merge post-pass that keeps the journal and the F14 derived
     /// cache agreeing, and the mechanism that makes rescan
@@ -260,19 +299,24 @@ impl WalletLedger {
     ///
     /// 1. **Reorg back-edges**: a `Confirmed { height ≥ fork }` row
     ///    returns to `Dispatched` — the confirming block is gone;
-    ///    refresh re-observes or the watchdog resolves.
+    ///    refresh re-observes or the watchdog resolves. The row keeps
+    ///    its `lock_baseline` so step 3 can re-place the F14 locks
+    ///    (baseline is cleared only by a deliberate watchdog release).
     /// 2. **Confirm edges** (refresh-authoritative, C3): a transfer
     ///    whose observed `spending_tx_hash` matches a journal row
     ///    moves the row to `Confirmed { spent_height }`. A
     ///    `PresumedDead` row flips here too — the loud late
-    ///    confirmation (`PresumedDead` was only ever display).
+    ///    confirmation (`PresumedDead` was only ever display). First
+    ///    observed height wins; baseline is retained for a later reorg
+    ///    re-derivation.
     /// 3. **Lock re-derivation** (the SJ-DQ-4 inversion): for every
     ///    `Dispatched` row with a `lock_baseline`, any carried input
     ///    present in the ledger, unspent, and unlocked gets its F14
     ///    lock re-derived from the journal facts. After a rescan wipe
     ///    this incrementally restores the locks as replay re-creates
-    ///    the rows; on an ordinary merge it is a no-op (the invariant
-    ///    holds already).
+    ///    the rows; after an accepting verdict it is the *only* lock
+    ///    placement site (journal owns the baseline; the field is the
+    ///    derived cache).
     pub fn reconcile_send_journal(&mut self, reorg_fork_height: Option<u64>) {
         use crate::send_journal_block::SendState;
         use crate::transfer::AwaitingConfirmation;
@@ -838,6 +882,48 @@ mod tests {
         assert_eq!(collected, 0, "F14-locked secret survives");
         assert!(w.tx_meta.tx_keys.contains_key(&txid));
         w.check_invariants().expect("I-2 with lock leg");
+    }
+
+    /// Accepting-verdict path: stamping the journal baseline is the
+    /// sole write; F14 locks re-derive from carried inputs (C2). This
+    /// is the site both fresh accept and AlreadyInChain share.
+    #[test]
+    fn stamp_send_lock_baseline_rederives_f14_locks() {
+        use crate::send_journal_block::{SendInputRef, SendRecipient};
+
+        let txid = [0x44; 32];
+        let mut w = WalletLedger::empty();
+        let mut unlocked = mk_transfer(0x41, 10);
+        unlocked.global_output_index = 300;
+        w.ledger.transfers.push(unlocked);
+        w.ledger.tip.synced_height = 30;
+        w.record_dispatched_send(
+            txid,
+            5,
+            vec![SendRecipient {
+                address: "shekyl1example".to_owned(),
+                amount: 1,
+            }],
+            vec![SendInputRef {
+                gindex: 300,
+                amount: 10,
+            }],
+        );
+        assert!(
+            w.ledger.transfers[0].awaiting_confirmation.is_none(),
+            "dispatch does not place the F14 lock — only an accepting verdict does"
+        );
+
+        w.stamp_send_lock_baseline(&txid, 25);
+        let lock = w.ledger.transfers[0]
+            .awaiting_confirmation
+            .as_ref()
+            .expect("stamp re-derives the F14 lock from journal facts");
+        assert_eq!(lock.tx_hash.to_bytes(), txid);
+        assert_eq!(lock.accepted_at_height, 25);
+        assert_eq!(w.send_journal.rows[&txid].lock_baseline, Some(25));
+        w.check_invariants()
+            .expect("I-5 holds after stamp+re-derive");
     }
 
     /// P3-1: the merge reconciler re-derives F14 locks from journal

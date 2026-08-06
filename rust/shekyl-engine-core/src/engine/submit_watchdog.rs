@@ -443,12 +443,7 @@ pub(crate) fn release_awaiting_confirmation(
     // released; a late confirmation flips the row to `Confirmed` through
     // the same reconciler, loudly un-presuming it.
     for txid in tx_hashes {
-        if let Some(row) = wallet.send_journal.rows.get_mut(&txid.to_bytes()) {
-            if row.state == shekyl_engine_state::SendState::Dispatched {
-                row.state = shekyl_engine_state::SendState::PresumedDead;
-                row.lock_baseline = None;
-            }
-        }
+        wallet.send_journal.mark_presumed_dead(&txid.to_bytes());
     }
     released
 }

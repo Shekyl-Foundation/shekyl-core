@@ -1522,25 +1522,19 @@ where
                 // the retention record — dispatch facts persist
                 // atomically, before the bytes can reach the daemon
                 // (pin-1 dispatch form). C2: the journal owns these
-                // facts; the F14 field stays a derived cache.
+                // facts; the F14 field is the derived cache.
                 let inputs: Vec<shekyl_engine_state::SendInputRef> = selected
                     .iter()
-                    .filter_map(|&idx| {
-                        wallet.ledger.transfers().get(idx).map(|td| {
-                            shekyl_engine_state::SendInputRef {
-                                gindex: td.global_output_index,
-                                amount: td.amount().to_raw(),
-                            }
-                        })
+                    .map(|&idx| {
+                        let td = wallet.ledger.transfers().get(idx).unwrap_or_else(|| {
+                            panic!("dispatch: output_locks references missing transfer index {idx}")
+                        });
+                        shekyl_engine_state::SendInputRef {
+                            gindex: td.global_output_index,
+                            amount: td.amount().to_raw(),
+                        }
                     })
                     .collect();
-                let sent: u64 = held
-                    .request
-                    .recipients
-                    .iter()
-                    .map(|r| r.amount_atomic_units.to_raw())
-                    .sum();
-                let input_total: u64 = inputs.iter().map(|i| i.amount).sum();
                 let recipients = held
                     .request
                     .recipients
@@ -1550,19 +1544,11 @@ where
                         amount: r.amount_atomic_units.to_raw(),
                     })
                     .collect();
-                wallet.send_journal.rows.insert(
+                wallet.record_dispatched_send(
                     dispatch_txid.to_bytes(),
-                    shekyl_engine_state::SendRecord {
-                        dispatched_at_height: wallet.ledger.height(),
-                        fee: realized_fee,
-                        recipients,
-                        change_amount: input_total
-                            .saturating_sub(sent)
-                            .saturating_sub(realized_fee),
-                        inputs,
-                        lock_baseline: None,
-                        state: shekyl_engine_state::SendState::Dispatched,
-                    },
+                    realized_fee,
+                    recipients,
+                    inputs,
                 );
             });
 

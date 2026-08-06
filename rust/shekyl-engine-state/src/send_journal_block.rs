@@ -153,6 +153,81 @@ impl SendJournalBlock {
         }
         Ok(())
     }
+
+    /// Birth a dispatch-authored row (pin-1 form: before the bytes can
+    /// leave for the daemon). `change_amount` is the exact remainder
+    /// `Σ inputs − Σ recipients − fee`; a wallet-built send that does
+    /// not balance is a build-path defect, not a runtime condition.
+    pub fn record_dispatched(
+        &mut self,
+        txid: [u8; 32],
+        dispatched_at_height: u64,
+        fee: u64,
+        recipients: Vec<SendRecipient>,
+        inputs: Vec<SendInputRef>,
+    ) {
+        let sent = recipients
+            .iter()
+            .map(|r| r.amount)
+            .try_fold(0u64, u64::checked_add)
+            .expect("recipient amounts sum without overflow");
+        let input_total = inputs
+            .iter()
+            .map(|i| i.amount)
+            .try_fold(0u64, u64::checked_add)
+            .expect("input amounts sum without overflow");
+        let change_amount = input_total
+            .checked_sub(sent)
+            .and_then(|v| v.checked_sub(fee))
+            .expect("wallet-built send balances: inputs >= recipients + fee");
+        self.rows.insert(
+            txid,
+            SendRecord {
+                dispatched_at_height,
+                fee,
+                recipients,
+                change_amount,
+                inputs,
+                lock_baseline: None,
+                state: SendState::Dispatched,
+            },
+        );
+    }
+
+    /// Record the F14 lock baseline on the owning row. Returns `false`
+    /// when no row exists (dispatch always births one first).
+    pub fn stamp_lock_baseline(&mut self, txid: &[u8; 32], baseline: u64) -> bool {
+        let Some(row) = self.rows.get_mut(txid) else {
+            return false;
+        };
+        row.lock_baseline = Some(baseline);
+        true
+    }
+
+    /// Terminal refusal: keep the row as failed-send history (rule 82).
+    pub fn mark_terminal_rejected(&mut self, txid: &[u8; 32]) {
+        if let Some(row) = self.rows.get_mut(txid) {
+            row.state = SendState::TerminalRejected;
+        }
+    }
+
+    /// Retryable refusal: the dispatch is undone — row removed, re-born
+    /// on the next submit (mirrors the retention record).
+    pub fn undo_dispatch(&mut self, txid: &[u8; 32]) {
+        self.rows.remove(txid);
+    }
+
+    /// Watchdog confirmed-absent release: display-state flip and clear
+    /// the baseline so re-derivation never re-locks a deliberately
+    /// released tx. No-op for non-`Dispatched` rows.
+    pub fn mark_presumed_dead(&mut self, txid: &[u8; 32]) {
+        if let Some(row) = self.rows.get_mut(txid) {
+            if row.state == SendState::Dispatched {
+                row.state = SendState::PresumedDead;
+                row.lock_baseline = None;
+            }
+        }
+    }
 }
 
 impl Default for SendJournalBlock {
@@ -239,5 +314,66 @@ mod tests {
         let back: SendJournalBlock = postcard::from_bytes(&bytes).expect("deserialize");
         assert_eq!(back.block_version, SEND_JOURNAL_BLOCK_VERSION);
         assert!(back.rows.is_empty());
+    }
+
+    /// Dispatch birth records the exact remainder as change; baseline
+    /// starts unset so re-derivation stays off until an accepting verdict.
+    #[test]
+    fn record_dispatched_computes_change_and_starts_unlocked() {
+        let mut block = SendJournalBlock::empty();
+        let txid = [7u8; 32];
+        block.record_dispatched(
+            txid,
+            42,
+            700,
+            vec![SendRecipient {
+                address: "shekyl1example".to_owned(),
+                amount: 7_000,
+            }],
+            vec![SendInputRef {
+                gindex: 11,
+                amount: 30_000,
+            }],
+        );
+        let row = &block.rows[&txid];
+        assert_eq!(row.change_amount, 22_300);
+        assert_eq!(row.lock_baseline, None);
+        assert_eq!(row.state, SendState::Dispatched);
+        assert!(block.stamp_lock_baseline(&txid, 43));
+        assert_eq!(block.rows[&txid].lock_baseline, Some(43));
+        block.mark_presumed_dead(&txid);
+        assert_eq!(block.rows[&txid].state, SendState::PresumedDead);
+        assert_eq!(block.rows[&txid].lock_baseline, None);
+        // PresumedDead is terminal for the release path; a late confirm
+        // un-presumes via the reconciler, not by re-stamping here.
+        block.mark_presumed_dead(&txid);
+        assert_eq!(
+            block.rows[&txid].state,
+            SendState::PresumedDead,
+            "mark_presumed_dead is a no-op once already released"
+        );
+        // Re-birth path: undo removes; a later dispatch inserts fresh.
+        block.undo_dispatch(&txid);
+        assert!(!block.rows.contains_key(&txid));
+        assert!(!block.stamp_lock_baseline(&txid, 1));
+    }
+
+    #[test]
+    fn mark_terminal_rejected_keeps_the_row() {
+        let mut block = SendJournalBlock::empty();
+        let txid = [8u8; 32];
+        block.record_dispatched(
+            txid,
+            1,
+            0,
+            Vec::new(),
+            vec![SendInputRef {
+                gindex: 1,
+                amount: 0,
+            }],
+        );
+        block.mark_terminal_rejected(&txid);
+        assert_eq!(block.rows[&txid].state, SendState::TerminalRejected);
+        assert!(block.rows.contains_key(&txid));
     }
 }

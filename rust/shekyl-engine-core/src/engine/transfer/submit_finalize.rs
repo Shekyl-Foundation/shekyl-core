@@ -19,7 +19,6 @@
 //! the Engine-public `SubmitOutcome` happens in `finalize_submit_success`,
 //! *after* the disposition completes.
 
-use shekyl_engine_state::AwaitingConfirmation;
 use shekyl_types::TxHash;
 
 use super::super::diagnostics::{emit_pending_tx_diagnostic, DiscardReason, PendingTxDiagnostic};
@@ -37,7 +36,7 @@ use super::super::transaction_submitter::{
 };
 use super::engine::LocalPendingTx;
 use super::support::{phase1_tx_hash, release_output_locks_for};
-use super::types::{OutputId, PendingTxState, RescanRequest, Stage1LedgerSpendableAccess};
+use super::types::{PendingTxState, RescanRequest, Stage1LedgerSpendableAccess};
 
 /// `#[allow(private_bounds)]`: the where-bounds name crate-private traits
 /// (`FeeSnapshotSource`, `TransactionSubmitter`,
@@ -64,12 +63,6 @@ where
         id: ReservationId,
         tx_hash: TxHash,
     ) -> TxHash {
-        let selected_indices: Vec<OutputId> = state
-            .output_locks
-            .iter()
-            .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
-            .collect();
-
         // §5.3 decision 2: retain the network-exposed bytes for the
         // watchdog's rung-1 resubmit-same-bytes probe before the in-flight
         // record (their only holder) is dropped. Ephemeral — a restart
@@ -90,40 +83,15 @@ where
         // (it does not clear a tripped breaker — see `SubmitLoopBreaker`).
         state.loop_breaker.record_accept();
 
-        // F14 (`DAEMON_SUBMIT_VERDICT.md` §2.6): the accepting verdict means
-        // the tx is network-exposed, not settled. Instead of the legacy
-        // durable `spent = true` write, place the persisted
-        // awaiting-confirmation lock on each input: the output stays
-        // unselectable across restarts (same-key-image rebuild hazard,
-        // §7.1) until refresh observes the spend on-chain
-        // (confirmed-present release, `mark_spent`) or the watchdog horizon
-        // resolves the tx as confirmed-absent.
+        // F14 (`DAEMON_SUBMIT_VERDICT.md` §2.6) via the journal (C2):
+        // the accepting verdict means the tx is network-exposed, not
+        // settled. Stamp the baseline on the owning journal row; the
+        // F14 field is the derived cache and is re-derived from the
+        // carried input set (spent race-guard included). Same path as
+        // `AlreadyInChain` — only the baseline height differs.
         self.ledger.with_wallet_ledger_mut(|wallet| {
             let accepted_at_height = wallet.ledger.height();
-            for index in selected_indices {
-                if let Some(td) = wallet.ledger.transfer_mut(index) {
-                    // Race guard: if the tx mined during the submit round-trip,
-                    // a refresh may already have observed the spend and run
-                    // `mark_spent` (spent = true, lock cleared). The
-                    // confirmed-present state is authoritative — re-locking an
-                    // already-spent input would persist an inconsistent
-                    // `spent && awaiting_confirmation` record whose F14 lock no
-                    // future `mark_spent` ever clears. Place the lock only on
-                    // inputs still unspent at commit time.
-                    if !td.spent {
-                        td.awaiting_confirmation = Some(AwaitingConfirmation {
-                            tx_hash,
-                            accepted_at_height,
-                        });
-                    }
-                }
-            }
-            // PR-SJ-1: mirror the F14 baseline into the owning journal
-            // row, same guard (C2: journal owns the dispatch facts, the
-            // field is the derived cache; I-5 equivalence).
-            if let Some(row) = wallet.send_journal.rows.get_mut(&tx_hash.to_bytes()) {
-                row.lock_baseline = Some(accepted_at_height);
-            }
+            wallet.stamp_send_lock_baseline(&tx_hash.to_bytes(), accepted_at_height);
         });
 
         emit_pending_tx_diagnostic(
@@ -177,12 +145,6 @@ where
         tx_hash: TxHash,
         height: u64,
     ) -> TxHash {
-        let selected_indices: Vec<OutputId> = state
-            .output_locks
-            .iter()
-            .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
-            .collect();
-
         // §5.3 decision 2: retain the network-exposed bytes for the
         // watchdog probe (see the accept path). The AlreadyInChain arm
         // holds too, so a fruitless-re-scan escalation can fall through to
@@ -225,21 +187,12 @@ where
             // uses. The raw claim still routes the release path below and
             // still rides the verdict to the consumer; only the persisted
             // baseline is bounded.
+            //
+            // Journal owns the baseline (C2); F14 locks re-derive from
+            // it — the same accepting-verdict site as fresh accept, so
+            // the two paths cannot diverge on I-5.
             let baseline_height = height.min(synced_height);
-            for index in selected_indices {
-                if let Some(td) = wallet.ledger.transfer_mut(index) {
-                    // Same race guard as the accept path: if refresh already
-                    // observed the spend and ran `mark_spent`, the
-                    // confirmed-present state is authoritative — re-locking
-                    // would strand an inconsistent record.
-                    if !td.spent {
-                        td.awaiting_confirmation = Some(AwaitingConfirmation {
-                            tx_hash,
-                            accepted_at_height: baseline_height,
-                        });
-                    }
-                }
-            }
+            wallet.stamp_send_lock_baseline(&tx_hash.to_bytes(), baseline_height);
             synced_height
         });
 
@@ -354,9 +307,7 @@ where
                 wallet.retire_retained_tx_key(&txid.to_bytes());
                 // PR-SJ-1: the journal row survives as failed-send
                 // history (SJ-DQ-3, rule 82) — only the secret retires.
-                if let Some(row) = wallet.send_journal.rows.get_mut(&txid.to_bytes()) {
-                    row.state = shekyl_engine_state::SendState::TerminalRejected;
-                }
+                wallet.send_journal.mark_terminal_rejected(&txid.to_bytes());
             });
         }
         release_output_locks_for(state, id);
@@ -420,7 +371,7 @@ where
                 // submit re-dispatches (possibly under a new txid after
                 // a re-anchor). The journal row mirrors the retention
                 // record: removed here, re-born at the next dispatch.
-                wallet.send_journal.rows.remove(&txid.to_bytes());
+                wallet.send_journal.undo_dispatch(&txid.to_bytes());
             });
             state.consumer_held.insert(id, flight.entry);
         }

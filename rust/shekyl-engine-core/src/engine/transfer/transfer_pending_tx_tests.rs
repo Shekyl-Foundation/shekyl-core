@@ -1400,10 +1400,21 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
     );
     assert_eq!(pending.outstanding(), 0, "reservation released");
 
-    // The F14 lock is placed on the selected inputs, baselined at the
-    // claimed confirming height; `spent` stays refresh-written.
+    // The F14 lock is re-derived from the journal baseline (clamped claim);
+    // `spent` stays refresh-written. Journal and field must agree (I-5).
     {
         let guard = pending.ledger.read();
+        let row = guard
+            .ledger
+            .send_journal
+            .rows
+            .get(&expected_hash.to_bytes())
+            .expect("dispatch birthed the journal row; AlreadyInChain stamps its baseline");
+        assert_eq!(
+            row.lock_baseline,
+            Some(20),
+            "AlreadyInChain mirrors the clamped baseline into the journal (F40)"
+        );
         let locked: Vec<_> = guard
             .ledger
             .ledger
@@ -1425,11 +1436,20 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                  the claimed 25 clamped to the synced 20, so the watchdog \
                  horizon stays measurable"
             );
+            assert_eq!(
+                row.lock_baseline,
+                Some(lock.accepted_at_height),
+                "I-5: journal baseline equals the derived F14 lock"
+            );
             assert!(
                 !td.is_spendable(u64::MAX),
                 "locked output must be excluded from selection"
             );
         }
+        guard
+            .ledger
+            .check_invariants()
+            .expect("I-5 holds after AlreadyInChain");
     }
 
     let events = sink.recorded_pending();

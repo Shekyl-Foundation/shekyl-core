@@ -680,6 +680,10 @@ mod start_rescan_integration_tests {
             seeded,
             "a blocked rescan must not reset the ledger"
         );
+        assert!(
+            !engine.refresh_slot.is_claimed(),
+            "a blocked rescan must release the single-flight slot"
+        );
     }
 
     /// End-to-end: a rescan really does destroy and rebuild.
