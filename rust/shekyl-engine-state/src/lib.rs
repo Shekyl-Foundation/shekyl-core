@@ -44,6 +44,7 @@ pub mod pscan_cursor;
 pub mod pscan_state;
 pub mod safety_constants;
 pub mod schema_snapshot;
+pub mod send_journal_block;
 pub mod serde_helpers;
 pub mod staking_block;
 pub mod sync_state_block;
@@ -67,6 +68,10 @@ pub use pending_post_block::{
     PENDING_POST_VERSION,
 };
 pub use safety_constants::NetworkSafetyConstants;
+pub use send_journal_block::{
+    SendInputRef, SendJournalBlock, SendRecipient, SendRecord, SendState,
+    SEND_JOURNAL_BLOCK_VERSION,
+};
 pub use staking_block::{StakingBlock, STAKING_BLOCK_VERSION};
 pub use sync_state_block::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION};
 pub use transfer::{AwaitingConfirmation, FcmpPrecomputedPath, TransferDetails, SPENDABLE_AGE};

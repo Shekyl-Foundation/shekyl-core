@@ -5,7 +5,7 @@
 
 //! `.wallet`-side ledger aggregator.
 //!
-//! Bundles the five typed blocks — [`LedgerBlock`], [`BookkeepingBlock`],
+//! Bundles the six typed blocks — [`LedgerBlock`], [`BookkeepingBlock`],
 //! [`TxMetaBlock`], [`SyncStateBlock`], and [`StakingBlock`] — into a
 //! single postcard-serialized payload that the wallet-file orchestrator
 //! (commit 2h) stores as Region 2 of the `.wallet` file.
@@ -54,6 +54,7 @@ use crate::{
     bookkeeping_block::BookkeepingBlock,
     error::WalletLedgerError,
     ledger_block::LedgerBlock,
+    send_journal_block::SendJournalBlock,
     staking_block::StakingBlock,
     sync_state_block::SyncStateBlock,
     tx_meta_block::{TxMetaBlock, TxSecretKey, TxSecretKeys},
@@ -96,6 +97,10 @@ use crate::{
 /// (`LEDGER_BLOCK_VERSION` 9, WI-RPC-3 F-9 spend-quadruple leg:
 /// confirmed spending txid so `tx_meta.tx_keys` retention stays
 /// I-2-live for no-change outbound txs).
+/// Version `13` adds the dispatch-authored [`SendJournalBlock`] as a
+/// sixth top-level block (`SEND_JOURNAL_BLOCK_VERSION` 1,
+/// `WALLET_SEND_RECORD.md` PR-SJ-1); the aggregator layout grew a
+/// block, so the bundle bytes shift and the format version bumps.
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -107,7 +112,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 12;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 13;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.
@@ -142,6 +147,12 @@ pub struct WalletLedger {
     /// Archival-staking persona bookkeeping: cursor + enabled flag +
     /// the reconcilable live-bond hint.
     pub staking: StakingBlock,
+
+    /// Dispatch-authored send records (`WALLET_SEND_RECORD.md`):
+    /// recipients, realized fee, carried input set, lifecycle state.
+    /// Outside [`LedgerBlock`] by C7 — survives rescan by construction.
+    #[serde(default)]
+    pub send_journal: SendJournalBlock,
 }
 
 impl WalletLedger {
@@ -155,6 +166,7 @@ impl WalletLedger {
             tx_meta: TxMetaBlock::empty(),
             sync_state: SyncStateBlock::empty(),
             staking: StakingBlock::empty(),
+            send_journal: SendJournalBlock::empty(),
         }
     }
 
@@ -176,6 +188,7 @@ impl WalletLedger {
             tx_meta,
             sync_state,
             staking,
+            send_journal: SendJournalBlock::empty(),
         }
     }
 
@@ -211,7 +224,7 @@ impl WalletLedger {
     }
 
     /// Fan out per-block version checks. Ordered ledger → bookkeeping
-    /// → tx_meta → sync_state → staking so failure diagnostics are
+    /// → tx_meta → sync_state → staking → send_journal so failure diagnostics are
     /// predictable.
     pub fn check_all_block_versions(&self) -> Result<(), WalletLedgerError> {
         self.ledger.check_version()?;
@@ -219,6 +232,7 @@ impl WalletLedger {
         self.tx_meta.check_version()?;
         self.sync_state.check_version()?;
         self.staking.check_version()?;
+        self.send_journal.check_version()?;
         Ok(())
     }
 
